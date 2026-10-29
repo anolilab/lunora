@@ -4,13 +4,13 @@ import { Node } from "ts-morph";
 import type { QualifiedImport } from "./name-rendering";
 import { annotationRendering, classifyType, isGloballyDeclared } from "./name-rendering";
 
-/** JS identifier allowlist — mirrors `emit.ts`'s `IDENTIFIER_RE`, gating raw splice of a property name. */
+/** JS identifier allowlist — mirrors `emit/shared.ts`'s `IDENTIFIER_RE`, gating raw splice of a property name. */
 const IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
 
 /**
  * Render an expanded object-type property key for splicing into generated TS:
  * bare when it's a JS identifier, otherwise JSON-quoted (a valid TS member name).
- * Mirrors `emit.ts`'s `renderPropertyKey` so this expansion path can't inject a
+ * Mirrors `emit/shared.ts`'s `renderPropertyKey` so this expansion path can't inject a
  * non-identifier property name (e.g. `"a; b"`) verbatim into `_generated/*`.
  */
 const renderExpandedPropertyKey = (propertyName: string): string => (IDENTIFIER_RE.test(propertyName) ? propertyName : JSON.stringify(propertyName));
@@ -32,8 +32,10 @@ const childTypes = (type: Type): Type[] => {
 
 /**
  * An object type whose members we can faithfully reproduce structurally: a plain
- * object/interface with no call/construct signatures and no index signatures
- * (those can't be re-expressed as `{ name: type; … }` without losing meaning).
+ * object/interface with no call/construct signatures, no index signatures, and
+ * no symbol-keyed members (none of those can be re-expressed as
+ * `{ name: type; … }` without losing meaning — a symbol key's name is the
+ * checker's internal `__@brand@12`, which would render as a STRING key).
  */
 const isExpandableObject = (type: Type): boolean => {
     if (!type.isObject() || type.isArray() || type.isTuple()) {
@@ -44,7 +46,11 @@ const isExpandableObject = (type: Type): boolean => {
         return false;
     }
 
-    return type.getStringIndexType() === undefined && type.getNumberIndexType() === undefined;
+    return (
+        type.getStringIndexType() === undefined &&
+        type.getNumberIndexType() === undefined &&
+        !type.getProperties().some((property) => property.getName().startsWith("__@"))
+    );
 };
 
 /**
@@ -96,6 +102,41 @@ const isOptionalProperty = (property: TsSymbol, propertyType: Type): boolean => 
     return propertyType.isUnion() && propertyType.getUnionTypes().some((member) => member.isUndefined());
 };
 
+/**
+ * `rendered` — the text of `type` — parenthesised unless it is a plain object or
+ * a primitive, the only renderings nothing can split.
+ *
+ * Needed wherever the text lands next to an operator that binds tighter than
+ * something inside it: an array suffix or an intersection member. Unparenthesised,
+ * `A & B[]` reads as `A & (B[])`, `A & B | C` as `(A & B) | C`, and
+ * `() => void & { meta: M }` as a function returning `void & { meta: M }` —
+ * each a DIFFERENT type that still compiles, which is the worst kind of wrong.
+ * An allowlist rather than a list of the operators that bind loosely, so a
+ * rendering this function has not met (a `readonly T[]`, a conditional) is
+ * grouped rather than trusted.
+ */
+const groupedUnlessAtomic = (type: Type | undefined, rendered: string): string => {
+    const atomic =
+        type !== undefined &&
+        (isExpandableObject(type) ||
+            type.isString() ||
+            type.isNumber() ||
+            type.isBigInt() ||
+            type.isBoolean() ||
+            type.isLiteral() ||
+            type.isBooleanLiteral() ||
+            type.isEnumLiteral() ||
+            type.isTemplateLiteral() ||
+            type.isNull() ||
+            type.isUndefined() ||
+            type.isAny() ||
+            type.isUnknown() ||
+            type.isNever() ||
+            type.isVoid());
+
+    return atomic ? rendered : `(${rendered})`;
+};
+
 /** Ceiling for the encodability walk — see `containsUnencodableMember` for why it is not `MAX_EXPANSION_DEPTH`, and what it is still load-bearing for. */
 const ENCODABILITY_WALK_LIMIT = 32;
 
@@ -117,7 +158,7 @@ const expandArrayType = (type: Type, node: Node, handlerFilePath: string, depth:
         return undefined;
     }
 
-    return element?.isUnion() ? `(${rendered})[]` : `${rendered}[]`;
+    return `${groupedUnlessAtomic(element, rendered)}[]`;
 };
 
 /**
@@ -138,6 +179,40 @@ const expandUnionType = (type: Type, node: Node, handlerFilePath: string, depth:
     }
 
     return parts.join(" | ");
+};
+
+/**
+ * Expand an intersection type; returns `undefined` when any member can't be reproduced.
+ * Receives `expand` as a parameter to avoid a forward-reference cycle.
+ *
+ * Without this branch an intersection fell through to {@link expandObjectType},
+ * whose `isObject()` guard an intersection does not satisfy — so it declined and
+ * the caller erased the whole type to `unknown`. That is not an exotic shape: a
+ * mapped type split into optional and required halves is how `v.object(...)`
+ * infers, so every `Infer<v.object(…)>` that reached expansion landed on it
+ * (issue #810).
+ */
+const expandIntersectionType = (
+    type: Type,
+    node: Node,
+    handlerFilePath: string,
+    depth: number,
+    nextSeen: Set<Type>,
+    expand: ExpandFunction,
+): string | undefined => {
+    const parts: string[] = [];
+
+    for (const member of type.getIntersectionTypes()) {
+        const rendered = expand(member, node, handlerFilePath, depth, nextSeen);
+
+        if (rendered === undefined) {
+            return undefined;
+        }
+
+        parts.push(groupedUnlessAtomic(member, rendered));
+    }
+
+    return parts.join(" & ");
 };
 
 /**
@@ -208,7 +283,7 @@ const isClassInstance = (type: Type): boolean =>
  * compile error anywhere) applies just as much when the class is a MEMBER of the
  * type being named. Printing `import("./money").Envelope` publishes
  * `at.format()` to every caller for a value that cannot cross the wire at all —
- * `shared/wire-codec.ts` throws on it at the send site.
+ * `packages/wire/src/wire-codec.ts` throws on it at the send site.
  *
  * Keyed on the same script-mode test the global exemption uses, so the built-ins
  * that DO round-trip (`Date`, `URL`, `Map`, `Set`, the typed arrays) are not
@@ -397,7 +472,7 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
 
     // A CLASS INSTANCE is not reproducible, and expanding it would be worse than
     // declining. Answered before every branch below — including the qualifier —
-    // so no path can publish one. `encodeWire` refuses a class instance outright (`shared/wire-codec.ts`
+    // so no path can publish one. `encodeWire` refuses a class instance outright (`packages/wire/src/wire-codec.ts`
     // — only plain objects and the supported built-ins round-trip), so no such value
     // ever reaches a caller; and the structural expansion would describe one wrongly
     // in three directions at once: methods and getters live on the prototype and are
@@ -441,6 +516,10 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
 
     if (type.isUnion()) {
         return expandUnionType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
+    }
+
+    if (type.isIntersection()) {
+        return expandIntersectionType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
     }
 
     return expandObjectType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);

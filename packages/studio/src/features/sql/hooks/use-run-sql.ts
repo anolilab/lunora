@@ -1,6 +1,6 @@
-import { useLunora } from "@lunora/react";
 import { useCallback, useEffect, useState } from "react";
 
+import useStudioClient from "../../../hooks/use-studio-client";
 import type { SqlConsoleResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../../lib/internal";
@@ -23,7 +23,7 @@ export interface RunSqlState {
  * one audited run/cancel path rather than re-deriving it per component.
  */
 export const useRunSql = (sql: string, shardKey: string): RunSqlState => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     const [result, setResult] = useState<SqlConsoleResult | undefined>(undefined);
     const [error, setError] = useState<string | undefined>(undefined);

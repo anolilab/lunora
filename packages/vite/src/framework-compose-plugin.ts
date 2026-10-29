@@ -1,6 +1,16 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { findProjectConfigFile, loadProjectConfig } from "@lunora/codegen";
+import type { GeneratedClassModule } from "@lunora/config";
+import {
+    DURABLE_OBJECT_BINDINGS,
+    GENERATED_CLASS_MODULES,
+    GENERATED_MODULE_DURABLE_OBJECTS,
+    isMergedProject,
+    isMergedRoleModule,
+    MERGED_DURABLE_OBJECTS_MODULE,
+} from "@lunora/config";
 import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 
@@ -23,6 +33,10 @@ const LUNORA_WORKER_VIRTUAL_ID: string = "virtual:lunora/worker";
 /** Vite prefixes resolved virtual ids with a NUL so other plugins skip them. */
 const RESOLVED_VIRTUAL_PREFIX = "\0";
 const RESOLVED_LUNORA_WORKER_ID: string = `${RESOLVED_VIRTUAL_PREFIX}${LUNORA_WORKER_VIRTUAL_ID}`;
+
+/** Hook filters matching exactly the two ids above. */
+const LUNORA_WORKER_VIRTUAL_ID_RE = /^virtual:lunora\/worker$/u;
+const RESOLVED_LUNORA_WORKER_ID_RE = /^\0virtual:lunora\/worker$/u;
 
 /**
  * Stub emitted for the worker virtual in the *client* (browser) environment. The
@@ -111,17 +125,7 @@ const isAutoComposable = (context: LunoraPluginContext): boolean => {
     return detected?.class === "A" && CLASS_A_WIRING[detected.framework] !== undefined;
 };
 
-/**
- * The `_generated/` modules whose exported classes wrangler validates a
- * `class_name` against: container Durable Objects, workflow entrypoints, and
- * agent (workflow) entrypoints — the same three kinds `reconcile-bindings`
- * writes into `wrangler.jsonc`. The composed entry star-re-exports each module
- * the project actually has.
- */
-const GENERATED_CLASS_MODULES = ["agents", "containers", "workflows"] as const;
-
-/** One {@link GENERATED_CLASS_MODULES} entry. */
-type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
+/** Trailing `.ts` on the app-config path — the bundler resolves the extension, so the emitted specifier drops it. */
 
 /**
  * Build the source of the virtual class-A worker entry. Pure (no fs / no Vite),
@@ -138,13 +142,67 @@ type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
  * virtual module id. Absolute paths are resolved correctly in all environments
  * (Vite 8 + rolldown 1.x confirmed).
  */
-const buildWorkerEntrySource = (
-    framework: DetectedFramework,
-    generatedImportBase: string,
-    classModules: ReadonlyArray<GeneratedClassModule> = [],
-    allowUnauthenticatedShardAccess = false,
-    shard: LunoraShardConfig = {},
-): string => {
+interface WorkerEntryComposition {
+    /** Whether to allow unauthenticated shard access — `.extend(...)` on the builder. */
+    allowUnauthenticatedShardAccess?: boolean;
+    /** Finished specifier for the project's `lunora.config.*`, when it declares an `app` hook. */
+    appConfigModule?: string;
+    /** The `_generated/` class modules that exist, each star-re-exported. */
+    classModules?: ReadonlyArray<GeneratedClassModule>;
+    /** Codegen wrote the merge module: export one `LunoraDO` hosting the shard, scheduler and registry (plan 462). */
+    mergeDurableObjects?: boolean;
+    /** Per-shard knobs, each key named after the builder method that sets it. */
+    shard?: LunoraShardConfig;
+}
+
+/** How the composed entry wires the framework Durable Objects. */
+interface DurableObjectWiring {
+    /** `export const ShardDO = …`, or the merged `LunoraDO`. */
+    classExport: string;
+    /** Extra imports the class export needs (none unless the app merges). */
+    imports: string;
+    /** The namespace expression a role module's builder call receives. */
+    namespace: (module: "scheduler" | "shardRegistry") => string;
+    /** Whether a generated class module is star-re-exported for wrangler. */
+    reexported: (module: GeneratedClassModule) => boolean;
+}
+
+/**
+ * The framework Durable Object wiring: the plain per-class bindings, or — when
+ * the app merges (plan 462) — one `LunoraDO` hosting the shard and each role
+ * module the app has, named after that module. A merged role's class is
+ * imported into `LunoraDO`, not re-exported, so wrangler binds one class.
+ */
+const durableObjectWiring = (base: string, classModules: ReadonlyArray<GeneratedClassModule>, merge: boolean): DurableObjectWiring => {
+    if (!merge) {
+        return {
+            classExport: "export const ShardDO = app.ShardDO;",
+            imports: "",
+            namespace: (module) => `env.${module === "scheduler" ? DURABLE_OBJECT_BINDINGS.SchedulerDO : DURABLE_OBJECT_BINDINGS.ShardRegistryDO}`,
+            reexported: () => true,
+        };
+    }
+
+    const roles = classModules.flatMap((module) => {
+        const className = GENERATED_MODULE_DURABLE_OBJECTS[module];
+
+        return className === undefined ? [] : [{ className, module }];
+    });
+
+    return {
+        classExport: `export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO${roles.map(({ className, module }) => `, ${module}: ${className}`).join("")} });`,
+        imports: [
+            `\nimport { mergeDurableObjects, roleNamespace } from "${base}/${MERGED_DURABLE_OBJECTS_MODULE}";`,
+            ...roles.map(({ className, module }) => `\nimport { ${className} } from "${base}/${module}";`),
+        ].join(""),
+        namespace: (module) => `roleNamespace(env.SHARD, "${module}")`,
+        reexported: (module) => !isMergedRoleModule(module),
+    };
+};
+
+const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBase: string, composition: WorkerEntryComposition = {}): string => {
+    const { allowUnauthenticatedShardAccess = false, appConfigModule, classModules = [], mergeDurableObjects = false, shard = {} } = composition;
+
     const wiring = CLASS_A_WIRING[framework];
 
     if (wiring === undefined) {
@@ -167,7 +225,50 @@ const buildWorkerEntrySource = (
     // forward every generated class itself. Emitted per module that actually
     // exists (codegen only writes the file when the project declares that kind),
     // otherwise the import would fail to resolve.
-    const classReexports = classModules.map((module) => `\nexport * from "${base}/${module}";\n`).join("");
+    const durableObjects = durableObjectWiring(base, classModules, mergeDurableObjects);
+    // A merged app forwards only `LunoraDO`, so the registry module's RPC entrypoint is named here: a client worker binds it.
+    const registryEntrypoint =
+        mergeDurableObjects && classModules.includes("shardRegistry") ? `\nexport { ShardRegistryEntrypoint } from "${base}/shardRegistry";\n` : "";
+    const classReexports =
+        classModules
+            .filter((module) => durableObjects.reexported(module))
+            .map((module) => `\nexport * from "${base}/${module}";\n`)
+            .join("") + registryEntrypoint;
+
+    // `ctx.scheduler.runAfter` / `runAt` need a `SchedulerDO` namespace on the
+    // worker (`create-worker`'s `schedulerDO`), and this entry is generated — so
+    // a class-A project had no file to add the re-export to and deferred dispatch
+    // was unreachable.
+    //
+    // Keyed on the generated `scheduler` module, which codegen writes off the
+    // same `hasScheduler` that decides whether the builder HAS a `.scheduler()`
+    // method — so the call and the method cannot disagree, and the class is
+    // forwarded by the ordinary star re-export below rather than a specifier this
+    // plugin hard-codes. Keying it on the `wrangler.jsonc` binding instead let a
+    // project declare the binding with no scheduler code and get
+    // `TypeError: ….scheduler is not a function` at worker boot.
+    const schedulerCall = classModules.includes("scheduler") ? `\n    .scheduler({ namespace: (env) => ${durableObjects.namespace("scheduler")} })` : "";
+    // The shard registry's twin of the above: keyed on the generated
+    // `shardRegistry` module (a schema with `.shardBy()` tables), whose star
+    // re-export forwards `ShardRegistryDO`.
+    const shardRegistryCall = classModules.includes("shardRegistry") ? `\n    .shardRegistry((env) => ${durableObjects.namespace("shardRegistry")})` : "";
+
+    // `configureApp` receives the builder and returns it, so the framework wiring
+    // below (`.httpRouter`, `.build`) stays ours and the app's own capabilities
+    // are chained in between. See the docs for why the seam exists at all.
+    // Carries its OWN leading newline so an app without the module gets output
+    // byte-identical to before, rather than a gratuitous blank line. The `.ts` is
+    // stripped for the same reason the sibling `/app` import has none: the
+    // bundler resolves the extension.
+    // Carries its OWN leading newline so a project without an `app` hook gets
+    // output byte-identical to before, rather than a gratuitous blank line.
+    const appConfigImport = appConfigModule === undefined ? "" : `\nimport lunoraConfig from "${appConfigModule}";`;
+    // Called directly, with no `?? identity` fallback. The host already asserted
+    // the hook is a function; a fallback could only fire if the config changed
+    // between that check and the bundle, and it would then boot a worker with the
+    // user's `.auth()` / `.global()` wiring silently missing. A `TypeError` naming
+    // `lunoraConfig.app` is strictly better than an app quietly missing its auth.
+    const [configureOpen, configureClose] = appConfigModule === undefined ? ["", ""] : ["lunoraConfig.app(", ")"];
 
     // Each declared `shard` knob as its `defineApp()` builder call. Every
     // `LunoraShardConfig` key is named after the builder method that sets it, so
@@ -203,17 +304,47 @@ const buildWorkerEntrySource = (
 // Do not edit: emitted from the detected framework (${framework}). Point your
 // wrangler \`main\` here (or re-export it) instead of hand-wiring createWorker.
 ${wiring.imports}
-import { defineApp } from "${base}/app";
+import { defineApp } from "${base}/app";${durableObjects.imports}${appConfigImport}
 
-const app = defineApp()
-    .shard((env) => env.SHARD)
+const app = ${configureOpen}defineApp()
+    .shard((env) => env.SHARD)${schedulerCall}${shardRegistryCall}${configureClose}
     .httpRouter(${wiring.handler})${shardCalls}${allowUnauthenticatedShardAccess ? "\n    .extend(() => ({ allowUnauthenticatedShardAccess: true }))" : ""}
     .build();
 
-export const ShardDO = app.ShardDO;
+${durableObjects.classExport}
 ${classReexports}
 export default app;
 `;
+};
+
+/**
+ * The project-config specifier to compose through, or `undefined` when the
+ * project declares no `app` hook.
+ *
+ * Decided by LOADING the config with `jiti`, not by parsing it for a name: a
+ * computed hook works, and a config that throws is caught here instead of
+ * failing the BUNDLE with "does not provide an export named …" against a virtual
+ * module — the least debuggable error this plugin can produce. `load()` may be
+ * async, which is what lets this use `jiti`'s non-deprecated entry point.
+ */
+const appConfigSpecifier = async (projectRoot: string): Promise<{ error?: string; specifier?: string }> => {
+    const { config, error } = await loadProjectConfig(projectRoot);
+
+    if (error !== undefined) {
+        return { error };
+    }
+
+    if (typeof config?.app !== "function") {
+        return {};
+    }
+
+    const path = findProjectConfigFile(projectRoot);
+
+    // Posix-ified HERE, so the emitter receives a finished specifier: `resolve()`
+    // yields backslashes on Windows, which are invalid escapes once interpolated
+    // into a string literal. The extension is KEPT — stripping it made the
+    // specifier depend on Vite's default `resolve.extensions` matching ours.
+    return { specifier: path?.replaceAll("\\", "/") };
 };
 
 /**
@@ -245,45 +376,66 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
     // locate the files regardless of the virtual module's (non-existent) base dir.
     const generatedImportBase = resolve(options.projectRoot, options.generatedDir.replace(TRAILING_SLASH, ""));
 
+    // Both hooks declare `filter.id`, so Rolldown (and Vite's dev container) skip
+    // the JS call for every other module — without it every module in the graph
+    // paid an async `load` call that could only answer `undefined`. The id checks
+    // stay in the handlers for Vite versions that ignore `filter`.
     return {
-        load(id) {
-            if (id === RESOLVED_LUNORA_WORKER_ID && isAutoComposable(context) && context.framework !== undefined) {
-                // `@cloudflare/vite-plugin` names the browser environment "client"
-                // and the worker environment after the worker; emit the stub there
-                // and the real entry everywhere else (worker/SSR). Vite 8 always
-                // runs hooks within an environment context, so `this.environment`
-                // is guaranteed present here.
-                if (this.environment.name === "client") {
-                    return CLIENT_WORKER_STUB;
+        load: {
+            filter: { id: RESOLVED_LUNORA_WORKER_ID_RE },
+            async handler(id) {
+                if (id === RESOLVED_LUNORA_WORKER_ID && isAutoComposable(context) && context.framework !== undefined) {
+                    // `@cloudflare/vite-plugin` names the browser environment "client"
+                    // and the worker environment after the worker; emit the stub there
+                    // and the real entry everywhere else (worker/SSR). Vite 8 always
+                    // runs hooks within an environment context, so `this.environment`
+                    // is guaranteed present here.
+                    if (this.environment.name === "client") {
+                        return CLIENT_WORKER_STUB;
+                    }
+
+                    // `_generated/{agents,containers,workflows}.ts` each exist only when
+                    // the project declares that kind; codegen has already run by load
+                    // time, so these fs checks decide which star re-exports the composed
+                    // entry carries.
+                    const classModules = GENERATED_CLASS_MODULES.filter((module) => existsSync(join(generatedImportBase, `${module}.ts`)));
+                    const mergeDurableObjects = isMergedProject(generatedImportBase);
+
+                    const { error, specifier } = await appConfigSpecifier(options.projectRoot);
+
+                    if (error !== undefined) {
+                        // Evaluated on the HOST, so a `cloudflare:*` import or a
+                        // tsconfig path alias (which `jiti` does not read) throws.
+                        // Swallowing it composed a worker with the user's `.auth()` /
+                        // `.global()` wiring silently missing.
+                        this.warn(`[lunora] lunora.config could not be loaded, so its \`app\` hook was not composed: ${error}`);
+                    }
+
+                    return buildWorkerEntrySource(context.framework.framework, generatedImportBase, {
+                        allowUnauthenticatedShardAccess: options.allowUnauthenticatedShardAccess,
+                        appConfigModule: specifier,
+                        classModules,
+                        mergeDurableObjects,
+                        shard: options.shard,
+                    });
                 }
 
-                // `_generated/{agents,containers,workflows}.ts` each exist only when
-                // the project declares that kind; codegen has already run by load
-                // time, so these fs checks decide which star re-exports the composed
-                // entry carries.
-                const classModules = GENERATED_CLASS_MODULES.filter((module) => existsSync(join(generatedImportBase, `${module}.ts`)));
-
-                return buildWorkerEntrySource(
-                    context.framework.framework,
-                    generatedImportBase,
-                    classModules,
-                    options.allowUnauthenticatedShardAccess,
-                    options.shard,
-                );
-            }
-
-            return undefined;
+                return undefined;
+            },
         },
         name: "lunora:framework-compose",
-        resolveId(id) {
-            if (id === LUNORA_WORKER_VIRTUAL_ID && isAutoComposable(context)) {
-                return RESOLVED_LUNORA_WORKER_ID;
-            }
+        resolveId: {
+            filter: { id: LUNORA_WORKER_VIRTUAL_ID_RE },
+            handler(id) {
+                if (id === LUNORA_WORKER_VIRTUAL_ID && isAutoComposable(context)) {
+                    return RESOLVED_LUNORA_WORKER_ID;
+                }
 
-            return undefined;
+                return undefined;
+            },
         },
     };
 };
 
-export type { ClassAWiring, GeneratedClassModule };
-export { buildWorkerEntrySource, CLASS_A_WIRING, GENERATED_CLASS_MODULES, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };
+export type { ClassAWiring, WorkerEntryComposition };
+export { buildWorkerEntrySource, CLASS_A_WIRING, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };

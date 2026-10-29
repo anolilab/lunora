@@ -69,5 +69,5 @@ const offerLintTools = async (deps: LintToolOfferDeps): Promise<LintIgnoreOutcom
     return outcomes;
 };
 
-export { LINT_TOOL_OPTIONS, PROMPT as LINT_TOOL_PROMPT, offerLintTools };
-export type { LintToolOfferDeps, LintToolOption };
+export { LINT_TOOL_OPTIONS, offerLintTools };
+export type { LintToolOfferDeps };

@@ -5,7 +5,9 @@ import type { CallExpression, Project, SourceFile, VariableDeclaration } from "t
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { MutatorWriteIR } from "../ir";
-import { isDatabaseAccessor } from "./ast";
+import { findObjectProperty } from "./ast";
+import { exportedNameOf } from "./attribution";
+import { isDatabaseAccessor } from "./database-calls";
 import { isDefineMutatorCallee, MUTATORS_FILENAME } from "./mutators";
 
 /**
@@ -40,7 +42,7 @@ const serverImplNode = (call: CallExpression): Node | undefined => {
         return undefined;
     }
 
-    const property = argument.getProperty("server");
+    const property = findObjectProperty(argument, "server");
 
     if (property === undefined) {
         return undefined;
@@ -81,7 +83,8 @@ const writesFromDeclaration = (declaration: VariableDeclaration): MutatorWriteIR
     }
 
     const nameNode = declaration.getNameNode();
-    const exportName = Node.isIdentifier(nameNode) ? nameNode.getText() : "";
+    // The name callers use: `export { createPost as makePost }` is `makePost`.
+    const exportName = Node.isIdentifier(nameNode) ? (exportedNameOf(declaration) ?? nameNode.getText()) : "";
 
     return serverImpl
         .getDescendantsOfKind(SyntaxKind.CallExpression)
@@ -100,7 +103,7 @@ const mutatorWritesFromSource = (source: SourceFile): MutatorWriteIR[] =>
  * authoritative `server` impls (`lunora/mutators.ts`) — the
  * `mutator_full_row_replace` advisor input. Returns `[]` when the file doesn't
  * exist. Each `replace` is attributed to the mutator export performing it so the
- * lint can steer a developer toward column-level `ctx.db.patch(id, { field })`.
+ * lint can steer a developer toward column-level `ctx.db.patch("table", id, { field })`.
  */
 const discoverMutatorWrites = (project: Project, lunoraDirectory: string): MutatorWriteIR[] => {
     const mutatorsPath = join(lunoraDirectory, MUTATORS_FILENAME);

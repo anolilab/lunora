@@ -115,7 +115,7 @@ describe("createShardCtxDb — insert/get", () => {
 
         expect(id).toBe("fixed");
 
-        const fetched = await context.writer.get("fixed");
+        const fetched = await context.writer.get("messages", "fixed");
 
         expect(fetched).toMatchObject({ _id: "fixed", text: "hi" });
     });
@@ -124,7 +124,7 @@ describe("createShardCtxDb — insert/get", () => {
         expect.assertions(1);
 
         const id = await context.writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
-        const fetched = await context.writer.get(id);
+        const fetched = await context.writer.get("messages", id);
 
         expect(fetched).toMatchObject({ _creationTime: fixedTime });
     });
@@ -147,7 +147,7 @@ describe("createShardCtxDb — insert/get", () => {
     it("get() returns null when no row matches", async () => {
         expect.assertions(1);
 
-        await expect(context.writer.get("missing")).resolves.toBeNull();
+        await expect(context.writer.get("messages", "missing")).resolves.toBeNull();
     });
 });
 
@@ -158,9 +158,9 @@ describe("createShardCtxDb — patch/replace/delete", () => {
         const { writer } = setupWriter({ idGenerator: () => "m_1" });
 
         await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
-        await writer.patch("m_1", { text: "edited" });
+        await writer.patch("messages", "m_1", { text: "edited" });
 
-        const fetched = await writer.get("m_1");
+        const fetched = await writer.get("messages", "m_1");
 
         expect(fetched).toMatchObject({ channelId: "c1", text: "edited" });
     });
@@ -170,7 +170,7 @@ describe("createShardCtxDb — patch/replace/delete", () => {
 
         const { writer } = setupWriter();
 
-        await expect(writer.patch("missing", { text: "x" })).rejects.toThrow(/document not found/u);
+        await expect(writer.patch("messages", "missing", { text: "x" })).rejects.toThrow(/document not found/u);
     });
 
     it("patch throws a descriptive error when a field is explicitly undefined", async () => {
@@ -180,12 +180,12 @@ describe("createShardCtxDb — patch/replace/delete", () => {
 
         await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
 
-        await expect(writer.patch("m_1", { text: undefined })).rejects.toThrow(
+        await expect(writer.patch("messages", "m_1", { text: undefined })).rejects.toThrow(
             "Cannot patch field 'text' to undefined — use null to clear a nullable field, or omit the key to leave it unchanged.",
         );
 
         // The silent delete must not have happened: the field is untouched.
-        const fetched = await writer.get("m_1");
+        const fetched = await writer.get("messages", "m_1");
 
         expect(fetched).toMatchObject({ text: "hi" });
     });
@@ -196,9 +196,9 @@ describe("createShardCtxDb — patch/replace/delete", () => {
         const { writer } = setupWriter({ idGenerator: () => "m_1" });
 
         await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
-        await writer.patch("m_1", { text: null });
+        await writer.patch("messages", "m_1", { text: null });
 
-        const fetched = await writer.get("m_1");
+        const fetched = await writer.get("messages", "m_1");
 
         expect(fetched).toHaveProperty("text", null);
         expect(fetched).toMatchObject({ channelId: "c1" });
@@ -211,9 +211,9 @@ describe("createShardCtxDb — patch/replace/delete", () => {
 
         await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
         // `text` is not a property of the patch object at all — must be a no-op.
-        await writer.patch("m_1", { channelId: "c2" });
+        await writer.patch("messages", "m_1", { channelId: "c2" });
 
-        const fetched = await writer.get("m_1");
+        const fetched = await writer.get("messages", "m_1");
 
         expect(fetched).toMatchObject({ channelId: "c2", text: "hi" });
     });
@@ -225,12 +225,12 @@ describe("createShardCtxDb — patch/replace/delete", () => {
 
         await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
 
-        await expect(writer.replace("m_1", { authorId: "u2", channelId: "c2", text: undefined })).rejects.toThrow(
+        await expect(writer.replace("messages", "m_1", { authorId: "u2", channelId: "c2", text: undefined })).rejects.toThrow(
             "Cannot replace field 'text' to undefined — use null to clear a nullable field, or omit the key to leave it unchanged.",
         );
 
         // The aborted replace must not have mutated the row.
-        const fetched = await writer.get("m_1");
+        const fetched = await writer.get("messages", "m_1");
 
         expect(fetched).toMatchObject({ authorId: "u1", channelId: "c1", text: "hi" });
     });
@@ -241,9 +241,9 @@ describe("createShardCtxDb — patch/replace/delete", () => {
         const { writer } = setupWriter({ idGenerator: () => "m_1" });
 
         await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
-        await writer.replace("m_1", { authorId: "u2", channelId: "c2", text: "fresh" });
+        await writer.replace("messages", "m_1", { authorId: "u2", channelId: "c2", text: "fresh" });
 
-        const fetched = await writer.get("m_1");
+        const fetched = await writer.get("messages", "m_1");
 
         expect(fetched).toMatchObject({ _id: "m_1", authorId: "u2", channelId: "c2", text: "fresh" });
     });
@@ -253,7 +253,7 @@ describe("createShardCtxDb — patch/replace/delete", () => {
 
         const { deltas, writer } = setupWriter();
 
-        await writer.delete("missing");
+        await writer.delete("messages", "missing");
 
         expect(deltas).toHaveLength(0);
     });
@@ -266,9 +266,9 @@ describe("createShardCtxDb — patch/replace/delete", () => {
         await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
         deltas.length = 0;
 
-        await writer.delete("m_1");
+        await writer.delete("messages", "m_1");
 
-        await expect(writer.get("m_1")).resolves.toBeNull();
+        await expect(writer.get("messages", "m_1")).resolves.toBeNull();
         expect(deltas).toHaveLength(1);
         expect(deltas[0]).toMatchObject({ key: "m_1", op: "delete", table: "messages" });
     });
@@ -462,9 +462,9 @@ describe("createShardCtxDb — onWrite", () => {
         });
 
         await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
-        await writer.patch("m_1", { text: "edit" });
-        await writer.replace("m_1", { authorId: "u2", channelId: "c2", text: "fresh" });
-        await writer.delete("m_1");
+        await writer.patch("messages", "m_1", { text: "edit" });
+        await writer.replace("messages", "m_1", { authorId: "u2", channelId: "c2", text: "fresh" });
+        await writer.delete("messages", "m_1");
 
         expect(events.map((event) => event.op)).toEqual(["insert", "update", "update", "delete"]);
         expect(events[0]).toMatchObject({ doc: { text: "hi" }, id: "m_1", op: "insert", table: "messages" });
@@ -497,7 +497,7 @@ describe("createShardCtxDb — onWrite", () => {
         const onWrite = vi.fn<WriteHook>();
         const { writer } = setupWriter({ onWrite });
 
-        await writer.delete("missing");
+        await writer.delete("messages", "missing");
 
         expect(onWrite).not.toHaveBeenCalled();
     });
@@ -524,8 +524,8 @@ describe("createShardCtxDb — broadcast", () => {
         const { writer } = setupWriter({ broadcast, idGenerator: () => "m_1" });
 
         await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
-        await writer.patch("m_1", { text: "edit" });
-        await writer.delete("m_1");
+        await writer.patch("messages", "m_1", { text: "edit" });
+        await writer.delete("messages", "m_1");
 
         expect(broadcast).toHaveBeenCalledTimes(3);
         expect(broadcast.mock.calls[0]![0]).toMatchObject({ op: "insert" });

@@ -33,6 +33,14 @@ import { LunoraError } from "./errors";
  * Return `null` to signal that the request is anonymous; the runtime will
  * skip both `x-lunora-userid` and `x-lunora-identity` headers, and
  * `ctx.auth.userId` will be `undefined` on the shard side.
+ *
+ * A credential that verified but has EXPIRED is not anonymous: return the
+ * identity with its past `exp` / `expiresAtMs` (or throw
+ * `new LunoraError("…", { code: "TOKEN_EXPIRED", status: 401 })`). The runtime
+ * answers an HTTP call with `TOKEN_EXPIRED` / 401 and drops a socket with close
+ * code 4001, which is what tells a client to refresh and re-send — returning
+ * `null` instead runs the call anonymous, and the app's own `UNAUTHORIZED`
+ * check reads to the client as a verdict on the call.
  */
 interface ResolvedIdentity {
     /** Arbitrary additional claims. Must be JSON-serialisable. */
@@ -40,15 +48,14 @@ interface ResolvedIdentity {
 
     /**
      * JWT-standard expiry in epoch SECONDS. When present (and `expiresAtMs` is
-     * absent), the runtime forwards it as the socket's credential expiry — the
-     * DO drops the socket once it lapses. Used only on the WebSocket path.
+     * absent), it is the credential's expiry: an HTTP call made after it is
+     * refused with `TOKEN_EXPIRED` / 401, and the DO drops a socket once it lapses.
      */
     exp?: number;
 
     /**
-     * Credential expiry in epoch MILLISECONDS. Preferred over `exp` when
-     * both are present. Forwarded as the socket's expiry on the WebSocket path
-     * so the DO drops the socket once it lapses; omit for non-expiring sessions.
+     * Credential expiry in epoch MILLISECONDS. Preferred over `exp` when both
+     * are present, with the same effect; omit for non-expiring sessions.
      */
     expiresAtMs?: number;
 

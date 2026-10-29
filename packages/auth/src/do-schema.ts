@@ -205,7 +205,6 @@ const columnClause = (fieldName: string, field: AuthField): string => {
  * here is the name better-auth's introspection expects to find.
  * @param options The better-auth options the DO will run — the plugin list decides which tables exist.
  * @returns SQL statements to execute in order.
- * @experimental
  */
 export const authDoSchemaStatements = (options: LunoraAuthOptions): string[] => {
     const { indexesByTable, tables } = getAuthTablesWithResolvedIndexes(options);
@@ -273,7 +272,6 @@ export const authDoSchemaStatements = (options: LunoraAuthOptions): string[] => 
  * @param options The better-auth options the DO runs, already resolved.
  * @param existingColumns Physical column names currently present on a table; empty/absent for a table that does not exist yet (it will be created instead).
  * @returns SQL statements to execute in order; empty when the live schema is current.
- * @experimental
  */
 export const authDoColumnAdditions = (options: LunoraAuthOptions, existingColumns: (table: string) => Iterable<string>): string[] => {
     const { tables } = getAuthTablesWithResolvedIndexes(options);

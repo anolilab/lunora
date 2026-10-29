@@ -66,7 +66,7 @@
                 "hourUTC": 1,
                 "minuteUTC": 0
             },
-            "expected": "0 1 * * 1"
+            "expected": "0 1 * * 2"
         },
         {
             "kind": "weekly",
@@ -75,7 +75,7 @@
                 "hourUTC": 0,
                 "minuteUTC": 0
             },
-            "expected": "0 0 * * 0"
+            "expected": "0 0 * * 1"
         },
         {
             "kind": "weekly",
@@ -84,7 +84,7 @@
                 "hourUTC": 23,
                 "minuteUTC": 59
             },
-            "expected": "59 23 * * 6"
+            "expected": "59 23 * * 7"
         },
         {
             "kind": "monthly",

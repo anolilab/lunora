@@ -350,7 +350,7 @@ describe("sql_injection_risk", () => {
     it("flags one ERROR finding per interpolation", () => {
         expect.assertions(2);
 
-        const sqlInterpolations: AdvisorSqlInterpolation[] = [{ exportName: "search", file: "search", line: 3 }];
+        const sqlInterpolations: AdvisorSqlInterpolation[] = [{ scope: { kind: "export", name: "search" }, file: "search", line: 3 }];
         const findings = sqlInjectionRisk.run({ schema: schema(), sqlInterpolations });
 
         expect(findings).toHaveLength(1);
@@ -686,7 +686,7 @@ describe("action_fetch_ssrf", () => {
     it("flags one ERROR finding per arg-derived ctx.fetch", () => {
         expect.assertions(2);
 
-        const argumentDerivedFetches: AdvisorArgumentDerivedFetch[] = [{ exportName: "proxyImage", file: "proxyImage", line: 7 }];
+        const argumentDerivedFetches: AdvisorArgumentDerivedFetch[] = [{ scope: { kind: "export", name: "proxyImage" }, file: "proxyImage", line: 7 }];
         const findings = actionFetchSsrf.run({ argumentDerivedFetches, schema: schema() });
 
         expect(findings).toHaveLength(1);

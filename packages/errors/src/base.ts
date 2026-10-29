@@ -6,9 +6,12 @@
  * `renderError` renders it (and its actionable hint) directly at the CLI/overlay
  * edge, and adds the transport fields Lunora needs: a machine `code`, an HTTP/RPC
  * `status`, an optional `docsUrl`, and an optional wire-encodable `data` payload.
- * Constructing one looks its defaults up in the central `ERROR_CATALOG` by
- * `code`, so a bare `new LunoraError("NOT_FOUND")` already carries the right
- * status/title/hint.
+ * Constructing one looks its status and title up in the central `ERROR_CATALOG`
+ * by `code`, so a bare `new LunoraError("NOT_FOUND")` already carries the right
+ * status/title. The catalog `hint` is NOT copied on: it lives in `hints.ts` so
+ * browser bundles (which construct errors but never render a fix) do not ship
+ * it. `hint` holds only an explicit or wire-received hint; renderers call
+ * `resolveHint(error)` for the catalog fallback, as `toErrorBody` does.
  *
  * It intentionally does NOT `extend` `@visulima/error`'s `VisulimaError` class:
  * that class's module (`@visulima/error/error`) statically pulls the Node-only
@@ -18,13 +21,22 @@
  * here keeps `@lunora/errors` genuinely zero-dependency and bundle-safe on every
  * runtime, while staying fully renderer-compatible.
  *
- * All fields are own-enumerable, so they ride the existing wire codec
- * (`shared/wire-codec.ts`) automatically when a `LunoraError` is embedded in a
+ * All client-facing fields are own-enumerable, so they ride the existing wire codec
+ * (`packages/wire/src/wire-codec.ts`) automatically when a `LunoraError` is embedded in a
  * payload, and the runtime/DO mappers copy them into the top-level error envelope
- * for the client, CLI, and Studio to render.
+ * for the client, CLI, and Studio to render. The one exception is `internal`
+ * (operator-only context), which is non-enumerable so it never reaches a client.
  */
-import type { ErrorCatalogEntry, ErrorHint, LunoraErrorCode } from "./catalog";
+import type { ErrorCatalogEntry, LunoraErrorCode } from "./catalog";
 import { getCatalogEntry } from "./catalog";
+import type { ErrorHint } from "./hints";
+
+/**
+ * Cross-copy brand. `Symbol.for` resolves to the same symbol in every copy of
+ * this module, so two installed copies of `@lunora/errors` (or two bundles that
+ * each inline it) still recognise each other's errors via `instanceof LunoraError`.
+ */
+const LUNORA_ERROR_BRAND: unique symbol = Symbol.for("@lunora/errors/LunoraError");
 
 /** Source location for an error (mirrors `@visulima/error`'s `ErrorLocation`). */
 export interface ErrorLocation {
@@ -41,8 +53,24 @@ export interface LunoraErrorOptions {
     data?: unknown;
     /** Link to deeper docs for this error. */
     docsUrl?: string;
-    /** Actionable fix (Markdown). Defaults to the catalog entry's hint. */
+
+    /**
+     * The HTTP response headers of the reply this error came from, keys lowercased. Set by the
+     * client's RPC, batch and replay paths; absent on every other error. Kept non-enumerable like
+     * `internal`: a response's `set-cookie` must never ride the wire codec or a JSON log line.
+     */
+    headers?: Readonly<Record<string, string>>;
+
+    /** Actionable fix (Markdown). Not defaulted from the catalog: see `resolveHint`. */
     hint?: ErrorHint;
+
+    /**
+     * Operator-only context (a JSON-safe record). It reaches observability sinks and
+     * NEVER a client: it is kept non-enumerable, so it is absent from `JSON.stringify`,
+     * `Object.keys`, and the wire codec's own-property walk, and no client-facing
+     * envelope copies it.
+     */
+    internal?: Record<string, unknown>;
     /** Source location, when known (e.g. a codegen/schema diagnostic). */
     location?: ErrorLocation;
     /** Override the error `name` (e.g. a subclass like `"ConflictError"`). */
@@ -51,6 +79,8 @@ export interface LunoraErrorOptions {
     status?: number;
     /** Override the short title. Defaults to the catalog entry's title. */
     title?: string;
+    /** Short human explanation of the cause, a sibling of `hint` (the fix). Client-visible like `hint`. */
+    why?: string;
 }
 
 /**
@@ -60,6 +90,20 @@ export interface LunoraErrorOptions {
 export type LunoraErrorCodeInput = LunoraErrorCode | (string & {});
 
 export class LunoraError extends Error {
+    /**
+     * `instanceof LunoraError` checks the cross-copy brand instead of the prototype
+     * chain, so an error thrown by a duplicate copy of this package still matches.
+     * Subclasses inherit this method; for them it falls back to the default
+     * prototype check, so `x instanceof ConflictError` keeps meaning subclass membership.
+     */
+    public static override [Symbol.hasInstance](value: unknown): boolean {
+        if (this !== LunoraError) {
+            return Function.prototype[Symbol.hasInstance].call(this, value);
+        }
+
+        return typeof value === "object" && value !== null && (value as Record<symbol, unknown>)[LUNORA_ERROR_BRAND] === true;
+    }
+
     /**
      * Discriminator recognised by `@visulima/error`'s `renderError`/`isVisulimaError`
      * (`error.type === "VisulimaError"`), so a `LunoraError` renders like a native
@@ -88,6 +132,18 @@ export class LunoraError extends Error {
     /** Optional structured payload propagated verbatim to the client. */
     public readonly data: unknown;
 
+    /** Short human explanation of the cause (client-visible, like `hint`). */
+    public readonly why: string | undefined;
+
+    /**
+     * Operator-only context. Defined as a non-enumerable own property in the
+     * constructor (see there), so it is never serialized to a client.
+     */
+    declare public readonly internal: Record<string, unknown> | undefined;
+
+    /** Response headers of the reply this error came from. Non-enumerable and absent unless set. */
+    declare public readonly headers: Readonly<Record<string, string>> | undefined;
+
     public constructor(code: LunoraErrorCodeInput, message?: string, options: LunoraErrorOptions = {}) {
         const entry: ErrorCatalogEntry | undefined = getCatalogEntry(code);
 
@@ -101,12 +157,28 @@ export class LunoraError extends Error {
         super(message ?? code, options.cause === undefined ? undefined : { cause: options.cause });
 
         this.name = options.name ?? "LunoraError";
-        this.hint = options.hint ?? entry?.hint;
+        this.hint = options.hint;
         this.title = options.title ?? entry?.title;
         this.loc = options.location;
         this.code = code;
         this.status = options.status ?? entry?.status ?? 500;
-        this.docsUrl = options.docsUrl ?? entry?.docsUrl;
+        this.docsUrl = options.docsUrl;
         this.data = options.data;
+        this.why = options.why;
+
+        // Non-enumerable so it never rides the wire codec or shows up in equality checks.
+        Object.defineProperty(this, LUNORA_ERROR_BRAND, { value: true });
+
+        // Non-enumerable for the same reason, and for `internal` specifically: the wire
+        // codec and JSON both walk own ENUMERABLE props, so an enumerable `internal`
+        // would reach the client the moment this error is embedded in a payload.
+        if (options.internal !== undefined) {
+            Object.defineProperty(this, "internal", { value: options.internal });
+        }
+
+        // Same reasoning for response headers: a `set-cookie` must not reach a client or a log line.
+        if (options.headers !== undefined) {
+            Object.defineProperty(this, "headers", { value: options.headers });
+        }
     }
 }

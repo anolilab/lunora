@@ -1,35 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { emitApp } from "../src/emit-app";
-
-/** Minimal `EmitAppOptions` with every capability off; tests flip one flag at a time. */
-const baseOptions = {
-    hasAccess: false,
-    hasAi: false,
-    hasAnalytics: false,
-    hasAuth: false,
-    hasBrowser: false,
-    hasFramework: false,
-    hasGlobal: false,
-    hasHyperdrive: false,
-    hasHyperdriveGlobal: false,
-    hasImages: false,
-    hasKv: false,
-    hasKvIntrospector: false,
-    hasNotify: false,
-    hasPayments: false,
-    hasQueue: false,
-    hasR2sql: false,
-    hasScheduler: false,
-    hasStorage: false,
-    hasVectors: false,
-    hasWorkflow: false,
-    hasX402: false,
-    tableNames: [],
-    useUmbrella: false,
-    wantsOpenApi: false,
-    wantsOpenRpc: false,
-};
+import baseOptions from "./emit-app-options";
 
 // Issue #287: `POST /_lunora/admin/import` needs `resolveTableSharding` and
 // `importGlobals` wired on the worker, or a `.global()` table silently never
@@ -38,35 +10,78 @@ const baseOptions = {
 // already imports when the app has a D1-backed `.global()` table, so codegen
 // emits them the same way it already emits `runShardExport`/`runShardImport`.
 describe("emitApp — admin bulk-import wiring (.global())", () => {
-    it("wires options.resolveTableSharding + options.importGlobals when the app has a .global() table", () => {
-        expect.assertions(4);
+    it("wires options.importGlobals when the app has a .global() table", () => {
+        expect.assertions(5);
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
-        expect(output).toContain("options.resolveTableSharding = buildTableShardingResolver();");
         expect(output).toContain("options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);");
-        expect(output).toContain("const buildTableShardingResolver = (): AdminTableResolver =>");
+        expect(output).toContain("options.importGlobalsSupportsDryRun = true;");
+        expect(output).toContain("options.importGlobalsSupportsReplace = true;");
+        expect(output).toContain('onConflict: request.onConflict ?? "skip",');
         expect(output).toContain("const buildGlobalImporter =");
     });
 
-    it("resolveTableSharding is a mechanical lookup over each table's declared shardMode", () => {
+    it("wires resolveTableSharding from a literal table map for every app, .global() or not", () => {
+        expect.assertions(3);
+
+        const output = emitApp({
+            ...baseOptions,
+            tables: [
+                { name: "users", shardMode: "root" },
+                { name: "messages", shardMode: { field: "channelId", kind: "shardBy" } },
+                { name: "settings", shardMode: "global" },
+            ],
+        });
+
+        expect(output).toContain(
+            [
+                "        const tableSharding = new Map<string, ShardingInfo>([",
+                '            ["users", { mode: { kind: "root" } }],',
+                '            ["messages", { mode: { field: "channelId", kind: "shardBy" } }],',
+                '            ["settings", { mode: { kind: "global" } }],',
+                "        ]);",
+            ].join("\n"),
+        );
+        expect(output).toContain("options.listSchemaTables = () => [...tableSharding.keys()];");
+        expect(output).toContain("options.resolveTableSharding = (table) => tableSharding.get(table);");
+    });
+
+    it("wires a .shardRegistry() declaration into both the shard and the worker's coordinator", () => {
+        expect.assertions(4);
+
+        const output = emitApp({ ...baseOptions, tables: [{ name: "messages", shardMode: { field: "channelId", kind: "shardBy" } }] });
+
+        expect(output).toContain("public shardRegistry(selector: Selector<Env, ShardNamespaceLike | ShardRegistryRpc>): this {");
+        expect(output).toContain(
+            "...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),",
+        );
+        expect(output).toContain(
+            "options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ env, namespace: shardRegistry }) });",
+        );
+        expect(output).toContain("import { createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv }");
+    });
+
+    it("offers no .shardRegistry() to a schema without .shardBy() tables", () => {
         expect.assertions(2);
 
-        const output = emitApp({ ...baseOptions, hasGlobal: true });
+        const output = emitApp({ ...baseOptions, tables: [{ name: "users", shardMode: "root" }] });
 
-        expect(output).toContain('const declared = (schema as unknown as D1CtxDbOptions["schema"]).tables[table];');
-        expect(output).toContain("return declared?.shardMode ? { mode: declared.shardMode } : undefined;");
+        expect(output).not.toContain("shardRegistry");
+        expect(output).not.toContain("createDynamicShardRegistry");
     });
 
     it("importGlobals routes rows through @lunora/d1's importGlobalRows over the same D1 writer", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
         expect(output).toContain(
-            'import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";',
+            'import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";',
         );
         expect(output).toContain("return importGlobalRows(writer, schema as unknown as");
+        // A dry run must reach the D1 importer, or a global table would be written by a check.
+        expect(output).toContain("dryRun: request.dryRun === true,");
     });
 
     it("wraps the D1 exec so .global() reads retry D1's transient failures", () => {
@@ -81,14 +96,6 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
             "const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {",
         );
         expect(output).toContain("return retryingExec({");
-    });
-
-    it("imports AdminTableResolver from @lunora/runtime alongside GlobalIntrospector", () => {
-        expect.assertions(1);
-
-        const output = emitApp({ ...baseOptions, hasGlobal: true });
-
-        expect(output).toContain("AdminTableResolver");
     });
 
     it("omits the admin-import wiring entirely for an app with no .global() table", () => {
@@ -156,7 +163,7 @@ describe("emitApp — admin export/sync/apply wiring (.global())", () => {
 
         expect(output).toContain("const present = await exec.all(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, [\"__cdc_log\"]);");
         expect(output).toContain("return { changes: [], cursor: request.sinceSeq };");
-        expect(output).toContain("const page = await readD1CdcChanges(exec, { limit: request.limit, sinceSeq: request.sinceSeq });");
+        expect(output).toContain("const page = await readD1CdcChanges(exec, request);");
     });
 
     it("applyGlobals replays through the same D1 writer and reports the count", () => {
@@ -168,14 +175,15 @@ describe("emitApp — admin export/sync/apply wiring (.global())", () => {
         expect(output).toContain("return request.changes.length;");
     });
 
-    it("omits the export/sync/apply wiring for a Hyperdrive-backed global app (D1-only wiring)", () => {
-        expect.assertions(3);
+    it("wires a Hyperdrive-backed global app through the Hyperdrive helpers, not the D1 builders", () => {
+        expect.assertions(4);
 
         const output = emitApp({ ...baseOptions, hasHyperdriveGlobal: true });
 
-        expect(output).not.toContain("exportGlobals");
-        expect(output).not.toContain("syncGlobals");
-        expect(output).not.toContain("applyGlobals");
+        expect(output).toContain("exportHyperdriveGlobalRows(");
+        expect(output).not.toContain("buildGlobalExporter");
+        expect(output).not.toContain("buildGlobalCdcSync");
+        expect(output).not.toContain("buildGlobalCdcApplier");
     });
 });
 
@@ -189,10 +197,29 @@ describe("emitApp — auth cold start", () => {
         expect.assertions(1);
 
         const output = emitApp({ ...baseOptions, hasAuth: true });
-        const migration = output.indexOf("await ensureMigrated(createAuth(");
-        const assignment = output.indexOf("auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(");
+        const migration = output.indexOf("await ensureMigrated(createMigrationAuth(");
+        const assignment = output.indexOf("auth = requestAuth;");
 
         expect(migration).toBeLessThan(assignment);
+    });
+
+    // The other half of the same window, and the opposite ordering constraint:
+    // `ensureMigrated` ends with better-auth's `invalidateSchemaChecks(database)`,
+    // which reads a `WeakMap` entry only `createSchemaCheck` writes and returns
+    // silently when there is none. The adapter-backed request instance is the only
+    // thing that registers one, so constructing it AFTER the migration left that
+    // invalidation inert and a pre-migration mismatch verdict cached for the life
+    // of the isolate. Constructing it first — while still assigning it after —
+    // makes the invalidation land.
+    it("constructs the request instance before the migration, so the schema-check invalidation lands", () => {
+        expect.assertions(2);
+
+        const output = emitApp({ ...baseOptions, hasAuth: true });
+        const construction = output.indexOf("const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(");
+        const migration = output.indexOf("await ensureMigrated(createMigrationAuth(");
+
+        expect(construction).toBeGreaterThan(-1);
+        expect(construction).toBeLessThan(migration);
     });
 
     it("single-flights init on the promise, so concurrent cold requests run one migration", () => {
@@ -221,11 +248,13 @@ describe("emitApp — auth cold start", () => {
     });
 
     it("migrates through the raw binding, never the adapter better-auth rejects", () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         const output = emitApp({ ...baseOptions, hasAuth: true });
 
-        expect(output).toContain("await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));");
+        expect(output).toContain("await ensureMigrated(createMigrationAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));");
+        expect(output).toContain('await import("@lunora/auth/migrate")');
+        expect(output).not.toContain('from "@lunora/auth/migrate"');
         expect(output).not.toContain("ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(");
     });
 });

@@ -69,102 +69,71 @@ String _stableObject(Map<Object?, Object?> value) {
 /// Renders a double exactly as `String(v)` does in JavaScript, which is what
 /// `JSON.stringify` emits for a finite number.
 ///
-/// Dart's own `toString` writes "1.0" for an integral value and "1e-5" where
-/// ECMAScript writes "1" and "0.00001". ECMAScript drops the decimal on an
-/// integral value, stays positional from 1e-6 up to (not including) 1e21,
-/// switches to exponential outside that, and never pads the exponent. A key is
-/// compared verbatim, so the spellings must match.
+/// ECMA-262 Number::toString laid over the SHORTEST digit string that reads
+/// back as the same double. Dart's `toString` already chooses those digits —
+/// it is shortest-round-trip, as ECMAScript is — but lays them out its own way
+/// ("1.0" where ECMAScript writes "1"), so only its digits and exponent are
+/// used and the layout is ECMA-262's.
+///
+/// A fixed-precision search cannot stand in for this. The one this replaced
+/// tried `toStringAsFixed(0..20)`, so a value needing more than 20 places to
+/// round-trip — reachable just above 1e-6 — was spelled at 20, and three
+/// adjacent doubles all keyed as `-0.00000607387560669604`: one subscription
+/// received another's frames and optimistic overlays.
+///
+/// Works on the double throughout, never on a narrowed `int`: an `int` is
+/// 64-bit, so `(1e20).toInt()` saturates rather than converting.
 String formatDouble(double value) {
   if (value.isNaN || value.isInfinite) {
     return 'null';
   }
-  // Before the integral branch. The key is `stableStringify`, NOT `String()`:
-  // it emits the bare token "-0" for a negative zero, precisely so a key cannot
-  // collapse -0 and 0 into one. (`String(-0)` in JavaScript IS "0" — that is
-  // the read this used to make, and it dropped the sign.)
+  // The key is `stableStringify`, NOT `String()`: it emits the bare token "-0"
+  // for a negative zero, precisely so a key cannot collapse -0 and 0 into one.
+  // (`String(-0)` in JavaScript IS "0" — that is the read this used to make,
+  // and it dropped the sign.)
   if (value == 0) {
     return value.isNegative ? '-0' : '0';
   }
-  if (value == value.truncateToDouble() && value.abs() < 1e21) {
-    // `toString` prints the SHORTEST digits that read back as the same double,
-    // which is ECMAScript's rule; `toStringAsFixed(0)` prints the EXACT
-    // expansion, so 2^60 came out as 1152921504606846976 where `String(2**60)`
-    // is 1152921504606847000.
-    final rendered = value.toString();
 
-    return rendered.endsWith('.0') ? rendered.substring(0, rendered.length - 2) : rendered;
-  }
-
-  final magnitude = value.abs();
-
-  if (magnitude >= 1e-6 && magnitude < 1e21) {
-    return _positional(value);
-  }
-
-  return _exponential(value);
-}
-
-/// Positional rendering at the shortest precision that still parses back to the
-/// same double — ECMAScript's "shortest round-trip" rule.
-///
-/// The 20-place ceiling is `toStringAsFixed`'s own, and is shared with every
-/// sibling port (Swift's `%.20f`, Python's, Go's). A value needing more than 20
-/// FRACTIONAL digits to round-trip — reachable only just above 1e-6 — falls back
-/// to the 20-place rendering and is then one ulp off what ECMAScript prints.
-/// Left as the siblings have it: a seventh, differently-correct algorithm is how
-/// ports drift, and the fix belongs to all of them at once.
-String _positional(double value) {
-  for (var precision = 0; precision <= 20; precision += 1) {
-    final candidate = value.toStringAsFixed(precision);
-
-    if (double.parse(candidate) == value) {
-      return _trimTrailingZeros(candidate);
-    }
-  }
-
-  return _trimTrailingZeros(value.toStringAsFixed(20));
-}
-
-/// Dart's `toStringAsExponential` already emits ECMAScript's exponent spelling
-/// ("1e-7", "1e+21"), so only the mantissa's trailing zeros need trimming —
-/// unlike the C-`printf` ports, which also have to unpad the exponent.
-String _exponential(double value) {
-  for (var precision = 0; precision <= 17; precision += 1) {
-    final candidate = value.toStringAsExponential(precision);
-
-    if (double.parse(candidate) == value) {
-      return _trimMantissa(candidate);
-    }
-  }
-
-  return _trimMantissa(value.toStringAsExponential(17));
-}
-
-String _trimMantissa(String text) {
+  // `<whole>.<fraction>` with an optional `e<sign><exponent>`, read as digits
+  // d1..dk and an exponent n such that the value is 0.d1..dk × 10^n.
+  final text = value.abs().toString();
   final marker = text.indexOf('e');
+  final mantissa = marker < 0 ? text : text.substring(0, marker);
+  final point = mantissa.indexOf('.');
+  final whole = point < 0 ? mantissa : mantissa.substring(0, point);
+  var digits = point < 0 ? whole : '$whole${mantissa.substring(point + 1)}';
+  var n = whole.length + (marker < 0 ? 0 : int.parse(text.substring(marker + 1)));
+  var start = 0;
+  var end = digits.length;
 
-  if (marker < 0) {
-    return text;
+  // A nonzero value has a nonzero digit, so neither loop runs off the string.
+  while (digits.codeUnitAt(start) == 0x30) {
+    start += 1;
   }
-
-  return '${_trimTrailingZeros(text.substring(0, marker))}${text.substring(marker)}';
-}
-
-String _trimTrailingZeros(String text) {
-  if (!text.contains('.')) {
-    return text;
-  }
-
-  var end = text.length;
-
-  while (end > 0 && text.codeUnitAt(end - 1) == 0x30) {
-    end -= 1;
-  }
-  if (end > 0 && text.codeUnitAt(end - 1) == 0x2E) {
+  while (digits.codeUnitAt(end - 1) == 0x30) {
     end -= 1;
   }
 
-  return text.substring(0, end);
+  digits = digits.substring(start, end);
+  n -= start;
+
+  final k = digits.length;
+  final String body;
+
+  if (k <= n && n <= 21) {
+    body = '$digits${'0' * (n - k)}';
+  } else if (0 < n && n <= 21) {
+    body = '${digits.substring(0, n)}.${digits.substring(n)}';
+  } else if (-6 < n && n <= 0) {
+    body = '0.${'0' * -n}$digits';
+  } else {
+    final exponent = n - 1;
+
+    body = '${digits[0]}${k > 1 ? '.${digits.substring(1)}' : ''}e${exponent < 0 ? '-' : '+'}${exponent.abs()}';
+  }
+
+  return value.isNegative ? '-$body' : body;
 }
 
 /// Quotes a string the way `JSON.stringify` does.

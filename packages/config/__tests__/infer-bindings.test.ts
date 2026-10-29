@@ -1,18 +1,34 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
-import { discoverSandboxUsage } from "@lunora/codegen";
-import { Project } from "ts-morph";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { CapabilityProbe } from "@lunora/codegen";
+import { CAPABILITY_PROBES, discoverSandboxUsage } from "@lunora/codegen";
+import { parse as parseJsonc } from "jsonc-parser";
+import { Project, ts } from "ts-morph";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { inferLunoraBindings, packageNamesFromBindings } from "../src/infer-bindings";
+// Not part of codegen's public API: only this drift guard needs the whole-project probe.
+import { discoverFeatureUsage } from "../../codegen/src/discover/feature-usage";
+import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
+import { validateWranglerProject } from "../src/cloudflare/wrangler-project";
+import type { InferredBindings } from "../src/infer-bindings";
+import { inferLunoraBindings, secretSourcesFromBindings } from "../src/infer-bindings";
+import { mintableSecretKeysFor, secretsForPackages, SHARD_RELAY_HOST_PLACEHOLDER } from "../src/package-secrets-registry";
 
 const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy("channelId"),
     users: defineTable({ email: v.string() }).global(),
+});
+`;
+
+const SCHEMA_HYPERDRIVE_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy("channelId"),
+    users: defineTable({ email: v.string() }).global({ backend: "hyperdrive" }),
 });
 `;
 
@@ -35,6 +51,12 @@ const ENTRY_SHARD_ONLY = `import { createShardDO } from "../../lunora/_generated
 export const ShardDO = createShardDO({});
 
 export default { fetch() { return new Response("ok"); } };
+`;
+
+const ENTRY_SHARD_REGISTRY = `import { createShardDO } from "../../lunora/_generated/shard.js";
+
+export { ShardRegistryDO } from "../../lunora/_generated/shardRegistry.js";
+export const ShardDO = createShardDO({});
 `;
 
 const ENTRY_SHARD_AND_SCHEDULER = `import { createShardDO } from "../../lunora/_generated/shard.js";
@@ -115,6 +137,22 @@ describe("inferLunoraBindings", () => {
         expect(result.needsD1).toBe(false);
     });
 
+    it("does not infer D1 for a Hyperdrive-backed .global() table", async () => {
+        expect.assertions(1);
+
+        // `.global({ backend: "hyperdrive" })` lives on Postgres/MySQL behind the
+        // HYPERDRIVE binding and touches no D1 database. Reading "declares a global
+        // table" as "needs D1" provisioned a database the app never opens, and the
+        // wrangler validator then demanded a `DB` binding of a project with none.
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_HYPERDRIVE_GLOBAL);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.needsD1).toBe(false);
+    });
+
     it("falls back to a known entry path when wrangler has no main", async () => {
         expect.assertions(1);
 
@@ -124,6 +162,25 @@ describe("inferLunoraBindings", () => {
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
+    it("prefers src/server.ts over src/index.ts when nothing names the entry", async () => {
+        expect.assertions(2);
+
+        // This list decides what `reconcile` PROVISIONS, so the precedence is
+        // load-bearing beyond the export cross-check that shares it:
+        // `src/server.ts` is where the astro / solid-v2 / standalone templates
+        // compose, and reading `src/index.ts` instead saw no exported class and
+        // provisioned nothing — green deploy, missing binding at runtime.
+        write("wrangler.jsonc", '{ "name": "app", "compatibility_date": "2026-04-07" }');
+        write("src/index.ts", "export const clientEntry = 1;\n");
+        write("src/server.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+        // Same order as `lunora registry`'s reconcile probe, which had it first.
+        expect(result.durableObjects).toHaveLength(1);
     });
 
     it("lexes src/worker.ts over an adapter-built main, matching what deploy bundles", async () => {
@@ -140,6 +197,61 @@ describe("inferLunoraBindings", () => {
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
+    it("provisions off a `./`-prefixed main rather than treating it as build output", async () => {
+        expect.assertions(1);
+
+        // The build-output gate read `.` as a tool-state directory, so a `./`
+        // main was discarded and inference ran on whichever fallback existed —
+        // provisioning nothing at all, not even SHARD. Green deploy, missing
+        // binding at runtime.
+        write("wrangler.jsonc", '{ "name": "app", "main": "./src/entry.ts", "compatibility_date": "2026-04-07" }');
+        write("src/entry.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+        write("src/index.ts", "export const clientEntry = 1;\n");
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
+    it.each([
+        ["a traversal that cancels a build directory", "dist/../src/entry.ts"],
+        ["a `./` prefix", "./src/entry.ts"],
+        ["no prefix at all", "src/entry.ts"],
+    ])("provisions off a main written with %s", async (_label, main) => {
+        expect.assertions(1);
+
+        // The build-output gate classifies by path segment, so it has to resolve
+        // the path first: dropping `..` on its own left `dist` behind and read
+        // `dist/../src/entry.ts` as build output, discarding the declared entry.
+        write("wrangler.jsonc", `{ "name": "app", "main": "${main}", "compatibility_date": "2026-04-07" }`);
+        write("dist/_worker.js", "export default { fetch() { return new Response('ok'); } };\n");
+        write("src/entry.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+        write("src/index.ts", "export const clientEntry = 1;\n");
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+    });
+
+    it("does not lex a BUILT adapter artifact named by main — it provisions nothing", async () => {
+        expect.assertions(2);
+
+        // The sibling test above is the case where `src/worker.ts` shadows the
+        // artifact. Without one, an existing `main` was accepted as the entry —
+        // and an adapter bundle exports only the SSR handler, so every class read
+        // as unexported and reconcile wrote NO bindings, not even SHARD. A green
+        // deploy that fails at runtime on a missing binding.
+        write("wrangler.jsonc", '{ "name": "app", "main": "dist/_worker.js", "compatibility_date": "2026-04-07" }');
+        write("dist/_worker.js", "export default { fetch() { return new Response('ok'); } };\n");
+        write("src/server.ts", ENTRY_SHARD_ONLY.replaceAll("../../lunora", "../lunora"));
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+        // Read off the authored entry, not the artifact.
+        expect(result.durableObjects).toHaveLength(1);
     });
 
     it("reports no Durable Objects when the worker entry cannot be found", async () => {
@@ -221,6 +333,37 @@ describe("inferLunoraBindings", () => {
 
         expect(result.usesAi).toBe(true);
         expect(result.signals.some((signal) => signal.includes("AI"))).toBe(true);
+    });
+
+    it("re-reads an edited file on the next scan of the same project, and forgets a deleted one", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/summarize.ts", `import { generateText } from "@lunora/ai";\nexport const summarize = () => generateText;`);
+        write("lunora/other.ts", `import { generateText } from "@lunora/ai";\nexport const other = () => generateText;`);
+
+        await expect(inferLunoraBindings({ projectRoot: root })).resolves.toHaveProperty("usesAi", true);
+
+        // Still a candidate file (it names the package), but a type-only import implies nothing.
+        write("lunora/summarize.ts", `import type { generateText } from "@lunora/ai";\nexport type Summarize = typeof generateText;`);
+        rmSync(join(root, "lunora", "other.ts"));
+
+        await expect(inferLunoraBindings({ projectRoot: root })).resolves.toHaveProperty("usesAi", false);
+
+        write("lunora/summarize.ts", `import { generateText } from "@lunora/ai";\nexport const summarize = () => generateText;`);
+
+        await expect(inferLunoraBindings({ projectRoot: root })).resolves.toHaveProperty("usesAi", true);
+    });
+
+    it("scans a project named by a relative root", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/summarize.ts", `import { generateText } from "@lunora/ai";\nexport const summarize = () => generateText;`);
+
+        await expect(inferLunoraBindings({ projectRoot: relative(process.cwd(), root) })).resolves.toHaveProperty("usesAi", true);
     });
 
     it("infers AI from an env.AI access without importing @lunora/ai", async () => {
@@ -352,7 +495,7 @@ export * from "../../lunora/_generated/workflows.js";
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.workflows).toHaveLength(1);
-        expect(result.workflows[0]).toMatchObject({ bindingName: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exported: true });
+        expect(result.workflows[0]).toMatchObject({ className: "OrderPipelineWorkflow", exported: true });
         expect(result.signals.join(" ")).toContain('workflow "orderPipeline" declared and exported');
     });
 
@@ -386,6 +529,22 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(result.signals.join(" ")).toContain("not exported by the worker entry");
     });
 
+    it("infers the queues a module's own queues.ts declares, with no root lunora/queues.ts", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/billing/module.ts", `import { defineModule } from "@lunora/server";\n\nexport default defineModule({});\n`);
+        write(
+            "lunora/billing/queues.ts",
+            `import { defineQueue } from "@lunora/queue";\n\nexport const invoices = defineQueue({ handler: async () => {} });\n`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.queues).toStrictEqual([expect.objectContaining({ bindingName: "QUEUE_INVOICES", filePath: "billing/queues", name: "invoices" })]);
+    });
+
     it("treats a class-A composed worker entry as exporting the declared classes", async () => {
         expect.assertions(3);
 
@@ -402,6 +561,125 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(result.workflows[0]).toMatchObject({ className: "OrderPipelineWorkflow", exported: true });
         expect(result.durableObjects).toEqual([{ binding: "SHARD", className: "ShardDO" }]);
         expect(result.signals.join(" ")).not.toContain("not exported by the worker entry");
+    });
+
+    it("binds only SHARD to the merged LunoraDO when codegen wrote the merge module", async () => {
+        expect.assertions(1);
+
+        // Plan 462: the composed entry exports `LunoraDO` in place of the
+        // per-role classes, so SCHEDULER and SHARD_REGISTRY must not be bound.
+        write("wrangler.jsonc", `{\n    "name": "app",\n    "main": "virtual:lunora/worker",\n    "compatibility_date": "2026-04-07"\n}\n`);
+        write("lunora/_generated/durableObjects.ts", "export {};\n");
+        write("lunora/_generated/scheduler.ts", 'export { SchedulerDO } from "@lunora/scheduler";\n');
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects).toEqual([{ binding: "SHARD", className: "LunoraDO" }]);
+    });
+
+    it("reports the shard registry's relay secret for an app that binds the registry, merged or not", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/do:shardRegistry");
+
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { ShardRegistryDO } from "@lunora/do";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
+
+        // A merged app exports `LunoraDO` and binds no `SHARD_REGISTRY`; the generated module still says it has one.
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/_generated/durableObjects.ts", "export {};\n");
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/do:shardRegistry");
+    });
+
+    it("declares no relay secret for a worker that only calls a registry another worker hosts", async () => {
+        expect.assertions(1);
+
+        // Such a worker takes the host's RPC over a service binding, so the binding is its capability and no secret is needed.
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/registry.ts", "export const registry = createDynamicShardRegistry({ namespace: env.SERVICE_REGISTRY });\n");
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/do:shardRegistry");
+    });
+
+    it("does not make a sharded app a registry host just because codegen wrote the registry module", async () => {
+        expect.assertions(1);
+
+        // Codegen writes `shardRegistry.ts` for every `.shardBy()` schema; this entry exports only the shard.
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        const sources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(sources).not.toContain("@lunora/do:shardRegistry");
+    });
+
+    it("gives a worker that hosts the registry the host's secret, and not the client's", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { ShardRegistryDO } from "@lunora/do";\n`);
+
+        const sources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(sources).toContain("@lunora/do:shardRegistry");
+    });
+
+    it("reconciles a fresh merged app into a config the validator accepts", async () => {
+        expect.assertions(3);
+
+        // End to end, the path `lunora dev` runs: infer → reconcile → validate.
+        write("wrangler.jsonc", `{\n    "name": "app",\n    "main": "virtual:lunora/worker",\n    "compatibility_date": "2026-04-07"\n}\n`);
+        write("lunora/schema.ts", 'import { defineSchema } from "@lunora/server";\nexport default defineSchema({});\n');
+        write("lunora/_generated/durableObjects.ts", "export {};\n");
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        reconcileWranglerBindings(root, await inferLunoraBindings({ projectRoot: root }));
+
+        const wrangler = parseJsonc(readFileSync(join(root, "wrangler.jsonc"), "utf8")) as {
+            durable_objects?: { bindings?: unknown[] };
+            migrations?: { new_sqlite_classes?: string[] }[];
+        };
+
+        expect(wrangler.durable_objects?.bindings).toStrictEqual([{ class_name: "LunoraDO", name: "SHARD" }]);
+        expect(wrangler.migrations?.flatMap((migration) => migration.new_sqlite_classes ?? [])).toStrictEqual(["LunoraDO"]);
+        expect(
+            validateWranglerProject({ projectRoot: root }).report.errors.filter((error) => error.includes("LunoraDO") || error.includes("ShardDO")),
+        ).toStrictEqual([]);
+    });
+
+    it("hints that the merge changed nothing for a hand-written entry without LunoraDO", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/_generated/durableObjects.ts", "export {};\n");
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.signals.join(" ")).toContain("exports no LunoraDO");
+    });
+
+    it("collapses a hand-written entry that exports LunoraDO onto one SHARD binding", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write(
+            "src/server/index.ts",
+            `${ENTRY_SHARD_AND_SCHEDULER}export const LunoraDO = mergeDurableObjects({ shard: ShardDO });\nexport default { fetch() { return new Response("ok"); } };\n`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects).toEqual([{ binding: "SHARD", className: "LunoraDO" }]);
     });
 
     it("reports no workflows for a project without lunora/workflows.ts", async () => {
@@ -435,7 +713,7 @@ export * from "../../lunora/_generated/agents.js";
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.agents).toHaveLength(1);
-        expect(result.agents[0]).toMatchObject({ bindingName: "AGENT_SUPPORT", className: "SupportAgentWorkflow", exported: true });
+        expect(result.agents[0]).toMatchObject({ className: "SupportAgentWorkflow", exported: true });
         expect(result.signals.join(" ")).toContain('agent "support" declared and exported');
     });
 
@@ -489,11 +767,27 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         const result = await inferLunoraBindings({ projectRoot: root });
 
-        expect(result.usesPayment).toBe(true);
+        expect(result.usesPayments).toBe(true);
         // Payment rides the existing ShardDO via ctx.db — no extra DO binding.
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
         expect(result.signals.some((signal) => signal.includes("@lunora/payment"))).toBe(true);
         expect(result.signals.some((signal) => signal.includes("STRIPE_SECRET_KEY") && signal.includes("POLAR_ACCESS_TOKEN"))).toBe(true);
+    });
+
+    it("reports the imported payment adapter's subpath, so only its secrets are scaffolded (#1022)", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/billing.ts",
+            `import { createPayment } from "@lunora/payment";\nimport { creem } from "@lunora/payment/creem";\nexport const payment = () => [createPayment, creem];`,
+        );
+
+        const packages = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(packages).toContain("@lunora/payment/creem");
+        expect(packages.filter((name) => name.startsWith("@lunora/payment/"))).toStrictEqual(["@lunora/payment/creem"]);
     });
 
     it("does not infer payment for a project that does not import @lunora/payment", async () => {
@@ -504,7 +798,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         const result = await inferLunoraBindings({ projectRoot: root });
 
-        expect(result.usesPayment).toBe(false);
+        expect(result.usesPayments).toBe(false);
     });
 
     // Cloudflare-coverage capability arms (plans 027/028/031/032/035/036).
@@ -514,13 +808,13 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
     // NOT import-driven (it ships from @lunora/bindings/pipelines, reached via
     // ctx.pipelines) and is covered by its own test below.
     it.each([
-        ["@lunora/bindings/kv", "usesKv", /hint: @lunora\/bindings\/kv/u],
-        ["@lunora/hyperdrive", "usesHyperdrive", /hint: @lunora\/hyperdrive/u],
+        ["@lunora/bindings/kv", "usesKv", /kv_namespaces \(@lunora\/bindings\/kv/u],
+        ["@lunora/hyperdrive", "usesHyperdrive", /hyperdrive \(@lunora\/hyperdrive/u],
         ["@lunora/browser", "usesBrowser", /browser \(@lunora\/browser/u],
         ["@lunora/bindings/images", "usesImages", /images \(@lunora\/bindings\/images/u],
         ["@lunora/bindings/analytics", "usesAnalytics", /analytics_engine_datasets/u],
         ["@lunora/x402/charge", "usesX402Charge", /hint: @lunora\/x402\/charge/u],
-        ["@lunora/x402/pay", "usesX402Pay", /hint: @lunora\/x402\/pay/u],
+        ["@lunora/x402/pay", "usesX402", /hint: @lunora\/x402\/pay/u],
     ] as const)("infers %s usage and emits the expected signal", async (source, flag, signalRe) => {
         expect.assertions(2);
 
@@ -532,6 +826,26 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         expect(result[flag]).toBe(true);
         expect(result.signals.join(" ")).toMatch(signalRe);
+    });
+
+    // The CIMD transport has no binding, so no signal either: the flag it needs is
+    // `lunora doctor`'s to check, against the wrangler config inference never reads.
+    it.each([
+        ["a static import", `import workersCimdFetch from "@lunora/auth/cimd/workers";\nexport const transport = workersCimdFetch;`],
+        ["a dynamic import()", `export const transport = async () => (await import("@lunora/auth/cimd/workers")).default();`],
+        // Unparseable mid-edit file: inference falls back to the regex sweep.
+        ["a dynamic import() in a file the lexer rejects", `export const transport = async () => (await import("@lunora/auth/cimd/workers")).default(;`],
+    ] as const)("infers usesCimdWorkers from %s without emitting a signal", async (_label, code) => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/auth.ts", code);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesCimdWorkers).toBe(true);
+        expect(result.signals.join(" ")).not.toContain("cimd");
     });
 
     it("leaves every Cloudflare-coverage flag false for a project importing none of them", async () => {
@@ -577,6 +891,25 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.usesBrowser).toBe(true);
+    });
+
+    it("provisions LOADER from a jsCodeTool import in lunora/, and not from src/ or a type-only import", async () => {
+        expect.assertions(4);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/agents.ts", `import { jsCodeTool } from "@lunora/agent";\nexport const t = jsCodeTool();`);
+        write("lunora/agents.ts", `import type { jsCodeTool } from "@lunora/agent";\nexport const t = 1;`);
+
+        await expect(inferLunoraBindings({ projectRoot: root })).resolves.toMatchObject({ usesBrowser: false, usesWorkerLoader: false });
+
+        write("lunora/agents.ts", `import { defineAgent, jsCodeTool } from "@lunora/agent";\nexport const t = jsCodeTool();`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesWorkerLoader).toBe(true);
+        expect(result.usesBrowser).toBe(false);
+        expect(result.signals.join(" ")).toMatch(/worker_loaders \(jsCodeTool/u);
     });
 
     it("does not provision BROWSER for a sandbox containerTool-only import", async () => {
@@ -726,6 +1059,344 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(result.signals.some((signal) => signal.includes("wrangler pipelines create"))).toBe(true);
     });
 
+    it("does not infer a ctx-access capability from a mention inside a comment or a string", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/notes.ts",
+            `// TODO: move this to ctx.pipelines.send(...)\n// ctx.aiSearch.get("docs") once the index exists\nexport const label = "see ctx.r2sql.query() for reports";`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesPipelines).toBe(false);
+        expect(result.usesR2sql).toBe(false);
+        // A comment must not auto-write `ai_search_namespaces` into wrangler.jsonc.
+        expect(result.usesAiSearch).toBe(false);
+    });
+
+    it("infers a ctx-access capability from a destructured read off ctx", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/ingest.ts", `export const handler = async (ctx) => {\n    const { pipelines } = ctx;\n    await pipelines.send([]);\n};`);
+        write("lunora/reports.ts", `export const report = async ({ ctx: { r2sql } }) => r2sql.query("select 1");`);
+        write(
+            "lunora/search.ts",
+            `export const ask = async ({ ctx }) => {\n    const { aiSearch } = ctx;\n    return aiSearch.get("docs").search({ query: "q" });\n};`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesPipelines).toBe(true);
+        expect(result.usesR2sql).toBe(true);
+        expect(result.usesAiSearch).toBe(true);
+    });
+
+    it("ignores a capability import whose every specifier is type-only", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/types.ts",
+            `import type { Kv } from "@lunora/bindings/kv";\nimport { type AnalyticsClient, type AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";\nexport type T = [Kv, AnalyticsClient, AnalyticsEngineDatasetLike];`,
+        );
+        write("lunora/images.ts", `import { createImages, type Images } from "@lunora/bindings/images";\nexport const make = (): Images => createImages();`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesKv).toBe(false);
+        expect(result.usesAnalytics).toBe(false);
+        // One value specifier beside a type one is a real import.
+        expect(result.usesImages).toBe(true);
+    });
+
+    // A handler reading a codegen-wired helper with no import gets the helper
+    // wired by codegen, so inference must add or hint its binding too — before,
+    // only the pipelines/r2sql/aiSearch/artifacts rows read `ctx`, and the rest
+    // built green and threw on first use.
+    it.each([
+        ["kv", "usesKv", /kv_namespaces \(@lunora\/bindings\/kv/u],
+        ["images", "usesImages", /images \(@lunora\/bindings\/images/u],
+        ["analytics", "usesAnalytics", /analytics_engine_datasets/u],
+        ["browser", "usesBrowser", /browser \(@lunora\/browser/u],
+        ["sql", "usesHyperdrive", /hyperdrive \(@lunora\/hyperdrive/u],
+    ] as const)("infers a bare ctx.%s read with no import", async (property, flag, signalRe) => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/handler.ts", `export const handler = async ({ ctx }) => ctx.${property};`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result[flag]).toBe(true);
+        expect(result.signals.join(" ")).toMatch(signalRe);
+    });
+
+    // Codegen probes `lunora/` only, so only a read there gets a helper wired. A
+    // hand-written Durable Object in `src/` reads its OWN `ctx.storage` (the
+    // `DurableObjectState`) — that must not hint an R2 bucket.
+    it("counts ctx reads under lunora/ only, never a src/ Durable Object's own ctx", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/counter-do.ts", `export class CounterDO {\n    constructor(ctx) {\n        this.sql = ctx.storage.sql;\n    }\n}`);
+
+        const fromSource = await inferLunoraBindings({ projectRoot: root });
+
+        write("lunora/upload.ts", `export const upload = async ({ ctx }) => ctx.storage.upload("a", new Blob());`);
+
+        const fromLunora = await inferLunoraBindings({ projectRoot: root });
+
+        expect(fromSource.usesStorage).toBe(false);
+        expect(fromLunora.usesStorage).toBe(true);
+    });
+
+    describe("agreement with codegen's discoverFeatureUsage over every capability row", () => {
+        /**
+         * Config's flag for each codegen capability it reports. Every row of
+         * codegen's table must be either here or in {@link CODEGEN_ONLY}, so a
+         * row added there fails this suite until someone decides what config
+         * infers from it.
+         */
+        const FLAG_FOR: Readonly<Record<string, keyof InferredBindings>> = {
+            ai: "usesAi",
+            aiSearch: "usesAiSearch",
+            analytics: "usesAnalytics",
+            analyticsSql: "usesAnalyticsSql",
+            artifacts: "usesArtifacts",
+            browser: "usesBrowser",
+            hyperdrive: "usesHyperdrive",
+            images: "usesImages",
+            kv: "usesKv",
+            mail: "usesMail",
+            notify: "usesNotify",
+            payments: "usesPayments",
+            pipelines: "usesPipelines",
+            r2sql: "usesR2sql",
+            scheduler: "usesScheduler",
+            storage: "usesStorage",
+            x402: "usesX402",
+        };
+        /** Codegen rows with no binding or secret for config to infer: their wiring is a declaration file or a ctx facade over existing state. */
+        const CODEGEN_ONLY = new Set(["access", "container", "flags", "vectors", "workflows"]);
+        const PROBES: ReadonlyArray<readonly [string, CapabilityProbe]> = Object.entries(CAPABILITY_PROBES);
+        const MAPPED = PROBES.filter(([key]) => FLAG_FOR[key] !== undefined);
+
+        /** Feed the SAME `lunora/` source through codegen's probe and config's inference, and read both verdicts for every mapped row. */
+        const verdicts = async (source: string): Promise<{ codegen: Record<string, boolean>; config: Record<string, boolean> }> => {
+            write("wrangler.jsonc", WRANGLER);
+            write("src/server/index.ts", ENTRY_SHARD_ONLY);
+            write("lunora/handler.ts", source);
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const usage: Readonly<Record<string, boolean>> = discoverFeatureUsage(project, join(root, "lunora"));
+            const inferred = await inferLunoraBindings({ projectRoot: root });
+
+            return {
+                codegen: Object.fromEntries(MAPPED.map(([key]) => [key, usage[key] === true])),
+                config: Object.fromEntries(MAPPED.map(([key]) => [key, inferred[FLAG_FOR[key] as keyof InferredBindings] === true])),
+            };
+        };
+
+        it("maps every codegen capability row to a config flag or a deliberate omission", () => {
+            expect.assertions(1);
+
+            expect(PROBES.filter(([key]) => FLAG_FOR[key] === undefined && !CODEGEN_ONLY.has(key)).map(([key]) => key)).toStrictEqual([]);
+        });
+
+        it.each(MAPPED)("agree on %s: a value import, a re-export, a ctx read, and a type-only import", async (key, { contextProperty, moduleSpecifier }) => {
+            expect.assertions(5);
+
+            const valueImport = await verdicts(`import * as capability from "${moduleSpecifier}";\nexport const used = capability;`);
+
+            expect(valueImport.config).toStrictEqual(valueImport.codegen);
+
+            const reExport = await verdicts(`export * from "${moduleSpecifier}";`);
+
+            expect(reExport.config).toStrictEqual(reExport.codegen);
+            expect(reExport.config[key]).toBe(true);
+
+            const contextRead = await verdicts(
+                contextProperty === undefined ? "export const none = 1;" : `export const handler = async ({ ctx }) => ctx.${contextProperty};`,
+            );
+
+            expect(contextRead.config).toStrictEqual(contextRead.codegen);
+
+            const typeOnly = await verdicts(`import type { Thing } from "${moduleSpecifier}";\nexport type T = Thing;`);
+
+            // The type-only import compiles away: neither side marks `key` used.
+            expect([typeOnly.codegen[key], typeOnly.config[key]]).toStrictEqual([false, false]);
+        });
+
+        it("agree: comment and string mentions imply nothing", async () => {
+            expect.assertions(1);
+
+            const result = await verdicts(`// ctx.pipelines\n// ctx.kv\nexport const s = "ctx.r2sql";`);
+
+            expect(result.config).toStrictEqual(result.codegen);
+        });
+
+        it("agree: destructured and renamed ctx reads", async () => {
+            expect.assertions(2);
+
+            const result = await verdicts(
+                `export const a = ({ ctx: { pipelines } }) => pipelines;\nexport const b = ({ ctx: context }) => context.kv;\nexport const c = (ctx) => {\n    const { aiSearch } = ctx;\n    return aiSearch;\n};`,
+            );
+
+            expect(result.config).toStrictEqual(result.codegen);
+            expect([result.config.pipelines, result.config.kv, result.config.aiSearch]).toStrictEqual([true, true, true]);
+        });
+
+        it("agree: an import of binding-free helpers only infers no binding", async () => {
+            expect.assertions(2);
+
+            const helpers = await verdicts(
+                `import { buildSignedUrl } from "@lunora/storage";\nimport { buildSignedImageUrl } from "@lunora/bindings/images";\nexport const used = [buildSignedUrl, buildSignedImageUrl];`,
+            );
+
+            expect(helpers.config).toStrictEqual(helpers.codegen);
+            expect([helpers.config.storage, helpers.config.images]).toStrictEqual([false, false]);
+        });
+    });
+
+    // Config detects a superset of codegen: a lazily loaded package needs its
+    // binding or secret even though codegen wires no helper off a dynamic import.
+    it("counts a dynamic import() of a codegen-backed package", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/shots.ts", `export const shot = async () => (await import("@lunora/browser")).createBrowser;`);
+        write("src/mailer.ts", `export const send = async () => (await import("@lunora/mail")).sendMail();`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesBrowser).toBe(true);
+        expect(result.usesMail).toBe(true);
+        // `@lunora/mail` is what carries `RESEND_API_KEY` into `.dev.vars.example`.
+        expect(secretSourcesFromBindings(result)).toContain("@lunora/mail");
+    });
+
+    it("counts a value re-export of a capability package", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/lib/mail.ts", `export { sendMail } from "@lunora/mail";`);
+        write("lunora/kv.ts", `export * from "@lunora/bindings/kv";`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesMail).toBe(true);
+        expect(result.usesKv).toBe(true);
+    });
+
+    it("never parses a file that names no capability package and reads no ctx helper (JSX included)", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        // JSX is what `es-module-lexer` rejects: a lex failure used to send every
+        // such file to the TypeScript parser.
+        write("src/App.tsx", `import { useState } from "react";\nexport const App = () => <div onClick={() => useState(0)}>ctx</div>;`);
+        write("lunora/view.tsx", `export const View = ({ ctx }) => <span>{ctx.db}</span>;`);
+        write("lunora/upload.tsx", `export const Upload = ({ ctx }) => <span>{String(ctx.kv)}</span>;`);
+        // Generated code names a capability package, but the scan skips `_generated` and the entry walk must stop there too.
+        write("lunora/_generated/shard.ts", `import "@lunora/replica";\n\nexport const createShardDO = (options: object) => options;\n`);
+
+        const parse = vi.spyOn(Project.prototype, "createSourceFile");
+
+        try {
+            const result = await inferLunoraBindings({ projectRoot: root });
+            const parsed = parse.mock.calls.map(([fileName]) => fileName);
+
+            // Only the file that may read a ctx helper reaches the parser.
+            expect(parsed.map((fileName) => fileName.slice(fileName.lastIndexOf("/") + 1))).toStrictEqual(["upload.tsx"]);
+            expect(result.usesKv).toBe(true);
+        } finally {
+            parse.mockRestore();
+        }
+    });
+
+    it("infers artifacts from a ctx.artifacts read, never naming a jurisdiction for an unpinned schema", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_NO_GLOBAL);
+        write("lunora/repos.ts", `export const handler = (ctx) => ctx.artifacts.list();`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesArtifacts).toBe(true);
+        expect(result.jurisdiction).toBeUndefined();
+        expect(result.signals.some((signal) => signal.startsWith("artifacts (") && !signal.includes("jurisdiction") && !signal.includes("lunora deploy"))).toBe(
+            true,
+        );
+    });
+
+    it("tells a jurisdiction-pinned app to create its Artifacts namespace first, instead of saying a binding is written", async () => {
+        expect.assertions(4);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_NO_GLOBAL.replace("});\n", '}).jurisdiction("eu");\n'));
+        write(
+            "lunora/repos.ts",
+            `import type { ArtifactsClient } from "@lunora/bindings/artifacts";\nimport { createArtifacts } from "@lunora/bindings/artifacts";\nexport const make = (env) => createArtifacts({ binding: env.ARTIFACTS });`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+        const hint = result.signals.find((signal) => signal.includes("ctx.artifacts"));
+
+        expect(result.usesArtifacts).toBe(true);
+        expect(result.jurisdiction).toBe("eu");
+        expect(hint?.startsWith("hint:")).toBe(true);
+        expect(hint).toContain('pins data to "eu", so create the namespace in that jurisdiction first');
+    });
+
+    it("treats a fedramp-pinned app like eu or us: the namespace is created in that jurisdiction first", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_NO_GLOBAL.replace("});\n", '}).jurisdiction("fedramp");\n'));
+        write(
+            "lunora/repos.ts",
+            `import { createArtifacts } from "@lunora/bindings/artifacts";\nexport const make = (env) => createArtifacts({ binding: env.ARTIFACTS });`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+        const hint = result.signals.find((signal) => signal.includes("ctx.artifacts"));
+
+        expect(result.usesArtifacts).toBe(true);
+        expect(hint).toContain('pins data to "fedramp", so create the namespace in that jurisdiction first');
+    });
+
+    it("does not infer artifacts from a type-only import of its event payload", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_NO_GLOBAL.replace("});\n", '}).jurisdiction("fedramp");\n'));
+        write(
+            "lunora/consumer.ts",
+            `import type { ArtifactsEvent } from "@lunora/bindings/artifacts";\nexport const isPush = (event: ArtifactsEvent) => event.type === "cf.artifacts.repo.pushed";`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesArtifacts).toBe(false);
+        expect(result.signals.some((signal) => signal.includes("ctx.artifacts"))).toBe(false);
+    });
+
     it("does not flip pipelines for an analytics-only project (no ctx.pipelines read)", async () => {
         expect.assertions(2);
 
@@ -754,22 +1425,829 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(result.signals.some((signal) => signal.includes("RESEND_API_KEY"))).toBe(true);
     });
 
-    it("infers notify from a @lunora/notify import so its VAPID/FCM secrets reach the pre-flights", async () => {
-        expect.assertions(2);
+    it("infers notify from a @lunora/notify import, keying its secrets by the configured channel (#1039)", async () => {
+        expect.assertions(5);
 
         write("wrangler.jsonc", WRANGLER);
         write("src/server/index.ts", ENTRY_SHARD_ONLY);
         write("lunora/notify.ts", `import { defineNotify, webPushFromEnv } from "@lunora/notify";\nexport default defineNotify({ webPush: webPushFromEnv });`);
 
         const result = await inferLunoraBindings({ projectRoot: root });
+        const packages = secretSourcesFromBindings(result);
 
-        // `packageNamesFromBindings` is the ONLY producer feeding `requiredSecrets`,
-        // and it can only emit a CAPABILITY_SOURCES source — so with no notify entry
-        // the five secrets declared in `package-secrets-registry.ts` reached nothing:
-        // not `.dev.vars.example`, not the missing-secret pre-flight. Web Push then
-        // failed silently on the deployed worker.
+        // `secretSourcesFromBindings` is the ONLY producer feeding `requiredSecrets`,
+        // so the channel key is what gets the VAPID secrets into `.dev.vars.example`
+        // and the missing-secret pre-flight — and a webPush-only app is not told
+        // to set FCM_*.
         expect(result.usesNotify).toBe(true);
-        expect(packageNamesFromBindings(result)).toContain("@lunora/notify");
+        expect(result.usesNotifyFcm).toBe(false);
+        expect(packages).toContain("@lunora/notify:webPush");
+        expect(packages).not.toContain("@lunora/notify:fcm");
+        // The package itself carries no secret, so it is not a secret source.
+        expect(packages).not.toContain("@lunora/notify");
+    });
+
+    it("keys LUNORA_RELAY_SECRET to a worker entry that exports ShardRegistryDO", async () => {
+        expect.assertions(1);
+
+        // The template shape: the entry re-exports the generated registry class, and that export is the signal.
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_REGISTRY);
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(secretSourcesFromBindings(result)).toContain("@lunora/do:shardRegistry");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for a composed app whose codegen wrote the registry module", async () => {
+        expect.assertions(1);
+
+        // A `.shardBy()` schema: the composed entry forwards `_generated/shardRegistry.ts`, which is the signal.
+        write("wrangler.jsonc", `{\n    "name": "app",\n    "main": "virtual:lunora/worker",\n    "compatibility_date": "2026-04-07"\n}\n`);
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(secretSourcesFromBindings(result)).toContain("@lunora/do:shardRegistry");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for a worker with no shard registry", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(secretSourcesFromBindings(result)).not.toContain("@lunora/do:shardRegistry");
+    });
+
+    it("keys LUNORA_RELAY_SECRET to an app whose worker entry exports EventLogDO", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { EventLogDO } from "@lunora/replica";\n`);
+
+        const sources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(sources).toContain("@lunora/replica:eventLog");
+        expect(secretsForPackages(sources).map((entry) => entry.key)).toContain("LUNORA_RELAY_SECRET");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for an app whose entry does not export EventLogDO", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET to an entry that star-re-exports the replica package", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for a commented-out star re-export of the replica package", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\n// export * from "@lunora/replica";\n/* export * from "@lunora/replica"; */\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET when the entry re-exports EventLogDO through a relative barrel", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "./barrel.js";\n`);
+        write("src/server/barrel.ts", `export { EventLogDO } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET when the entry re-exports EventLogDO through a .mjs barrel", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "./barrel.mjs";\n`);
+        write("src/server/barrel.mjs", `export { EventLogDO } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET when a relative barrel star-re-exports the replica package", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "./barrel";\n`);
+        write("src/server/barrel/index.ts", `export * from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for a barrel that star-re-exports other packages only", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "./barrel";\n`);
+        write("src/server/barrel.ts", `export * from "@lunora/do";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("lists LUNORA_RELAY_SECRET once for an app that hosts both the shard registry and the event log", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_REGISTRY}\nexport { EventLogDO } from "@lunora/replica";\n`);
+
+        const sources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(sources).toEqual(expect.arrayContaining(["@lunora/do:shardRegistry", "@lunora/replica:eventLog"]));
+        expect(secretsForPackages(sources).filter((entry) => entry.key === "LUNORA_RELAY_SECRET")).toHaveLength(1);
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for a barrel whose own EventLogDO shadows the replica star re-export", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "./barrel";\n`);
+        write("src/server/barrel.ts", `export class EventLogDO {}\nexport * from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for an entry that declares its own EventLogDO class", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport class EventLogDO {}\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for a relative barrel whose EventLogDO is its own class", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { EventLogDO } from "./local";\n`);
+        write("src/server/local.ts", "export class EventLogDO {}\n");
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for an export that renames another class to EventLogDO", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { Other as EventLogDO } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for an entry that exports the replica EventLogDO under another name", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { EventLogDO as Log } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for an entry that imports the replica EventLogDO and exports it by name", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport { EventLogDO } from "@lunora/replica";\nexport { EventLogDO };\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for a star re-export that also forwards the replica EventLogDO under another name", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport class EventLogDO {}\nexport * from "./barrel";\n`);
+        write("src/server/barrel.ts", `export { EventLogDO as Log } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET when a local EventLogDO hides the replica class a nested star re-exports", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport class EventLogDO {}\nexport * from "./barrel";\n`);
+        write("src/server/barrel.ts", `export * from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for an entry that exports a subclass of the imported EventLogDO", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport { EventLogDO } from "@lunora/replica";\n\nexport class Log extends EventLogDO {}\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for an exported class that extends an unrelated import", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport { ShardDO as Base } from "@lunora/do";\n\nexport class Log extends Base {}\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for an entry that exports a property of the replica namespace as a value", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport * as replica from "@lunora/replica";\n\nexport const Log = replica.EventLogDO;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for an entry that exports the imported EventLogDO as a value", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport { EventLogDO } from "@lunora/replica";\n\nexport const Log = EventLogDO;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for a value export of a renamed EventLogDO import", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport { EventLogDO as Base } from "@lunora/replica";\n\nexport const Log = Base;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for a value export of another replica import", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nimport { EventLogDOClient } from "@lunora/replica";\n\nexport const Client = EventLogDOClient;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET when the entry exports the replica EventLogDO through a relative barrel's value export", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { Log } from "./barrel";\n`);
+        write("src/server/barrel.ts", `import { EventLogDO } from "@lunora/replica";\n\nexport const Log = EventLogDO;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET when the entry exports a relative barrel's EventLogDO under its own name", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { Log as EventLogDO } from "./barrel";\n`);
+        write("src/server/barrel.ts", `export { EventLogDO as Log } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET when a barrel exports an imported EventLogDO under another name", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "./barrel";\n`);
+        write("src/server/barrel.ts", `import { EventLogDO as Log } from "@lunora/replica";\n\nexport { Log };\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("does not key LUNORA_RELAY_SECRET when the entry's name is another barrel export, not EventLogDO", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { Foo as EventLogDO } from "./barrel";\n`);
+        write("src/server/barrel.ts", `export { EventLogDO as Log } from "@lunora/replica";\nexport { Other as Foo } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for a remote-only worker that constructs EventLogDOClient for another worker's log", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "src/server/events.ts",
+            `import { EventLogDOClient } from "@lunora/replica";\n\nexport const log = (env: Env) => new EventLogDOClient({ env });\n`,
+        );
+
+        const sources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+        const entry = secretsForPackages(sources).find((candidate) => candidate.key === "LUNORA_RELAY_SECRET");
+
+        expect(sources).toContain("@lunora/replica:eventLogClient");
+        // The client takes the host's value: its line is a template, and the key is never minted here.
+        expect(entry?.placeholderValue.startsWith("<")).toBe(true);
+        expect(mintableSecretKeysFor(sources).has("LUNORA_RELAY_SECRET")).toBe(false);
+    });
+
+    it("keys LUNORA_RELAY_SECRET for a composed remote-only worker whose lunora/ code constructs EventLogDOClient", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", `{\n    "name": "app",\n    "main": "virtual:lunora/worker",\n    "compatibility_date": "2026-04-07"\n}\n`);
+        write("lunora/events.ts", `import { EventLogDOClient } from "@lunora/replica";\n\nexport const log = (env: Env) => new EventLogDOClient({ env });\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("lists LUNORA_RELAY_SECRET once, keeping the host's value, for a worker that hosts and constructs the log", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport { EventLogDO } from "@lunora/replica";\n`);
+        write(
+            "src/server/events.ts",
+            `import { EventLogDOClient } from "@lunora/replica";\n\nexport const log = (env: Env) => new EventLogDOClient({ env });\n`,
+        );
+
+        const sources = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+        const entries = secretsForPackages(sources).filter((entry) => entry.key === "LUNORA_RELAY_SECRET");
+
+        expect(entries).toHaveLength(1);
+        expect(entries[0]?.placeholderValue).toBe(SHARD_RELAY_HOST_PLACEHOLDER);
+        expect(mintableSecretKeysFor(sources).has("LUNORA_RELAY_SECRET")).toBe(true);
+    });
+
+    it("does not key LUNORA_RELAY_SECRET for a worker that imports EventLogDOClient as a type only", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/events.ts", `import type { EventLogDOClient } from "@lunora/replica";\n\nexport type Log = EventLogDOClient;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("does not key the client's relay secret for a namespace import that reads only other replica exports", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/replica.ts", `import * as replica from "@lunora/replica";\n\nexport const host = replica.EventLogDO;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a namespace import that passes the whole namespace on", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/replica.ts", `import * as replica from "@lunora/replica";\n\nexport const all = replica;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("does not key the client's relay secret for a dynamic import that destructures only other replica exports", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "src/server/load.ts",
+            `export const load = async () => {\n    const { EventLogDO } = await import("@lunora/replica");\n\n    return EventLogDO;\n};\n`,
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a dynamic import whose module object is kept as a value", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/load.ts", `const replicaModule = await import("@lunora/replica");\n\nexport const load = () => replicaModule;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a worker that reaches EventLogDOClient through a namespace import", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "src/server/events.ts",
+            `import * as replica from "@lunora/replica";\n\nexport const log = (env: Env) => new replica.EventLogDOClient({ env });\n`,
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a barrel that re-exports EventLogDOClient", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/client.ts", `export { EventLogDOClient } from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for an aliased import of EventLogDOClient", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "src/server/events.ts",
+            `import { EventLogDOClient as Client } from "@lunora/replica";\n\nexport const log = (env: Env) => new Client({ env });\n`,
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a worker that imports EventLogDOClient through a local star-exporting barrel", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/client.ts", `export * from "@lunora/replica";\n`);
+        write("src/server/events.ts", `import { EventLogDOClient } from "./client";\n\nexport const log = (env: Env) => new EventLogDOClient({ env });\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a namespace import of a local barrel that re-exports EventLogDOClient", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/client.ts", `export * from "@lunora/replica";\n`);
+        write("src/server/events.ts", `import * as replica from "./client";\n\nexport const log = (env: Env) => new replica.EventLogDOClient({ env });\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("does not key the client's relay secret for a namespace import of a local barrel that reads only other exports", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/client.ts", `export * from "@lunora/replica";\n`);
+        write("src/server/events.ts", `import * as replica from "./client";\n\nexport const host = replica.EventLogDO;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("does not key the client's relay secret for a namespace import that names EventLogDOClient only as a type", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/types.ts", `import * as replica from "@lunora/replica";\n\nexport type Log = replica.EventLogDOClient;\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("does not key the client's relay secret for a local class that only shares the name EventLogDOClient", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/local.ts", `export class EventLogDOClient {}\n`);
+        write("src/server/events.ts", `import { EventLogDOClient } from "./local";\n\nexport const log = () => new EventLogDOClient();\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys LUNORA_RELAY_SECRET when the entry re-exports the replica package through a tsconfig path alias", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("tsconfig.json", `{\n    "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["src/*"] } }\n}\n`);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "@/server/barrel";\n`);
+        write("src/server/barrel.ts", `export * from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys the client's relay secret for a client imported through a tsconfig path alias", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("tsconfig.json", `{\n    "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["src/*"] } }\n}\n`);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/client.ts", `export * from "@lunora/replica";\n`);
+        write(
+            "src/server/events.ts",
+            `import { EventLogDOClient } from "@/server/client";\n\nexport const log = (env: Env) => new EventLogDOClient({ env });\n`,
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys LUNORA_RELAY_SECRET for a barrel reached first through a path that hides the replica class and then through an open one", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", `${ENTRY_SHARD_ONLY}\nexport * from "./hidden";\nexport * from "./open";\n`);
+        write("src/server/hidden.ts", `export class EventLogDO {}\nexport * from "./log";\n`);
+        write("src/server/open.ts", `export * from "./log";\n`);
+        write("src/server/log.ts", `export * from "@lunora/replica";\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLog");
+    });
+
+    it("keys the client's relay secret for a named import of a namespace a barrel re-exports from the replica package", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/server/barrel.ts", `export * as replica from "@lunora/replica";\n`);
+        write("src/server/events.ts", `import { replica } from "./barrel";\n\nexport const log = (env: Env) => new replica.EventLogDOClient({ env });\n`);
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a worker entry at the project root that constructs the client", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", `{\n    "name": "app",\n    "main": "worker.ts",\n    "compatibility_date": "2026-04-07"\n}\n`);
+        write(
+            "worker.ts",
+            `import { EventLogDOClient } from "@lunora/replica";\n\nexport const log = (env: Env) => new EventLogDOClient({ env });\n\nexport default { fetch() { return new Response("ok"); } };\n`,
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the client's relay secret for a dynamic import that destructures the client under a computed key", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "src/server/load.ts",
+            `export const load = async (env: Env) => {\n    const { ["EventLogDOClient"]: Client } = await import("@lunora/replica");\n\n    return new Client({ env });\n};\n`,
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    describe("a root-level worker entry's imports", () => {
+        const ROOT_WRANGLER = `{\n    "name": "app",\n    "main": "worker.ts",\n    "compatibility_date": "2026-04-07"\n}\n`;
+        const CLIENT_LOG = `import { EventLogDOClient } from "@lunora/replica";\n\nexport const log = (env: Env) => new EventLogDOClient({ env });\n`;
+        const ROOT_FETCH_ENTRY = `export default { fetch() { return new Response("ok"); } };\n`;
+
+        it("keys the client's relay secret for a module the root-level entry imports that constructs the client", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("lib/log.ts", CLIENT_LOG);
+            write(
+                "worker.ts",
+                `import { log } from "./lib/log";\n\nexport default { fetch(_request: Request, env: Env) { log(env); return new Response("ok"); } };\n`,
+            );
+
+            expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+        });
+
+        it("keys the client's relay secret through a barrel the root-level entry imports", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("lib/index.ts", `export * from "./log";\n`);
+            write("lib/log.ts", CLIENT_LOG);
+            write(
+                "worker.ts",
+                `import { log } from "./lib";\n\nexport default { fetch(_request: Request, env: Env) { log(env); return new Response("ok"); } };\n`,
+            );
+
+            expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+        });
+
+        it("keys the client's relay secret for a module the root-level entry loads with a dynamic import", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("lib/log.ts", CLIENT_LOG);
+            write(
+                "worker.ts",
+                `export default { async fetch(_request: Request, env: Env) { const { log } = await import("./lib/log"); log(env); return new Response("ok"); } };\n`,
+            );
+
+            expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+        });
+
+        it("keys the client's relay secret for a root-level entry that loads the module with a no-substitution template import()", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("lib/log.ts", CLIENT_LOG);
+            write(
+                "worker.ts",
+                'export default { async fetch(_request: Request, env: Env) { const { log } = await import(`./lib/log`); log(env); return new Response("ok"); } };\n',
+            );
+
+            expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+        });
+
+        it("reads the tsconfig once for two path-aliased imports from the root-level entry", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("tsconfig.json", `{ "compilerOptions": { "baseUrl": ".", "paths": { "@app/*": ["./lib/*"] } } }\n`);
+            write("lib/a.ts", "export const a = 1;\n");
+            write("lib/b.ts", "export const b = 2;\n");
+            write("worker.ts", `import { a } from "@app/a";\nimport { b } from "@app/b";\n\nexport const total = a + b;\n\n${ROOT_FETCH_ENTRY}`);
+
+            // Every parse of the nearest tsconfig reads its file once, so the reads count the parses.
+            const read = vi.spyOn(ts.sys, "readFile");
+
+            try {
+                await inferLunoraBindings({ projectRoot: root });
+
+                expect(read.mock.calls.filter(([file]) => file.endsWith("/tsconfig.json"))).toHaveLength(1);
+            } finally {
+                read.mockRestore();
+            }
+        });
+
+        it("does not key the client's relay secret for a type-only import of a module that constructs the client", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("lib/log.ts", `${CLIENT_LOG}\nexport type LogFn = typeof log;\n`);
+            write("worker.ts", `import type { LogFn } from "./lib/log";\n\nexport type Entry = LogFn;\n\n${ROOT_FETCH_ENTRY}`);
+
+            expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+        });
+
+        it("finishes an import cycle back to the entry, and keys nothing when no module in it constructs the client", async () => {
+            expect.assertions(1);
+
+            write("wrangler.jsonc", ROOT_WRANGLER);
+            write("lib/a.ts", `import "../worker";\n\nexport const ready = true;\n`);
+            write("worker.ts", `import "./lib/a";\n\n${ROOT_FETCH_ENTRY}`);
+
+            expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).not.toContain("@lunora/replica:eventLogClient");
+        });
+    });
+
+    it("keys the client's relay secret for a worker that loads EventLogDOClient lazily", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "src/server/events.ts",
+            `export const log = async (env: Env) => {\n    const { EventLogDOClient } = await import("@lunora/replica");\n\n    return new EventLogDOClient({ env });\n};\n`,
+        );
+
+        expect(secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }))).toContain("@lunora/replica:eventLogClient");
+    });
+
+    it("keys the secret-value key to a tool imported through a relative barrel inside lunora/", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/tools.ts", `export { requestSecretTool } from "@lunora/agent";`);
+        write(
+            "lunora/agent.ts",
+            `import { requestSecretTool } from "./tools";\nexport const ask = requestSecretTool({ consumer: "charge", description: "API key" });`,
+        );
+
+        const bindings = await inferLunoraBindings({ projectRoot: root });
+
+        expect(secretSourcesFromBindings(bindings)).toContain("@lunora/agent:requestSecretTool");
+    });
+
+    it("finds a capability reached through one barrel that several lunora/ files import", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/tools.ts", `export { requestSecretTool } from "@lunora/agent";`);
+        write("lunora/a.ts", `import { requestSecretTool } from "./tools";\nexport const askA = requestSecretTool({ consumer: "a", description: "A key" });`);
+        write("lunora/b.ts", `import { requestSecretTool } from "./tools";\nexport const askB = requestSecretTool({ consumer: "b", description: "B key" });`);
+        write("lunora/c.ts", "export const unrelated = 1;");
+
+        const bindings = await inferLunoraBindings({ projectRoot: root });
+
+        expect(bindings.usesRequestSecretTool).toBe(true);
+        expect(secretSourcesFromBindings(bindings)).toContain("@lunora/agent:requestSecretTool");
+    });
+
+    it("keys the secret-value key to a value import of requestSecretTool, not to @lunora/agent alone", async () => {
+        expect.assertions(4);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/agent.ts",
+            `import { requestSecretTool } from "@lunora/agent";\nexport const ask = requestSecretTool({ consumer: "charge", description: "API key" });`,
+        );
+
+        const withTool = await inferLunoraBindings({ projectRoot: root });
+
+        expect(withTool.usesRequestSecretTool).toBe(true);
+        expect(secretSourcesFromBindings(withTool)).toContain("@lunora/agent:requestSecretTool");
+
+        // A type-only import is not a wired tool, and an agent import without the tool needs no key.
+        write("lunora/agent.ts", `import type { requestSecretTool } from "@lunora/agent";\nexport type Ask = typeof requestSecretTool;`);
+
+        const typeOnly = await inferLunoraBindings({ projectRoot: root });
+
+        expect(typeOnly.usesRequestSecretTool).toBe(false);
+        expect(secretSourcesFromBindings(typeOnly)).not.toContain("@lunora/agent:requestSecretTool");
+    });
+
+    it("keys the secret-value key to requestSecretTool reached through a barrel or a namespace import", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/tools.ts", `export { requestSecretTool } from "@lunora/agent";`);
+        write(
+            "lunora/agent.ts",
+            `import { defineAgent } from "@lunora/agent";\nimport { requestSecretTool } from "./tools";\nexport const support = defineAgent({ model: "m", tools: { ask: requestSecretTool({ consumer: "charge", description: "API key" }) } });`,
+        );
+
+        const barrel = await inferLunoraBindings({ projectRoot: root });
+
+        expect(barrel.usesRequestSecretTool).toBe(true);
+
+        write("lunora/tools.ts", "");
+        write(
+            "lunora/agent.ts",
+            `import * as agent from "@lunora/agent";\nexport const ask = agent.requestSecretTool({ consumer: "charge", description: "API key" });`,
+        );
+
+        const namespace = await inferLunoraBindings({ projectRoot: root });
+
+        expect(namespace.usesRequestSecretTool).toBe(true);
+    });
+
+    it("scaffolds only the webPush secrets when defineNotify gets a readable variable config (webPush-only, #1039)", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/notify.ts",
+            `import { defineNotify, webPushFromEnv } from "@lunora/notify";\nconst config = { webPush: webPushFromEnv };\nexport default defineNotify(config);`,
+        );
+
+        const packages = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        // The variable config is readable as an object literal, so a webPush-only
+        // app still does not get FCM secrets scaffolded.
+        expect(packages).toContain("@lunora/notify:webPush");
+        expect(packages).not.toContain("@lunora/notify:fcm");
+    });
+
+    it("reports both notify channels when defineNotify's config is not a plain object literal", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/notify.ts",
+            `import { defineNotify, webPushFromEnv } from "@lunora/notify";\nconst base = { webPush: webPushFromEnv };\nexport default defineNotify({ ...base });`,
+        );
+
+        const packages = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(packages.filter((name) => name.startsWith("@lunora/notify:"))).toStrictEqual(["@lunora/notify:fcm", "@lunora/notify:webPush"]);
+    });
+
+    it("reports both notify channels when defineNotify configures webPush and fcm", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/notify.ts",
+            `import { defineNotify, fcmFromEnv, webPushFromEnv } from "@lunora/notify";\nexport default defineNotify({ fcm: fcmFromEnv, webPush: webPushFromEnv });`,
+        );
+
+        const packages = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(packages.filter((name) => name.startsWith("@lunora/notify:"))).toStrictEqual(["@lunora/notify:fcm", "@lunora/notify:webPush"]);
     });
 
     it("infers r2sql from a ctx.r2sql access so its R2_SQL_* secrets reach the pre-flights", async () => {
@@ -784,7 +2262,87 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.usesR2sql).toBe(true);
-        expect(packageNamesFromBindings(result)).toContain("@lunora/bindings/r2sql");
+        expect(secretSourcesFromBindings(result)).toContain("@lunora/bindings/r2sql");
+    });
+
+    it("infers AI Search from a ctx.aiSearch access, the only signal an app gives", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        // `@lunora/bindings/ai-search` is types only — an app reads the generated
+        // `ctx.aiSearch` and never imports it at runtime.
+        write("lunora/search.ts", `export const handler = (ctx) => ctx.aiSearch.get("docs").search({ query: "q" });`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAiSearch).toBe(true);
+        expect(
+            result.signals.some((signal) => signal.startsWith("ai_search_namespaces (@lunora/bindings/ai-search is imported or ctx.aiSearch is read)")),
+        ).toBe(true);
+    });
+
+    it("infers Analytics SQL from a ctx.analyticsSql access", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/usage.ts", `export const handler = (ctx) => ctx.analyticsSql.query("SELECT 1");`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAnalyticsSql).toBe(true);
+        // The read surface does not imply the write-only Analytics Engine dataset.
+        expect(result.usesAnalytics).toBe(false);
+        expect(result.signals.some((signal) => signal.startsWith("analytics (@lunora/bindings/analytics-sql is imported or ctx.analyticsSql is read)"))).toBe(
+            true,
+        );
+    });
+
+    it("adds the analytics binding end to end when a handler reads ctx.analyticsSql", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/usage.ts", `export const handler = async ({ ctx }) => ctx.analyticsSql.query("SELECT 1");`);
+
+        const result = reconcileWranglerBindings(root, await inferLunoraBindings({ projectRoot: root }));
+
+        expect(result.added).toContain("ANALYTICS_SQL (Analytics SQL)");
+        expect((parseJsonc(readFileSync(join(root, "wrangler.jsonc"), "utf8")) as { analytics?: unknown }).analytics).toStrictEqual({
+            binding: "ANALYTICS_SQL",
+        });
+    });
+
+    it("does not infer Analytics SQL from a type-only import or from the Analytics Engine write subpath", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/types.ts",
+            `import type { AnalyticsSql } from "@lunora/bindings/analytics-sql";\nimport { createAnalytics } from "@lunora/bindings/analytics";\nexport const label = (sql: AnalyticsSql) => [sql, createAnalytics];`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAnalyticsSql).toBe(false);
+        expect(result.usesAnalytics).toBe(true);
+    });
+
+    it("does not infer AI Search from a type-only import or an unrelated `aiSearch` name", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/types.ts",
+            `import type { AiSearch } from "@lunora/bindings/ai-search";\nexport const aiSearchLabel = (search: AiSearch) => String(search);`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAiSearch).toBe(false);
     });
 
     it("does not infer mail for a project that does not import @lunora/mail", async () => {

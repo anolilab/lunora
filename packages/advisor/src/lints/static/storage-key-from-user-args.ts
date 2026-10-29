@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * Flags a `ctx.storage.<bucket>.<method>(key, …)` whose R2 object key is derived
@@ -32,11 +33,9 @@ const storageKeyFromUserArgs: Lint = {
         }
 
         return context.storageKeyAccesses.map((access) => {
-            const where = `\`ctx.storage.*.${access.method}\` in \`${access.exportName}\` (${access.file}:${access.line.toString()})`;
+            const where = `\`ctx.storage.*.${access.method}\` in ${callSiteWhere(access)}`;
             const metadata = {
-                exportName: access.exportName,
-                file: access.file,
-                line: access.line,
+                ...callSiteFields(access),
                 method: access.method,
                 visibility: access.visibility ?? "unknown",
             };

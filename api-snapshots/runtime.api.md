@@ -590,9 +590,10 @@ interface DynamicShardRegistry extends ShardRegistry {
 ```ts
 interface DynamicShardRegistryOptions {
     cacheTtlMs?: number;
+    env?: unknown;
     instanceName?: string;
     jurisdiction?: DurableObjectJurisdiction;
-    namespace: ShardNamespaceLike;
+    namespace: ShardNamespaceLike | ShardRegistryRpc;
 }
 ```
 
@@ -607,6 +608,7 @@ interface ExecutionContextLike {
             tags?: string[];
         }) => Promise<unknown>;
     };
+    exports?: unknown;
     passThroughOnException?: () => void;
     waitUntil?: (promise: Promise<unknown>) => void;
 }
@@ -778,8 +780,11 @@ interface FunctionDescriptor {
 ```ts
 interface FunctionRegistryEntry {
     args?: unknown;
+    argumentDescriptors?: Readonly<FunctionDescriptor["args"]>;
     expose?: RestExposure;
     kind: "action" | "mutation" | "query" | "stream";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "socket" | "whisper";
+    socketPath?: string;
     visibility?: "internal" | "public";
     x402?: {
         readonly price: number | string;
@@ -808,6 +813,8 @@ type GlobalExportFunction = (request: {
 
 ```ts
 type GlobalImportFunction = (request: {
+    dryRun?: boolean;
+    onConflict?: "replace" | "skip";
     rows: ReadonlyArray<{
         doc: Record<string, unknown>;
         line: number;
@@ -823,6 +830,7 @@ type GlobalImportFunction = (request: {
         table: string;
     }>;
     inserted: Record<string, number>;
+    replaced?: number;
 }>;
 ```
 
@@ -961,7 +969,17 @@ interface HttpActionContext {
         }) => Promise<unknown>;
     };
     fetch: typeof globalThis.fetch;
+    fetchShard: (shardKey: string | undefined, path: string, init?: {
+        body?: string;
+        headers?: Record<string, string>;
+        method?: string;
+    }) => Promise<Response>;
     forShard: (shardKey: string) => Pick<HttpActionContext, "runAction" | "runMutation" | "runQuery">;
+    live?: {
+        publish: (topic: LiveTopicRefLike, payload: unknown, options?: {
+            shardKey?: string;
+        }) => Promise<void>;
+    };
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -1025,7 +1043,9 @@ interface ImportFanOutRequest {
         shardKey: string;
         startLine?: number;
     }>;
+    dryRun?: boolean;
     headers?: Record<string, string>;
+    onConflict?: "replace" | "skip";
 }
 ```
 
@@ -1043,6 +1063,7 @@ interface ImportFanOutResult {
     failed: number;
     inserted: Record<string, number>;
     ok: number;
+    replaced: number;
     shards: ReadonlyArray<ShardImportOutcome>;
 }
 ```
@@ -1156,11 +1177,13 @@ interface LogArchiveConfig {
 ```ts
 interface LogEvent {
     args: unknown[];
+    error?: ErrorDetail;
     eventName?: string;
     fields?: LogFields;
     functionPath: string;
     level: ContextLogLevel;
     message: string;
+    rayId?: string;
     shardKey?: string;
     spanId?: string;
     traceId?: string;
@@ -1188,7 +1211,9 @@ class LunoraError extends LunoraError$1 {
     constructor(message: string, options?: {
         cause?: unknown;
         code?: string;
+        internal?: Record<string, unknown>;
         status?: number;
+        why?: string;
     });
     toResponse(): Response;
 }
@@ -1343,10 +1368,14 @@ interface NotifySubscriptionStoreLike {
 
 ```ts
 interface ObservabilityEvent {
+    attributes?: LogFields;
     durationMs: number;
     error?: {
         code: string;
+        internal?: Record<string, unknown>;
         message: string;
+        name?: string;
+        stack?: string;
         status: number;
     };
     fanOut?: {
@@ -1361,6 +1390,7 @@ interface ObservabilityEvent {
     parentSpanId?: string;
     path?: string;
     port?: number;
+    rayId?: string;
     scheme?: string;
     shardKey?: string;
     spanId?: string;
@@ -1560,6 +1590,38 @@ interface QueryCoordinatorOptions {
 }
 ```
 
+### `QueueForwardBatch` (interface)
+
+```ts
+interface QueueForwardBatch {
+    messages: ReadonlyArray<QueueForwardMessage>;
+    queue: string;
+}
+```
+
+### `QueueForwardHandler` (type)
+
+```ts
+type QueueForwardHandler = (batch: QueueForwardBatch, env: unknown, context: ExecutionContextLike) => Promise<QueueForwardResult | undefined> | QueueForwardResult | undefined;
+```
+
+### `QueueForwardMessage` (interface)
+
+```ts
+interface QueueForwardMessage {
+    body: unknown;
+    id: string;
+}
+```
+
+### `QueueForwardResult` (interface)
+
+```ts
+interface QueueForwardResult {
+    retry?: ReadonlyArray<string>;
+}
+```
+
 ### `RankFanOutRequest` (interface)
 
 ```ts
@@ -1640,6 +1702,17 @@ interface RateLimiterLike {
 }
 ```
 
+### `ReportedError` (interface)
+
+```ts
+interface ReportedError {
+    code?: string;
+    message: string;
+    name?: string;
+    stack?: string;
+}
+```
+
 ### `ResolvedSecurity` (interface)
 
 ```ts
@@ -1683,6 +1756,7 @@ type RestRateLimit = (request: Request, functionPath: string) => Promise<Respons
 interface RestRegistryEntry {
     expose?: RestExposure;
     kind: "action" | "mutation" | "query" | "stream";
+    x402?: unknown;
 }
 ```
 
@@ -1805,15 +1879,6 @@ interface SecurityOptions {
 }
 ```
 
-### `SentrySinkOptions` (interface)
-
-```ts
-interface SentrySinkOptions extends OnlyErrorsOption {
-    capture: (event: ObservabilityEvent) => void;
-    captureLog?: (event: LogEvent) => void;
-}
-```
-
 ### `ShardCallArgs` (type)
 
 ```ts
@@ -1932,6 +1997,7 @@ interface ShardImportOutcome {
             table: string;
         }>;
         inserted: Record<string, number>;
+        replaced: number;
     };
     shardKey: string;
 }
@@ -2010,7 +2076,19 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ```ts
 interface ShardRegistry {
+    invalidate?: (table?: string) => void;
     listShardKeys: (table: string) => Promise<ReadonlyArray<string>> | ReadonlyArray<string>;
+}
+```
+
+### `ShardRegistryRpc` (interface)
+
+```ts
+interface ShardRegistryRpc {
+    listShardKeys: (table: string) => Promise<string[]>;
+    register: (table: string, shardKey: string) => Promise<void>;
+    snapshot: () => Promise<Record<string, string[]>>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
 }
 ```
 
@@ -2053,6 +2131,33 @@ interface ShardingInfo {
 }
 ```
 
+### `SinkEnricher` (type)
+
+```ts
+type SinkEnricher = (event: SinkEvent, signal: SinkSignalKind) => LogFields | undefined;
+```
+
+### `SinkEvent` (type)
+
+```ts
+type SinkEvent = LogEvent | MetricEvent | ObservabilityEvent | SpanEvent;
+```
+
+### `SinkRouteOptions` (interface)
+
+```ts
+interface SinkRouteOptions {
+    exclude?: string[];
+    include?: string[];
+}
+```
+
+### `SinkSignalKind` (type)
+
+```ts
+type SinkSignalKind = "log" | "metric" | "rpc" | "span";
+```
+
 ### `SpanEvent` (interface)
 
 ```ts
@@ -2071,11 +2176,24 @@ interface SpanEvent {
     ok: boolean;
     parentSpanId: string;
     dispatch?: boolean;
+    rayId?: string;
+    sampled?: boolean;
     shardKey?: string;
     spanId: string;
     startTs: number;
     traceId: string;
     userId?: string;
+}
+```
+
+### `StackFrame` (interface)
+
+```ts
+interface StackFrame {
+    colno: number;
+    filename: string;
+    function: string;
+    lineno: number;
 }
 ```
 
@@ -2187,8 +2305,8 @@ interface VectorQueryMatch {
 ```ts
 interface WebhookSinkOptions extends OnlyErrorsOption {
     headers?: Record<string, string>;
-    transform?: (event: ObservabilityEvent) => null | ObservabilityEvent | undefined;
-    transformLog?: (event: LogEvent) => LogEvent | null | undefined;
+    transform?: (event: ObservabilityEvent) => unknown;
+    transformLog?: (event: LogEvent) => unknown;
     url: string;
 }
 ```
@@ -2201,10 +2319,13 @@ interface WorkerOptions {
     adminToken?: string;
     allowUnauthenticatedShardAccess?: boolean;
     applyGlobals?: GlobalCdcApplyFunction;
+    architecture?: unknown;
     authAdmin?: AuthAdmin;
     authAuditReader?: AuthAuditReader;
     authBasePath?: string;
+    authDiscoveryHandler?: (request: Request) => Promise<Response | undefined>;
     authHandler?: (request: Request) => Promise<Response | undefined>;
+    authJurisdictionMove?: AuthJurisdictionMove;
     authorizeFanOut?: (identity: ResolvedIdentity | null, table: string, functionPath: string) => boolean | Promise<boolean>;
     authorizeShard?: (caller: ShardCaller) => boolean | Promise<boolean>;
     backupCron?: string;
@@ -2224,9 +2345,13 @@ interface WorkerOptions {
     httpRouter?: HttpRouterLike;
     identity?: IdentityContractLike;
     importGlobals?: GlobalImportFunction;
+    importGlobalsSupportsDryRun?: boolean;
+    importGlobalsSupportsReplace?: boolean;
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
     listSchemaTables?: () => ReadonlyArray<string>;
+    liveStreamRoutes?: ReadonlyArray<string>;
+    liveStreams?: boolean;
     logArchive?: LogArchiveConfig;
     notifySubscriptionStore?: NotifySubscriptionStoreLike;
     observability?: ObservabilitySink;
@@ -2235,8 +2360,9 @@ interface WorkerOptions {
     passThroughOnException?: boolean;
     queryCoordinator?: QueryCoordinator;
     queue?: QueueConsumerHandler;
+    queueFetchImpl?: typeof fetch;
+    queueHandler?: QueueForwardHandler;
     replicaReads?: boolean;
-    requireEphemeralWsToken?: boolean;
     resolveIdentity?: (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
     resolveTableSharding?: AdminTableResolver;
     restEdgeCache?: HttpCacheLike | null;
@@ -2248,7 +2374,7 @@ interface WorkerOptions {
     security?: SecurityOptions;
     shardDO: ShardNamespaceLike;
     shardRegion?: (shardKey: string) => RegionHint | undefined;
-    storage?: (env: unknown) => unknown;
+    storage?: (env: unknown, origin?: string) => unknown;
     storageBuckets?: string[];
     storageDelete?: StorageDeleteFunction;
     storageDownload?: StorageDownloadFunction;
@@ -2427,6 +2553,12 @@ const d1Probe: (name: string, database: {
 }) => HealthProbe;
 ```
 
+### `declareAppJurisdiction` (const)
+
+```ts
+const declareAppJurisdiction: (jurisdiction: AppJurisdiction) => void;
+```
+
 ### `decorateResponse` (const)
 
 ```ts
@@ -2469,6 +2601,18 @@ const emitRpcEvent: (sink: ObservabilitySink | undefined, event: ObservabilityEv
 const enforceOrigin: (request: Request, resolved: ResolvedSecurity) => Response | undefined;
 ```
 
+### `enrichSink` (const)
+
+```ts
+const enrichSink: (sink: ObservabilitySink, enrich: SinkEnricher) => ObservabilitySink;
+```
+
+### `filterSink` (const)
+
+```ts
+const filterSink: (sink: ObservabilitySink, options: SinkRouteOptions) => ObservabilitySink;
+```
+
 ### `handleCorsPreflight` (const)
 
 ```ts
@@ -2509,6 +2653,12 @@ const normalizeBackupPrefix: (prefix: string) => string;
 
 ```ts
 const otlpSink: (options: OtlpSinkOptions) => ObservabilitySink;
+```
+
+### `parseStackFrames` (const)
+
+```ts
+const parseStackFrames: (stack: string | undefined) => StackFrame[];
 ```
 
 ### `pipelineLogSink` (const)
@@ -2593,16 +2743,16 @@ const runExportTap: (options: RunExportTapOptions) => Promise<ExportTapResult>;
 const sanitizeChange: (raw: Record<string, unknown>) => ExportChange;
 ```
 
-### `sentrySink` (const)
-
-```ts
-const sentrySink: (options: SentrySinkOptions) => ObservabilitySink;
-```
-
 ### `toAirbyteMessages` (const)
 
 ```ts
 const toAirbyteMessages: (page: ConnectorSyncPage, emittedAt?: number) => AirbyteMessage[];
+```
+
+### `toError` (const)
+
+```ts
+const toError: (error: ReportedError) => Error;
 ```
 
 ### `toErrorResponse` (const)
@@ -2645,6 +2795,12 @@ const withFrameworkWorker: (host: FrameworkHostHandler, optionsInput: FrameworkW
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `AppJurisdiction` (type)
+
+```ts
+type AppJurisdiction = "eu" | "fedramp" | "us";
+```
 
 ### `ApplyCdcFanOutRequest` (interface)
 
@@ -2698,6 +2854,37 @@ interface AuthAuditReader {
 }
 ```
 
+### `AuthJurisdictionMove` (interface)
+
+```ts
+interface AuthJurisdictionMove {
+    copy: (options?: {
+        force?: boolean;
+    }) => Promise<{
+        done: boolean;
+        tables: AuthMoveTableReport[];
+    }>;
+    purge: () => Promise<{
+        dropped: string[];
+    }>;
+}
+```
+
+### `AuthMoveTableReport` (interface)
+
+```ts
+interface AuthMoveTableReport {
+    conflicts: number;
+    copied: number;
+    deleted: number;
+    sourceRows: number;
+    table: string;
+    targetRows: number;
+    unchanged: number;
+    updated: number;
+}
+```
+
 ### `AuthTimestamp` (type)
 
 ```ts
@@ -2710,6 +2897,7 @@ type AuthTimestamp = null | number | string;
 interface CdcSyncFanOutRequest {
     cursors?: Record<string, number>;
     defaultShardKey: DefaultShardKey;
+    epochs?: Record<string, string>;
     headers?: Record<string, string>;
     limit?: number;
     tables: ReadonlyArray<string>;
@@ -2754,6 +2942,18 @@ const DEFAULT_COLUMNS: {
 type DefaultShardKey = string | null;
 ```
 
+### `ErrorDetail` (interface)
+
+```ts
+interface ErrorDetail {
+    code?: string;
+    internal?: Record<string, unknown>;
+    message: string;
+    name: string;
+    stack?: string;
+}
+```
+
 ### `FetchLike` (type)
 
 ```ts
@@ -2785,6 +2985,7 @@ interface FunctionArgumentDescriptor {
     kind: string;
     name: string;
     optional: boolean;
+    sensitive?: true;
     table?: string;
 }
 ```
@@ -2826,6 +3027,8 @@ interface GlobalFacetResult {
 ```ts
 interface GlobalFilterClause {
     column: string;
+    operator?: string;
+    path?: string[];
     value: unknown;
 }
 ```
@@ -2849,6 +3052,15 @@ interface HealthOptions {
 interface KvLike {
     get: (key: string, type: "json") => Promise<unknown>;
     put: (key: string, value: string) => Promise<unknown>;
+}
+```
+
+### `LiveTopicRefLike` (interface)
+
+```ts
+interface LiveTopicRefLike {
+    readonly __lunoraLive: string;
+    readonly topic: string;
 }
 ```
 
@@ -2914,7 +3126,17 @@ type OtlpSpanKind = "client" | "consumer" | "internal" | "producer" | "server";
 ### `QueueConsumerHandler` (type)
 
 ```ts
-type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace) => Promise<void>;
+type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace, live: QueueLivePublisherLike, fetchImpl: typeof fetch | undefined) => Promise<void>;
+```
+
+### `QueueLivePublisherLike` (interface)
+
+```ts
+interface QueueLivePublisherLike {
+    publish: (topic: LiveTopicRefLike, payload: unknown, options?: {
+        shardKey?: string;
+    }) => Promise<void>;
+}
 ```
 
 ### `R2PutLike` (interface)
@@ -3077,7 +3299,9 @@ interface SchedulerContext {
 interface ShardCdcOutcome {
     changes?: ReadonlyArray<Record<string, unknown>>;
     cursor: number;
+    epoch?: string;
     error?: {
+        code: string;
         message: string;
         timedOut: boolean;
     };
@@ -3143,6 +3367,7 @@ type StorageSignedUrlFunction = (key: string, options?: {
     contentType?: string;
     expiresInSeconds?: number;
     method?: "GET" | "PUT";
+    origin?: string;
 }) => Promise<string> | string;
 ```
 

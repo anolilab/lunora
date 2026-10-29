@@ -4,7 +4,7 @@ import type { ClientEvmSigner } from "@x402/evm";
 import { describe, expect, it, vi } from "vitest";
 
 import type { X402PayConfig } from "../src/config";
-import { createX402Pay } from "../src/pay";
+import { createX402Pay, lazyX402Pay } from "../src/pay";
 import { registerWallet, resolveEvmAccount, resolveSvmSigner } from "../src/pay/wallet";
 
 // Records what the CDP branch passes to `@coinbase/cdp-sdk` so we can assert the
@@ -303,5 +303,35 @@ describe("createX402Pay", () => {
         const pay = await createX402Pay(config, { fetch: globalThis.fetch, getSecret: () => TEST_KEY });
 
         expect(typeof pay.fetch).toBe("function");
+    });
+});
+
+describe("lazyX402Pay", () => {
+    const config: X402PayConfig = { network: "base", policy: boundedPolicy, signer: { secretName: "AGENT_KEY", type: "raw-key" } };
+
+    it("builds nothing until the first payment, then reuses one rail", async () => {
+        const getSecret = vi.fn<(name: string) => string>(() => TEST_KEY);
+        const base = vi.fn<typeof fetch>(async () => new Response("free"));
+        const rail = lazyX402Pay(config, { fetch: base, getSecret });
+
+        expect(getSecret).not.toHaveBeenCalled();
+
+        await rail.fetch("https://api.example/a");
+        await rail.fetch("https://api.example/b");
+
+        expect(getSecret).toHaveBeenCalledTimes(1);
+        expect(base).toHaveBeenCalledTimes(2);
+    });
+
+    it("memoises a failed build, so a misconfigured wallet stays closed without re-reading the secret", async () => {
+        const getSecret = vi.fn<(name: string) => string | undefined>(() => undefined);
+        const base = vi.fn<typeof fetch>(async () => new Response("free"));
+        const rail = lazyX402Pay(config, { fetch: base, getSecret });
+
+        await expect(rail.fetch("https://api.example/a")).rejects.toThrow(/secret "AGENT_KEY" is not set/);
+        await expect(rail.fetch("https://api.example/b")).rejects.toThrow(/secret "AGENT_KEY" is not set/);
+
+        expect(getSecret).toHaveBeenCalledTimes(1);
+        expect(base).not.toHaveBeenCalled();
     });
 });

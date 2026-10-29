@@ -1,5 +1,4 @@
 import { findIssueSolution, flattenHint } from "@lunora/errors";
-import { useLunora } from "@lunora/react";
 import type { KeyboardEvent, ReactElement } from "react";
 import { useState } from "react";
 
@@ -15,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import useAsyncSubmit from "../../hooks/use-async-submit";
 import { useShardKey } from "../../hooks/use-shard-key";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import type { ErrorIssue, ExplainIssueArgs, ExplainIssueResult, IssueSeverity, IssuesResult, IssueStatus } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -123,7 +123,7 @@ interface IssueDetailProps {
  * result of one still in flight. So this stays mounted and renders `null` instead.
  */
 const IssueDetail = ({ expanded, issue, shardKey }: IssueDetailProps): null | ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [explanation, setExplanation] = useState<ExplainIssueResult | undefined>(undefined);
@@ -423,7 +423,7 @@ const IssueRow = ({ busy, issue, rowError, runTriage, shardKey }: IssueRowProps)
  */
 const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement => {
     const t = useT();
-    const client = useLunora();
+    const client = useStudioClient();
 
     const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");

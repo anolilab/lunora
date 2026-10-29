@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
+import { decodeWire, encodeArgsOrThrow } from "@lunora/wire";
 
 import { collectPages } from "../../../shared/collect-pages";
-import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { CronTarget, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";
@@ -9,7 +9,7 @@ import assertScheduleDelay from "./validate-delay";
 import assertScheduleInstant from "./validate-instant";
 
 /**
- * Name a schedule target for an error message: a workflow/agent binding, a
+ * Name a schedule target for an error message: a workflow/agent class, a
  * function reference's path, or the bare `"ns:fn"` string the loosely-typed
  * `ctx.scheduler` surface still accepts.
  */
@@ -18,7 +18,7 @@ const targetLabel = (target: CronTarget): string => {
         return target as unknown as string;
     }
 
-    return (isWorkflowReference(target) ? target.binding : target.__lunoraRef) ?? "<unknown>";
+    return (isWorkflowReference(target) ? target.className : target.__lunoraRef) ?? "<unknown>";
 };
 
 /**
@@ -46,7 +46,11 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
     // The DO's `scheduledFor` echoes what the caller passed, so nothing is lost;
     // `get(id)` returns the full record for a caller that wants it back.
     const runAt = async <T extends CronTarget>(date: Date | number, target: T, args: ScheduleTargetArgs<T>, options_: RunOptions = {}): Promise<string> => {
-        const scheduledFor = date instanceof Date ? date.getTime() : date;
+        // Rounded UP to a whole millisecond: the SchedulerDO's time index takes
+        // integers only, so a fractional instant (`runAfter(1500.5)`, or
+        // `Date.now() + 1000 / 3`) used to pass the guard below and be refused
+        // by the DO. Up, never down, so a job never fires before it was asked to.
+        const scheduledFor = Math.ceil(date instanceof Date ? date.getTime() : date);
 
         // The bound `runAfter` has always applied, restated for the absolute form.
         // Without it `runAt` was the door a `NaN`/`Infinity` instant walked through
@@ -85,15 +89,15 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
 
         if (isWorkflowReference(target)) {
             // A workflow/agent target starts a fresh durable instance on fire; carry
-            // its `WORKFLOW_*`/`AGENT_*` binding so the runtime can `create()` it.
-            if (typeof target.binding !== "string" || target.binding.length === 0) {
+            // its export key (the generated class name) so the runtime can `create()` it.
+            if (typeof target.className !== "string" || target.className.length === 0) {
                 throw new LunoraError(
                     "INTERNAL",
-                    "@lunora/scheduler: workflow/agent schedule target is missing its `binding` — pass the generated `workflows.<name>` / `agents.<name>` reference",
+                    "@lunora/scheduler: workflow/agent schedule target is missing its `className` — pass the generated `workflows.<name>` / `agents.<name>` reference",
                 );
             }
 
-            const scheduled = await callDO<{ id: string }>(options, "/schedule", { ...base, workflow: target.binding });
+            const scheduled = await callDO<{ id: string }>(options, "/schedule", { ...base, workflow: target.className });
 
             return scheduled.id;
         }

@@ -1,9 +1,11 @@
-import type { CallExpression, Identifier, PropertyAccessExpression } from "ts-morph";
-import { Node } from "ts-morph";
+import type { CallExpression, Identifier, PropertyAccessExpression, ts } from "ts-morph";
+import { Node, SyntaxKind } from "ts-morph";
 
+import { isServerSurfaceModule } from "../../module-specifiers";
 import { unwrapExpression } from "../ast";
-import { walkBuilderChain } from "../builder-chain";
-import { resolveCalleeKind } from "../callee";
+import { walkBuilderChain, wrappedCallsWhere } from "../builder-chain";
+import { isServerImport, resolveCalleeKind } from "../callee";
+import staticBuilderChain from "./internal/static-builder-chain";
 
 const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
 
@@ -20,20 +22,48 @@ const INTERNAL_FACTORIES: Record<string, "action" | "mutation" | "query"> = {
 
 /**
  * Lifecycle factory names exported from `@lunora/server`, mapped to the moment
- * they fire on. A call to one of these registers an internal mutation tagged
+ * they fire on. A call to one of these registers an internal function tagged
  * with its `lifecycle` so emit collects it into the `LUNORA_LIFECYCLE_HOOKS`
  * manifest: `connect`/`disconnect` are dispatched per socket, `init` once per
- * Durable Object instance before any handler runs, and `reactor` after each
- * write flush whose tables the reactor's watched read touched.
+ * Durable Object instance before any handler runs, `reactor` after each write
+ * flush whose tables the reactor's watched read touched, and `whisper` before a
+ * socket joins or broadcasts to a whisper topic. `socket` is a `defineWebSocket`
+ * registration, dispatched server-side when a socket opens, sends a typed frame,
+ * or closes on the route's path — emit derives the `LUNORA_SOCKETS`
+ * path→registration map from it.
  */
-type LifecycleMoment = "connect" | "disconnect" | "init" | "reactor";
+type LifecycleMoment = "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
 
 const LIFECYCLE_FACTORIES: Record<string, LifecycleMoment> = {
     onConnect: "connect",
     onDisconnect: "disconnect",
     onQueryChange: "reactor",
     onShardInit: "init",
+    onWhisper: "whisper",
+    defineWebSocket: "socket",
 };
+
+/**
+ * Channel factories: a socket reaches the registration by its name, not by a
+ * lifecycle moment. A `defineRoom` is dispatched server-side when a socket joins,
+ * leaves, or sends to the room's whisper topic; emit derives the `LUNORA_ROOMS`
+ * topic→path map from it.
+ */
+type ChannelKind = "room";
+
+const CHANNEL_FACTORIES: Record<string, ChannelKind> = {
+    defineRoom: "room",
+};
+
+/**
+ * The registration kind a lifecycle moment dispatches as. All of them are
+ * mutations except the whisper authorizer, which is a QUERY — it reports a
+ * verdict the shard acts on and must not be able to write while deciding.
+ * Getting this wrong is not cosmetic: `handleRpc` transaction-wraps a `mutation`,
+ * so a misclassified authorizer would open a write span on every topic join.
+ * A `room` handler is a mutation: its `ctx.db` writes must commit all-or-nothing.
+ */
+const lifecycleKind = (moment: LifecycleMoment): "mutation" | "query" => (moment === "whisper" ? "query" : "mutation");
 
 /**
  * Walk a builder chain leftward to the identifier it roots at, or `undefined`
@@ -97,15 +127,59 @@ const resolveBuilderRootKind = (receiver: Node, followedLocal = false): "interna
     return INTERNAL_FACTORIES[rootName] ? "internal" : undefined;
 };
 
+/**
+ * Whether a chain carries a `.use(platformAdmin(...))` step. Follows a local
+ * `const` (or an imported one) ONE hop, as {@link resolveBuilderRootKind} does, so the common shape
+ * `const adminMutation = mutation.use(platformAdmin(...))` marks every procedure
+ * built on it. Bounded to one hop so a `const a = b; const b = a;` cycle ends.
+ */
+const usesPlatformAdmin = (receiver: Node, followedLocal = false): boolean => {
+    if (wrappedCallsWhere(receiver, "use", (callee) => isServerImport(callee, "platformAdmin")).length > 0) {
+        return true;
+    }
+
+    if (followedLocal) {
+        return false;
+    }
+
+    // An imported builder (`import { adminMutation } from "../lib/crpc"`) is an alias: follow it to the
+    // declaration in the module that defines it. Without this, a builder shared across modules never marks.
+    const symbol = builderChainRoot(receiver)?.getSymbol();
+    const declaration = (symbol?.isAlias() ? symbol.getAliasedSymbol() : symbol)?.getValueDeclaration();
+    const initializer = declaration && Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
+
+    return initializer !== undefined && usesPlatformAdmin(initializer, true);
+};
+
+/**
+ * The `adminOnly` flag for a builder chain, or nothing. The marker is the
+ * `platformAdmin` import from `@lunora/server` used as a `.use(...)` step, matched
+ * by its import origin and not by the name of the variable that holds the chain.
+ */
+const adminMarkerOf = (receiver: Node): { adminOnly: true } | Record<string, never> => (usesPlatformAdmin(receiver) ? { adminOnly: true } : {});
+
 /** Procedure classification — kind + visibility — produced by {@link classifyProcedureCall}. */
 interface ProcedureClassification {
+    /**
+     * `true` when the builder chain carries `.use(platformAdmin(...))`: only a
+     * platform admin can reach the procedure. Absent otherwise.
+     */
+    adminOnly?: true;
+
+    /**
+     * Set when the call registers a channel (`defineRoom`): the channel's kind. The
+     * name is read from the call's options, not here. Absent otherwise.
+     */
+    channel?: ChannelKind;
+
     /** Registration kind: `query` | `mutation` | `action` | `stream`. */
     kind: string;
 
     /**
-     * Set when the call is a connection-lifecycle hook (`onConnect`/`onDisconnect`):
-     * the socket side it fires on. The classification is otherwise an internal
-     * mutation. Absent for ordinary procedures.
+     * Set when the call is a lifecycle hook (`onConnect`/`onDisconnect`/
+     * `onShardInit`/`onQueryChange`/`onWhisper`): the moment it fires on. The
+     * classification is otherwise an internal mutation — or an internal query for
+     * `whisper`. Absent for ordinary procedures.
      */
     lifecycle?: LifecycleMoment;
 
@@ -122,7 +196,7 @@ interface ProcedureClassification {
  * Classify a builder-terminal call (`c.use(...).query(handler)`), or `undefined`
  * when the receiver is not a Lunora builder.
  */
-const classifyBuilderTerminal = (callee: PropertyAccessExpression): ProcedureClassification | undefined => {
+const classifyBuilderTerminal = (callee: PropertyAccessExpression, lazyFunctions: boolean): ProcedureClassification | undefined => {
     const method = callee.getName();
 
     if (!FUNCTION_KINDS.has(method)) {
@@ -161,7 +235,7 @@ const classifyBuilderTerminal = (callee: PropertyAccessExpression): ProcedureCla
         // security classification, so the stricter of the two wins.
         const internal = candidates.some((node) => node.getType().getProperty("__lunoraVisibility"));
 
-        return { kind: method, receiver, visibility: internal ? "internal" : "public" };
+        return { kind: method, receiver, visibility: internal ? "internal" : "public", ...adminMarkerOf(receiver) };
     }
 
     // Robust fallback: walk the builder chain (`.input()`/`.use()`/`.output()`)
@@ -169,10 +243,12 @@ const classifyBuilderTerminal = (callee: PropertyAccessExpression): ProcedureCla
     // bare-factory path does. This keeps discovery working when dependency
     // types aren't installed (e.g. a freshly-scaffolded project before
     // `pnpm install`, where the `__lunoraProcedure` brand can't resolve).
-    const rootKind = resolveBuilderRootKind(receiver);
+    const staticFactory = lazyFunctions ? staticBuilderChain(receiver).factory : undefined;
+    const staticVisibility = staticFactory?.startsWith("internal") ? "internal" : "public";
+    const rootKind = staticFactory ? staticVisibility : resolveBuilderRootKind(receiver);
 
     if (rootKind) {
-        return { kind: method, receiver, visibility: rootKind };
+        return { kind: method, receiver, visibility: rootKind, ...adminMarkerOf(receiver) };
     }
 
     return undefined;
@@ -187,11 +263,53 @@ const classifyBuilderTerminal = (callee: PropertyAccessExpression): ProcedureCla
  * for "is this a Lunora procedure, and is it internal?" — shared by function
  * discovery here and the RLS-coverage feeder.
  */
-const classifyProcedureCall = (call: CallExpression): ProcedureClassification | undefined => {
+
+/**
+ * Whether an identifier is a namespace import of `@lunora/server` (`import * as lunora`).
+ * Import-based, so a local object that happens to have a `defineRoom` method is not one.
+ */
+const isLunoraNamespace = (identifier: Identifier): boolean =>
+    (identifier.getSymbol()?.getDeclarations() ?? []).some(
+        (declaration) =>
+            Node.isNamespaceImport(declaration) &&
+            isServerSurfaceModule(declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration)?.getModuleSpecifierValue() ?? ""),
+    );
+
+/** Whether a bare name is a channel or lifecycle factory, the two registrations that are not builder terminals. */
+const isRegistrationFactory = (name: string): boolean => Object.hasOwn(CHANNEL_FACTORIES, name) || Object.hasOwn(LIFECYCLE_FACTORIES, name);
+
+/**
+ * The registration a channel or lifecycle factory makes, however the factory was reached (bare identifier
+ * or namespace property). Callers check {@link isRegistrationFactory} first.
+ */
+const registrationOfFactory = (name: string): ProcedureClassification | undefined => {
+    if (Object.hasOwn(CHANNEL_FACTORIES, name)) {
+        return { channel: CHANNEL_FACTORIES[name], kind: "mutation", visibility: "internal" };
+    }
+
+    const lifecycle = Object.hasOwn(LIFECYCLE_FACTORIES, name) ? LIFECYCLE_FACTORIES[name] : undefined;
+
+    // A lifecycle hook is an internal registration tagged with its moment; it lands in LUNORA_FUNCTIONS for
+    // path dispatch and in the lifecycle manifest emit derives from the `lifecycle` tag.
+    return lifecycle ? { kind: lifecycleKind(lifecycle), lifecycle, visibility: "internal" } : undefined;
+};
+
+const classifyUncached = (call: CallExpression, lazyFunctions: boolean): ProcedureClassification | undefined => {
     const callee = call.getExpression();
 
     if (Node.isPropertyAccessExpression(callee)) {
-        return classifyBuilderTerminal(callee);
+        // A channel or lifecycle factory reached through a namespace import (`lunora.defineRoom(...)`,
+        // `lunora.defineWebSocket(...)`) is a registration too, found by the same lookup as the identifier form.
+        const receiver = callee.getExpression();
+        const name = callee.getName();
+
+        // The name is checked first: resolving the receiver's symbol is type-checker work, which
+        // only a factory name is worth paying for.
+        if (isRegistrationFactory(name) && Node.isIdentifier(receiver) && isLunoraNamespace(receiver)) {
+            return registrationOfFactory(name);
+        }
+
+        return classifyBuilderTerminal(callee, lazyFunctions);
     }
 
     if (!Node.isIdentifier(callee)) {
@@ -214,17 +332,40 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
         return { kind: internalKind, visibility: "internal" };
     }
 
-    const lifecycle = LIFECYCLE_FACTORIES[exportedName];
+    return registrationOfFactory(exportedName);
+};
 
-    if (lifecycle) {
-        // A lifecycle hook is an internal mutation tagged with its socket side;
-        // it lands in LUNORA_FUNCTIONS for path dispatch and in the lifecycle
-        // manifest emit derives from the `lifecycle` tag.
-        return { kind: "mutation", lifecycle, visibility: "internal" };
+/**
+ * {@link classifyUncached}'s answers, per type checker, then per call node and `lazyFunctions`
+ * flag. Some fifteen feeders classify the same exported initializers every pass, and the
+ * answer reads types and symbols across files, so it is only reused while the program is the
+ * same one: an edit to ANY file builds a new program and checker, which starts empty. The
+ * outer levels are weak, so a dropped program frees its answers.
+ */
+const CLASSIFIED = new WeakMap<ts.TypeChecker, WeakMap<ts.Node, Map<boolean, Readonly<ProcedureClassification> | undefined>>>();
+
+const classifyProcedureCall = (call: CallExpression, lazyFunctions = false): Readonly<ProcedureClassification> | undefined => {
+    const checker = call.getProject().getTypeChecker().compilerObject;
+    let byNode = CLASSIFIED.get(checker);
+
+    if (byNode === undefined) {
+        byNode = new WeakMap();
+        CLASSIFIED.set(checker, byNode);
     }
 
-    return undefined;
+    let byFlag = byNode.get(call.compilerNode);
+
+    if (byFlag === undefined) {
+        byFlag = new Map();
+        byNode.set(call.compilerNode, byFlag);
+    }
+
+    if (!byFlag.has(lazyFunctions)) {
+        byFlag.set(lazyFunctions, classifyUncached(call, lazyFunctions));
+    }
+
+    return byFlag.get(lazyFunctions);
 };
 
 export { classifyProcedureCall };
-export type { LifecycleMoment, ProcedureClassification };
+export type { ChannelKind, LifecycleMoment, ProcedureClassification };

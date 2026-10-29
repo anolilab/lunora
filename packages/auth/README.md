@@ -55,7 +55,8 @@ pnpm add @lunora/auth
 ## Usage
 
 ```ts
-import { createAuth, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { createAuth, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";
 
 const options = { secret: env.AUTH_SECRET, emailAndPassword: { enabled: true } };
 
@@ -69,7 +70,7 @@ const auth = createAuth({ ...options, database: lunoraD1Adapter(env.DB) });
 // it once and keep it — `ensureMigrated` single-flights on the options object it
 // is handed, so a `createAuth({...})` built inside `fetch` is a fresh key every
 // request and the migration re-runs on each one.
-const migrationAuth = createAuth({ ...options, database: env.DB });
+const migrationAuth = createMigrationAuth({ ...options, database: env.DB });
 
 // In your Worker's fetch handler, route /api/auth/* to better-auth and fall
 // through to the Lunora worker for everything else:

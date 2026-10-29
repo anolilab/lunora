@@ -21,7 +21,7 @@
  * Those assertions are called out inline.
  */
 import type { HostTracingLike, TracerDeps } from "@lunora/observability";
-import { createTracer } from "@lunora/observability";
+import { applyHostRootSpan, createTracer, setHostSpanAttributes } from "@lunora/observability";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
@@ -81,6 +81,62 @@ describe("createTracer cloudflare custom-spans bridge (workerd)", () => {
 
         expect(tracing).toBeDefined();
         expect(typeof tracing?.enterSpan).toBe("function");
+    });
+
+    it("mirrors attributes onto the real getActiveSpan() and fails a traced body cleanly, where the runtime has them", async () => {
+        expect.assertions(2);
+
+        const stub = newShardStub("cf-bridge-active-span");
+
+        const outcome = await runInDurableObject(stub, async () => {
+            const tracing = await realResolveCloudflareTracing();
+            const activeSpan = tracing?.getActiveSpan?.();
+
+            // Feature-detected like production: absent on an older runtime, in
+            // which case there is nothing to write and nothing may throw.
+            if (activeSpan !== undefined) {
+                setHostSpanAttributes(activeSpan, { "lunora.probe": true, nested: null });
+            }
+
+            const { trace } = setup({ fuseHostSpans: true, resolveHostTracing: realResolveCloudflareTracing });
+
+            const failure = await trace("fails", () => {
+                throw new TypeError("kaboom");
+            }).catch((error: unknown) => error);
+
+            return { failure: failure instanceof Error ? failure.message : String(failure), hasGetActiveSpan: typeof tracing?.getActiveSpan };
+        });
+
+        expect(["function", "undefined"]).toContain(outcome.hasGetActiveSpan);
+        // The body's own error surfaces untouched, with a native recordException
+        // (when present) on the host span in between.
+        expect(outcome.failure).toBe("kaboom");
+    });
+
+    it("exposes setStatus on the real custom and invocation spans, and applyHostRootSpan writes it", async () => {
+        expect.assertions(2);
+
+        const stub = newShardStub("cf-bridge-status");
+
+        const outcome = await runInDurableObject(stub, async () => {
+            const tracing = await realResolveCloudflareTracing();
+            let customSetStatus = "undefined";
+
+            // A custom span: the shape `ctx.trace` hands `applyHostSpanAttributes`.
+            tracing?.enterSpan("probe.status", (hostSpan) => {
+                customSetStatus = typeof hostSpan.setStatus;
+            });
+
+            // The invocation span the shard's dispatch mirror marks for a server fault.
+            applyHostRootSpan(tracing, { attributes: { "lunora.probe": true }, error: { message: "internal error", serverFault: true } });
+
+            return { activeSetStatus: typeof tracing?.getActiveSpan?.()?.setStatus, customSetStatus };
+        });
+
+        // The pinned workerd implements the workers-types 5.20260929 `Span.setStatus`,
+        // so the feature-detected path is the one production takes.
+        expect(outcome.customSetStatus).toBe("function");
+        expect(outcome.activeSetStatus).toBe("function");
     });
 
     it("runs a nested ctx.trace inside a real DO with the bridge ON — no throw, isTraced is boolean, our spans intact", async () => {

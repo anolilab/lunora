@@ -27,7 +27,7 @@ const buildClientWithHttpStream = (): { client: LunoraClient; opened: MockEntry[
         return iterable;
     });
 
-    const client = { httpStream: httpStreamFunction } as unknown as LunoraClient;
+    const client = { httpStream: httpStreamFunction, onIdentityChange: () => () => undefined } as unknown as LunoraClient;
 
     return {
         client,

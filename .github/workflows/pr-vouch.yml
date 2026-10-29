@@ -1,0 +1,29 @@
+"name": "PR Vouch"
+
+# Labels each pull request with how much its author is trusted: `vouch:trusted`
+# (collaborator, bot or listed in `.github/VOUCHED.td`), `vouch:unvouched` or
+# `vouch:denounced`. It labels only; nothing is blocked. The work is done by the
+# shared `vouch` workflow, which checks nothing out.
+"on": # yamllint disable-line rule:truthy
+    "pull_request_target":
+        "types":
+            - "opened"
+            - "reopened"
+            - "synchronize"
+            - "ready_for_review"
+
+"concurrency":
+    "group": "${{ github.workflow }}-${{ github.event.pull_request.number }}"
+    "cancel-in-progress": true
+
+"permissions": {}
+
+"jobs":
+    "vouch":
+        "permissions":
+            "contents": "read"
+            "issues": "write" # to create the labels
+            "pull-requests": "write" # to apply them
+        "uses": "anolilab/workflows/.github/workflows/vouch.yml@fb7a881926480723026a1deaa587ceaaaee7bf12" # v24.2.0
+        "with":
+            "target-repo": "anolilab/lunora"

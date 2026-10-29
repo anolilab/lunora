@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, sharding, pluggable stores, and procedure middleware</h3>
+<h3 align="center">Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, pluggable stores, and procedure middleware</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,7 +34,7 @@
 
 ---
 
-Rate limiting for Lunora: token-bucket, fixed-window, and sliding-window algorithms, a deny list, optional sharding for hot limits, pluggable stores (in-memory, SQL, or the Lunora ORM), and procedure middleware that rides the `.use()` chain.
+Rate limiting for Lunora: token-bucket, fixed-window, and sliding-window algorithms, a deny list, pluggable stores (in-memory, SQL, or the Lunora ORM), and procedure middleware that rides the `.use()` chain.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
@@ -116,6 +116,11 @@ table via `dbRateLimit(config, name, options)`, or supply a `store`
 correct inside a single Durable Object — but constructing a `RateLimiter` with
 no explicit `store` now warns once so that choice is visible instead of
 silent.
+
+A key that is an IPv6 address (for example `ctx.ip`) is bucketed by its /64
+prefix, and an IPv4-mapped address by the IPv4 address it wraps. An IPv6 client
+usually controls a whole /64, so a per-address bucket would let it pick a fresh
+address for every request. A deny-list IPv6 entry bans its /64.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs)**.
 

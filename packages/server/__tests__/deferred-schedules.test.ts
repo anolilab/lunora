@@ -8,7 +8,8 @@
  * harness suite (`@lunora/testing`) pins the same guarantees end to end; this
  * suite pins the ordering itself, which a row count cannot see.
  */
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { createScheduler, SchedulerDO } from "@lunora/scheduler";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { beginDeferredSchedules, withDeferredSchedules } from "../src/index";
 
@@ -355,6 +356,75 @@ describe("withDeferredSchedules", () => {
         expect(calls).toHaveLength(1);
     });
 
+    it("schedules the job whose id it handed out for a fractional delay", async () => {
+        expect.assertions(3);
+
+        // The real client over the real SchedulerDO, whose time index takes whole
+        // milliseconds. A fractional delay used to pass the call-site guard, hand
+        // the handler an id, and then be refused at the flush, after the commit.
+        const storage = new Map<string, unknown>();
+        let alarm: number | null = null;
+        const durableObject = new SchedulerDO(
+            {
+                storage: {
+                    delete: async (keys: string | string[]) => [keys].flat().filter((key) => storage.delete(key)).length,
+                    deleteAlarm: () => {
+                        alarm = null;
+                    },
+                    get: async <T>(key: string) => storage.get(key) as T | undefined,
+                    getAlarm: async () => alarm,
+                    list: async <T>(options: { limit?: number; prefix?: string } = {}) =>
+                        new Map(
+                            [...storage.entries()]
+                                .filter(([key]) => key.startsWith(options.prefix ?? ""))
+                                .toSorted(([left], [right]) => (left < right ? -1 : 1))
+                                .slice(0, options.limit ?? storage.size) as [string, T][],
+                        ),
+                    put: async (entries: Record<string, unknown> | string, value?: unknown) => {
+                        for (const [key, entry] of typeof entries === "string" ? [[entries, value] as const] : Object.entries(entries)) {
+                            storage.set(key, entry);
+                        }
+                    },
+                    setAlarm: (time: Date | number) => {
+                        alarm = Number(time);
+                    },
+                },
+            },
+            { LUNORA_ORIGIN_URL: "https://app.test" },
+        );
+        const client = createScheduler({
+            namespace: {
+                get: () => {
+                    return { fetch: async (input: Request | string, init?: RequestInit) => durableObject.fetch(new Request(input, init)) };
+                },
+                idFromName: (name: string) => name,
+            },
+        });
+        const facade = withDeferredSchedules(client);
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        const id = await facade.runAfter(1500.5, { __lunoraRef: "mail:send" } as never, {} as never);
+
+        await expect(settle(true)).resolves.toBeUndefined();
+        await expect(client.list()).resolves.toHaveLength(1);
+        await expect(client.get(id)).resolves.toMatchObject({ id });
+    });
+
+    it("rejects a delay past the latest schedulable instant at the call site rather than at the flush", async () => {
+        expect.assertions(2);
+
+        const log: string[] = [];
+        const { calls, scheduler } = recordingScheduler(log);
+        const facade = withDeferredSchedules(scheduler);
+        const settle = beginDeferredSchedules({ scheduler: facade });
+
+        expect(() => facade.runAfter(Number.MAX_SAFE_INTEGER, "mail:send")).toThrow("later than the latest schedulable instant");
+
+        await settle(true);
+
+        expect(calls).toHaveLength(0);
+    });
+
     it("keeps the rest of the scheduler surface reachable", async () => {
         expect.assertions(1);
 
@@ -378,5 +448,122 @@ describe("withDeferredSchedules", () => {
         // A query ctx (or an admin dispatch) gets the bare scheduler; the settle a
         // caller holds must be a no-op rather than a crash.
         expect(calls).toHaveLength(1);
+    });
+});
+
+/**
+ * The shard's schedule-rate budget as the facade sees it (see schedule-rate-breaker.ts in
+ * `@lunora/do`): `admit` answers `undefined` for the first `limit` targets it is asked
+ * about, then `deferTo`. The shard's real window is covered by its own suite; this pins
+ * what the facade does with the answer.
+ */
+const budgetOutbox = (limit: number, deferTo: number) => {
+    let admitted = 0;
+
+    return {
+        admit: vi.fn<() => number | undefined>(() => {
+            if (admitted < limit) {
+                admitted += 1;
+
+                return undefined;
+            }
+
+            return deferTo;
+        }),
+        forget: vi.fn<(id: string) => void>(),
+        record: vi.fn<(id: string, envelope: { when: number }) => void>(),
+        wake: vi.fn<() => void>(),
+    };
+};
+
+describe("withDeferredSchedules — schedule-rate budget", () => {
+    const NOW = 1_700_000_000_000;
+    const WINDOW = 60_000;
+    const DEFER_TO = NOW + WINDOW + 1;
+
+    beforeEach(() => {
+        vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("asks the budget once per target per dispatch, so one fan-out is one decision", async () => {
+        expect.assertions(3);
+
+        const { calls, scheduler } = recordingScheduler([]);
+        const outbox = budgetOutbox(3, DEFER_TO);
+        const facade = withDeferredSchedules(scheduler, outbox);
+
+        // A fan-out of ten jobs to one target from one invocation, past a budget of three.
+        for (let index = 0; index < 10; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- the fan-out is one invocation's calls in declaration order
+            await facade.runAfter(0, "import:row");
+        }
+
+        expect(outbox.admit).toHaveBeenCalledTimes(1);
+        expect(calls).toHaveLength(10);
+        // Every job in the fan-out keeps its own due time: none of them is deferred piecemeal.
+        expect(calls.every((call) => call.when === 0)).toBe(true);
+    });
+
+    it("defers a self-rescheduling loop's live call to the instant the budget gives, one dispatch at a time", async () => {
+        expect.assertions(4);
+
+        const { calls, scheduler } = recordingScheduler([]);
+        const outbox = budgetOutbox(3, DEFER_TO);
+
+        // Each run is its own dispatch, so each builds its own facade and asks once.
+        for (let run = 0; run < 5; run += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each run schedules the next one, the chain being modelled
+            await withDeferredSchedules(scheduler, outbox).runAfter(0, "loop:self");
+        }
+
+        expect(calls.slice(0, 3).map((call) => call.when)).toEqual([0, 0, 0]);
+        // Past the budget the live call is a delay that lands on the deferred instant.
+        expect(calls[3]?.when).toBe(DEFER_TO - NOW);
+        expect(calls[4]?.when).toBe(DEFER_TO - NOW);
+        expect(outbox.admit).toHaveBeenCalledTimes(5);
+    });
+
+    it("writes the deferred instant into custody and into the replayed call, for a mutation", async () => {
+        expect.assertions(3);
+
+        const { calls, scheduler } = recordingScheduler([]);
+        const outbox = budgetOutbox(0, DEFER_TO);
+        const context = { scheduler: withDeferredSchedules(scheduler, outbox) };
+
+        const settle = beginDeferredSchedules(context);
+
+        await context.scheduler.runAfter(0, "loop:self");
+        await settle(true);
+
+        expect(outbox.record).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ when: DEFER_TO }));
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.when).toBe(DEFER_TO - NOW);
+    });
+
+    it("never brings a job forward: a far-future instant keeps its time past the deferral", async () => {
+        expect.assertions(1);
+
+        const { calls, scheduler } = recordingScheduler([]);
+        const facade = withDeferredSchedules(scheduler, budgetOutbox(0, DEFER_TO));
+        const later = NOW + 10 * WINDOW;
+
+        await facade.runAt(later, "reminder:send");
+
+        expect(calls[0]?.when).toBe(later);
+    });
+
+    it("leaves every call alone when the outbox answers within budget", async () => {
+        expect.assertions(1);
+
+        const { calls, scheduler } = recordingScheduler([]);
+        const facade = withDeferredSchedules(scheduler, budgetOutbox(Number.POSITIVE_INFINITY, DEFER_TO));
+
+        await facade.runAfter(5000, "mail:send");
+
+        expect(calls[0]?.when).toBe(5000);
     });
 });

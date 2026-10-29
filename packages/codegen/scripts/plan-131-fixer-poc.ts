@@ -145,7 +145,7 @@ const main = async (): Promise<void> => {
         console.log(`Fixture: temp copy at ${workRoot}, .relations() injected on channels.\n`);
 
         // 1. BEFORE: run codegen, capture the fabricated finding.
-        const before = runCodegen({ projectRoot: workRoot });
+        const before = runCodegen({ projectRoot: workRoot, wranglerQueueProducers: [] });
         const beforeFinding = findTargetFinding(before.advisories);
 
         console.log(`Before: ${before.advisories.length.toString()} advisories, target finding present: ${String(beforeFinding !== undefined)}`);
@@ -177,7 +177,7 @@ const main = async (): Promise<void> => {
         console.log(`Wrote fix to ${schemaPath}\n`);
 
         // 3. AFTER: re-run codegen, confirm the finding is gone; re-apply to prove idempotence.
-        const after = runCodegen({ projectRoot: workRoot });
+        const after = runCodegen({ projectRoot: workRoot, wranglerQueueProducers: [] });
         const afterFinding = findTargetFinding(after.advisories);
         const rerun = appendIndexFix(readFileSync(schemaPath, "utf8"), table, suggested);
 

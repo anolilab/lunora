@@ -50,7 +50,15 @@ interface DataViewSearch {
     table?: string;
 }
 
-const VALID_OPERATORS = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "lt", "lte", "ne"]);
+const VALID_OPERATORS = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "has", "lt", "lte", "ne"]);
+
+/**
+ * The router JSON-parses each param, so a hand-written `?shard=42` (or
+ * `?search=2026`) arrives as the NUMBER. Take it back as text — but only while
+ * the number is exact: past 2^53 the parse has already rounded it to a
+ * different key, and guessing would point the view at another shard.
+ */
+const numericText = (raw: unknown): unknown => (typeof raw === "number" && Number.isSafeInteger(raw) ? String(raw) : raw);
 
 /**
  * Read a non-blank string off the raw search record, else `undefined`. Trims so a
@@ -73,9 +81,20 @@ const isFilterClause = (entry: unknown): entry is FilterClause => {
         return false;
     }
 
-    const candidate = entry as { column?: unknown; operator?: unknown };
+    const candidate = entry as { column?: unknown; operator?: unknown; path?: unknown };
 
-    return typeof candidate.column === "string" && typeof candidate.operator === "string" && VALID_OPERATORS.has(candidate.operator as FilterOperator);
+    // A clause whose path is not a list of strings is dropped whole: keeping it with
+    // the path stripped would test the parent field under the operator the URL asked
+    // for. An empty segment is kept as written: the server refuses it, and dropping
+    // it would widen the filter on reload.
+    const pathIsValid = candidate.path === undefined || (Array.isArray(candidate.path) && candidate.path.every((segment) => typeof segment === "string"));
+
+    return (
+        typeof candidate.column === "string" &&
+        typeof candidate.operator === "string" &&
+        VALID_OPERATORS.has(candidate.operator as FilterOperator) &&
+        pathIsValid
+    );
 };
 
 /** Read the structured filters out of a `?filters=<json>` param, tolerating absence/garbage. */
@@ -166,13 +185,13 @@ export const validateDataViewSearch = (search: Record<string, unknown>): DataVie
         validated.table = table;
     }
 
-    const shard = stringParameter(search["shard"]);
+    const shard = stringParameter(numericText(search["shard"]));
 
     if (shard !== undefined) {
         validated.shard = shard;
     }
 
-    const searchText = stringParameter(search["search"]);
+    const searchText = stringParameter(numericText(search["search"]));
 
     if (searchText !== undefined) {
         validated.search = searchText;
@@ -207,9 +226,9 @@ export const searchToDataView = (search: DataViewSearch | Record<string, unknown
     return {
         filters: filters.length > 0 ? filters : undefined,
         orderBy,
-        search: typeof search["search"] === "string" && search["search"] !== "" ? search["search"] : undefined,
-        shard: typeof search["shard"] === "string" && search["shard"] !== "" ? search["shard"] : undefined,
-        table: typeof search["table"] === "string" && search["table"] !== "" ? search["table"] : undefined,
+        search: stringParameter(numericText(search["search"])),
+        shard: stringParameter(numericText(search["shard"])),
+        table: stringParameter(search["table"]),
         tier: search["schema"] === "global" ? "global" : "shard",
     };
 };

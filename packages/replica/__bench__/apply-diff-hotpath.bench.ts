@@ -1,6 +1,6 @@
+import { stableWireKey } from "@lunora/wire";
 import { bench, describe } from "vitest";
 
-import { stableWireKey } from "../../../shared/wire-key";
 import { applyDiff, applyDiffs, fnv1a64Hex } from "../src/apply-diff";
 import type { TableDiff } from "../src/table-diff";
 import { backlog, baseRows, nestedInsertDiff, nestedPayload, ROW_COUNT } from "./apply-diff.shared";
@@ -51,7 +51,7 @@ const applyDiffsBaseline = (current: ReadonlyMap<string, Record<string, unknown>
  * Named for its ordering on purpose — it sorts with `localeCompare`, the
  * locale-dependent ordering REPLICA-05 replaced with code-unit order. Do not
  * reach for this as a canonicalization reference; the shipped encoder is
- * `stableWireKey`, imported above from `shared/wire-key.ts`.
+ * `stableWireKey`, imported above from `packages/wire/src/wire-key.ts`.
  */
 const canonicalizeLocaleSortedPreReplica05 = (value: unknown): unknown => {
     if (Array.isArray(value)) {

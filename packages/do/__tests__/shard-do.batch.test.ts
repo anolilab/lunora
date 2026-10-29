@@ -92,4 +92,31 @@ describe("shardDO /rpc-batch", () => {
         // The entry after the failure still ran (fail-per-slot, not fail-fast).
         expect(body.results[2]?.body.result).toStrictEqual({ echoed: "docs:after" });
     });
+
+    it("puts a failing slot's real error on `errorDetail` only when the worker asked", async () => {
+        expect.assertions(3);
+
+        const shard = new BatchShard(createFakeState(), {});
+        const calls = [
+            { args: {}, functionPath: "docs:ok", id: 0 },
+            { args: {}, functionPath: "boom:bad", id: 1 },
+        ];
+        const slots = async (headers?: Record<string, string>): Promise<{ errorDetail?: string }[]> => {
+            const response = await shard.fetch(batch(calls, headers));
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- tsc sees Response.json() as `unknown`; the cast is load-bearing for lint:types
+            const body = (await response.json()) as { results: { errorDetail?: string }[] };
+
+            return body.results;
+        };
+        const unasked = { results: await slots() };
+        const asked = { results: await slots({ "x-lunora-want-error-detail": "1" }) };
+
+        expect(unasked.results.some((slot) => "errorDetail" in slot)).toBe(false);
+        expect(asked.results[0]).not.toHaveProperty("errorDetail");
+        expect(JSON.parse(decodeURIComponent(asked.results[1]!.errorDetail!))).toMatchObject({
+            message: "kaboom",
+            name: "Error",
+            stack: expect.stringContaining("kaboom"),
+        });
+    });
 });

@@ -56,8 +56,11 @@ const createRawWriter = (rows: Row[], log: string[]) => {
 
             return rowsOfTable(tableName).length;
         },
-        async delete(id: string) {
+        async delete(_table: string, id: string) {
             log.push(`raw.delete:${id}`);
+        },
+        async explain() {
+            return { params: [], plan: [], sql: "" };
         },
         async findFirst(tableName: string, args?: { where?: { _id?: string } }) {
             log.push(`raw.findFirst:${tableName}`);
@@ -80,7 +83,7 @@ const createRawWriter = (rows: Row[], log: string[]) => {
 
             return { continueCursor: null, isDone: true, page: rowsOfTable(tableName) };
         },
-        async get(id: string) {
+        async get(_table: string, id: string) {
             log.push(`raw.get:${id}`);
 
             return rows.find((row) => row._id === id) ?? null;
@@ -101,7 +104,7 @@ const createRawWriter = (rows: Row[], log: string[]) => {
 
             return (document._id as string | undefined) ?? "new-id";
         },
-        async patch(id: string) {
+        async patch(_table: string, id: string, _patch?: Record<string, unknown>, _options?: unknown) {
             log.push(`raw.patch:${id}`);
         },
         query(tableName: string): never {
@@ -118,7 +121,7 @@ const createRawWriter = (rows: Row[], log: string[]) => {
 
             return { continueCursor: null, isDone: true, page: rowsOfTable(tableName) };
         },
-        async replace(id: string) {
+        async replace(_table: string, id: string, _document?: Record<string, unknown>) {
             log.push(`raw.replace:${id}`);
         },
     };
@@ -158,10 +161,11 @@ const guard = (raw: RawWriter, protectedTables: Set<string>, tableOfId: (id: str
 
             return raw.count(tableName);
         },
-        delete: async (id: string) => {
-            denyById(id);
+        delete: async (table: string, id: string) => {
+            // A delete is denied on the table it names, even when the row is already gone.
+            deny(table);
 
-            return raw.delete(id);
+            return raw.delete(table, id);
         },
         findFirst: (tableName: string, args?: { where?: { _id?: string } }) => {
             deny(tableName);
@@ -178,10 +182,10 @@ const guard = (raw: RawWriter, protectedTables: Set<string>, tableOfId: (id: str
 
             return raw.findMany(tableName);
         },
-        get: async (id: string) => {
+        get: async (table: string, id: string) => {
             denyById(id);
 
-            return raw.get(id);
+            return raw.get(table, id);
         },
         groupBy: (tableName: string) => {
             deny(tableName);
@@ -193,17 +197,22 @@ const guard = (raw: RawWriter, protectedTables: Set<string>, tableOfId: (id: str
 
             return raw.insert(tableName, document);
         },
-        patch: async (id: string) => {
-            denyById(id);
+        patch: async (table: string, id: string, patch: Record<string, unknown>, options?: unknown) => {
+            deny(table);
 
-            return raw.patch(id);
+            return raw.patch(table, id, patch, options);
         },
-        replace: async (id: string) => {
-            denyById(id);
+        replace: async (table: string, id: string, document: Record<string, unknown>) => {
+            deny(table);
 
-            return raw.replace(id);
+            return raw.replace(table, id, document);
         },
     };
+
+    // `related` is deliberately absent from this fixture: the traversal is
+    // routed per hop by the wrapper itself (it keys off the writer's
+    // `relationEdges`, which this writer does not publish), and
+    // `rls-related.test.ts` covers it end to end.
 
     // NON-enumerable, mirroring the real `guardWriter`. An enumerable escape
     // hatch rides the `{ ...ctx.db }` spread the RLS wrapper is built from, which
@@ -342,7 +351,9 @@ describe("rls — secure-by-default routing over a guarded writer", () => {
         const log: string[] = [];
         const raw = createRawWriter([{ _id: "secret_1", table: "secrets" }], log);
         const guarded = guard(raw, protectedTables, tableOfId);
-        const handler = lunora.query.use(rlsForTest<TestContext>(definePolicies([readPosts, insertSecrets]))).query(async ({ ctx }) => ctx.db.get("secret_1"));
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>(definePolicies([readPosts, insertSecrets])))
+            .query(async ({ ctx }) => ctx.db.get("secrets", "secret_1"));
 
         // The by-id path must defer to the guarded `base.get` (fail closed), never
         // return the row it located through the unwrapped writer.
@@ -488,10 +499,65 @@ describe("rls — chained rls() steps compose", () => {
         const handler = lunora.mutation
             .use(rlsForTest<TestContext>(permissive))
             .use(rlsForTest<TestContext>(restrictive))
-            .mutation(async ({ ctx }) => ctx.db.patch("post_1", { title: "x" }));
+            .mutation(async ({ ctx }) => ctx.db.patch("posts", "post_1", { title: "x" }));
 
         await expect(handler.handler({ auth: { userId: "u1" }, db: guarded }, {})).rejects.toThrow(/denied by policy/u);
 
         expect(log).not.toContain("raw.patch:post_1");
+    });
+});
+
+describe("rls — chunked delete over a guarded writer", () => {
+    const deletePosts = definePolicy<TestContext>({ on: "delete", table: "posts", when: () => true });
+    const readPosts = definePolicy<TestContext>({ on: "read", table: "posts", when: () => true });
+
+    it("deleteAll skips a later row an earlier delete of the page cascaded away, without reaching the guard", async () => {
+        expect.assertions(3);
+
+        const log: string[] = [];
+        // post_2 is post_1's child: deleting post_1 cascades it away.
+        const rows: Row[] = [
+            { _id: "post_1", table: "posts" },
+            { _id: "post_2", table: "posts" },
+        ];
+        const base = createRawWriter(rows, log);
+        const raw = {
+            ...base,
+            async delete(_table: string, id: string) {
+                log.push(`raw.delete:${id}`);
+
+                if (id === "post_1") {
+                    rows.splice(0, rows.length, ...rows.filter((row) => row._id !== "post_1" && row._id !== "post_2"));
+                } else {
+                    rows.splice(0, rows.length, ...rows.filter((row) => row._id !== id));
+                }
+            },
+            // Page images are snapshots, as a real read returns.
+            async findMany(tableName: string) {
+                log.push(`raw.findMany:${tableName}`);
+
+                return {
+                    continueCursor: null,
+                    isDone: true,
+                    page: rows
+                        .filter((row) => row.table === tableName)
+                        .map((row) => {
+                            return { ...row };
+                        }),
+                };
+            },
+        };
+        const guarded = guard(raw, new Set(["posts"]), () => "posts");
+
+        Object.assign(guarded, { deleteRereadTables: new Set(["posts"]) });
+
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>(definePolicies([readPosts, deletePosts])))
+            .mutation(async ({ ctx }) => ctx.db.deleteAll("posts"));
+
+        // The cascaded row is not counted: this call issued one delete.
+        await expect(handler.handler({ auth: { userId: "u1" }, db: guarded }, {})).resolves.toStrictEqual({ deleted: 1 });
+        expect(log.filter((entry) => entry.startsWith("raw.delete:"))).toStrictEqual(["raw.delete:post_1"]);
+        expect(rows).toHaveLength(0);
     });
 });

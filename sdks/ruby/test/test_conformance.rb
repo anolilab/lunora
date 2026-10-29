@@ -134,6 +134,9 @@ class TestRpc < Minitest::Test
       assert_equal entry["code"], error.code
       assert_equal entry["message"], error.message
       assert_equal canonical(entry["dataWire"]), canonical(Lunora.encode_wire(error.data)) if entry.key?("dataWire")
+      # An envelope whose data the codec refuses is still the coded verdict,
+      # raised with the data dropped rather than as the codec's own error.
+      assert_nil error.data, entry["name"] if entry["dataDropped"]
     end
   end
 
@@ -164,19 +167,47 @@ class TestRpc < Minitest::Test
   #
   # The manifest listed this case from the start; the Ruby port never had it, and
   # nothing noticed until the manifest became a gate.
+  #
+  # The non-object +error+ slots are the other half: read without a type check
+  # they raised NoMethodError/TypeError, which is not an ApiError and so escapes
+  # every handler the caller wrote.
   def test_non_2xx_without_error_envelope_fails
     ConformanceManifest.covers("non_2xx_without_error_envelope_fails")
 
-    error = assert_raises(Lunora::ApiError) do
-      Lunora.parse_rpc_response({ "message" => "bad gateway" }, 502)
-    end
+    fixture("rpc.json")["responseTransportError"].each do |entry|
+      error = assert_raises(Lunora::ApiError, entry["name"]) do
+        Lunora.parse_rpc_response(entry["response"], entry["status"])
+      end
 
-    assert_equal "INTERNAL", error.code
+      assert_equal entry["code"], error.code, entry["name"]
+      # Nothing reached the shard, so a queued write must be replayed rather
+      # than dropped — the batch path already says so.
+      assert error.transient, entry["name"]
+    end
   end
 end
 
 class TestWsFrames < Minitest::Test
   include FixtureLoader
+
+  # protocol/README.md 5.1 and 6: the session credential rides the first
+  # +connect+ frame, and the socket URL carries only the admin ticket as ?token=.
+  def test_session_credential_is_in_connect_and_only_the_ticket_is_in_the_url
+    session = "sess-SECRET-1"
+    client = Lunora::Client.new("https://app.example")
+
+    frame = Lunora.build_connect_frame("client-test", token: session)
+    assert_equal session, frame["token"]
+    assert_equal "connect", frame["type"]
+
+    assert_equal [%w[token tkt-1]], URI.decode_www_form(URI.parse(client.send(:ws_url, nil, "tkt-1")).query)
+    assert_equal [%w[shard room-1], %w[token tkt-1]],
+                 URI.decode_www_form(URI.parse(client.send(:ws_url, "room-1", "tkt-1")).query)
+    refute_includes client.send(:ws_url, nil, "tkt-1"), session
+
+    refute Lunora.build_connect_frame("client-test").key?("token"), "no session credential, no token key"
+    assert_equal "wss://app.example/_lunora/ws", client.send(:ws_url)
+  end
 
   def test_client_frames
     ConformanceManifest.covers("client_frame_builders")
@@ -212,6 +243,7 @@ class TestWsFrames < Minitest::Test
 
     resent = []
     client.attach_socket(->(frame) { resent << frame })
+    assert_equal "connect", resent.shift["type"], "attach sends connect before anything else"
     client.resend_subscriptions
 
     # BOTH registries. A resend that walks only the queries leaves every shape
@@ -228,14 +260,19 @@ class TestWsFrames < Minitest::Test
 
   def test_server_frames
     ConformanceManifest.covers("server_frame_consumer")
+    ConformanceManifest.covers("complete_frame_cancels_without_dropping_the_subscription")
+
+    cancellations = 0
 
     fixture("ws-frames.json")["serverFrames"].each do |entry|
       client = Lunora::Client.new("https://app.example")
-      client.attach_socket(->(_frame) {})
+      sent = []
+      client.attach_socket(->(frame) { sent << frame })
       seen = []
       errors = []
       client.subscribe("messages:list", { "channel" => "general" }, ->(value) { seen << value },
                        ->(error) { errors << error })
+      sent.clear
 
       kind = client.handle_frame(JSON.generate(entry["frame"]))
       expect = entry["expect"]
@@ -251,7 +288,28 @@ class TestWsFrames < Minitest::Test
         assert_equal 1, errors.length
         assert_equal expect["code"], errors.first.code
       end
+
+      next unless expect["resendsAfterReconnect"]
+
+      cancellations += 1
+      assert_cancelled_but_kept(client, expect, errors, sent)
     end
+
+    # A conditional assertion that never runs is worse than none: without this,
+    # renaming the fixture key would leave every suite green.
+    assert_equal 1, cancellations, "serverFrames must carry one cancelling case"
+  end
+
+  # Cancelled AND kept. Deleting the entry takes it out of the hash
+  # +resend_subscriptions+ walks, which froze the query across every future
+  # reconnect with nothing reported.
+  def assert_cancelled_but_kept(client, expect, errors, sent)
+    assert_equal 1, errors.length
+    assert_equal expect["code"], errors.first.code
+    assert_equal expect["message"], errors.first.message
+    client.resend_subscriptions
+
+    assert_equal([expect["id"]], sent.select { |frame| frame["type"] == "subscribe" }.map { |frame| frame["id"] })
   end
 
   # A payload the codec refuses belongs on the addressed subscription's error
@@ -452,9 +510,9 @@ class TestClientConcurrency < Minitest::Test
     reading = false
     reader.join
 
-    # Attached only now, so the count below sees resend frames alone.
+    # Attached only now, and counting subscribe frames alone: attach's connect is not a resend.
     resent = 0
-    client.attach_socket(->(_frame) { resent += 1 })
+    client.attach_socket(->(frame) { resent += 1 if frame["type"] == "subscribe" })
     client.resend_subscriptions
 
     assert_equal THREADS * PER_THREAD, resent, "every concurrent subscribe survived with a distinct id"

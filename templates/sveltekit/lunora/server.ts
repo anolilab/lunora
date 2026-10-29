@@ -1,10 +1,4 @@
-import type { ShardNamespaceLike } from "lunorash/runtime";
-
-import { defineApp } from "./_generated/app.js";
-
-interface Env extends Record<string, unknown> {
-    SHARD: ShardNamespaceLike;
-}
+import { lunora } from "./app";
 
 /**
  * The Lunora-only worker for this SvelteKit project — RPC + WebSocket realtime
@@ -24,14 +18,9 @@ interface Env extends Record<string, unknown> {
  * `default` is the app (its `fetch` entrypoint); `ShardDO` is the bound Durable
  * Object class.
  */
-const app = defineApp<Env>()
-    .shard((env) => env.SHARD)
-    // Demo/local default: this app has no auth, so shard access is left OPEN
-    // (any caller may target any shard) and data is protected by per-row RLS.
-    // A PRODUCTION sharded app must gate this instead — e.g.
-    // `.extend(() => ({ authorizeShard: ({ identity, shardKey }) => shardKey === "__root__" || identity?.userId === ownerOf(shardKey) }))`.
-    .extend(() => ({ allowUnauthenticatedShardAccess: true }))
-    .build();
+const app = lunora.build();
 
 export const ShardDO = app.ShardDO;
+// Tracks which shards hold `.shardBy()` rows, for cross-shard export / CDC sync.
+export { ShardRegistryDO } from "./_generated/shardRegistry.js";
 export default app;

@@ -2,11 +2,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createWorkflowContext, defineWorkflow } from "@lunora/workflow";
+import { branch, createWorkflowContext, defineWorkflow } from "@lunora/workflow";
 import type { WorkflowStore } from "@visulima/workflow";
 import { MemoryStore } from "@visulima/workflow";
 import Database from "better-sqlite3";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { createNodeWorkflowHost } from "../src/node-workflow-host";
 import { createNodeWorkflowStore } from "../src/node-workflow-store";
@@ -188,8 +188,9 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         });
 
         const host = createNodeWorkflowHost({ store: freshStore(), workflows: { double } });
-        const instances = await host.bindings.double.createBatch([{ params: { value: 2 } }, { params: { value: 3 } }]);
+        const { created: instances, errors } = await host.bindings.double.createBatch({ instances: [{ params: { value: 2 } }, { params: { value: 3 } }] });
 
+        expect(errors).toStrictEqual([]);
         expect(instances).toHaveLength(2);
         await expect(
             Promise.all(
@@ -200,6 +201,105 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
                 }),
             ),
         ).resolves.toStrictEqual([4, 6]);
+    });
+
+    it("createBatch reports a refused entry in errors at its index and still starts the rest", async () => {
+        expect.hasAssertions();
+
+        const double = defineWorkflow<{ value: number }, number>({
+            handler: async (ctx) => ctx.params.value * 2,
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { double } });
+        const existing = await host.bindings.double.create({ params: { value: 1 } });
+
+        // An id that already names a real run is refused, not aliased over.
+        const result = await host.bindings.double.createBatch({
+            instances: [{ id: existing.id, params: { value: 2 } }, { params: { value: 3 } }],
+        });
+
+        expect(result.created).toHaveLength(1);
+        expect(result.errors).toStrictEqual([expect.objectContaining({ code: 409, id: existing.id, index: 0 })]);
+    });
+
+    it("createBatch reports a repeated id inside the batch at its index and starts only the first", async () => {
+        expect.hasAssertions();
+
+        const double = defineWorkflow<{ value: number }, number>({
+            handler: async (ctx) => ctx.params.value * 2,
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { double } });
+        const result = await host.bindings.double.createBatch({
+            instances: [
+                { id: "dup", params: { value: 1 } },
+                { id: "dup", params: { value: 2 } },
+            ],
+        });
+
+        expect(result.created).toHaveLength(1);
+        expect(result.errors).toStrictEqual([expect.objectContaining({ code: 409, id: "dup", index: 1 })]);
+    });
+
+    it("createBatch takes 1 to 100 instances in either form", async () => {
+        expect.hasAssertions();
+
+        const double = defineWorkflow<{ value: number }, number>({
+            handler: async (ctx) => ctx.params.value * 2,
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { double } });
+
+        await expect(host.bindings.double.createBatch({ instances: [] })).rejects.toThrow("takes 1 to 100 instances, got 0");
+        await expect(host.bindings.double.createBatch({ count: 0 })).rejects.toThrow("takes 1 to 100 instances, got 0");
+        await expect(host.bindings.double.createBatch({ count: 101 })).rejects.toThrow("takes 1 to 100 instances, got 101");
+    });
+
+    it("createBatch removes a run whose alias could not be saved, so the entry is an error and a retry starts one run", async () => {
+        expect.hasAssertions();
+
+        const double = defineWorkflow<{ value: number }, number>({
+            handler: async (ctx) => ctx.params.value * 2,
+        });
+
+        const store = freshStore();
+        const realSave = store.save.bind(store);
+        let failed = false;
+
+        store.save = async (row) => {
+            if (!failed && row.definitionId === "@lunora/platform-node:alias") {
+                failed = true;
+
+                throw new Error("alias write failed");
+            }
+
+            return realSave(row);
+        };
+
+        const host = createNodeWorkflowHost({ store, workflows: { double } });
+        const first = await host.bindings.double.createBatch({ instances: [{ id: "retry-me", params: { value: 2 } }] });
+
+        expect(first.created).toHaveLength(0);
+        expect(first.errors).toStrictEqual([expect.objectContaining({ code: 500, id: "retry-me", index: 0 })]);
+
+        const retry = await host.bindings.double.createBatch({ instances: [{ id: "retry-me", params: { value: 2 } }] });
+
+        expect(retry.errors).toStrictEqual([]);
+        expect(retry.created).toHaveLength(1);
+    });
+
+    it("createBatch({ count }) starts count instances that share their params", async () => {
+        expect.hasAssertions();
+
+        const double = defineWorkflow<{ value: number }, number>({
+            handler: async (ctx) => ctx.params.value * 2,
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { double } });
+        const result = await host.bindings.double.createBatch({ count: 3, params: { value: 5 } });
+
+        expect(result.errors).toStrictEqual([]);
+        expect(result.created).toHaveLength(3);
     });
 
     it("get on an unknown id reports unknown status", async () => {
@@ -217,7 +317,7 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         expect(status.status).toBe("unknown");
     });
 
-    it("pause and restart are not implemented; terminate reports terminated, not unknown", async () => {
+    it("pause, restart and subscribe are not implemented; terminate reports terminated, not unknown", async () => {
         expect.hasAssertions();
 
         const trivial = defineWorkflow<Record<string, never>, string>({
@@ -229,6 +329,7 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
 
         await expect(instance.pause()).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
         await expect(instance.restart()).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
+        await expect(instance.subscribe()).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
 
         await instance.terminate();
 
@@ -302,6 +403,83 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         await expect(store.load("never-existed")).resolves.toBeUndefined();
     });
 
+    it("delete drops the run and its state, so it reads back as unknown", async () => {
+        expect.hasAssertions();
+
+        const trivial = defineWorkflow<Record<string, never>, string>({
+            handler: async () => "done",
+        });
+
+        const store = freshStore();
+        const host = createNodeWorkflowHost({ store, workflows: { trivial } });
+        const instance = await host.bindings.trivial.create({});
+
+        await instance.delete();
+
+        await expect(instance.status()).resolves.toStrictEqual({ status: "unknown" });
+        await expect(store.load(instance.id)).resolves.toBeUndefined();
+    });
+
+    it("delete frees a caller-supplied id, so a later create with it starts a new run", async () => {
+        expect.hasAssertions();
+
+        const trivial = defineWorkflow<Record<string, never>, string>({
+            handler: async () => "done",
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { trivial } });
+        const first = await host.bindings.trivial.create({ id: "order-1" });
+
+        await first.delete();
+
+        const second = await host.bindings.trivial.create({ id: "order-1" });
+
+        expect(second.id).not.toBe(first.id);
+        await expect(second.status()).resolves.toMatchObject({ status: "complete" });
+    });
+
+    it("deleting by the run id also frees the caller-supplied id", async () => {
+        expect.hasAssertions();
+
+        const trivial = defineWorkflow<Record<string, never>, string>({
+            handler: async () => "done",
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { trivial } });
+        const first = await host.bindings.trivial.create({ id: "order-2" });
+
+        // `first.id` is the engine run id, not "order-2".
+        const byRunId = await host.bindings.trivial.get(first.id);
+
+        await byRunId.delete();
+
+        const second = await host.bindings.trivial.create({ id: "order-2" });
+
+        expect(second.id).not.toBe(first.id);
+    });
+
+    it("deleteBatch reports one entry per input position: duplicates deleted once, unknown ids as errors", async () => {
+        expect.hasAssertions();
+
+        const trivial = defineWorkflow<Record<string, never>, string>({
+            handler: async () => "done",
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { trivial } });
+        const aliased = await host.bindings.trivial.create({ id: "order-1" });
+        const plain = await host.bindings.trivial.create({});
+
+        const result = await host.bindings.trivial.deleteBatch(["order-1", plain.id, "order-1", "missing"]);
+
+        expect(result.deleted).toStrictEqual([{ id: "order-1" }, { id: plain.id }, { id: "order-1" }]);
+        expect(result.errors).toStrictEqual([{ code: 404, id: "missing", message: 'workflow instance "missing" not found' }]);
+        await expect(aliased.status()).resolves.toStrictEqual({ status: "unknown" });
+        await expect(plain.status()).resolves.toStrictEqual({ status: "unknown" });
+        await expect(host.bindings.trivial.deleteBatch(Array.from({ length: 101 }, (_, index) => String(index)))).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+        });
+    });
+
     it("honours a caller-supplied instance id: one run, findable by that id", async () => {
         expect.hasAssertions();
 
@@ -357,6 +535,47 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         const childInstance = await host.bindings.child.get(status.output as string);
 
         await expect(childInstance.status()).resolves.toMatchObject({ output: 42, status: "complete" });
+    });
+
+    it("joins ctx.parallel branches that finished inside create()", async () => {
+        expect.hasAssertions();
+
+        const double = defineWorkflow<{ n: number }, number>({
+            handler: async (ctx) => ctx.params.n * 2,
+        });
+        const parent = defineWorkflow<Record<string, never>, number[]>({
+            handler: async (ctx) => ctx.parallel([branch<number>("double", { n: 1 }), branch<number>("double", { n: 2 })]),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { double, parent } });
+        const instance = await host.bindings.parent.create({});
+
+        // The Node host runs each child to completion inside `create()`, before
+        // the parent could wait — the join must read the child's status instead.
+        await expect(instance.status()).resolves.toMatchObject({ output: [2, 4], status: "complete" });
+    });
+
+    it("reports a ctx.parallel branch error when the branch finished inside create()", async () => {
+        expect.hasAssertions();
+
+        const ok = defineWorkflow<Record<string, never>, string>({
+            handler: async () => "ok",
+        });
+        const boom = defineWorkflow<Record<string, never>, string>({
+            handler: async () => {
+                throw new Error("branch exploded");
+            },
+        });
+        const parent = defineWorkflow<Record<string, never>, string[]>({
+            handler: async (ctx) => ctx.parallel([branch<string>("ok"), branch<string>("boom")]),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { boom, ok, parent } });
+        const instance = await host.bindings.parent.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        expect(status.error?.message).toContain("branch exploded");
     });
 
     it("rejects non-finite sleep durations rather than passing them to the engine", async () => {
@@ -440,7 +659,335 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         }
     });
 
-    it("derives the WORKFLOW_* env so createWorkflowContext resolves the seam", async () => {
+    it("retries a failing step up to its config limit and memoizes only the attempt that succeeded", async () => {
+        expect.hasAssertions();
+
+        const attempts: number[] = [];
+        const flaky = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do("charge", { retries: { backoff: "constant", delay: 1, limit: 3 } }, async (stepContext) => {
+                    attempts.push(stepContext.attempt);
+
+                    if (stepContext.attempt < 3) {
+                        throw new Error(`attempt ${String(stepContext.attempt)} failed`);
+                    }
+
+                    return "charged";
+                }),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { flaky } });
+        const instance = await host.bindings.flaky.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("complete");
+        expect(status.output).toBe("charged");
+        // `attempt` is the 1-based counter Cloudflare passes, not a fresh 1 each time.
+        expect(attempts).toStrictEqual([1, 2, 3]);
+    });
+
+    it("waits the duration a retries.delay function returns, given the failed attempt and its error", async () => {
+        expect.hasAssertions();
+
+        const delayInputs: { attempt: number; message: string }[] = [];
+        const flaky = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do(
+                    "sync",
+                    {
+                        retries: {
+                            delay: ({ ctx: stepContext, error }) => {
+                                delayInputs.push({ attempt: stepContext.attempt, message: error.message });
+
+                                return "1 millisecond";
+                            },
+                            limit: 3,
+                        },
+                    },
+                    async (stepContext) => {
+                        if (stepContext.attempt < 3) {
+                            throw new Error(`rate limit ${String(stepContext.attempt)}`);
+                        }
+
+                        return "synced";
+                    },
+                ),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { flaky } });
+        const instance = await host.bindings.flaky.create({});
+        const status = await instance.status();
+
+        expect(status.output).toBe("synced");
+        expect(delayInputs).toStrictEqual([
+            { attempt: 1, message: "rate limit 1" },
+            { attempt: 2, message: "rate limit 2" },
+        ]);
+    });
+
+    it("gives up after the last attempt and errors the run", async () => {
+        expect.hasAssertions();
+
+        let runs = 0;
+        const doomed = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do("doomed", { retries: { delay: 1, limit: 2 } }, async () => {
+                    runs += 1;
+
+                    throw new Error("always fails");
+                }),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { doomed } });
+        const instance = await host.bindings.doomed.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        expect(runs).toBe(2);
+        expect(status.error?.message).toBe("always fails");
+    });
+
+    it("runs rollbacks in reverse declaration order when a later step fails", async () => {
+        expect.hasAssertions();
+
+        const unwound: { output: unknown; stepName: string }[] = [];
+        const saga = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await ctx.step.do("reserve", async () => "reservation-1", {
+                    rollback: async (rollbackContext) => {
+                        unwound.push({ output: rollbackContext.output, stepName: rollbackContext.stepName });
+                    },
+                });
+                await ctx.step.do("charge", async () => "charge-1", {
+                    rollback: async (rollbackContext) => {
+                        unwound.push({ output: rollbackContext.output, stepName: rollbackContext.stepName });
+                    },
+                });
+
+                return ctx.step.do(
+                    "ship",
+                    async () => {
+                        throw new Error("carrier down");
+                    },
+                    {
+                        rollback: async (rollbackContext) => {
+                            unwound.push({ output: rollbackContext.output, stepName: rollbackContext.stepName });
+                        },
+                    },
+                );
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { saga } });
+        const instance = await host.bindings.saga.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        // The failing step compensates first, with no output — it never produced
+        // one — then the completed steps unwind newest-first with theirs.
+        expect(unwound).toStrictEqual([
+            { output: undefined, stepName: "ship" },
+            { output: "charge-1", stepName: "charge" },
+            { output: "reservation-1", stepName: "reserve" },
+        ]);
+    });
+
+    it("compensates a step that completed before a suspension", async () => {
+        expect.hasAssertions();
+
+        const unwound: string[] = [];
+        const resumed = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await ctx.step.do("reserve", async () => "reservation-1", {
+                    rollback: async (rollbackContext) => {
+                        unwound.push(rollbackContext.stepName);
+                    },
+                });
+                await ctx.step.sleep("wait", 5);
+
+                return ctx.step.do("ship", async () => {
+                    throw new Error("carrier down");
+                });
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { resumed } });
+        const instance = await host.bindings.resumed.create({});
+
+        const suspended = await instance.status();
+
+        expect(suspended.status).toBe("waiting");
+        expect(unwound).toStrictEqual([]);
+
+        await sleep(15);
+        await instance.resume();
+
+        // The failure happens in a second activation, after the engine replayed
+        // the body — the replayed `reserve` re-registers its rollback, which is
+        // the only reason the earlier step is compensable at all.
+        const failed = await instance.status();
+
+        expect(failed.status).toBe("errored");
+        expect(unwound).toStrictEqual(["reserve"]);
+    });
+
+    it("does not let a throwing rollback mask the step error or strand the rest of the unwind", async () => {
+        expect.hasAssertions();
+
+        const unwound: string[] = [];
+        const messy = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await ctx.step.do("reserve", async () => "reservation-1", {
+                    rollback: async () => {
+                        unwound.push("reserve");
+                    },
+                });
+                await ctx.step.do("charge", async () => "charge-1", {
+                    rollback: async () => {
+                        throw new Error("compensation exploded");
+                    },
+                });
+
+                return ctx.step.do("ship", async () => {
+                    throw new Error("carrier down");
+                });
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { messy } });
+        const instance = await host.bindings.messy.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        expect(status.error?.message).toBe("carrier down");
+        expect(unwound).toStrictEqual(["reserve"]);
+    });
+
+    it("unwinds concurrent steps in declaration order, not completion order", async () => {
+        expect.hasAssertions();
+
+        const unwound: string[] = [];
+        const record = (name: string) => {
+            return {
+                rollback: async (): Promise<void> => {
+                    unwound.push(name);
+                },
+            };
+        };
+        // `ctx.parallel` and a hand-rolled `Promise.all` of `ctx.runStep` both
+        // reach the one shared adapter this way, so the compensation list sees
+        // the steps in COMPLETION order while the saga contract is declaration
+        // order reversed.
+        const raced = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await Promise.all([
+                    ctx.step.do(
+                        "slow",
+                        async () => {
+                            await sleep(20);
+
+                            return "slow-1";
+                        },
+                        record("slow"),
+                    ),
+                    ctx.step.do("fast", async () => "fast-1", record("fast")),
+                ]);
+
+                return ctx.step.do(
+                    "ship",
+                    async () => {
+                        throw new Error("carrier down");
+                    },
+                    record("ship"),
+                );
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { raced } });
+        const instance = await host.bindings.raced.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        // "fast" finished first but was declared second, so it must compensate
+        // before "slow" — reversing completion order would give ["slow", "fast"].
+        expect(unwound).toStrictEqual(["ship", "fast", "slow"]);
+    });
+
+    // `Infinity` and `NaN` both survive `Math.trunc` and `Math.max`, so an
+    // unguarded `limit` leaves `attempt >= limit` forever false. The bodies here
+    // succeed on their first attempt on purpose: a regression then reports a
+    // COMPLETE run these assertions reject, rather than spinning the attempt
+    // loop until the suite is killed.
+    it.each([
+        ["Infinity", Number.POSITIVE_INFINITY],
+        ["NaN", Number.NaN],
+    ])("rejects a %s retry limit instead of looping forever", async (_label, limit) => {
+        expect.hasAssertions();
+
+        let runs = 0;
+        const endless = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do("charge", { retries: { limit } } as never, async () => {
+                    runs += 1;
+
+                    return "charged";
+                }),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { endless } });
+        const instance = await host.bindings.endless.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        expect(status.error?.message).toMatch(/retries\.limit must be a finite number/);
+        // Rejected at the adapter boundary, before the callback can run at all.
+        expect(runs).toBe(0);
+    });
+
+    it("caps a backoff that would overflow Node's timer ceiling", async () => {
+        expect.hasAssertions();
+
+        const waits: number[] = [];
+        const realSetTimeout = globalThis.setTimeout;
+
+        // Every timer in the activation fires immediately, so the run finishes
+        // in test time while the delay the adapter ASKED for is still observable.
+        vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+            waits.push(ms);
+
+            return realSetTimeout(callback, 0);
+        }) as never);
+
+        let runs = 0;
+        // "1 month" is 2_592_000_000 ms, past the 2_147_483_647 Node honours —
+        // above that a `setTimeout` fires on the next tick, so an unclamped
+        // backoff is no backoff at all.
+        const slowBackoff = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) =>
+                ctx.step.do("charge", { retries: { delay: "1 month", limit: 2 } }, async () => {
+                    runs += 1;
+
+                    if (runs === 1) {
+                        throw new Error("transient");
+                    }
+
+                    return "charged";
+                }),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { slowBackoff } });
+        const instance = await host.bindings.slowBackoff.create({});
+        const status = await instance.status();
+
+        vi.restoreAllMocks();
+
+        expect(status.status).toBe("complete");
+        expect(runs).toBe(2);
+        expect(waits).toContain(2_147_483_647);
+        expect(waits).not.toContain(2_592_000_000);
+    });
+
+    it("binds each workflow on env under its class name so createWorkflowContext resolves the seam", async () => {
         expect.hasAssertions();
 
         const orderPipeline = defineWorkflow<{ orderId: string }, string>({
@@ -450,9 +997,9 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         const host = createNodeWorkflowHost({ store: freshStore(), env: { EXTRA: "kept" }, workflows: { orderPipeline } });
 
         expect(host.env.EXTRA).toBe("kept");
-        expect(host.env.WORKFLOW_ORDER_PIPELINE).toBe(host.bindings.orderPipeline);
+        expect(host.env.OrderPipelineWorkflow).toBe(host.bindings.orderPipeline);
 
-        const workflows = createWorkflowContext(host.env, [{ binding: "WORKFLOW_ORDER_PIPELINE", exportName: "orderPipeline" }]);
+        const workflows = createWorkflowContext(host.env, [{ className: "OrderPipelineWorkflow", exportName: "orderPipeline" }]);
         const instance = await workflows.get("orderPipeline").create({ params: { orderId: "123" } });
 
         const status2 = await instance.status();

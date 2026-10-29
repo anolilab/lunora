@@ -3,8 +3,11 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
-import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { descendantsOfKind, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { calleeName } from "./callee";
+import { contextSurfaceNodesIn, contextSurfacePathOf, isContextIdentifier } from "./context-root";
+import { isDatabaseAccessor } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
@@ -133,7 +136,7 @@ const protectPublicFlags = (call: CallExpression): { usesCaptcha: boolean; usesR
         return { usesCaptcha: false, usesRateLimit: false };
     }
 
-    return { usesCaptcha: Boolean(argument.getProperty("captcha")), usesRateLimit: Boolean(argument.getProperty("rateLimit")) };
+    return { usesCaptcha: Boolean(findObjectProperty(argument, "captcha")), usesRateLimit: Boolean(findObjectProperty(argument, "rateLimit")) };
 };
 
 /**
@@ -254,15 +257,16 @@ const isUserTableInsert = (call: CallExpression): boolean => {
 };
 
 /** Method names that dispatch privileged, billable async work (fan-out surfaces). */
-const FANOUT_METHODS = new Set(["create", "runAfter", "runAt", "send", "sendBatch"]);
+const FANOUT_METHODS = new Set(["create", "publish", "publishBatch", "runAfter", "runAt", "send", "sendBatch"]);
 
 /** `ctx.<surface>` accessors those fan-out methods dispatch through. */
-const FANOUT_SURFACES = new Set(["queues", "scheduler", "workflows"]);
+const FANOUT_SURFACES = new Set(["queues", "scheduler", "topics", "workflows"]);
 
 /**
  * True when `call` is a privileged fan-out dispatch — a {@link FANOUT_METHODS}
  * call whose receiver chain roots at `ctx.scheduler` / `ctx.queues` /
- * `ctx.workflows` (`ctx.scheduler.runAfter(...)`, `ctx.queues.<name>.send(...)`,
+ * `ctx.topics` / `ctx.workflows` (`ctx.scheduler.runAfter(...)`,
+ * `ctx.queues.<name>.send(...)`, `ctx.topics.<name>.publish(...)`,
  * `ctx.workflows.<name>.create(...)`). Anchoring to the `ctx.<surface>` root — not
  * just the method name — keeps generic `.create`/`.send` calls on unrelated
  * objects from matching.
@@ -277,18 +281,17 @@ const isFanOutCall = (call: CallExpression): boolean => {
     let node: TsNode = callee.getExpression();
 
     while (Node.isCallExpression(node) || Node.isElementAccessExpression(node) || Node.isPropertyAccessExpression(node)) {
-        if (Node.isPropertyAccessExpression(node) && FANOUT_SURFACES.has(node.getName())) {
-            const receiver = node.getExpression();
-
-            if (Node.isIdentifier(receiver) && receiver.getText() === "ctx") {
-                return true;
-            }
+        if (Node.isPropertyAccessExpression(node) && FANOUT_SURFACES.has(node.getName()) && isContextIdentifier(node.getExpression())) {
+            return true;
         }
 
         node = node.getExpression();
     }
 
-    return false;
+    // A destructured or aliased surface (`const { topics } = ctx; topics.publish(…)`).
+    const surface = contextSurfacePathOf(node);
+
+    return surface?.length === 1 && FANOUT_SURFACES.has(surface[0] ?? "");
 };
 
 /** True when `call` is a `ctx.db.insertManyUnsafe(...)` / `db.insertManyUnsafe(...)` — the validator/trigger-bypassing bulk insert. */
@@ -342,7 +345,7 @@ const isUnboundedAiGeneration = (call: CallExpression): boolean => {
         return false;
     }
 
-    return !argument.getProperty("maxOutputTokens");
+    return !findObjectProperty(argument, "maxOutputTokens");
 };
 
 /** `ctx.*` members that emit a structured observability event. */
@@ -355,19 +358,11 @@ const AI_MEMBERS: ReadonlySet<string> = new Set(["ai"]);
 const MAIL_MEMBERS: ReadonlySet<string> = new Set(["email", "mail"]);
 
 /** `ctx.*` members that reach the outside world and can therefore fail in ways worth catching. */
-const OUTBOUND_MEMBERS: ReadonlySet<string> = new Set(["ai", "browser", "fetch", "mail", "notify", "queues", "sql", "storage", "workflows"]);
+const OUTBOUND_MEMBERS: ReadonlySet<string> = new Set(["ai", "browser", "fetch", "mail", "notify", "queues", "sql", "storage", "topics", "workflows"]);
 
 /** True when any `ctx.<member>` in `declaration` is one of `members`. */
 const referencesContextMember = (declaration: TsNode, members: ReadonlySet<string>): boolean =>
-    declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression).some((access) => {
-        if (!members.has(access.getName())) {
-            return false;
-        }
-
-        const receiver = access.getExpression();
-
-        return Node.isIdentifier(receiver) && receiver.getText() === "ctx";
-    });
+    [...members].some((member) => contextSurfaceNodesIn(declaration, member).length > 0);
 
 /** Syntax kinds that bound "the same function" for the enclosing-`try` walk below — climbing stops here. */
 const FUNCTION_BOUNDARY_KINDS: ReadonlySet<SyntaxKind> = new Set([
@@ -466,6 +461,99 @@ const hasEnclosingTry = (call: TsNode): boolean => {
     return false;
 };
 
+/**
+ * True when `call` runs inside a `Promise.allSettled(...)` fan-out: `allSettled`
+ * records each rejection instead of propagating it, so one failed call cannot
+ * fail the action. `Promise.allSettled(items.map(async (i) => ctx.storage.delete(i)))`
+ * is the shape. The call must sit under the combinator's own argument.
+ */
+const isAllSettledFanout = (call: CallExpression): boolean => {
+    let current: TsNode | undefined = call.getParent();
+
+    while (current !== undefined) {
+        if (Node.isCallExpression(current) && current.getExpression().getText() === "Promise.allSettled") {
+            return true;
+        }
+
+        if (FUNCTION_BOUNDARY_KINDS.has(current.getKind())) {
+            // A callback is part of the fan-out only when it runs synchronously
+            // inside the iteration (`items.map(...)`). A deferred one (`setTimeout`,
+            // an event listener) can settle after `allSettled` has returned, so the
+            // walk stops there.
+            current = syncIterationCallToResumeFrom(current);
+
+            if (current === undefined) {
+                return false;
+            }
+
+            continue;
+        }
+
+        current = current.getParent();
+    }
+
+    return false;
+};
+
+/**
+ * True when `call` sits in a callback handed to a guard helper: a function whose
+ * own body wraps a call to one of its parameters in a `try` whose `catch` rethrows.
+ * `withDependency("mail", () => ctx.mail.send(…))` is the shape. The try lives in the
+ * helper, not in the procedure, so the procedure's own body never shows it.
+ *
+ * The helper is resolved through its symbol, so an imported helper counts too. A
+ * helper that swallows the error, or never calls the callback inside its try, does
+ * not qualify.
+ */
+const isGuardHelperArgument = (call: CallExpression): boolean => {
+    const callback = call.getFirstAncestor((node) => Node.isArrowFunction(node) || Node.isFunctionExpression(node));
+    const helperCall = callback?.getParent();
+
+    if (!callback || !Node.isCallExpression(helperCall) || !helperCall.getArguments().includes(callback)) {
+        return false;
+    }
+
+    const callee = helperCall.getExpression();
+
+    if (!Node.isIdentifier(callee)) {
+        return false;
+    }
+
+    const symbol = callee.getSymbol();
+    const declaration = symbol?.getAliasedSymbol()?.getValueDeclaration() ?? symbol?.getValueDeclaration();
+    const helper = Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : declaration;
+
+    if (!Node.isArrowFunction(helper) && !Node.isFunctionExpression(helper) && !Node.isFunctionDeclaration(helper)) {
+        return false;
+    }
+
+    // The callback is bound to the helper parameter at its own argument position,
+    // and only that parameter counts. Naming some other parameter would take an
+    // unrelated function's try block for the guard.
+    const position = helperCall.getArguments().indexOf(callback);
+    const boundName = helper.getParameters()[position]?.getName();
+
+    if (boundName === undefined) {
+        return false;
+    }
+
+    return helper.getDescendantsOfKind(SyntaxKind.TryStatement).some((tryStatement) => {
+        // Only an awaited call is a guard: an unawaited one returns its promise past
+        // the try, so its rejection is never caught there.
+        const invokesParameter = tryStatement
+            .getTryBlock()
+            .getDescendantsOfKind(SyntaxKind.CallExpression)
+            .some((inner) => {
+                const invoked = inner.getExpression();
+
+                return Node.isIdentifier(invoked) && invoked.getText() === boundName && Node.isAwaitExpression(inner.getParent());
+            });
+        const catchClause = tryStatement.getCatchClause();
+
+        return invokesParameter && catchClause !== undefined && catchClause.getDescendantsOfKind(SyntaxKind.ThrowStatement).length > 0;
+    });
+};
+
 /** True when `call` is the receiver of a `.catch(...)` — directly, or at the end of a `.then(...)`/`.finally(...)` chain. */
 const isCatchGuarded = (call: CallExpression): boolean => {
     let node: TsNode = call;
@@ -531,17 +619,7 @@ const outboundErrorHandlingFacts = (declaration: TsNode): { handlesErrors: boole
     let reachesOutbound = false;
     let allGuarded = true;
 
-    for (const access of declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
-        if (!OUTBOUND_MEMBERS.has(access.getName())) {
-            continue;
-        }
-
-        const receiver = access.getExpression();
-
-        if (!Node.isIdentifier(receiver) || receiver.getText() !== "ctx") {
-            continue;
-        }
-
+    for (const access of [...OUTBOUND_MEMBERS].flatMap((member) => contextSurfaceNodesIn(declaration, member))) {
         const call = outboundCallSite(access);
 
         if (!call) {
@@ -550,7 +628,7 @@ const outboundErrorHandlingFacts = (declaration: TsNode): { handlesErrors: boole
 
         reachesOutbound = true;
 
-        if (!hasEnclosingTry(call) && !isCatchGuarded(call)) {
+        if (!hasEnclosingTry(call) && !isCatchGuarded(call) && !isGuardHelperArgument(call) && !isAllSettledFanout(call)) {
             allGuarded = false;
         }
     }
@@ -567,7 +645,7 @@ const outboundErrorHandlingFacts = (declaration: TsNode): { handlesErrors: boole
  * unqualified builtin counts here — a subclass or a catalog helper does not.
  */
 const throwsBareError = (declaration: TsNode): boolean =>
-    declaration.getDescendantsOfKind(SyntaxKind.ThrowStatement).some((statement) => {
+    descendantsOfKind(declaration, SyntaxKind.ThrowStatement).some((statement) => {
         const thrown = statement.getExpression();
 
         if (!Node.isNewExpression(thrown)) {
@@ -665,7 +743,7 @@ const handlerArgumentOf = (initializer: CallExpression): TsNode | undefined => {
     }
 
     if (Node.isObjectLiteralExpression(firstArgument)) {
-        const handlerProperty = firstArgument.getProperty("handler");
+        const handlerProperty = findObjectProperty(firstArgument, "handler");
 
         if (!handlerProperty) {
             return undefined;
@@ -749,7 +827,7 @@ const behaviourOf = (
     let usesInsertManyUnsafe = false;
     let writesUserTable = false;
 
-    for (const call of declaration.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(declaration, SyntaxKind.CallExpression)) {
         if (isUserTableInsert(call)) {
             writesUserTable = true;
         }
@@ -820,7 +898,7 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         ...exemptionOf(declaration),
         ...protections,
         analyzableBody: behaviourRoot !== undefined,
-        exportName: declaration.getName(),
+        exportName: exportedNameOf(declaration) ?? declaration.getName(),
         file: relativePath,
         hasEmailArg: declaresEmailArgument(initializer, classified.receiver),
         kind: classified.kind,
@@ -832,17 +910,11 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
 const middlewareInSourceFile = (sourceFile: SourceFile, relativePath: string): ProcedureMiddlewareIR[] => {
     const found: ProcedureMiddlewareIR[] = [];
 
-    for (const statement of sourceFile.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
+    for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+        const ir = middlewareIrFromDeclaration(declaration, relativePath);
 
-        for (const declaration of statement.getDeclarations()) {
-            const ir = middlewareIrFromDeclaration(declaration, relativePath);
-
-            if (ir) {
-                found.push(ir);
-            }
+        if (ir) {
+            found.push(ir);
         }
     }
 

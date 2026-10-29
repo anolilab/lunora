@@ -3,11 +3,12 @@ import { Node } from "ts-morph";
 
 import type { ExposeCacheIR, ValidatorIR } from "../../../ir";
 import { parseObjectShape, resolveObjectLiteral } from "../../../parse-validator";
+import { findObjectProperty } from "../../ast";
 import { builderChainSteps } from "../../builder-chain";
 
 /** Read a property off an object literal as a string literal, or `undefined` when absent / not statically readable. */
 const stringProperty = (literal: ObjectLiteralExpression, name: string): string | undefined => {
-    const property = literal.getProperty(name);
+    const property = findObjectProperty(literal, name);
 
     if (property === undefined || !Node.isPropertyAssignment(property)) {
         return undefined;
@@ -20,7 +21,7 @@ const stringProperty = (literal: ObjectLiteralExpression, name: string): string 
 
 /** Read a property off an object literal as a numeric literal, or `undefined` when absent / not statically readable. */
 const numberProperty = (literal: ObjectLiteralExpression, name: string): number | undefined => {
-    const property = literal.getProperty(name);
+    const property = findObjectProperty(literal, name);
 
     if (property === undefined || !Node.isPropertyAssignment(property)) {
         return undefined;
@@ -39,7 +40,7 @@ const numberProperty = (literal: ObjectLiteralExpression, name: string): number 
  * `cache` object at all.
  */
 const cacheFromExposeLiteral = (literal: ObjectLiteralExpression): ExposeCacheIR | undefined => {
-    const property = literal.getProperty("cache");
+    const property = findObjectProperty(literal, "cache");
 
     if (property === undefined || !Node.isPropertyAssignment(property)) {
         return undefined;
@@ -82,7 +83,7 @@ const exposeFromArgument = (argument: Node | undefined): { cache?: ExposeCacheIR
     }
 
     const cache = cacheFromExposeLiteral(argument);
-    const restProperty = argument.getProperty("rest");
+    const restProperty = findObjectProperty(argument, "rest");
 
     if (restProperty !== undefined && Node.isPropertyAssignment(restProperty)) {
         return { ...(cache === undefined ? {} : { cache }), rest: restProperty.getInitializer()?.getText() === "true" };
@@ -105,6 +106,43 @@ const exposeFromBuilderChain = (receiver: Node): { cache?: ExposeCacheIR; rest?:
     return step ? exposeFromArgument(step.call.getArguments()[0]) : undefined;
 };
 
+/** Read a literal `.x402({ price })` tag without evaluating the procedure module. */
+const x402FromBuilderChain = (receiver: Node): { price?: number | string } | undefined => {
+    const step = builderChainSteps(receiver).find((candidate) => candidate.name === "x402");
+
+    if (!step) {
+        return undefined;
+    }
+
+    const argument = step.call.getArguments()[0];
+
+    if (argument === undefined || !Node.isObjectLiteralExpression(argument)) {
+        return {};
+    }
+
+    const property = findObjectProperty(argument, "price");
+
+    if (property === undefined || !Node.isPropertyAssignment(property)) {
+        return {};
+    }
+
+    const initializer = property.getInitializer();
+
+    if (initializer === undefined) {
+        return {};
+    }
+
+    if (Node.isStringLiteral(initializer)) {
+        return { price: initializer.getLiteralValue() };
+    }
+
+    if (Node.isNumericLiteral(initializer)) {
+        return { price: initializer.getLiteralValue() };
+    }
+
+    return {};
+};
+
 /** Inspect a `query({ args, handler })` call and pull out the args validator map. */
 const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
     const first = call.getArguments()[0];
@@ -113,7 +151,7 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
         return {};
     }
 
-    const argsProperty = first.getProperty("args");
+    const argsProperty = findObjectProperty(first, "args");
 
     if (!argsProperty || !Node.isPropertyAssignment(argsProperty)) {
         return {};
@@ -131,4 +169,4 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
     return shape === undefined ? {} : parseObjectShape(shape);
 };
 
-export { argsFromCall, exposeFromBuilderChain };
+export { argsFromCall, exposeFromBuilderChain, x402FromBuilderChain };

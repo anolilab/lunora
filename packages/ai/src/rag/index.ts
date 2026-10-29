@@ -3,7 +3,8 @@ export type { ChunkerOptions, TokenChunkerOptions } from "./chunkers";
 export { markdownChunker, sentenceChunker, tokenChunker } from "./chunkers";
 export { default as defineRag } from "./define-rag";
 export { contentHash, guessMimeTypeFromExtension } from "./helpers";
-export { default as hybridRank } from "./hybrid-rank";
+export type { FusionLeg, FusionWeight, HybridRankOptions } from "./hybrid-rank";
+export { hybridRank } from "./hybrid-rank";
 export { default as bm25LexicalStore } from "./lexical-store";
 export { default as matchesMetadataFilter } from "./metadata-filter";
 export type { BatchRerankerOptions, ScoreRerankerOptions } from "./rerank";
@@ -18,6 +19,7 @@ export { sqliteVectorStore } from "./sqlite-vector-store";
 export type { RagSyncActionReference, RagSyncArgs, RagSyncOptions } from "./sync";
 export { ragSyncTriggers } from "./sync";
 export type {
+    GraphMatch,
     IndexInput,
     IndexResult,
     LexicalMatch,
@@ -25,6 +27,7 @@ export type {
     RagConfig,
     RagContext,
     RagEmbedder,
+    RagGraphStore,
     RagLexicalStore,
     RagNamedFilter,
     RagQueryTransform,

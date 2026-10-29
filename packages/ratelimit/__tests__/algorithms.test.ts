@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { availableAt, evaluate } from "../src/algorithms";
-import type { RateLimitConfig } from "../src/types";
+import type { RateLimitConfig, RateLimitValue } from "../src/types";
 
 const tokenBucket: RateLimitConfig = { kind: "token bucket", period: 1000, rate: 10 };
 const fixedWindow: RateLimitConfig = { kind: "fixed window", period: 1000, rate: 5 };
@@ -9,6 +9,53 @@ const slidingWindow: RateLimitConfig = { kind: "sliding window", period: 1000, r
 
 const consumeOptions = (count: number, now: number, reserve = false) => {
     return { consume: true, count, now, reserve };
+};
+
+/** A deterministic LCG, so the fuzz below is reproducible. */
+const LCG_MODULUS = 2 ** 31;
+
+const seededRandom = (seed: number): (() => number) => {
+    let state = seed;
+
+    return () => {
+        state = (state * 1_103_515_245 + 12_345) % LCG_MODULUS;
+
+        return state / LCG_MODULUS;
+    };
+};
+
+/**
+ * Run one consuming call and check its `retryAfter` against what the limiter
+ * actually does at that time. Returns which branch ran, the failure (if any),
+ * and the state to carry into the next call.
+ */
+const checkRetryAfter = (
+    config: RateLimitConfig,
+    state: RateLimitValue | undefined,
+    call: { count: number; now: number; reserve: boolean },
+): { branch: "admit" | "reject" | "reserve"; failure?: string; next: RateLimitValue | undefined } => {
+    const { count, now } = call;
+    const result = evaluate(config, state, consumeOptions(count, now, call.reserve));
+    const { retryAfter } = result.status;
+    const describeCall = `${JSON.stringify(config)} prior=${JSON.stringify(state)} count=${String(count)} now=${String(now)} retryAfter=${String(retryAfter)}`;
+
+    const next = result.value ?? state;
+
+    if (!result.status.ok) {
+        const atRetry = evaluate(config, state, { consume: false, count, now: now + retryAfter, reserve: false });
+        const justBefore = evaluate(config, state, { consume: false, count, now: now + retryAfter - 1, reserve: false });
+
+        return { branch: "reject", next, ...(!atRetry.status.ok || justBefore.status.ok ? { failure: `reject ${describeCall}` } : {}) };
+    }
+
+    if (retryAfter > 0 && result.value !== undefined) {
+        const cleared = availableAt(config, result.value, now + retryAfter).value >= 0;
+        const clearedEarly = availableAt(config, result.value, now + retryAfter - 1).value >= 0;
+
+        return { branch: "reserve", next, ...(!cleared || clearedEarly ? { failure: `reserve ${describeCall}` } : {}) };
+    }
+
+    return { branch: "admit", next };
 };
 
 describe("token bucket", () => {
@@ -208,6 +255,118 @@ describe("fixed window", () => {
 
         expect(afterNext.status.ok).toBe(true);
         expect(afterNext.value).toEqual({ ts: 2000, value: 4 });
+    });
+
+    it("admits a count above rate but within capacity on a fresh key", () => {
+        expect.assertions(2);
+
+        // A fresh key is one that has sat idle long enough to roll over to
+        // `capacity`. Starting it at `rate` rejected this count forever: the
+        // rejection persists nothing, so every retry saw a fresh key again.
+        const rollover: RateLimitConfig = { capacity: 10, kind: "fixed window", period: 1000, rate: 5 };
+        const { status, value } = evaluate(rollover, undefined, consumeOptions(10, 0));
+
+        expect(status).toStrictEqual({ ok: true, retryAfter: 0 });
+        expect(value).toStrictEqual({ ts: 0, value: 0 });
+    });
+
+    it("points retryAfter past every window a carried debt still covers", () => {
+        expect.assertions(2);
+
+        // rate 9 against a -4 debt: the next window projects to 5, which does
+        // not cover 6. The one after projects to 14 (capped at 9).
+        const rejected = evaluate({ kind: "fixed window", period: 1007, rate: 9 }, { ts: 2014, value: -4 }, consumeOptions(6, 2118));
+
+        expect(rejected.status).toStrictEqual({ ok: false, reason: "rate", retryAfter: 2014 + 2 * 1007 - 2118 });
+
+        // A reserve reports when its debt clears: -4 - 20 = -24 needs three grants of 9.
+        const reserved = evaluate({ capacity: 20, kind: "fixed window", period: 1000, rate: 9 }, { ts: 0, value: -4 }, consumeOptions(20, 500, true));
+
+        expect(reserved.status).toStrictEqual({ ok: true, retryAfter: 3 * 1000 - 500 });
+    });
+
+    it("reports a retryAfter that is exactly when the request (or the debt) clears", () => {
+        expect.assertions(3);
+
+        // A seeded fuzz: every rejection must be admitted at `now + retryAfter`
+        // and still rejected one millisecond earlier; every reserve must leave
+        // the balance at >= 0 at `now + retryAfter` and < 0 one millisecond
+        // earlier. Always answering "the next window" failed thousands of these.
+        const random = seededRandom(42);
+        const failures: string[] = [];
+        const branches = { admit: 0, reject: 0, reserve: 0 };
+
+        for (let trial = 0; trial < 5000; trial += 1) {
+            const rate = 1 + Math.floor(random() * 10);
+            const period = 100 + Math.floor(random() * 1000);
+            const capacity = random() < 0.5 ? undefined : rate + Math.floor(random() * 5);
+            const config: RateLimitConfig = {
+                kind: "fixed window",
+                period,
+                rate,
+                start: Math.floor(random() * period),
+                ...(capacity === undefined ? {} : { capacity }),
+            };
+            let state: RateLimitValue | undefined;
+            let now = Math.floor(random() * 5000);
+
+            for (let step = 0; step < 12; step += 1) {
+                now += Math.floor(random() * period);
+                const outcome = checkRetryAfter(config, state, { count: 1 + Math.floor(random() * (capacity ?? rate)), now, reserve: random() < 0.3 });
+
+                branches[outcome.branch] += 1;
+                state = outcome.next;
+
+                if (outcome.failure !== undefined) {
+                    failures.push(outcome.failure);
+                }
+            }
+        }
+
+        // Counted, not just asserted empty: a fuzz that stopped reaching either
+        // branch would pass vacuously.
+        expect(branches.reject).toBeGreaterThan(5000);
+        expect(branches.reserve).toBeGreaterThan(1000);
+        expect(failures.slice(0, 5)).toStrictEqual([]);
+    });
+
+    it("reports an exact retryAfter for a fractional rate too", () => {
+        expect.assertions(3);
+
+        // `carry + periods * rate` and `(needed - value) / rate` round
+        // differently once `rate` is not an integer, so a closed-form window
+        // count alone lands a window early or late on some of these.
+        const random = seededRandom(7);
+        const rates = [0.1, 0.3, 1 / 3, 2 / 3];
+        const failures: string[] = [];
+        const branches = { admit: 0, reject: 0, reserve: 0 };
+
+        for (let trial = 0; trial < 4000; trial += 1) {
+            const rate = rates[trial % rates.length] as number;
+            const period = 100 + Math.floor(random() * 1000);
+            // A fractional rate needs an explicit capacity of at least one unit,
+            // or no integer count could ever be admitted.
+            const capacity = 1 + Math.floor(random() * 5);
+            const config: RateLimitConfig = { capacity, kind: "fixed window", period, rate, start: Math.floor(random() * period) };
+            let state: RateLimitValue | undefined;
+            let now = Math.floor(random() * 5000);
+
+            for (let step = 0; step < 12; step += 1) {
+                now += Math.floor(random() * period * 3);
+                const outcome = checkRetryAfter(config, state, { count: 1 + Math.floor(random() * capacity), now, reserve: random() < 0.3 });
+
+                branches[outcome.branch] += 1;
+                state = outcome.next;
+
+                if (outcome.failure !== undefined) {
+                    failures.push(outcome.failure);
+                }
+            }
+        }
+
+        expect(branches.reject).toBeGreaterThan(5000);
+        expect(branches.reserve).toBeGreaterThan(1000);
+        expect(failures.slice(0, 5)).toStrictEqual([]);
     });
 });
 

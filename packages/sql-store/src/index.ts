@@ -11,6 +11,8 @@
  * This package is internal: consumers depend on `@lunora/d1` or
  * `@lunora/hyperdrive`, which assemble the concrete dialect and wrap the core.
  */
+export type { ExportGlobalArgs, ExportRow, ImportError, ImportGlobalArgs, ImportResult } from "./admin-export-import";
+export { exportSqlGlobalRows, importSqlGlobalRows, selectGlobalTables } from "./admin-export-import";
 export type { SqlCtxDbOptions, SqlCtxExec } from "./ctx-db";
 export {
     createSqlCtxDb,
@@ -21,8 +23,20 @@ export {
     runSqlCdcMigration,
     sweepSqlCdcRetention,
 } from "./ctx-db";
-export { runSqlAggregateMigrations, runSqlGlobalTableMigrations, runSqlRankMigrations } from "./ctx-db-migrations";
+export { runSqlGlobalTableMigrations } from "./ctx-db-global-provisioning";
+export { runSqlAggregateMigrations, runSqlRankMigrations } from "./ctx-db-migrations";
+export type { SqlSearchBackfillResult } from "./ctx-db-search";
 export { backfillSqlSearchIndexes, runSqlSearchMigrations } from "./ctx-db-search";
 export { migrateSearchState, SEARCH_STATE_TABLE } from "./ctx-db-search-state";
 export type { SqlDialect, SqlExec, SqlRunResult } from "./dialect";
+export type {
+    FacetGlobalColumnOptions,
+    GlobalFacetResult,
+    GlobalFacetValue,
+    GlobalFilterClause,
+    GlobalTableInfo,
+    GlobalTablePage,
+    ReadGlobalTablePageOptions,
+} from "./introspect";
+export { facetSqlGlobalColumn, listSqlGlobalTables, readSqlGlobalTablePage } from "./introspect";
 export { decodeBigint, effectiveColumnKind, sqliteDecode, sqliteEncode, tryJsonParse } from "./value-codec";

@@ -391,4 +391,4 @@ const readAuthDump = async function* (
 };
 
 export type { AuthRows, FirebaseAuthUser, SupabaseAuthUser };
-export { emitAuthRows, fromFirebaseUser, fromSupabaseUser, readAuthDump, readFirebaseAuth, readSupabaseAuth };
+export { readAuthDump };

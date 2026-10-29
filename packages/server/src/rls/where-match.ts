@@ -21,8 +21,6 @@
  * harness.
  */
 import { LunoraError } from "@lunora/errors";
-
-import { isRelationPredicate } from "../../../../shared/relation-operators";
 // `isPlainObject` comes from the wire codec rather than being re-declared here.
 // The prototype check it carries is load-bearing: a local `typeof === "object"`
 // variant counted a `Date`, a `Uint8Array` or a `Map` as a plain object, so
@@ -33,7 +31,10 @@ import { isRelationPredicate } from "../../../../shared/relation-operators";
 // same predicate for the same reason (a class instance has no own enumerable
 // keys and would silently encode to `{}`). `Array.isArray` is subsumed: an
 // array's prototype is `Array.prototype`, not `Object.prototype`.
-import { isPlainObject } from "../../../../shared/wire-codec";
+import { isPlainObject } from "@lunora/wire";
+
+import { isFieldPath, rangeOperandType, readFieldPath } from "../../../../shared/json-field-path";
+import { isRelationPredicate } from "../../../../shared/relation-operators";
 import type { WhereInput } from "./types";
 
 /** Operator keys the JS evaluator recognises. Mirrors `FieldOperators` from the SQL compiler. */
@@ -131,6 +132,10 @@ const ORDERED_COMPARATORS: Record<string, (left: unknown, right: unknown) => boo
  * so `NOT (col > NULL)` matches every row, NULL cells included. A NULL *cell*
  * against a real operand is UNKNOWN like any other comparison. A non-orderable
  * pair (an object, a boolean) is FALSE rather than coercing.
+ *
+ * A range over a PATH follows the SQL stores' rule instead: it is bracketed to the operand's JSON type
+ * (`rangeOperandType`, shared with the compiler), so `"30" > 5` is FALSE, a boolean operand compares booleans, and an
+ * operand that is none of number, string or boolean (a bigint, an object) matches nothing.
  */
 const matchesOrderedOperators = (field: string, documentValue: unknown, operators: Record<string, unknown>): Ternary => {
     let result: Ternary = TRUE;
@@ -144,14 +149,17 @@ const matchesOrderedOperators = (field: string, documentValue: unknown, operator
 
         assertOperandDefined(field, operator, operand);
 
-        if (!isOrderable(operand)) {
+        const onPath = isFieldPath(field);
+
+        if (onPath ? rangeOperandType(operand) === undefined : !isOrderable(operand)) {
             result = kleeneAnd(result, FALSE);
         } else if (isSqlNull(documentValue)) {
             result = kleeneAnd(result, UNKNOWN);
         } else {
             const compare = ORDERED_COMPARATORS[operator] as (left: unknown, right: unknown) => boolean;
+            const comparable = onPath ? typeof documentValue === typeof operand : isOrderable(documentValue);
 
-            result = kleeneAnd(result, ternaryOf(isOrderable(documentValue) && compare(documentValue, operand)));
+            result = kleeneAnd(result, ternaryOf(comparable && compare(documentValue, operand)));
         }
     }
 
@@ -307,8 +315,10 @@ const matchesEqualityOperators = (field: string, documentValue: unknown, operato
  * **Parity with `where-sql.ts`, and where it stops.** The operator set, the NULL
  * behaviour of each one and the refusal of malformed operands all match the
  * compiler case by case, verified against SQLite — the pinned truth table lives
- * in `__tests__/rls-null-semantics.test.ts`. Three known divergences remain,
- * none of them about NULL:
+ * in `__tests__/rls-null-semantics.test.ts`, the empty-group shapes (`{}`,
+ * `{ AND: [] }`, `{ OR: [] }`, an `OR` holding `allowAll()`, `{ NOT: {} }`) in
+ * `__tests__/rls-empty-shapes.test.ts`. Two known divergences remain, neither
+ * of them about NULL:
  *
  * - `contains` is case-SENSITIVE here and case-insensitive in SQL, which folds
  * both sides (`instr(lower(…), lower(…))`). Matching it needs SQLite's
@@ -316,8 +326,6 @@ const matchesEqualityOperators = (field: string, documentValue: unknown, operato
  * what the legacy `query()` filter returns — so it is stated, not guessed at.
  * - a malformed group (`{ AND: "junk" }`) is FALSE here and a vacuous TRUE in
  * the compiler, which drops the branch. Deliberately fail-closed.
- * - `{ NOT: {} }` is FALSE here and TRUE in the compiler, which drops an empty
- * branch before there is anything to negate. Deliberately fail-closed.
  */
 const matchesOperators = (field: string, documentValue: unknown, operators: Record<string, unknown>): Ternary =>
     kleeneAnd(
@@ -401,7 +409,8 @@ const evaluateWhere = (document: Record<string, unknown>, where: WhereInput): Te
             continue;
         }
 
-        const documentValue = document[key];
+        // A dotted key reads into an object column, the same way the SQL path does.
+        const documentValue = readFieldPath(document, key);
 
         if (isOperatorBag(value)) {
             result = kleeneAnd(result, matchesOperators(key, documentValue, value));

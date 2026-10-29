@@ -1,5 +1,7 @@
 import type { IndexKeyEntry } from "./read-write-set";
+import type { RelationWriteMap } from "./relation-writes";
 import type { SystemDatabaseReader } from "./system-reader";
+import type { SubscriptionIdentity } from "./types";
 import type { WhereInput } from "./where-types";
 
 /**
@@ -79,7 +81,30 @@ export interface ColumnMetaLike {
 
 /** Structural mirror of a validator from `@lunora/values`. */
 export interface ValidatorLike {
-    readonly _meta?: { readonly column?: ColumnMetaLike };
+    /**
+     * The validator's internal metadata bag. `column` carries the modifier
+     * chain; `inner` is the child of a `v.optional(...)` / `v.array(...)`
+     * wrapper; `tableName` is a `v.id("target")`'s target table — the fact the
+     * relation-graph edge set is derived from.
+     *
+     * `members` (a `v.union(...)`'s alternatives) and `value` (a
+     * `v.literal(...)`'s one permitted value) are here because storage reads
+     * them: a literal's column type and codec pair are the ones its VALUE's type
+     * needs, and whether a NULL in a column means `null` or means "field unset"
+     * turns on whether any union member accepts `null`. Both were read off an
+     * untyped bag before, which is how each stayed wrong without a compiler
+     * anywhere in a position to say so.
+     */
+    readonly _meta?: {
+        readonly column?: ColumnMetaLike;
+        readonly inner?: ValidatorLike;
+        readonly members?: ReadonlyArray<ValidatorLike>;
+
+        /** A `v.object({...})`'s fields: what a dotted path into the column is checked against. */
+        readonly shape?: Readonly<Record<string, ValidatorLike>>;
+        readonly tableName?: string;
+        readonly value?: unknown;
+    };
     readonly kind?: string;
     readonly parse?: (value: unknown) => unknown;
 }
@@ -92,12 +117,12 @@ export type TriggerOpLike = "delete" | "insert" | "update";
 
 /**
  * A schedulable durable-workflow reference — the generated `workflows.<name>` /
- * `agents.<name>` object (carries its `WORKFLOW_*`/`AGENT_*` binding + stable
+ * `agents.<name>` object (carries its generated class name + stable
  * name). Structural mirror so a scheduled target can be a workflow/agent, not
  * just a function path, without this package depending on `@lunora/scheduler`.
  */
 export interface SchedulableWorkflowReferenceLike {
-    readonly binding?: string;
+    readonly className?: string;
     readonly isLunoraWorkflow: true;
     readonly name?: string;
 }
@@ -147,10 +172,32 @@ export interface SchemaLike {
     readonly tables: Record<string, TableDefinitionLike>;
 }
 
+/**
+ * Decides whether an update may be written, given the row as the store read it and the row it is
+ * about to write. A layer that authorizes writes (the RLS gate) passes one so the verdict is taken
+ * against the store's own read, not an earlier one: an atomic operator (`{ increment: 1 }`)
+ * resolves to a value that depends on the row, so a check made before the store reads can approve
+ * a different post-image than the one that lands.
+ */
+export type PatchVerifier = (previous: Record<string, unknown>, next: Record<string, unknown>) => boolean;
+
+/** Optional extras for a single `patch` call. */
+export interface PatchWriteOptions {
+    /** Checked on every attempt, after operators resolve and before the write; `false` raises FORBIDDEN. */
+    verify?: PatchVerifier;
+}
+
 /** Structural mirror of `@lunora/server`'s `TableDefinition`. */
 export interface TableDefinitionLike {
     readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
     readonly commitOrderedMode?: boolean;
+
+    /**
+     * `.dropStalePatches()` — drop a `patch` whose fields moved since the
+     * caller's CDC baseline instead of clobbering the newer value. Opt-in per
+     * table; see `dropStalePatches` in `ctx-db.ts` for the rule and its limits.
+     */
+    readonly dropStalePatchesMode?: boolean;
     readonly geoIndexes?: ReadonlyArray<GeoIndexDefinitionLike>;
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
     readonly isPublic?: boolean;
@@ -165,14 +212,32 @@ export interface TableDefinitionLike {
     readonly ttlPolicy?: { after?: number; field: string };
 }
 
-/** Structural mirror of `@lunora/server`'s `RelationDefinition`. */
-export interface RelationDefinitionLike {
+/** Structural mirror of `@lunora/server`'s `KeyedRelationDefinition`: a `one` or `many` relation backed by one foreign-key column. */
+export interface KeyedRelationDefinitionLike {
     readonly field: string;
     readonly kind: "many" | "one";
     readonly onDelete?: OnDeleteActionLike;
     readonly references: string;
     readonly table: string;
+    readonly through?: never;
 }
+
+/** Structural mirror of `@lunora/server`'s `RelationThrough`: the join table of a many-to-many relation. */
+export interface RelationThroughLike {
+    readonly from: string;
+    readonly table: string;
+    readonly to: string;
+}
+
+/** Structural mirror of `@lunora/server`'s `ThroughRelationDefinition`: a many-to-many relation through a join table. */
+export interface ThroughRelationDefinitionLike {
+    readonly kind: "many";
+    readonly table: string;
+    readonly through: RelationThroughLike;
+}
+
+/** Structural mirror of `@lunora/server`'s `RelationDefinition`. */
+export type RelationDefinitionLike = KeyedRelationDefinitionLike | ThroughRelationDefinitionLike;
 
 export type OnDeleteActionLike = "cascade" | "restrict" | "set null";
 
@@ -189,13 +254,6 @@ export interface NestedWith {
 export interface WithInput {
     [relationName: string]: NestedWith | Record<string, true> | boolean | undefined;
     _count?: Record<string, true>;
-}
-
-export interface ApplyOnDeleteOptions {
-    database: DatabaseWriterLike;
-    relation: RelationDefinitionLike;
-    row: Record<string, unknown>;
-    tableName: string;
 }
 
 /**
@@ -247,8 +305,15 @@ export interface ResolveWithResult {
 
 export type SortDirection = "asc" | "desc";
 
-/** A single `{ field: "asc" | "desc" }` entry; `orderBy` is an ordered list of these. */
-export type OrderByInput = Record<string, SortDirection>;
+/** Where rows holding SQL NULL sort among the others. */
+export type NullPlacement = "first" | "last";
+
+/**
+ * A single `{ field: "asc" | "desc" }` entry; `orderBy` is an ordered list of these. The object form
+ * `{ field: { sort: "desc", nulls: "last" } }` also says where NULLs go. Without it NULLs sort
+ * first ascending and last descending, as SQLite orders them.
+ */
+export type OrderByInput = Record<string, SortDirection | { nulls: NullPlacement; sort: SortDirection }>;
 
 export interface QueryArgs {
     baseWhere?: WhereInput;
@@ -326,11 +391,134 @@ export interface CrossShardReadArgs {
  */
 export type RelationMask = (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
 
+/** What `explain` returns: the SQL a read compiles to and the database's plan for it. */
+export interface QueryPlan {
+    /** The bound parameters, in order. */
+    params: unknown[];
+    /** One line per plan step, as the database reports it (`SEARCH messages USING INDEX by_room (room=?)`). */
+    plan: string[];
+    /** The statement the read compiles to. */
+    sql: string;
+}
+
 export interface QueryPage {
     continueCursor: null | string;
     isDone: boolean;
     page: Record<string, unknown>[];
     splitCursor?: null | string;
+}
+
+/**
+ * One directed foreign-key edge derived from a `v.id("target")` column:
+ * `sourceTable.column` → `targetTable`.
+ *
+ * The direction is the one the DATA points in — the row carrying the column is
+ * the source — which is the direction a `"out"` traversal follows. The `name`
+ * is what a caller passes to `related({ edges: [...] })`; a column name is
+ * unique within its table, so `` `${sourceTable}.${column}` `` is unique within
+ * the schema.
+ */
+export interface RelationEdge {
+    /** `true` for a `v.array(v.id(...))` column — one row holds MANY target ids. */
+    readonly array: boolean;
+    /** The `v.id(...)` column on {@link RelationEdge.sourceTable}. */
+    readonly column: string;
+    /** The addressable edge-type name: `` `${sourceTable}.${column}` ``. */
+    readonly name: string;
+    /** The table whose rows carry the foreign key. */
+    readonly sourceTable: string;
+    /** The table the foreign key points at. */
+    readonly targetTable: string;
+}
+
+/** An explicit `{ table, id }` start node for {@link DatabaseWriterLike.related}. */
+export interface RelatedStartReference {
+    id: string;
+    table: string;
+}
+
+/**
+ * Where a traversal starts: an explicit {@link RelatedStartReference}, or a
+ * loaded document (its `_id` is read and its owning table resolved through the
+ * writer's `lookupById` seam). A document is recognised by carrying `_id`, so a
+ * table that happens to declare `table`/`id` columns is never mistaken for a
+ * reference.
+ *
+ * The document arm requires `_id` for the same reason `resolveStart` reads it:
+ * without it the union COLLAPSED — a bare `Record<string, unknown>` swallows
+ * `RelatedStartReference`, so `related({ tabel: "x", id: "y" })` type-checked
+ * and failed at runtime with a message about the shape it was already meant to
+ * enforce. Requiring the discriminant makes the documented distinction real.
+ */
+export type RelatedStart = (Record<string, unknown> & { _id: string }) | RelatedStartReference;
+
+/** Which way foreign-key edges are followed out of each visited node. */
+export type RelatedDirection = "both" | "in" | "out";
+
+/** Options for {@link DatabaseWriterLike.related}. */
+export interface RelatedOptions {
+    /** Opaque cursor from a prior page's `continueCursor`; `null`/omitted starts at the first page. */
+    cursor?: null | string;
+
+    /**
+     * How many hops to expand. `1` (the default) is the direct neighbourhood;
+     * higher values re-expand each frontier. Must be an integer in
+     * `1 … RELATED_MAX_DEPTH`.
+     */
+    depth?: number;
+
+    /** Which way edges are followed. Default `"both"`. */
+    direction?: RelatedDirection;
+
+    /**
+     * Restrict the walk to these edge-type names ({@link RelationEdge.name}).
+     * Omitted ⇒ every edge the schema declares. An unknown name is refused
+     * rather than ignored — a typo that silently widens a traversal is the
+     * failure this exists to prevent.
+     */
+    edges?: ReadonlyArray<string>;
+
+    /** Maximum nodes per page. Default `RELATED_DEFAULT_LIMIT`, capped at `RELATED_MAX_LIMIT`. */
+    limit?: number;
+
+    /**
+     * Per-table read filter applied to EVERY read the traversal makes, the
+     * start row's included — the same seam `with`-relation loading threads (see
+     * {@link QueryArgs.relationBaseWhere}). Engine-internal: the RLS middleware
+     * supplies it so a traversal cannot walk into rows the caller's policy
+     * excludes, and so a start row the policy hides reads as absent.
+     *
+     * One seam rather than a separate `baseWhere` for the start table, because
+     * the start table is only known after the reader resolves it — a caller
+     * passing a loaded document does not name it.
+     */
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+
+    /** Per-target-table column mask applied to every hop's rows — see {@link RelationMask}. */
+    relationMask?: RelationMask;
+}
+
+/** One row reached by a traversal, with how it was reached. */
+export interface RelatedNode {
+    /** Hops from the start node; always `>= 1`. */
+    depth: number;
+    /** The reached row. */
+    document: Record<string, unknown>;
+    /** Edge-type names walked from the start node to this one, in order. Length equals {@link RelatedNode.depth}. */
+    path: ReadonlyArray<string>;
+    /** Document ids from the start node to this one inclusive. Length equals `depth + 1`. */
+    pathIds: ReadonlyArray<string>;
+    /** Depth-decaying relevance, `RELATED_DEPTH_DECAY ** (depth - 1)` — `1` at depth 1, halving per hop. */
+    score: number;
+    /** The table {@link RelatedNode.document} lives in. */
+    table: string;
+}
+
+/** One page of a traversal — the same envelope shape as {@link QueryPage}. */
+export interface RelatedPage {
+    continueCursor: null | string;
+    isDone: boolean;
+    nodes: RelatedNode[];
 }
 
 export interface OrderKey {
@@ -346,6 +534,13 @@ export interface OrderKey {
      * which is the row-losing direction.
      */
     nullable: boolean;
+
+    /**
+     * Where this key's NULLs sort, when the caller asked for something other than the default. Set
+     * only on a nullable key: on a column that never holds NULL the placement is moot, and the
+     * clause it would add can cost the index.
+     */
+    nulls?: NullPlacement;
 }
 
 /** Query-options shape shared by every aggregate reader. */
@@ -518,8 +713,11 @@ export interface IndexRangeBuilderLike {
 /** Notifies hibernated subscribers that a row in `table` changed. */
 export type BroadcastDelta = (delta: MutationDelta) => void;
 
-/** Records that a query touched `table`. */
-export type ReadHook = (table: string, idOrScan?: string) => void;
+/**
+ * Records that a query touched `table`. `exact` marks a point read whose result
+ * depends on row `idOrScan` alone, which lets a subscription narrow to it.
+ */
+export type ReadHook = (table: string, idOrScan?: string, exact?: boolean) => void;
 
 /** The argument a connection-lifecycle hook receives. */
 export interface LifecycleEvent {
@@ -529,11 +727,18 @@ export interface LifecycleEvent {
     userId: string | null;
 }
 
-/** Per-socket lifecycle dispatch payload. */
-export interface LifecycleDispatchInfo {
+/**
+ * Per-socket lifecycle dispatch payload: the hook's argument, plus the caller
+ * context to replay it under.
+ *
+ * That context is {@link SubscriptionIdentity} itself rather than a restatement
+ * of its members. It used to restate them, which is why it was the one place a
+ * socket's context was assembled by hand instead of through the shared helper —
+ * and why `ip` had to be added here separately. Extending means the helper's
+ * output spreads straight in, and the next member added is not a second edit.
+ */
+export interface LifecycleDispatchInfo extends SubscriptionIdentity {
     event: LifecycleEvent;
-    identity: Record<string, unknown> | undefined;
-    userId: string | undefined;
 }
 
 /** Per-row change notification emitted by the CDC layer. */
@@ -556,6 +761,14 @@ export interface MutationDelta {
 export interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
     asId?: (tableName: string, id: string) => string;
+
+    /**
+     * Check that the caller's update policy would let row `id` be written, without writing it: no row changes,
+     * no trigger fires, no timestamp, version or change-data-capture entry moves. A relation-only patch uses it to
+     * gate its parent row, which it never writes. Optional: the RLS middleware evaluates the update policy here, and
+     * a writer with no policy layer has no update rule to check. The guard gates only the table.
+     */
+    assertPatchAllowed?: (table: string, id: string) => Promise<void>;
 
     /**
      * Which tables this store's change-data-capture log recorded a write to
@@ -605,14 +818,34 @@ export interface DatabaseWriterLike {
         | undefined
     >;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
-    delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
+    delete: (table: string, id: string, options?: { hard?: boolean }) => Promise<void>;
+
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
-    deleteMany?: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
+
+    deleteMany?: (table: string, ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
+
+    /**
+     * Tables whose rows can change under a chunked delete between the page read and the delete: `.global()` tables
+     * (another shard writes the shared D1 rows) and tables where deleting a row can reach, through `cascade` or
+     * `set null` relation delete actions followed transitively, a delete trigger or the table itself (a handler or
+     * cascade may patch a later row). A wrapper that deletes from a page it already read must re-read these.
+     * Metadata only: it names tables and reaches no row.
+     */
+    deleteRereadTables?: ReadonlySet<string>;
+
     deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
+
+    /**
+     * Describe how the store would run `findMany(tableName, args)`: the statement, its bound
+     * parameters, and the database's own plan for it, one line per step.
+     */
+    explain: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
+
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
+
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
-    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: GroupByOptions) => Promise<ReadonlyArray<GroupByEntry>>;
     insert: (tableName: string, document: Record<string, unknown>, options?: { allowExplicitId?: boolean; clientId?: string }) => Promise<string>;
     insertMany?: (
@@ -620,18 +853,67 @@ export interface DatabaseWriterLike {
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: { limit?: number; skipDuplicates?: boolean },
     ) => Promise<(string | null)[]>;
+
+    /**
+     * The unvalidated bulk insert. It applies column defaults and the parsed output of `v.from` transform
+     * columns (so stored rows match every other write) and nothing else: `.check()` validators, foreign
+     * key existence checks and triggers are all skipped, because the caller vouches for the data.
+     */
     insertManyUnsafe?: (
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: { allowExplicitId?: boolean; limit?: number },
     ) => Promise<string[]>;
+
+    /**
+     * Does the host currently have an atomic write boundary open?
+     *
+     * Published so a wrapper that reads a page of rows and then deletes them can tell whether the page image
+     * can change under an `await`: inside a mutation the DO serialises writes inside one transaction, but an
+     * action deliberately runs OUTSIDE that boundary (its external I/O cannot be rolled back), so a
+     * concurrent write can reassign a later row before its delete. The RLS middleware's chunked erase
+     * re-locates every row whenever this is not `true`.
+     *
+     * A call-time read, not a flag captured at construction: the transaction opens AFTER the writer is built
+     * (a mutation dispatch wraps the handler), so only a live read reports the truth. Absent ⇒ treated as
+     * "not in a transaction" — the conservative direction, since trusting a stale image is the failure this
+     * exists to prevent.
+     */
+    inTransaction?: () => boolean;
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     normalizeId: (tableName: string, id: string) => null | string;
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+
+    patch: (table: string, id: string, patch: Record<string, unknown>, options?: PatchWriteOptions) => Promise<void>;
+
+    /**
+     * Conditional patch: apply `patch` to row `id` of `tableName` only while the
+     * CURRENT row matches `where`, decided atomically with the write. Returns
+     * whether it applied and the row as it stands afterwards (`null` when there
+     * is no such row). A row that does not match is left untouched and reported
+     * with `applied: false`.
+     *
+     * Every implementation decides in one step against the stored row, never by
+     * reading first and writing later. A shard-local table (DO `storage.sql`,
+     * `better-sqlite3`, celld's SQLite) checks the predicate and writes the row
+     * in one synchronous run, CAS-guarded on the row image. A `.global()` table
+     * (`@lunora/sql-store` over D1, Postgres, MySQL) runs one
+     * `UPDATE … WHERE id = ? AND <version> AND (<where>)`, re-reading and
+     * re-deciding when the version moved underneath.
+     *
+     * Optional because a writer that cannot decide atomically must not offer a
+     * read-then-write substitute; callers raise an explicit unsupported error
+     * when it is absent.
+     */
+    patchIf?: (
+        tableName: string,
+        id: string,
+        args: { patch: Record<string, unknown>; verify?: PatchVerifier; where: WhereInput },
+    ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
+
     patchMany?: (
+        table: string,
         patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
         options?: { limit?: number },
-        expectedTable?: string,
     ) => Promise<{ patched: number }>;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
     query: (tableName: string) => TableReaderLike;
@@ -639,8 +921,57 @@ export interface DatabaseWriterLike {
     rankBefore?: (tableName: string, indexName: string, options: RankBeforeOptions) => Promise<RankBeforeResult>;
     rankPage: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<RankPage>;
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<ShardRankPageResult>;
-    replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: { allowExplicitId?: boolean }) => Promise<void>;
-    restore?: (id: string, expectedTable?: string) => Promise<void>;
+
+    /**
+     * Walk the schema-derived foreign-key graph out of one row — breadth-first,
+     * bounded by `depth` and `limit`, cycle-safe — and return each reached row
+     * with its depth, the edge names walked to reach it, and a depth-decaying
+     * score.
+     *
+     * OPTIONAL because it is derived from the schema's `v.id(...)` columns and
+     * implemented by the shard writer; the `.global()` twin and the generated
+     * `globalDbStub` do not carry it. Reads route through this writer's own
+     * `get`/`findMany`, so read-dependency tracking, soft-delete scoping and
+     * global-table routing all apply per hop exactly as they do for a direct
+     * read.
+     */
+    related?: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
+
+    /**
+     * The edge set {@link DatabaseWriterLike.related} walks, derived from this
+     * schema's `v.id(...)` columns once per writer. Present exactly when
+     * `related` is — the two are a pair, and the `.global()` twin carries
+     * neither.
+     *
+     * PUBLISHED rather than kept as a closure variable because a wrapper that
+     * has to route the traversal PER TABLE — the RLS middleware under a
+     * `.rls("required")` schema — cannot delegate to `related`: that closure is
+     * already bound to one writer, and every hop out of it would go to that
+     * writer. Such a wrapper runs the walk itself over a reader it routes, and
+     * the walk needs this set to know what the hops are.
+     *
+     * It is metadata, not capability. Edge NAMES are already a caller-facing
+     * surface (`RelatedOptions.edges` selects by them, and refuses an undeclared
+     * one), and holding the set grants no read that the writer would not
+     * otherwise gate.
+     */
+    relationEdges?: ReadonlyArray<RelationEdge>;
+
+    /** Per-relation facts the table facade needs for nested relation writes (`connect`/`disconnect`/`set`). */
+    relationWrites?: RelationWriteMap;
+
+    replace: (table: string, id: string, document: Record<string, unknown>, options?: { allowExplicitId?: boolean }) => Promise<void>;
+    restore?: (table: string, id: string) => Promise<void>;
+
+    /**
+     * Soft-delete marker column per table, for tables declared `.softDelete()`. The writer's `delete`
+     * short-circuits (a no-op) when the row is already marked, so a wrapper that re-locates a row before
+     * deleting it reads this to treat an already-marked row as gone — otherwise a cascade that soft-deletes
+     * a later row of the same page would have that row counted again and its delete policy run against the
+     * tombstone. Absent for a table with no `.softDelete()` (nothing to mark). Metadata only: it names
+     * columns and reaches no row.
+     */
+    softDeleteFields?: ReadonlyMap<string, string>;
 
     /**
      * The system-table reader.

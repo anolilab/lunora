@@ -1,5 +1,4 @@
 import type { ClientDebugSnapshot } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 
 import { Badge } from "../../components/ui/badge";
@@ -8,6 +7,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 
 /** How often the snapshot is re-read. `client.debug()` is pull-only and allocation-cheap. */
@@ -46,7 +46,7 @@ interface SyncClientPanelProps {
  */
 const SyncClientPanel = ({ read }: SyncClientPanelProps): ReactElement => {
     const t = useT();
-    const client = useLunora();
+    const client = useStudioClient();
 
     // `client.debug()` is a synchronous read of in-memory state, but it rides the
     // studio's one data primitive anyway so the panel gets the same polling, suspense
@@ -60,11 +60,11 @@ const SyncClientPanel = ({ read }: SyncClientPanelProps): ReactElement => {
     // `useCallback`: React Compiler memoizes it.
     const sample = (): Promise<ClientDebugSnapshot> => Promise.resolve(read ? read() : client.debug());
 
-    const { data: snapshot, refetch } = useClientQuery<ClientDebugSnapshot>(["lunora-studio", "sync-client-debug", read ? "injected" : "live"], sample);
+    const { data: snapshot, poll } = useClientQuery<ClientDebugSnapshot>(["lunora-studio", "sync-client-debug", read ? "injected" : "live"], sample);
 
     // The snapshot has no push channel — it's in-memory client state — so polling is
     // the honest "live" here, exactly as for the HTTP-only panels.
-    useAutoRefresh(refetch, true, POLL_INTERVAL_MS);
+    useAutoRefresh(poll, true, POLL_INTERVAL_MS);
 
     if (!snapshot) {
         return (

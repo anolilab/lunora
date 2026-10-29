@@ -53,11 +53,11 @@ it rides the `.use(...)` chain and is **opt-in per procedure**: a bare
 
 Each named limit declares a `kind`. Pick by the burst behavior you want:
 
-| `kind`             | Behavior                                                                                                                            | Pick it when                                                         |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `"token bucket"`   | Tokens refill continuously at `rate / period` per ms up to `capacity`; a fresh key starts full, so a burst is allowed.              | You want smooth throughput that tolerates short bursts (API calls).  |
-| `"fixed window"`   | `rate` tokens granted at the start of each window aligned to `start + n * period`. With `capacity > rate`, unused tokens roll over. | You want a hard cap per discrete window (e.g. 5 logins per minute).  |
-| `"sliding window"` | A weighted estimate blending the current and previous window's counts; always caps at `rate` per `period`.                          | You want fixed-window's simplicity without its boundary-burst spike. |
+| `kind`             | Behavior                                                                                                                                                                 | Pick it when                                                         |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `"token bucket"`   | Tokens refill continuously at `rate / period` per ms up to `capacity`; a fresh key starts full, so a burst is allowed.                                                   | You want smooth throughput that tolerates short bursts (API calls).  |
+| `"fixed window"`   | `rate` tokens granted at the start of each window aligned to `start + n * period`. With `capacity > rate`, unused tokens roll over and a fresh key starts at `capacity`. | You want a hard cap per discrete window (e.g. 5 logins per minute).  |
+| `"sliding window"` | A weighted estimate blending the current and previous window's counts; always caps at `rate` per `period`.                                                               | You want fixed-window's simplicity without its boundary-burst spike. |
 
 ```ts
 const limiter = new RateLimiter({
@@ -73,19 +73,17 @@ const limiter = new RateLimiter({
 
 Each entry in the config map is a `RateLimitConfig`:
 
-| Field      | Type            | Default | Notes                                                                                                                        |
-| ---------- | --------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `kind`     | `RateLimitKind` | —       | `"token bucket"`, `"fixed window"`, or `"sliding window"`. Required.                                                         |
-| `rate`     | `number`        | —       | Tokens granted per `period`. Required; must be a positive number.                                                            |
-| `period`   | `number`        | —       | Window/refill period in milliseconds. Required; must be a positive number.                                                   |
-| `capacity` | `number`        | `rate`  | Rollover ceiling. Caps a token-bucket burst; for fixed windows enables cross-window rollover. Ignored by sliding windows.    |
-| `shards`   | `number`        | `1`     | Split a hot limit across N independent sub-buckets. Positive integer; `1` is equivalent to unset. See [Sharding](#sharding). |
-| `start`    | `number`        | `0`     | Phase offset in epoch ms for windowed algorithms; windows align to `start + n * period`. Ignored by token buckets.           |
+| Field      | Type            | Default | Notes                                                                                                                     |
+| ---------- | --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `kind`     | `RateLimitKind` | —       | `"token bucket"`, `"fixed window"`, or `"sliding window"`. Required.                                                      |
+| `rate`     | `number`        | —       | Tokens granted per `period`. Required; must be a positive number.                                                         |
+| `period`   | `number`        | —       | Window/refill period in milliseconds. Required; must be a positive number.                                                |
+| `capacity` | `number`        | `rate`  | Rollover ceiling. Caps a token-bucket burst; for fixed windows enables cross-window rollover. Ignored by sliding windows. |
+| `start`    | `number`        | `0`     | Phase offset in epoch ms for windowed algorithms; windows align to `start + n * period`. Ignored by token buckets.        |
 
 <Callout type="info">
-The constructor validates every config up front: a non-positive `period` or
-`rate`, a negative `capacity`, or a non-integer/`< 1` `shards` throws at
-construction rather than corrupting accounting later.
+    The constructor validates every config up front: a non-positive `period` or `rate`, or a negative `capacity` throws at construction rather than corrupting
+    accounting later.
 </Callout>
 
 ## Consuming a limit
@@ -222,27 +220,6 @@ every incoming `key` for case-folding, trimming, or canonicalizing IPs/emails),
 both the normalized and raw form are checked, but normalize your deny-list
 entries up front to be safe.
 
-## Sharding
-
-For a high-volume limit where a single hot key contends on one bucket/Durable
-Object, set `shards: N`. The limiter splits the limit into N independent
-sub-buckets, each enforcing `rate / shards` (and `capacity / shards`). A request
-is routed to a shard by a deterministic hash of `(name, key)`, so the same key
-always lands on the same shard; its effective throughput is exactly
-`rate / shards`, while aggregate throughput across many distinct keys approaches
-`rate` as keys spread uniformly.
-
-```ts
-const limiter = new RateLimiter({
-    config: {
-        ingest: { kind: "token bucket", period: 1_000, rate: 10_000, shards: 16 },
-    },
-});
-```
-
-Reserve sharding for limits where contention actually bites; leave it unset (one
-bucket) otherwise.
-
 ## Pluggable stores
 
 Persistence is a `RateLimitStore` (`get`/`set`/`delete`, sync or async):
@@ -260,8 +237,9 @@ value forward to the current clock, which is a pure read; only `limit`/`reset`
 write, and those reject with a message naming `createDbStore` as the fix.
 
 `createSqlStore` creates its table (default `_lunora_rate_limits`) if missing.
-`createDbStore` expects a table you declare in your schema with a key column and
-its index (defaults: table `rateLimits`, index `by_key`, key column `key`):
+`createDbStore` expects a table you declare in your schema with a key column,
+indexed (defaults: table `rateLimits`, key column `key`). It works on a
+shard-local table and on a `.global()` one:
 
 ```ts
 import { defineTable, v } from "lunorash/server";
@@ -271,12 +249,20 @@ export const rateLimits = defineTable({
     ts: v.number(),
     value: v.number(),
     prev: v.optional(v.number()),
-}).index("by_key", ["key"]);
+})
+    .index("by_key", ["key"])
+    .index("by_ts", ["ts"]);
 ```
 
+After each write the limiter deletes up to 32 rows whose `ts` is past the limit's retention, through `by_ts`. A row
+with a negative `value` (a reserved debt) is never deleted. Tables declared before this index was added need it
+added before expiry runs; without it each sweep scans the whole table.
+
 <Callout type="info">
-    Inside a Durable Object the input gate serializes the limiter's read-modify-write against storage, so both SQL- and ORM-backed stores are atomic against
-    concurrent calls without an explicit transaction. Driving `createSqlStore` outside a DO, you own serialization yourself.
+    Every store admits exactly the configured rate under concurrent consumes. `createMemoryStore` and `createSqlStore` are synchronous, and the limiter reads,
+    decides and writes through them in one step. `createDbStore` writes through `ctx.db.patchIf` with the value it read as the condition, and creates a key's
+    row under an id derived from the key, so a consume that raced another one loses its write, re-reads, and decides again. That holds on a `.global()` table
+    too, where D1 calls do not hold the Durable Object's input gate.
 </Callout>
 
 ## Token budgets
@@ -331,7 +317,7 @@ const limiter = new RateLimiter({
 });
 
 export const send = mutation.use(ratelimitPlugin(limiter).middleware!).mutation(async ({ ctx }) => {
-    const status = await ctx.api.ratelimit.limit("send", { key: ctx.auth.userId });
+    const status = await ctx.api.ratelimit.limit("send", { key: ctx.auth.userId ?? "anonymous" });
 
     if (!status.ok) {
         throw new Error("slow down");

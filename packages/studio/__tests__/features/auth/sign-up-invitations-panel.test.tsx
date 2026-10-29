@@ -85,6 +85,34 @@ describe("signUpInvitationsPanel", () => {
         expect(screen.getByTestId<HTMLInputElement>("sign-up-invitation-link").value).toContain("email=ada%40example.com");
     });
 
+    it("builds the link on the worker the studio talks to, on a sign-up page the operator can correct", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        // A studio served on its own host, pointed at a deployed worker.
+        (mock.asClient as unknown as { url: string }).url = "https://api.prod.example/";
+        mock.listAuthSignUpInvitations.mockResolvedValue({ rows: [], total: 0 });
+        mock.createAuthSignUpInvitation.mockResolvedValue({ email: "ada@example.com", id: "1", token: "tok_secret" });
+
+        render(renderPanel(mock));
+
+        fireEvent.change(screen.getByTestId("sign-up-invitation-email"), { target: { value: "ada@example.com" } });
+        fireEvent.click(screen.getByTestId("sign-up-invitation-submit"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId<HTMLInputElement>("sign-up-invitation-link").value).toBe(
+                "https://api.prod.example/sign-up?email=ada%40example.com&invite=tok_secret",
+            );
+        });
+
+        fireEvent.change(screen.getByTestId("sign-up-invitation-page"), { target: { value: "https://app.example/auth/sign-up?ref=admin" } });
+
+        expect(screen.getByTestId<HTMLInputElement>("sign-up-invitation-link").value).toBe(
+            "https://app.example/auth/sign-up?ref=admin&email=ada%40example.com&invite=tok_secret",
+        );
+    });
+
     it("surfaces a rejected invite instead of silently clearing the field", async () => {
         expect.assertions(2);
 

@@ -117,6 +117,38 @@ export default createConfig(
             "vitest/prefer-strict-equal": "off",
         },
     },
+    // The workerd suites type-check in their own program (Cloudflare's ambient
+    // globals, kept out of `src/` — see tsconfig.json), so lint them against it.
+    {
+        files: ["**/__tests__/workerd/**/*.ts"],
+        languageOptions: {
+            parserOptions: { project: "./__tests__/workerd/tsconfig.json", tsconfigRootDir: import.meta.dirname },
+        },
+        rules: {
+            // `aroundEach` (Vitest 4.1) is a hook the plugin does not know yet.
+            "vitest/require-hook": ["warn", { allowedFunctionCalls: ["aroundEach"] }],
+        },
+    },
+    // These files only hand a harness to a shared suite in `__tests__/_scenarios/`
+    // — `node:sqlite` here, a Durable Object's storage in the `workerd/` twin — and
+    // the suite registers the `it`s, which sonarjs cannot see (it reports the file
+    // empty at 0:1, where no inline disable reaches); the suite call is the hook.
+    {
+        files: [
+            "**/__tests__/auth-metrics.test.ts",
+            "**/__tests__/function-metrics.test.ts",
+            "**/__tests__/issue-state.test.ts",
+            "**/__tests__/metric-history.test.ts",
+            "**/__tests__/query-metrics.test.ts",
+            "**/__tests__/request-log.test.ts",
+            "**/__tests__/storage-correlation.test.ts",
+            "**/__tests__/workerd/*.workerd.test.ts",
+        ],
+        rules: {
+            "sonarjs/no-empty-test-file": "off",
+            "vitest/require-hook": "off",
+        },
+    },
     // The `n` Node-builtins rules reach into the scope manager, which a markdown
     // document has none of — under ESLint 10 they throw "Cannot read properties
     // of undefined (globalScope)" while LOADING the rule, so a single committed

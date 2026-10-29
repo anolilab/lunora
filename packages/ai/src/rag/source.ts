@@ -4,9 +4,11 @@
  *
  * `rag.index()` takes one document's text, which leaves the whole crawl — list
  * the objects, fetch each, extract text, index it, notice the ones that were
- * deleted — as something every app writes for itself. This is the one axis on
- * which Cloudflare's managed AutoRAG pipeline is genuinely more convenient than
- * `defineRag`.
+ * deleted — as something every app writes for itself. This is that loop. An app
+ * that would rather not run it at all can use Cloudflare AI Search (formerly
+ * AutoRAG) through `ctx.aiSearch` instead, at the cost of `defineRag`'s chunking,
+ * embedding, RLS and multi-target controls — see "Managed RAG: AI Search" in the
+ * package docs.
  *
  * The object source is **injected**, so this works over an R2 bucket, S3, a
  * filesystem, or a database table without `@lunora/ai` depending on any of

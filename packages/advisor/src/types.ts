@@ -6,10 +6,13 @@ import type { AdvisorArgumentValidator } from "./argument-validators";
 import type { AdvisorAuthConfig } from "./auth-config";
 import type { AdvisorAuthApiCall } from "./authapi-calls";
 import type { AdvisorBrowserUrlAccess } from "./browser-url-accesses";
+import type { AdvisorCallEdge } from "./call-edges";
 import type { AdvisorConfigCall } from "./config-calls";
 import type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 import type { AdvisorContainerOverride } from "./container-overrides";
 import type { AdvisorContainer } from "./containers";
+import type { AdvisorCountRead } from "./counts";
+import type { AdvisorCron } from "./crons";
 import type { AdvisorExportSink } from "./export-sinks";
 import type { AdvisorFailOpenGuard } from "./fail-open-guards";
 import type { AdvisorFlagRead } from "./flag-reads";
@@ -21,15 +24,17 @@ import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 import type { AdvisorIdentityClaimRead } from "./identity-claim-reads";
 import type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
-import type { AdvisorInsertWrite } from "./inserts";
+import type { AdvisorInsertWrite, AdvisorTableWrite } from "./inserts";
 import type { AdvisorKvKeyAccess } from "./kv-key-accesses";
 import type { AdvisorMailRecipientAccess } from "./mail-recipient-accesses";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
 import type { AdvisorMaskStrategy } from "./mask-strategies";
+import type { AdvisorMutatorDeclaration } from "./mutator-declarations";
 import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
 import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "./notify-calls";
+import type { AdvisorOpenShardAccess } from "./open-shard-access";
 import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
 import type { AdvisorPaymentWebhook } from "./payment-webhooks";
 import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
@@ -41,6 +46,7 @@ import type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
 import type { AdvisorRawRowReturn } from "./raw-row-returns";
 import type { AdvisorRelationLoad } from "./relation-loads";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
+import type { AdvisorRowEffect } from "./row-effects";
 import type { AdvisorSchema } from "./schema";
 import type { AdvisorSecretLiteral } from "./secrets";
 import type { AdvisorShape } from "./shapes";
@@ -50,6 +56,7 @@ import type { AdvisorSqlInterpolation } from "./sql-interpolation";
 import type { AdvisorStaleMigrationImport } from "./stale-migration-imports";
 import type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 import type { AdvisorStorageUpload } from "./storage-uploads";
+import type { AdvisorUnboundedLoop } from "./unbounded-loops";
 import type { AdvisorUnrestrictedWhereBranch } from "./unrestricted-where-branches";
 import type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
@@ -116,6 +123,22 @@ export interface Finding {
     remediation: string;
     /** Short headline for the finding. */
     title: string;
+}
+
+/** A `defineModule` folder and the tables it claims — the `cross_module_table_write` input. */
+export interface AdvisorModule {
+    /** `true` for an installed component (a schema extension key) treated as a module. */
+    installed?: true;
+    /** The folder path relative to `lunora/`, e.g. `billing`. */
+    name: string;
+
+    /**
+     * `false` for a package component, which owns its tables but no `lunora/` folder.
+     * Absent means the module owns `lunora/<name>/`.
+     */
+    ownsFolder?: false;
+    /** Tables the module declares it owns; empty when it declares none. */
+    tables: ReadonlyArray<string>;
 }
 
 /**
@@ -203,6 +226,14 @@ export interface LintContext {
     browserUrlAccesses?: ReadonlyArray<AdvisorBrowserUrlAccess>;
 
     /**
+     * Call-site edges of the architecture graph — `ctx.run*` calls, scheduler
+     * dispatches, enqueues, publishes and service uses — the `dispatch_cycle`
+     * input. Supplied by the codegen feeder; absent for runtime
+     * callers, where the lint finds nothing.
+     */
+    callEdges?: ReadonlyArray<AdvisorCallEdge>;
+
+    /**
      * Factory/constructor calls in `lunora/` whose config object literal a
      * security lint inspects for a present-or-absent key — the shared input for
      * the config-call security lints (payment authorize, inbound-mail verify,
@@ -237,6 +268,18 @@ export interface LintContext {
      * the container lints find nothing.
      */
     containers?: ReadonlyArray<AdvisorContainer>;
+    /** Every `count()` call found in function bodies; the `count_without_index` lint reads it. Absent for a runtime caller. */
+    countReads?: ReadonlyArray<AdvisorCountRead>;
+
+    /** Every `cronJobs()` registration; the `cron_every_minute` lint reads it. Supplied by the codegen feeder; absent for runtime callers. */
+    crons?: ReadonlyArray<AdvisorCron>;
+
+    /**
+     * The `namespace:export` keys of the function-targeted cron jobs. A cron fires
+     * its target without a request, so the target is server-driven even when it is
+     * public. Supplied by the codegen feeder; absent for runtime callers.
+     */
+    cronTargets?: ReadonlyArray<string>;
 
     /**
      * CDC export-sink constructions (`defineExportSink` / `webhookExportSink` /
@@ -407,7 +450,26 @@ export interface LintContext {
     maskStrategies?: ReadonlyArray<AdvisorMaskStrategy>;
 
     /**
-     * Whole-row `ctx.db.replace(id, document)` writes lifted from custom
+     * The app's modules — those declared via `lunora/<dir>/module.ts`
+     * (`defineModule`) plus one per installed component (see
+     * {@link AdvisorModule.installed}) — each with the tables it owns: the
+     * `cross_module_table_write` input. Supplied by the codegen feeder; absent for
+     * runtime callers.
+     */
+    modules?: ReadonlyArray<AdvisorModule>;
+
+    /**
+     * Exported `defineMutator({ … })` declarations in `lunora/mutators.ts` — the
+     * `mutator_without_owner_scope` input. A mutator is a client-callable write
+     * endpoint, and `owner` is the declarative scope that ties each write to its
+     * caller's verified identity; one declaring none authorizes nothing by itself.
+     * Supplied by the codegen feeder; absent for runtime callers, where the lint
+     * finds nothing.
+     */
+    mutators?: ReadonlyArray<AdvisorMutatorDeclaration>;
+
+    /**
+     * Whole-row `ctx.db.replace("table", id, document)` writes lifted from custom
      * mutators' authoritative `server` impls (the `mutator_full_row_replace`
      * input). Each `replace` overwrites the entire row, clobbering a concurrent
      * edit to a different column on a synced table. Supplied by the codegen
@@ -453,6 +515,13 @@ export interface LintContext {
      * callers, where the lint finds nothing.
      */
     notifyConfig?: AdvisorNotifyConfig;
+
+    /**
+     * Literal `allowUnauthenticatedShardAccess: true` sites in the app — the
+     * `open_shard_access` input. Supplied by `lunora deploy`'s project scan only;
+     * absent for codegen and runtime callers, where the lint finds nothing.
+     */
+    openShardAccess?: ReadonlyArray<AdvisorOpenShardAccess>;
 
     /**
      * `ctx.db` writes (`insert` / `replace` / `patch` / `insertManyUnsafe`) that set
@@ -507,7 +576,8 @@ export interface LintContext {
 
     /**
      * Queues declared via `defineQueue` exports in `lunora/queues.ts` — the
-     * declaration-side input for the `queue_*` lints (`queue_without_dlq`).
+     * declaration-side input for `queue_without_dlq` and, through each
+     * subscription's `topic`, `topic_too_many_subscriptions`.
      * Supplied by the codegen feeder; absent for runtime callers, where the
      * queue lints find nothing.
      */
@@ -565,6 +635,13 @@ export interface LintContext {
      * runtime callers, where the lint finds nothing.
      */
     rlsProcedures?: ReadonlyArray<AdvisorRlsProcedure>;
+
+    /**
+     * Row-changing writes each export reaches, including writes in helpers it calls
+     * (even in other files). The sweep lints count these as progress. Absent for
+     * runtime callers, where a helper's write is then not seen.
+     */
+    rowEffects?: ReadonlyArray<AdvisorRowEffect>;
 
     /** The declared schema under audit, normalized to the feeder-agnostic {@link AdvisorSchema}. */
     schema: AdvisorSchema;
@@ -652,6 +729,20 @@ export interface LintContext {
      * and shards. Absent for static callers, where the lint finds nothing.
      */
     tableScans?: ReadonlyArray<AdvisorTableScan>;
+
+    /**
+     * Table writes other than a plain `ctx.db.insert` (see {@link LintContext.inserts}) — by
+     * id, batch, and the `ctx.db.<table>` facade. Supplied by the codegen feeder;
+     * absent for runtime callers.
+     */
+    tableWrites?: ReadonlyArray<AdvisorTableWrite>;
+
+    /**
+     * Literal-infinite loops (`while (true)`, `for (;;)`, `do … while (true)`)
+     * with no statically reachable exit — the `unbounded_loop` input. Supplied
+     * by the codegen feeder only.
+     */
+    unboundedLoops?: ReadonlyArray<AdvisorUnboundedLoop>;
 
     /**
      * Branching shape/policy predicate arms returning an unrestricted filter (`{}` /

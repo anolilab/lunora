@@ -10,7 +10,8 @@
  * is sent as. `shard-do.ts` consumes both.
  */
 
-import { encodeWire } from "../../../shared/wire-codec";
+import { encodeWire } from "@lunora/wire";
+
 import type { ShapeRow } from "./ctx-db-shapes";
 
 /** Wire form of a single shape row change (the DO-side mirror of `@lunora/client`'s `RowOp`; kept local so `@lunora/do` takes no client dependency). */

@@ -30,10 +30,11 @@ However your app is composed, the resulting Worker dispatches by path:
 
 1. `/api/auth/*` → `@lunora/auth`
 2. explicit routes → webhooks / callbacks
-3. **everything else** → your framework's SSR handler
-4. `/_lunora/rpc` → query / mutation RPC
-5. `/_lunora/ws` → subscriptions / deltas
-6. `/_lunora/admin/*` → studio / observability
+3. `/_lunora/rpc` → query / mutation RPC
+4. `/_lunora/ws` → subscriptions / deltas
+5. `/_lunora/admin/*` → studio / observability (any other `/_lunora/*` path is a
+   404, never the app)
+6. **everything else** → your framework's SSR handler
 
 Lunora realtime lives under the reserved `/_lunora/*` namespace, so it never
 collides with your framework's routes, and a 500 from SSR does not take down the
@@ -67,8 +68,8 @@ export { ShardDO };
 {
     "name": "my-app",
     "main": "src/server.ts",
-    "compatibility_date": "2026-04-07",
-    "compatibility_flags": ["nodejs_compat", "web_socket_auto_reply_to_close"],
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
 }
@@ -77,12 +78,12 @@ export { ShardDO };
 Deploy is the standard flow:
 
 ```bash
-pnpm lunora deploy   # codegen → D1 migrations → wrangler deploy
+pnpm lunora deploy   # codegen → config validation → wrangler deploy
 ```
 
 Because the SSR handler and Lunora run in the **same** Worker, an SSR loader can
 call Lunora over a same-process loopback (`/_lunora/rpc`) with near-zero latency.
-An in-process `serverQuery` fast-path that skips even the loopback is in progress.
+An in-process `serverQuery` fast-path skips even that loopback.
 See [Reactive loaders](/docs/frameworks/reactive-loaders).
 
 ## Class B: the framework owns the CF adapter
@@ -92,10 +93,11 @@ their own Worker, so Lunora does **not** take over the entry. Instead the Lunora
 worker composition is injected into the framework's server entry / hooks: Lunora
 realtime mounts under `/_lunora/*`, and the framework keeps everything else.
 
-- **SvelteKit**: `@sveltejs/adapter-cloudflare` builds the Worker; the Lunora
-  realtime handler is composed in via the server `handle` hook (the `@lunora/svelte`
-  adapter ships a `withLunora()`-style wrapper). `ShardDO` and the migrations are
-  declared in the adapter's `wrangler.jsonc`.
+- **SvelteKit**: `@sveltejs/adapter-cloudflare` builds the SSR handler;
+  `src/worker.ts` wraps it with the generated
+  `defineApp().buildFrameworkWorker(host)` (`@lunora/svelte` is client/loader
+  only). `ShardDO` and the migrations are declared in the adapter's
+  `wrangler.jsonc`.
 - **Nuxt**: Nitro's `cloudflare-module` preset builds the Worker; Lunora is
   composed into the Nitro server entry, with `ShardDO` exported from the same
   module.

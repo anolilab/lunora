@@ -9,7 +9,10 @@ import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch
 import { eventDefinitionProblem } from "./define-event";
 import type {
     LunoraWorkflowsOptions,
+    WorkflowBatchDeleteResult,
     WorkflowBindingLike,
+    WorkflowCreateBatchOptions,
+    WorkflowCreateBatchResult,
     WorkflowCreateOptions,
     WorkflowEventDefinition,
     WorkflowHandle,
@@ -40,13 +43,17 @@ const handleFor = (binding: WorkflowBindingLike): WorkflowHandle => {
 
             return binding.create(options);
         },
-        createBatch: async (batch: ReadonlyArray<WorkflowCreateOptions>): Promise<WorkflowInstanceLike[]> => {
-            for (const options of batch) {
-                rejectReservedParams(options);
+        createBatch: async (options: WorkflowCreateBatchOptions): Promise<WorkflowCreateBatchResult> => {
+            // Every params object the batch creates is checked, whichever form carries it.
+            const entries: ReadonlyArray<WorkflowCreateOptions> = "instances" in options ? options.instances : [{ params: options.params }];
+
+            for (const entry of entries) {
+                rejectReservedParams(entry);
             }
 
-            return binding.createBatch(batch);
+            return binding.createBatch(options);
         },
+        deleteBatch: async (instanceIds: ReadonlyArray<string>): Promise<WorkflowBatchDeleteResult> => binding.deleteBatch(instanceIds),
         get: async (id: string): Promise<WorkflowInstanceLike> => binding.get(id),
         sendEvent: async <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload): Promise<void> => {
             // The trust boundary, mirroring `rejectReservedParams` above: the brand

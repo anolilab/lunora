@@ -19,6 +19,11 @@ const makeStreamRef = (reference: string): FunctionReference<"stream", { key: st
 const MESSAGES_REF = "agents:agentMessages";
 const THREAD_REF = "agents:agentThread";
 const APPROVAL_REF = "agents:agentResolveApproval";
+const GRANTS_REF = "agents:agentApprovalGrants";
+const REVOKE_REF = "agents:agentRevokeApprovalGrant";
+const SUPPLY_REF = "agents:agentSupplySecret";
+const DECLINE_REF = "agents:agentDeclineSecret";
+const SECRET = "sk-live-4242-do-not-log";
 const SEND_REF = "chat:startRun";
 const CANCEL_REF = "chat:cancelRun";
 const STREAM_REF = "chat:liveEvents";
@@ -26,8 +31,12 @@ const STREAM_REF = "chat:liveEvents";
 const buildApi = (): AgentChatApi =>
     ({
         agents: {
+            agentApprovalGrants: makeRef(GRANTS_REF),
+            agentDeclineSecret: makeRef(DECLINE_REF),
             agentMessages: makeRef(MESSAGES_REF),
             agentResolveApproval: makeRef(APPROVAL_REF),
+            agentRevokeApprovalGrant: makeRef(REVOKE_REF),
+            agentSupplySecret: makeRef(SUPPLY_REF),
             agentThread: makeRef(THREAD_REF),
         },
     }) as unknown as AgentChatApi;
@@ -46,7 +55,7 @@ describe(agentChat, () => {
         });
 
         // Both the history and thread channels open on setup.
-        expect(fake.subscriptions.map((sub) => sub.functionPath).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([MESSAGES_REF, THREAD_REF]);
+        expect(fake.subscriptions.map((sub) => sub.functionPath).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([GRANTS_REF, MESSAGES_REF, THREAD_REF]);
         expect(chat.messages()).toStrictEqual([]);
         expect(chat.status()).toBeUndefined();
         // No stream reference supplied — streamingText stays empty (no stream opens).
@@ -263,6 +272,67 @@ describe(agentChat, () => {
         destroy.destroy();
     });
 
+    it("supplySecret sends the value through agentSupplySecret with onlineOnly, and keeps no copy", async () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+
+        const chat: AgentChatResult = agentChat({
+            api: buildApi(),
+            client: fake.asClient,
+            destroyRef: destroy.asDestroyRef,
+            send: makeRef(SEND_REF) as FunctionReference<"mutation">,
+            threadKey: "t1",
+        });
+
+        await chat.supplySecret("call-1", SECRET);
+
+        // The secret rides in the args only; the options are exactly the online-only flag.
+        expect(fake.mutationCalls).toStrictEqual([
+            { args: { secret: SECRET, threadKey: "t1", toolCallId: "call-1" }, functionPath: SUPPLY_REF, options: { onlineOnly: true } },
+        ]);
+
+        destroy.destroy();
+    });
+
+    it("supplySecret rethrows the original failure, so the value is not echoed into the error", async () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+
+        const chat: AgentChatResult = agentChat({
+            api: buildApi(),
+            client: fake.asClient,
+            destroyRef: destroy.asDestroyRef,
+            send: makeRef(SEND_REF) as FunctionReference<"mutation">,
+            threadKey: "t1",
+        });
+        const failure = new Error("connection is not live");
+
+        fake.setMutationThrow(failure);
+
+        await expect(chat.supplySecret("call-1", SECRET)).rejects.toBe(failure);
+
+        destroy.destroy();
+    });
+
+    it("declineSecret sends agentDeclineSecret for the tool call, carrying no value", async () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+
+        const chat: AgentChatResult = agentChat({
+            api: buildApi(),
+            client: fake.asClient,
+            destroyRef: destroy.asDestroyRef,
+            send: makeRef(SEND_REF) as FunctionReference<"mutation">,
+            threadKey: "t1",
+        });
+
+        await chat.declineSecret("call-1");
+
+        expect(fake.mutationCalls).toContainEqual({ args: { threadKey: "t1", toolCallId: "call-1" }, functionPath: DECLINE_REF, options: undefined });
+
+        destroy.destroy();
+    });
+
     it("approve rejects when there is no in-flight run to resolve", async () => {
         const fake = createFakeClient();
         const destroy = createFakeDestroyRef();
@@ -276,6 +346,71 @@ describe(agentChat, () => {
         });
 
         await expect(chat.approve("call-1")).rejects.toThrow("no in-flight run");
+
+        destroy.destroy();
+    });
+
+    it("approveForThread sends approve_for_thread through agentResolveApproval", async () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+
+        const chat: AgentChatResult = agentChat({
+            api: buildApi(),
+            client: fake.asClient,
+            destroyRef: destroy.asDestroyRef,
+            send: makeRef(SEND_REF) as FunctionReference<"mutation">,
+            threadKey: "t1",
+        });
+
+        fake.push(THREAD_REF, { key: "t1" }, { instanceId: "wf-1", status: "awaiting_input" });
+
+        await chat.approveForThread("call-1", "ok for this thread");
+
+        expect(fake.mutationCalls).toContainEqual({
+            args: { decision: "approve_for_thread", instanceId: "wf-1", note: "ok for this thread", threadKey: "t1", toolCallId: "call-1" },
+            functionPath: APPROVAL_REF,
+            options: undefined,
+        });
+
+        destroy.destroy();
+    });
+
+    it("lists the thread's approval grants and revokes one, refreshing the list from the server", async () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+
+        const chat: AgentChatResult = agentChat({
+            api: buildApi(),
+            client: fake.asClient,
+            destroyRef: destroy.asDestroyRef,
+            send: makeRef(SEND_REF) as FunctionReference<"mutation">,
+            threadKey: "t1",
+        });
+
+        expect(chat.approvalGrants()).toStrictEqual([]);
+
+        fake.push(GRANTS_REF, { key: "t1" }, [
+            { createdAt: 1, toolName: "sendEmail" },
+            { createdAt: 2, toolName: "refund" },
+        ]);
+
+        expect(chat.approvalGrants()).toStrictEqual([
+            { createdAt: 1, toolName: "sendEmail" },
+            { createdAt: 2, toolName: "refund" },
+        ]);
+
+        await chat.revokeGrant("sendEmail");
+
+        expect(fake.mutationCalls).toContainEqual({
+            args: { threadKey: "t1", toolName: "sendEmail" },
+            functionPath: REVOKE_REF,
+            options: undefined,
+        });
+
+        // The revoke commits server-side; the grants subscription re-pushes the list.
+        fake.push(GRANTS_REF, { key: "t1" }, [{ createdAt: 2, toolName: "refund" }]);
+
+        expect(chat.approvalGrants()).toStrictEqual([{ createdAt: 2, toolName: "refund" }]);
 
         destroy.destroy();
     });

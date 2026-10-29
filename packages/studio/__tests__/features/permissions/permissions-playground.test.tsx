@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -32,6 +32,9 @@ const runAsServer =
 
         return answer();
     };
+
+/** An error shaped like the one `LunoraClient` rebuilds from the server's `{ code, message }` envelope. */
+const coded = (code: string, message: string): Error => Object.assign(new Error(message), { code });
 
 const renderPlayground = (mock: MockClientHooks, runAsIdentity: boolean): ReactElement => (
     <LunoraProvider client={mock.asClient}>
@@ -67,12 +70,14 @@ describe("permissionsPlayground", () => {
         expect(screen.getByTestId("pp-result").textContent).toContain("doc_1");
     });
 
-    it("renders the denied outcome when the probe throws", async () => {
+    it("renders the denied outcome when the probe is refused by a policy", async () => {
         expect.hasAssertions();
 
         const mock = createMockClient({
             query: runAsServer(() => {
-                throw new Error("not authorized");
+                // What `rls(...)` throws on a denied read/write, carried to the client
+                // as the machine `code` on the rebuilt error.
+                throw coded("FORBIDDEN", `read on "documents" denied by policy`);
             }),
         });
 
@@ -86,8 +91,53 @@ describe("permissionsPlayground", () => {
         expect(denied.textContent).toContain("Denied");
 
         await waitFor(() => {
-            expect(screen.getByTestId("pp-denied").textContent).toContain("not authorized");
+            expect(screen.getByTestId("pp-denied").textContent).toContain("denied by policy");
         });
+    });
+
+    it("renders Errored — never Denied — for a failure that is not an access verdict", async () => {
+        expect.assertions(3);
+
+        // A malformed query, an unregistered path, a throw inside the handler: the
+        // dispatch failed, which says nothing about whether the rule would have let
+        // this identity through. Painting it as a denial is the screen built to
+        // verify access reporting a verdict it does not have.
+        const mock = createMockClient({
+            query: runAsServer(() => {
+                throw new Error("unknown function: list");
+            }),
+        });
+
+        render(renderPlayground(mock, true));
+
+        fireEvent.change(screen.getByTestId("pp-user"), { target: { value: "user_1" } });
+        fireEvent.click(screen.getByTestId("pp-run"));
+
+        const errored = await screen.findByTestId("pp-outcome-errored");
+
+        expect(errored.textContent).toContain("Errored");
+        expect(screen.getByTestId("pp-errored").textContent).toContain("unknown function");
+        expect(screen.queryByTestId("pp-outcome-denied")).toBeNull();
+    });
+
+    it("does not mistake an unrelated 403 for a verdict on the probed identity", async () => {
+        expect.assertions(2);
+
+        // `ADMIN_FORBIDDEN` is the admin bearer gate refusing the STUDIO, not the
+        // policy refusing the forged user — same status, opposite meaning.
+        const mock = createMockClient({
+            query: runAsServer(() => {
+                throw coded("ADMIN_FORBIDDEN", "admin access forbidden");
+            }),
+        });
+
+        render(renderPlayground(mock, true));
+
+        fireEvent.change(screen.getByTestId("pp-user"), { target: { value: "user_1" } });
+        fireEvent.click(screen.getByTestId("pp-run"));
+
+        await expect(screen.findByTestId("pp-outcome-errored")).resolves.toBeDefined();
+        expect(screen.queryByTestId("pp-outcome-denied")).toBeNull();
     });
 
     it("does not dispatch — and never claims Denied — when no identity is supplied", async () => {
@@ -108,5 +158,96 @@ describe("permissionsPlayground", () => {
         expect(screen.queryByTestId("pp-outcome-denied")).toBeNull();
         expect(screen.queryByTestId("pp-outcome-allowed")).toBeNull();
         expect(mock.query).not.toHaveBeenCalled();
+    });
+
+    it("drops a probe verdict that lands after a matrix prefill selected another function", async () => {
+        expect.assertions(1);
+
+        let finishProbe: (rows: unknown) => void = () => {};
+        const mock = createMockClient({
+            query: runAsServer(
+                async () =>
+                    new Promise((resolve) => {
+                        finishProbe = resolve;
+                    }),
+            ),
+        });
+        const functions: FunctionDescriptor[] = [...FUNCTIONS, { args: [], kind: "query", path: "listSecrets" }];
+        const withPrefill = (prefill?: { functionPath: string; nonce: number }): ReactElement => (
+            <LunoraProvider client={mock.asClient}>
+                <PermissionsPlayground functions={functions} prefill={prefill} runAsIdentity />
+            </LunoraProvider>
+        );
+
+        const { rerender } = render(withPrefill());
+
+        fireEvent.change(screen.getByTestId("pp-user"), { target: { value: "user_1" } });
+        fireEvent.click(screen.getByTestId("pp-run"));
+        rerender(withPrefill({ functionPath: "listSecrets", nonce: 1 }));
+
+        await act(async () => {
+            await Promise.resolve();
+            finishProbe([{ _id: "doc_1" }]);
+            await new Promise((resolve) => {
+                setTimeout(resolve, 20);
+            });
+        });
+
+        // The verdict is `listDocuments`'; the prefill cleared the outcome for `listSecrets`.
+        expect(screen.queryByTestId("pp-outcome-allowed")).toBeNull();
+    });
+
+    it("asks for confirmation before running a prefilled path the function list does not resolve", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({ query: runAsServer(() => null) });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <PermissionsPlayground functions={FUNCTIONS} prefill={{ functionPath: "deleteDocument", nonce: 1 }} runAsIdentity />
+            </LunoraProvider>,
+        );
+
+        fireEvent.change(screen.getByTestId("pp-user"), { target: { value: "user_1" } });
+
+        // The prefill applies in a microtask; flush it, then the path matches no listed function, so the run control asks first.
+        await act(async () => undefined);
+        fireEvent.click(screen.getByTestId("pp-run"));
+
+        expect(screen.getByTestId("pp-run-confirm").textContent).toBe("This will execute `deleteDocument` as user `user_1`.");
+        expect(mock.query).not.toHaveBeenCalled();
+    });
+
+    it("lists only queries by default, and needs a confirm step before running a mutation as the user", async () => {
+        expect.assertions(5);
+
+        const functions: FunctionDescriptor[] = [...FUNCTIONS, { args: [], kind: "mutation", path: "deleteDocument" }];
+        const mock = createMockClient({ query: runAsServer(() => null) });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <PermissionsPlayground functions={functions} runAsIdentity />
+            </LunoraProvider>,
+        );
+
+        const options = (): string[] => [...screen.getByTestId<HTMLSelectElement>("pp-function").options].map((option) => option.value);
+
+        expect(options()).toStrictEqual(["listDocuments"]);
+
+        fireEvent.click(screen.getByTestId("pp-include-writes"));
+        fireEvent.change(screen.getByTestId("pp-function"), { target: { value: "deleteDocument" } });
+        fireEvent.change(screen.getByTestId("pp-user"), { target: { value: "user_1" } });
+        fireEvent.click(screen.getByTestId("pp-run"));
+
+        // The first click only asks; nothing has run yet.
+        expect(screen.getByTestId("pp-run-confirm").textContent).toBe("This will execute `deleteDocument` as user `user_1`.");
+        expect(mock.query).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByTestId("pp-run-confirm"));
+
+        await screen.findByTestId("pp-outcome-allowed");
+
+        expect(mock.query).toHaveBeenCalledTimes(1);
+        expect((mock.query.mock.calls[0]?.[1] as { functionPath?: unknown }).functionPath).toBe("deleteDocument");
     });
 });

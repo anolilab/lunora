@@ -15,6 +15,7 @@ interface SubscribeCall {
     args: { channelId?: string };
     cb: (rows: unknown[]) => void;
     onError?: (error: { code?: string; message: string }) => void;
+    options?: { shardKey?: string };
     ref: unknown;
     unsubscribe: ReturnType<typeof vi.fn>;
 }
@@ -27,22 +28,33 @@ const makeClient = (mutation: () => Promise<unknown> = async () => "server-id") 
         // The list-path row callback advances the checkpoint registry from this
         // (server-confirmed custom-mutator watermark); no custom mutators here → 0.
         confirmedMutationWatermark: () => 0,
+        // No live subscription carries a cursor in these fixtures, which is the
+        // honest "composed with no baseline" answer.
+        currentBaseline: () => undefined,
         currentIdentity: () => null,
+        getAuthToken: () => null,
         mutation: mutationMock,
         // Mirrors `LunoraClient.replayIdentityVerdict`. Both stamp and current are
-        // the signed-out sentinel here, so every replay is a "match".
-        replayIdentityVerdict: (stamped: null | string | undefined) => (stamped === null ? "match" : "mismatch"),
+        // the signed-out sentinel here, so every replay is a "match", carrying the
+        // credential it was judged under (`{ judged }` stands in for the opaque one).
+        replayIdentityVerdict: (stamped: null | string | undefined) => {
+            if (stamped === null) {
+                return { credential: { judged: stamped }, verdict: "match" as const };
+            }
+
+            return { verdict: "mismatch" as const };
+        },
         subscribe: vi.fn<
             (
                 reference: unknown,
                 args: { channelId?: string },
                 cb: (rows: unknown[]) => void,
-                options?: { onError?: (error: { code?: string; message: string }) => void },
+                options?: { onError?: (error: { code?: string; message: string }) => void; shardKey?: string },
             ) => () => void
         >((reference, args, cb, options) => {
             const unsubscribe = vi.fn<() => void>();
 
-            subscribes.push({ args, cb, onError: options?.onError, ref: reference, unsubscribe });
+            subscribes.push({ args, cb, onError: options?.onError, options, ref: reference, unsubscribe });
 
             return unsubscribe;
         }),
@@ -231,8 +243,39 @@ describe(defineCollections, () => {
         // write also carries a stable `mutationId` (the executor's idempotency key)
         // so the server dedupes a committed-but-unacked retry at the transport
         // layer, not only by the app's manual `id`-arg dedup.
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- test fixture id from a mocked runtime
-        expect(mutation).toHaveBeenCalledWith(messagesSend, { channelId: "c1", id, text: "hi" }, { mutationId: expect.any(String) });
+        // `replayBaseline: null` pins "composed with no baseline" — this fixture's
+        // client carries no subscription cursor. Omitting the option would instead
+        // let the replay sample whatever cursor the client had reached by then.
+        // `shardKey: "c1"` — a `scopeBy` collection's row lives in the shard its
+        // scoped column names, so the write goes there, not to the default shard.
+        expect(mutation).toHaveBeenCalledWith(
+            messagesSend,
+            { channelId: "c1", id, text: "hi" },
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- fixture id from a mocked runtime
+            { mutationId: expect.any(String), replayBaseline: null, replayCredential: { judged: null }, shardKey: "c1" },
+        );
+    });
+
+    it("routes a scoped write to its row's shard even while scoped to another channel", async () => {
+        expect.hasAssertions();
+
+        const { client, mutation, subscribes } = makeClient();
+        const database = build(client);
+
+        database.collections.messages.subscribeChanges(() => {});
+        database.scope.messages({ channelId: "c2" });
+        await database.executor.waitForInit();
+        await flush();
+
+        expect(subscribes.find((s) => s.ref === messagesList)?.options?.shardKey).toBe("c2");
+
+        database.actions.messages({ channelId: "c1", text: "cross-post" });
+
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(1);
+        });
+
+        expect(mutation.mock.calls[0]?.[2]).toMatchObject({ shardKey: "c1" });
     });
 
     it("passes a stable idempotency key on the insert replay so a retry dedupes", async () => {

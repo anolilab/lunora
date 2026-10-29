@@ -144,6 +144,7 @@ describe(mcpTools, () => {
                 env: {},
                 getState: async () => undefined,
                 idempotencyKey: "tool:get_weather:call_1",
+                instanceId: "wf-1",
                 reportProgress: () => {},
                 run: async () => null,
                 setState: async () => {},

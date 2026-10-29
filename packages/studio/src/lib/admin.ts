@@ -98,6 +98,7 @@ export const ADMIN_FUNCTIONS = {
     runSql: "__lunora_admin__:runSql",
     sendQueueMessage: "__lunora_admin__:sendQueueMessage",
     sendTestMail: "__lunora_admin__:sendTestMail",
+    sendWorkflowEvent: "__lunora_admin__:sendWorkflowEvent",
     setIssueSeverity: "__lunora_admin__:setIssueSeverity",
     storageOrphans: "__lunora_admin__:storageOrphans",
     storageReferences: "__lunora_admin__:storageReferences",
@@ -106,8 +107,8 @@ export const ADMIN_FUNCTIONS = {
     writeRow: "__lunora_admin__:writeRow",
 } as const;
 
-/** Comparison a {@link FilterClause} applies, mirroring `@lunora/do`'s `FilterOperator`. `contains` is a substring (LIKE). */
-export type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
+/** Comparison a {@link FilterClause} applies, mirroring `@lunora/do`'s `FilterOperator`. `contains` is a substring (LIKE); `has` is membership in a JSON array. */
+export type FilterOperator = "contains" | "eq" | "gt" | "gte" | "has" | "lt" | "lte" | "ne";
 
 /**
  * One structured column filter passed to `readTablePage`, mirroring `@lunora/do`'s
@@ -117,6 +118,8 @@ export type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "
 export interface FilterClause {
     column: string;
     operator: FilterOperator;
+    /** Field names nested under a document `column`, outermost first (`["city"]` addresses `column.city`). */
+    path?: string[];
     value?: unknown;
 }
 
@@ -458,6 +461,15 @@ export interface ColumnMeta {
      * column — one of those must not be offered a control that writes `null`.
      */
     nullable?: boolean;
+
+    /**
+     * The declared `onDelete` of the relation this foreign key belongs to —
+     * what the writer actually does to this row when the referenced parent is
+     * deleted. Absent when the column is not an FK, or when the schema declared
+     * no action for it. Paired with {@link ColumnMeta.ref}, which names the
+     * parent table.
+     */
+    onDelete?: "cascade" | "restrict" | "set null";
     /** Optional on insert (declared `v.optional(...)` or carrying a default). */
     optional: boolean;
     /** Primary key — the `_id` column. */
@@ -477,9 +489,6 @@ export interface TableColumnsResult {
 export interface TablesColumnsResult {
     columnsByTable: Record<string, ColumnMeta[]>;
 }
-
-/** Severity of a static schema advisory (the advisor's `Level`, lowercased to match the studio's tab levels). */
-export type AdvisoryLevel = "ERROR" | "INFO" | "WARN";
 
 /**
  * One static schema advisory served by `__lunora_admin__:getAdvisories` — the
@@ -621,6 +630,11 @@ export interface StudioFeaturesResult {
     mail: boolean;
     notifications: boolean;
     payments: boolean;
+
+    /** The worker's deploy target and its capability levels; absent from a worker that predates it or has no matrix. */
+    platform?: StudioPlatform;
+    /** `@lunora/privacy` is a declared dependency. It backs the Privacy requests page. */
+    privacy: boolean;
     queues: boolean;
     scheduler: boolean;
     storage: boolean;
@@ -629,15 +643,32 @@ export interface StudioFeaturesResult {
 }
 
 /**
+ * The studio's view of {@link StudioFeaturesResult}: the payload, plus whether
+ * the fetch has settled yet. Client-side state, not part of the wire contract.
+ */
+export type StudioFeatures = StudioFeaturesResult & { readonly settled: boolean };
+
+/**
+ * The deploy target a worker was generated for, hand-mirroring the `platform`
+ * field of `@lunora/do`'s `StudioFeaturesResult`. `unsupported` lists the
+ * `@lunora/platform` capability keys (`vectorStore`, `pointInTimeRecovery`, …)
+ * the target's matrix rates `unsupported`.
+ */
+export interface StudioPlatform {
+    id: string;
+    name: string;
+    unsupported: string[];
+}
+
+/**
  * One declared Cloudflare Workflow, hand-mirroring `@lunora/do`'s
  * `WorkflowMetadata` (the studio can't import `@lunora/do`). Pure declaration
  * data — workflows hold no shard runtime state — discovered at codegen time from
- * `lunora/workflows.ts`. `binding` is the wrangler `Workflow` binding name,
- * `className` the generated `WorkflowEntrypoint` subclass, `exportName` the
- * `defineWorkflow` export, and `name` the stable deployed `workflows[].name`.
+ * `lunora/workflows.ts`. `className` is the generated `WorkflowEntrypoint`
+ * subclass (its `ctx.exports` key), `exportName` the `defineWorkflow` export,
+ * and `name` the stable deployed workflow name.
  */
 export interface WorkflowMetadata {
-    binding: string;
     className: string;
     exportName: string;
     name: string;
@@ -645,6 +676,8 @@ export interface WorkflowMetadata {
 
 /** Payload of a `__lunora_admin__:listWorkflows` call, hand-mirroring `@lunora/do`'s `WorkflowsResult`. */
 export interface WorkflowsResult {
+    /** The declared `defineWorkflowEvent` types `sendWorkflowEvent` accepts; absent when the app declares none. */
+    eventTypes?: string[];
     workflows: WorkflowMetadata[];
 }
 
@@ -661,6 +694,8 @@ export interface QueueMetadata {
     exportName: string;
     mode: "pull" | "push";
     name: string;
+    /** Set for a `defineSubscription` queue: the topic export it consumes. */
+    topic?: string;
 }
 
 /** Payload of a `__lunora_admin__:listQueues` call, hand-mirroring `@lunora/do`'s `QueuesResult`. */
@@ -781,7 +816,8 @@ export interface ReactorsResult {
  * Lifecycle state of a workflow instance, hand-mirroring `@lunora/do`'s
  * `WorkflowInstanceState` (itself mirrored from `@lunora/workflow`).
  */
-export type WorkflowInstanceState = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+export type WorkflowInstanceState =
+    "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
 
 /** Payload of a `__lunora_admin__:createWorkflowInstance` call: the new instance id and its initial status. */
 export interface CreateWorkflowInstanceResult {
@@ -934,8 +970,9 @@ export interface FanoutTopicStat {
 /**
  * Running fan-out counters for one delivery path since the DO instance woke,
  * mirroring `@lunora/do`'s `FanoutPathCounters`. `socketsIterated` is the
- * O(subscribers) loop cost; `socketsDelivered` is how many of those received a
- * frame. `totalMs`/`maxMs` are **coarse** (a DO clock advances only on I/O) and
+ * O(subscribers) loop cost; `socketsDelivered` counts successful sends to sockets
+ * (one per whisper or shape poke, a handoff and not a receipt by the client; a
+ * relay counts one per socket-and-shape pair). `totalMs`/`maxMs` are **coarse** (a DO clock advances only on I/O) and
  * populated only for the asynchronous shape-poke path — they stay `0` for the
  * synchronous whisper broadcast.
  */
@@ -1100,19 +1137,6 @@ export interface ErrorIssue {
 /** Payload of a `__lunora_admin__:getIssues` call: grouped error Issues, most-recently-active first. */
 export interface IssuesResult {
     issues: ErrorIssue[];
-}
-
-/**
- * Filters accepted by `__lunora_admin__:getIssues`, mirroring `@lunora/do`'s
- * `ReadIssuesOptions`. All AND-combined and bound server-side; `outcome` is
- * forced to `error` server-side.
- */
-export interface IssuesQuery {
-    functionPathPrefix?: string;
-    limit?: number;
-    shardKey?: string;
-    status?: IssueStatus;
-    userId?: string;
 }
 
 /**
@@ -1436,8 +1460,8 @@ export interface SecurityAuditResult {
 
 /**
  * Payload of a `__lunora_admin__:runSql` call, mirroring `@lunora/do`'s
- * `SqlConsoleResult`: a read-only query's `columns` (from the first row), the
- * (capped) `rows`, the true `rowCount`, and whether the rows were `truncated`.
+ * `SqlConsoleResult`: a read-only query's `columns`, its `rows`, and `rowCount` —
+ * the rows returned, at most `MAX_SQL_ROWS`; `truncated` says whether more existed.
  */
 export interface SqlConsoleResult {
     columns: string[];
@@ -1472,7 +1496,7 @@ export interface AiAvailableResult {
 export type GenerateChartResult = { chart: AssistantChartConfig; degraded: false } | { degraded: true; reason: GenerateSqlDegradedReason };
 
 /** Why no statement came back. `no-ai-binding` means the app has no AI binding — hide the affordance entirely. */
-export type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding" | "unsafe-response";
+export type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding" | "too-long" | "unsafe-response";
 
 /** One reverse edge: `table.column` holds a foreign key pointing at the browsed table. */
 export interface BackRelation {
@@ -1554,26 +1578,6 @@ export interface SchemaVersionDetail {
 }
 
 /**
- * Payload of a `__lunora_admin__:lintSql` call, mirroring `@lunora/do`'s
- * `SqlLintResult`: diagnostics to render in the editor plus the query plan the
- * statement would use. Optional on the wire — a worker predating the RPC simply
- * rejects the call, and the editor keeps its client-side diagnostics.
- */
-export interface SqlLintResult {
-    diagnostics: SqlLintDiagnostic[];
-    plan: string[];
-}
-
-/** One server-produced editor diagnostic; `offset`/`length` index into the linted query. */
-export interface SqlLintDiagnostic {
-    length?: number;
-    message: string;
-    offset?: number;
-    severity: "error" | "warning";
-    source: "gate" | "plan" | "syntax";
-}
-
-/**
  * Payload of a `__lunora_admin__:getPitrBookmark` call, mirroring `@lunora/do`'s
  * `PitrBookmarkResult`. `current` names the shard's present point in history;
  * `forTime` is the bookmark nearest a queried time, present only when one was
@@ -1607,6 +1611,19 @@ export interface TablePage {
     /** Foreign-key columns (column → target table) for `v.id("target")` fields, so the UI can link those cells. */
     refs?: Record<string, string>;
     rows: Record<string, unknown>[];
+
+    /**
+     * The table's PHYSICAL column names (`id`, `_creationTime`, `__doc__` for a
+     * canonical shard table), mirroring `@lunora/do`'s `TablePage.sqlColumns`.
+     *
+     * `columns` is the DISPLAY list, with every `__doc__` field lifted to a
+     * top-level column — names no SQL statement can reference. A surface that
+     * feeds columns to something SQL-shaped wants this list, not that one.
+     *
+     * Optional on the client mirror because a shard running an older `@lunora/do`
+     * omits it; a caller must treat its absence as "unknown", never as "none".
+     */
+    sqlColumns?: string[];
 
     /**
      * Total rows matching the predicate. Absent when the read passed
@@ -1732,6 +1749,8 @@ export interface ImportShardResult {
     conflicts: number;
     errors: ImportError[];
     inserted: Record<string, number>;
+    /** Existing rows overwritten under `onConflict: "replace"`; absent from a shard built before replace imports. */
+    replaced?: number;
 }
 
 /* -------------------------------------------------------------------------- */

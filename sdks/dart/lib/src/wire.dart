@@ -426,6 +426,17 @@ Object? decodeWire(Object? value, [int depth = 0]) {
     return result;
   }
 
+  // A number off the wire is a float64 whatever its spelling, and
+  // `JSON.stringify` writes every double in [2^53, 1e21) as an INTEGER literal,
+  // which `jsonDecode` types as an `int`. Left an `int`, it was refused on the
+  // way back out by [_encodeInt]'s range guard — so a server frame carrying
+  // 1700000000000000000 could be neither re-encoded nor keyed. It is the
+  // nearest double, which is what `JSON.parse` reads (9007199254740993 is
+  // 9007199254740992). An `int` a caller constructs is still refused on encode.
+  if (value is int && (value > wireMaxExactInteger || value < -wireMaxExactInteger)) {
+    return value.toDouble();
+  }
+
   return value;
 }
 
@@ -527,7 +538,7 @@ Object? _decodeMap(List<Object?> value, int depth) {
       throw const WireFormatException('malformed map entry tag');
     }
 
-    final key = decodeWire(item[0], depth + 1);
+    final key = _positiveZero(decodeWire(item[0], depth + 1));
     final entry = MapEntry(key, decodeWire(item[1], depth + 1));
     final identity = _mapKeyIdentity(key);
 
@@ -565,7 +576,7 @@ WireSet _decodeSet(List<Object?> raw, int depth) {
   final seen = <String>{};
 
   for (final entry in raw) {
-    final item = decodeWire(entry, depth + 1);
+    final item = _positiveZero(decodeWire(entry, depth + 1));
     final identity = _mapKeyIdentity(item);
 
     if (identity != null && !seen.add(identity)) {
@@ -577,6 +588,11 @@ WireSet _decodeSet(List<Object?> raw, int depth) {
 
   return WireSet(items);
 }
+
+/// A signed zero stored as `+0`, as `Set.prototype.add` and `Map.prototype.set`
+/// do on INSERT — so a lone `-0` member or key re-encodes (and keys, per §3's
+/// bare `-0` token) as `0` in the reference, not only when it collides.
+Object? _positiveZero(Object? value) => value is double && value == 0 ? 0 : value;
 
 /// A map key's collapse identity, or `null` when it never collapses.
 ///

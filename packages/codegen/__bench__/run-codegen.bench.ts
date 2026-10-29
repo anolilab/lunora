@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { bench, describe } from "vitest";
 
-import { runCodegen } from "../src/index";
+import { createCodegenProject, refreshCodegenProject, runCodegen } from "../src/index";
+import writeLargeFixture from "./large-fixture";
 
 /**
  * Codegen runs on every schema/function file save in dev. The Vite plugin's
@@ -17,12 +18,40 @@ import { runCodegen } from "../src/index";
  * We rebuild the workdir per iteration because `runCodegen` writes
  * `_generated/*.ts` files into the tree and uses `writeIfChanged` — without
  * fresh state the first run dominates and the steady state isn't measured.
+ *
+ * The large-fixture cases are shrunk under CodSpeed (`CODSPEED_ENV`, or `CI`).
+ * That is the CI job budget, not a measurement choice: the `Benchmarks` job
+ * runs every package's benches instrumented (50-100x slower) inside a 30 minute
+ * timeout it already nearly fills. There only the reuse case runs, on a smaller
+ * app and 2 iterations; the full 200 procedure / 40 table matrix runs locally.
  */
+
+const reduced = process.env["CODSPEED_ENV"] !== undefined || process.env["CI"] === "true";
+const largeProcedures = reduced ? 60 : 200;
+const largeTables = reduced ? 12 : 40;
+const largeIterations = reduced ? 2 : 5;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "__tests__", "fixtures", "simple");
 
 let warmWorkdir: string | undefined;
+let largeWorkdir: string | undefined;
+let reuseProject: ReturnType<typeof createCodegenProject> | undefined;
+let largeReuseProject: ReturnType<typeof createCodegenProject> | undefined;
+
+/** A primed synthetic 200-procedure / 40-table app, created lazily like `primedWorkdir`. */
+const primedLargeWorkdir = (): string => {
+    largeWorkdir ??= (() => {
+        const created = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-large-"));
+
+        writeLargeFixture(created, largeProcedures, largeTables);
+        runCodegen({ projectRoot: created, wranglerQueueProducers: [] });
+
+        return created;
+    })();
+
+    return largeWorkdir;
+};
 
 /**
  * A workdir with `_generated/*` already written, created on first use.
@@ -53,7 +82,7 @@ const primedWorkdir = (): string => {
         cpSync(join(fixtureRoot, "lunora"), join(created, "lunora"), { recursive: true });
         // Prime the on-disk output so the bench exercises the `writeIfChanged`
         // no-op path rather than a first write.
-        runCodegen({ projectRoot: created });
+        runCodegen({ projectRoot: created, wranglerQueueProducers: [] });
 
         return created;
     })();
@@ -65,8 +94,10 @@ const primedWorkdir = (): string => {
 // for the same context reason. The directory is small and lives in the OS temp
 // dir, so a missed cleanup after a hard kill is harmless.
 process.on("exit", () => {
-    if (warmWorkdir !== undefined) {
-        rmSync(warmWorkdir, { force: true, recursive: true });
+    for (const dir of [warmWorkdir, largeWorkdir]) {
+        if (dir !== undefined) {
+            rmSync(dir, { force: true, recursive: true });
+        }
     }
 });
 
@@ -79,7 +110,7 @@ describe("runCodegen end-to-end (simple fixture)", () => {
             cpSync(join(fixtureRoot, "lunora"), join(coldWorkdir, "lunora"), { recursive: true });
 
             try {
-                runCodegen({ projectRoot: coldWorkdir });
+                runCodegen({ projectRoot: coldWorkdir, wranglerQueueProducers: [] });
             } finally {
                 rmSync(coldWorkdir, { force: true, recursive: true });
             }
@@ -90,8 +121,60 @@ describe("runCodegen end-to-end (simple fixture)", () => {
     bench(
         "warm run — same workdir, only emit phase changes",
         () => {
-            runCodegen({ projectRoot: primedWorkdir() });
+            runCodegen({ projectRoot: primedWorkdir(), wranglerQueueProducers: [] });
         },
         { iterations: 20 },
+    );
+});
+
+describe("runCodegen end-to-end (simple fixture, reused Project)", () => {
+    bench(
+        "reuse run — cached Project + refreshCodegenProject",
+        () => {
+            const root = primedWorkdir();
+
+            reuseProject ??= createCodegenProject(join(root, "lunora"));
+            refreshCodegenProject(reuseProject, join(root, "lunora"));
+            runCodegen({ project: reuseProject, projectRoot: root, wranglerQueueProducers: [] });
+        },
+        { iterations: 20 },
+    );
+});
+
+describe(`runCodegen end-to-end (large fixture: ${String(largeProcedures)} procedures, ${String(largeTables)} tables)`, () => {
+    bench.skipIf(reduced)(
+        "large cold run — fresh workdir",
+        () => {
+            const root = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-large-cold-"));
+
+            writeLargeFixture(root, largeProcedures, largeTables);
+
+            try {
+                runCodegen({ projectRoot: root, wranglerQueueProducers: [] });
+            } finally {
+                rmSync(root, { force: true, recursive: true });
+            }
+        },
+        { iterations: 5, time: 0 },
+    );
+
+    bench.skipIf(reduced)(
+        "large warm run — same workdir, no Project reuse",
+        () => {
+            runCodegen({ projectRoot: primedLargeWorkdir(), wranglerQueueProducers: [] });
+        },
+        { iterations: 5, time: 0 },
+    );
+
+    bench(
+        "large reuse run — cached Project + refreshCodegenProject",
+        () => {
+            const root = primedLargeWorkdir();
+
+            largeReuseProject ??= createCodegenProject(join(root, "lunora"));
+            refreshCodegenProject(largeReuseProject, join(root, "lunora"));
+            runCodegen({ project: largeReuseProject, projectRoot: root, wranglerQueueProducers: [] });
+        },
+        { iterations: largeIterations, time: 0 },
     );
 });

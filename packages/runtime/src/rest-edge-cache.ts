@@ -221,9 +221,15 @@ const restEdgeCacheFor = (policy: RestCachePolicy | undefined, edgeCache: HttpCa
             // something to store anyway: a partial body is not the resource, and a
             // response minting a cookie is caller-specific whatever its declared scope.
             // An x402 settlement receipt is the same in kind — a paid exchange is
-            // already unshareable via the `x-payment` credential header, and this is
-            // the second lock on a money path.
-            if (response.status !== 200 || response.headers.has("set-cookie") || response.headers.has("x-payment-response")) {
+            // already unshareable via the payment credential header, and this is
+            // another lock on a money path. `payment-response` is the x402 v2 receipt
+            // name; `x-payment-response` is v1's.
+            if (
+                response.status !== 200 ||
+                response.headers.has("set-cookie") ||
+                response.headers.has("payment-response") ||
+                response.headers.has("x-payment-response")
+            ) {
                 return response;
             }
 

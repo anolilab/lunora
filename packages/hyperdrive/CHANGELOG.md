@@ -1,3 +1,1570 @@
+## @lunora/hyperdrive [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.213...@lunora/hyperdrive@1.0.0-alpha.214) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.168
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.217
+
+## @lunora/hyperdrive [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.212...@lunora/hyperdrive@1.0.0-alpha.213) (2026-10-29)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** Mysql2Like now requires query(text, params) instead of
+execute(text, params). A real mysql2/promise connection or pool has both,
+so only hand-written doubles need renaming.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind pgvector id lists and metadata as json text
+
+createPgVectorIndex broke on postgres.js, the driver its docs show. With
+fetch_types: false (Hyperdrive's recommended setting) postgres.js knows no
+array types, so the id array bound to ANY($1::text[]) went over as the
+malformed literal "a,b,c" and getByIds/deleteByIds threw. And because
+postgres.js types each parameter from the server's Describe, a bare
+$n::jsonb parameter had the already-serialised metadata JSON-encoded a
+second time: metadata was stored as a string and filters never matched.
+
+Id lists now bind as one JSON text parameter expanded with
+jsonb_array_elements_text, and every JSON parameter is cast ::text::jsonb.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind mysql2 array and object params as one value
+
+mysql2's query() interpolates values client-side and expands an array
+into a comma list and a plain object into `key = value` pairs, so since
+the switch from execute() such a param changed the statement's shape
+instead of binding one value. execute()'s binary protocol sent them as
+JSON text. fromMysql2 and buildMysqlExec now normalise every param: an
+array or object becomes its JSON text, an ArrayBuffer becomes bytes,
+scalars, dates and byte views pass through, and undefined throws, as it
+did under execute(), instead of silently binding NULL.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* perf(hyperdrive): run postgres.js statements as prepared statements
+
+fromPostgresJs called client.unsafe(text, params), and unsafe defaults to
+prepare: false. Cloudflare warns against that under Hyperdrive: its
+transaction pooling does not reliably support unnamed statements (queries
+can hang or fail), and each one pays a Parse/Describe round trip before
+Bind/Execute. The adapter now passes { prepare: true }; a client built
+with prepare: false still wins.
+
+Prepared reads are cacheable by Hyperdrive, which is safe for .global()
+only because its config now has caching disabled (the deploy and docs
+change that requires it). The docs, skills, registry item and the config
+remediation build postgres.js with Cloudflare's recommended
+{ fetch_types: false, max: 5 }, with the caveat that array params then
+need binding as JSON text, and the .global() snippets go through
+fromPostgresJs instead of calling sql.unsafe directly.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(hyperdrive): state that mysql needs backslash escapes enabled
+
+Since MySQL statements go over as text, mysql2 escapes string values
+client-side and writes a quote as \'. On a server whose sql_mode includes
+NO_BACKSLASH_ESCAPES that sequence ends the literal, so a stored string
+could break out of it. The mode is off in MySQL's default sql_mode; the
+docs, the global setup skill and the adapter JSDoc now mark it
+unsupported.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(hyperdrive): rename Mysql2Execute to Mysql2Client
+
+The mysql2 adapters call query() now, so the execute-based name no longer
+describes the type. The snapshot also picks up the multi-line formatting of
+PostgresJsLike.unsafe's options.
+* **hyperdrive:** the exported `Mysql2Execute` type from `@lunora/hyperdrive/global`
+is now `Mysql2Client`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(codegen): pass postgres.js options in hyperdrive examples
+
+The generated hyperdriveGlobal JSDoc and the ctx.sql missing-binding diagnostic
+now show postgres(cs, { fetch_types: false, max: 5 }), matching the docs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): quote mysql strings so no sql_mode can end the literal
+
+mysql2's query() escapes a quote as \', which closes the literal when the server's
+sql_mode has NO_BACKSLASH_ESCAPES and lets a bound string inject SQL. Strings (and
+the JSON text of arrays and objects) are now rendered by toMysqlParams with ''
+for a quote and \\ for a backslash, which keeps every value inside its literal
+under any mode. A hex _utf8mb4 literal was rejected: it takes the charset's
+default collation and comparing it with a plain literal fails.
+
+That mode stays unsupported because backslashes come back doubled under it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(cli): warn when a bound hyperdrive config still caches queries
+
+An app with .global({ backend: "hyperdrive" }) tables needs query caching off, but
+deploy only turned it off on configs it created or reused by name. A binding whose
+id was set by hand or by an earlier deploy kept caching on silently. With API
+credentials present, deploy now reads each such config and warns with the
+`wrangler hyperdrive update <id> --caching-disabled` command. It never changes a
+config the user picked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): keep the hyperdrive caching check from blocking a deploy
+
+The cache-status GET for an already-bound config is advisory, but a network
+failure or timeout rejected out of provisionHyperdrive and aborted the deploy.
+It now logs the same "could not check" warning and carries on.
+
+A schema that exists but can't be read used to leave caching on. Since it may
+declare .global({ backend: "hyperdrive" }) tables, configs are now set up with
+caching off and the parse error is logged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(hyperdrive): note how mysql2 reads ? and ?? in query text
+
+mysql2's client-side formatter skips a ? inside a quoted string or comment, but
+reads ?? as an identifier placeholder. A real-MySQL test pins the literal case.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind a mysql string to ?? as its identifier again
+
+mysql2's ?? escaper reads String(value) and never toSqlString, so the quoted-
+literal wrapper toMysqlParams returns for strings came out as `[object Object]`.
+The wrapper now also has toString returning the raw text.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* test(hyperdrive): pin multi-command postgres.js statements without params
+
+postgres.js sends a statement with no params over the simple protocol even with
+prepare: true, so semicolon-separated commands keep working.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(sql-store): cast search token rows ::text::json on postgres
+
+postgres.js types a bare $n::json parameter from the server and JSON-encodes the
+already-serialised token rows again, so json_to_recordset got a scalar and every
+search-indexed .global() write through fromPostgresJs failed. A postgres.js wire
+test inserts and searches such a table.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): skip the hyperdrive caching check on a dry run
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+### Bug Fixes
+
+* **hyperdrive:** safe caching, mysql text protocol, prepared postgres.js ([#1394](https://github.com/anolilab/lunora/issues/1394)) ([ad59bcf](https://github.com/anolilab/lunora/commit/ad59bcf85763e3ee9853c101fa377d00b9d0c63f))
+
+
+### Dependencies
+
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.216
+
+## @lunora/hyperdrive [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.211...@lunora/hyperdrive@1.0.0-alpha.212) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** `runMigrateToHyperdriveCommand` is now `runMigrateBackendCommand`
+and requires a `direction`.
+* **hyperdrive:** ImportShardResult and the global ImportResult gain a required
+`replaced` count; `streamingImport` takes an `onConflict` argument.
+
+### Features
+
+* **hyperdrive:** wire the admin global plane, add replace imports and migrate hyperdrive-to-d1 ([#1360](https://github.com/anolilab/lunora/issues/1360)) ([f25b400](https://github.com/anolilab/lunora/commit/f25b400a13fbf76d19e5e587f4d20f00242a7ece)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.215
+
+## @lunora/hyperdrive [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.210...@lunora/hyperdrive@1.0.0-alpha.211) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.165
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.214
+
+## @lunora/hyperdrive [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.209...@lunora/hyperdrive@1.0.0-alpha.210) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.164
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.213
+
+## @lunora/hyperdrive [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.208...@lunora/hyperdrive@1.0.0-alpha.209) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.212
+
+## @lunora/hyperdrive [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.207...@lunora/hyperdrive@1.0.0-alpha.208) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.162
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.211
+
+## @lunora/hyperdrive [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.206...@lunora/hyperdrive@1.0.0-alpha.207) (2026-10-26)
+
+### Features
+
+* **server:** require the table in ctx.db.get(table, id) ([#1342](https://github.com/anolilab/lunora/issues/1342)) ([92cca06](https://github.com/anolilab/lunora/commit/92cca0604d33fc93db2ad49530572e8b99508f3b))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.161
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.210
+
+## @lunora/hyperdrive [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.205...@lunora/hyperdrive@1.0.0-alpha.206) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.160
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.209
+
+## @lunora/hyperdrive [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.204...@lunora/hyperdrive@1.0.0-alpha.205) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.208
+
+## @lunora/hyperdrive [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.203...@lunora/hyperdrive@1.0.0-alpha.204) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.75
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.207
+
+## @lunora/hyperdrive [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.202...@lunora/hyperdrive@1.0.0-alpha.203) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.206
+
+## @lunora/hyperdrive [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.201...@lunora/hyperdrive@1.0.0-alpha.202) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.205
+
+## @lunora/hyperdrive [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.200...@lunora/hyperdrive@1.0.0-alpha.201) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.204
+
+## @lunora/hyperdrive [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.199...@lunora/hyperdrive@1.0.0-alpha.200) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.154
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.203
+
+## @lunora/hyperdrive [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.198...@lunora/hyperdrive@1.0.0-alpha.199) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.202
+
+## @lunora/hyperdrive [1.0.0-alpha.198](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.197...@lunora/hyperdrive@1.0.0-alpha.198) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.74
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.201
+
+## @lunora/hyperdrive [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.196...@lunora/hyperdrive@1.0.0-alpha.197) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.200
+* **drizzle-orm:** ^0.45.3 → 1.0.0-rc.5
+
+## @lunora/hyperdrive [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.195...@lunora/hyperdrive@1.0.0-alpha.196) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.199
+
+## @lunora/hyperdrive [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.194...@lunora/hyperdrive@1.0.0-alpha.195) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.73
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.149
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.198
+
+## @lunora/hyperdrive [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.193...@lunora/hyperdrive@1.0.0-alpha.194) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.148
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.197
+
+## @lunora/hyperdrive [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.192...@lunora/hyperdrive@1.0.0-alpha.193) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/platform:** upgraded to 1.0.0-alpha.72
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.196
+
+## @lunora/hyperdrive [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.191...@lunora/hyperdrive@1.0.0-alpha.192) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/platform:** upgraded to 1.0.0-alpha.71
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.146
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.195
+
+## @lunora/hyperdrive [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.190...@lunora/hyperdrive@1.0.0-alpha.191) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.194
+
+## @lunora/hyperdrive [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.189...@lunora/hyperdrive@1.0.0-alpha.190) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.144
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.193
+
+## @lunora/hyperdrive [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.188...@lunora/hyperdrive@1.0.0-alpha.189) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/platform:** upgraded to 1.0.0-alpha.70
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.143
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.192
+
+## @lunora/hyperdrive [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.187...@lunora/hyperdrive@1.0.0-alpha.188) (2026-10-18)
+
+### Features
+
+* **cli:** provision KV and Hyperdrive bindings, and serve Hyperdrive from PGlite in dev ([#1242](https://github.com/anolilab/lunora/issues/1242)) ([1b38891](https://github.com/anolilab/lunora/commit/1b388917c15564a88693f41d204d458bfaf0d1b0))
+
+## @lunora/hyperdrive [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.186...@lunora/hyperdrive@1.0.0-alpha.187) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.141
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.191
+
+## @lunora/hyperdrive [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.185...@lunora/hyperdrive@1.0.0-alpha.186) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/platform:** upgraded to 1.0.0-alpha.69
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.140
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.190
+
+## @lunora/hyperdrive [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.184...@lunora/hyperdrive@1.0.0-alpha.185) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.139
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.189
+
+## @lunora/hyperdrive [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.183...@lunora/hyperdrive@1.0.0-alpha.184) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/platform:** upgraded to 1.0.0-alpha.68
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.138
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.188
+
+## @lunora/hyperdrive [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.182...@lunora/hyperdrive@1.0.0-alpha.183) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.67
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.137
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.187
+
+## @lunora/hyperdrive [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.181...@lunora/hyperdrive@1.0.0-alpha.182) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.135
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.186
+
+## @lunora/hyperdrive [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.180...@lunora/hyperdrive@1.0.0-alpha.181) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.134
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.185
+
+## @lunora/hyperdrive [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.179...@lunora/hyperdrive@1.0.0-alpha.180) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.66
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.133
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.184
+
+## @lunora/hyperdrive [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.178...@lunora/hyperdrive@1.0.0-alpha.179) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.131
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.183
+
+## @lunora/hyperdrive [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.177...@lunora/hyperdrive@1.0.0-alpha.178) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.56
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.130
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.182
+
+## @lunora/hyperdrive [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.176...@lunora/hyperdrive@1.0.0-alpha.177) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.129
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.181
+
+## @lunora/hyperdrive [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.175...@lunora/hyperdrive@1.0.0-alpha.176) (2026-10-15)
+
+### ⚠ BREAKING CHANGES
+
+* **sql-store:** SqlDialect requires a `render(query)` member; custom dialects must supply it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* ci(codspeed): give the benchmark job a 60-minute budget
+
+The full bench suite under CodSpeed instrumentation took 25-29 minutes on alpha before any
+new bench landed, and a PR touching a low-level package runs the full suite through
+`vis affected`. Runs were being cancelled at the 30-minute job timeout on PRs that added
+nothing slow.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+### Performance Improvements
+
+* **sql-store:** render through the dialect object so a shard bundles only sqlite-core ([#1176](https://github.com/anolilab/lunora/issues/1176)) ([8942c32](https://github.com/anolilab/lunora/commit/8942c32559f2b69fbd016281b310c9d6bbc66f20))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.128
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.180
+
+## @lunora/hyperdrive [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.174...@lunora/hyperdrive@1.0.0-alpha.175) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.64
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.127
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.179
+
+## @lunora/hyperdrive [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.173...@lunora/hyperdrive@1.0.0-alpha.174) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.63
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.126
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.178
+
+## @lunora/hyperdrive [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.172...@lunora/hyperdrive@1.0.0-alpha.173) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.62
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.125
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.177
+
+## @lunora/hyperdrive [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.171...@lunora/hyperdrive@1.0.0-alpha.172) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.176
+
+## @lunora/hyperdrive [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.170...@lunora/hyperdrive@1.0.0-alpha.171) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.124
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.175
+
+## @lunora/hyperdrive [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.169...@lunora/hyperdrive@1.0.0-alpha.170) (2026-10-13)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** a field name containing a dot now descends into an object column instead of
+addressing a literal key with that name.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(server): add table .timestamps() for last-change tracking
+
+Adds `defineTable(...).timestamps({ field? })`, which injects an epoch-millisecond column
+(default `updatedAt`) that is stamped on insert and restamped on every update (any patch or
+replace, including soft delete and restore) unless the write sets it. It is shorthand for
+`v.timestamp().defaultNow().$onUpdateFn(() => Date.now())`. Codegen injects the same column, and
+a test pins that the result is identical to declaring it by hand (IR, data model, drizzle schema
+and shard output).
+
+A column the author already declares is kept only if it restamps on update; a plain column of
+that name, a second `.timestamps()` call, the soft-delete field, and a `field` that is not a
+string literal are refused, at runtime and in codegen alike, rather than silently doing nothing
+or letting the generated types name a column the runtime never creates.
+
+The return type adds the column to the builder's `Shape`, so a later `.index()` or `.ttl()` can
+name it; call `.timestamps()` before them.
+
+Soft delete built its merged row directly and skipped the `$onUpdateFn` recompute, so any
+`$onUpdateFn` column went stale on delete. Both the shard and the SQL (D1) engines now run it
+there as well.
+
+The generated migration for a `.global()` table now adds a new column as nullable. SQLite
+rejects `ADD COLUMN ... NOT NULL` on a table that already has rows and D1 is SQLite, so adding a
+required column failed exactly when it mattered; the runtime auto-provisioner already made this
+choice. Rows written before the column existed read back without it until their next write.
+
+Not host-backed: this only changes row contents on the existing ctx.db write path, so no
+PlatformCapabilities entry is needed.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(server): add explain to describe how a read would run
+
+`ctx.db.<table>.explain(args)` takes the arguments of `findMany` and returns the SQL it compiles
+to, the bound parameters, and the database's own plan, one line per step, without running the
+read. It answers "does an index serve this filter?" (`SEARCH … USING INDEX by_room` versus
+`SCAN`) from the same statement the read would execute, rather than from a lookalike.
+
+Both stores compile the statement through one shared step that `findMany` now also uses, so a plan
+cannot describe a different query than the read runs. `explain` subscribes to nothing: a live query
+that explains must not become reactive to the table it describes. Relation filters in `where` are
+resolved first, which reads the related table. The RLS gate merges the read policy exactly as it
+does for `findMany`, and the secure-by-default guard gates it as a table-named read.
+
+Plans come from SQLite's `EXPLAIN QUERY PLAN` on shard tables and D1, and plain `EXPLAIN` on a
+Postgres or MySQL `.global()` backend. SQLite, workerd's Durable Object SQLite and a real D1
+binding are exercised against the real engine; the Postgres and MySQL path is covered with canned
+plan rows only, not a live server.
+
+`explain` becomes a reserved table name, since per-table accessors share a namespace with the
+writer's methods. A schema with a table named `explain` must rename it.
+
+The mask gate refuses an `explain` whose filter reaches a masked column, relation predicates
+included: resolving one reads the child table and inlines the matching ids into `params`, which
+would be the value oracle `findMany` already refuses. `params` also carries RLS-injected values,
+so the docs say to keep the output server-side.
+
+Platform mapping: advisory `queryExplain` in PlatformCapabilities, rated native on Cloudflare,
+Node and celld. It is carried by no host contract, since it prefixes a statement the engines
+already build. Only Cloudflare is verified against its real engines; the Node and celld notes say
+what was and was not run.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(server): let orderBy place NULLs first or last
+
+An `orderBy` entry can now be `{ field: { sort: "asc" | "desc", nulls: "first" | "last" } }`
+besides the plain direction. Without it, NULLs still sort first ascending and last descending,
+and an un-annotated read compiles byte-for-byte as before.
+
+The keyset seek now separates two questions it used to answer with one: which way the value
+comparison runs (from the direction) and where the NULL group sorts (from the placement). That
+keeps paging correct when a page boundary falls inside the NULL run, for all four direction and
+placement combinations. A placement is recorded only on a nullable column and only when it differs
+from the default, so a column that never holds NULL never picks up a clause that could cost its
+index, and existing cursors keep their meaning.
+
+Each store states the placement its own way: SQLite and D1 add `NULLS FIRST/LAST` when asked,
+Postgres always spells it out for nullable keys, and MySQL, which has no such syntax, gets a
+leading `(col IS NULL)` sort key.
+
+The object form is validated at runtime, since `orderBy` can arrive as an RPC argument and the
+placement ends up in SQL text; it is mapped to fixed literals and anything else is rejected as
+VALIDATION_ERROR.
+
+Verified by paging in pages of 2 and 3 over rows with a NULL run and a tie, comparing both the
+unpaged and the concatenated paged order with an independently computed reference, on node:sqlite,
+workerd's Durable Object SQLite and a real D1 binding. SQLite walks the index for a requested
+placement; Postgres and MySQL are covered by the emitted ORDER BY text only, not a live server.
+
+Not host-backed: it only changes the ORDER BY the engines already build, with the same result on
+every target, so no PlatformCapabilities entry is needed.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(server): write through a relation with connect, disconnect and set
+
+`insert`, `patch` and `upsert` accept a nested write under a relation's name. For a to-one, `{
+author: { connect: userId } }` sets the foreign key from the target and `{ author: { disconnect:
+true } }` clears it. For a to-many, `{ posts: { connect: [...], disconnect: [...] } }` points
+rows at the parent or releases them, and `{ posts: { set: [...] } }` makes the list complete.
+
+It is composed in the table facade, the way `upsert` is: each target is read with the bound
+writer's `get` and each child is written with its `patch`. When the facade is re-bound over the
+RLS-wrapped writer, every child write is gated by its own policy, and triggers, validators and
+live queries see it as the write it is. Nothing reaches into a store. The engines only publish a
+small per-relation descriptor (`relationWrites`, next to `relationEdges`): the key column, the
+column it references, whether the key can hold null, and whether both tables share a backend and
+shard.
+
+The whole write is one mutation, so a failure partway through rolls back the children already
+written. A relation that crosses to a `.global()` table or another shard is refused with
+UNPROCESSABLE before anything is written, since a D1 write does not roll back with the Durable
+Object and a row on another shard cannot be addressed from this one. `disconnect` and `set` need
+a key that can hold null; `v.optional(...)` alone means absent, not null, so they are refused
+there rather than writing a null the schema does not describe. A write is capped at 500 rows,
+setting a key and its relation together is refused, and `insertMany`, `patchMany` and `replace`
+reject a relation write instead of storing it as a column value.
+
+Codegen now emits the foreign-key column into the generated `OneRelation<Target, Field>` type,
+so the insert type makes that key optional when the relation supplies it. The type cannot forbid
+the key and its relation together or require the key when neither is given; the runtime refuses
+the first and the store's own validation catches the second. `relationWrites` becomes a reserved
+table name, like the other writer members.
+
+Many-to-many through a join table is not a relation kind yet; plan 489 sets out the design.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(plans): add plan 489 for many-to-many relations through a join table
+
+Nested relation writes stop at one hop because a relation is a single foreign key. This records
+the design for a through relation, the open decision between a new relation kind and a write
+helper, and the gates for each phase, without implementing it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(server): validate relation writes first and tighten null placement and explain
+
+Relation writes are now parsed in full before the first row is written, so a malformed or
+unsupported request leaves the parent unwritten instead of relying on the mutation's
+transaction. An object under a relation name must use connect, disconnect or set; an unknown
+operator is a VALIDATION_ERROR rather than a stored column. A relation between `.global()`
+tables, or into one, is refused because each write there is its own commit. Children are not
+pointed at a parent that has no value for the referenced column, and an upsert whose target
+key is supplied by a relation write says so. The to-one and to-many write types are now unions
+that reject connect+disconnect and set+connect at compile time, `OneRelation` no longer
+defaults its field to `string`, and codegen quotes the foreign-key name. The engine descriptor
+field `writable` is renamed `colocated`.
+
+orderBy null placement now treats `v.union(x, v.null())`, `v.any()` and `v.null()` as nullable,
+so a requested placement is no longer ignored on them and a `desc` seek no longer drops their
+NULL rows. A plain-string direction other than asc/desc is rejected instead of sorting
+ascending, and an entry whose value is undefined now throws instead of sorting ascending.
+
+explain: the documentation no longer claims it subscribes to nothing (a relation filter's id
+lookup is an ordinary read), the Cloudflare capability note names the Hyperdrive path that is
+only checked against canned rows, and a vacuous test is removed.
+
+Plan 489 is brought in line with the plan template.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(server): refuse relation writes through masked keys and test the gaps reviewers named
+
+A relation write copies a value between rows, and the mask middleware reads that value through the
+mask. A to-one connect on a masked referenced column, or a masked foreign key, would have stored
+the masked form (a null or a hash token) and a disconnect on a masked key would never match. The
+mask middleware now marks such a relation refused, and the facade reports it as UNPROCESSABLE.
+
+The server mirror types of explain now return QueryPlan, and static discovery counts a
+ctx.db.explain("table") call as a read of that table for the RLS and mask advisors.
+
+New tests: a nested relation write is gated by the child's own update policy; a masked relation is
+refused; null placement pages correctly on a real Postgres and a real MySQL (the MySQL half skips
+where mysqld cannot be provisioned, as the collation parity suite does).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* refactor(shard-engine): compose the read predicate in one place
+
+Both compileFindMany functions repeated the same read composition: order
+keys, keyset seek, baseWhere AND where, soft-delete scope, relation
+predicate resolution, then the seek ANDed in and the limit clamped with
+its +1 over-fetch. explain promises the plan it describes is the one
+findMany runs, so that order is a contract and needs a single source.
+
+composeReadPredicate in relation-predicates.ts now owns it and is
+exported from @lunora/shard-engine. Each dialect keeps only its emit
+step (text fragments in shard-engine, drizzle SQL in sql-store). No
+behaviour change: the composition order, the cursor decode before the
+relation await, and the resolver options are unchanged.
+
+The new export changes the shard-engine public API snapshot.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* refactor(server): require explain on the writer interfaces
+
+explain was optional on DatabaseWriterLike and on the facade, mask and rls writer
+interfaces, and each consumer threw an 'unsupported' error when it was missing.
+Every real writer implements it (the shard engine, sql-store which backs D1,
+node and Hyperdrive, and the generated global stub), so the optionality only
+let test fakes skip it.
+
+Make it required, delete the four fallback branches, drop the optional calls
+in the tests, give the fake writers an explain, remove the test that asserted
+the refusal, and drop the platform doc sentence that described it.
+* **server:** a custom writer passed where DatabaseWriterLike or FacadeWriterLike
+is expected must now provide explain. The built-in writers already do.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* refactor(sql-store): one ORDER BY term builder for NULL placement
+
+orderTermsFor replaces nullsPlacement and mysqlNullsKey. One switch over
+the dialect name builds each key's terms, and the rank-page ORDER BY goes
+through it too. The NULLS FIRST/LAST suffix is now exported from
+shard-engine as nullsOrderSuffix, so the keyset reader and the store share
+one spelling. Generated SQL text is unchanged.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(shard-engine): run null placement paging in the conformance suite
+
+The paging case (four placements, pages of three across a NULL run, checked
+against an independent reference sort) moves into the engine conformance
+suite. That suite runs on the node host and on the Durable Object host under
+workerd, so one case now covers both, and the two copies it replaces are
+removed.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(sql-store): share the NULL placement fixture and the D1 helpers
+
+The NULL placement rows, expected order and paging loop were copied into the
+node and D1 suites. They now live in one runtime-neutral helper that both
+import. The placement cases move out of the 3k-line ctx-db test into their own
+file, and the hostile-placement case goes: normalizeOrderKeys validates
+placements and is covered in shard-engine.
+
+The D1 dialect, exec and column helpers copied across five workerd suites move
+to workerd/_helpers/d1.ts. The two FTS suites take d1FtsDialect. The node
+SQLite harness moves to _helpers/sqlite.ts so the placement file can use it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(server): regenerate api snapshots for required explain and the shared read composer
+* **server:** `explain` is required on the writer interfaces (`DatabaseWriterLike`,
+`FacadeWriterLike` and the RLS and mask writer mirrors); a custom writer must implement it.
+`@lunora/shard-engine` also exports `composeReadPredicate` and `nullsOrderSuffix`.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(server): hold a declared timestamps column to the contract and run the new MySQL suite in CI
+
+`.timestamps()` kept any declared column that had an `$onUpdateFn`. It now also requires a
+`v.timestamp()` with an insert default, so a column that is not epoch milliseconds, or that
+nothing stamps on insert, is refused by the runtime builder and by codegen alike. Codegen also
+refuses `.timestamps(options)` and `.softDelete(options)` when the options are not an object
+literal, instead of silently using the default field name.
+
+The MySQL integration job asserts that its run step names every suite using the MySQL harness;
+the null placement paging suite is added to that list and to the run step.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(server): gate relation-only patches by the parent's update policy
+
+A patch that only changed relations wrote no parent row, so the parent's
+update policy was never consulted. A caller who could read a parent but
+not update it could still attach or release its children, with each child
+gated only by its own policy.
+
+The parent is now checked before any child is written, through a new
+optional writer method, assertPatchAllowed. The RLS wrapper implements it
+by running the update gate with an empty patch, so no row, timestamp,
+version, trigger or CDC entry changes. The parent is still read first, so
+a missing or unreadable parent is still NOT_FOUND.
+
+Callers see two new outcomes on relation-only patches. A parent the caller
+cannot update is refused with FORBIDDEN where it used to succeed. A parent
+whose update policy uses a relation predicate is refused with
+RELATION_PREDICATE_UNSUPPORTED, as a direct patch of that row already is.
+
+assertPatchAllowed is also a reserved table name, like every
+DatabaseWriterLike member, so a table of that name is rejected at codegen.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(sql-store): read and search dotted JSON paths on postgres and mysql
+
+A dotted field path into an object column (where, orderBy, index where, contains) was refused
+with NOT_IMPLEMENTED on every .global() backend except SQLite. Postgres now reads it with ->
+steps over jsonb and MySQL with JSON_EXTRACT, both guarded so text that is not JSON reads as
+NULL, as it does on SQLite. A JSON null leaf reads as NULL. A path value is bound as JSON, so 30
+never equals "30" and true never equals 1. A list of path values is sent as one JSON array
+parameter, since a literal list past the wire protocol's parameter count matched nothing. The
+MySQL NULL-placement term resolves its field the same way as the sort term.
+
+contains runs over the leaf's own text: #>> '{}' on Postgres and JSON_UNQUOTE on MySQL, with
+the term taken the same way, as a substring search (strpos, LOCATE) rather than LIKE, so % and _
+match themselves. Case follows each engine's column rule: both are case-sensitive, unlike
+SQLite's ASCII-insensitive instr. A number leaf is searched by its digits; a boolean leaf is 1
+or 0 on SQLite and true or false on Postgres and MySQL; an object or array leaf by its JSON
+text, which SQLite and Postgres space differently.
+
+A range over a path whose values mix types returns different rows on SQLite, Postgres and
+MySQL, since each engine orders mixed types its own way. That is documented rather than
+papered over.
+
+Postgres 16 or later is required, for pg_input_is_valid.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(server): regenerate api snapshots for the writer's assertPatchAllowed
+* **server:** a relation-only patch now fails with FORBIDDEN when the caller may not update the
+parent row, and `assertPatchAllowed` is a reserved table name.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(sql-store): backfill a required field added to a populated global table
+
+A field added to a `.global()` table is created nullable, because SQLite, D1, Postgres and MySQL
+reject `ADD COLUMN ... NOT NULL` on a populated table. The validator still treats the field as
+required, so the rows that predate it read NULL and a later patch of one of them failed
+validation on a column nobody touched.
+
+When the runtime adds a required column that declares a default (`.default(v)`,
+`.defaultNow()`, `.$defaultFn(fn)`), it now writes that default, evaluated once, into every row
+that has no value. That includes the `updatedAt` column `.timestamps()` adds. A column that may
+hold null needs nothing. A required column with no default has no value to invent: its rows keep
+reading NULL and one warning per isolate names the column.
+
+`migrate generate` marks an added required column the same way: the ALTER is followed by a
+comment saying rows read NULL and giving the UPDATE to run. The snapshot records no default
+value, so that value is left to the author.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(sql-store): keep the required-field backfill from sharing or losing values
+
+A per-row `$defaultFn` on a unique column is no longer written as one value into
+every existing row; it is reported like a column with no default. A backfill
+that fails after its ALTER now drops the column again, so the next provisioning
+pass retries the add instead of seeing the column as done and leaving rows NULL.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(shard-engine): bracket a range over a JSON path to the operand's type
+
+A range (`gt`/`gte`/`lt`/`lte`) over a dotted path whose leaves mix JSON types returned
+different rows per engine: SQLite put every text above every number, Postgres and MySQL
+the other way round, and Postgres matched booleans and arrays too. The range is now ANDed
+with a type test on the leaf, so `gt: 5` matches number leaves above 5 and nothing else on
+the Durable Object store, SQLite/D1, Postgres and MySQL, and in the in-memory rls
+evaluator. An operand that is none of number, string or boolean matches nothing.
+
+The keyset seek opts out through `FieldOperators.crossType`: it continues an ORDER BY that
+sorts every type together, so bracketing it would make the rows of other types unreachable
+on page two.
+* **server:** a range over a path no longer matches leaves of a different JSON type than
+its operand (on SQLite, `gt: 5` used to match every text leaf).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(shard-engine): address review of the path range bracket and the backfill
+
+Range bracketing:
+- the rls evaluator now follows the same rule as the SQL stores for booleans and bigints; the
+  rule (`rangeOperandType`) and the SQLite type names live once in shared/json-field-path
+- the keyset seek opts out through an internal symbol (`SEEK_RANGE`) instead of a public
+  `crossType` operator key, which turned `{ crossType: true }` into a silent match-all
+- `rangeTypeGuard` is required, and the DO strategies extend one `doWhereSqlStrategy` root
+- the DO guard reads the path literal directly instead of rewriting `json_extract(` by regex
+- a path comparison now counts the extra bound path parameters toward the D1 placeholder budget
+- one mixed-type dataset is shared by the shard-engine, sql-store, hyperdrive and server tests
+
+Required-column backfill:
+- a column under any unique constraint (`.unique()` or any unique index, composite too) is no
+  longer backfilled, whatever its default, as one value in every row failed the index build on
+  every provisioning pass
+- a failing backfill statement is reported with the UPDATE to run instead of dropping the
+  column, which looped a persistent failure and could discard a concurrent request's writes
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(server): give the rls strategy literal a range type guard
+
+WhereSqlStrategy.rangeTypeGuard is required now; the empty-shapes test built a strategy without it,
+which only the CI type check caught because the local tsc ran against a stale shard-engine dist.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **server:** timestamps, atomic operators, JSON paths, explain, null placement and relation writes ([#1144](https://github.com/anolilab/lunora/issues/1144)) ([6122a22](https://github.com/anolilab/lunora/commit/6122a22bdf64905f1a3c005c8b24c005838412d5))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.61
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.123
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.174
+
+## @lunora/hyperdrive [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.168...@lunora/hyperdrive@1.0.0-alpha.169) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.122
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.173
+
+## @lunora/hyperdrive [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.167...@lunora/hyperdrive@1.0.0-alpha.168) (2026-10-12)
+
+### Bug Fixes
+
+* **ratelimit:** make the D1-backed consume atomic with ctx.db.patchIf ([#1133](https://github.com/anolilab/lunora/issues/1133)) ([e137141](https://github.com/anolilab/lunora/commit/e137141443492eca6a7485341f4e6f8486864089))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.121
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.172
+
+## @lunora/hyperdrive [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.166...@lunora/hyperdrive@1.0.0-alpha.167) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.59
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.120
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.171
+
+## @lunora/hyperdrive [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.165...@lunora/hyperdrive@1.0.0-alpha.166) (2026-10-08)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.58
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.119
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.170
+
+## @lunora/hyperdrive [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.164...@lunora/hyperdrive@1.0.0-alpha.165) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+### Documentation
+
+* **cli:** refresh agent skills and compile-check their examples ([#1035](https://github.com/anolilab/lunora/issues/1035)) ([ad2d4c8](https://github.com/anolilab/lunora/commit/ad2d4c8052509ef45f3cdb78eddf40523333e5c7))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.118
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.169
+
+## @lunora/hyperdrive [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.163...@lunora/hyperdrive@1.0.0-alpha.164) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.57
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.116
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.168
+
+## @lunora/hyperdrive [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.162...@lunora/hyperdrive@1.0.0-alpha.163) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.115
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.167
+
+## @lunora/hyperdrive [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.161...@lunora/hyperdrive@1.0.0-alpha.162) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.114
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.166
+
+## @lunora/hyperdrive [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.160...@lunora/hyperdrive@1.0.0-alpha.161) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.112
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.164
+* **drizzle-orm:** ^0.45.2 → ^0.45.3
+
+## @lunora/hyperdrive [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.159...@lunora/hyperdrive@1.0.0-alpha.160) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.55
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.111
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.163
+
+## @lunora/hyperdrive [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.158...@lunora/hyperdrive@1.0.0-alpha.159) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.54
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.110
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.162
+
+## @lunora/hyperdrive [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.157...@lunora/hyperdrive@1.0.0-alpha.158) (2026-10-03)
+
+### Features
+
+* **observability:** instrument ctx.sql with database telemetry ([#944](https://github.com/anolilab/lunora/issues/944)) ([2fd04d0](https://github.com/anolilab/lunora/commit/2fd04d07bbbb458d64e501f02cd353f79888aa3a)), closes [#private](https://github.com/anolilab/lunora/issues/private) [#private](https://github.com/anolilab/lunora/issues/private)
+
+## @lunora/hyperdrive [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.156...@lunora/hyperdrive@1.0.0-alpha.157) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+* **@lunora/platform:** upgraded to 1.0.0-alpha.52
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.108
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.161
+
+## @lunora/hyperdrive [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.155...@lunora/hyperdrive@1.0.0-alpha.156) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.51
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.107
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.160
+
+## @lunora/hyperdrive [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.154...@lunora/hyperdrive@1.0.0-alpha.155) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.49
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.105
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.158
+
+## @lunora/hyperdrive [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.153...@lunora/hyperdrive@1.0.0-alpha.154) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.48
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.104
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.157
+
+## @lunora/hyperdrive [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.152...@lunora/hyperdrive@1.0.0-alpha.153) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.47
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.103
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.156
+
+## @lunora/hyperdrive [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.151...@lunora/hyperdrive@1.0.0-alpha.152) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/platform:** upgraded to 1.0.0-alpha.46
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.102
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.155
+
+## @lunora/hyperdrive [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.150...@lunora/hyperdrive@1.0.0-alpha.151) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.45
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.101
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.154
+
+## @lunora/hyperdrive [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.149...@lunora/hyperdrive@1.0.0-alpha.150) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.44
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.100
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.153
+
+## @lunora/hyperdrive [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.148...@lunora/hyperdrive@1.0.0-alpha.149) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.43
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.99
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.152
+
+## @lunora/hyperdrive [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.147...@lunora/hyperdrive@1.0.0-alpha.148) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.98
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.151
+
+## @lunora/hyperdrive [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.146...@lunora/hyperdrive@1.0.0-alpha.147) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.42
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.97
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.150
+
+## @lunora/hyperdrive [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.145...@lunora/hyperdrive@1.0.0-alpha.146) (2026-09-28)
+
+### Bug Fixes
+
+* **sql-store:** hold the global cdc poll cursor below late commits ([#903](https://github.com/anolilab/lunora/issues/903)) ([d118920](https://github.com/anolilab/lunora/commit/d118920b33d5ddb9a760b9eda2a46d2880a8f40e))
+
+
+### Dependencies
+
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.149
+
+## @lunora/hyperdrive [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.144...@lunora/hyperdrive@1.0.0-alpha.145) (2026-09-27)
+
+### Tests
+
+* **hyperdrive:** drop unused exports from the test helpers ([#886](https://github.com/anolilab/lunora/issues/886)) ([cbf3857](https://github.com/anolilab/lunora/commit/cbf3857c98fc9325727a458946c9cf649545bfd2))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.96
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.148
+
+## @lunora/hyperdrive [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.143...@lunora/hyperdrive@1.0.0-alpha.144) (2026-09-27)
+
+### Bug Fixes
+
+* **sql-store:** make .global() values and D1 migrations behave alike on every engine ([#879](https://github.com/anolilab/lunora/issues/879)) ([119c979](https://github.com/anolilab/lunora/commit/119c9792baec2b2772d971d219d65c7e699d04b9))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.95
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.147
+
+## @lunora/hyperdrive [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.142...@lunora/hyperdrive@1.0.0-alpha.143) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.94
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.146
+
+## @lunora/hyperdrive [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.141...@lunora/hyperdrive@1.0.0-alpha.142) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.41
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.92
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.145
+
+## @lunora/hyperdrive [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.140...@lunora/hyperdrive@1.0.0-alpha.141) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+* **@lunora/platform:** upgraded to 1.0.0-alpha.40
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.91
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.144
+
+## @lunora/hyperdrive [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.139...@lunora/hyperdrive@1.0.0-alpha.140) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.89
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.143
+
+## @lunora/hyperdrive [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.138...@lunora/hyperdrive@1.0.0-alpha.139) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.88
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.142
+
+## @lunora/hyperdrive [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.137...@lunora/hyperdrive@1.0.0-alpha.138) (2026-09-25)
+
+### Bug Fixes
+
+* **sql-store:** push rls policies into global search SQL; fix mid-iteration reorder ([#828](https://github.com/anolilab/lunora/issues/828)) ([3256c91](https://github.com/anolilab/lunora/commit/3256c911d6efbd1937935afafb4ca770be12b830))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.86
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.140
+
+## @lunora/hyperdrive [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.136...@lunora/hyperdrive@1.0.0-alpha.137) (2026-09-25)
+
+### Bug Fixes
+
+* **sql-store:** guard native search writes and purges ([#827](https://github.com/anolilab/lunora/issues/827)) ([c1f4a2d](https://github.com/anolilab/lunora/commit/c1f4a2df34052eec74ce20eb381df3a957e66cfb))
+
+
+### Dependencies
+
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.139
+
+## @lunora/hyperdrive [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.135...@lunora/hyperdrive@1.0.0-alpha.136) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.38
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.85
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.138
+
+## @lunora/hyperdrive [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.134...@lunora/hyperdrive@1.0.0-alpha.135) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.84
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.137
+
+## @lunora/hyperdrive [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.133...@lunora/hyperdrive@1.0.0-alpha.134) (2026-09-25)
+
+### Bug Fixes
+
+* **sql-store:** key inverted search rows and guard live writes ([#821](https://github.com/anolilab/lunora/issues/821)) ([a7c5696](https://github.com/anolilab/lunora/commit/a7c56969395be8df799afd2b0de90fe341b7170c))
+
+
+### Dependencies
+
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.136
+
+## @lunora/hyperdrive [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.132...@lunora/hyperdrive@1.0.0-alpha.133) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.37
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.83
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.135
+
+## @lunora/hyperdrive [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.131...@lunora/hyperdrive@1.0.0-alpha.132) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.36
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.82
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.134
+
+## @lunora/hyperdrive [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.130...@lunora/hyperdrive@1.0.0-alpha.131) (2026-09-25)
+
+### Bug Fixes
+
+* **search:** key fts5 companions by a rowid map and guard backfills ([#819](https://github.com/anolilab/lunora/issues/819)) ([8d57122](https://github.com/anolilab/lunora/commit/8d5712261cb2d5dc051b7db0f061c376fb995304))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.81
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.133
+
+## @lunora/hyperdrive [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.129...@lunora/hyperdrive@1.0.0-alpha.130) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.34
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.80
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.132
+
+## @lunora/hyperdrive [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.128...@lunora/hyperdrive@1.0.0-alpha.129) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.79
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.131
+
+## @lunora/hyperdrive [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.127...@lunora/hyperdrive@1.0.0-alpha.128) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.78
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.130
+
+## @lunora/hyperdrive [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.126...@lunora/hyperdrive@1.0.0-alpha.127) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.129
+
+## @lunora/hyperdrive [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.125...@lunora/hyperdrive@1.0.0-alpha.126) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.33
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.77
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.128
+
+## @lunora/hyperdrive [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.124...@lunora/hyperdrive@1.0.0-alpha.125) (2026-09-23)
+
+### Bug Fixes
+
+* **registry:** match the postgres stub to the driver it stands in for ([#790](https://github.com/anolilab/lunora/issues/790)) ([f3d4397](https://github.com/anolilab/lunora/commit/f3d439763f55e151f7b47b7f0b916100094b9c3e))
+
+## @lunora/hyperdrive [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.123...@lunora/hyperdrive@1.0.0-alpha.124) (2026-09-23)
+
+### Bug Fixes
+
+* **codegen:** reach the source client, the shape thunk and hidden return types ([#781](https://github.com/anolilab/lunora/issues/781)) ([3014b0d](https://github.com/anolilab/lunora/commit/3014b0dbb9f8601d4a95d15c62ca6c1b23eef46e))
+
+## @lunora/hyperdrive [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.122...@lunora/hyperdrive@1.0.0-alpha.123) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.75
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.126
+
+## @lunora/hyperdrive [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.121...@lunora/hyperdrive@1.0.0-alpha.122) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.74
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.125
+
+## @lunora/hyperdrive [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.120...@lunora/hyperdrive@1.0.0-alpha.121) (2026-09-19)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** `Mysql2Like.execute`'s second parameter is `unknown`. An
+implementor that reads the argument must narrow it first; the two doubles in this
+package now do.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **hyperdrive:** let Mysql2Like accept a real connection ([#754](https://github.com/anolilab/lunora/issues/754)) ([fadb269](https://github.com/anolilab/lunora/commit/fadb269f3e8af23559f131e5ece944b281caef61))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.73
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.124
+
+## @lunora/hyperdrive [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.119...@lunora/hyperdrive@1.0.0-alpha.120) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.72
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.123
+
+## @lunora/hyperdrive [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.118...@lunora/hyperdrive@1.0.0-alpha.119) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.71
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.122
+
+## @lunora/hyperdrive [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.117...@lunora/hyperdrive@1.0.0-alpha.118) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.70
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.121
+
+## @lunora/hyperdrive [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.116...@lunora/hyperdrive@1.0.0-alpha.117) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* `NodePgLike`, `PostgresJsLike` and `Mysql2Like` declare their
+members with method syntax and an explicit `this: void`. An implementation that
+assigned a bare arrow property still satisfies them; code that aliased the
+member type keeps working.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* unbreak the first five minutes of a new project ([#746](https://github.com/anolilab/lunora/issues/746)) ([9915245](https://github.com/anolilab/lunora/commit/9915245c32e6891f098ebece5a3243f5fa5d3c5d))
+
+## @lunora/hyperdrive [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.115...@lunora/hyperdrive@1.0.0-alpha.116) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+* **hyperdrive:** show the real ctx.sql wiring ([#707](https://github.com/anolilab/lunora/issues/707)) ([caab3fb](https://github.com/anolilab/lunora/commit/caab3fbb6aa629b360267be5c38ba016439581df))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.66
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.118
+
+## @lunora/hyperdrive [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.114...@lunora/hyperdrive@1.0.0-alpha.115) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/platform:** upgraded to 1.0.0-alpha.30
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.64
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.116
+
+## @lunora/hyperdrive [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.113...@lunora/hyperdrive@1.0.0-alpha.114) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.63
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.115
+
+## @lunora/hyperdrive [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.112...@lunora/hyperdrive@1.0.0-alpha.113) (2026-09-08)
+
+### Bug Fixes
+
+* the five alpha.238 field reports — auth inserts, invite-only, .vectors(), findUnique ([#671](https://github.com/anolilab/lunora/issues/671)) ([34677ef](https://github.com/anolilab/lunora/commit/34677ef5661a487340319de66bd37feaa73e7d71))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.62
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.114
+
 ## @lunora/hyperdrive [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.111...@lunora/hyperdrive@1.0.0-alpha.112) (2026-09-07)
 
 

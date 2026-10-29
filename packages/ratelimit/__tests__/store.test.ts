@@ -99,3 +99,104 @@ describe("sql store (real node:sqlite)", () => {
         await expect(reopened.limit("send", { key: "u1" })).resolves.toMatchObject({ ok: true });
     });
 });
+
+// Calls started in the same tick all run up to their first `await` before any of
+// them resumes. A synchronous store must therefore read and write a consume in one
+// step: an `await` between the read and the write lets every call read the same
+// empty prior, and a limit of 1 admits all of them.
+describe("concurrent consumes through a synchronous store", () => {
+    it.each(["memory", "sql"] as const)("%s store admits exactly one of ten for a limit of 1", async (kind) => {
+        expect.assertions(1);
+
+        const harness = createSqliteSql();
+
+        try {
+            const limiter = new RateLimiter({
+                config: { login: { kind: "fixed window", period: 60_000, rate: 1 } },
+                now: () => 0,
+                store: kind === "memory" ? createMemoryStore() : createSqlStore({ sql: harness.sql }),
+            });
+
+            const statuses = await Promise.all(Array.from({ length: 10 }, async () => limiter.limit("login", { key: "u1" })));
+
+            expect(statuses.filter((status) => status.ok)).toHaveLength(1);
+        } finally {
+            harness.close();
+        }
+    });
+});
+
+describe("sql store retention sweep (real node:sqlite)", () => {
+    let harness: ReturnType<typeof createSqliteSql>;
+
+    beforeEach(() => {
+        harness = createSqliteSql();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const keys = (): string[] =>
+        harness.sql
+            .exec<{ k: string }>(`SELECT k FROM "_lunora_rate_limits" ORDER BY k`)
+            .toArray()
+            .map((row) => row.k);
+
+    it("creates a partial index on ts that excludes debts", () => {
+        expect.assertions(1);
+
+        createSqlStore({ sql: harness.sql });
+
+        expect(harness.sql.exec<{ sql: string }>(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = '_lunora_rate_limits_ts'`).toArray()).toEqual([
+            { sql: expect.stringContaining("WHERE value >= 0") as string },
+        ]);
+    });
+
+    it("deletes rows at or before the horizon and keeps rows inside it", async () => {
+        expect.assertions(1);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        await store.set("old", { ts: 100, value: 1 });
+        await store.set("edge", { ts: 500, value: 1 });
+        await store.set("fresh", { ts: 900, value: 1 });
+
+        await store.sweep?.(500, 32);
+
+        expect(keys()).toEqual(["fresh"]);
+    });
+
+    it("keeps a reserved debt however old, and does not count it against the limit", async () => {
+        expect.assertions(1);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        await store.set("debt", { ts: 1, value: -10 });
+        await store.set("a", { ts: 100, value: 1 });
+        await store.set("b", { ts: 200, value: 1 });
+
+        await store.sweep?.(500, 1);
+
+        expect(keys()).toEqual(["b", "debt"]);
+    });
+
+    it("deletes at most limit rows per call", async () => {
+        expect.assertions(2);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        for (const index of [1, 2, 3, 4, 5]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential writes keep the fixture deterministic
+            await store.set(`k${String(index)}`, { ts: index, value: 1 });
+        }
+
+        await store.sweep?.(500, 2);
+
+        expect(keys()).toHaveLength(3);
+
+        await store.sweep?.(500, 2);
+
+        expect(keys()).toHaveLength(1);
+    });
+});

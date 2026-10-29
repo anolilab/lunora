@@ -1,0 +1,215 @@
+/**
+ * HTTP polling fallback for live queries on a network that blocks WebSockets.
+ *
+ * Lunora's one-shot calls (`query` / `mutation` / `action`) already ride HTTP
+ * POST, so a corporate proxy or captive network that refuses the `Upgrade`
+ * handshake does not break them — it breaks **reactivity**, and only that. Every
+ * live query bound to the shard simply stops moving, the status indicator reads
+ * `"connecting"` forever, and nothing says why.
+ *
+ * This controller closes that gap the cheapest way that keeps data flowing: after
+ * a run of connect attempts that never reach `open`, the client stops relying on
+ * the socket for freshness and re-runs each active subscription's query over the
+ * existing batch-RPC endpoint on an interval, feeding the results into the very
+ * same frame-apply path a server `data` frame takes. When a socket finally does
+ * open, polling stops and the normal resubscribe handshake takes over.
+ *
+ * A poll that cannot reach the origin at all (the `fetch` itself rejects) stops
+ * polling too. A socket that will not open looks the same whether a proxy is
+ * refusing the upgrade or the device has no network, and only a poll tells the
+ * two apart. So the fallback reports `"polling"` only once a pass has actually
+ * reached the origin. A pass that cannot reach it hands the status back to the
+ * socket's own `"connecting"` / `"offline"`, and the next failed connect attempt
+ * tries polling again.
+ *
+ * # What this is not
+ *
+ * It is a **degradation, not a second transport**, and the difference is worth
+ * stating because the gap it leaves is not obvious from the outside:
+ *
+ * Only plain live queries are polled — **shapes** (`@lunora/db` collections),
+ * **durable streams** and **whispers** are WebSocket-only surfaces with no
+ * request/response equivalent to re-run, so they stay dark for as long as the
+ * socket does. Freshness is bounded by the interval, not by the write: there is no
+ * CDC cursor on this path, so each tick carries a full snapshot and a poll costs
+ * what the query costs, repeatedly. And it does not make an app offline-capable —
+ * a poll is an HTTP request, so when nothing can reach the origin the offline
+ * queue is what carries you, and the status says `"offline"` rather than
+ * `"polling"`.
+ *
+ * So the honest summary for a UI: `"polling"` means *live, but slower and
+ * partial*, which is why it is a distinct `ConnectionStatus` rather than being
+ * folded into `"connected"`.
+ *
+ * # Why "failed to open", not "closed"
+ *
+ * The trigger is deliberately a run of attempts that never reached `open`, not a
+ * run of disconnects. A socket that opens and drops is a flaky network, and the
+ * reconnect backoff is the right answer to that — falling back to polling would
+ * trade a self-healing channel for a permanently worse one. A socket that never
+ * opens at all is the signature of something refusing the upgrade, which no
+ * amount of retrying fixes.
+ */
+
+import { withinRpcDeadline } from "./rpc-deadline";
+
+/** Knobs for {@link createPollingFallback}. */
+interface PollingFallbackOptions {
+    /**
+     * Consecutive connect attempts that must fail to reach `open` before polling
+     * starts. More than one so a single cold-start timeout or a deploy bounce
+     * does not flip a healthy client onto the slow path.
+     */
+    readonly afterFailedAttempts: number;
+
+    /** Interval between polls, in ms. */
+    readonly intervalMs: number;
+
+    /**
+     * A poll pass reached the origin. Fired on every such pass, not only the
+     * first: the client flushes queued writes here, and a write can be queued
+     * while polling is live (its request failed after the last poll).
+     */
+    readonly onReachable: () => void;
+
+    /** Re-read the state (i.e. recompute + emit the aggregate connection status). */
+    readonly onStateChange: () => void;
+
+    /**
+     * Run one poll pass. Resolves `true` when the origin answered (even with an
+     * error), `false` when the request never reached it. A rejection is swallowed
+     * and leaves the state as it was, so a failed tick just waits for the next.
+     */
+    readonly poll: () => Promise<boolean>;
+}
+
+/** The polling state machine for ONE shard connection. */
+export interface PollingFallback {
+    /** `true` once a connect attempt has failed to reach `open` since the last one that did. */
+    hasFailedOpen: () => boolean;
+    /** `true` while the interval is armed AND the latest pass reached the origin. */
+    isPolling: () => boolean;
+    /** A connect attempt ended without ever reaching `open`. Starts polling at the threshold. */
+    noteFailedOpen: () => void;
+    /** A connect attempt reached `open`: reset the run and stop polling. */
+    noteOpen: () => void;
+    /** Stop polling and clear the timer (client close / connection teardown). Keeps the failure run. */
+    stop: () => void;
+}
+
+/**
+ * Build the polling state machine for one connection. Inert when `intervalMs` is
+ * `0` or less — `noteFailedOpen` then only counts, and `isPolling` is always
+ * `false`, so the client behaves exactly as it did before this existed.
+ */
+export const createPollingFallback = (options: PollingFallbackOptions): PollingFallback => {
+    const { afterFailedAttempts, intervalMs, onReachable, onStateChange, poll } = options;
+    const enabled = intervalMs > 0 && afterFailedAttempts > 0;
+
+    let failures = 0;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    // Whether the latest pass reached the origin. Starts `false` on every arm, so
+    // the status does not claim `"polling"` before any data has come back.
+    let live = false;
+    // Ticks must not overlap: a poll slower than the interval would otherwise
+    // stack requests on a link that is already the reason we are here.
+    let inFlight = false;
+
+    const stop = (): void => {
+        if (timer === undefined) {
+            return;
+        }
+
+        clearInterval(timer);
+        timer = undefined;
+        live = false;
+        onStateChange();
+    };
+
+    const settle = (reachable: boolean): void => {
+        // Stopped (a socket opened, or the client closed) while this pass was in flight.
+        if (timer === undefined) {
+            return;
+        }
+
+        if (!reachable) {
+            // Nothing reaches the origin, so polling does nothing useful. Stop and
+            // let the socket status speak. The failure run is kept, so the next
+            // failed connect attempt arms polling again, and that pass is the probe
+            // that notices the network came back.
+            stop();
+
+            return;
+        }
+
+        if (!live) {
+            live = true;
+            onStateChange();
+        }
+
+        onReachable();
+    };
+
+    const tick = (): void => {
+        if (inFlight) {
+            return;
+        }
+
+        inFlight = true;
+
+        // `finally` before `catch`, deliberately: `finally` passes a rejection
+        // through, so the flag is always cleared AND the rejection is still
+        // swallowed by the trailing `catch`. A failed pass is not fatal — the
+        // next tick retries.
+        poll()
+            .then(settle)
+            .finally(() => {
+                inFlight = false;
+            })
+            .catch(() => {
+                /* reported nowhere: the caller's own error path owns this */
+            });
+    };
+
+    return {
+        hasFailedOpen: () => failures > 0,
+        isPolling: () => timer !== undefined && live,
+        noteFailedOpen: () => {
+            failures += 1;
+
+            if (!enabled || timer !== undefined || failures < afterFailedAttempts) {
+                return;
+            }
+
+            timer = setInterval(tick, intervalMs);
+            onStateChange();
+
+            // Poll immediately rather than making the first value wait a full
+            // interval: by this point the subscriptions have already been stale
+            // for several failed connect attempts.
+            tick();
+        },
+        noteOpen: () => {
+            failures = 0;
+            stop();
+        },
+        stop,
+    };
+};
+
+/**
+ * How long one polling-fallback request may take before it counts as unreachable.
+ * Without it a network that accepts the connection and never answers ("Wi-Fi
+ * without internet") holds the poll in flight forever, and the in-flight guard
+ * blocks every later tick, so the status stays `"polling"` and writes keep
+ * skipping the queue.
+ */
+export const POLL_TIMEOUT_MS = 10_000;
+
+/**
+ * Run a poll request with {@link POLL_TIMEOUT_MS}. The timeout aborts it and
+ * rejects with a `TypeError`, the same error an unreachable origin gives, even
+ * when a `fetch` double ignores the signal.
+ */
+export const withinPollTimeout = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> =>
+    withinRpcDeadline(POLL_TIMEOUT_MS, undefined, run, () => new TypeError("LunoraClient: poll timed out"));

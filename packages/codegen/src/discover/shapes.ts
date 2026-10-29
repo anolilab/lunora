@@ -8,6 +8,8 @@ import { diagnosticAt } from "../diagnostics";
 import type { ShapeIR, ValidatorIR } from "../ir";
 import { isServerPackageModule } from "../module-specifiers";
 import { parseObjectShape } from "../parse-validator";
+import { findObjectProperty } from "./ast";
+import { addressableExportNameOf } from "./attribution";
 
 /** The only file shapes may be declared in — mirrors `lunora/queues.ts`. */
 const SHAPES_FILENAME = "shapes.ts";
@@ -98,7 +100,7 @@ const tableLiteralFrom = (call: CallExpression): string | undefined => {
         return undefined;
     }
 
-    const tableProperty = config.getProperty("table");
+    const tableProperty = findObjectProperty(config, "table");
 
     if (!tableProperty || !Node.isPropertyAssignment(tableProperty)) {
         return undefined;
@@ -123,7 +125,7 @@ const argsFrom = (call: CallExpression): Record<string, ValidatorIR> => {
         return {};
     }
 
-    const argsProperty = config.getProperty("args");
+    const argsProperty = findObjectProperty(config, "args");
 
     if (!argsProperty || !Node.isPropertyAssignment(argsProperty)) {
         return {};
@@ -143,10 +145,6 @@ const shapesFromSource = (source: SourceFile): ShapeIR[] => {
     const shapes: ShapeIR[] = [];
 
     for (const declaration of source.getVariableDeclarations()) {
-        if (!declaration.isExported()) {
-            continue;
-        }
-
         const initializer = declaration.getInitializer();
 
         if (initializer?.getKind() !== SyntaxKind.CallExpression) {
@@ -162,11 +160,22 @@ const shapesFromSource = (source: SourceFile): ShapeIR[] => {
 
         const nameNode = declaration.getNameNode();
 
+        // Only the `export` keyword can export a destructuring; an unexported one is a local.
         if (!Node.isIdentifier(nameNode)) {
+            if (declaration.getVariableStatement()?.hasExportKeyword() !== true) {
+                continue;
+            }
+
             throw diagnosticAt(nameNode, "defineShape exports must be plain named exports (no destructuring)");
         }
 
-        shapes.push({ args: argsFrom(callExpression), exportName: nameNode.getText(), filePath: "shapes", table: tableLiteralFrom(callExpression) });
+        const exportName = addressableExportNameOf(declaration, "binding");
+
+        if (exportName === undefined) {
+            continue;
+        }
+
+        shapes.push({ args: argsFrom(callExpression), exportName, filePath: "shapes", table: tableLiteralFrom(callExpression) });
     }
 
     return shapes;

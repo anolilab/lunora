@@ -3,102 +3,8 @@ import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 import { FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
-import { authClient } from "./auth-client";
 import { api } from "../lunora/_generated/api";
-
-/** Human label + colour for the live-socket status badge. */
-const STATUS: Record<string, { color: string; label: string }> = {
-    connected: { color: "#16a34a", label: "live" },
-    connecting: { color: "#d97706", label: "connecting…" },
-    idle: { color: "#6b7280", label: "idle" },
-    offline: { color: "#dc2626", label: "offline" },
-};
-
-/**
- * The chat screen. `useQuery` opens a live subscription — the list updates in
- * place as anyone posts — and `useMutation` sends optimistically (queued and
- * retried offline, thanks to the AsyncStorage persistence wired in
- * `src/lunora.ts`). `useConnectionStatus` drives the live/offline badge.
- */
-export function Chat(): ReactElement {
-    const { data: session } = authClient.useSession();
-    const myUserId = session?.user.id;
-    const myName = session?.user.name ?? session?.user.email ?? "me";
-
-    const messages = useQuery(api.messages.list, {});
-    const { error: sendError, mutate: send, pending } = useMutation(api.messages.send);
-    const status = useConnectionStatus();
-
-    const [draft, setDraft] = useState("");
-
-    const listRef = useRef<FlatList>(null);
-
-    // Reveal newly arrived messages (live-query deltas and the initial load).
-    useEffect(() => {
-        if (messages?.length) {
-            listRef.current?.scrollToEnd({ animated: true });
-        }
-    }, [messages]);
-
-    const handleSend = (): void => {
-        const text = draft.trim();
-
-        if (text === "" || pending) {
-            return;
-        }
-
-        // Clear the composer optimistically, but restore the text if the send is
-        // rejected so it's never lost — only when the user hasn't started a new
-        // draft. `sendError` surfaces the failure below the input either way.
-        setDraft("");
-        send({ authorName: myName, text }).catch(() => {
-            setDraft((current) => (current === "" ? text : current));
-        });
-    };
-
-    const badge = STATUS[status] ?? STATUS.idle;
-
-    return (
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.flex}>
-            <View style={styles.header}>
-                <Text style={styles.title}>Chat</Text>
-                <View style={styles.headerRight}>
-                    <View style={[styles.dot, { backgroundColor: badge.color }]} />
-                    <Text style={styles.status}>{badge.label}</Text>
-                    <Pressable onPress={() => void authClient.signOut()}>
-                        <Text style={styles.signOut}>Sign out</Text>
-                    </Pressable>
-                </View>
-            </View>
-
-            <FlatList
-                contentContainerStyle={styles.listContent}
-                data={messages ?? []}
-                keyExtractor={(item) => item._id}
-                ref={listRef}
-                renderItem={({ item }) => {
-                    const mine = item.userId === myUserId;
-
-                    return (
-                        <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
-                            {mine ? null : <Text style={styles.author}>{item.authorName}</Text>}
-                            <Text style={mine ? styles.textMine : styles.textTheirs}>{item.text}</Text>
-                        </View>
-                    );
-                }}
-            />
-
-            {sendError ? <Text style={styles.error}>{sendError.message}</Text> : null}
-
-            <View style={styles.composer}>
-                <TextInput onChangeText={setDraft} onSubmitEditing={handleSend} placeholder="Message" returnKeyType="send" style={styles.input} value={draft} />
-                <Pressable onPress={handleSend} style={({ pressed }) => [styles.sendButton, pressed && styles.pressed]}>
-                    <Text style={styles.sendText}>Send</Text>
-                </Pressable>
-            </View>
-        </KeyboardAvoidingView>
-    );
-}
+import { authClient } from "./auth-client";
 
 const styles = StyleSheet.create({
     author: { color: "#6b7280", fontSize: 12, marginBottom: 2 },
@@ -122,3 +28,129 @@ const styles = StyleSheet.create({
     textTheirs: { color: "#111827", fontSize: 16 },
     title: { fontSize: 20, fontWeight: "700" },
 });
+/** Human label + colour for the live-socket status badge. */
+const STATUS: Record<string, { color: string; label: string }> = {
+    connected: { color: "#16a34a", label: "live" },
+    connecting: { color: "#d97706", label: "connecting…" },
+    idle: { color: "#6b7280", label: "idle" },
+    offline: { color: "#dc2626", label: "offline" },
+};
+
+/**
+ * The chat screen. `useQuery` opens a live subscription — the list updates in
+ * place as anyone posts — and `useMutation` sends optimistically (queued and
+ * retried offline, thanks to the AsyncStorage persistence wired in
+ * `src/lunora.ts`). `useConnectionStatus` drives the live/offline badge.
+ */
+export const Chat = (): ReactElement => {
+    const { data: session } = authClient.useSession();
+    const myUserId = session?.user.id;
+    const myName = session?.user.name ?? session?.user.email ?? "me";
+
+    const messages = useQuery(api.messages.list, {});
+    const { error: sendError, mutate: send } = useMutation(api.messages.send);
+    const status = useConnectionStatus();
+
+    const [draft, setDraft] = useState("");
+
+    const listReference = useRef<FlatList>(null);
+
+    // Reveal newly arrived messages (live-query deltas and the initial load).
+    useEffect(() => {
+        if (messages?.length) {
+            listReference.current?.scrollToEnd({ animated: true });
+        }
+    }, [messages]);
+
+    const handleSend = (): void => {
+        const text = draft.trim();
+
+        // Deliberately NOT gated on `pending`. A queued offline write stays
+        // pending until it replays on reconnect, so gating here let the user send
+        // exactly one message offline and then silently swallowed every tap —
+        // which is the opposite of what the offline queue is here to demonstrate.
+        // Double-submit is already covered: the composer clears below, so a second
+        // tap sees an empty draft and returns.
+        if (text === "") {
+            return;
+        }
+
+        // Clear the composer optimistically, but restore the text if the send is
+        // rejected so it's never lost — only when the user hasn't started a new
+        // draft. `sendError` surfaces the failure below the input either way.
+        setDraft("");
+        send({ authorName: myName, text }).catch(() => {
+            setDraft((current) => (current === "" ? text : current));
+        });
+    };
+
+    const badge = STATUS[status] ?? STATUS.idle;
+
+    return (
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.flex}>
+            <View style={styles.header}>
+                <Text style={styles.title}>Chat</Text>
+                <View style={styles.headerRight}>
+                    {/* Colour alone conveys the status, so the dot is decorative — the
+                        adjacent label is the accessible version of the same fact. */}
+                    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.dot, { backgroundColor: badge.color }]} />
+                    <Text accessibilityLabel={`Connection: ${badge.label}`} accessibilityLiveRegion="polite" style={styles.status}>
+                        {badge.label}
+                    </Text>
+                    <Pressable
+                        accessibilityLabel="Sign out"
+                        accessibilityRole="button"
+                        onPress={() => {
+                            void authClient.signOut();
+                        }}
+                    >
+                        <Text style={styles.signOut}>Sign out</Text>
+                    </Pressable>
+                </View>
+            </View>
+
+            <FlatList
+                contentContainerStyle={styles.listContent}
+                data={messages ?? []}
+                keyExtractor={(item) => item._id}
+                ref={listReference}
+                renderItem={({ item }) => {
+                    const mine = item.userId === myUserId;
+
+                    return (
+                        <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
+                            {mine ? null : <Text style={styles.author}>{item.authorName}</Text>}
+                            <Text style={mine ? styles.textMine : styles.textTheirs}>{item.text}</Text>
+                        </View>
+                    );
+                }}
+            />
+
+            {sendError ? (
+                <Text accessibilityLiveRegion="assertive" accessibilityRole="alert" style={styles.error}>
+                    {sendError.message}
+                </Text>
+            ) : null}
+
+            <View style={styles.composer}>
+                <TextInput
+                    accessibilityLabel="Message"
+                    onChangeText={setDraft}
+                    onSubmitEditing={handleSend}
+                    placeholder="Message"
+                    returnKeyType="send"
+                    style={styles.input}
+                    value={draft}
+                />
+                <Pressable
+                    accessibilityLabel="Send message"
+                    accessibilityRole="button"
+                    onPress={handleSend}
+                    style={({ pressed }) => [styles.sendButton, pressed && styles.pressed]}
+                >
+                    <Text style={styles.sendText}>Send</Text>
+                </Pressable>
+            </View>
+        </KeyboardAvoidingView>
+    );
+};

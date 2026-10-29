@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import extendContext from "./extend-context";
 import type { Middleware, MiddlewareNext } from "./types";
 
 /**
@@ -56,7 +57,7 @@ const runMiddlewareChain = async (
         const downstream: { promise: Promise<unknown> | undefined } = { promise: undefined };
 
         const next = ((options?: { ctx: Record<string, unknown> }) => {
-            downstream.promise = dispatch(index + 1, options?.ctx ? { ...(context as Record<string, unknown>), ...options.ctx } : context);
+            downstream.promise = dispatch(index + 1, options?.ctx ? extendContext(context, options.ctx) : context);
 
             return downstream.promise;
         }) as MiddlewareNext<unknown>;

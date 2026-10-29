@@ -1,3 +1,15 @@
 export { createDispatchLogger } from "./create-dispatch-logger";
-export { createDispatchRunner, getDispatchMessageId, isDeterministicDispatchFailure } from "./create-dispatch-runner";
+export type { DeclinedMessageContext, DeclinedMessageLike } from "./create-dispatch-runner";
+export {
+    createDispatchRunner,
+    DEFAULT_DISPATCH_TIMEOUT_MS,
+    DEFAULT_QUEUE_MAX_RETRIES,
+    DISPATCH_CLAIM_CEILING_MS,
+    DISPATCH_DECLINE_RETRY_DELAY_SECONDS,
+    getDispatchMessageId,
+    isDeterministicDispatchFailure,
+    isDispatchDecline,
+    retryDeclinedMessage,
+} from "./create-dispatch-runner";
+export { signRequeue, verifyRequeue } from "./requeue-mac";
 export type { ArgsOf, DispatchLogger, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "./types";

@@ -12,7 +12,6 @@ import type {
     KvKeyListResult,
     KvNamespaceSummary,
     KvValueResult,
-    LunoraClient,
     PipelineLogPage,
     PipelineLogQuery,
     ScheduleRecord,
@@ -21,13 +20,14 @@ import type {
     VectorIndexSummary,
     VectorQueryMatch,
 } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { vi } from "vitest";
 
 interface MockClientHooks {
     action: ReturnType<typeof vi.fn>;
     addAuthOrgMember: ReturnType<typeof vi.fn>;
     addAuthOrgTeamMember: ReturnType<typeof vi.fn>;
-    asClient: LunoraClient;
+    asClient: LunoraAdminClient;
     banAuthUser: ReturnType<typeof vi.fn>;
     cancelAuthOrgInvitation: ReturnType<typeof vi.fn>;
     cancelScheduledJob: ReturnType<typeof vi.fn>;
@@ -49,6 +49,7 @@ interface MockClientHooks {
     /** Push a job list to every live `subscribeScheduledJobs` subscriber. */
     emitJobs: (jobs: ScheduleRecord[]) => void;
     facetGlobalColumn: ReturnType<typeof vi.fn>;
+    fetchArchitecture: ReturnType<typeof vi.fn>;
     fetchOpenApi: ReturnType<typeof vi.fn>;
     fetchOpenRpc: ReturnType<typeof vi.fn>;
     getAuthCapabilities: ReturnType<typeof vi.fn>;
@@ -128,6 +129,7 @@ interface MockClientImpls {
     action?: Impl;
     cancelScheduledJob?: (id: string) => { cancelled: boolean };
     facetGlobalColumn?: (options: { column: string; filters?: GlobalFilterClause[]; limit?: number; table: string }) => GlobalFacetResult;
+    fetchArchitecture?: () => Record<string, unknown>;
     fetchOpenApi?: () => Record<string, unknown>;
     fetchOpenRpc?: () => Record<string, unknown>;
     getCronJobs?: () => CronJobInfo[];
@@ -158,6 +160,9 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const mutation = makeMethod(impls.mutation);
     const action = makeMethod(impls.action);
     const listFunctions = vi.fn<() => Promise<FunctionDescriptor[]>>(async () => impls.listFunctions?.() ?? []);
+    const fetchArchitecture = vi.fn<() => Promise<Record<string, unknown>>>(
+        async () => impls.fetchArchitecture?.() ?? { edges: [], nodes: [], modules: [], unresolved: [], version: 1 },
+    );
     const fetchOpenApi = vi.fn<() => Promise<Record<string, unknown>>>(async () => impls.fetchOpenApi?.() ?? { openapi: "3.1.0", paths: {} });
     const fetchOpenRpc = vi.fn<() => Promise<Record<string, unknown>>>(async () => impls.fetchOpenRpc?.() ?? { methods: [], openrpc: "1.3.2" });
     const listScheduledJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => impls.listScheduledJobs?.() ?? []);
@@ -482,6 +487,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         getAuthToken: () => "mock-admin-token",
         deleteStorageObject,
         facetGlobalColumn,
+        fetchArchitecture,
         fetchOpenApi,
         fetchOpenRpc,
         getCronJobs,
@@ -496,7 +502,9 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         listStorageBuckets,
         listStorageObjects,
         listVectorIndexes,
+        canQueueOffline: () => true,
         mutation,
+        onIdentityChange: () => () => undefined,
         putKvValue,
         query,
         queryLogArchive,
@@ -511,7 +519,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         /** The worker origin a REST try-it request is resolved against. */
         url: "http://127.0.0.1:8787",
         ...authAdminMethods,
-    } as unknown as LunoraClient;
+    } as unknown as LunoraAdminClient;
 
     return {
         action,
@@ -523,6 +531,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         emitError,
         emitJobs,
         facetGlobalColumn,
+        fetchArchitecture,
         fetchOpenApi,
         fetchOpenRpc,
         getCronJobs,

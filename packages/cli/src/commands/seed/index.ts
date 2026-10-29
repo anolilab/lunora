@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 const seedCommand: Command = {
     description: "Generate deterministic fake data from lunora/schema.ts and bulk-insert it via the worker's admin endpoint",
     examples: [
@@ -7,6 +9,7 @@ const seedCommand: Command = {
         ["lunora seed --table posts --count 50", "Seed 50 posts; FK-parent tables are seeded automatically"],
         ["lunora seed --reset", "Wipe local .wrangler/state, then seed from scratch"],
         ["lunora seed --seed 7 --dry-run", "Print the NDJSON for seed 7 without inserting"],
+        ["lunora seed --format json", "Report generated / inserted / conflicts per table as JSON"],
         ["lunora seed --seed 7 --now 1785000000000", "Byte-identical rows across runs (pins the clock too)"],
     ],
     group: "Data",
@@ -26,6 +29,12 @@ const seedCommand: Command = {
             type: Number,
         },
         { description: "Print the generated NDJSON instead of inserting", name: "dry-run", type: Boolean },
+        {
+            description: "Let a required foreign key with no row to point at take a dangling id instead of failing",
+            name: "allow-orphans",
+            type: Boolean,
+        },
+        OUTPUT_FORMAT_OPTION,
         { description: "Wipe local .wrangler/state before seeding (local dev only)", name: "reset", type: Boolean },
         { description: "Rows per HTTP request (default 500)", name: "batch-size", type: Number },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
@@ -42,9 +51,11 @@ const seedCommand: Command = {
 export { seedCommand };
 
 export type SeedOptions = CreateOptions<{
+    "allow-orphans": boolean | undefined;
     "batch-size": number | undefined;
     count: number | undefined;
     "dry-run": boolean | undefined;
+    format: string | undefined;
     now: number | undefined;
     prod: boolean | undefined;
     reset: boolean | undefined;

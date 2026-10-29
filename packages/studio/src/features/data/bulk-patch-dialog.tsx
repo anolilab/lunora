@@ -1,10 +1,10 @@
-import type { ReactElement } from "react";
-import { useState } from "react";
-
 // Bundler-inlined shared helper (see CLAUDE.md `shared/` rules) — the same wire
 // codec the row editor decodes with, so a tagged value typed here means what it
 // means everywhere else in the browser.
-import { decodeWire } from "../../../../../shared/wire-codec";
+import { decodeWire } from "@lunora/wire";
+import type { ReactElement } from "react";
+import { useState } from "react";
+
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";

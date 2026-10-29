@@ -1,7 +1,8 @@
 export type { ValidationPath } from "./errors";
 export { describeValue, formatPath, ValidationError } from "./errors";
+export { cyrb53 } from "./hash";
 export type { JsonSchema, SchemaNodeReader } from "./json-schema-core";
-export { jsonSchemaFromNode, objectSchemaFromNodes } from "./json-schema-core";
+export { acceptsAbsent, jsonSchemaFromNode, objectSchemaFromNodes } from "./json-schema-core";
 export { argsToJsonSchema, toJsonSchema } from "./to-json-schema";
 export type {
     ArrayColumnValidator,
@@ -29,6 +30,6 @@ export type {
     Validator,
     ValidatorKind,
 } from "./v";
-export { isOrWrapsFromValidator, optionalInner, v } from "./v";
+export { containsSensitive, isOrWrapsFromValidator, isStringValidator, optionalInner, sensitiveArgumentNames, v } from "./v";
 export type { CompiledValidatorMap, InferValidatorMap, ValidatorMap } from "./validator-map";
 export { DEFER_VALIDATION, installCompiledValidatorMap, parseValidatorMap } from "./validator-map";

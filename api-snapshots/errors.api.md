@@ -49,22 +49,19 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Not found";
     };
+    readonly DELIVERY_FENCED: {
+        readonly status: 409;
+        readonly title: "Delivery authorization changed";
+    };
+    readonly DELIVERY_RECEIPT_FENCED: {
+        readonly status: 409;
+        readonly title: "Committed receipt authorization changed";
+    };
     readonly CONFLICT: {
-        readonly hint: readonly [
-            "Another write changed this row while your mutation was running (optimistic concurrency conflict).",
-            "",
-            "Re-read the row and retry the mutation with the fresh value. Lunora serializes a DO's mutations, so a persistent conflict usually means the handler conflicts **with itself** (e.g. a trigger or cascade touching the same row) — split that work rather than adding a retry loop."
-        ];
         readonly status: 409;
         readonly title: "Conflict";
     };
     readonly NOT_UNIQUE: {
-        readonly hint: readonly [
-            "`.unique()` matched more than one document — it expects the query to identify at most one row.",
-            "",
-            "- If several matches are legitimate, use `.first()` (take one) or `.collect()` (take all) instead.",
-            "- Otherwise tighten the query (e.g. filter on a unique/indexed field) so it can only match one row."
-        ];
         readonly status: 400;
         readonly title: "Query matched more than one document";
     };
@@ -124,11 +121,6 @@ const ERROR_CATALOG: {
         readonly title: "Relation predicate is unsupported in a write policy";
     };
     readonly RLS_REQUIRED: {
-        readonly hint: readonly [
-            "This table is secure-by-default: it has no `.public()` marker and no RLS policy resolved for the caller, so the read fails closed.",
-            "",
-            "Add a read policy with `.rls(...)`, or mark the table `.public()` if it is intentionally world-readable."
-        ];
         readonly status: 403;
         readonly title: "RLS policy required";
     };
@@ -142,19 +134,16 @@ const ERROR_CATALOG: {
         readonly title: "Function kind may not be composed from a query";
     };
     readonly TRANSACTION_LIMIT_EXCEEDED: {
-        readonly hint: readonly [
-            "A single mutation may only read and write a bounded amount before it is stopped.",
-            "",
-            "Narrow the read with an index (`.withIndex(...)`) instead of scanning the table, or split the write across several mutations — for a large backfill use `defineMigration` + `lunora migrate up`, which batches and checkpoints for you.",
-            "",
-            "The ceilings are deliberately conservative — they exist to stop one request taking down the whole shard. A deployment that genuinely needs bigger transactions can raise them by overriding the `transactionLimits()` seam on its generated shard class."
-        ];
         readonly status: 413;
         readonly title: "Transaction limit exceeded";
     };
     readonly MIGRATION_NOT_FOUND: {
         readonly status: 404;
         readonly title: "Data migration not found";
+    };
+    readonly MIGRATION_DRIFT: {
+        readonly status: 409;
+        readonly title: "Migration drift";
     };
     readonly UNKNOWN_TABLE: {
         readonly status: 404;
@@ -180,6 +169,10 @@ const ERROR_CATALOG: {
         readonly status: 502;
         readonly title: "Shard HTTP error";
     };
+    readonly SHARD_DRY_RUN_UNSUPPORTED: {
+        readonly status: 501;
+        readonly title: "Shard cannot dry-run an import";
+    };
     readonly SUBSCRIPTION_PERSIST_FAILED: {
         readonly status: 500;
         readonly title: "Subscription persist failed";
@@ -188,13 +181,33 @@ const ERROR_CATALOG: {
         readonly status: 429;
         readonly title: "Too many subscriptions";
     };
+    readonly LIVE_CONTROL_SUPERSEDED: {
+        readonly status: 409;
+        readonly title: "A later live control call already applied";
+    };
     readonly OFFLINE_IDENTITY_CHANGED: {
         readonly status: 409;
         readonly title: "Offline identity changed";
     };
+    readonly OFFLINE_NOT_QUEUED: {
+        readonly status: 503;
+        readonly title: "Offline, write not queued";
+    };
+    readonly IDENTITY_MISMATCH: {
+        readonly status: 409;
+        readonly title: "Session changed since the write was queued";
+    };
     readonly CODEGEN_DIAGNOSTIC: {
         readonly status: 500;
         readonly title: "Codegen diagnostic";
+    };
+    readonly JURISDICTION_MOVE: {
+        readonly status: 422;
+        readonly title: "Unacknowledged jurisdiction move";
+    };
+    readonly INDEX_FIELD_NESTED_PATH: {
+        readonly status: 500;
+        readonly title: "Index field is a nested path";
     };
     readonly SCHEMA_SNAPSHOT_PARSE: {
         readonly status: 500;
@@ -205,32 +218,47 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Invalid environment";
     };
+    readonly X402_FACILITATOR_ERROR: {
+        readonly internal: true;
+        readonly status: 502;
+        readonly title: "Payment facilitator error";
+    };
     readonly AUTH_HEADERS_MISSING: {
         readonly internal: true;
         readonly status: 500;
         readonly title: "Auth headers missing";
     };
+    readonly PRIVACY_COVERAGE: {
+        readonly status: 500;
+        readonly title: "Privacy coverage check failed";
+    };
+    readonly PRIVACY_REQUEST_OPEN: {
+        readonly status: 409;
+        readonly title: "A privacy request is already open";
+    };
+    readonly PRIVACY_SESSION_NOT_FRESH: {
+        readonly status: 403;
+        readonly title: "Recent sign-in required";
+    };
     readonly EMAIL_DOMAIN_BLOCKED: {
-        readonly hint: readonly [
-            "This address's domain is on the disposable/throwaway blocklist (or your configured deny-list).",
-            "",
-            "Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` to `emailGate(...)` (`@lunora/auth/email-guard`)."
-        ];
         readonly status: 400;
         readonly title: "Email domain not allowed";
     };
     readonly EMAIL_UNDELIVERABLE: {
-        readonly hint: readonly [
-            "The address's domain publishes no MX (or fallback A/AAAA) records, so it can't receive mail.",
-            "",
-            "Check for a typo in the domain. MX verification is opt-in (`mx: true`) and needs DNS — leave it off on the edge path if DNS is unavailable."
-        ];
         readonly status: 400;
         readonly title: "Email domain cannot receive mail";
     };
-    readonly ANALYTICS_SQL_ERROR: {
+    readonly ANALYTICS_SQL_QUERY_ERROR: {
         readonly status: 502;
-        readonly title: "Analytics Engine SQL API error";
+        readonly title: "Analytics SQL query error";
+    };
+    readonly BROWSER_RUN_ERROR: {
+        readonly status: 502;
+        readonly title: "Browser Run API error";
+    };
+    readonly BROWSER_TOO_MANY_REDIRECTS: {
+        readonly status: 502;
+        readonly title: "Too many redirects";
     };
     readonly R2_SQL_ERROR: {
         readonly status: 502;
@@ -274,13 +302,6 @@ const ERROR_CATALOG: {
         readonly title: "Admin token not configured";
     };
     readonly AUTH_MIGRATOR_UNSUPPORTED: {
-        readonly hint: readonly [
-            "better-auth migrates only through its Kysely adapter, so `ensureMigrated` / `compileMigrationsSql` need the raw D1 binding as `database` — a custom adapter (`lunoraD1Adapter`, `lunoraAuthAdapter`, `lunoraDoAdapter`) cannot be migrated through, and neither can an absent `database`.",
-            "",
-            "Build a SECOND, migration-only instance over the raw binding — `createAuth({ ...options, database: env.DB })` — and hand that one to `ensureMigrated`. Keep the adapter on the instance that serves requests: the adapter exists to dodge a dev-runner hang in `$context`, which the migration instance never resolves.",
-            "",
-            "To compile the SQL off-platform (`compileMigrationsSql`), diff against an empty local database — `new DatabaseSync(':memory:')` from `node:sqlite` — rather than passing no `database` at all."
-        ];
         readonly status: 500;
         readonly title: "Auth migrator cannot drive the configured database";
     };
@@ -292,27 +313,31 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Auth admin operation not supported";
     };
+    readonly AUTH_CIMD_FETCH_NOT_PUBLIC: {
+        readonly status: 500;
+        readonly title: "CIMD transport needs the global_fetch_strictly_public flag";
+    };
+    readonly AUTH_MCP_RESOURCE_AMBIGUOUS: {
+        readonly status: 500;
+        readonly title: "MCP resource cannot be told apart from the provider's other resources";
+    };
+    readonly AUTH_MCP_RESOURCE_INVALID: {
+        readonly status: 500;
+        readonly title: "MCP resource missing or not an absolute URL";
+    };
+    readonly MCP_STEP_UP_MISCONFIGURED: {
+        readonly status: 500;
+        readonly title: "MCP step-up misconfigured";
+    };
     readonly BACKUP_NOT_CONFIGURED: {
         readonly status: 500;
         readonly title: "Scheduled backup not configured";
     };
     readonly BACKUP_RETENTION_NOT_CONFIGURED: {
-        readonly hint: readonly [
-            "`lunora backup prune` removes snapshots past the retention window, and this worker has no window: set `backupRetain` (how many to keep) and `backupCron` (which decides whose snapshots retention owns) on `createWorker`.",
-            "",
-            "Nothing was deleted. A default is deliberately not invented here — retention deleting on its own is exactly what this command exists to replace."
-        ];
         readonly status: 400;
         readonly title: "Backup retention window not configured";
     };
     readonly BACKUP_TOO_LARGE: {
-        readonly hint: readonly [
-            "The scheduled backup is assembled inside the Worker isolate, so it caps the snapshot it will build. Nothing was written.",
-            "",
-            "The cap is on the NDJSON, not on peak memory: the export fan-out resolves every shard's rows before the first row is encoded, so a snapshot under the cap can still exhaust the isolate. It is set well below the isolate's limit for that reason.",
-            "",
-            "Narrow the snapshot with `backupTables`, or take this backup off-platform with `lunora backup create --bucket`, which runs on a machine rather than in an isolate. Backing up more often does not help — every run is a full snapshot."
-        ];
         readonly status: 507;
         readonly title: "Backup too large to assemble in a Worker";
     };
@@ -323,6 +348,10 @@ const ERROR_CATALOG: {
     readonly CRON_JOB_NOT_FOUND: {
         readonly status: 404;
         readonly title: "Cron job not found";
+    };
+    readonly EXPORT_SHARD_FAILED: {
+        readonly status: 502;
+        readonly title: "Export failed on one or more shards";
     };
     readonly EXPORT_TAP_NOT_CONFIGURED: {
         readonly status: 400;
@@ -335,6 +364,10 @@ const ERROR_CATALOG: {
     readonly GLOBALS_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Global-table introspector not configured";
+    };
+    readonly ID_COLLISION: {
+        readonly status: 409;
+        readonly title: "Document id already belongs to another table";
     };
     readonly KV_NOT_CONFIGURED: {
         readonly status: 400;
@@ -353,11 +386,6 @@ const ERROR_CATALOG: {
         readonly title: "Scheduler not configured";
     };
     readonly STORAGE_CHECKSUM_MISMATCH: {
-        readonly hint: readonly [
-            "The upload body did not match the declared `expectedSize` or `expectedSha256`, so nothing was written — this check fails closed.",
-            "",
-            "Re-read the bytes from the source export and retry the transfer. A persistent mismatch means the source blob is corrupt or truncated; fix the export rather than bypassing the check."
-        ];
         readonly status: 400;
         readonly title: "Storage checksum mismatch";
     };
@@ -366,11 +394,6 @@ const ERROR_CATALOG: {
         readonly title: "Storage delete not configured";
     };
     readonly STORAGE_DOWNLOAD_NOT_CONFIGURED: {
-        readonly hint: readonly [
-            "`GET /_lunora/admin/storage/object` needs a `storageDownload` function on the worker. The generated app worker wires it up; a hand-written `createWorker({ ... })` has to pass `(key, opts) => pick(opts?.bucket).download(key)` — forwarding `opts.bucket` to the right bucket, and wrapping rather than passing `createStorage(...).download` itself, whose second parameter is a byte range.",
-            "",
-            "Without it a bucket-backed `lunora backup restore --bucket` cannot read the snapshot. The object is still readable out of band with `wrangler r2 object get`."
-        ];
         readonly status: 400;
         readonly title: "Storage download not configured";
     };
@@ -390,12 +413,11 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Storage signed URL not configured";
     };
+    readonly AI_UNKNOWN_IMAGE_MODEL: {
+        readonly status: 400;
+        readonly title: "Unknown image model";
+    };
     readonly RAG_DIMENSION_MISMATCH: {
-        readonly hint: readonly [
-            "A stored vector and the query embedding have different widths, so they cannot be compared.",
-            "",
-            "This is what changing a RAG index's `embeddingModel` (or a provider's `dimensions` option) without reindexing looks like. Either put the previous model back, or reindex the namespace under the new one — bump `embeddingModelVersion` so the index rebuilds instead of mixing widths."
-        ];
         readonly status: 409;
         readonly title: "Embedding dimension mismatch";
     };
@@ -419,6 +441,34 @@ const ERROR_CATALOG: {
         readonly internal: true;
         readonly status: 500;
         readonly title: "Auth audit read failed";
+    };
+    readonly AUTH_MOVE_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Auth jurisdiction move not configured";
+    };
+    readonly AUTH_MOVE_TARGET_NOT_EMPTY: {
+        readonly status: 409;
+        readonly title: "Pinned auth object is not empty";
+    };
+    readonly AUTH_MOVE_CONFLICT: {
+        readonly status: 409;
+        readonly title: "Auth copy conflict";
+    };
+    readonly AUTH_MOVE_SOURCE_CHANGED: {
+        readonly status: 409;
+        readonly title: "Un-pinned auth object changed since the copy";
+    };
+    readonly AUTH_MOVE_SOURCE_PURGED: {
+        readonly status: 409;
+        readonly title: "Un-pinned auth object already purged";
+    };
+    readonly AUTH_MOVE_INCOMPLETE: {
+        readonly status: 409;
+        readonly title: "Auth copy not finished";
+    };
+    readonly AUTH_MOVE_FAILED: {
+        readonly status: 500;
+        readonly title: "Auth jurisdiction move failed";
     };
     readonly CRON_EXPR_INVALID: {
         readonly status: 500;
@@ -457,10 +507,6 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Duplicate cron job name";
     };
-    readonly DUPLICATE_AGENT_BINDING: {
-        readonly status: 500;
-        readonly title: "Duplicate agent binding";
-    };
     readonly DUPLICATE_AGENT_CLASS: {
         readonly status: 500;
         readonly title: "Duplicate agent generated class name";
@@ -481,9 +527,57 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Duplicate queue name";
     };
+    readonly DUPLICATE_ROOM_NAME: {
+        readonly status: 500;
+        readonly title: "Duplicate room name";
+    };
+    readonly ROOM_NAME_NOT_LITERAL: {
+        readonly status: 500;
+        readonly title: "Room name is not a string literal";
+    };
+    readonly DUPLICATE_SOCKET_PATH: {
+        readonly status: 500;
+        readonly title: "Duplicate socket route path";
+    };
+    readonly SOCKET_AUTH_NOT_LITERAL: {
+        readonly status: 500;
+        readonly title: "Socket route auth is not a literal boolean";
+    };
+    readonly SOCKET_PATH_INVALID: {
+        readonly status: 500;
+        readonly title: "Socket route path is not a plain URL path";
+    };
+    readonly SOCKET_PATH_NOT_LITERAL: {
+        readonly status: 500;
+        readonly title: "Socket route path is not a string literal";
+    };
+    readonly LIVE_STREAM_DUPLICATE: {
+        readonly status: 500;
+        readonly title: "Duplicate live stream id or export name";
+    };
+    readonly LIVE_STREAM_NOT_EXPORTED: {
+        readonly status: 500;
+        readonly title: "Live stream is not a named export";
+    };
+    readonly LIVE_STREAM_NOT_LITERAL: {
+        readonly status: 500;
+        readonly title: "Live stream declaration is not a literal";
+    };
+    readonly LIVE_TOPIC_INVALID: {
+        readonly status: 500;
+        readonly title: "Live topic name or key field is not allowed";
+    };
     readonly DUPLICATE_WORKFLOW_CLASS: {
         readonly status: 500;
         readonly title: "Duplicate workflow generated class name";
+    };
+    readonly WORKFLOW_EVENT_DUPLICATE: {
+        readonly status: 500;
+        readonly title: "Duplicate workflow event type";
+    };
+    readonly WORKFLOW_EVENT_NOT_LITERAL: {
+        readonly status: 500;
+        readonly title: "Workflow event type is not a string literal";
     };
     readonly MIGRATION_ID_NOT_STATIC: {
         readonly status: 500;
@@ -505,14 +599,29 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Batch limit exceeded";
     };
+    readonly CASCADE_LIMIT: {
+        readonly status: 400;
+        readonly title: "Cascade limit exceeded";
+    };
     readonly CROSS_SHARD_RANK_UNSUPPORTED: {
         readonly status: 400;
         readonly title: "Cross-shard rank() is unsupported";
     };
     readonly DISPATCH_UNAUTHENTICATED: {
-        readonly hint: "The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.";
         readonly status: 403;
         readonly title: "Dispatch caller not authenticated";
+    };
+    readonly DISPATCH_IN_PROGRESS: {
+        readonly status: 409;
+        readonly title: "Dispatch already in progress";
+    };
+    readonly STALE_CREDENTIAL: {
+        readonly status: 409;
+        readonly title: "Stale credential";
+    };
+    readonly IDENTITY_CHANGED: {
+        readonly status: 409;
+        readonly title: "Socket identity changed";
     };
     readonly FORBIDDEN_FANOUT: {
         readonly status: 403;
@@ -529,6 +638,14 @@ const ERROR_CATALOG: {
     readonly FORBIDDEN_SHARD: {
         readonly status: 403;
         readonly title: "Shard access forbidden";
+    };
+    readonly FORBIDDEN_TOPIC: {
+        readonly status: 403;
+        readonly title: "Live topic publish forbidden";
+    };
+    readonly GLOBAL_DRY_RUN_UNSUPPORTED: {
+        readonly status: 400;
+        readonly title: "Global table dry run not supported";
     };
     readonly GLOBAL_NOT_CONFIGURED: {
         readonly status: 400;
@@ -570,6 +687,10 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Shape cross-shard join is unsupported";
     };
+    readonly SHAPE_RELATION_PREDICATE: {
+        readonly status: 400;
+        readonly title: "Shape filtered by a relation is unsupported";
+    };
     readonly UNAUTHENTICATED: {
         readonly status: 401;
         readonly title: "Unauthenticated";
@@ -590,6 +711,10 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "CDC log trimmed";
     };
+    readonly CDC_TIMELINE_FORKED: {
+        readonly status: 409;
+        readonly title: "CDC timeline forked";
+    };
     readonly CDC_PAYLOAD_COMPACTED: {
         readonly status: 409;
         readonly title: "CDC payloads compacted";
@@ -597,6 +722,18 @@ const ERROR_CATALOG: {
     readonly EXPIRED: {
         readonly status: 404;
         readonly title: "Session expired";
+    };
+    readonly LIVE_CONNECTION_LIMIT: {
+        readonly status: 503;
+        readonly title: "Live connection limit reached";
+    };
+    readonly LIVE_CONNECTION_NOT_FOUND: {
+        readonly status: 404;
+        readonly title: "Live connection not found";
+    };
+    readonly LIVE_STREAMS_UNSUPPORTED: {
+        readonly status: 501;
+        readonly title: "Live streams are not served by this worker";
     };
     readonly NESTED_TRANSACTION: {
         readonly internal: true;
@@ -628,6 +765,10 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Stream id already in use";
     };
+    readonly STREAM_IDLE: {
+        readonly status: 504;
+        readonly title: "Stream went idle";
+    };
     readonly STREAM_INTERRUPTED: {
         readonly status: 503;
         readonly title: "Durable stream interrupted";
@@ -636,13 +777,25 @@ const ERROR_CATALOG: {
         readonly status: 507;
         readonly title: "Durable stream exceeded its chunk ceiling";
     };
+    readonly SUBSCRIPTION_RESULT_TOO_LARGE: {
+        readonly status: 413;
+        readonly title: "Subscription result too large";
+    };
     readonly TOKEN_EXPIRED: {
         readonly status: 401;
         readonly title: "Authentication token expired";
     };
+    readonly TOO_MANY_LIVE_TOPICS: {
+        readonly status: 429;
+        readonly title: "Too many live topics";
+    };
     readonly TOO_MANY_STREAMS: {
         readonly status: 429;
         readonly title: "Too many streams";
+    };
+    readonly TOO_MANY_WHISPER_TOPICS: {
+        readonly status: 429;
+        readonly title: "Too many whisper topics";
     };
     readonly UNKNOWN_ADMIN_OP: {
         readonly status: 404;
@@ -694,6 +847,10 @@ const ERROR_CATALOG: {
         readonly status: 502;
         readonly title: "Malformed HTTP stream chunk";
     };
+    readonly HTTP_STREAM_CALLBACK: {
+        readonly status: 500;
+        readonly title: "HTTP stream callback threw";
+    };
     readonly HTTP_STREAM_INTERRUPTED: {
         readonly status: 502;
         readonly title: "HTTP stream interrupted";
@@ -730,7 +887,17 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Unknown mutation function";
     };
+    readonly LOCAL_DEPENDENCY_MISSING: {
+        readonly status: 500;
+        readonly title: "Required local tool not found";
+    };
 };
+```
+
+### `ERROR_HINTS` (const)
+
+```ts
+const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>>;
 ```
 
 ### `ErrorBody` (interface)
@@ -742,6 +909,7 @@ interface ErrorBody {
     docsUrl?: string;
     hint?: ErrorHint;
     message: string;
+    why?: string;
 }
 ```
 
@@ -749,8 +917,6 @@ interface ErrorBody {
 
 ```ts
 interface ErrorCatalogEntry {
-    docsUrl?: string;
-    hint?: ErrorHint;
     internal?: boolean;
     status: number;
     title: string;
@@ -773,10 +939,17 @@ interface ErrorLocation {
 }
 ```
 
+### `HTTP_STREAM_NO_BODY_HINT` (const)
+
+```ts
+const HTTP_STREAM_NO_BODY_HINT: ReadonlyArray<string>;
+```
+
 ### `LunoraError` (class)
 
 ```ts
 class LunoraError extends Error {
+    static override [Symbol.hasInstance](value: unknown): boolean;
     readonly type = "VisulimaError";
     readonly hint: ErrorHint | undefined;
     readonly title: string | undefined;
@@ -785,6 +958,9 @@ class LunoraError extends Error {
     readonly status: number;
     readonly docsUrl: string | undefined;
     readonly data: unknown;
+    readonly why: string | undefined;
+    readonly internal: Record<string, unknown> | undefined;
+    readonly headers: Readonly<Record<string, string>> | undefined;
     constructor(code: LunoraErrorCodeInput, message?: string, options?: LunoraErrorOptions);
 }
 ```
@@ -811,6 +987,7 @@ interface LunoraErrorLike extends Error {
     hint?: ErrorHint;
     status: number;
     type: "VisulimaError";
+    why?: string;
 }
 ```
 
@@ -821,11 +998,14 @@ interface LunoraErrorOptions {
     cause?: unknown;
     data?: unknown;
     docsUrl?: string;
+    headers?: Readonly<Record<string, string>>;
     hint?: ErrorHint;
+    internal?: Record<string, unknown>;
     location?: ErrorLocation;
     name?: string;
     status?: number;
     title?: string;
+    why?: string;
 }
 ```
 
@@ -833,6 +1013,12 @@ interface LunoraErrorOptions {
 
 ```ts
 const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule>;
+```
+
+### `OFFLINE_NOT_QUEUED_HINT` (const)
+
+```ts
+const OFFLINE_NOT_QUEUED_HINT = "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).";
 ```
 
 ### `Solution` (interface)
@@ -895,6 +1081,18 @@ const findSolutionByMessage: (message: string) => Solution | undefined;
 
 ```ts
 const flattenHint: (hint: ErrorHint) => string;
+```
+
+### `getCatalogEntry` (const)
+
+```ts
+const getCatalogEntry: (code: string) => ErrorCatalogEntry | undefined;
+```
+
+### `getCatalogHint` (const)
+
+```ts
+const getCatalogHint: (code: string) => ErrorHint | undefined;
 ```
 
 ### `invariant` (const)

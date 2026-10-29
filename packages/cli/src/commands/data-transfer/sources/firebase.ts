@@ -388,5 +388,4 @@ const readFirestoreExport = async function* (
     yield* readDumpFiles(collections, logger, sourceRows, (dumpFile) => readFirestoreCollection(dumpFile, mapping));
 };
 
-export type { FirestoreValue };
-export { decodeValue, documentIdFromName, listFirestoreCollections, readFirestoreExport, toDocument };
+export { listFirestoreCollections, readFirestoreExport };

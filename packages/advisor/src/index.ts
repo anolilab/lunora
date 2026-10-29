@@ -31,10 +31,15 @@ import browserUserUrlWithoutAllowlist from "./lints/static/browser-user-url-with
 import circularFk from "./lints/static/circular-fk";
 import commitOrderedHardDelete from "./lints/static/commit-ordered-hard-delete";
 import containerInstanceKeyFromUserInput from "./lints/static/container-instance-key-from-user-input";
+import containerLongSleepAfter from "./lints/static/container-long-sleep-after";
 import containerOversizedInstance from "./lints/static/container-oversized-instance";
 import containerPublicInternet from "./lints/static/container-public-internet";
 import containerRuntimeEgressRelaxation from "./lints/static/container-runtime-egress-relaxation";
 import containerStartEnableInternetOverride from "./lints/static/container-start-enable-internet-override";
+import countWithoutIndex from "./lints/static/count-without-index";
+import cronEveryMinute from "./lints/static/cron-every-minute";
+import crossModuleTableWrite from "./lints/static/cross-module-table-write";
+import dispatchCycle from "./lints/static/dispatch-cycle";
 import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
 import errorWithoutCatalog from "./lints/static/error-without-catalog";
@@ -42,6 +47,7 @@ import exportSinkMisconfigured from "./lints/static/export-sink-misconfigured";
 import externalSourceIncrementalNoDeletePath from "./lints/static/external-source-incremental-no-delete-path";
 import externalSourceOnGlobal from "./lints/static/external-source-on-global";
 import externalSourceUnscoped from "./lints/static/external-source-unscoped";
+import filterAfterIndexScan from "./lints/static/filter-after-index-scan";
 import filterOnPrimaryKey from "./lints/static/filter-on-primary-key";
 import filterWithoutIndex from "./lints/static/filter-without-index";
 import flagGatesSecurityWithUnsafeDefault from "./lints/static/flag-gates-security-with-unsafe-default";
@@ -65,10 +71,12 @@ import maskWeakHashStrategyOnPii from "./lints/static/mask-weak-hash-strategy-on
 import maskedRelationLeakViaWith from "./lints/static/masked-relation-leak-via-with";
 import migrationStaleImport from "./lints/static/migration-stale-import";
 import mutatorFullRowReplace from "./lints/static/mutator-full-row-replace";
+import mutatorWithoutOwnerScope from "./lints/static/mutator-without-owner-scope";
 import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
 import normalizeIdUsedAsAuthorization from "./lints/static/normalize-id-used-as-authorization";
 import notifyMissingPushConfig from "./lints/static/notify-missing-push-config";
 import notifySendOutsideAction from "./lints/static/notify-send-outside-action";
+import openShardAccess from "./lints/static/open-shard-access";
 import outputProjectionMissingOnPublicRead from "./lints/static/output-projection-missing-on-public-read";
 import ownerFieldFromArgsNotAuth from "./lints/static/owner-field-from-args-not-auth";
 import paymentCreateWithoutAuthorize from "./lints/static/payment-create-without-authorize";
@@ -81,6 +89,7 @@ import procedureWithoutStructuredEvent from "./lints/static/procedure-without-st
 import publicArgumentUsesAny from "./lints/static/public-argument-uses-any";
 import publicMutationWithoutRatelimit from "./lints/static/public-mutation-without-ratelimit";
 import publicTableRlsOptoutConfusion from "./lints/static/public-table-rls-optout-confusion";
+import queueDispatchCycle from "./lints/static/queue-dispatch-cycle";
 import queueWithoutDlq from "./lints/static/queue-without-dlq";
 import r2sqlOutsideAction from "./lints/static/r2sql-outside-action";
 import ratelimitDefaultMemoryStore from "./lints/static/ratelimit-default-memory-store";
@@ -89,6 +98,7 @@ import ratelimitMiddlewareFailOpen from "./lints/static/ratelimit-middleware-fai
 import relationReferencesUnknownField from "./lints/static/relation-references-unknown-field";
 import relationReferencesUnknownTable from "./lints/static/relation-references-unknown-table";
 import rlsUncoveredTable from "./lints/static/rls-uncovered-table";
+import selfRescheduleWithoutProgress from "./lints/static/self-reschedule-without-progress";
 import shapeTargetsGlobalTable from "./lints/static/shape-targets-global-table";
 import shapeUnknownTable from "./lints/static/shape-unknown-table";
 import signupMutationWithoutDisposableGating from "./lints/static/signup-mutation-without-disposable-gating";
@@ -100,8 +110,12 @@ import storagePresignedUrlForPrivateContent from "./lints/static/storage-presign
 import storageUploadWithoutContentTypeAllowlist from "./lints/static/storage-upload-without-content-type-allowlist";
 import storageUploadWithoutMaxSize from "./lints/static/storage-upload-without-max-size";
 import tableWithoutInsert from "./lints/static/table-without-insert";
+import throughRelationMissingUniqueIndex from "./lints/static/through-relation-missing-unique-index";
+import topicTooManySubscriptions from "./lints/static/topic-too-many-subscriptions";
 import ttlFieldNotTimestamp from "./lints/static/ttl-field-not-timestamp";
 import unboundedCollect from "./lints/static/unbounded-collect";
+import unboundedCollectOnOpenRange from "./lints/static/unbounded-collect-on-open-range";
+import unboundedLoop from "./lints/static/unbounded-loop";
 import unboundedStringArgument from "./lints/static/unbounded-string-argument";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
 import unindexedRelationTarget from "./lints/static/unindexed-relation-target";
@@ -130,10 +144,15 @@ export type { AdvisorArgumentValidator } from "./argument-validators";
 export type { AdvisorAuthConfig } from "./auth-config";
 export type { AdvisorAuthApiCall } from "./authapi-calls";
 export type { AdvisorBrowserUrlAccess } from "./browser-url-accesses";
+export type { AdvisorCallEdge } from "./call-edges";
+export type { AdvisorCallSiteScope, CallSiteMetadata } from "./call-site-scope";
+export { callSiteCallers, callSiteDescription, callSiteLabel, callSiteMetadata, helperRole, isReachableSite, readCallSiteCallers } from "./call-site-scope";
 export type { AdvisorConfigCall } from "./config-calls";
 export type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 export type { AdvisorContainerOverride } from "./container-overrides";
 export type { AdvisorContainer } from "./containers";
+export type { AdvisorCountRead } from "./counts";
+export type { AdvisorCron } from "./crons";
 export { dedupeCacheKeys } from "./dedupe-cache-keys";
 export type { AdvisorExportSink } from "./export-sinks";
 export type { AdvisorFailOpenGuard } from "./fail-open-guards";
@@ -146,7 +165,7 @@ export type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 export type { AdvisorIdentityClaimRead } from "./identity-claim-reads";
 export type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
 export type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
-export type { AdvisorInsertWrite } from "./inserts";
+export type { AdvisorInsertWrite, AdvisorTableWrite } from "./inserts";
 export type { AdvisorKvKeyAccess } from "./kv-key-accesses";
 export { default as fanOutBreadth } from "./lints/runtime/fan-out-breadth";
 export { default as hotShard } from "./lints/runtime/hot-shard";
@@ -171,10 +190,15 @@ export { default as browserUserUrlWithoutAllowlist } from "./lints/static/browse
 export { default as circularFk } from "./lints/static/circular-fk";
 export { default as commitOrderedHardDelete } from "./lints/static/commit-ordered-hard-delete";
 export { default as containerInstanceKeyFromUserInput } from "./lints/static/container-instance-key-from-user-input";
+export { default as containerLongSleepAfter } from "./lints/static/container-long-sleep-after";
 export { default as containerOversizedInstance } from "./lints/static/container-oversized-instance";
 export { default as containerPublicInternet } from "./lints/static/container-public-internet";
 export { default as containerRuntimeEgressRelaxation } from "./lints/static/container-runtime-egress-relaxation";
 export { default as containerStartEnableInternetOverride } from "./lints/static/container-start-enable-internet-override";
+export { default as countWithoutIndex } from "./lints/static/count-without-index";
+export { default as cronEveryMinute } from "./lints/static/cron-every-minute";
+export { default as crossModuleTableWrite } from "./lints/static/cross-module-table-write";
+export { default as dispatchCycle } from "./lints/static/dispatch-cycle";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
 export { default as errorWithoutCatalog } from "./lints/static/error-without-catalog";
@@ -182,6 +206,7 @@ export { default as exportSinkMisconfigured } from "./lints/static/export-sink-m
 export { default as externalSourceIncrementalNoDeletePath } from "./lints/static/external-source-incremental-no-delete-path";
 export { default as externalSourceOnGlobal } from "./lints/static/external-source-on-global";
 export { default as externalSourceUnscoped } from "./lints/static/external-source-unscoped";
+export { default as filterAfterIndexScan } from "./lints/static/filter-after-index-scan";
 export { default as filterOnPrimaryKey } from "./lints/static/filter-on-primary-key";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
 export { default as flagGatesSecurityWithUnsafeDefault } from "./lints/static/flag-gates-security-with-unsafe-default";
@@ -204,10 +229,12 @@ export { default as maskUncoveredPiiColumn } from "./lints/static/mask-uncovered
 export { default as maskWeakHashStrategyOnPii } from "./lints/static/mask-weak-hash-strategy-on-pii";
 export { default as maskedRelationLeakViaWith } from "./lints/static/masked-relation-leak-via-with";
 export { default as mutatorFullRowReplace } from "./lints/static/mutator-full-row-replace";
+export { default as mutatorWithoutOwnerScope } from "./lints/static/mutator-without-owner-scope";
 export { default as nondeterministicQueryMutation } from "./lints/static/nondeterministic-query-mutation";
 export { default as normalizeIdUsedAsAuthorization } from "./lints/static/normalize-id-used-as-authorization";
 export { default as notifyMissingPushConfig } from "./lints/static/notify-missing-push-config";
 export { default as notifySendOutsideAction } from "./lints/static/notify-send-outside-action";
+export { default as openShardAccess } from "./lints/static/open-shard-access";
 export { default as outputProjectionMissingOnPublicRead } from "./lints/static/output-projection-missing-on-public-read";
 export { default as ownerFieldFromArgsNotAuth } from "./lints/static/owner-field-from-args-not-auth";
 export { default as paymentCreateWithoutAuthorize } from "./lints/static/payment-create-without-authorize";
@@ -220,6 +247,7 @@ export { default as procedureWithoutStructuredEvent } from "./lints/static/proce
 export { default as publicArgumentUsesAny } from "./lints/static/public-argument-uses-any";
 export { default as publicMutationWithoutRatelimit } from "./lints/static/public-mutation-without-ratelimit";
 export { default as publicTableRlsOptoutConfusion } from "./lints/static/public-table-rls-optout-confusion";
+export { default as queueDispatchCycle } from "./lints/static/queue-dispatch-cycle";
 export { default as queueWithoutDlq } from "./lints/static/queue-without-dlq";
 export { default as r2sqlOutsideAction } from "./lints/static/r2sql-outside-action";
 export { default as ratelimitDefaultMemoryStore } from "./lints/static/ratelimit-default-memory-store";
@@ -228,6 +256,7 @@ export { default as ratelimitMiddlewareFailOpen } from "./lints/static/ratelimit
 export { default as relationReferencesUnknownField } from "./lints/static/relation-references-unknown-field";
 export { default as relationReferencesUnknownTable } from "./lints/static/relation-references-unknown-table";
 export { default as rlsUncoveredTable } from "./lints/static/rls-uncovered-table";
+export { default as selfRescheduleWithoutProgress } from "./lints/static/self-reschedule-without-progress";
 export { default as shapeTargetsGlobalTable } from "./lints/static/shape-targets-global-table";
 export { default as shapeUnknownTable } from "./lints/static/shape-unknown-table";
 export { default as signupMutationWithoutDisposableGating } from "./lints/static/signup-mutation-without-disposable-gating";
@@ -239,7 +268,11 @@ export { default as storagePresignedUrlForPrivateContent } from "./lints/static/
 export { default as storageUploadWithoutContentTypeAllowlist } from "./lints/static/storage-upload-without-content-type-allowlist";
 export { default as storageUploadWithoutMaxSize } from "./lints/static/storage-upload-without-max-size";
 export { default as tableWithoutInsert } from "./lints/static/table-without-insert";
+export { default as throughRelationMissingUniqueIndex } from "./lints/static/through-relation-missing-unique-index";
+export { default as topicTooManySubscriptions } from "./lints/static/topic-too-many-subscriptions";
 export { default as ttlFieldNotTimestamp } from "./lints/static/ttl-field-not-timestamp";
+export { default as unboundedCollectOnOpenRange } from "./lints/static/unbounded-collect-on-open-range";
+export { default as unboundedLoop } from "./lints/static/unbounded-loop";
 export { default as unboundedStringArgument } from "./lints/static/unbounded-string-argument";
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
 export { default as unindexedRelationTarget } from "./lints/static/unindexed-relation-target";
@@ -263,10 +296,12 @@ export { default as classifySensitivity } from "./map/sensitivity";
 export type { AdvisorMap, CheckResult, Coverage, Grade, MapSummary, ProcedureScore, ProjectScore, Sensitivity, SensitivityLevel } from "./map/types";
 export type { AdvisorMaskProcedure } from "./mask-procedures";
 export type { AdvisorMaskStrategy } from "./mask-strategies";
+export type { AdvisorMutatorDeclaration } from "./mutator-declarations";
 export type { AdvisorMutatorWrite } from "./mutator-writes";
 export type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 export type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
 export type { AdvisorNotifyCall, AdvisorNotifyConfig } from "./notify-calls";
+export type { AdvisorOpenShardAccess } from "./open-shard-access";
 export type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
 export type { AdvisorPaymentWebhook } from "./payment-webhooks";
 export type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
@@ -278,7 +313,8 @@ export type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
 export type { AdvisorRawRowReturn } from "./raw-row-returns";
 export type { AdvisorRelationLoad } from "./relation-loads";
 export type { AdvisorRlsProcedure } from "./rls-procedures";
-export type { AdvisorIndex, AdvisorRelation, AdvisorSchema, AdvisorTable } from "./schema";
+export type { AdvisorRowEffect } from "./row-effects";
+export type { AdvisorIndex, AdvisorKeyedRelation, AdvisorRelation, AdvisorSchema, AdvisorTable, AdvisorThroughRelation } from "./schema";
 export { fromServerSchema } from "./schema";
 export type { AdvisorSecretLiteral } from "./secrets";
 export type { AdvisorShape } from "./shapes";
@@ -288,7 +324,8 @@ export type { AdvisorSqlInterpolation } from "./sql-interpolation";
 export type { AdvisorStaleMigrationImport } from "./stale-migration-imports";
 export type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 export type { AdvisorStorageUpload } from "./storage-uploads";
-export type { Category, Facing, Finding, Level, Lint, LintContext, LintSource } from "./types";
+export type { AdvisorModule, Category, Facing, Finding, Level, Lint, LintContext, LintSource } from "./types";
+export type { AdvisorUnboundedLoop } from "./unbounded-loops";
 export type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 export type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
 export type { AdvisorWranglerVariable } from "./wrangler-variables";
@@ -318,17 +355,29 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     ttlFieldNotTimestamp,
     commitOrderedHardDelete,
     circularFk,
+    countWithoutIndex,
+    crossModuleTableWrite,
     unindexedForeignKey,
     unindexedRelationTarget,
+    throughRelationMissingUniqueIndex,
     duplicateIndex,
     tableWithoutInsert,
     workflowUnused,
+    queueDispatchCycle,
     queueWithoutDlq,
+    cronEveryMinute,
+    topicTooManySubscriptions,
     filterOnPrimaryKey,
     filterWithoutIndex,
+    filterAfterIndexScan,
     unboundedCollect,
+    unboundedCollectOnOpenRange,
+    unboundedLoop,
+    dispatchCycle,
+    selfRescheduleWithoutProgress,
     shapeTargetsGlobalTable,
     mutatorFullRowReplace,
+    mutatorWithoutOwnerScope,
     nondeterministicQueryMutation,
     hyperdriveOutsideAction,
     r2sqlOutsideAction,
@@ -337,6 +386,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     rlsUncoveredTable,
     maskUncoveredPiiColumn,
     maskWeakHashStrategyOnPii,
+    containerLongSleepAfter,
     containerOversizedInstance,
     containerPublicInternet,
     publicMutationWithoutRatelimit,
@@ -380,6 +430,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     ratelimitKeySpoofableOrGlobal,
     publicTableRlsOptoutConfusion,
     allowUnauthenticatedShardAccessEnabled,
+    openShardAccess,
     storageUploadWithoutContentTypeAllowlist,
     storageUploadWithoutMaxSize,
     storageGenerateUploadUrlNoContentTypePin,

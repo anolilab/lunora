@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { createReadFootprint } from "../src/read-footprint";
 import type { IndexKeyEntry, KeyRange } from "../src/read-write-set";
 import type { ChangedKeys } from "../src/subscription-range-gate";
-import { mergeChangedKeys, recordChangedKeys, writeTouchesMemo } from "../src/subscription-range-gate";
+import { MAX_TRACKED_KEYS_PER_TABLE, mergeChangedKeys, recordChangedKeys, writeTouchesMemo } from "../src/subscription-range-gate";
 
 const range = (table: string, lo: string, hi: string, index = "by_channel"): KeyRange => {
     return { hi, index, lo, table };
@@ -146,6 +146,25 @@ describe("recordChangedKeys", () => {
 
         expect(acc.get("messages")).toBeUndefined();
     });
+
+    it("tracks positions up to the cap and marks the table unknown one past it", () => {
+        expect.assertions(3);
+
+        const input = [key("seed")];
+        let acc = recordChangedKeys(undefined, "messages", input);
+
+        for (let row = 1; row < MAX_TRACKED_KEYS_PER_TABLE; row += 1) {
+            acc = recordChangedKeys(acc, "messages", [key(`row-${String(row)}`)]);
+        }
+
+        expect(acc.get("messages")).toHaveLength(MAX_TRACKED_KEYS_PER_TABLE);
+        // The caller's array is copied, never appended to.
+        expect(input).toHaveLength(1);
+
+        acc = recordChangedKeys(acc, "messages", [key("over")]);
+
+        expect(acc.get("messages")).toBeUndefined();
+    });
 });
 
 describe("mergeChangedKeys", () => {
@@ -182,6 +201,16 @@ describe("mergeChangedKeys", () => {
         expect.assertions(1);
 
         expect(mergeChangedKeys(undefined, undefined, new Set(["messages"])).get("messages")).toBeUndefined();
+    });
+
+    it("marks a table unknown once the merged positions exceed the cap", () => {
+        expect.assertions(2);
+
+        const half = (prefix: string): IndexKeyEntry[] => Array.from({ length: MAX_TRACKED_KEYS_PER_TABLE / 2 }, (_, row) => key(`${prefix}-${String(row)}`));
+        const atCap = mergeChangedKeys(new Map([["messages", half("a")]]), new Map([["messages", half("b")]]), new Set(["messages"]));
+
+        expect(atCap.get("messages")).toHaveLength(MAX_TRACKED_KEYS_PER_TABLE);
+        expect(mergeChangedKeys(atCap, new Map([["messages", [key("over")]]]), new Set(["messages"])).get("messages")).toBeUndefined();
     });
 });
 

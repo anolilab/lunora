@@ -192,13 +192,13 @@ const REQUIRED_SURFACE: Record<string, Record<AdapterName, Requirement>> = {
     // The SSE-style HTTP-stream hook. Shipped for React only so far — nobody
     // has ported it. This is a real, still-open gap (not a framework-shape
     // difference like authGates), tracked separately from this spike; see
-    // plan 231 for adapter-drift follow-ups.
+    // plan 052 (the HTTP-SSE stream design) for the adapter follow-up.
     httpStream: {
-        angular: { gap: "not yet ported — React-only today; see plan 231", name: "httpStream" },
+        angular: { gap: "not yet ported — React-only today; see plan 052", name: "httpStream" },
         react: { name: "useHttpStream" },
-        solid: { gap: "not yet ported — React-only today; see plan 231", name: "createHttpStream" },
-        svelte: { gap: "not yet ported — React-only today; see plan 231", name: "httpStream" },
-        vue: { gap: "not yet ported — React-only today; see plan 231", name: "useHttpStream" },
+        solid: { gap: "not yet ported — React-only today; see plan 052", name: "createHttpStream" },
+        svelte: { gap: "not yet ported — React-only today; see plan 052", name: "httpStream" },
+        vue: { gap: "not yet ported — React-only today; see plan 052", name: "useHttpStream" },
     },
     hydratePreloaded: {
         angular: { name: "hydratePreloaded" },
@@ -223,6 +223,13 @@ const REQUIRED_SURFACE: Record<string, Record<AdapterName, Requirement>> = {
         solid: { name: "useLunora" },
         svelte: { name: "getLunoraClient" },
         vue: { name: "useLunora" },
+    },
+    liveTopic: {
+        angular: { name: "liveTopic" },
+        react: { name: "useLiveTopic" },
+        solid: { name: "createLiveTopic" },
+        svelte: { name: "liveTopic" },
+        vue: { name: "useLiveTopic" },
     },
     mutation: {
         angular: { name: "mutate" },
@@ -455,6 +462,29 @@ describe("adapter export-surface parity (react, vue, solid, svelte, angular)", (
                     `${feature} is a subpath-backed feature — src/${subpath.replace("./", "")}.ts existing is not enough; ` +
                     `the exports map entry is what a consumer's "import … from '@lunora/${adapter}${subpath.slice(1)}'" actually resolves through.`,
             ).toBe(true);
+        });
+    });
+
+    // The exported names above do not change when the live-topic hooks take a ref, so a name check alone cannot catch
+    // an adapter that quietly keeps its own `{ url, topic }` form. Every adapter must build its subscription through
+    // the one shared ref -> options helper (which is what puts the stream's route under the client's base URL), and
+    // none re-implements the URL join.
+    describe("live topic hooks share one ref -> subscription path", () => {
+        const LIVE_TOPIC_MODULES: Record<AdapterName, string> = {
+            angular: "live-topic.ts",
+            react: "use-live-topic.ts",
+            solid: "create-live-topic.ts",
+            svelte: "live-topic.ts",
+            vue: "use-live-topic.ts",
+        };
+
+        it.each(ADAPTER_NAMES)("%s resolves its subscription through liveTopicSubscription", (adapter) => {
+            expect.assertions(2);
+
+            const source = readFileSync(join(ADAPTER_SRC[adapter], LIVE_TOPIC_MODULES[adapter]), "utf8");
+
+            expect(source).toMatch(/\bliveTopicSubscription\(/u);
+            expect(source).toMatch(/import \{[^}]*\bliveTopicSubscription\b[^}]*\} from "@lunora\/client"/u);
         });
     });
 });

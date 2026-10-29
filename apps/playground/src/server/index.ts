@@ -7,11 +7,18 @@ import { authenticatesFrom, createInboundEmailHandler, dispatchToLunoraFunction,
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike } from "@lunora/storage";
-import { buildSignedUrl, verifySignedUrl } from "@lunora/storage";
+import { buildSignedUrl, createStorage, verifySignedUrl } from "@lunora/storage";
 import type { ExecutionContextLike, ScheduledControllerLike, ShardNamespaceLike } from "lunorash/runtime";
+import { createShardClient } from "lunorash/runtime";
+import { serveStorageObject } from "lunorash/server";
 
 import { defineApp } from "../../lunora/_generated/app.js";
+import { internal } from "../../lunora/_generated/internal.js";
+import { rememberIssuedJob, wasJobIssued } from "./issued-jobs";
 
+// The registry of which shards hold `.shardBy()` rows — `.shardRegistry(...)`
+// below points at it, and cross-shard export / CDC sync fan out to what it lists.
+export { ShardRegistryDO } from "../../lunora/_generated/shardRegistry.js";
 // WorkflowEntrypoint class for `lunora/workflows.ts` — wrangler requires every
 // declared `workflows[].class_name` to be exported by the worker entry.
 export { ChannelWelcomeWorkflow } from "../../lunora/_generated/workflows.js";
@@ -33,8 +40,10 @@ interface Env extends Record<string, unknown> {
      * When set to the literal string `"true"`, the worker exposes a small
      * surface of `/test/*` helpers (reset DO state, mint a short-lived signed
      * URL, schedule a job, etc.) used by the `@lunora/e2e` Playwright suite.
-     * The flag is read in `apps/playground/wrangler.jsonc` and injected via
-     * `tests/e2e/globalSetup.ts` — *never* set this in production.
+     * The worker reads it off `.dev.vars`, which `tests/e2e/globalSetup.ts`
+     * writes for the server it starts; `.dev.vars.example` documents it for a
+     * playground you start yourself. It is deliberately absent from
+     * `wrangler.jsonc` — *never* set this in production.
      */
     LUNORA_E2E?: string;
 
@@ -47,10 +56,9 @@ interface Env extends Record<string, unknown> {
     LUNORA_ORIGIN_URL?: string;
     /** Sender address for auth (verification / reset) email; captured into the studio Mail tab in dev. */
     MAIL_FROM?: string;
-    /** Public base URL R2 objects resolve against — used to mint signed URLs. */
-    PUBLIC_STORAGE_BASE_URL?: string;
     SCHEDULER: DurableObjectNamespaceLike & ShardNamespaceLike;
     SHARD: ShardNamespaceLike;
+    SHARD_REGISTRY: ShardNamespaceLike;
     STORAGE_SECRET?: string;
 }
 
@@ -60,6 +68,49 @@ interface Env extends Record<string, unknown> {
  * dispatch below, and every scheduler/cron dispatch — resolves here.
  */
 const ROOT_SHARD_KEY = "__root__";
+
+/**
+ * Mirror a better-auth user into `users` — the `databaseHooks` callback.
+ *
+ * A hook gets better-auth's row, never a Lunora ctx, so this is a separate write
+ * over the shard client — an upsert keyed by the user id, safe to repeat. It
+ * runs AFTER better-auth committed the user, so it must not throw: the account
+ * already exists, and a throw here would fail the sign-up response for a user
+ * who can then sign in anyway. A failed mirror costs a display name until the
+ * user's next sign-in, which re-runs it (see `mirrorOnSignIn`).
+ */
+const mirrorUser =
+    (env: Env) =>
+    async (user: { email: string; id: string; name: string }): Promise<void> => {
+        try {
+            await createShardClient(env.SHARD)
+                .forShard(ROOT_SHARD_KEY)
+                .call(internal.users.mirrorAuthUser, { email: user.email, id: user.id, name: user.name });
+        } catch (error) {
+            // eslint-disable-next-line no-console -- no ctx.log here: the hook runs inside better-auth, outside any Lunora dispatch
+            console.error("users:mirrorAuthUser failed", error);
+        }
+    };
+
+/**
+ * Re-mirror the user on every new session.
+ *
+ * The user hooks fire only when the row is written, so an account created
+ * before they existed, or one whose mirror failed, would stay unnamed for good.
+ * A sign-in repairs both; the upsert makes the repeat free of side effects.
+ */
+const mirrorOnSignIn =
+    (env: Env) =>
+    async (
+        session: { userId: string },
+        context: { context: { internalAdapter: { findUserById: (id: string) => Promise<{ email: string; id: string; name: string } | null> } } } | null,
+    ): Promise<void> => {
+        const user = await context?.context.internalAdapter.findUserById(session.userId).catch(() => null);
+
+        if (user) {
+            await mirrorUser(env)(user);
+        }
+    };
 
 /**
  * Auth config the builder's `.auth()` lazily builds the runtime + migration
@@ -92,6 +143,13 @@ const authOptions = (env: Env): LunoraAuthOptions => {
                 });
             },
         },
+        // Copy every created/updated user into the app's `.global()` `users`
+        // table, which the chat joins to render author names, and repair the
+        // copy on each sign-in. See `mirrorUser` and `mirrorOnSignIn`.
+        databaseHooks: {
+            session: { create: { after: mirrorOnSignIn(env) } },
+            user: { create: { after: mirrorUser(env) }, update: { after: mirrorUser(env) } },
+        },
         plugins: [admin({ defaultRole: "user" }), organization({ allowUserToCreateOrganization: true }), twoFactor(), passkey()],
         secret: env.AUTH_SECRET,
     };
@@ -113,6 +171,7 @@ const authOptions = (env: Env): LunoraAuthOptions => {
  */
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .shardRegistry((env) => env.SHARD_REGISTRY)
     // Required by `lunora/shapes.ts`: a shard-local `defineShape` replicates out
     // of `__cdc_log`, so without this the subscribe is refused. It used to be
     // accepted and then never deliver another row, which is how this app shipped
@@ -121,7 +180,10 @@ const app = defineApp<Env>()
     .storage({
         bucket: (env) => env.FILES,
         buckets: { avatars: (env) => env.AVATARS },
-        publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL,
+        // No `publicBaseUrl`: actions sign object URLs against the origin the
+        // request reached the worker on, which is also the host `verifySignedUrl`
+        // checks below. A fixed base binds every URL to one host and breaks the
+        // rest (a placeholder one breaks all of them).
         signingSecret: (env) => env.STORAGE_SECRET,
     })
     .scheduler({ namespace: (env) => env.SCHEDULER })
@@ -246,8 +308,8 @@ const handleTestReset = async (env: Env): Promise<Response> => {
 };
 
 const handleTestSign = async (request: Request, env: Env): Promise<Response> => {
-    if (!env.STORAGE_SECRET || !env.PUBLIC_STORAGE_BASE_URL) {
-        return Response.json({ error: "STORAGE_SECRET and PUBLIC_STORAGE_BASE_URL must both be configured", url: null }, { status: 500 });
+    if (!env.STORAGE_SECRET) {
+        return Response.json({ error: "STORAGE_SECRET must be configured", url: null }, { status: 500 });
     }
 
     const body = (await request.json().catch(() => null)) as {
@@ -262,7 +324,9 @@ const handleTestSign = async (request: Request, env: Env): Promise<Response> => 
     }
 
     const signed = await buildSignedUrl({
-        baseUrl: env.PUBLIC_STORAGE_BASE_URL,
+        // Signed against this request's own origin, exactly as the actions sign:
+        // `handleStorageAsset` verifies the host the URL comes back on.
+        baseUrl: new URL(request.url).origin,
         // PUT-only pin, forwarded so a harness upload can send a real
         // `content-type`: the PUT handler compares the header against the
         // signed value unconditionally, so an unpinned URL only accepts a body
@@ -301,7 +365,36 @@ const handleTestSchedule = async (request: Request, env: Env): Promise<Response>
     // computed and passed in, so the response shape is unchanged.
     const jobId = await scheduler.runAt(scheduledFor, { __lunoraRef: body.functionPath }, body.args ?? {});
 
+    await rememberIssuedJob(env.DB, jobId);
+
     return Response.json({ jobId, scheduledFor });
+};
+
+/**
+ * Where a scheduled job got to: `unknown`, `scheduled`, `failed`, `executed`.
+ *
+ * `executed` is inferred from an absence — the SchedulerDO deletes a job's rows
+ * the moment it succeeds — so it is only sound once the other two readings of
+ * that absence are ruled out: an id this app never issued (see
+ * {@link wasJobIssued}) and a job parked in the dead-letter after exhausting its
+ * retries, whose `id:` header is deleted too.
+ */
+const handleTestJobStatus = async (url: URL, env: Env): Promise<Response> => {
+    const id = url.searchParams.get("id");
+
+    if (!id || !env.SCHEDULER || !(await wasJobIssued(env.DB, id))) {
+        return Response.json({ status: "unknown" });
+    }
+
+    const scheduler = createScheduler({ namespace: env.SCHEDULER });
+
+    if (await scheduler.get(id)) {
+        return Response.json({ status: "scheduled" });
+    }
+
+    const parked = await scheduler.dead();
+
+    return Response.json({ status: parked.some((record) => record.id === id) ? "failed" : "executed" });
 };
 
 /**
@@ -336,41 +429,32 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
     }
 
     if (url.pathname === "/test/job-status" && method === "GET") {
-        const id = url.searchParams.get("id");
-
-        if (!id || !env.SCHEDULER) {
-            return Response.json({ status: "unknown" });
-        }
-
-        const scheduler = createScheduler({ namespace: env.SCHEDULER });
-        const record = await scheduler.get(id);
-
-        // The SchedulerDO deletes a job's rows once it completes successfully, so
-        // a previously-scheduled id with no record left has executed.
-        return Response.json({ status: record ? "scheduled" : "executed" });
+        return handleTestJobStatus(url, env);
     }
 
     return new Response("not found", { status: 404 });
 };
 
 /**
- * Serve `@lunora/storage` signed URLs. The signer mints a URL under
- * `PUBLIC_STORAGE_BASE_URL` carrying the object key plus expiry/method/signature
- * query params; in production that base is a CDN/Worker route, but in dev the
- * Worker shares its origin, so the signed URL lands back here. We verify the
- * HMAC + expiry, then stream the R2 body (GET) or store the uploaded bytes
- * (PUT). The `avatars/` prefix is the only key namespace the playground signs,
- * and it can't collide with the `/_lunora`, `/api/auth`, `/test` routes the
- * Worker otherwise owns.
+ * Serve `@lunora/storage` signed URLs. The signer mints a URL under the origin
+ * the minting request reached this Worker on, carrying the object key plus
+ * bucket/expiry/method/signature query params, so the signed URL lands back
+ * here. We verify the HMAC + expiry, then store the uploaded bytes (PUT) or
+ * stream the object (GET) from the bucket the signature names.
+ *
+ * Routed on the signature, not on a key prefix: the studio signs keys in every
+ * declared bucket, whatever they look like. No other route here takes a `sig`.
  */
 const handleStorageAsset = async (request: Request, env: Env): Promise<null | Response> => {
     const url = new URL(request.url);
 
-    if (!url.pathname.startsWith("/avatars/")) {
+    if (!url.searchParams.has("sig")) {
         return null;
     }
 
-    if (!env.STORAGE_SECRET || !env.FILES) {
+    const secret = env.STORAGE_SECRET;
+
+    if (!secret) {
         return new Response("storage not configured", { status: 500 });
     }
 
@@ -380,30 +464,23 @@ const handleStorageAsset = async (request: Request, env: Env): Promise<null | Re
         return new Response("method not allowed", { status: 405 });
     }
 
-    const verdict = await verifySignedUrl(request.url, env.STORAGE_SECRET);
+    const verdict = await verifySignedUrl(request.url, secret);
 
-    if (!verdict.valid) {
+    // The bucket is HMAC-bound, so this is the URL's own claim about which
+    // binding to serve — never a caller-supplied parameter. `Object.hasOwn`
+    // keeps a prototype name (`constructor`) from resolving to an inherited member.
+    const buckets: Record<string, R2BucketLike | undefined> = { avatars: env.AVATARS, default: env.FILES };
+    const bucket = verdict.bucketName !== undefined && Object.hasOwn(buckets, verdict.bucketName) ? buckets[verdict.bucketName] : undefined;
+
+    if (!verdict.valid || verdict.key === undefined || verdict.bucketName === undefined || !bucket) {
         // Opaque 403 — never leak expired-vs-bad-signature (a signing oracle).
         return new Response("forbidden", { status: 403 });
     }
 
-    // The bucket is HMAC-bound, so this is the URL's own claim about which
-    // binding to serve — never a caller-supplied parameter. Only the default
-    // bucket is served here: the app also declares `avatars`, but nothing mints
-    // a URL against it (`lunora/avatars.ts` writes `avatars/`-prefixed keys into
-    // the default bucket), so a URL naming any other bucket was minted for an
-    // app we are not. Serving `avatars` means resolving the binding here first.
-    if (verdict.bucketName !== "default") {
-        return new Response("forbidden", { status: 403 });
-    }
-
-    const key = decodeURIComponent(url.pathname.slice(1));
-
     if (request.method === "PUT") {
         // The signed `Content-Type` pin is bound into the HMAC precisely so the
         // uploader can't swap it. Storing the request's header verbatim would let
-        // a URL pinned to `image/png` land a `text/html` body that the GET branch
-        // below then serves back as HTML from this origin — stored XSS.
+        // a URL pinned to `image/png` land a `text/html` body.
         //
         // The comparison is UNCONDITIONAL. Skipping it when the URL carries no
         // pin (`verdict.contentType === undefined`) hands the choice straight
@@ -417,20 +494,16 @@ const handleStorageAsset = async (request: Request, env: Env): Promise<null | Re
             return new Response("content-type does not match the signed URL", { status: 415 });
         }
 
-        await env.FILES.put(key, request.body, { httpMetadata: { contentType } });
+        await bucket.put(verdict.key, request.body, { httpMetadata: { contentType } });
 
         return new Response(null, { status: 200 });
     }
 
-    const object = await env.FILES.get(key);
-
-    if (!object) {
-        return new Response("not found", { status: 404 });
-    }
-
-    return new Response(object.body, {
-        headers: { "content-type": object.httpMetadata?.contentType ?? "application/octet-stream" },
-    });
+    // The stored type is whatever the minter pinned, and this answers from the
+    // app origin. `serveStorageObject` always sends `nosniff` and turns anything
+    // but a raster image or media type into a download, so a pinned `text/html`
+    // can never render here as a page. Its gate is the verdict checked above.
+    return serveStorageObject({ storage: createStorage({ bucket, bucketName: verdict.bucketName }) }, verdict.key, request, () => verdict.valid);
 };
 
 /**
@@ -443,8 +516,8 @@ export const { email } = app;
 export default {
     async fetch(request: Request, env: Env, context: ExecutionContextLike): Promise<Response> {
         // App-specific pre-worker routing: the e2e `/test/*` helpers and the
-        // `/avatars/*` signed-asset endpoint run ahead of the composed worker so
-        // it never sees those paths. Everything else (RPC, WebSocket, auth, admin)
+        // signed-asset endpoint (any `?sig=` URL) run ahead of the composed
+        // worker so it never sees those requests. Everything else (RPC, WebSocket, auth, admin)
         // is the builder's `app.fetch` — which also owns the auth lazy-init.
         const testResponse = await handleTestRoute(request, env);
 

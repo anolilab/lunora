@@ -37,6 +37,7 @@ import type { ForwardableEmailMessageLike } from "@lunora/mail/inbound";
 import { authenticatesFrom, createInboundEmailHandler, parseInboundEmail } from "@lunora/mail/inbound";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import type { AgentDefinition, AgentWorkflowBindingLike } from "./types";
 
 /**
@@ -49,8 +50,8 @@ interface AgentEmailTarget {
      * this agent claims the message and, if so, the run to start.
      */
     agent: Pick<AgentDefinition, "onEmail">;
-    /** The `AGENT_*` Workflow binding name (off `env`) that starts a run. */
-    binding: string;
+    /** The agent's export key (its generated class name), resolved off `ctx.exports` or `env`. */
+    className: string;
 }
 
 /**
@@ -122,12 +123,17 @@ const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAg
                     continue;
                 }
 
-                const binding = context.env[target.binding] as AgentWorkflowBindingLike | undefined;
+                const binding = resolveWorkflowHandle<AgentWorkflowBindingLike>(
+                    context.env,
+                    (context.ctx as { exports?: unknown } | undefined)?.exports,
+                    target.className,
+                    ["create"],
+                );
 
-                if (!binding || typeof binding.create !== "function") {
+                if (binding === undefined) {
                     rejectPermanently(
                         context,
-                        `@lunora/agent: no Workflow binding "${target.binding}" on env for an inbound agent — run codegen/dev so wrangler.jsonc declares it`,
+                        `@lunora/agent: no "${target.className}" on ctx.exports or env for an inbound agent — run codegen/dev so wrangler.jsonc declares it`,
                     );
 
                     return;

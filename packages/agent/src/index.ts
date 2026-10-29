@@ -12,13 +12,26 @@ export { defineAgent, defineAgentTool, isAgentDefinition } from "./define-agent"
 export type { FunctionToolOptions } from "./function-tool";
 export { functionTool } from "./function-tool";
 export { createAgentGenerate, createEpisodeExtract, createGraphExtract, createStreamGenerate, resolveAgentModel } from "./generate";
+export type { JsCodeToolInput, JsCodeToolOptions, JsCodeToolResult } from "./js-code-tool";
+export { jsCodeTool } from "./js-code-tool";
 export type { McpCallResult, McpClientLike, McpContentPart, McpToolInfo, McpToolsOptions } from "./mcp";
 export { adaptMcpResult, mcpTools } from "./mcp";
 export { buildModelMessages } from "./model-messages";
-export { agentBindingName, agentClassName, agentDefaultName, voiceBindingName, voiceClassName } from "./naming";
+export { agentClassName, agentDefaultName, voiceBindingName, voiceClassName } from "./naming";
 export { AGENT_MODULE, DEFAULT_AGENT_FUNCTION_PATHS, SANDBOX_INVOKE_PATH, SANDBOX_MODULE, toFunctionReference } from "./paths";
-export type { BrowserToolInput, BrowserToolOptions, ContainerToolInput, ContainerToolOptions, FsToolInput, FsToolOptions } from "./sandbox";
-export { browserTool, containerTool, fsTool } from "./sandbox";
+export type {
+    BrowserRenderResult,
+    BrowserToolInput,
+    BrowserToolOptions,
+    ContainerFsToolOptions,
+    ContainerToolInput,
+    ContainerToolOptions,
+    FsToolInput,
+    FsToolOptions,
+} from "./sandbox";
+export { browserTool, containerFsTool, containerTool, fsTool } from "./sandbox";
+export type { SecretRequestInput } from "./secret-request-tool";
+export { requestSecretTool, SecretUnavailableError, withSecret } from "./secret-request-tool";
 export { defineSkill, isSkillDefinition } from "./skill";
 export type {
     AgentApprovalContext,
@@ -52,6 +65,7 @@ export type {
     AgentRunFunction,
     AgentRunHandle,
     AgentRunInput,
+    AgentRunOptions,
     AgentRunResult,
     AgentStepFinishInfo,
     AgentStepInfo,
@@ -74,6 +88,7 @@ export type {
     SkillConfig,
     SkillDefinition,
 } from "./types";
+export { default as wrapUntrusted } from "./untrusted";
 export { default as VoiceSessionDO } from "./voice-do";
 export type {
     RunVoiceTurnOptions,
@@ -87,4 +102,6 @@ export type {
     VoiceTurnResult,
 } from "./voice-turn";
 export { runVoiceTurn } from "./voice-turn";
+export type { WebSearchToolInput, WebSearchToolOptions } from "./web-search-tool";
+export { webSearchTool } from "./web-search-tool";
 export { default as compileAgentWorkflow } from "./workflow";

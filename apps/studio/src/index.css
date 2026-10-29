@@ -9,6 +9,12 @@
    `@lunora/studio` to, matching the relative `@source` below. */
 @import "../../../packages/studio/src/theme.css";
 
+/* React Flow's minimal base styles (pan/zoom, handles, edges) for the schema and
+   architecture diagrams — the same file the library's styles.css imports. This
+   app does not depend on @xyflow/react itself, so it is reached through the
+   library's install, by relative path like theme.css above. */
+@import "../../../packages/studio/node_modules/@xyflow/react/dist/base.css";
+
 /* The studio UI lives in the @lunora/studio library and ships as compiled
    JS, which Tailwind's source detection skips. Scan its source so every utility
    class the panels use is generated into this app's stylesheet, with live HMR

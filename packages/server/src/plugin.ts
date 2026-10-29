@@ -59,10 +59,12 @@
  */
 
 import { LunoraError } from "@lunora/errors";
+import type { Validator } from "@lunora/values";
 
 import composeMiddleware from "./builder/compose-middleware";
 import type { Middleware } from "./builder/types";
-import { validateIndexFields } from "./schema";
+import { validateGlobalVectors, validateIndexFields, validateTableModes } from "./schema";
+import validateThroughRelations from "./schema-through";
 import type {
     AggregateIndexDefinition,
     FunctionKind,
@@ -91,6 +93,63 @@ const rewriteReference = (target: string, key: string, bareNames: ReadonlySet<st
     bareNames.has(target) ? prefixTableName(key, target) : target;
 
 /**
+ * The slice of a runtime validator an id retarget reads: the `_meta` bag that holds the target table of an id and the
+ * children of a wrapper (`optional`/`array` → `inner`, `union` → `members`, `object` → `shape`, `record` → key and value).
+ */
+interface IdMeta {
+    readonly inner?: Validator;
+    readonly keyValidator?: Validator;
+    readonly members?: ReadonlyArray<Validator>;
+    readonly shape?: Readonly<Record<string, Validator>>;
+    readonly tableName?: string;
+    readonly valueValidator?: Validator;
+}
+
+/** A shallow copy of `validator` carrying `meta` in place of its own `_meta`. */
+const withMeta = (validator: Validator, meta: IdMeta): Validator => {
+    const copy: Validator & { _meta: IdMeta } = { ...validator, _meta: meta };
+
+    return copy;
+};
+
+/**
+ * Point every `v.id("table")` in `validator` that names an extension table at its prefixed name, through every
+ * wrapper an id can sit in. Returns the same validator when nothing changes, and a shallow copy otherwise: extension
+ * definitions are shared across apps, so they are never mutated.
+ */
+const retargetId = (validator: Validator, resolve: (name: string) => string): Validator => {
+    const meta = (validator as { _meta?: IdMeta })._meta;
+
+    if (meta === undefined) {
+        return validator;
+    }
+
+    if (validator.kind === "id" && meta.tableName !== undefined) {
+        const tableName = resolve(meta.tableName);
+
+        return tableName === meta.tableName ? validator : withMeta(validator, { ...meta, tableName });
+    }
+
+    const retarget = (child: Validator | undefined): Validator | undefined => (child === undefined ? undefined : retargetId(child, resolve));
+    const next: IdMeta = {
+        ...meta,
+        ...(meta.inner && { inner: retarget(meta.inner) }),
+        ...(meta.keyValidator && { keyValidator: retarget(meta.keyValidator) }),
+        ...(meta.valueValidator && { valueValidator: retarget(meta.valueValidator) }),
+        ...(meta.members && { members: meta.members.map((member) => retargetId(member, resolve)) }),
+        ...(meta.shape && { shape: Object.fromEntries(Object.entries(meta.shape).map(([field, child]) => [field, retargetId(child, resolve)])) }),
+    };
+    const unchanged =
+        next.inner === meta.inner &&
+        next.keyValidator === meta.keyValidator &&
+        next.valueValidator === meta.valueValidator &&
+        (next.members ?? []).every((member, index) => member === meta.members?.[index]) &&
+        Object.entries(next.shape ?? {}).every(([field, child]) => child === meta.shape?.[field]);
+
+    return unchanged ? validator : withMeta(validator, next);
+};
+
+/**
  * Produce a copy of an extension table with every intra-extension table
  * reference rewritten to its prefixed name: relation targets, aggregate /
  * rank index `on` fields. (Inline `TableVectorIndex` entries carry no table
@@ -110,7 +169,13 @@ const rewriteTableReferences = (table: TableDefinition, key: string, bareNames: 
     const relationMap: Record<string, RelationDefinition> = {};
 
     for (const [accessor, relation] of Object.entries(table.relationMap)) {
-        relationMap[accessor] = { ...relation, table: rewriteReference(relation.table, key, bareNames) };
+        const target = rewriteReference(relation.table, key, bareNames);
+
+        // Two branches rather than one spread: a conditional `through` would widen the keyed variant's `through?: never`.
+        relationMap[accessor] =
+            relation.through === undefined
+                ? { ...relation, table: target }
+                : { ...relation, table: target, through: { ...relation.through, table: rewriteReference(relation.through.table, key, bareNames) } };
     }
 
     const aggregateIndexes: AggregateIndexDefinition[] = table.aggregateIndexes.map((index) => {
@@ -121,7 +186,11 @@ const rewriteTableReferences = (table: TableDefinition, key: string, bareNames: 
         return { ...index, on: rewriteOn(index.on) };
     });
 
-    return { ...table, aggregateIndexes, rankIndexes, relationMap };
+    const shape = Object.fromEntries(
+        Object.entries(table.shape).map(([field, validator]) => [field, retargetId(validator, (name) => rewriteReference(name, key, bareNames))]),
+    );
+
+    return { ...table, aggregateIndexes, rankIndexes, relationMap, shape };
 };
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- the install/compose accumulator types fold over a heterogeneous tuple of plugins; per-plugin types are recovered by the `infer`s below. */
@@ -164,9 +233,9 @@ type ComposedOut<Plugins extends ReadonlyArray<unknown>> = Plugins extends reado
  * `defineSchema` argument so a plugin can ship vector decls alongside its
  * tables.
  */
-export interface SchemaExtension<T extends Record<string, TableDefinition> = Record<string, TableDefinition>> {
-    /** Stable key identifying the plugin that owns this extension. */
-    readonly key: string;
+export interface SchemaExtension<T extends Record<string, TableDefinition> = Record<string, TableDefinition>, Key extends string = string> {
+    /** Stable key identifying the plugin that owns this extension. Kept literal, so `.extend()` adds exactly `<key>_<table>`. */
+    readonly key: Key;
 
     /**
      * Extension tables, keyed by **bare** name (e.g. `buckets`). At merge time
@@ -187,10 +256,10 @@ export interface SchemaExtension<T extends Record<string, TableDefinition> = Rec
  * Build a {@link SchemaExtension}. The `key` is a runtime tag (used for
  * error messages on collision) and a type-level brand.
  */
-export const defineSchemaExtension = <T extends Record<string, TableDefinition>>(
-    key: string,
+export const defineSchemaExtension = <T extends Record<string, TableDefinition>, const Key extends string = string>(
+    key: Key,
     options: { tables: T; vectorIndexes?: Record<string, VectorIndexDefinition> },
-): SchemaExtension<T> => {
+): SchemaExtension<T, Key> => {
     if (!key) {
         throw new LunoraError("INTERNAL", "defineSchemaExtension: `key` is required and must be a non-empty string");
     }
@@ -246,10 +315,10 @@ export interface DefinePluginOptions<TExtension extends Record<string, TableDefi
  * that carry only middleware.
  */
 export interface DefinePluginFunction {
-    <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(
-        key: string,
-        options: DefinePluginOptions<TExtension, TContextIn, TContextOut> & { extension: SchemaExtension<TExtension> },
-    ): Plugin<TExtension, TContextIn, TContextOut> & { readonly extension: SchemaExtension<TExtension> };
+    <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn, const Key extends string = string>(
+        key: Key,
+        options: DefinePluginOptions<TExtension, TContextIn, TContextOut> & { extension: SchemaExtension<TExtension, Key> },
+    ): Plugin<TExtension, TContextIn, TContextOut> & { readonly extension: SchemaExtension<TExtension, Key> };
     <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(
         key: string,
         options: DefinePluginOptions<TExtension, TContextIn, TContextOut>,
@@ -444,6 +513,9 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
     }
 
     validateIndexFields(merged);
+    validateTableModes(merged);
+    validateGlobalVectors(merged, mergedVectorIndexes);
+    validateThroughRelations(merged);
 
     return {
         // Preserve secure-by-default RLS across `.extend(...)` — a plugin's

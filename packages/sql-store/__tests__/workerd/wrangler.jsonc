@@ -1,0 +1,18 @@
+// Test-only wrangler config consumed by `@cloudflare/vitest-plugin`. Not deployed.
+//
+// The D1 binding is the whole point of the project: workerd's SQLite and
+// `node:sqlite` disagree about a double-quoted name that resolves to nothing —
+// Node builds with `SQLITE_DQS=0` and raises, workerd and D1 read a string
+// literal instead. Every provisioning guard in this package that gates on a
+// statement failing is therefore untestable off this runtime, and a Node suite
+// over the same code passes whether the guard works or not.
+//
+// `database_id` is a local miniflare handle, not a real database.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-sql-store-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "d1_databases": [{ "binding": "DB", "database_id": "00000000-0000-0000-0000-000000000000", "database_name": "lunora-sql-store-test" }],
+}

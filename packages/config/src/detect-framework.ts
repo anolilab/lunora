@@ -1,5 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readProjectDependencyNames } from "./project-manifest";
 
 /**
  * The meta-frameworks Lunora can compose with, plus `"none"` for a standalone
@@ -53,31 +52,6 @@ const FRAMEWORK_SIGNATURES: ReadonlyArray<{ class: FrameworkClass; dependency: s
 const STANDALONE: FrameworkDetection = { class: "C", framework: "none" };
 
 /**
- * Read and parse the project `package.json`, returning its merged
- * `dependencies` + `devDependencies` name set (empty on any failure). Public
- * so sibling consumers (e.g. the CLI's Vite-project detection) share one
- * best-effort reader instead of re-parsing `package.json` themselves.
- */
-const readProjectDependencyNames = (root: string): ReadonlySet<string> => {
-    const packageJsonPath = join(root, "package.json");
-
-    if (!existsSync(packageJsonPath)) {
-        return new Set();
-    }
-
-    try {
-        const raw = readFileSync(packageJsonPath, "utf8");
-        const parsed = JSON.parse(raw) as { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> };
-
-        return new Set([...Object.keys(parsed.dependencies ?? {}), ...Object.keys(parsed.devDependencies ?? {})]);
-    } catch {
-        // A malformed / unreadable package.json must never crash a consumer —
-        // fall back to standalone behaviour.
-        return new Set();
-    }
-};
-
-/**
  * Whether the project depends on the unscoped `lunorash` umbrella rather than
  * the granular `@lunora/*` packages.
  *
@@ -116,4 +90,4 @@ const detectFramework = (root: string): FrameworkDetection => {
 };
 
 export type { DetectedFramework, FrameworkClass, FrameworkDetection };
-export { detectFramework, projectUsesUmbrella, readProjectDependencyNames };
+export { detectFramework, projectUsesUmbrella };

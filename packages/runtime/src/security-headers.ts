@@ -47,7 +47,12 @@ interface SecurityHeadersOptions {
 interface CorsOptions {
     /** Echo `Access-Control-Allow-Credentials: true`. Incompatible with a `*` allowlist. */
     allowCredentials?: boolean;
-    /** Request headers permitted on the actual request (preflight `Allow-Headers`). */
+
+    /**
+     * Extra request headers permitted on the actual request (preflight
+     * `Allow-Headers`). Always added to the headers `@lunora/client` sends on
+     * its own, which cannot be removed.
+     */
     allowedHeaders?: string[];
     /** Methods permitted cross-origin (preflight `Allow-Methods`). */
     allowedMethods?: string[];
@@ -178,9 +183,15 @@ const DEFAULT_PERMISSIONS_POLICY =
 const DEFAULT_CORS_HEADERS = [
     "Authorization",
     "Content-Type",
+    // The browser's own SSE reconnect and `connectLiveStream` resume send this
+    // unprompted; without it a cross-origin resume fails at the preflight.
+    "Last-Event-ID",
     "X-D1-Bookmark",
     "X-Lunora-Client-Id",
     "X-Lunora-Client-Seq",
+    // Sent on replayed offline writes under a cookie session; see
+    // `assertExpectedSubject` in `create-worker.ts`.
+    "X-Lunora-Expect-Subject",
     "X-Lunora-Min-Seq",
     "X-Lunora-Mutation-Id",
     // The REST surface's documented header form of `?shardKey=` (`rest-routes.ts`
@@ -320,7 +331,11 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
 
     return {
         allowCredentials,
-        allowedHeaders: input.allowedHeaders ?? DEFAULT_CORS_HEADERS,
+        // An app's list ADDS to the SDK's own headers rather than replacing
+        // them: each default is one `@lunora/client` sends unprompted, and a
+        // custom list written before one of them existed fails that request's
+        // preflight — which the client can only read as a network error.
+        allowedHeaders: [...new Set([...DEFAULT_CORS_HEADERS, ...(input.allowedHeaders ?? [])])],
         allowedMethods: input.allowedMethods ?? DEFAULT_CORS_METHODS,
         enabled: true,
         isAllowed,
@@ -572,7 +587,13 @@ const enforceWebSocketOrigin = (request: Request, resolved: ResolvedSecurity): R
  * bookmark by; `x-lunora-edge-cache` is the REST edge-cache hit indicator, which
  * the docs tell callers to read and a browser could not otherwise see.
  */
-const DEFAULT_CORS_EXPOSED_HEADERS = ["X-D1-Bookmark", "X-Lunora-Edge-Cache", "X-Lunora-Shard-Key"];
+const DEFAULT_CORS_EXPOSED_HEADERS = [
+    "X-D1-Bookmark",
+    "X-Lunora-Edge-Cache",
+    // A live connect's id: a cross-origin `connectLiveStream` scopes every control call to it.
+    "X-Lunora-Live-Connection",
+    "X-Lunora-Shard-Key",
+];
 
 /** Build the `Access-Control-Allow-*` headers for an allowed cross-origin request. */
 const corsResponseHeaders = (origin: string, cors: ResolvedCors): Headers => {

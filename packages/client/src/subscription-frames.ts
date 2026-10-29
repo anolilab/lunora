@@ -1,0 +1,88 @@
+import type { ConnectionStatus } from "./connection-state";
+import { deferNotification } from "./optimistic-layers";
+import type { SubscriptionState } from "./subscription";
+
+/**
+ * Advance a subscription's custom-mutator watermark. `Math.max`, never a bare
+ * assignment: the server's watermark restarts from a lower value when its
+ * `__client_watermark` row is reset (a recycled DO, a PITR restore), and a bare
+ * assignment would walk the checkpoint gate backwards and re-open an overlay a
+ * later frame had already confirmed.
+ */
+export const advanceWatermark = (state: SubscriptionState, mutationId: number): void => {
+    // eslint-disable-next-line no-param-reassign -- the watermark is the subscription's own state
+    state.lastMutationId = Math.max(state.lastMutationId ?? 0, mutationId);
+};
+
+/**
+ * Fan the current checkpoint out to every subscriber of a shared state. A data
+ * frame passes `rowsFollow`, because its rowset callback runs right after. A settled
+ * frame does not: its value did not change, so no rows follow.
+ */
+export const fanCheckpoints = (state: SubscriptionState, rowsFollow = false): void => {
+    const checkpoint = state.serverCursor;
+    const mutationId = state.lastMutationId;
+
+    // Held with the value inside a refresh batch, so a checkpoint listener never reads a
+    // sibling query the batch has not committed yet. Captured now: the batch moves both on.
+    deferNotification(() => {
+        for (const onCheckpoint of state.checkpointCallbacks) {
+            onCheckpoint({ checkpoint, mutationId, ...(rowsFollow && { rowsFollow: true }) });
+        }
+    });
+};
+
+/**
+ * Record a data frame's authoritative payload and its position. The caller has already
+ * resolved the payload, and runs the watermark, the fan-out and any layer drops itself,
+ * so this has no effect on subscribers. A cross-tab follower passes the same position the
+ * leader does, and it decides which parts apply.
+ */
+export const commitDataFrame = (state: SubscriptionState, payload: unknown, position: { cursor?: number; epoch?: string }): void => {
+    /* eslint-disable no-param-reassign -- commit the shared subscription state in place */
+    state.serverBase = payload;
+
+    if (position.cursor !== undefined) {
+        state.serverCursor = position.cursor;
+    }
+
+    if (position.epoch !== undefined) {
+        state.serverEpoch = position.epoch;
+    }
+    /* eslint-enable no-param-reassign */
+};
+
+/**
+ * Whether a full data frame is an older snapshot than the one already applied. A re-sent
+ * `subscribe` can leave two seeds of one subscription running, and the older may land last.
+ * Only the same epoch is comparable, and only against a value this subscription holds: a
+ * cursor that a `settled` frame advanced before any value arrived says nothing about it.
+ */
+export const isStaleDataFrame = (state: SubscriptionState, position: { cursor?: number; epoch?: string }): boolean =>
+    position.cursor !== undefined &&
+    state.serverCursor !== undefined &&
+    state.serverBase !== undefined &&
+    position.epoch !== undefined &&
+    position.epoch === state.serverEpoch &&
+    position.cursor < state.serverCursor;
+
+/**
+ * Whether a frame is a non-final frame of a delta run. The server marks every frame of a run
+ * but the last with `more: true`; the run is applied when its last frame arrives. A
+ * standalone legacy `broadcastDelta` frame carries no flag, so it is applied on arrival.
+ */
+export const isNonFinalRunFrame = (message: { more?: boolean; type: string }): boolean => message.type === "delta" && message.more === true;
+
+/**
+ * Whether a cross-tab frame was stamped for another identity. A frame with no stamp
+ * (a mixed-version leader) is accepted, as before.
+ */
+export const isForeignStamp = (identity: string | null | undefined, current: string | null): boolean => identity !== undefined && identity !== current;
+
+/**
+ * Whether a follower's view of its leader just moved to a state its queued writes can
+ * ride. `polling` counts as live: the leader reaches the origin over HTTP, as the
+ * follower's writes do.
+ */
+export const isLiveTransition = (previous: ConnectionStatus | undefined, next: ConnectionStatus): boolean =>
+    (next === "connected" && previous !== "connected") || (next === "polling" && previous !== "connected" && previous !== "polling");

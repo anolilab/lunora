@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One `createAuth({...})` call's configuration snapshot — the shared input for
  * the five `auth_*` security lints (`auth_trusted_origins_wildcard`,
@@ -23,8 +25,6 @@ export interface AdvisorAuthConfig {
     disableCsrfCheck: boolean;
     /** `emailAndPassword.enabled === true`. */
     emailPasswordEnabled: boolean;
-    /** The exported binding name enclosing the `createAuth(...)` call. */
-    exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
     /** 1-based line of the `createAuth(...)` call, or `0` when unknown. */
@@ -39,6 +39,9 @@ export interface AdvisorAuthConfig {
      * refuses to serve without.
      */
     scimOnNonTransactionalAdapter: boolean;
+
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
     /** `advanced.useSecureCookies === false`. */
     secureCookiesDisabled: boolean;
     /** `session.freshAge === 0` (explicit literal). */

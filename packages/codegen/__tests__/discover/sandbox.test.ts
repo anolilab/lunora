@@ -27,7 +27,12 @@ describe("discover/sandbox", () => {
     it("reports no usage when lunora/ imports nothing from the sandbox subpath", () => {
         expect.assertions(1);
 
-        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({ usesSandboxBrowser: false, usesSandboxContainer: false, usesSandboxFs: false });
+        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({
+            usesSandboxBrowser: false,
+            usesSandboxContainer: false,
+            usesSandboxFs: false,
+            usesSandboxLoader: false,
+        });
     });
 
     it("detects a named browserTool import from the sandbox subpath", () => {
@@ -39,7 +44,28 @@ describe("discover/sandbox", () => {
             export const support = defineAgent({ model: "m", tools: { browser: bt() } });
         `);
 
-        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({ usesSandboxBrowser: true, usesSandboxContainer: false, usesSandboxFs: false });
+        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({
+            usesSandboxBrowser: true,
+            usesSandboxContainer: false,
+            usesSandboxFs: false,
+            usesSandboxLoader: false,
+        });
+    });
+
+    it("treats containerFsTool as a container tool — it needs the dispatcher and ctx.containers", () => {
+        expect.assertions(1);
+
+        writeAgents(`
+            import { containerFsTool, defineAgent } from "@lunora/agent/sandbox";
+            export const coder = defineAgent({ model: "m", tools: { files: containerFsTool("sandbox") } });
+        `);
+
+        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({
+            usesSandboxBrowser: false,
+            usesSandboxContainer: true,
+            usesSandboxFs: false,
+            usesSandboxLoader: false,
+        });
     });
 
     it("detects sandbox tools re-exported from the @lunora/agent main entry (the documented import)", () => {
@@ -53,7 +79,12 @@ describe("discover/sandbox", () => {
             export const support = defineAgent({ model: "m", tools: { browser: browserTool(), box: containerTool("worker") } });
         `);
 
-        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({ usesSandboxBrowser: true, usesSandboxContainer: true, usesSandboxFs: false });
+        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({
+            usesSandboxBrowser: true,
+            usesSandboxContainer: true,
+            usesSandboxFs: false,
+            usesSandboxLoader: false,
+        });
     });
 
     it("detects both browserTool and containerTool from the sandbox subpath", () => {
@@ -65,7 +96,12 @@ describe("discover/sandbox", () => {
             export const support = defineAgent({ model: "m", tools: { browser: browserTool(), box: containerTool("sandbox") } });
         `);
 
-        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({ usesSandboxBrowser: true, usesSandboxContainer: true, usesSandboxFs: false });
+        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({
+            usesSandboxBrowser: true,
+            usesSandboxContainer: true,
+            usesSandboxFs: false,
+            usesSandboxLoader: false,
+        });
     });
 
     it("does not false-positive on a browserTool imported from another module", () => {
@@ -76,7 +112,12 @@ describe("discover/sandbox", () => {
             export const x = browserTool();
         `);
 
-        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({ usesSandboxBrowser: false, usesSandboxContainer: false, usesSandboxFs: false });
+        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({
+            usesSandboxBrowser: false,
+            usesSandboxContainer: false,
+            usesSandboxFs: false,
+            usesSandboxLoader: false,
+        });
     });
 
     it("ignores a type-only import of the sandbox subpath", () => {
@@ -87,7 +128,12 @@ describe("discover/sandbox", () => {
             export const shape = (input: BrowserToolInput): BrowserToolInput => input;
         `);
 
-        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({ usesSandboxBrowser: false, usesSandboxContainer: false, usesSandboxFs: false });
+        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({
+            usesSandboxBrowser: false,
+            usesSandboxContainer: false,
+            usesSandboxFs: false,
+            usesSandboxLoader: false,
+        });
     });
 
     it("ignores an inline type-only named specifier", () => {
@@ -99,7 +145,12 @@ describe("discover/sandbox", () => {
             export const shape = (input: ContainerToolInput): ContainerToolInput => input;
         `);
 
-        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({ usesSandboxBrowser: false, usesSandboxContainer: true, usesSandboxFs: false });
+        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({
+            usesSandboxBrowser: false,
+            usesSandboxContainer: true,
+            usesSandboxFs: false,
+            usesSandboxLoader: false,
+        });
     });
 
     // Regression: `fsTool` registers the same `sandbox:invoke` dispatcher the other
@@ -114,7 +165,12 @@ describe("discover/sandbox", () => {
             export const coder = defineAgent({ model: "m", tools: { fs: fsTool("SANDBOX_BUCKET") } });
         `);
 
-        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({ usesSandboxBrowser: false, usesSandboxContainer: false, usesSandboxFs: true });
+        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({
+            usesSandboxBrowser: false,
+            usesSandboxContainer: false,
+            usesSandboxFs: true,
+            usesSandboxLoader: false,
+        });
     });
 
     it("ignores a type-only fsTool import", () => {
@@ -122,6 +178,27 @@ describe("discover/sandbox", () => {
 
         writeAgents(`import type { fsTool } from "@lunora/agent/sandbox";`);
 
-        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({ usesSandboxBrowser: false, usesSandboxContainer: false, usesSandboxFs: false });
+        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({
+            usesSandboxBrowser: false,
+            usesSandboxContainer: false,
+            usesSandboxFs: false,
+            usesSandboxLoader: false,
+        });
+    });
+
+    it("detects a named jsCodeTool import from the main entry", () => {
+        expect.assertions(1);
+
+        writeAgents(`
+            import { defineAgent, jsCodeTool } from "@lunora/agent";
+            export const analyst = defineAgent({ model: "m", tools: { js: jsCodeTool() } });
+        `);
+
+        expect(discoverSandboxUsage(newProject(), workdir)).toStrictEqual({
+            usesSandboxBrowser: false,
+            usesSandboxContainer: false,
+            usesSandboxFs: false,
+            usesSandboxLoader: true,
+        });
     });
 });

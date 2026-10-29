@@ -7,9 +7,11 @@
  */
 import { existsSync } from "node:fs";
 
-import { discoverSchema } from "@lunora/codegen";
+import type { SchemaIR, ValidatorIR } from "@lunora/codegen";
+import { discoverSchema, isD1GlobalTable, isHyperdriveGlobalTable } from "@lunora/codegen";
 import { Project } from "ts-morph";
 
+import type { DiscoveryCache } from "./discovery-cache";
 import join from "./path";
 
 /** One filterable Vectorize metadata property a schema declares. */
@@ -18,8 +20,9 @@ interface VectorMetadataDeclaration {
     index: string;
 
     /**
-     * The validator kind behind the column, or `undefined` when the column
-     * isn't in the owning table's shape. Callers map it to the Vectorize
+     * The validator kind behind the column, with `v.optional(...)` and a
+     * nullable union unwrapped (metadata columns are usually optional), or
+     * `undefined` when the column isn't in the owning table's shape. Callers map it to the Vectorize
      * metadata type; a kind that can't be filtered on is reported, not indexed.
      */
     kind: string | undefined;
@@ -28,8 +31,22 @@ interface VectorMetadataDeclaration {
 }
 
 interface SchemaInfo {
-    /** Whether the lunora schema declares any `.global()` table. */
-    hasGlobalTable: boolean;
+    /**
+     * Whether the schema declares a **D1-backed** `.global()` table — the only
+     * flavour that needs the `DB` binding and the app's `.global({ d1 })` chain.
+     * A `.global({ backend: "hyperdrive" })` table needs neither, and counting it
+     * here demanded a D1 database of a project that has none.
+     */
+    hasD1GlobalTable: boolean;
+    /** Whether the schema declares a `.global({ backend: "hyperdrive" })` table — needs the app's `.hyperdriveGlobal(...)` chain instead. Required, not optional: the only producer always knows the answer, and `?` made every consumer read a two-valued fact as three-valued. */
+    hasHyperdriveGlobalTable: boolean;
+
+    /**
+     * Data-residency jurisdiction declared via `defineSchema(...).jurisdiction("…")`.
+     * It pins the app's Durable Objects only; KV namespaces and R2 buckets carry
+     * their own jurisdiction, set when they are created.
+     */
+    jurisdiction?: SchemaIR["jurisdiction"];
     /** Names of vector indexes declared via `.vectorize()` / `defineVectorIndex()`. */
     vectorIndexNames?: ReadonlyArray<string>;
 
@@ -49,12 +66,31 @@ interface DiscoverSchemaInfoResult {
 }
 
 /**
+ * The kind a metadata filter sees: an absent value is simply not filterable, so
+ * `v.optional(x)` and a `v.union(x, v.null())` index as `x`. A union whose other
+ * members all share one kind (a string enum) indexes as that kind.
+ */
+const filterableKind = (validator: ValidatorIR | undefined): string | undefined => {
+    if (validator?.kind === "optional") {
+        return filterableKind(validator.inner);
+    }
+
+    if (validator?.kind === "union") {
+        const kinds = new Set((validator.members ?? []).filter((member) => member.kind !== "null").map((member) => filterableKind(member)));
+
+        return kinds.size === 1 ? [...kinds][0] : validator.kind;
+    }
+
+    return validator?.kind;
+};
+
+/**
  * Discover {@link SchemaInfo} for a project. Returns `{ info: undefined }` when
  * the project declares no `schema.ts` (not an error), or `{ info: undefined,
  * error }` when a present schema could not be parsed — callers decide whether a
  * parse failure is a warning (validator) or simply ignorable (inference).
  */
-const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string): DiscoverSchemaInfoResult => {
+const parseSchemaInfo = (projectRoot: string, schemaDirectory: string): DiscoverSchemaInfoResult => {
     const schemaPath = join(projectRoot, schemaDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {
@@ -62,21 +98,26 @@ const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string): Disco
     }
 
     try {
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        // `noLib`: discovery only follows symbols (an `.extend(...)` argument to its
+        // declaration), never a type, so parsing the default `lib.*.d.ts` set — most of
+        // this program — bought nothing.
+        const project = new Project({ compilerOptions: { noLib: true }, skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
         // Pass `projectRoot` so a package-defined `.extend(...)` (resolved by
         // importing the dep) is seen here too — keeping binding inference + the
         // wrangler validator consistent with what codegen emits.
         const schema = discoverSchema(project, schemaPath, projectRoot);
 
-        const shapeOf = (tableName: string): Record<string, { kind?: string }> => schema.tables.find((table) => table.name === tableName)?.shape ?? {};
+        const shapeOf = (tableName: string): Record<string, ValidatorIR> => schema.tables.find((table) => table.name === tableName)?.shape ?? {};
 
         return {
             info: {
-                hasGlobalTable: schema.tables.some((table) => table.shardMode === "global"),
+                hasD1GlobalTable: schema.tables.some((table) => isD1GlobalTable(table)),
+                hasHyperdriveGlobalTable: schema.tables.some((table) => isHyperdriveGlobalTable(table)),
+                ...(schema.jurisdiction === undefined ? {} : { jurisdiction: schema.jurisdiction }),
                 vectorIndexNames: schema.vectorIndexes.map((index) => index.name),
                 vectorMetadata: schema.vectorIndexes.flatMap((index) =>
                     (index.metadata ?? []).map((property) => {
-                        return { index: index.name, kind: shapeOf(index.table)[property]?.kind, property };
+                        return { index: index.name, kind: filterableKind(shapeOf(index.table)[property]), property };
                     }),
                 ),
             },
@@ -85,6 +126,12 @@ const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string): Disco
         return { error: error instanceof Error ? error.message : String(error), info: undefined };
     }
 };
+
+/** Discover the schema facts, memoised on `cache` when one is given. */
+const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string, cache?: DiscoveryCache): DiscoverSchemaInfoResult =>
+    cache === undefined
+        ? parseSchemaInfo(projectRoot, schemaDirectory)
+        : cache.memo(`schema:${projectRoot}:${schemaDirectory}`, () => parseSchemaInfo(projectRoot, schemaDirectory));
 
 export type { DiscoverSchemaInfoResult, SchemaInfo, VectorMetadataDeclaration };
 export { discoverSchemaInfo };

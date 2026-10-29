@@ -3,6 +3,7 @@ import type { ShallowRef } from "vue";
 import { shallowRef } from "vue";
 
 import { isBrowser } from "../../../shared/is-browser";
+import { assertPresenceInterval } from "../../../shared/presence-interval";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./lunora-provider";
 import onScopeDisposeOrWarn from "./scope-dispose";
@@ -71,6 +72,8 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     const client = useLunora();
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
+    assertPresenceInterval(intervalMs);
+
     // One session id per composable call unless the caller pins one.
     const sessionId = options.sessionId ?? randomSessionId();
 
@@ -80,6 +83,8 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     // Latest awareness data — updated by `setData`; read at heartbeat time so
     // changing data never resets the interval or closes the subscription.
     let latestData: Record<string, unknown> | undefined = options.data;
+    // True only between the client-side mount and teardown; `setData` must not heartbeat before then.
+    let mounted = false;
 
     const sendHeartbeat = (): void => {
         const args = {
@@ -94,7 +99,10 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
 
     const setData = (next: Record<string, unknown> | undefined): void => {
         latestData = next;
-        sendHeartbeat();
+
+        if (mounted) {
+            sendHeartbeat();
+        }
     };
 
     // The heartbeat, interval, and live subscription are client-only. During SSR
@@ -105,6 +113,8 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     // request would leak a live `setInterval` handle. Skip the whole client wiring
     // server-side; the returned refs stay inert until the component hydrates.
     if (isBrowser()) {
+        mounted = true;
+
         // Heartbeat: immediately on mount, on interval, and on tab re-focus.
         sendHeartbeat();
         const intervalHandle = setInterval(sendHeartbeat, intervalMs);
@@ -144,6 +154,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
 
         // Teardown: clear interval, remove listener, clear connection context, unsubscribe.
         const teardown = (): void => {
+            mounted = false;
             clearInterval(intervalHandle);
 
             if (typeof document !== "undefined") {

@@ -10,6 +10,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecutionContextLike, ShardingInfo } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
+import chunkedBody from "./helpers/chunked-body";
 
 const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
@@ -31,23 +32,7 @@ const ADMIN_TOKEN = "admin-bear";
  * A chunked request body that streams just over the 1 MiB `MAX_BODY_BYTES`
  * cap with no `Content-Length`, so only the byte-budgeted reader can reject it.
  */
-const oversizedStream = (): ReadableStream<Uint8Array> => {
-    const chunk = new Uint8Array(256 * 1024).fill(120); // 'x'
-    let sent = 0;
-
-    return new ReadableStream<Uint8Array>({
-        pull(controller) {
-            if (sent >= 5) {
-                controller.close();
-
-                return;
-            }
-
-            sent += 1;
-            controller.enqueue(chunk); // 5 × 256 KiB = 1.25 MiB > 1 MiB cap
-        },
-    });
-};
+const oversizedStream = (): ReadableStream<Uint8Array> => chunkedBody({ exceedBytes: 1_048_576 });
 
 describe("createWorker — admin export endpoint", () => {
     it("rejects without a configured admin token (403)", async () => {
@@ -186,6 +171,120 @@ describe("createWorker — admin export endpoint", () => {
 
         expect(lines).toHaveLength(2);
         expect(JSON.parse(lines[0]!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
+    });
+
+    it("answers 502 when a shard's export failed instead of serving a short snapshot", async () => {
+        expect.assertions(2);
+
+        const orchestrateExport = vi.fn<() => Promise<unknown>>(async () => {
+            return {
+                failed: 1,
+                ok: 1,
+                shards: [
+                    { rows: [{ doc: { _id: "u1" }, table: "users" }], shardKey: "c1" },
+                    { error: { message: 'shard "c2" failed: boom', timedOut: false }, shardKey: "c2" },
+                ],
+            };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: orchestrateExport as never,
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify({ tables: ["users"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        // The shard-local fan-out settles before the status is committed, so a
+        // failed shard is a real 502 — not a short body a consumer could mistake
+        // for a complete dump.
+        expect(response.status).toBe(502);
+        await expect(response.text()).resolves.toContain("c2");
+    });
+
+    it("exports a root table without a configured queryCoordinator", async () => {
+        expect.assertions(3);
+
+        const shardKeys: string[] = [];
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            resolveTableSharding: (): ShardingInfo => {
+                return { mode: { kind: "root" } };
+            },
+            shardDO: {
+                get: (id) => {
+                    shardKeys.push((id as { __name: string }).__name);
+
+                    return { fetch: async () => Response.json({ result: { rows: [{ doc: { _id: "u1" }, table: "users" }] } }) };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            },
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify({ tables: ["users"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const text = await response.text();
+
+        expect(JSON.parse(text.trim())).toEqual({ doc: { _id: "u1" }, table: "users" });
+        expect(shardKeys).toEqual(["__root__"]);
+    });
+
+    it("refuses a .shardBy() export with a 400 when no shard registry is configured", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            resolveTableSharding: (): ShardingInfo => {
+                return { mode: { field: "channelId", kind: "shardBy" } };
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify({ tables: ["messages"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        // Refused before the status line: from inside the stream this could only
+        // end the body early, which reads as a short but complete dump.
+        expect(response.status).toBe(400);
+        await expect(response.text()).resolves.toContain(String.raw`cannot discover the shards of \"messages\"`);
     });
 
     it("streams D1 globals when exportGlobals is configured", async () => {
@@ -460,6 +559,42 @@ describe("createWorker — admin import endpoint", () => {
         expect(shardKeys).toEqual(["__root__", "c1", "c2"]);
     });
 
+    it("imports without a configured queryCoordinator", async () => {
+        expect.assertions(3);
+
+        const shardKeys: string[] = [];
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            shardDO: {
+                get: (id) => {
+                    shardKeys.push((id as { __name: string }).__name);
+
+                    return { fetch: async () => Response.json({ result: { conflicts: 0, errors: [], inserted: { users: 1 } } }) };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            },
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: JSON.stringify({ doc: { _id: "u1", email: "a@b.com" }, table: "users" }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/x-ndjson" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body: { inserted: Record<string, number> } = await response.json();
+
+        expect(body.inserted).toEqual({ users: 1 });
+        expect(shardKeys).toEqual(["__root__"]);
+    });
+
     it("reports malformed JSON rows in `errors` but continues", async () => {
         expect.assertions(3);
 
@@ -657,6 +792,70 @@ describe("createWorker — admin import endpoint", () => {
         expect(capturedRows.map((row) => row.line)).toEqual([1, 3]);
     });
 
+    describe("dry run of global rows", () => {
+        const dryRunGlobals = async (workerOptions: {
+            importGlobalsSupportsDryRun?: boolean;
+        }): Promise<{ body: { errors: { code: string; line: number }[]; inserted: Record<string, number> }; importGlobals: ReturnType<typeof vi.fn> }> => {
+            const importGlobals = vi.fn<(request: { dryRun?: boolean; rows: { doc: Record<string, unknown>; table: string }[] }) => Promise<unknown>>(
+                async () => {
+                    return { conflicts: 0, errors: [], inserted: {} };
+                },
+            );
+
+            const worker = createWorker({
+                adminToken: ADMIN_TOKEN,
+                importGlobals: importGlobals as never,
+                queryCoordinator: {
+                    fanOut: vi.fn<() => never>(),
+                    orchestrateApplyCdc: vi.fn<() => never>(),
+                    orchestrateCdcSync: vi.fn<() => never>(),
+                    orchestrateExport: vi.fn<() => never>(),
+                    orchestrateImport: orchestrateImport as never,
+                    orchestrateMigration: vi.fn<() => never>(),
+                    orchestrateRank: vi.fn<() => never>(),
+                    orchestrateRankPage: vi.fn<() => never>(),
+                    orchestrateShardTraffic: vi.fn<() => never>(),
+                    registry: {} as never,
+                },
+                resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                    table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+                shardDO: noopNamespace,
+                ...workerOptions,
+            });
+
+            const response = await worker.fetch(
+                new Request("https://app.example/_lunora/admin/import?dryRun=true", {
+                    body: JSON.stringify({ doc: { _id: "g1" }, table: "settings" }),
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            return { body: await response.json(), importGlobals };
+        };
+
+        it("refuses the rows without calling an importer that has not opted in", async () => {
+            expect.assertions(3);
+
+            const { body, importGlobals } = await dryRunGlobals({});
+
+            expect(importGlobals).not.toHaveBeenCalled();
+            expect(body.errors).toHaveLength(1);
+            expect(body.errors[0]).toMatchObject({ code: "GLOBAL_DRY_RUN_UNSUPPORTED", line: 1 });
+        });
+
+        it("passes the dry run to an importer that has opted in", async () => {
+            expect.assertions(2);
+
+            const { body, importGlobals } = await dryRunGlobals({ importGlobalsSupportsDryRun: true });
+
+            expect(importGlobals).toHaveBeenCalledWith(expect.objectContaining({ dryRun: true }));
+            expect(body.errors).toHaveLength(0);
+        });
+    });
+
     it("reports global rows as errors when importGlobals is not configured", async () => {
         expect.assertions(2);
 
@@ -696,6 +895,142 @@ describe("createWorker — admin import endpoint", () => {
         expect(body.errors).toHaveLength(1);
         expect(body.errors[0]!.code).toBe("GLOBAL_NOT_CONFIGURED");
     });
+
+    it("echoes the dry run in its answer, and a real import carries no echo", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const post = async (url: string): Promise<Record<string, unknown>> => {
+            const response = await worker.fetch(
+                new Request(url, { body: "\n", headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+                {},
+                fakeContext,
+            );
+
+            return response.json();
+        };
+
+        await expect(post("https://app.example/_lunora/admin/import?dryRun=true")).resolves.toMatchObject({ dryRun: true });
+        await expect(post("https://app.example/_lunora/admin/import")).resolves.not.toHaveProperty("dryRun");
+    });
+
+    describe("onConflict=replace", () => {
+        const replaceImport = async (
+            url: string,
+            workerOptions: { importGlobals?: never; importGlobalsSupportsDryRun?: boolean; importGlobalsSupportsReplace?: boolean },
+        ): Promise<{ body: Record<string, unknown>; importGlobals: ReturnType<typeof vi.fn>; status: number }> => {
+            const importGlobals = vi.fn<(request: { onConflict?: string }) => Promise<unknown>>(async () => {
+                return { conflicts: 0, errors: [], inserted: {}, replaced: 1 };
+            });
+            const worker = createWorker({
+                adminToken: ADMIN_TOKEN,
+                importGlobals: importGlobals as never,
+                queryCoordinator: {
+                    fanOut: vi.fn<() => never>(),
+                    orchestrateApplyCdc: vi.fn<() => never>(),
+                    orchestrateCdcSync: vi.fn<() => never>(),
+                    orchestrateExport: vi.fn<() => never>(),
+                    orchestrateImport: orchestrateImport as never,
+                    orchestrateMigration: vi.fn<() => never>(),
+                    orchestrateRank: vi.fn<() => never>(),
+                    orchestrateRankPage: vi.fn<() => never>(),
+                    orchestrateShardTraffic: vi.fn<() => never>(),
+                    registry: {} as never,
+                },
+                resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                    table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+                shardDO: noopNamespace,
+                ...workerOptions,
+            });
+            const response = await worker.fetch(
+                new Request(url, {
+                    body: [JSON.stringify({ doc: { _id: "g1" }, table: "settings" }), JSON.stringify({ doc: { _id: "u1" }, table: "users" })].join("\n"),
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            return { body: await response.json(), importGlobals, status: response.status };
+        };
+
+        it("passes the mode to both planes, sums `replaced`, and echoes it", async () => {
+            expect.assertions(4);
+
+            const { body, importGlobals } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=replace", {
+                importGlobalsSupportsReplace: true,
+            });
+
+            expect(importGlobals).toHaveBeenCalledWith(expect.objectContaining({ onConflict: "replace" }));
+            expect(orchestrateImport).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ onConflict: "replace" }));
+            expect(body).toMatchObject({ onConflict: "replace", replaced: 1 });
+            expect(body["errors"]).toStrictEqual([]);
+        });
+
+        it("defaults to skip, with no echo", async () => {
+            expect.assertions(2);
+
+            const { body } = await replaceImport("https://app.example/_lunora/admin/import", { importGlobalsSupportsReplace: true });
+
+            expect(orchestrateImport).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ onConflict: "skip" }));
+            expect(body).not.toHaveProperty("onConflict");
+        });
+
+        it("refuses the whole import (400) for a global importer that has not opted in, before any shard row is overwritten", async () => {
+            expect.assertions(3);
+
+            const { importGlobals, status } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=replace", {});
+
+            expect(status).toBe(400);
+            expect(importGlobals).not.toHaveBeenCalled();
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
+
+        it("refuses the whole import (400) when no global importer is configured, before any shard row is overwritten", async () => {
+            expect.assertions(2);
+
+            const { status } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=replace", { importGlobals: undefined });
+
+            expect(status).toBe(400);
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
+
+        it("refuses it in a dry run too, so a client's check catches it before anything is written", async () => {
+            expect.assertions(2);
+
+            const { importGlobals, status } = await replaceImport("https://app.example/_lunora/admin/import?dryRun=true&onConflict=replace", {
+                importGlobalsSupportsDryRun: true,
+            });
+
+            expect(status).toBe(400);
+            expect(importGlobals).not.toHaveBeenCalled();
+        });
+
+        it("rejects an unknown mode", async () => {
+            expect.assertions(1);
+
+            const { status } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=merge", { importGlobalsSupportsReplace: true });
+
+            expect(status).toBe(400);
+        });
+    });
 });
 
 /**
@@ -732,7 +1067,7 @@ describe("backup registry snapshot → admin import", () => {
      * question HERE is the NDJSON framing — `table` and `doc` on every line. That
      * the item's mirror still agrees with the reference is pinned separately, by
      * `packages/cli/__tests__/commands/registry-backup-item.test.ts`, which builds
-     * its expected bytes from `shared/wire-codec`.
+     * its expected bytes from `packages/wire/src/wire-codec`.
      */
     const itemToNdjson = async (): Promise<(table: string, rows: ReadonlyArray<Record<string, unknown>>) => string> => {
         // Spans lines: the expression is an arrow whose body sits on the next one.
@@ -742,7 +1077,7 @@ describe("backup registry snapshot → admin import", () => {
             throw new Error("could not locate `toNdjson` in registry/backup/backup.ts");
         }
 
-        const codecPath = resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "shared", "wire-codec.ts");
+        const codecPath = resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "..", "wire", "src", "wire-codec.ts");
         const compiled = transformSync(`import { encodeWire } from ${JSON.stringify(pathToFileURL(codecPath).href)};\nexport const toNdjson = ${match[1]};`, {
             loader: "ts",
         }).code;
@@ -1037,6 +1372,55 @@ describe("admin sync (CDC streaming export)", () => {
         expect(body.global.cursor).toBe(2);
         // The caller's per-shard cursor map reaches the coordinator verbatim.
         expect(orchestrateCdcSync.mock.calls[0]?.[1]).toMatchObject({ cursors: { c1: 4 } });
+    });
+
+    it("forwards the per-shard epoch map and surfaces each shard's epoch", async () => {
+        expect.assertions(3);
+
+        const orchestrateCdcSync = vi.fn<
+            (
+                namespace: unknown,
+                request: { cursors?: Record<string, number>; epochs?: Record<string, string> },
+            ) => Promise<{ failed: number; ok: number; shards: { cursor: number; epoch?: string; shardKey: string }[] }>
+        >(async () => {
+            return { failed: 0, ok: 1, shards: [{ cursor: 5, epoch: "live-c1", shardKey: "c1" }] };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync,
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/sync", {
+                body: JSON.stringify({ cursors: { c1: 4 }, epochs: { c1: "held-c1" }, tables: ["messages"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ shards: { epoch?: string; shardKey: string }[] }>();
+
+        // The pair the consumer checkpoints: the cursor it already had, and the
+        // timeline that cursor indexes, which it can echo back next poll.
+        expect(body.shards[0]).toMatchObject({ epoch: "live-c1", shardKey: "c1" });
+        expect(orchestrateCdcSync.mock.calls[0]?.[1]).toMatchObject({ epochs: { c1: "held-c1" } });
     });
 
     it("omits the global page when syncGlobals is not configured", async () => {

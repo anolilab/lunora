@@ -1,0 +1,3 @@
+# jactionlint configuration.
+# "correctness" keeps the checks of actionlint. Use "default" to add the security and policy rules.
+profile: "correctness"

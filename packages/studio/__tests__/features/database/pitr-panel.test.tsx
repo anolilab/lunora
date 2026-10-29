@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -99,6 +99,67 @@ describe("pitrPanel", () => {
         expect(mock.mutation).toHaveBeenCalledTimes(1);
     });
 
+    it("sends typed epoch-ms and ISO times as epoch-ms numbers", async () => {
+        expect.hasAssertions();
+
+        const times: unknown[] = [];
+        const mock = createMockClient({
+            query: (_reference, args): unknown => {
+                const { time } = args as { time?: unknown };
+
+                if (time !== undefined) {
+                    times.push(time);
+                }
+
+                return { current: "bm-current", forTime: "bm-for-time" } satisfies PitrBookmarkResult;
+            },
+        });
+
+        render(renderPanel(mock));
+        await screen.findByTestId("pitr-current");
+
+        // The worker `Date.parse`s a string, which is NaN for a run of digits.
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "1717200000000" } });
+
+        expect(screen.getByTestId("pitr-time-resolved").textContent).toContain("2024-06-01T00:00:00.000Z");
+
+        fireEvent.click(screen.getByTestId("pitr-preview"));
+        await waitFor(() => {
+            expect(times).toStrictEqual([1_717_200_000_000]);
+        });
+
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "2026-06-01T00:00:00.000Z" } });
+        fireEvent.click(screen.getByTestId("pitr-preview"));
+        await waitFor(() => {
+            expect(times).toStrictEqual([1_717_200_000_000, Date.UTC(2026, 5, 1)]);
+        });
+    });
+
+    it("refuses text that is not a time before sending anything", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({ query: (): unknown => ({ current: "bm-current" }) satisfies PitrBookmarkResult });
+
+        render(renderPanel(mock));
+        await screen.findByTestId("pitr-current");
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "yesterday-ish" } });
+
+        expect(screen.getByTestId<HTMLButtonElement>("pitr-preview").disabled).toBe(true);
+        expect(screen.getByTestId("pitr-time-resolved").textContent).toContain("Not a time");
+    });
+
+    it("treats epoch-ms past the Date range as not a time instead of crashing", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({ query: (): unknown => ({ current: "bm-current" }) satisfies PitrBookmarkResult });
+
+        render(renderPanel(mock));
+        await screen.findByTestId("pitr-current");
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "8640000000000001" } });
+
+        expect(screen.getByTestId("pitr-time-resolved").textContent).toContain("Not a time");
+    });
+
     it("names the shard and the target in the restore confirmation", async () => {
         expect.assertions(3);
 
@@ -138,5 +199,146 @@ describe("pitrPanel", () => {
         await screen.findByTestId("pitr-error");
 
         expect(screen.getByTestId("pitr-error").textContent).toContain("PITR_UNAVAILABLE");
+    });
+
+    it("disables preview and restore when the host keeps no bookmarks", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (): unknown => {
+                throw Object.assign(new Error("point-in-time recovery is not available here"), { code: "PITR_UNAVAILABLE" });
+            },
+        });
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("pitr-error");
+
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "2026-06-01T00:00:00.000Z" } });
+        fireEvent.change(screen.getByTestId("pitr-bookmark"), { target: { value: "bm-typed" } });
+
+        expect(screen.getByTestId("pitr-preview").hasAttribute("disabled")).toBe(true);
+        expect(screen.getByTestId("pitr-restore").hasAttribute("disabled")).toBe(true);
+        expect(screen.getByTestId("pitr-error").textContent).toContain("not available");
+    });
+
+    it("disables restore once a restore answers that the host cannot arm one", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            mutation: (): unknown => {
+                throw Object.assign(new Error("restore is not available here"), { code: "PITR_UNAVAILABLE" });
+            },
+            query: (): unknown => ({ current: "bm-current" }) satisfies PitrBookmarkResult,
+        });
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("pitr-current");
+
+        fireEvent.change(screen.getByTestId("pitr-bookmark"), { target: { value: "bm-target" } });
+        fireEvent.click(screen.getByTestId("pitr-restore"));
+        fireEvent.click(screen.getByTestId("pitr-restore-confirm"));
+
+        await screen.findByTestId("pitr-error");
+
+        expect(screen.getByTestId("pitr-restore").hasAttribute("disabled")).toBe(true);
+    });
+
+    it("ignores a bookmark answer from the previous client after a client swap", async () => {
+        expect.assertions(2);
+
+        let answerOld: ((value: PitrBookmarkResult) => void) | undefined;
+        const old = createMockClient({
+            query: (): unknown =>
+                new Promise<PitrBookmarkResult>((resolve) => {
+                    answerOld = resolve;
+                }),
+        });
+        const next = createMockClient({
+            query: (): unknown => {
+                throw Object.assign(new Error("point-in-time recovery is not available here"), { code: "PITR_UNAVAILABLE" });
+            },
+        });
+
+        const { rerender } = render(renderPanel(old));
+
+        rerender(renderPanel(next));
+        await screen.findByTestId("pitr-error");
+
+        answerOld?.({ current: "bm-from-old-host" });
+        await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+        });
+
+        fireEvent.change(screen.getByTestId("pitr-bookmark"), { target: { value: "bm-target" } });
+
+        expect(screen.getByTestId("pitr-current").textContent).not.toContain("bm-from-old-host");
+        expect(screen.getByTestId("pitr-restore").hasAttribute("disabled")).toBe(true);
+    });
+
+    it("ignores the previous shard's bookmark read after the shard prop changes", async () => {
+        expect.assertions(1);
+
+        let answerA: ((value: PitrBookmarkResult) => void) | undefined;
+        const mock = createMockClient({
+            query: (_reference, _args, options): unknown => {
+                if ((options as { shardKey?: string }).shardKey === "room-a") {
+                    return new Promise<PitrBookmarkResult>((resolve) => {
+                        answerA = resolve;
+                    });
+                }
+
+                return { current: "bm-room-b" } satisfies PitrBookmarkResult;
+            },
+        });
+
+        const { rerender } = render(renderPanel(mock, "room-a"));
+
+        rerender(renderPanel(mock, "room-b"));
+
+        await waitFor(() => {
+            if (screen.getByTestId("pitr-current").textContent !== "bm-room-b") {
+                throw new Error("room-b not loaded");
+            }
+        });
+
+        await act(async () => {
+            answerA?.({ current: "bm-room-a" });
+        });
+
+        expect(screen.getByTestId("pitr-current").textContent).toBe("bm-room-b");
+    });
+
+    it("drops the previous shard's preview when the shard prop changes", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (_reference, args, options): unknown => {
+                const shard = (options as { shardKey?: string }).shardKey ?? "";
+                const { time } = args as { time?: number };
+
+                return { current: `bm-${shard}`, ...(time === undefined ? {} : { forTime: `bm-${shard}-for-time` }) } satisfies PitrBookmarkResult;
+            },
+        });
+
+        const { rerender } = render(renderPanel(mock, "room-a"));
+
+        await screen.findByTestId("pitr-current");
+
+        fireEvent.change(screen.getByTestId("pitr-time"), { target: { value: "2026-06-01T00:00:00.000Z" } });
+        fireEvent.click(screen.getByTestId("pitr-preview"));
+        await screen.findByTestId("pitr-preview-bookmark");
+
+        rerender(renderPanel(mock, "room-b"));
+
+        await waitFor(() => {
+            if (screen.getByTestId("pitr-current").textContent !== "bm-room-b") {
+                throw new Error("room-b not loaded");
+            }
+        });
+
+        // room-a's nearest bookmark is not a bookmark of room-b.
+        expect(screen.queryByTestId("pitr-preview-bookmark")).toBeNull();
     });
 });

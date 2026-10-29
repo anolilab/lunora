@@ -1,7 +1,9 @@
 ---
 title: Relations
-description: Modeling many-to-one and one-to-many relationships with the one / many relation descriptors, foreign-key columns and indexed reads.
+description: Modeling many-to-one, one-to-many and many-to-many relationships with the one / many relation descriptors, foreign-key columns, join tables and indexed reads.
 related:
+    - to: /docs/concepts/relation-graph
+      note: "`ctx.db.related` — walking the derived foreign-key graph"
     - to: /docs/concepts/schema
       note: "declaring tables, validators and indexes"
     - to: /docs/concepts/indexes
@@ -47,15 +49,16 @@ export default defineSchema({
 });
 ```
 
-## The two descriptors
+## The descriptors
 
 `.relations((r) => …)` returns a map of named accessors. Each accessor is
-built with one of two descriptors on the `r` builder:
+built with one of the descriptors on the `r` builder:
 
-| Descriptor            | Cardinality | Where the FK lives                                                                                | Signature                           |
-| --------------------- | ----------- | ------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `r.one(table, opts)`  | many-to-one | on **this** table; `opts.field` points at `table`.`references`                                    | `{ field, references?, onDelete? }` |
-| `r.many(table, opts)` | one-to-many | on the **target** table; `opts.field` is the column over there matching this table's `references` | `{ field, references? }`            |
+| Descriptor                   | Cardinality  | Where the FK lives                                                                                | Signature                           |
+| ---------------------------- | ------------ | ------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `r.one(table, opts)`         | many-to-one  | on **this** table; `opts.field` points at `table`.`references`                                    | `{ field, references?, onDelete? }` |
+| `r.many(table, opts)`        | one-to-many  | on the **target** table; `opts.field` is the column over there matching this table's `references` | `{ field, references? }`            |
+| `r.many(table, { through })` | many-to-many | on a **join table** with one row per linked pair; see [Many-to-many](#many-to-many)               | `{ through: { table, from, to } }`  |
 
 - **`field`** (required): the name of the foreign-key column.
 - **`references`**: the target column the FK points at. Defaults to `_id`;
@@ -123,6 +126,75 @@ categories: defineTable({
 `.relations()` chains alongside `.index()`, `.shardBy()`, `.global()` and the
 rest of the table builder, and returns the same builder instance.
 
+## Many-to-many
+
+A link that needs a join table (`posts` ↔ `tags` through `post_tags`) is one more `r.many`, naming the join table
+and its two keys. The join table is an ordinary table: `from` points at the table that declares the relation and
+`to` at the target.
+
+```ts
+export default defineSchema({
+    posts: defineTable({ title: v.string() }).relations((r) => ({
+        tags: r.many("tags", { through: { table: "post_tags", from: "postId", to: "tagId" } }),
+    })),
+
+    tags: defineTable({ label: v.string() }),
+
+    post_tags: defineTable({ postId: v.id("posts"), tagId: v.id("tags") })
+        // one row per pair: a repeated connect must not store the link twice
+        .index("by_pair", ["postId", "tagId"], { unique: true })
+        // the unique index leads with postId; this one serves the other direction
+        .index("by_tag", ["tagId"])
+        .relations((r) => ({
+            post: r.one("posts", { field: "postId", onDelete: "cascade" }),
+            tag: r.one("tags", { field: "tagId", onDelete: "cascade" }),
+        })),
+});
+```
+
+- **The schema is checked when it loads.** The join table has to exist, `from` and `to` have to be required
+  `v.id` columns on two different columns pointing at the declaring table and the target, and a **unique index over
+  exactly those two columns** is required. The `through_relation_missing_unique_index` advisor lint reports the missing index at
+  codegen time.
+- **Reads work like any other `many`.** `with: { tags: true }` loads the linked tags (two batched reads: the join
+  rows, then the tags), `where: { tags: { some | every | none: … } }` filters posts through the join, and
+  `with: { _count: { tags: true } }` counts. Rows come back in the target read's order (its `orderBy`), not in the
+  order the links were created. The join table's and the target's read policies both apply, so a link the caller
+  cannot see, or one to a tag it cannot read, is not returned or counted. A join table or target that sits on a
+  sharded table is refused in a live shape's predicate, as any other relation is. A shard-local live shape (`defineShape`) cannot filter by a relation at all and is refused with `SHAPE_RELATION_PREDICATE`; filter on a denormalized column, make the table `.global()`, or use a live query.
+- **Reads are bounded and fail closed.** A `with` or `_count` over a page whose parents link more than 10 000 join
+  rows is an error (load fewer parents at a time), and a `some` / `every` / `none` whose matches name more than
+  `maxRelationKeys` distinct owners or targets (5 000 by default) is refused. A join table may hold any number of
+  rows per owner. Silently dropping links would return a wrong, partly
+  empty relation. A `limit` on the relation caps the tags returned per parent, not the join rows read to find them.
+- **Deletes follow the join table's own foreign keys.** A through relation declares no `onDelete`. Deleting a post
+  or a tag removes its join rows when the join table's `r.one(…, { onDelete: "cascade" })` says so, exactly as it
+  would for a hand-written join table. Without those, the join rows are left behind and simply point at nothing.
+- **Writes** use the same `connect` / `disconnect` / `set` operators, and only ever write join rows: the tags
+  themselves are read, never changed.
+
+    ```ts
+    await ctx.db.posts.insert({ title: "Hello", tags: { connect: [red, green] } });
+    await ctx.db.posts.patch(postId, { tags: { disconnect: [red] } });
+    await ctx.db.posts.patch(postId, { tags: { set: [green, blue] } }); // adds blue, removes red
+    ```
+
+    `connect` is idempotent (a link that already exists is left alone, even one the join table's read policy hides
+    from the caller), and `set` is a diff against the links already present. As for a one-to-many, the caller can
+    only release a tag it can read: `disconnect` of one it cannot read (or that does not exist) is `NOT_FOUND`, and
+    `set` leaves such a link in place. Naming the same id in `connect` and `disconnect` is a `VALIDATION_ERROR`.
+    Each tag to connect must exist and be readable (`NOT_FOUND` otherwise), checked before the first join row
+    changes. A join table with a **required column besides `from` and `to`** (a role, an `addedAt`) cannot be
+    written this way and is refused with `UNPROCESSABLE`: write its rows directly. A column the server stamps
+    itself (`.serverDefault(...)`) does not count. Every join row goes through its own write, so the join table's
+    write policy, triggers and validators run for each one.
+
+- **It needs a mutation.** The links are several row writes that only a mutation's transaction makes atomic: if
+  the third insert fails, the earlier deletes and inserts roll back. An action has no transaction, so a many-to-many
+  write there is refused with `UNPROCESSABLE`; so is a write from any writer that does not report that it is inside
+  a transaction (a many-to-many write is never attempted on trust). The owner, the join table and the target all have to live in the
+  same shard's Durable Object, as for any [nested write](#writing-through-a-relation).
+
 ## Index your foreign keys
 
 A relation is only a declaration; it does not create an index. Reading
@@ -169,8 +241,8 @@ To go the other direction (child → parent), read the FK off the child and
 `get` the parent by id:
 
 ```ts
-const post = await ctx.db.get(postId);
-const author = post && (await ctx.db.get(post.authorId));
+const post = await ctx.db.get("posts", postId);
+const author = post && (await ctx.db.get("users", post.authorId));
 ```
 
 **Load related rows declaratively with `with`.** The typed table accessor's
@@ -192,3 +264,71 @@ const userWithPosts = await ctx.db.users.findFirst({
 
 The hydration is driven by the same FK + index, so the same advice applies:
 keep the FK indexed or the loader scans.
+
+## Writing through a relation
+
+`insert`, `patch` and `upsert` accept a nested write under a relation's name, so you point rows at each
+other without reading the foreign key yourself:
+
+```ts
+// to-one: set `posts.authorId` from the user
+await ctx.db.posts.insert({ title: "Hello", author: { connect: userId } });
+await ctx.db.posts.patch(postId, { author: { disconnect: true } });
+
+// to-many: point `posts.authorId` at this user
+await ctx.db.users.insert({ name: "Ada", posts: { connect: [postA, postB] } });
+await ctx.db.users.patch(userId, { posts: { disconnect: [postA] } });
+await ctx.db.users.patch(userId, { posts: { set: [postB, postC] } }); // exactly these; the rest are released
+```
+
+- **`connect`** names the target table's ids. Each must exist and be readable by the caller, or the write is
+  `NOT_FOUND`. A to-many `connect` takes a row from whichever parent held it. A to-many relation keyed on a column
+  other than `_id` needs the parent to have a value there, or the write is refused.
+- **`disconnect`** and **`set`** clear a foreign key, so that key has to be allowed to hold `null`:
+  `v.optional(v.id("users").nullable())`. A key that is merely `v.optional(...)` can be absent but not null, and a
+  required key cannot be cleared; both are refused with `VALIDATION_ERROR`. Disconnecting a row that is not
+  connected to this parent does nothing, but naming a row that does not exist or that the caller cannot read is
+  `NOT_FOUND`. `set` only sees the rows the caller can read, so a related row hidden by a read policy (or
+  soft-deleted) stays connected.
+- A to-one's foreign key may be left out of an `insert` in the type, because the relation can supply it; leaving it
+  out with no `connect` is rejected when the row is validated. Setting the key and its relation in the same write
+  is refused. `set` cannot be combined with `connect` or `disconnect`, and each list holds at most 500 ids. An
+  operator that is not `connect`, `disconnect` or `set` is a `VALIDATION_ERROR`, not a stored column.
+- **Every row goes through its own write**, so RLS policies, triggers and validators run for each child, and
+  live queries see them. The request is validated in full before the first row is written. A `patch` that only
+  changes relations changes the children, not the parent row, but the parent's update policy is still checked
+  before any child is written, so a caller who can read a parent without updating it cannot re-point its children
+  (each child's own policy applies as well).
+- **It is one mutation, and so one transaction**: if the third `connect` fails, the first two are rolled back.
+  An action has no transaction, so there the writes already made stay.
+- **Both tables have to live in the same shard's Durable Object.** A relation from a shard table to a `.global()`
+  table (or between two `.global()` tables, where each write is its own commit), or to a table on another shard, is
+  refused with `UNPROCESSABLE`: a D1 write does not roll back with the Durable Object's transaction, and a row on
+  another shard cannot be addressed from this one. Write each side yourself.
+- A relation whose foreign-key column, or the column it references, is [masked](/docs/concepts/masking) for the
+  caller is refused with `UNPROCESSABLE`: the write would copy the masked value into a stored column.
+- Not available in `insertMany`, `patchMany` or `replace`: they reject a relation write rather than store it as
+  a column value.
+
+## Relations vs the relation graph
+
+The descriptors on this page are **declared**: you name each relationship, give
+it a cardinality, and `with` hydrates it one hop at a time with a fully typed
+result. That is the right tool when you already know which relationship you
+want.
+
+[`ctx.db.related`](/docs/concepts/relation-graph) answers the other question —
+"what is this connected to" — over a graph that is **derived** rather than
+declared. It reads every `v.id("table")` column in the schema, whether or not a
+`.relations()` descriptor names it, and walks up to four hops in one call,
+returning each row with the path that reached it.
+
+|            | `with` (this page)          | `ctx.db.related`                                         |
+| ---------- | --------------------------- | -------------------------------------------------------- |
+| Edges      | the descriptors you declare | every `v.id(...)` column, derived                        |
+| Hops       | one per named accessor      | up to 4, breadth-first                                   |
+| Result     | typed onto the parent row   | a flat page of `{ table, document, depth, path, score }` |
+| Use it for | a known relationship, typed | discovery, retrieval, model context                      |
+
+Neither replaces the other, and both read through the same foreign key — so
+[indexing that column](#index-your-foreign-keys) matters just as much either way.

@@ -14,7 +14,7 @@ import type { InAppPayload } from "@visulima/notification";
  * {@link InboxItem.userId} already carries the recipient, mirroring how
  * `PushContent` drops `PushPayload.to` for the same reason (`../types.ts`).
  */
-export type InboxContent = Omit<InAppPayload, "to">;
+type InboxContent = Omit<InAppPayload, "to">;
 
 /**
  * One persisted in-app notification. `id` is a store-assigned, monotonically

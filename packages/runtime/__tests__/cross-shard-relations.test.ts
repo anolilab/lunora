@@ -1,7 +1,7 @@
 import { RELATION_FUNCTION_PREFIX } from "@lunora/shard-engine";
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import { createCrossShardRelationCapabilities } from "../src/cross-shard-relations";

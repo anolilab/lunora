@@ -75,68 +75,80 @@ fn utf16_units(value: &str) -> Vec<u16> {
 /// Renders a number exactly as `String(v)` does in JavaScript, which is what
 /// `JSON.stringify` emits for a finite number.
 ///
-/// Rust's `{}` for f64 never uses exponent notation at all and writes integral
-/// values without a decimal; ECMAScript stays positional only between 1e-7 and
-/// 1e21 and uses exponent form outside that, never zero-padding the exponent.
+/// ECMA-262 `Number::toString`: take the shortest digit string `d1..dk` that
+/// reads back as the same double, with decimal exponent `n` (the value is
+/// `0.d1..dk × 10^n`), and lay it out positionally for `-6 < n ≤ 21`, in
+/// exponent form (always signed, never zero-padded) otherwise. A negative zero
+/// is spelled `-0`, so it keys apart from `0`.
 pub(crate) fn format_number(value: f64) -> String {
-    if value.is_nan() || value.is_infinite() {
+    if !value.is_finite() {
         return "null".to_string();
     }
 
-    if value == value.trunc() && value.abs() < 1e21 {
-        // `{}` prints the SHORTEST digits that read back as the same f64, which
-        // is ECMAScript's rule; `{:.0}` prints the EXACT expansion, so 2^60 came
-        // out as 1152921504606846976 where `String(2**60)` is
-        // 1152921504606847000. Both spell a negative zero "-0".
-        return format!("{}", value);
+    if value == 0.0 {
+        return if value.is_sign_negative() { "-0" } else { "0" }.to_string();
     }
 
-    let magnitude = value.abs();
+    let (digits, n) = shortest_digits(value.abs());
+    let k = digits.len() as i32;
+    let body = if k <= n && n <= 21 {
+        format!("{digits}{}", "0".repeat((n - k) as usize))
+    } else if 0 < n && n <= 21 {
+        format!("{}.{}", &digits[..n as usize], &digits[n as usize..])
+    } else if -6 < n && n <= 0 {
+        format!("0.{}{digits}", "0".repeat(-n as usize))
+    } else {
+        let mantissa = if k == 1 {
+            digits.clone()
+        } else {
+            format!("{}.{}", &digits[..1], &digits[1..])
+        };
 
-    if (1e-6..1e21).contains(&magnitude) {
-        return trim_trailing_zeros(&format!("{}", value));
+        format!("{mantissa}e{}{}", if n >= 1 { "+" } else { "-" }, (n - 1).abs())
+    };
+
+    if value < 0.0 {
+        format!("-{body}")
+    } else {
+        body
     }
-
-    exponential(value)
 }
 
-fn exponential(value: f64) -> String {
-    for precision in 0..=17 {
-        let candidate = format!("{:.*e}", precision, value);
+/// The shortest round-trip digits of a positive finite double and its decimal
+/// exponent `n`.
+///
+/// Rust's `{:e}` already prints the shortest digits, closest to the value — but
+/// when the value lies EXACTLY halfway between two shortest candidates it rounds
+/// up, where ECMA-262 takes the even one: `-1447690133445719.25` keyed as
+/// `…719.3` here and `…719.2` in the reference. A tie only ever differs from
+/// round-up when the chosen last digit is odd, so that is the only case checked.
+fn shortest_digits(magnitude: f64) -> (String, i32) {
+    let text = format!("{magnitude:e}");
+    let (mantissa, exponent) = text.split_once('e').expect("LowerExp writes an exponent");
+    let mut digits = mantissa.replace('.', "");
+    let n = exponent.parse::<i32>().expect("LowerExp writes an integer exponent") + 1;
+    let last = *digits.as_bytes().last().expect("at least one digit");
 
-        if candidate.parse::<f64>() == Ok(value) {
-            return normalise_exponent(&candidate);
+    if (last - b'0') % 2 == 1 {
+        let mut lower = digits[..digits.len() - 1].to_string();
+
+        lower.push((last - 1) as char);
+
+        // The cheap test first — the even neighbour must read back as the same
+        // double at all — then the exact one: the value is the midpoint
+        // `0.<lower>5 × 10^n`. An f64's exact decimal expansion has at most 767
+        // significant digits, so 800 places print it whole.
+        if format!("0.{lower}e{n}").parse::<f64>() == Ok(magnitude) {
+            let exact = format!("{magnitude:.800e}");
+            let (exact_mantissa, exact_exponent) = exact.split_once('e').expect("LowerExp writes an exponent");
+
+            if exact_exponent == (n - 1).to_string() && exact_mantissa.replace('.', "").trim_end_matches('0') == format!("{lower}5") {
+                digits = lower;
+            }
         }
     }
 
-    normalise_exponent(&format!("{:.17e}", value))
-}
-
-/// Rust writes "1e-7" as `1e-7` already, but with a bare `e` and no `+` for a
-/// positive exponent; ECMAScript always signs it. Trailing mantissa zeros are
-/// dropped for the same reason.
-fn normalise_exponent(text: &str) -> String {
-    let Some((mantissa, exponent)) = text.split_once('e') else {
-        return text.to_string();
-    };
-
-    let mantissa = trim_trailing_zeros(mantissa);
-    let (sign, digits) = match exponent.strip_prefix('-') {
-        Some(rest) => ("-", rest),
-        None => ("+", exponent.strip_prefix('+').unwrap_or(exponent)),
-    };
-    let digits = digits.trim_start_matches('0');
-    let digits = if digits.is_empty() { "0" } else { digits };
-
-    format!("{mantissa}e{sign}{digits}")
-}
-
-fn trim_trailing_zeros(text: &str) -> String {
-    if !text.contains('.') {
-        return text.to_string();
-    }
-
-    text.trim_end_matches('0').trim_end_matches('.').to_string()
+    (digits, n)
 }
 
 /// Quotes a string the way `JSON.stringify` does: `<`, `>`, `&`, U+2028 and

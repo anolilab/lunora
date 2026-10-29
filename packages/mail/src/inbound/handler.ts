@@ -37,9 +37,9 @@
 import { LunoraError } from "@lunora/errors";
 
 import { toBase64 } from "../../../../shared/base64";
-import type { InboundEmail, RawInboundEmail } from "./parse";
+import type { InboundAttachment, InboundEmail, RawInboundEmail } from "./parse";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./shard";
-import { DEFAULT_ROOT_SHARD, postShardRpc } from "./shard";
+import { applyJurisdiction, DEFAULT_ROOT_SHARD, postShardRpc } from "./shard";
 
 /**
  * Structural projection of Cloudflare's `ForwardableEmailMessage` (verified
@@ -335,9 +335,11 @@ interface DispatchToLunoraFunctionOptions<TEnv = Record<string, unknown>> {
     functionPath: string;
 
     /**
-     * Pin inbound dispatch to a Cloudflare data-residency jurisdiction. Pass the
-     * same value as the worker's `jurisdiction` so inbound mail routes to the
-     * jurisdiction-pinned shard. Omit for the un-pinned global namespace.
+     * Pin inbound dispatch to a Cloudflare data-residency jurisdiction. Defaults
+     * to the jurisdiction the schema declares (`.jurisdiction("eu")`), so a
+     * generated app needs nothing here; set it only for a hand-written worker, to
+     * the same value as its `jurisdiction`. A value that contradicts the schema's
+     * throws.
      */
     jurisdiction?: DurableObjectJurisdiction;
 
@@ -354,22 +356,57 @@ interface DispatchToLunoraFunctionOptions<TEnv = Record<string, unknown>> {
 }
 
 /**
+ * Total binary attachment bytes forwarded in the default envelope. Raw +
+ * decoded + base64 + JSON copies of one large attachment outgrow the isolate's
+ * memory limit; apps that need more supply `resolveArgs` and store to R2.
+ */
+const MAX_FORWARDED_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+
+const TRAILING_BASE64_PADDING = /={1,2}$/;
+
+/**
+ * Bytes a string attachment occupies once forwarded: its decoded length when it
+ * is base64, its UTF-8 length otherwise. Charged against the same budget as
+ * binary content so a large string part cannot bypass the cap.
+ */
+const stringContentBytes = (content: string, encoding: InboundAttachment["encoding"]): number => {
+    if (encoding !== "base64") {
+        return new TextEncoder().encode(content).byteLength;
+    }
+
+    const padding = TRAILING_BASE64_PADDING.exec(content)?.[0].length ?? 0;
+
+    return Math.floor((content.length * 3) / 4) - padding;
+};
+
+/**
  * Normalise an {@link InboundEmail} into a JSON-safe envelope for the RPC body.
  * Binary attachment `content` (postal-mime hands binary parts back as an
  * `ArrayBuffer`/`Uint8Array`) would be corrupted by `JSON.stringify` — an
  * `ArrayBuffer` serialises to `{}` and a `Uint8Array` to a bloated index-keyed
  * object. We base64-encode binary content and mark `encoding: "base64"` so it
- * survives the wire intact; string content is passed through untouched.
+ * survives the wire intact; string content is passed through untouched. Content
+ * past {@link MAX_FORWARDED_ATTACHMENT_BYTES} is dropped and the attachment
+ * marked `truncated`.
  */
 const toJsonSafeEmail = (email: InboundEmail): InboundEmail => {
     if (email.attachments.length === 0) {
         return email;
     }
 
+    let forwarded = 0;
+
     return {
         ...email,
         attachments: email.attachments.map((attachment) => {
             const { content } = attachment;
+            const size = typeof content === "string" ? stringContentBytes(content, attachment.encoding) : content.byteLength;
+
+            if (forwarded + size > MAX_FORWARDED_ATTACHMENT_BYTES) {
+                return { ...attachment, content: "", encoding: "base64" as const, truncated: true };
+            }
+
+            forwarded += size;
 
             if (typeof content === "string") {
                 return attachment;
@@ -419,10 +456,9 @@ const dispatchToLunoraFunction = <TEnv extends Record<string, unknown> = Record<
         // The shared helper owns the URL, headers, `response.ok` check, and error
         // envelope check; a throw here reaches the handler's dispatch-failure
         // path (custom `onError` for observability, then `retain` or a bounce).
-        await postShardRpc(options.shard, {
+        await postShardRpc(applyJurisdiction(options.shard, options.jurisdiction), {
             adminToken,
             envelope,
-            jurisdiction: options.jurisdiction,
             label: `@lunora/mail/inbound: dispatch to \`${options.functionPath}\``,
             shardKey,
         });

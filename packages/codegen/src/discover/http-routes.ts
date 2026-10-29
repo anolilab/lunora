@@ -4,6 +4,7 @@ import { Node } from "ts-morph";
 import type { HttpRouteIR, ValidatorIR } from "../ir";
 import { parseObjectShape, parseValidator } from "../parse-validator";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import unwrapHandlerReturn from "./functions/unwrap-handler-return";
 
 /**
@@ -134,6 +135,9 @@ const walkRouteChain = (terminalCall: CallExpression, terminalStep: string): Rou
             const argument = node.getArguments()[0];
 
             if (argument && Node.isExpression(argument)) {
+                // Not through `parseOutput`: a route's output feeds only its
+                // OpenAPI JSON Schema, which never reads the recovered TS type,
+                // so an erasure here reaches no generated type to report.
                 state.output = parseValidator(argument);
             }
         }
@@ -158,8 +162,10 @@ const walkRouteChain = (terminalCall: CallExpression, terminalStep: string): Rou
  * handler yields. The handler is the terminal call's only argument; its
  * `AsyncGenerator<R, …>` / `AsyncIterable<R>` return type is unwrapped by
  * `unwrapHandlerReturn` (shared with function discovery), so the same
- * degraded-checker fallbacks apply. `"unknown"` when the argument isn't an
- * inline function expression (e.g. a hoisted identifier).
+ * degraded-checker fallbacks apply. The `streamChunk` flag collapses the
+ * `sseEvent` wrapper here only, since ordinary handlers return it intact.
+ * `"unknown"` when the argument isn't an inline function expression (e.g. a
+ * hoisted identifier).
  */
 const chunkTypeFromStreamTerminal = (call: CallExpression): string => {
     const handler = call.getArguments()[0];
@@ -168,7 +174,7 @@ const chunkTypeFromStreamTerminal = (call: CallExpression): string => {
         return "unknown";
     }
 
-    return unwrapHandlerReturn(handler);
+    return unwrapHandlerReturn(handler, true);
 };
 
 /**
@@ -207,29 +213,23 @@ const routeFromTerminal = (call: CallExpression, callee: PropertyAccessExpressio
 const discoverFileRoutes = (source: SourceFile, relativePath: string): HttpRouteIR[] => {
     const found: HttpRouteIR[] = [];
 
-    for (const statement of source.getVariableStatements()) {
-        if (!statement.isExported()) {
+    for (const declaration of exportedVariableDeclarationsOf(source)) {
+        const initializer = declaration.getInitializer();
+
+        if (!initializer || !Node.isCallExpression(initializer)) {
             continue;
         }
 
-        for (const declaration of statement.getDeclarations()) {
-            const initializer = declaration.getInitializer();
+        const callee = initializer.getExpression();
 
-            if (!initializer || !Node.isCallExpression(initializer)) {
-                continue;
-            }
+        if (!Node.isPropertyAccessExpression(callee)) {
+            continue;
+        }
 
-            const callee = initializer.getExpression();
+        const route = routeFromTerminal(initializer, callee, exportedNameOf(declaration) ?? declaration.getName(), relativePath);
 
-            if (!Node.isPropertyAccessExpression(callee)) {
-                continue;
-            }
-
-            const route = routeFromTerminal(initializer, callee, declaration.getName(), relativePath);
-
-            if (route) {
-                found.push(route);
-            }
+        if (route) {
+            found.push(route);
         }
     }
 

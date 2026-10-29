@@ -110,7 +110,7 @@ export default createConfig(
         },
     },
     // Behavior-breaking autofixers — kept off (not style). sort-objects reorders keys of
-    // JSON.stringify'd wire payloads (x402 PAYMENT-REQUIRED / X-PAYMENT bytes are
+    // JSON.stringify'd wire payloads (x402 PAYMENT-REQUIRED / PAYMENT-SIGNATURE bytes are
     // order-sensitive); prefer-expect-type-of drops a runtime assertion from the count.
     {
         rules: {

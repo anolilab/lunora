@@ -81,10 +81,15 @@ export interface RagVectorUpsertInput {
  * @experimental
  */
 export interface RagVectors {
-    deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
+    /** Set by a facade whose `deleteByIds` honours `operation` and `afterDelete`; see `RagVectorStoreCapabilities.deferredDelete`. */
+    deferredDelete?: boolean;
+    deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string, operation?: object, afterDelete?: () => Promise<void>) => Promise<unknown>;
     getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (indexName: string, input: RagVectorQueryInput) => Promise<RagVectorMatches>;
-    upsert: (indexName: string, input: RagVectorUpsertInput) => Promise<unknown>;
+    /** `operation` groups the writes of one logical operation: a deferred facade skips the rest once one fails. */
+    upsert: (indexName: string, input: RagVectorUpsertInput, operation?: object) => Promise<unknown>;
+    /** Batch write of at most 1000 inputs. Optional: without it `defineRag` writes per chunk via `upsert`. */
+    upsertMany?: (indexName: string, inputs: ReadonlyArray<RagVectorUpsertInput>, operation?: object) => Promise<unknown>;
 }
 
 /**
@@ -122,6 +127,14 @@ export interface RagContext {
      * attribute is absent (backward-compatible).
      */
     conversationId?: string;
+
+    /**
+     * Optional `ctx.metrics` — an `ActionCtx`'s `ctx.metrics` satisfies it. When
+     * present, every embed counts its tokens and cost into the durable
+     * `gen_ai.usage.*` series, like a `ctx.ai.model(...)` call. `unknown` for the
+     * same decoupling reason as `trace`; `defineRag` narrows it.
+     */
+    metrics?: unknown;
 
     /**
      * Optional `ctx.trace` span factory — an `ActionCtx`'s `ctx.trace` satisfies
@@ -232,6 +245,85 @@ export interface RagLexicalStore {
      * every filtered query rather than ignore the predicate.
      */
     search: (query: string, options: { filter?: Record<string, unknown>; namespace?: string; topK: number }) => Promise<ReadonlyArray<LexicalMatch>>;
+}
+
+/**
+ * One graph hit returned by {@link RagGraphStore.related}.
+ * @experimental
+ */
+export interface GraphMatch {
+    /** The chunk vector id — the same id scheme the other legs use, so RRF can fuse the three. */
+    id: string;
+
+    /**
+     * Depth-decaying PROXIMITY, not relevance: `1` for a direct neighbour,
+     * halving per hop — exactly what `ctx.db.related` puts on each node. `hybridRank`
+     * scales this leg's RRF term by it, so a leg of distant hits weighs less than
+     * a leg of direct ones even when the two rank identically among themselves.
+     * Values outside `[0, 1]` are clamped.
+     */
+    score: number;
+    /** The chunk text, returned so a graph-only hit needs no extra hydration round-trip. */
+    text: string;
+}
+
+/**
+ * Pluggable relation-graph store — the third retrieval signal, alongside the
+ * vector (semantic) and lexical (keyword) legs.
+ *
+ * Keyword and embedding search both answer "which passages look like this
+ * question". Neither can answer "what is this connected to" when the connecting
+ * fact lives in a foreign key rather than in the text — a ticket's customer, a
+ * customer's other tickets, those tickets' messages. `ctx.db.related` walks
+ * exactly that graph, and this is the seam that feeds its result into retrieval.
+ *
+ * Implement it over a Lunora app whose RAG source ids ARE document ids: expand
+ * from the seed ids with `ctx.db.related`, then return the indexed chunks of the
+ * documents it reached, each carrying that node's `score`. Mirrors the
+ * {@link RagLexicalStore} shape (namespace-partitioned, `topK`-bounded).
+ * @experimental
+ */
+export interface RagGraphStore {
+    /**
+     * Whether {@link RagGraphStore.related} applies the `filter` it is handed to
+     * every document it returns.
+     *
+     * Required, and asked rather than assumed, because the honest answer is not
+     * derivable: `related` is somebody else's traversal and this package cannot
+     * see whether it narrows. `retrieve()` passes the SAME effective filter to
+     * all three legs — the caller's filter with `RagConfig.rlsFilter` merged
+     * over it — and the vector and lexical stores enforce it. A graph store that
+     * ignored it would return the neighbours of a document the caller may see
+     * even when those neighbours belong to another tenant, which is a leak the
+     * other two legs are specifically built to prevent. So a store that answers
+     * `false` is SKIPPED whenever a filter is in play, rather than trusted:
+     * retrieval loses its third signal and keeps its isolation. With no filter
+     * (no `rlsFilter`, no `RetrieveOptions.filter`) there is nothing to enforce
+     * and `false` costs nothing.
+     *
+     * Answer `true` only if every returned chunk's document really is matched
+     * against the filter — `ctx.db.related` under a schema with RLS policies
+     * does not count on its own, because the filter here is RAG metadata, not a
+     * row policy. The stricter reading is the safe one: if in doubt, `false`.
+     */
+    enforcesFilter: boolean;
+
+    /**
+     * Expand from the SOURCE document ids the search legs found and return
+     * chunks of the documents they connect to, best (nearest) first.
+     *
+     * Seeded rather than queried: the graph has no notion of a query string, so
+     * it widens a ranking the other legs produced instead of ranking on its own.
+     * A seed id that is not a graph node simply contributes nothing.
+     *
+     * `options.filter` is the effective metadata filter for this retrieval, and
+     * is present only for stores that declared {@link RagGraphStore.enforcesFilter}
+     * — see there for what declaring it commits you to.
+     */
+    related: (
+        sourceIds: ReadonlyArray<string>,
+        options: { filter?: Record<string, unknown>; namespace?: string; topK: number },
+    ) => Promise<ReadonlyArray<GraphMatch>>;
 }
 
 /**
@@ -363,6 +455,17 @@ export interface RagConfig {
      * name is not found here — catches spelling mistakes early.
      */
     filters?: Record<string, RagNamedFilter>;
+
+    /**
+     * Pluggable relation-graph store — the third retrieval signal. When set,
+     * `retrieve()` seeds a traversal from the source documents the vector and
+     * lexical legs found and fuses the connected documents' chunks into the same
+     * RRF ranking, weighted by how far away they are. See {@link RagGraphStore}.
+     */
+    graphStore?: RagGraphStore;
+
+    /** Retrieval depth for the graph leg. Defaults to the effective candidate pool. */
+    graphTopK?: number;
 
     /** The Vectorize index name (a `ctx.vectors` index binding key). */
     index: string;

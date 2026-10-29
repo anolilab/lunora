@@ -1,48 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import { emitApp } from "../src/emit-app";
-
-/** Minimal `EmitAppOptions` with every capability off; tests flip one flag at a time. */
-const baseOptions = {
-    hasAccess: false,
-    hasAi: false,
-    hasAnalytics: false,
-    hasAuth: false,
-    hasBrowser: false,
-    hasFramework: false,
-    hasGlobal: false,
-    hasHyperdrive: false,
-    hasHyperdriveGlobal: false,
-    hasImages: false,
-    hasKv: false,
-    hasKvIntrospector: false,
-    hasNotify: false,
-    hasPayments: false,
-    hasQueue: false,
-    hasR2sql: false,
-    hasScheduler: false,
-    hasStorage: false,
-    hasVectors: false,
-    hasWorkflow: false,
-    hasX402: false,
-    tableNames: [],
-    useUmbrella: false,
-    wantsOpenApi: false,
-    wantsOpenRpc: false,
-};
+import baseOptions from "./emit-app-options";
 
 describe("emitApp — inbound-email (`onEmail`) route wiring", () => {
-    it("wires `composed.email` to `dispatchAgentEmail` with the agent definition + its `AGENT_*` binding", () => {
+    it("wires `composed.email` to `dispatchAgentEmail` with the agent definition + its class name", () => {
         expect.assertions(4);
 
-        const output = emitApp({ ...baseOptions, emailAgents: [{ bindingName: "AGENT_SUPPORT", exportName: "support" }] });
+        const output = emitApp({ ...baseOptions, emailAgents: [{ className: "SupportAgentWorkflow", exportName: "support" }] });
 
         // Imports: the dispatch factory (add-on, never umbrella-routed) + the agent
         // definitions namespace (so `onEmail` mappers are reachable at runtime).
         expect(output).toContain('import { dispatchAgentEmail } from "@lunora/agent/inbound";');
         expect(output).toContain('import * as lunoraAgentDefinitions from "../agents.js";');
         expect(output).toContain("composed.email = dispatchAgentEmail([");
-        expect(output).toContain('{ agent: lunoraAgentDefinitions.support, binding: "AGENT_SUPPORT" },');
+        expect(output).toContain('{ agent: lunoraAgentDefinitions.support, className: "SupportAgentWorkflow" },');
     });
 
     it("wires every `onEmail` agent as its own dispatch target", () => {
@@ -51,19 +23,19 @@ describe("emitApp — inbound-email (`onEmail`) route wiring", () => {
         const output = emitApp({
             ...baseOptions,
             emailAgents: [
-                { bindingName: "AGENT_SUPPORT", exportName: "support" },
-                { bindingName: "AGENT_SALES", exportName: "sales" },
+                { className: "SupportAgentWorkflow", exportName: "support" },
+                { className: "SalesAgentWorkflow", exportName: "sales" },
             ],
         });
 
-        expect(output).toContain('{ agent: lunoraAgentDefinitions.support, binding: "AGENT_SUPPORT" },');
-        expect(output).toContain('{ agent: lunoraAgentDefinitions.sales, binding: "AGENT_SALES" },');
+        expect(output).toContain('{ agent: lunoraAgentDefinitions.support, className: "SupportAgentWorkflow" },');
+        expect(output).toContain('{ agent: lunoraAgentDefinitions.sales, className: "SalesAgentWorkflow" },');
     });
 
     it("keeps a manual `.onEmail(...)` handler able to override the auto-wired default (agent block precedes it)", () => {
         expect.assertions(1);
 
-        const output = emitApp({ ...baseOptions, emailAgents: [{ bindingName: "AGENT_SUPPORT", exportName: "support" }] });
+        const output = emitApp({ ...baseOptions, emailAgents: [{ className: "SupportAgentWorkflow", exportName: "support" }] });
 
         // The generated `dispatchAgentEmail` assignment must appear BEFORE the
         // `if (this.emailHandler)` override so a hand-registered handler wins.

@@ -8,23 +8,36 @@ interface BundleSize {
     files: number;
 
     /**
-     * Sum of the per-file gzip sizes. Cloudflare states its script-size limit
-     * against the compressed script, and gzip at zlib's default level is what
-     * wrangler itself reports ("Total Upload: … / gzip: …") — measuring the same
-     * way keeps the two numbers comparable instead of inviting a "which is
-     * right?" question. Summing per file rather than gzipping the concatenation
-     * is the conservative direction: separate streams share no dictionary.
+     * Sum of the per-file gzip sizes — for reference only. Cloudflare has no
+     * compressed size limit; this mirrors the gzip figure wrangler prints
+     * ("Total Upload: … / gzip: …") so the two outputs stay comparable, and it
+     * is a useful regression signal for what crosses the wire. Summing per file
+     * rather than gzipping the concatenation is the conservative direction:
+     * separate streams share no dictionary.
      */
     gzipBytes: number;
+
+    /** Sum of the uncompressed file sizes — the number Cloudflare's Worker size limit counts. */
     rawBytes: number;
 }
+
+/**
+ * Cloudflare's Worker size limit: 64 MiB uncompressed, the same on Free and
+ * Paid. There is no compressed limit — only the uncompressed bundle counts.
+ * https://developers.cloudflare.com/workers/platform/limits/#worker-size
+ *
+ * Mirrored as `RAW_LIMIT_BYTES` in `scripts/check-worker-size.js` (the repo's
+ * CI size gate, a plain Node script that does not import this package); change
+ * both together.
+ */
+const WORKER_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
 
 /**
  * True for files that are part of the uploaded Worker.
  *
  * The out-dir also carries artifacts Cloudflare never sees: sourcemaps (which
  * are larger than the script itself — counting them would roughly triple the
- * number), the esbuild metafile `lunora deploy --outdir` writes alongside the
+ * number), the esbuild metafile `lunora build --out-dir` writes alongside the
  * bundle, and the README wrangler drops in to explain the directory.
  */
 const isUploaded = (name: string): boolean => !name.endsWith(".map") && name !== "bundle-meta.json" && name !== "README.md";
@@ -66,4 +79,4 @@ const measureBundle = (outDirectory: string): BundleSize | undefined => {
 };
 
 export type { BundleSize };
-export { measureBundle };
+export { measureBundle, WORKER_SIZE_LIMIT_BYTES };

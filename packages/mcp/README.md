@@ -51,8 +51,8 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 | `lunora_list_tables`          | List the deployment's `.global()` tables with their row counts.                                                                                               |
 | `lunora_get_function_schema`  | Return a function's argument descriptors and kind by path, so a caller can construct a valid arguments object.                                                |
 | `lunora_run_query`            | Run a query and return its result. Read-only.                                                                                                                 |
-| `lunora_run_mutation`         | Run a mutation and return its result. Writes data — use with care.                                                                                            |
-| `lunora_run_action`           | Run an action and return its result. May call external services.                                                                                              |
+| `lunora_run_mutation`         | Run a mutation. Writes data. Two-step: propose, then confirm with the returned `actionDigest`.                                                                |
+| `lunora_run_action`           | Run an action. May call external services. Two-step: propose, then confirm with the returned `actionDigest`.                                                  |
 | `lunora_get_logs`             | Read the deployment's recent log entries (newest first). Requires an admin token.                                                                             |
 | `lunora_get_issues`           | List errors grouped into Issues by fingerprint, with counts and triage status. Requires an admin token.                                                       |
 | `lunora_get_advisories`       | List the deployment's schema/query advisories. Requires an admin token.                                                                                       |
@@ -68,7 +68,79 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 2. lunora_get_function_schema     → retrieve the argument descriptors for a specific path
 3. lunora_run_query / lunora_run_mutation / lunora_run_action
                                   → call the function with a well-formed arguments object
+                                    (the two write tools take a second, confirming call)
 ```
+
+### Write confirmation (the two-step handshake)
+
+`LUNORA_MCP_ALLOW_WRITES` decides whether this server may write at **all**. It
+never said anything about whether a _particular_ write was reviewed, so past that
+gate `lunora_run_mutation` and `lunora_run_action` each take two calls.
+
+The first call **executes nothing**. It returns the proposed action and a digest:
+
+```jsonc
+{
+    "status": "action_required",
+    "actionDigest": "1789129912052.0ZR2…",
+    "expiresAt": "2026-09-11T14:41:52.052Z",
+    "proposedAction": {
+        "tool": "lunora_run_mutation",
+        "kind": "mutation",
+        "functionPath": "messages:send",
+        "args": { "roomId": "r1", "text": "hi" },
+    },
+    "nextStep": "Show proposedAction to a human. To execute, call …",
+}
+```
+
+Render `proposedAction` for a human, then call the same tool again — before
+`expiresAt` — with the identical `functionPath` / `args` / `shardKey` /
+`idempotencyKey`, plus `confirmed: true` and that `actionDigest`. Only then does
+the write happen.
+
+The digest is `<expiresAt>.<signature>`, where the signature is an HMAC over a
+canonical (sorted-key) encoding of the tool name, function path, arguments, shard
+key, idempotency key **and that deadline**, keyed by the deployment's own
+identity. So:
+
+- **Argument key order is irrelevant** — re-serializing `args` does not invalidate a confirmation.
+- **Any real edit invalidates it.** A different target, argument, or shard key produces a different digest, and the confirmation is refused with nothing written. That is the guarantee: what executes is exactly what was reviewed.
+- **It expires after 10 minutes.** The deadline travels in the clear (the verifying instance has to read it) but is signed alongside the proposal, so moving it breaks the signature. An expired digest is refused, not silently re-proposed — call again without `confirmed` for a fresh one.
+- **No server state is involved.** The HTTP handler serves statelessly (a fresh server per request), so a confirmation is revalidated by recomputation on whichever instance receives it, not looked up in a store.
+
+`idempotencyKey` is optional and is folded into the digest. A client that timed
+out can resubmit the confirmation it already holds, for as long as that digest is
+inside its window, without asking for a second review; and a deliberately-repeated
+identical write under a **new** key gets its own review instead of riding the
+first one. It does **not** deduplicate the write: this server keeps no state
+between requests and never forwards the key to your function, so a resubmitted
+confirmed call executes again. Make the function itself idempotent if the write
+must happen at most once.
+
+#### What the handshake does not do
+
+It binds **intent, not human presence**, and the difference matters when you
+decide whether to enable writes at all.
+
+A verified digest proves the call about to run is exactly the call that was
+proposed, on this deployment, inside its window. It does **not** prove a human
+saw it, and no server-side check can: an MCP server has no channel to a person —
+no session, no end-user identity, no UI — and MCP deliberately puts the
+human-in-the-loop at the **host**. The client is what renders a tool call for
+approval. A client that asks nobody can take the digest it was just handed, send
+it straight back with `confirmed: true`, and the write runs.
+
+That is why writes are off by default and refused at dispatch as well as omitted
+from `ListTools`: enabling `LUNORA_MCP_ALLOW_WRITES` is **your** statement that
+the client on the other end does the asking. Treat the handshake as a client-UI
+affordance and an audit record of what was proposed, not as a gate against the
+model.
+
+Two more scope limits, stated rather than implied:
+
+- **The digest is deployment-wide, not principal-bound.** Its key is the domain separator, the deployment URL and the admin bearer — nothing identifying a user. On an OAuth-fronted server (`createAuthedMcpFetchHandler`) every principal shares that bearer, so within the 10-minute window any principal holding write scope can confirm another's identical proposal. Binding it to a person would mean folding the verified `sub` claim into the signing key, which this package does not do today.
+- **It survives an admin-bearer rotation only as long as the bearer does.** Rotating `LUNORA_ADMIN_TOKEN`, or moving the deployment URL, invalidates every outstanding digest — which is the intended behaviour, not a bug to work around.
 
 ### Observability tools (privileged)
 
@@ -140,6 +212,54 @@ const server = createLunoraMcpServer({ url: "https://app.example.workers.dev", t
 await server.connect(myTransport);
 ```
 
+## Expose your app's functions
+
+`createLunoraMcpServer` fronts a deployment with generic tools (`lunora_run_query`, `lunora_run_mutation`, …). To give a model one tool per function in **your** app, with typed arguments, build the server from the OpenRPC document your app generates:
+
+```ts
+import { createFunctionMcpServer } from "@lunora/mcp";
+import { openRpcSpec } from "./lunora/_generated/openrpc";
+
+const server = createFunctionMcpServer({
+    url: env.LUNORA_URL,
+    token: caller.token, // the caller's bearer, not an admin token
+    openRpcSpec,
+    allowWrites: false,
+});
+```
+
+For a Worker that serves MCP over HTTP, build the server per request, with the signed-in user's token, and hand it to `serveStateless`:
+
+```ts
+import { createFunctionMcpServer, serveStateless } from "@lunora/mcp/worker";
+
+export default {
+    async fetch(request: Request, env: Env): Promise<Response> {
+        const user = await resolveUser(request); // your own session check
+        const server = createFunctionMcpServer({ url: env.LUNORA_URL, token: user.token, openRpcSpec });
+
+        return serveStateless(server, request);
+    },
+};
+```
+
+Requirements and behaviour:
+
+- **Generate the document.** Pass `apiSpec: "openrpc"` (or `"both"`) to the Vite plugin, or run `lunora codegen --api-spec openrpc`. Without it, `_generated/openrpc.ts` is not emitted and the import fails.
+- **Identity is the caller's.** Each tool runs as `token` through the public RPC path, so auth and row-level security apply as they do in the app. Nothing calls `/_lunora/admin/*`, so no admin token is needed.
+- **One tool per query, mutation, action and stream.** Internal functions are not listed. The tool name is the function path with non-identifier characters replaced by `_` (`billing/invoices:create` → `billing_invoices_create`). Construction throws if two functions map to one name or a name exceeds 64 characters.
+- **Descriptions come from the doc comment** above `export const name = query(…)`. A function without one gets a generated sentence.
+- **Writes are off by default.** With `allowWrites: false`, mutation and action tools are not listed and a direct call is refused. With it on, each write uses the same two-step confirmation as [Write confirmation](#write-confirmation-the-two-step-handshake). The digest is keyed by `token`, so writes need one. A write tool has no `outputSchema`, because its first call returns a proposal rather than the function's result.
+- **Arguments are decoded.** A `v.bigint()` argument arrives as a decimal string and is converted back to a `bigint`; a `v.bytes()` argument arrives as base64 and is converted to an `ArrayBuffer`. A nullable or union argument is decoded through the one branch the value fits: its JSON type, its `const`, the `const` properties of an object (a discriminator), and the carrier of a string (a decimal for `v.bigint()`, canonical base64 for `v.bytes()`). A value that still fits several branches (`v.union(v.string(), v.bigint())` with `"5"`) is sent as it is, because picking one would guess. A decimal string whose length is a multiple of four is also canonical base64, so a `v.bigint()`-or-`v.bytes()` union leaves it as it is.
+- **Results match `.output()`.** A declared object output is returned as `structuredContent` and checked against the `outputSchema`. A non-object output is wrapped as `{ result }`, because MCP requires an object root. `result` is not required in that wrapper, since a handler whose output is optional returns `undefined`, which arrives as an empty object. An object output that returns `undefined` is sent as `{}`, and its `outputSchema` admits the empty object, because the document does not say whether an output can be absent. The same schema therefore accepts `{}` for a required object output too. A function with no `.output()` has no `outputSchema`.
+- **A changed document is announced on the next request.** `openRpcSpec` may be a function that returns the document, and it is read on each `tools/list` and `tools/call`. The tools are rebuilt, and the client is told its tool list changed, when a request finds the document different. A host that wants the change announced before any request has to make a request itself, or watch the file as `lunora mcp serve --functions` does.
+- **A stream is a read-only tool that collects its chunks.** The call runs the stream to completion and returns every chunk, in order, as the text block, with no `outputSchema` and no wrapping. A mid-stream error is an error result. When the caller aborts, the stream is cancelled on the Lunora socket. A stream is capped at 10,000 chunks (`MAX_STREAM_CHUNKS`): the chunk past the cap cancels the stream and returns a `PAYLOAD_TOO_LARGE` error with no chunks. A stream is also capped at 16 MiB of collected chunk JSON (`MAX_STREAM_BYTES`), and the chunk past that cap cancels it the same way. Neither cap bounds the time a stream may run.
+- **Sensitive arguments** (`v.sensitive`) are masked in a write proposal, whole argument at a time, wherever the sensitive value sits inside it. The call is sent on a reference that the client never queues offline.
+- **The deployment URL can resolve late.** `url` may be a function, read on every call. While it returns `undefined`, a call returns `SERVICE_UNAVAILABLE` and the server keeps running. A stream cancelled by the caller returns a `CANCELLED` error, not the chunks it had.
+- **Over stdio, for an editor:** `connectFunctionStdio(options)`, from the root entry or `@lunora/mcp/node`, builds the server and connects it to stdio. The CLI does the same with `lunora mcp serve --functions --token <your bearer>`, and it starts before `lunora dev` is running. The `--token` is the only bearer that mode uses: the project's admin token is never sent to these tools.
+- **Stream progress** is one `notifications/progress` per chunk (the progress value is the chunk's index, with no total), sent only when the request carries a `progressToken`. It reaches the caller only over a transport that delivers notifications during the call. `serveStateless` answers each request as a single JSON body, so there the chunks still arrive in the result, but no progress does.
+- **Not yet supported:** `shardKey` is always accepted even for an unsharded function.
+
 ## Expose an agent
 
 A deployment's durable [`@lunora/agent`](https://www.npmjs.com/package/@lunora/agent) agents can be fronted as MCP tools. This is **opt-in and fail-closed**, mirroring `allowWrites`: starting an agent run is a side effect, so the agent tools are omitted from the advertised list _and_ refused at dispatch unless you explicitly enable them. `@lunora/mcp` takes no dependency on `@lunora/agent` — it reaches the agent's public `agents:agentRun` mutation over RPC like any other function.
@@ -174,6 +294,8 @@ Two opt-ins are needed, on **both** sides:
 ```
 
 Each exposed agent gets an `agent_<name>` tool taking `prompt` (required), an optional `threadKey` (reuse to continue a conversation; omit to start a new thread), and an optional `title`. The tool starts a durable run and awaits it up to the timeout budget; if the run outlasts the budget it returns a pending result whose `threadKey` you feed to the generic `lunora_agent_status` tool to poll for the final answer.
+
+**Limit:** a run paused for a tool approval or a secret request (`requestSecretTool`) cannot be resumed through MCP. MCP has no operation to approve, reject, supply or decline it, so the run waits for its owner to answer it in the app and otherwise expires. The status reports the run as `awaiting_input`, and that result's `hint` says the decision belongs in the app.
 
 Runs are **owner-scoped** to the identity the configured token resolves to — which is the deployment's **admin** identity, because `LUNORA_ADMIN_TOKEN` is what every tool needs (see [Tokens](#tokens)). Every agent thread this server starts therefore belongs to that one identity; run a separate MCP server per deployment if you need them kept apart.
 

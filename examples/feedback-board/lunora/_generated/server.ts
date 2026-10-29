@@ -58,7 +58,6 @@ export type {
 } from "lunorash/server/data-model";
 
 import type { DataModel, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, Insert, InsertModel, RankIndexNamesByTable, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";
-import type { LunoraAi } from "@lunora/ai";
 
 export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 
@@ -170,11 +169,11 @@ type TypedTableQuery = (<T extends TableName>(
     ((table: string) => TableReader);
 
 /**
- * The point read `ctx.db.get(id)`, bound to this schema: an `Id<"table">`
- * carries its table name, so the resolved document is typed `Doc<table>` (or
- * `null` when absent) with no `as Doc<...>` cast. Mirrors {@link TypedTableQuery}.
+ * The point read `ctx.db.get(table, id)`, bound to this schema: the table literal
+ * fixes `T`, so the id must be an `Id<T>` and the resolved document is typed
+ * `Doc<T>` (or `null` when absent) with no `as Doc<...>` cast. Mirrors {@link TypedTableQuery}.
  */
-type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> | null>;
+type TypedTableGet = <T extends TableName>(table: T, id: IdOfTable<T>) => Promise<Doc<T> | null>;
 
 /**
  * Resolves the `asId` table argument: a literal in {@link TableName} passes through, a
@@ -217,7 +216,7 @@ export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: StorageBase<StorageBucketName>;
-    readonly ai: LunoraAi;
+    readonly ai: import("@lunora/ai").LunoraAi;
 }
 
 /**
@@ -252,13 +251,13 @@ export const internalAction = lunoraBuilders.internalAction as unknown as Intern
  * custom mutators (`lunora/mutators.ts`) with it instead of importing from
  * `lunorash/server`, and the authoritative `server` impl's `ctx` carries the
  * schema-typed `ctx.db` (`ctx.db.query("nodes")` resolves `Doc<"nodes">`,
- * `ctx.db.patch(id, …)` takes an `Id<"nodes">`) with no hand-written ctx type and
+ * `ctx.db.patch("nodes", id, …)` takes an `Id<"nodes">`) with no hand-written ctx type and
  * no `as unknown as` cast. Runtime-identical to the package export; only the
  * context type narrows, so discovery finds a mutator authored either way.
  * @example
  * export const setText = defineMutator({
  *     args: { id: v.id("nodes"), text: v.string() },
- *     server: async (ctx, args) => { await ctx.db.patch(args.id, { text: args.text }); },
+ *     server: async (ctx, args) => { await ctx.db.patch("nodes", args.id, { text: args.text }); },
  * });
  */
 export const defineMutator = defineMutatorBase as unknown as <Args extends Record<string, Validator> = Record<string, Validator>, ClientTx = unknown, R = unknown>(

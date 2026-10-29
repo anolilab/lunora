@@ -1,9 +1,9 @@
-import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent } from "react";
 import { useState } from "react";
 
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../../hooks/use-auto-refresh";
+import useStudioClient from "../../../hooks/use-studio-client";
 import type { CapturedMail, CapturedMailResult, SendTestMailResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, copyToClipboard, errorMessage, fireAndForget } from "../../../lib/internal";
@@ -45,7 +45,7 @@ interface MailCapture {
  * presentational, so it is unit-testable without a renderer.
  */
 const useMailCapture = ({ limit }: { limit: number }): MailCapture => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     // The inbox is a single root-shard table with no write-flush to subscribe to,
     // so it's a one-shot read kept fresh by the poll below.
@@ -54,6 +54,7 @@ const useMailCapture = ({ limit }: { limit: number }): MailCapture => {
         error: readError,
         errorSource: readErrorSource,
         isLoading,
+        poll,
         refetch,
     } = useAdminQuery<CapturedMailResult>(ADMIN_FUNCTIONS.getCapturedMail, { limit });
 
@@ -92,9 +93,7 @@ const useMailCapture = ({ limit }: { limit: number }): MailCapture => {
     };
 
     // Poll for newly-captured mail so the inbox stays live without a manual refresh.
-    useAutoRefresh(() => {
-        refetch();
-    }, true);
+    useAutoRefresh(poll, true);
 
     const onClear = (): void => {
         fireAndForget(clearInbox());

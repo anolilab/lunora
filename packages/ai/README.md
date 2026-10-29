@@ -54,19 +54,25 @@ yarn add @lunora/ai
 pnpm add @lunora/ai
 ```
 
-To use another provider, install it alongside (optional): `pnpm add @ai-sdk/openai`.
+Other providers need no extra install: `ctx.ai.model("anthropic/claude-sonnet-5")` routes through Cloudflare AI Gateway (see below).
 
 ## Usage
 
-When a function uses AI, codegen wires a typed **`ctx.ai`** onto the action context (inference is an external call, so — like `ctx.fetch` — it lives on actions). Workers AI is the zero-config default; pass any AI SDK model to use another provider.
+When a function uses AI, codegen wires a typed **`ctx.ai`** onto the action context (inference is an external call, so — like `ctx.fetch` — it lives on actions). Workers AI is the zero-config default; a `"<provider>/<model>"` id reaches any other provider through Cloudflare AI Gateway, and any AI SDK model object passes straight through.
 
 ```ts
 // lunora/summarize.ts — ctx.ai (codegen-wired), Workers AI by default
 import { action, v } from "@/lunora/_generated/server";
 import { generateText } from "@lunora/ai";
 
-export const summarize = action.input({ text: v.string() }).action(async ({ args: { text }, ctx }) => {
+export const summarize = action.input({ text: v.string().max(20_000) }).action(async ({ args: { text }, ctx }) => {
     const { text: summary } = await generateText({
+        // Both ends of the token bill are bounded: the input by `.max()` above,
+        // the completion here. An `action` is public RPC and inference is
+        // metered, so an unbounded completion is a denial-of-wallet vector — a
+        // short prompt can ask for an arbitrarily long answer, and output
+        // tokens are the expensive half.
+        maxOutputTokens: 300,
         model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
         prompt: `Summarize:\n\n${text}`,
     });
@@ -76,12 +82,13 @@ export const summarize = action.input({ text: v.string() }).action(async ({ args
 ```
 
 ```ts
-// Bring-your-own provider — same call surface, no lock-in
-import { streamText } from "@lunora/ai";
-import { openai } from "@ai-sdk/openai";
-
-const result = streamText({ model: openai("gpt-5"), messages });
+// Any provider: change the string, nothing else. Routed through Cloudflare AI
+// Gateway over the same `AI` binding — Unified Billing or keys stored on the
+// gateway, so the app holds no provider API key.
+const result = streamText({ model: ctx.ai.model("anthropic/claude-sonnet-5"), messages });
 ```
+
+Every `ctx.ai.model(...)` call is traced and its tokens and cost are counted per function (`gen_ai.usage.*`), which Studio's **AI usage** page charts. `lunora cloudflare ai-gateway` creates a gateway for the app and sets `LUNORA_AI_GATEWAY_ID`; without it, calls use the account's `default` gateway.
 
 ```ts
 // RAG: embed via ctx.ai, store/search with @lunora/bindings/vectors (ctx.vectors)
@@ -94,6 +101,10 @@ await ctx.vectors.upsert("docs-body", { id, input: text, embed: async () => embe
 Outside an action — in the worker entry, a Durable Object, or a queue/scheduled handler — build the helper directly with `createAi({ binding: env.AI })`. The raw binding escape hatch (`ctx.ai.run(model, inputs)`) covers Workers-AI-only model families (image, ASR, translation) not surfaced through the AI SDK provider.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs)**.
+
+### Local dev without a Cloudflare login
+
+Workers AI only runs remotely, so the `AI` binding needs a Cloudflare login even in dev. When `lunora dev` or `vite dev` finds none (no `wrangler login`, no `CLOUDFLARE_API_TOKEN`), it leaves the binding out and prints a warning instead of failing to boot. AI SDK model objects and `"<provider>/<model>"` slugs through `LUNORA_AI_PROXY_URL` keep working; `@cf/…` models throw until you log in.
 
 ## Related
 

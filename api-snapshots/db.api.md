@@ -16,6 +16,7 @@ interface BindMutatorsContext<TCollections extends CollectionMap = CollectionMap
     checkpoints?: CheckpointRegistry | false;
     collections: TCollections;
     onWriteRejected?: (event: MutatorRejectedEvent) => void;
+    scopeBy?: string;
     shardKey?: string;
 }
 ```
@@ -210,6 +211,17 @@ interface LunoraCollectionOptions<TRow extends Row> {
     checkpoints: CheckpointRegistry;
     config: CollectionConfig<TRow, string>;
     scope: (args?: Record<string, unknown>) => void;
+    utils: LunoraCollectionUtils;
+}
+```
+
+### `LunoraCollectionUtils` (interface)
+
+```ts
+interface LunoraCollectionUtils {
+    error: () => SubscriptionError | undefined;
+    isError: () => boolean;
+    subscribeError: (listener: () => void) => () => void;
 }
 ```
 
@@ -329,11 +341,11 @@ interface PlanPatch {
 
 ```ts
 interface PlanWriter {
-    delete: (id: never) => Promise<void>;
+    delete: (table: never, id: never) => Promise<void>;
     insert: (tableName: never, document: Record<string, unknown>, options?: {
         clientId?: string;
     }) => Promise<unknown>;
-    patch: (id: never, patch: Record<string, unknown>) => Promise<void>;
+    patch: (table: never, id: never, patch: Record<string, unknown>) => Promise<void>;
 }
 ```
 
@@ -644,6 +656,7 @@ interface ShapeSource {
 
 ```ts
 interface WriteProvenance extends Record<string, unknown> {
+    baselineSeq?: number;
     identity: string | null;
     shardKey?: string;
 }

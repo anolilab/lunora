@@ -19,11 +19,13 @@ import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
-import { WORKERD_SQLITE_LIMITS } from "./drizzle";
+import type { RangeOperandType } from "../../../shared/json-field-path";
+import { isFieldPath, rangeOperandType } from "../../../shared/json-field-path";
+import { isJsonSafe, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import type { WhereFragments } from "./where-fragments";
 import { drizzleFragments } from "./where-fragments";
 import type { FieldOperators, WhereInput } from "./where-types";
-import { RELATION_EXISTS_KEY } from "./where-types";
+import { RELATION_EXISTS_KEY, SEEK_RANGE } from "./where-types";
 
 /** Maps a logical field name to its dialect SQL reference (already a drizzle `SQL`). */
 type FieldRefSql<T> = (field: string) => T;
@@ -84,6 +86,15 @@ interface WhereSqlStrategy<T = SQL> {
     inList?: (reference: T, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => T;
 
     /**
+     * The test that the leaf at path `field` is a JSON value of `type`. A range (`gt`/`gte`/`lt`/`lte`) over a path
+     * is ANDed with it, so `gt: 5` matches the number leaves above 5 and nothing else on every engine; each engine
+     * orders values of different types differently (SQLite puts every text above every number, Postgres and MySQL
+     * put them the other way round), so an unbracketed range would answer differently per backend. Required, so a new
+     * strategy cannot quietly leave ranges unbracketed. A cursor seek opts out (see {@link SEEK_RANGE}).
+     */
+    rangeTypeGuard: (field: string, type: RangeOperandType) => T;
+
+    /**
      * Optional correlated-EXISTS push-down hook: compiles a {@link RELATION_EXISTS_KEY}
      * marker node into a `[NOT] EXISTS (SELECT 1 FROM … WHERE …)` predicate. The DO
      * JSON-blob path supplies it (relation predicates push down to a subquery);
@@ -103,6 +114,7 @@ const IN_LIST_DEFAULT_BUDGET = WORKERD_SQLITE_LIMITS.boundParams / 2;
 
 const OPERATOR_KEYS = ["eq", "ne", "lt", "lte", "gt", "gte", "in", "notIn", "isNull", "contains"] as const;
 const OPERATOR_KEY_SET = new Set<string>(OPERATOR_KEYS);
+const RANGE_OPERATOR_KEYS: ReadonlySet<string> = new Set(["gt", "gte", "lt", "lte"]);
 const BINARY_COMPARATORS: Record<string, string> = { eq: "=", gt: ">", gte: ">=", lt: "<", lte: "<=", ne: "<>" };
 
 /** A plain object whose every own key is a known operator is an operator object; anything else is an equality literal. */
@@ -129,6 +141,17 @@ const compileContains = <T>(field: string, reference: T, value: unknown, strateg
 };
 
 /**
+ * Restrict a range over a path to the leaves of its operand's own type. An operand that is none of number, string or
+ * boolean (a Date, a bigint, an object) has no leaf to match, so the range matches nothing — the same answer the
+ * in-memory evaluator gives. Under `NOT` that is every row with a typed leaf, where a NULL operand would match none.
+ */
+const bracketRange = <T>(field: string, comparison: T, operand: unknown, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T => {
+    const type = rangeOperandType(operand);
+
+    return type === undefined ? fragments.constant(false) : fragments.connect(comparison, strategy.rangeTypeGuard(field, type), "AND");
+};
+
+/**
  * SQL NULL is `null` here and ONLY `null`.
  *
  * `undefined` is deliberately not folded into it. A JS absence in a predicate is
@@ -149,6 +172,7 @@ const compileComparator = <T>(
     value: unknown,
     strategy: WhereSqlStrategy<T>,
     fragments: WhereFragments<T>,
+    seek: boolean,
 ): T => {
     // user's `where: { col: { eq: undefined } }` still fails loudly at the driver instead of quietly matching every null row.
     if (value === null) {
@@ -168,7 +192,9 @@ const compileComparator = <T>(
         return fragments.constant(false);
     }
 
-    return fragments.binary(reference, comparator, strategy.serialize(value, field));
+    const comparison = fragments.binary(reference, comparator, strategy.serialize(value, field));
+
+    return !seek && RANGE_OPERATOR_KEYS.has(operator) && isFieldPath(field) ? bracketRange(field, comparison, value, strategy, fragments) : comparison;
 };
 
 /**
@@ -220,15 +246,172 @@ const compileInList = <T>(
     return strategy.inList ? strategy.inList(reference, serialized, negated) : fragments.inList(reference, serialized, negated, IN_LIST_DEFAULT_BUDGET);
 };
 
-/** The `IN` / `NOT IN` rendering a dialect with no bounded list form uses: one bound placeholder per item. */
-const literalInList = (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean): SQL => {
-    const list = sql.join(
-        items.map((item) => sql`${item}`),
-        sql`, `,
-    );
+/**
+ * Placeholders every `in` / `notIn` list in one `where` may spend between them.
+ *
+ * Half of Workerd's per-statement parameter cap, leaving the other half for the
+ * rest of the statement — the comparators, the cursor, the limit. It is a
+ * whole-statement budget rather than a per-list one because three 40-item `in`
+ * filters are ordinary app code and would otherwise bind 120 placeholders while
+ * each list sat "within budget" on its own.
+ *
+ * The cap is SQLite's, and so is the default `inList` it feeds; a dialect that
+ * overrides the hook is free to ignore the budget it is handed.
+ */
+const WHERE_LIST_PARAM_BUDGET = WORKERD_SQLITE_LIMITS.boundParams / 2;
 
-    return negated ? sql`${reference} NOT IN (${list})` : sql`${reference} IN (${list})`;
+/**
+ * Placeholders every literal `IN (?, ?, …)` list in one Postgres or MySQL
+ * `where` may spend between them.
+ *
+ * Both engines cap one statement at 65,535 bound parameters, so a literal list
+ * past that failed outright — "bind message has … parameter formats but 0
+ * parameters" on Postgres, "too many placeholders" on MySQL — where D1 took the
+ * same filter as one `json_each` parameter. Close to the cap, so a list that
+ * fits as placeholders keeps them, with the rest left for the other predicates,
+ * and shared between the lists the way the SQLite budget is (see
+ * {@link serverInList}).
+ */
+const SERVER_LIST_PARAM_BUDGET = 60_000;
+
+/** A wide list split by the storage type of its values, each part JSON-safe. */
+interface WideListParts {
+    /** Bytes, hex-encoded, for the engine to decode back into the same BLOBs. */
+    bytes: string[];
+    hasNull: boolean;
+    numbers: number[];
+    strings: string[];
+}
+
+/**
+ * Split a wide list's serialized values by type, refusing one JSON cannot carry
+ * exactly (see `isJsonSafe`) — silently binding it as something else would
+ * change which rows match.
+ */
+const splitWideList = (items: ReadonlyArray<unknown>, literalMax: number): WideListParts => {
+    const parts: WideListParts = { bytes: [], hasNull: false, numbers: [], strings: [] };
+
+    for (const item of items) {
+        if (item === null) {
+            parts.hasNull = true;
+        } else if (item instanceof Uint8Array) {
+            parts.bytes.push(Array.from(item, (byte) => byte.toString(16).padStart(2, "0")).join(""));
+        } else if (typeof item === "number" && isJsonSafe(item)) {
+            parts.numbers.push(item);
+        } else if (typeof item === "string" && isJsonSafe(item)) {
+            parts.strings.push(item);
+        } else {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `an "in" list of ${String(items.length)} values holds a value that cannot be bound as one parameter (a non-finite number, or malformed text). Narrow the list to ${String(literalMax)} values or fewer.`,
+            );
+        }
+    }
+
+    return parts;
 };
+
+/** One membership test per value type — a column holds one type, so only one ever matches. */
+const wideListTests = (engine: "mysql" | "postgres", reference: SQL, parts: WideListParts): SQL[] => {
+    const tests: SQL[] = [];
+    const value = sql.identifier("v");
+    const alias = sql.identifier("__in__");
+
+    // Postgres: `jsonb_array_elements_text` over ONE text parameter cast to
+    // `jsonb` on the server. A JS array bound to `= ANY($1)` depends on the
+    // driver inferring an array type: postgres.js with `fetch_types: false` — the
+    // setting Hyperdrive recommends — sends it as a malformed array literal, and
+    // a bytes array fails with any driver that sends it untyped.
+    //
+    // The parameter is declared `text` and only then cast: typed `jsonb`
+    // directly, a driver that reads parameter types (postgres.js does) serialises
+    // the already-JSON string as JSON again, and the server sees one scalar.
+    const postgresElements = (list: ReadonlyArray<unknown>): SQL => sql`jsonb_array_elements_text(CAST(CAST(${JSON.stringify(list)} AS text) AS jsonb))`;
+    // MySQL: `JSON_TABLE` over one JSON parameter — MySQL has no array type.
+    const mysqlRows = (list: ReadonlyArray<unknown>, type: string): SQL =>
+        sql`JSON_TABLE(${JSON.stringify(list)}, '$[*]' COLUMNS (${value} ${sql.raw(type)} PATH '$')) ${alias}`;
+
+    if (parts.strings.length > 0) {
+        // MySQL strings are converted to the connection character set, which
+        // leaves them comparable under the COLUMN's collation the way a bound
+        // literal is: a table created before its text columns were pinned to a
+        // binary collation keeps a case-folding `utf8mb4_0900_ai_ci`, and a
+        // binary comparison would silently drop the rows a literal list matches.
+        // A column on another legacy collation (`utf8mb4_general_ci`,
+        // `utf8mb4_unicode_ci`) is refused by MySQL with "Illegal mix of
+        // collations" — loudly, never as a wrong answer; `@lunora/hyperdrive`'s
+        // dialect documents the one-off conversion.
+        tests.push(
+            engine === "postgres"
+                ? sql`${reference} IN (SELECT ${postgresElements(parts.strings)})`
+                : sql`${reference} IN (SELECT CONVERT(${value} USING utf8mb4) FROM ${mysqlRows(parts.strings, "LONGTEXT")})`,
+        );
+    }
+
+    if (parts.numbers.length > 0) {
+        tests.push(
+            engine === "postgres"
+                ? sql`${reference} IN (SELECT CAST(${postgresElements(parts.numbers)} AS double precision))`
+                : sql`${reference} IN (SELECT ${value} FROM ${mysqlRows(parts.numbers, "DOUBLE")})`,
+        );
+    }
+
+    if (parts.bytes.length > 0) {
+        tests.push(
+            engine === "postgres"
+                ? sql`${reference} IN (SELECT decode(${postgresElements(parts.bytes)}, 'hex'))`
+                : sql`${reference} IN (SELECT UNHEX(${value}) FROM ${mysqlRows(parts.bytes, "LONGTEXT")})`,
+        );
+    }
+
+    return tests;
+};
+
+/**
+ * The `IN` / `NOT IN` rendering for Postgres and MySQL: one placeholder per
+ * item while the list fits its share of {@link SERVER_LIST_PARAM_BUDGET}, and
+ * past it the whole list as ONE bound JSON parameter the engine unpacks, the way
+ * SQLite's `json_each` form carries it (see {@link wideListTests}).
+ *
+ * The share is scaled off the SQLite `budget` `compileWhereSql` hands every
+ * list — that budget is already the statement's list allowance divided by the
+ * number of lists — so seven wide lists in one `where` switch early enough that
+ * together they stay under the cap, instead of each fitting on its own.
+ *
+ * NULL keeps SQL's rules: it matches nothing in an `IN` list, and a `NOT IN`
+ * list holding it matches no row.
+ */
+const serverInList =
+    (engine: "mysql" | "postgres") =>
+    (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget = WHERE_LIST_PARAM_BUDGET): SQL => {
+        const literalMax = Math.floor((SERVER_LIST_PARAM_BUDGET * budget) / WHERE_LIST_PARAM_BUDGET);
+
+        if (items.length <= literalMax) {
+            const list = sql.join(
+                items.map((item) => sql`${item}`),
+                sql`, `,
+            );
+
+            return negated ? sql`${reference} NOT IN (${list})` : sql`${reference} IN (${list})`;
+        }
+
+        const parts = splitWideList(items, literalMax);
+
+        if (negated && parts.hasNull) {
+            return sql`1 = 0`;
+        }
+
+        const tests = wideListTests(engine, reference, parts);
+
+        if (tests.length === 0) {
+            // Every value was NULL: an `IN` over nothing but NULL matches no row.
+            return sql`1 = 0`;
+        }
+
+        const members = tests.length === 1 ? (tests[0] as SQL) : sql`(${sql.join(tests, sql` OR `)})`;
+
+        return negated ? sql`NOT (${members})` : members;
+    };
 
 const compileFieldOperators = <T>(field: string, reference: T, operators: FieldOperators, strategy: WhereSqlStrategy<T>, fragments: WhereFragments<T>): T[] => {
     const record = operators as Record<string, unknown>;
@@ -243,7 +426,18 @@ const compileFieldOperators = <T>(field: string, reference: T, operators: FieldO
         const comparator = BINARY_COMPARATORS[operator];
 
         if (comparator) {
-            clauses.push(compileComparator(field, reference, operator, comparator, value, strategy, fragments));
+            clauses.push(
+                compileComparator(
+                    field,
+                    reference,
+                    operator,
+                    comparator,
+                    value,
+                    strategy,
+                    fragments,
+                    (operators as { [SEEK_RANGE]?: boolean })[SEEK_RANGE] === true,
+                ),
+            );
         } else if (operator === "isNull") {
             clauses.push(fragments.nullCheck(reference, !value));
         } else if (operator === "contains") {
@@ -318,10 +512,16 @@ const compileGroup = <T>(value: unknown, connector: "AND" | "OR", strategy: Wher
 
         if (compiled !== undefined) {
             parts.push(compiled);
+        } else if (connector === "OR") {
+            // A branch that compiles to nothing constrains nothing: it is TRUE, and
+            // so is any OR holding it. Dropping it instead narrowed
+            // `{ OR: [allowAll(), X] }` to `X`, while the JS matcher `rls()` runs
+            // on every row admits everything.
+            return undefined;
         }
     }
 
-    // An OR over zero satisfiable branches matches nothing; an empty AND matches everything.
+    // An OR over zero branches matches nothing; an AND over zero (or only vacuous) branches matches everything.
     if (parts.length === 0) {
         return connector === "OR" ? fragments.constant(false) : undefined;
     }
@@ -345,7 +545,8 @@ const compileStructuralKey = <T>(key: string, value: unknown, strategy: WhereSql
         // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with compileNode
         const inner = compileNode((value ?? {}) as WhereInput, strategy, fragments);
 
-        return inner === undefined ? undefined : fragments.negate(inner);
+        // `NOT` of a vacuous (TRUE) predicate is FALSE, as the JS matcher has it.
+        return inner === undefined ? fragments.constant(false) : fragments.negate(inner);
     }
 
     return compileGroup(value, key as "AND" | "OR", strategy, fragments);
@@ -368,20 +569,6 @@ const compileNode = <T>(where: WhereInput, strategy: WhereSqlStrategy<T>, fragme
 
     return joinClauses(clauses, "AND", fragments);
 };
-
-/**
- * Placeholders every `in` / `notIn` list in one `where` may spend between them.
- *
- * Half of Workerd's per-statement parameter cap, leaving the other half for the
- * rest of the statement — the comparators, the cursor, the limit. It is a
- * whole-statement budget rather than a per-list one because three 40-item `in`
- * filters are ordinary app code and would otherwise bind 120 placeholders while
- * each list sat "within budget" on its own.
- *
- * The cap is SQLite's, and so is the default `inList` it feeds; a dialect that
- * overrides the hook is free to ignore the budget it is handed.
- */
-const WHERE_LIST_PARAM_BUDGET = WORKERD_SQLITE_LIMITS.boundParams / 2;
 
 /**
  * What the tree spends: how many `in`/`notIn` lists it holds (so the budget above
@@ -431,8 +618,13 @@ const countParams = (node: unknown): { lists: number; scalars: number } => {
         // both recurse. Anything else is a field bound to one literal.
         else if (key === "AND" || key === "NOT" || key === "OR" || isOperatorObject(value)) {
             absorb(value);
+
+            // A path binds its own key path, and a range over it binds it a second time in the type test.
+            if (isFieldPath(key)) {
+                scalars += 1 + Object.keys(value as object).filter((operator) => RANGE_OPERATOR_KEYS.has(operator)).length;
+            }
         } else {
-            scalars += 1;
+            scalars += isFieldPath(key) ? 2 : 1;
         }
     }
 
@@ -449,6 +641,9 @@ export const compileWhereSql = <T = SQL>(
     // Defaulted so `@lunora/sql-store` — which wants exactly this — passes
     // nothing and is unaffected by the parameterisation.
     fragments: WhereFragments<T> = drizzleFragments as unknown as WhereFragments<T>,
+    // Placeholders the REST of the statement binds outside this `where` — a
+    // search's term predicates, say — taken off the list budget up front.
+    reservedParams = 0,
 ): T | undefined => {
     if (!where || Object.keys(where).length === 0) {
         return undefined;
@@ -471,7 +666,7 @@ export const compileWhereSql = <T = SQL>(
     // half-cap is a ceiling, never a floor, so this only ever tightens. A page
     // whose keyset seek is wide gets a correspondingly narrower list budget
     // instead of the two overrunning the cap between them.
-    const perList = Math.max(1, Math.floor(Math.min(WHERE_LIST_PARAM_BUDGET, WORKERD_SQLITE_LIMITS.boundParams - scalars) / listCount));
+    const perList = Math.max(1, Math.floor(Math.min(WHERE_LIST_PARAM_BUDGET, WORKERD_SQLITE_LIMITS.boundParams - scalars - reservedParams) / listCount));
 
     // Rebinding `inList` is how the per-list budget reaches the leaf. A strategy
     // that supplied its own hook keeps it (bound to the budget); one that did not
@@ -483,5 +678,7 @@ export const compileWhereSql = <T = SQL>(
     return compileNode(where, { ...strategy, inList: (reference, items, negated) => inList(reference, items, negated, perList) }, fragments);
 };
 
-export { literalInList };
+export { serverInList };
 export type { WhereSqlStrategy };
+
+export { type RangeOperandType } from "../../../shared/json-field-path";

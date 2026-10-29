@@ -56,4 +56,4 @@ const promptBucketName = async (text: TextPrompt, projectName: string): Promise<
 const withStorageBucketName = (manifest: RegistryManifest, bucketName: string): RegistryManifest =>
     setBindingField(manifest, "r2_buckets", { key: "binding", value: UPLOADS_BINDING }, "bucket_name", bucketName);
 
-export { deriveBucketName, promptBucketName, sanitizeBucketName, STORAGE_BUCKET_PROMPT, UPLOADS_BINDING, withStorageBucketName };
+export { deriveBucketName, promptBucketName, sanitizeBucketName, withStorageBucketName };

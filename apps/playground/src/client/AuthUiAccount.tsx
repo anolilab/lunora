@@ -18,18 +18,30 @@ import { authClient } from "./auth-client.js";
 const STACK_STYLE: CSSProperties = { display: "grid", gap: 24, margin: "24px auto", maxWidth: 480 };
 
 /**
+ * No routes here, as in {@link AuthUiDemo}: `<App>` swaps views off the
+ * session, so a sign-out stays in the page the way it does under an SPA
+ * router, instead of reloading it.
+ */
+const IN_PLACE_NAV = {
+    navigate: (): void => undefined,
+    replace: (): void => undefined,
+};
+
+/**
  * The signed-in half of the copy-in auth screens, mounted behind `?authui=1`
  * beside {@link AuthUiDemo}'s signed-out half.
  *
- * Only the cards that need no better-auth plugin are here. The playground's
- * client is a bare `createAuthClient` with no plugin array, so `PasskeysCard`,
- * `TwoFactorSetupCard` and the organization cards have no server half to talk to
- * — mounting them would test that a 404 renders an error, which is not the same
- * as testing the card. They stay covered by the controller and jsdom suites.
+ * Only the cards that need no better-auth feature plugin are here. The
+ * playground's client installs `lunoraSessionSync()` and nothing else, so
+ * `PasskeysCard`, `TwoFactorSetupCard` and the organization cards have no server
+ * half to talk to — mounting them would test that a 404 renders an error, which
+ * is not the same as testing the card. They stay covered by the controller and
+ * jsdom suites.
  */
 export const AuthUiAccount = (): ReactElement => (
     <AuthUIProvider
         authClient={authClient}
+        nav={IN_PLACE_NAV}
         onSessionChange={() => {
             void authClient.getSession();
         }}

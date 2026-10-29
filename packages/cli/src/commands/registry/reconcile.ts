@@ -8,6 +8,7 @@
  */
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
+import { projectUsesUmbrella } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { LunoraError } from "@lunora/errors";
 import { dirname, join, relative } from "@visulima/path";
@@ -17,7 +18,7 @@ import type { Logger } from "../../util/logger";
 import type { RegistryLock } from "../../util/registry-lock";
 import { hashContent, readLock, recordedHash, recordFile, writeLock } from "../../util/registry-lock";
 import renderDiff from "../../util/text-diff";
-import { applyItemResources, projectUsesUmbrella, rewriteUmbrellaImports } from "./apply";
+import { applyItemResources, rewriteUmbrellaImports } from "./apply";
 import type { EntrypointReexport, ReconcileOptions, ReconcileOutcome, RegistryFile, ResolvedItem } from "./types";
 
 /** Code files whose `@lunora/*` base imports are rewritten to `lunorash/*` for umbrella projects. */
@@ -53,6 +54,20 @@ const readItemFile = (itemDirectory: string, file: RegistryFile, useUmbrella: bo
 };
 
 /**
+ * The `lunora/schema.ts` written when the project has none yet.
+ *
+ * A DEFAULT export, not a named one: codegen emits `import schema from
+ * "../schema.js"` into `shard.ts` unconditionally, so a named-only stub made
+ * every scaffolded project fail `tsc` with TS2613 until someone changed the
+ * export by hand. Every template and example already uses the default form.
+ *
+ * `insertSchemaExtension` resolves the chain from the `defineSchema(...)` call
+ * rather than a variable binding, so it splices into either shape.
+ */
+const schemaStub = (useUmbrella: boolean): string =>
+    `import { defineSchema } from "${useUmbrella ? "lunorash/server" : "@lunora/server"}";\n\nexport default defineSchema({});\n`;
+
+/**
  * Reconcile a `schema-extension` file: copy the extension source (if absent)
  * and AST-merge the item's `.extend(...)` into `lunora/schema.ts`. In diff
  * mode, just describe the intended merge.
@@ -83,10 +98,7 @@ const reconcileSchemaExtension = (
         writeFileSync(destinationPath, readItemFile(itemDirectory, file, useUmbrella, itemKey), "utf8");
     }
 
-    const baseModule = useUmbrella ? "lunorash/server" : "@lunora/server";
-    const existingSchema = existsSync(schemaPath)
-        ? readFileSync(schemaPath, "utf8")
-        : `import { defineSchema } from "${baseModule}";\n\nexport const schema = defineSchema({});\n`;
+    const existingSchema = existsSync(schemaPath) ? readFileSync(schemaPath, "utf8") : schemaStub(useUmbrella);
 
     const result = insertSchemaExtension(existingSchema, itemKey);
 
@@ -450,7 +462,7 @@ const reconcileItems = (
                 continue;
             }
 
-            const applied = applyItemResources(manifest, cwd, logger, useUmbrella);
+            const applied = applyItemResources(manifest, cwd, logger, useUmbrella, reconcileOptions.pinnedVersions);
 
             depsAdded.push(...applied.deps);
             bindingsApplied.push(...applied.bindings);

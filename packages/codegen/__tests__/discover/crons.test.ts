@@ -38,11 +38,11 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.interval("clear presence", { minutes: 30 }, internal.presence.clear, {});
             crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, { batch: 10 });
-            crons.cron("custom", "0 * * * *", internal.foo.bar, {});
+            crons.cron("custom", "0 * * * *", internal.reports.weekly.send, {});
             export default crons;
         `,
         );
@@ -52,7 +52,8 @@ describe("discover/crons", () => {
         // Sorted by name: "clear presence", "custom", "send digest".
         expect(result).toEqual([
             { args: {}, cron: "*/30 * * * *", functionPath: "presence:clear", name: "clear presence" },
-            { args: {}, cron: "0 * * * *", functionPath: "foo:bar", name: "custom" },
+            // A nested `api.*` path joins with `_`, matching the dispatch key.
+            { args: {}, cron: "0 * * * *", functionPath: "reports_weekly:send", name: "custom" },
             { args: { batch: 10 }, cron: "0 9 * * *", functionPath: "email:digest", name: "send digest" },
         ]);
     });
@@ -67,7 +68,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.hourly("sweep sessions", { minuteUTC: 17 }, internal.presence.sweep, {});
             export default crons;
@@ -87,7 +88,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/server";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.interval("heartbeat", { hours: 1 }, internal.jobs.run, {});
             export default crons;
@@ -106,7 +107,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs as defineCrons } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const c = defineCrons();
             c.weekly("report", { dayOfWeek: "monday", hourUTC: 8, minuteUTC: 0 }, internal.email.report, {});
             export default c;
@@ -115,7 +116,7 @@ describe("discover/crons", () => {
 
         const result = discoverCrons(newProject(), workdir);
 
-        expect(result[0]).toEqual({ args: {}, cron: "0 8 * * 1", functionPath: "email:report", name: "report" });
+        expect(result[0]).toEqual({ args: {}, cron: "0 8 * * 2", functionPath: "email:report", name: "report" });
     });
 
     it("supports a chained builder", () => {
@@ -125,7 +126,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons
                 .interval("a", { hours: 1 }, internal.jobs.a, {})
@@ -163,7 +164,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.interval("dup", { minutes: 1 }, internal.a.b, {});
             export default crons;
@@ -173,7 +174,7 @@ describe("discover/crons", () => {
             "more-crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.interval("dup", { minutes: 2 }, internal.a.c, {});
             export default crons;
@@ -205,7 +206,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.cron(\`nightly\`, \`0 * * * *\`, internal.presence.clear, {});
             export default crons;
@@ -224,7 +225,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.cron("bad", "every minute", internal.a.b, {});
             export default crons;
@@ -246,7 +247,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.interval("tick", { seconds: 30 }, internal.jobs.tick, {});
             export default crons;
@@ -284,7 +285,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.cron("sub-minute", "*/30 * * * * *", internal.jobs.tick, {});
             export default crons;
@@ -320,7 +321,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const name = "dyn";
             const crons = cronJobs();
             crons.interval(name, { minutes: 1 }, internal.a.b, {});
@@ -341,7 +342,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const everyMinutes = 30;
             const crons = cronJobs();
             crons.interval("clear presence", { minutes: everyMinutes }, internal.presence.clear, {});
@@ -398,7 +399,7 @@ describe("discover/crons", () => {
                 args: { region: "eu" },
                 cron: "0 9 * * *",
                 name: "nightly digest",
-                workflow: { binding: "WORKFLOW_DIGEST_PIPELINE", exportName: "digestPipeline" },
+                workflow: { className: "DigestPipelineWorkflow", exportName: "digestPipeline" },
             },
         ]);
     });
@@ -428,7 +429,7 @@ describe("discover/crons", () => {
         const workflows = discoverWorkflows(project, workdir);
 
         expect(discoverCrons(project, workdir, workflows)).toEqual([
-            { args: {}, cron: "0 9 * * *", name: "nightly digest", workflow: { binding: "WORKFLOW_DIGEST_PIPELINE", exportName: "digestPipeline" } },
+            { args: {}, cron: "0 9 * * *", name: "nightly digest", workflow: { className: "DigestPipelineWorkflow", exportName: "digestPipeline" } },
         ]);
     });
 
@@ -481,7 +482,7 @@ describe("discover/crons", () => {
                 args: { input: "sweep", threadKey: "cron" },
                 cron: "0 3 * * *",
                 name: "nightly sweep",
-                workflow: { binding: "AGENT_SUPPORT", exportName: "support" },
+                workflow: { className: "SupportAgentWorkflow", exportName: "support" },
             },
         ]);
     });
@@ -532,7 +533,7 @@ describe("discover/crons", () => {
                 args: { input: "sweep", threadKey: "cron" },
                 cron: "0 3 * * *",
                 name: "nightly sweep",
-                workflow: { binding: "AGENT_SUPPORT", exportName: "support" },
+                workflow: { className: "SupportAgentWorkflow", exportName: "support" },
             },
         ]);
     });
@@ -567,11 +568,11 @@ describe("discover/crons", () => {
                 args: { input: "sweep", threadKey: "cron" },
                 cron: "0 3 * * *",
                 name: "nightly sweep",
-                workflow: { binding: "AGENT_SUPPORT", exportName: "support" },
+                workflow: { className: "SupportAgentWorkflow", exportName: "support" },
             },
         ]);
 
-        expect(output).toContain('{ name: "nightly sweep", workflow: "AGENT_SUPPORT", args: {"input":"sweep","threadKey":"cron"} },');
+        expect(output).toContain('{ name: "nightly sweep", workflow: "SupportAgentWorkflow", args: {"input":"sweep","threadKey":"cron"} },');
         // The agent job carries no per-job functionPath dispatch (workflow-start only).
         expect(output).not.toContain('name: "nightly sweep", functionPath:');
     });
@@ -603,12 +604,12 @@ describe("emitCrons", () => {
         expect.assertions(3);
 
         const output = emitCrons([
-            { args: { region: "eu" }, cron: "0 9 * * *", name: "nightly digest", workflow: { binding: "WORKFLOW_DIGEST", exportName: "digest" } },
+            { args: { region: "eu" }, cron: "0 9 * * *", name: "nightly digest", workflow: { className: "DigestWorkflow", exportName: "digest" } },
             { args: {}, cron: "0 9 * * *", functionPath: "email:report", name: "report" },
         ]);
 
         // The workflow job carries `workflow: "<binding>"` and no functionPath…
-        expect(output).toContain('{ name: "nightly digest", workflow: "WORKFLOW_DIGEST", args: {"region":"eu"} },');
+        expect(output).toContain('{ name: "nightly digest", workflow: "DigestWorkflow", args: {"region":"eu"} },');
         // …while the function job is unchanged.
         expect(output).toContain('{ name: "report", functionPath: "email:report", args: {} },');
         // The emitted interface allows either target.

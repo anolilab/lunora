@@ -14,100 +14,32 @@
  * exported — are returned as warnings rather than written, since a binding
  * referencing an unexported class would make `wrangler deploy` fail.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 
+import type { DefaultScheduledContainerIR, DurableObjectScheduledContainerIR } from "@lunora/codegen";
 import { containerBuildTag } from "@lunora/container";
+import { readJsonSync } from "@visulima/fs";
 
-import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
-import type { DurableObjectSpec, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow } from "../infer-bindings";
+import celldBindingId from "../celld/celld-binding-id";
+import type { InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "../infer-bindings";
 import { applyModify } from "../jsonc-edit";
+import type { DurableObjectSpec, GeneratedClassModule } from "../worker-entry";
+import type { Manifest } from "./lunora-manifest";
+import { readManifest } from "./lunora-manifest";
+import { D1_PLACEHOLDER_ID, HYPERDRIVE_PLACEHOLDER_ID } from "./placeholder-ids";
+import type { OwnedTuning } from "./reconcile-queues";
+import { readOwnedTuning, reconcileEnvQueues, reconcileQueues, recordOwnedTuning } from "./reconcile-queues";
+import type { OwnedServices } from "./reconcile-services";
+import { readOwnedServices, reconcileDevConfigServices, reconcileServices, recordOwnedServices } from "./reconcile-services";
+import collectWarnings from "./reconcile-warnings";
+import { objectBindingEntries, stringEntries } from "./validate-bindings";
+import { scanAppChains } from "./worker-entry-checks";
+import { settingLeaf, WORKFLOW_SETTING_KEYS, WORKFLOW_SETTINGS, workflowSettingsFor } from "./workflow-settings";
+import { DEFAULT_OBSERVABILITY } from "./wrangler-config";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
-import { objectBindingEntries, stringEntries } from "./wrangler-validator";
-
-/**
- * Placeholder `database_id` written for an auto-provisioned `DB` binding. It is
- * intentionally not a valid id so a deploy can't silently target the wrong
- * database; reconciliation warns the user to replace it (see the D1 warning in
- * `reconcileWranglerBindings`).
- */
-const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
-
-interface DurableObjectBinding {
-    class_name?: string;
-    name?: string;
-}
-
-/**
- * One `migrations[]` record as READ BACK from a hand-edited `wrangler.jsonc` —
- * so every list may hold a `null` (a trailing comma in a JSONC array parses to
- * one). The nullability is in the type on purpose: it was absent, the replay
- * below trusted it, and a stray `null` threw a raw `TypeError` out of a step
- * that runs on every dev-server start.
- */
-interface MigrationEntry {
-    deleted_classes?: ReadonlyArray<string | null | undefined>;
-    new_classes?: ReadonlyArray<string | null | undefined>;
-    new_sqlite_classes?: ReadonlyArray<string | null | undefined>;
-    renamed_classes?: ReadonlyArray<{ from?: string; to?: string } | null | undefined>;
-    tag?: string;
-}
-
-interface ContainerEntry {
-    class_name?: string;
-}
-
-interface WorkflowEntry {
-    binding?: string;
-    class_name?: string;
-    name?: string;
-}
-
-interface QueueProducerEntry {
-    binding?: string;
-    queue?: string;
-}
-
-interface QueueConsumerEntry {
-    queue?: string;
-    type?: string;
-}
-
-interface QueuesShape {
-    consumers?: ReadonlyArray<QueueConsumerEntry>;
-    producers?: ReadonlyArray<QueueProducerEntry>;
-}
-
-interface WranglerShape {
-    ai?: { binding?: string };
-    // Self-describing: { binding, dataset } with no remote id — auto-writeable (see reconcileAnalytics).
-    analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string }>;
-    // Self-describing: a parameterless { binding } — auto-writeable like `ai` (see reconcileBrowser).
-    browser?: { binding?: string };
-    containers?: ReadonlyArray<ContainerEntry>;
-    d1_databases?: ReadonlyArray<{ binding?: string }>;
-    durable_objects?: { bindings?: ReadonlyArray<DurableObjectBinding> };
-    // Presence-only: read here just to tell whether a requested `--env <name>`
-    // is declared at all, for the advisory warning below. Never written into.
-    env?: Record<string, unknown>;
-    // Hint-only: the `app_id` is a remote Flagship app Lunora can't mint — warned, never written.
-    flagship?: ReadonlyArray<{ app_id?: string; binding?: string }>;
-    // Hint-only: the `id` is a remote Hyperdrive resource Lunora can't mint — warned, never written.
-    hyperdrive?: ReadonlyArray<{ binding?: string; id?: string }>;
-    // Self-describing: a parameterless { binding } — auto-writeable like `ai` (see reconcileImages).
-    images?: { binding?: string };
-    // Hint-only: the namespace `id` is a remote KV resource Lunora can't mint — warned, never written.
-    kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string }>;
-    migrations?: ReadonlyArray<MigrationEntry | null | undefined>;
-    name?: string;
-    observability?: { enabled?: boolean; head_sampling_rate?: number; logs?: { enabled?: boolean; head_sampling_rate?: number } };
-    // Hint-only: the `pipeline` name is a remote resource Lunora can't mint — warned, never written.
-    pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string; stream?: string }>;
-    // Cloudflare Queues — producers + consumers, both reconciled from `lunora/queues.ts`.
-    queues?: QueuesShape;
-    r2_buckets?: ReadonlyArray<{ binding?: string }>;
-    workflows?: ReadonlyArray<WorkflowEntry>;
-}
+import type { MigrationEntry, ReconcileStep, WranglerShape } from "./wrangler-shape";
 
 /**
  * A container/workflow that is declared (so codegen emits its class) but the
@@ -126,7 +58,7 @@ interface ExportGap {
     /** Which declaration is unexported. */
     kind: "agent" | "container" | "workflow";
     /** The `_generated/{module}` to re-export from, e.g. `workflows`. */
-    module: "agents" | "containers" | "workflows";
+    module: GeneratedClassModule;
 }
 
 interface ReconcileBindingsResult {
@@ -135,16 +67,28 @@ interface ReconcileBindingsResult {
     /** `true` when `wrangler.jsonc` was rewritten. */
     changed: boolean;
 
+    /** What was written to the SvelteKit / Nuxt dev sidecar's own config, when anything was. */
+    devConfig?: { added: string[]; path: string; updated: string[] };
+
     /**
      * Declared containers/workflows the worker entry doesn't re-export — the
      * structured form of the corresponding `warnings` entries, for the dev error
      * overlay. Empty when every declaration is wired.
      */
     exportGaps: ExportGap[];
+
     /** Reason reconciliation was skipped, for logging. */
     reason?: string;
+
+    /**
+     * Short labels for each EXISTING entry whose settings were brought in line
+     * with its declaration (e.g. `"queues.consumers/receipt-queue (max_retries)"`).
+     * Kept apart from `added` so a retune is not logged as a new binding.
+     */
+    updated: string[];
     /** Non-fatal hints for capabilities that cannot be auto-provisioned. */
     warnings: string[];
+
     /** Resolved wrangler path, or `undefined` when none was found. */
     wranglerPath?: string;
 }
@@ -175,292 +119,6 @@ const collectExportGaps = (inferred: InferredBindings): ExportGap[] => {
                 return { className, exportName, kind, module };
             }),
     );
-};
-
-interface ReconcileStep {
-    added: string[];
-    text: string;
-}
-
-/**
- * Collect hint-only binding warnings. Each carries a remote id/name Lunora
- * can't mint (a KV namespace id, a Hyperdrive id, a Pipelines pipeline name);
- * like R2's user-defined bucket name they are warned, never auto-written, and
- * the warning is suppressed once the corresponding binding array is already
- * present so a wired-up project starts the dev server clean. Self-describing
- * bindings (browser/images/analytics) are auto-written instead; see reconcile.
- */
-/** The one Pipelines binding name codegen resolves — `emitPipelinesFragments`'s `env.PIPELINES` fallback, which has no `defineApp` override. */
-const PIPELINES_BINDING = "PIPELINES";
-
-const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
-    // A Flagship binding-mode provider needs a matching `flagship[]` entry; the
-    // warning keys on the *binding name* (an app can wire several Flagship apps),
-    // not array length, and carries the specific name + app_id remediation.
-    const flagshipBindingMissing =
-        inferred.flagshipBinding !== undefined && !(parsed?.flagship ?? []).some((entry) => entry.binding === inferred.flagshipBinding);
-
-    // Keyed on the binding NAME for the same reason Flagship is, and one more:
-    // codegen resolves ONE fixed name (`config.pipelines?.(env) ?? env.PIPELINES`)
-    // and `pipelines` has no `defineApp` override to point elsewhere. So a
-    // `{ "binding": "EVENTS" }` entry satisfies the array-length test and the
-    // wrangler validator while `ctx.pipelines.send()` still throws at runtime —
-    // with nothing before that ever naming PIPELINES. The KV and Hyperdrive
-    // rules above stay on length: those bindings are passed to `createKv()` /
-    // the Hyperdrive client by the app, so any name the app chose is correct.
-    const pipelinesBindingMissing = inferred.usesPipelines && !(parsed?.pipelines ?? []).some((entry) => entry.binding === PIPELINES_BINDING);
-
-    const rules: ReadonlyArray<[boolean, string]> = [
-        [
-            inferred.usesKv && (parsed?.kv_namespaces?.length ?? 0) === 0,
-            "@lunora/bindings/kv is used but no kv_namespaces binding exists; add a kv_namespaces entry ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned.",
-        ],
-        [
-            inferred.usesHyperdrive && (parsed?.hyperdrive?.length ?? 0) === 0,
-            "@lunora/hyperdrive is used but no hyperdrive binding exists; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned.",
-        ],
-        [
-            pipelinesBindingMissing,
-            `ctx.pipelines is used but no "${PIPELINES_BINDING}" pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding: "${PIPELINES_BINDING}", pipeline }) — codegen resolves this one name, and the pipeline resource can't be auto-provisioned.`,
-        ],
-        [
-            flagshipBindingMissing,
-            `lunora/flags.ts uses Flagship in binding mode but no flagship binding "${inferred.flagshipBinding ?? ""}" exists; add a flagship entry ({ binding: "${inferred.flagshipBinding ?? ""}", app_id }) — the app_id can't be auto-provisioned.`,
-        ],
-    ];
-
-    return rules.filter(([active]) => active).map(([, warning]) => warning);
-};
-
-/**
- * Capability reminders for the x402 rails. Neither implies a wrangler binding
- * Lunora can auto-write: the charge recipient is a user-named `[vars]` entry, and
- * the pay wallet key is a Secrets Store binding created out-of-band. So both are
- * always-on reminders — nothing in `wrangler.jsonc` can confirm them away (the pay
- * binding name is `signer.secretName`, unknown here) — rather than suppressible
- * hint bindings. The pay reminder also flags the mandatory spend policy: the rail
- * moves real funds.
- */
-const collectX402Warnings = (inferred: InferredBindings): string[] => {
-    const rules: ReadonlyArray<[boolean, string]> = [
-        [
-            inferred.usesX402Charge,
-            "@lunora/x402/charge is used; set the recipient wallet address as a [vars] entry (the var name is your choice) and pass it to the charge config — the x402 facilitator settles USDC to that address.",
-        ],
-        [
-            inferred.usesX402Pay,
-            "@lunora/x402/pay is used (ActionCtx-only, spends real funds); add a secrets_store_secrets[] binding holding the agent wallet key (binding name == signer.secretName) and pair the pay rail with a spend policy — ctx.secrets reads a Secrets Store binding, not .dev.vars.",
-        ],
-    ];
-
-    return rules.filter(([active]) => active).map(([, warning]) => warning);
-};
-
-/**
- * The declared-but-not-re-exported warning lines for a container / workflow /
- * agent set — one per declaration the worker entry never exports (wrangler
- * would reject its `class_name` at deploy). Shared by the three cases so
- * {@link collectWarnings} stays flat; the prose mirrors each {@link ExportGap}.
- */
-const unexportedDeclarationWarnings = (
-    kind: string,
-    module: ExportGap["module"],
-    declarations: ReadonlyArray<{ className: string; exported: boolean; exportName: string }>,
-): string[] =>
-    declarations
-        .filter((declaration) => !declaration.exported)
-        .map(
-            (declaration) =>
-                `${kind} "${declaration.exportName}" is declared but ${declaration.className} is not exported by the worker entry; add \`export * from "./lunora/_generated/${module}"\` so its binding can be provisioned.`,
-        );
-
-/** Workflow/agent `class_name` entries the emitted bundle no longer exports. */
-const orphanedWorkflowWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => {
-    const declaredClasses = new Set([...inferred.workflows, ...inferred.agents].map((declaration) => declaration.className));
-
-    if (declaredClasses.size === 0) {
-        return [];
-    }
-
-    // `flatMap` with an in-body guard rather than `filter().map()`: a filter
-    // predicate does not narrow the element type for the map that follows, so the
-    // template literal would still see `string | undefined`.
-    return (parsed.workflows ?? []).flatMap((entry) => {
-        const className = entry.class_name;
-
-        return className === undefined || declaredClasses.has(className)
-            ? []
-            : [
-                  `wrangler.jsonc declares workflows[] entry "${className}" but no defineWorkflow/defineAgent export generates that class — a leftover from a rename will fail the deploy (wrangler rejects a class_name the worker does not export). Remove it if it is not hand-wired.`,
-              ];
-    });
-};
-
-/** Queue consumer/producer entries no `defineQueue` export declares. */
-const orphanedQueueWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => {
-    if (inferred.queues.length === 0) {
-        return [];
-    }
-
-    const declaredNames = new Set(inferred.queues.map((queue) => queue.name));
-    const declaredBindings = new Set(inferred.queues.map((queue) => queue.bindingName));
-
-    return [
-        ...(parsed.queues?.consumers ?? []).flatMap((consumer) => {
-            const { queue } = consumer;
-
-            return queue === undefined || declaredNames.has(queue)
-                ? []
-                : [
-                      `wrangler.jsonc subscribes queues.consumers[] to "${queue}" but no defineQueue export declares that queue — a leftover from a rename keeps delivering batches this worker has no handler for (they retry to exhaustion, then drop or dead-letter). Remove it if it is not hand-wired.`,
-                  ];
-        }),
-        ...(parsed.queues?.producers ?? []).flatMap((producer) => {
-            const { binding } = producer;
-
-            return binding === undefined || declaredBindings.has(binding)
-                ? []
-                : [
-                      `wrangler.jsonc declares queues.producers[] binding "${binding}" but no defineQueue export declares it — a leftover from a rename. Remove it if it is not hand-wired.`,
-                  ];
-        }),
-    ];
-};
-
-/**
- * The `workflows[]` / `queues` entries in `wrangler.jsonc` that no longer match
- * any declaration — the leftovers a rename produces, since every reconcile step
- * here is **add-only** (it computes what is missing and appends it; it never
- * removes).
- *
- * Warned about rather than deleted, deliberately. Nothing in `wrangler.jsonc`
- * records which entries this tool wrote, so "unmatched" and "hand-written" are
- * indistinguishable — a project can export a Workflow class or handle a queue
- * itself without a `defineWorkflow` / `defineQueue` declaration, and silently
- * dropping those is exactly the over-eager clear the cron reconciler had to be
- * pulled back from. Establishing ownership needs a marker in the file, which is
- * a larger change than this.
- *
- * Each kind is inspected only when the project declares at least one of that
- * kind: with zero declarations there is no rename to infer, only a config this
- * tool has never had a reason to touch, and warning there would fire on every
- * dev-server boot of a hand-wired project. So a rename is caught and a
- * delete-the-last-one is not — stated here because it is the limit of what can
- * be told apart without ownership.
- *
- * Left behind, a stale `queues.consumers[]` subscription keeps delivering
- * batches to a worker that has no handler for that queue name
- * (`@lunora/queue`'s dispatch throws `no push handler is registered`, so the
- * batch retries to exhaustion and is then dropped or dead-lettered), and a
- * stale `workflows[]` entry names a `class_name` the bundle no longer exports,
- * which wrangler rejects at deploy.
- */
-const orphanedEntryWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => [
-    ...orphanedWorkflowWarnings(inferred, parsed),
-    ...orphanedQueueWarnings(inferred, parsed),
-];
-
-/**
- * Hints for capabilities used but not safely auto-provisionable — only emitted
- * when the corresponding binding is actually **missing**. `parsed` (the existing
- * `wrangler.jsonc`, when one was read) suppresses a hint whose binding is already
- * configured, so a correctly-wired project starts the dev server clean.
- *
- * Storage is silent once any `r2_buckets` binding exists (lunora can't pick the bucket name, but if one is already declared there's nothing to add). Auth is silent once sessions have a store — a `DB` D1 binding (the default, D1-backed) or an exported `SessionDO` (DO-backed); only a project with neither has nowhere to put sessions, so only that case warns. Scheduler keys on the `SchedulerDO` export, the safe binding signal. Payment has no binding at all — state rides the app's existing `ShardDO` via `ctx.db`; its only need is the provider secret pair, which lives in `.dev.vars` (not `wrangler.jsonc`), so the reminder fires whenever payment is used and nothing here can confirm it away.
- */
-
-/**
- * Every `@lunora/payment` provider adapter and the `.dev.vars` secret pair that
- * configures it. Mirrors the `@lunora/payment` entry in
- * `package-secrets-registry.ts` and the adapters under
- * `packages/payment/src/providers/` — a provider is "configured" when **both**
- * of its keys carry a non-empty value.
- */
-const PAYMENT_PROVIDER_SECRETS: ReadonlyArray<{ keys: readonly [string, string]; label: string }> = [
-    { keys: ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"], label: "Stripe" },
-    { keys: ["POLAR_ACCESS_TOKEN", "POLAR_WEBHOOK_SECRET"], label: "Polar" },
-    { keys: ["CREEM_API_KEY", "CREEM_WEBHOOK_SECRET"], label: "Creem" },
-    { keys: ["AUTUMN_SECRET_KEY", "AUTUMN_WEBHOOK_SECRET"], label: "Autumn" },
-    { keys: ["DODO_PAYMENTS_API_KEY", "DODO_PAYMENTS_WEBHOOK_KEY"], label: "Dodo Payments" },
-];
-
-/** Render the provider list for the reminder, e.g. `STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (Stripe) or …`. */
-const describePaymentProviders = (): string => PAYMENT_PROVIDER_SECRETS.map(({ keys, label }) => `${keys[0]} + ${keys[1]} (${label})`).join(" or ");
-
-/**
- * True when `.dev.vars` already carries a complete secret pair for any supported
- * payment provider — the reminder is then noise, so it is suppressed. A missing
- * or unreadable `.dev.vars` counts as unconfigured (warn), which is the safe
- * direction for a setup hint.
- */
-const hasConfiguredPaymentProvider = (projectRoot: string): boolean => {
-    let content: string;
-
-    try {
-        content = readFileSync(join(projectRoot, DEV_VARS_FILE), "utf8");
-    } catch {
-        return false;
-    }
-
-    const values = new Map(parseDevVariableEntries(content).map((entry) => [entry.key, entry.value]));
-
-    return PAYMENT_PROVIDER_SECRETS.some(({ keys }) => keys.every((key) => (values.get(key) ?? "") !== ""));
-};
-
-const collectWarnings = (inferred: InferredBindings, projectRoot: string, parsed?: WranglerShape): string[] => {
-    const exported = new Set(inferred.durableObjects.map((object) => object.className));
-    const warnings: string[] = [];
-
-    const hasR2Bucket = (parsed?.r2_buckets?.length ?? 0) > 0;
-    // A `DB` binding already present, or a `.global()` schema that will have one
-    // reconciled in, means D1-backed sessions are viable.
-    const hasSessionStore = (parsed?.d1_databases?.some((binding) => binding.binding === "DB") ?? false) || inferred.needsD1;
-
-    if (inferred.usesStorage && !hasR2Bucket) {
-        warnings.push(
-            "@lunora/storage is used but R2 bucket bindings have user-defined names; add an r2_buckets entry and pass env.<BINDING> to createStorage().",
-        );
-    }
-
-    if (inferred.usesAuth && !exported.has("SessionDO") && !hasSessionStore) {
-        warnings.push(
-            "@lunora/auth is used but the worker entry exports no SessionDO; sessions are D1-backed, or export SessionDO to enable DO-backed sessions.",
-        );
-    }
-
-    if (inferred.usesScheduler && !exported.has("SchedulerDO")) {
-        warnings.push("@lunora/scheduler is used but the worker entry exports no SchedulerDO; export it so the SCHEDULER binding can be provisioned.");
-    }
-
-    warnings.push(
-        ...unexportedDeclarationWarnings("container", "containers", inferred.containers),
-        ...unexportedDeclarationWarnings("workflow", "workflows", inferred.workflows),
-        ...unexportedDeclarationWarnings("agent", "agents", inferred.agents),
-    );
-
-    // Container logs are invisible without Workers observability. An absent key
-    // is reconciled to enabled below; an explicit `false` is a user billing
-    // decision we respect — but flag, since it silently swallows container logs.
-    if (inferred.containers.length > 0 && parsed?.observability?.enabled === false) {
-        warnings.push("containers are declared but observability is explicitly disabled in wrangler.jsonc — container logs will not be captured.");
-    }
-
-    if (inferred.usesPayment && !hasConfiguredPaymentProvider(projectRoot)) {
-        // Payment state rides the app's existing ShardDO via ctx.db, so there is
-        // no wrangler binding to provision — only the provider secrets, which
-        // live in .dev.vars (not wrangler.jsonc) and the scaffolder can't
-        // fabricate. Unlike the binding hints there is nothing in wrangler.jsonc
-        // to confirm against, so this reads .dev.vars directly.
-        warnings.push(`@lunora/payment is used; set one provider's secret pair in .dev.vars — ${describePaymentProviders()}.`);
-    }
-
-    warnings.push(...collectX402Warnings(inferred), ...collectHintBindingWarnings(inferred, parsed));
-
-    if (parsed !== undefined) {
-        warnings.push(...orphanedEntryWarnings(inferred, parsed));
-    }
-
-    return warnings;
 };
 
 /** Compute the lowest free `vN` `migrations` tag (`v1`, `v2`, …). */
@@ -551,7 +209,25 @@ const reconcileDurableObjects = (text: string, parsed: WranglerShape, required: 
     return { added, text: nextText };
 };
 
-/** Add the `DB` D1 binding for `.global()` schemas, if absent. Pure. */
+/**
+ * Whether reconcile may add the KV and Hyperdrive bindings: their resources are created by
+ * wrangler and `lunora deploy`, which only a Cloudflare target runs. An omitted target is
+ * the default, Cloudflare.
+ */
+const createsCloudflareResources = (target: string | undefined): boolean => target === undefined || target === "cloudflare";
+
+/** The placeholder-id advisory for a DB binding reconcile just wrote. Cloudflare only: celld projects the placeholder onto the database name. */
+const placeholderWarnings = (added: ReadonlyArray<string>, target: string | undefined): string[] =>
+    added.includes("DB (D1)") && createsCloudflareResources(target)
+        ? [`wrote a DB binding with a placeholder database_id ("${D1_PLACEHOLDER_ID}") — run \`wrangler d1 create <name>\` and replace it before deploying.`]
+        : [];
+
+/**
+ * Add the `DB` D1 binding for `.global()` schemas, if absent. Pure. Every target
+ * writes the placeholder `wrangler d1 create` replaces: the file outlives the target,
+ * and a later switch to Cloudflare must find a placeholder, not a fake id. celld
+ * derives the database's identity from the placeholder when it projects the config.
+ */
 const reconcileD1 = (text: string, parsed: WranglerShape): ReconcileStep => {
     const d1Bindings = parsed.d1_databases ?? [];
 
@@ -566,12 +242,25 @@ const reconcileD1 = (text: string, parsed: WranglerShape): ReconcileStep => {
 };
 
 /**
- * Add a self-describing single-`{ binding }` binding (`ai`, `browser`, `images`)
- * if absent. These share one shape — the binding name is the whole config, with
- * no remote id to mint — so each is written safely like `DB`, and one helper
- * covers all three. Idempotent on `parsed[key].binding`. Pure.
+ * The self-describing single-`{ binding }` sections reconcile auto-writes:
+ * wrangler key → the binding name it writes and the label it reports. They share
+ * one shape — the binding name is the whole config, with no remote id to mint —
+ * so {@link reconcileSelfDescribing} covers all of them, and its key type is
+ * this table's keys.
  */
-const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: "ai" | "browser" | "images", binding: string, label: string): ReconcileStep => {
+const SELF_DESCRIBING_BINDINGS = {
+    ai: { binding: "AI", label: "AI (Workers AI)" },
+    analytics: { binding: "ANALYTICS_SQL", label: "ANALYTICS_SQL (Analytics SQL)" },
+    browser: { binding: "BROWSER", label: "BROWSER (Browser Rendering)" },
+    images: { binding: "IMAGES", label: "IMAGES (Cloudflare Images)" },
+} as const satisfies Partial<Record<keyof WranglerShape, { binding: string; label: string }>>;
+
+/**
+ * Add one {@link SELF_DESCRIBING_BINDINGS} section if absent, written safely
+ * like `DB`. Idempotent on `parsed[key].binding`. Pure.
+ */
+const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: keyof typeof SELF_DESCRIBING_BINDINGS): ReconcileStep => {
+    const { binding, label } = SELF_DESCRIBING_BINDINGS[key];
     const current = parsed[key]?.binding;
 
     if (typeof current === "string" && current.length > 0) {
@@ -582,20 +271,225 @@ const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: "ai" 
 };
 
 /**
- * Add the `analytics_engine_datasets` binding for `@lunora/bindings/analytics` usage, if
- * absent. Self-describing: the `dataset` name is user-chosen and created lazily
- * on first write (no remote id to mint), so it auto-writes like the DO bindings.
- * The dataset defaults to the binding name on Cloudflare's side; we write it
- * explicitly to avoid drift. Idempotent on any existing `analytics_engine_datasets` entry. Pure.
+ * Whether reconcile should write the `analytics` binding: `ctx.analyticsSql` is
+ * read and the project does NOT chain `.analyticsSql(...)` onto `defineApp()`.
+ * The chain is a parsed call anywhere in the project ({@link scanAppChains}), so
+ * a comment or string naming it does not count. With the override,
+ * `ctx.analyticsSql` reads whatever it returns (typically the REST transport),
+ * so the binding would be dead config. A project with no readable `defineApp()`
+ * composition reads as not overridden: the binding is then what
+ * `ctx.analyticsSql` reads by default.
  */
-const reconcileAnalytics = (text: string, parsed: WranglerShape): ReconcileStep => {
-    if ((parsed.analytics_engine_datasets?.length ?? 0) > 0) {
+const wantsAnalyticsSqlBinding = (inferred: InferredBindings, projectRoot: string): boolean =>
+    inferred.usesAnalyticsSql && scanAppChains(projectRoot, new Set(["analyticsSql"]))?.chained.has("analyticsSql") !== true;
+
+/** Sections that are a list of entries naming their binding with `name`, not `binding`. */
+const NAME_KEYED_LIST_SECTIONS = new Set(["ratelimits", "send_email"]);
+
+/** Sections whose `bindings` list names each entry with `name`. */
+const NESTED_NAME_BINDING_SECTIONS = ["durable_objects", "logfwdr", "unsafe"] as const;
+
+/** Sections whose object KEYS are the binding names. */
+const KEYED_MAP_SECTIONS = new Set(["data_blobs", "text_blobs", "vars", "wasm_modules"]);
+
+/** A plain (non-array) object. */
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+const bindsName = (entry: unknown, field: string, name: string): boolean => isRecord(entry) && entry[field] === name;
+
+/** Whether one top-level section's own value (object, list, or keyed map) binds `name`. */
+const sectionBindsName = (section: string, value: unknown, name: string): boolean => {
+    if (KEYED_MAP_SECTIONS.has(section)) {
+        return isRecord(value) && Object.hasOwn(value, name);
+    }
+
+    const field = NAME_KEYED_LIST_SECTIONS.has(section) ? "name" : "binding";
+
+    return Array.isArray(value) ? value.some((entry) => bindsName(entry, field, name)) : bindsName(value, "binding", name);
+};
+
+/**
+ * Where `name` is already bound in the top-level config, as `section` (or
+ * `section.sub`), else `undefined`. Covers every entry shape wrangler binds a
+ * name with: a `{ binding }` object (`ai`, `browser`, …), a list of
+ * `{ binding }` entries (`kv_namespaces`, `services`, `ai_search`, …), a list
+ * of `{ name }` entries (`ratelimits`, `send_email`), a `bindings[].name` list
+ * (`durable_objects`, `unsafe`, `logfwdr`), `queues.producers[].binding`, the
+ * keys of `vars` / `wasm_modules` / `text_blobs` / `data_blobs`, and the
+ * declared `secrets.required`. `env.*` blocks are skipped: they are separate
+ * workers' configs as far as name clashes go.
+ */
+const bindingNameOwner = (parsed: WranglerShape, name: string): string | undefined => {
+    const config = parsed as Record<string, unknown>;
+    const owner = Object.entries(config).find(([section, value]) => section !== "env" && sectionBindsName(section, value, name));
+
+    if (owner !== undefined) {
+        return owner[0];
+    }
+
+    for (const section of NESTED_NAME_BINDING_SECTIONS) {
+        const block = config[section];
+
+        if (isRecord(block) && Array.isArray(block.bindings) && block.bindings.some((entry) => bindsName(entry, "name", name))) {
+            return `${section}.bindings`;
+        }
+    }
+
+    if (parsed.queues?.producers?.some((entry) => entry?.binding === name) === true) {
+        return "queues.producers";
+    }
+
+    const required = parsed.secrets?.required;
+
+    if (Array.isArray(required) && required.includes(name)) {
+        return "secrets.required";
+    }
+
+    return undefined;
+};
+
+/** The warning for a binding reconcile would add under a name another section already uses. */
+const nameTakenWarning = (key: string, name: string, owner: string): string =>
+    `${key}: not adding "${name}" — the name is already bound by \`${owner}\` in wrangler.jsonc. Add a ${key} entry under another binding name and point the matching \`defineApp()\` override at it.`;
+
+/**
+ * Add a `HYPERDRIVE` binding when the project binds none, carrying the placeholder id. It makes
+ * `ctx.sql` work in dev at once (an embedded Postgres), and `lunora deploy` creates the
+ * Hyperdrive config from the connection string it is given. Pure.
+ */
+const reconcileHyperdrive = (text: string, parsed: WranglerShape, target: string | undefined): ReconcileStep => {
+    if (!createsCloudflareResources(target) || (parsed.hyperdrive?.length ?? 0) > 0) {
         return { added: [], text };
     }
 
-    const nextDatasets = [{ binding: "ANALYTICS", dataset: "ANALYTICS" }];
+    const owner = bindingNameOwner(parsed, "HYPERDRIVE");
 
-    return { added: ["ANALYTICS (Analytics Engine)"], text: applyModify(text, ["analytics_engine_datasets"], nextDatasets) };
+    if (owner !== undefined) {
+        return { added: [], text, warnings: [nameTakenWarning("hyperdrive", "HYPERDRIVE", owner)] };
+    }
+
+    return {
+        added: ["HYPERDRIVE (Hyperdrive, created on deploy)"],
+        text: applyModify(text, ["hyperdrive"], [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }]),
+    };
+};
+
+/** The targets that serve a `KV` namespace binding; the others have no KV for `ctx.kv` to bind. */
+const KV_TARGETS: ReadonlySet<string> = new Set(["celld", "cloudflare"]);
+
+/**
+ * Add an id-less `KV` namespace binding when the project binds none. Wrangler
+ * creates the namespace on the first deploy and writes its id back, so nothing
+ * here mints it. celld needs an id, but its projection derives one
+ * (`projectCelldConfig`), so the config never carries a celld-only id into a
+ * later Cloudflare deploy. A project that already binds a namespace (under any
+ * name) is left alone: `createKv()` is handed whichever binding the app chose. Not run for a
+ * jurisdiction-pinned schema: a namespace wrangler creates is unrestricted and
+ * cannot be moved, so that app creates it itself. Pure.
+ */
+const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: InferredBindings["jurisdiction"], target: string | undefined): ReconcileStep => {
+    if ((target !== undefined && !KV_TARGETS.has(target)) || jurisdiction !== undefined || (parsed.kv_namespaces?.length ?? 0) > 0) {
+        return { added: [], text };
+    }
+
+    const owner = bindingNameOwner(parsed, "KV");
+
+    if (owner !== undefined) {
+        return { added: [], text, warnings: [nameTakenWarning("kv_namespaces", "KV", owner)] };
+    }
+
+    // celld creates nothing on deploy: the label names the id its projection derives.
+    const label = target === "celld" ? `KV (Workers KV, celld namespace ${celldBindingId(parsed.name, "KV")})` : "KV (Workers KV, created on deploy)";
+
+    return { added: [label], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV" }]) };
+};
+
+/**
+ * Add the `ARTIFACTS` binding when the project binds no namespace, naming the namespace after the
+ * Worker. The namespace itself is created on first use. A logged-out dev session leaves the binding
+ * out, since Artifacts only runs remotely. Not run for a jurisdiction-pinned schema: the first
+ * `create()` against a missing namespace makes it unrestricted and its jurisdiction cannot change, and
+ * a logged-in dev session would make that call, so that app creates the namespace itself (the hint
+ * says how) and adds the binding, and `lunora deploy` then checks it. Pure.
+ */
+const reconcileArtifacts = (text: string, parsed: WranglerShape, jurisdiction: InferredBindings["jurisdiction"], target: string | undefined): ReconcileStep => {
+    if (!createsCloudflareResources(target) || jurisdiction !== undefined || (parsed.artifacts?.length ?? 0) > 0) {
+        return { added: [], text };
+    }
+
+    const owner = bindingNameOwner(parsed, "ARTIFACTS");
+
+    if (owner !== undefined) {
+        return { added: [], text, warnings: [nameTakenWarning("artifacts", "ARTIFACTS", owner)] };
+    }
+
+    const namespace = typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : "lunora";
+
+    return { added: ["ARTIFACTS (Cloudflare Artifacts)"], text: applyModify(text, ["artifacts"], [{ binding: "ARTIFACTS", namespace }]) };
+};
+
+/**
+ * The array twin of {@link reconcileSelfDescribing}: add a self-describing
+ * binding whose wrangler key holds a LIST, as a one-entry array, when the key
+ * has no entry at all. Idempotent on ANY existing entry — an app that binds its
+ * own resource under another name keeps it (pointing the `defineApp()` override
+ * at it), and a second, unused binding is never added beside it. Pure.
+ *
+ * Skipped, with a warning instead, when the entry's binding name is already
+ * taken by another section (`ANALYTICS` as a KV namespace, `AI_SEARCH` as an
+ * `ai_search` instance, …): writing it would make wrangler reject the config
+ * with "assigned to multiple bindings".
+ *
+ * - `analytics_engine_datasets` (`@lunora/bindings/analytics` usage) is written
+ * as `{ binding: "ANALYTICS", dataset: "ANALYTICS" }`: the dataset is created
+ * lazily on first write (no remote id to mint), and defaults to the binding name
+ * on Cloudflare's side — written explicitly to avoid drift.
+ * - `ai_search_namespaces` (`ctx.aiSearch` reads) is written as
+ * `{ binding: "AI_SEARCH", namespace: "default" }`: `default` exists on every
+ * account and wrangler creates a missing namespace on deploy. No `remote: true`
+ * either — wrangler rates the binding "never has a local simulator" and proxies
+ * it remotely in plain `wrangler dev`, exactly like `ai`.
+ */
+const reconcileSelfDescribingArray = (
+    text: string,
+    parsed: WranglerShape,
+    key: "ai_search_namespaces" | "analytics_engine_datasets",
+    entry: Readonly<Record<string, string>> & { binding: string },
+    label: string,
+): ReconcileStep => {
+    if ((parsed[key]?.length ?? 0) > 0) {
+        return { added: [], text };
+    }
+
+    const owner = bindingNameOwner(parsed, entry.binding);
+
+    if (owner !== undefined) {
+        return {
+            added: [],
+            text,
+            warnings: [
+                `${key}: not adding ${JSON.stringify(entry)} — the name "${entry.binding}" is already bound by \`${owner}\` in wrangler.jsonc. Add a ${key} entry under another binding name and point the matching \`defineApp()\` override at it.`,
+            ],
+        };
+    }
+
+    return { added: [label], text: applyModify(text, [key], [entry]) };
+};
+
+/**
+ * Add the `worker_loaders` binding `jsCodeTool` reads (`LOADER`), if absent.
+ * Self-describing — the binding name is the whole entry — so it auto-writes.
+ * Idempotent on any existing `LOADER` entry; another loader binding is left
+ * alone and `LOADER` added beside it. Pure.
+ */
+const reconcileWorkerLoaders = (text: string, parsed: WranglerShape): ReconcileStep => {
+    const loaders = parsed.worker_loaders ?? [];
+
+    if (loaders.some((loader) => loader.binding === "LOADER")) {
+        return { added: [], text };
+    }
+
+    return { added: ["LOADER (Worker Loader)"], text: applyModify(text, ["worker_loaders"], [...loaders, { binding: "LOADER" }]) };
 };
 
 /** Map a camelCase custom instance type onto wrangler's snake_case fields. Pure. */
@@ -622,14 +516,16 @@ const wranglerInstanceType = (instanceType: NonNullable<InferredContainer["insta
     return custom;
 };
 
-/** The wrangler `containers[].image` for an inferred container. */
-const imageRefFor = (container: InferredContainer): string => {
-    if (container.image.kind === "dockerfile") {
-        return container.image.dockerfilePath;
+/** The wrangler `containers[].image` for an inferred default-policy container. */
+const imageRefFor = (container: DefaultScheduledContainerIR): string => {
+    const { image } = container;
+
+    if (image.kind === "dockerfile") {
+        return image.dockerfilePath;
     }
 
-    if (container.image.kind === "registry") {
-        return container.image.reference;
+    if (image.kind === "registry") {
+        return image.reference;
     }
 
     // A Railpack `{ build }` source: `lunora deploy` builds + pushes this local
@@ -638,19 +534,53 @@ const imageRefFor = (container: InferredContainer): string => {
     return containerBuildTag(container.exportName);
 };
 
+/**
+ * Render a `durable_object`-scheduled container's `containers[]` entry: the
+ * policy plus its named images (wrangler `dockerfile` / `build_context` /
+ * `build_vars`, or a registry `image`). The instance size is chosen at start,
+ * and the policy takes no `max_instances` or rollout, so none are written.
+ */
+const durableObjectContainerEntryFor = (container: DurableObjectScheduledContainerIR): Record<string, unknown> => {
+    const images: Record<string, Record<string, unknown>> = {};
+
+    for (const [name, image] of Object.entries(container.images ?? {})) {
+        images[name] =
+            image.kind === "registry"
+                ? { image: image.reference }
+                : {
+                      build_context: image.buildContext,
+                      dockerfile: image.dockerfilePath,
+                      ...(container.buildArgs === undefined ? {} : { build_vars: container.buildArgs }),
+                  };
+    }
+
+    return {
+        class_name: container.className,
+        scheduling_policy: "durable_object",
+        ...(Object.keys(images).length > 0 ? { images } : {}),
+        ...(container.name === undefined ? {} : { name: container.name }),
+    };
+};
+
 /** Render one wrangler `containers[]` entry from an inferred container. Pure. */
 const containerEntryFor = (container: InferredContainer): Record<string, unknown> => {
+    if (container.schedulingPolicy === "durable_object") {
+        return durableObjectContainerEntryFor(container);
+    }
+
+    const { image } = container;
+
     const entry: Record<string, unknown> = {
         class_name: container.className,
         image: imageRefFor(container),
     };
 
-    if (container.image.kind === "dockerfile") {
-        entry.image_build_context = container.image.buildContext;
+    if (image.kind === "dockerfile") {
+        entry.image_build_context = image.buildContext;
     }
 
     // Build args (image_vars) only make sense for an image lunora builds.
-    if (container.buildArgs !== undefined && container.image.kind !== "registry") {
+    if (container.buildArgs !== undefined && image.kind !== "registry") {
         entry.image_vars = container.buildArgs;
     }
 
@@ -687,21 +617,49 @@ const reconcileContainers = (text: string, parsed: WranglerShape, containers: Re
     const existing = parsed.containers ?? [];
     const existingClasses = new Set(existing.map((entry) => entry.class_name));
     const missing = containers.filter((container) => !existingClasses.has(container.className));
+    // Append first, retune second, as for workflows: the append rewrites the
+    // array from `parsed`, and never moves an existing entry's index.
+    let nextText = missing.length === 0 ? text : applyModify(text, ["containers"], [...existing, ...missing.map((container) => containerEntryFor(container))]);
+    const updated: string[] = [];
+    const warnings: string[] = [];
 
-    if (missing.length === 0) {
-        return { added: [], text };
+    for (const [index, entry] of existing.entries()) {
+        const container = containers.find((candidate) => candidate.className === entry.class_name);
+
+        if (container === undefined) {
+            continue;
+        }
+
+        const declared = container.schedulingPolicy ?? "default";
+
+        // The policy is immutable on Cloudflare — switching means a new container
+        // application — so it is flagged, never rewritten in place.
+        if ((entry.scheduling_policy ?? "default") !== declared) {
+            warnings.push(
+                `containers/${container.className} has scheduling_policy "${entry.scheduling_policy ?? "default"}" in wrangler.jsonc but defineContainer "${container.exportName}" declares "${declared}" — the policy is immutable, so replace the entry (and its container application) by hand.`,
+            );
+
+            continue;
+        }
+
+        // Named images are the part of a `durable_object` entry the app keeps
+        // editing, and a missing one fails `start({ image })` at runtime.
+        const images = container.schedulingPolicy === "durable_object" ? durableObjectContainerEntryFor(container).images : undefined;
+
+        if (images !== undefined && JSON.stringify(entry.images) !== JSON.stringify(images)) {
+            nextText = applyModify(nextText, ["containers", index, "images"], images);
+            updated.push(`containers/${container.className}.images`);
+        }
     }
 
-    const nextText = applyModify(text, ["containers"], [...existing, ...missing.map((container) => containerEntryFor(container))]);
-
-    return { added: missing.map((container) => `containers/${container.className}`), text: nextText };
+    return { added: missing.map((container) => `containers/${container.className}`), text: nextText, updated, warnings };
 };
 
 /**
  * Switch Workers Observability on when the key is entirely absent, so every
  * Lunora worker ships with Workers Logs + Traces enabled by default (not just
- * container apps). `head_sampling_rate: 1` keeps all logs initially — a sensible
- * default users can dial down. An explicit `enabled: false` is a user billing
+ * container apps), writing {@link DEFAULT_OBSERVABILITY}: `head_sampling_rate: 1`
+ * keeps all logs initially — a sensible default users can dial down. An explicit `enabled: false` is a user billing
  * decision and is left untouched (`collectWarnings` flags the container case).
  * Pure.
  */
@@ -710,135 +668,224 @@ const reconcileObservability = (text: string, parsed: WranglerShape): ReconcileS
         return { added: [], text };
     }
 
-    const nextText = applyModify(text, ["observability"], { enabled: true, head_sampling_rate: 1 });
+    const nextText = applyModify(text, ["observability"], { ...DEFAULT_OBSERVABILITY });
 
     return { added: ["observability"], text: nextText };
 };
 
 /**
- * Render one wrangler `workflows[]` entry from an inferred workflow or agent —
- * an agent compiles onto a Cloudflare Workflow, so its wrangler footprint is
- * identical: a `{ binding, class_name, name }` entry in the same array. Pure.
+ * Upload source maps on deploy when the key is entirely absent, so production
+ * stack traces and on-demand profiles (`lunora cloudflare profile`) show source
+ * function names instead of mangled bundle names. Cloudflare retrieves the map
+ * after the invocation completes, so it adds nothing to request CPU; it only
+ * runs at `wrangler deploy` time. An explicit `false` is left untouched.
+ * Cloudflare-only: celld and Node ignore the key. Pure.
  */
-const workflowEntryFor = (workflow: InferredAgent | InferredWorkflow): Record<string, unknown> => {
-    return { binding: workflow.bindingName, class_name: workflow.className, name: workflow.name };
+const reconcileUploadSourceMaps = (text: string, parsed: WranglerShape): ReconcileStep => {
+    if (parsed.upload_source_maps !== undefined) {
+        return { added: [], text };
+    }
+
+    return { added: ["upload_source_maps"], text: applyModify(text, ["upload_source_maps"], true) };
 };
 
 /**
- * Add any missing `workflows[]` entries (matched by `class_name`) from both
- * `defineWorkflow` and `defineAgent` exports — an agent compiles onto a
- * Cloudflare Workflow, so both land in the SAME `workflows[]` array, and one
- * step owns that key (the reconcile pipeline's disjoint-key invariant forbids a
- * second step rewriting `workflows[]` off the now-stale `parsed`). Workflows and
- * agents are NOT Durable Objects, so — unlike containers — this writes ONLY the
- * `workflows[]` array: no `durable_objects` binding, no `migrations` class, no
- * `observability` toggle.
+ * The oldest toolchain that declares and runs Workflows in `exports`: wrangler
+ * 4.142.0 and `@cloudflare/vite-plugin` 1.61.0. An older one ignores the field,
+ * so moving a `workflows[]` binding into `exports` under it unregisters the
+ * workflow.
+ */
+const WORKFLOW_EXPORTS_TOOLCHAIN: ReadonlyArray<{ minimum: readonly [number, number]; name: string }> = [
+    { minimum: [4, 142], name: "wrangler" },
+    { minimum: [1, 61], name: "@cloudflare/vite-plugin" },
+];
+
+/** The `pnpm add -D` arguments that lift every package in {@link WORKFLOW_EXPORTS_TOOLCHAIN} past its floor. */
+const WORKFLOW_EXPORTS_UPGRADE: string = WORKFLOW_EXPORTS_TOOLCHAIN.map(({ minimum, name }) => `${name}@^${minimum.join(".")}.0`).join(" ");
+
+/** The installed `major.minor` of `name` as resolved from the project, or `undefined` when it is not installed. */
+const installedVersion = (projectRoot: string, name: string): readonly [number, number] | undefined => {
+    try {
+        const manifest = createRequire(join(projectRoot, "package.json")).resolve(`${name}/package.json`);
+        const [major = 0, minor = 0] = String((readJsonSync(manifest) as { version?: unknown }).version)
+            .split(".")
+            .map(Number);
+
+        return [major, minor];
+    } catch {
+        return undefined;
+    }
+};
+
+/** A warning naming each installed toolchain package too old for workflow `exports`, or `undefined` when none is. */
+const workflowExportsToolchainGap = (projectRoot: string): string | undefined => {
+    const stale = WORKFLOW_EXPORTS_TOOLCHAIN.flatMap(({ minimum, name }) => {
+        const version = installedVersion(projectRoot, name);
+
+        return version !== undefined && (version[0] < minimum[0] || (version[0] === minimum[0] && version[1] < minimum[1]))
+            ? [`${name} ${version.join(".")} (needs >= ${minimum.join(".")})`]
+            : [];
+    });
+
+    return stale.length === 0
+        ? undefined
+        : `workflows are declared in wrangler \`exports\`, which ${stale.join(" and ")} cannot run — reconcile left workflows[] untouched. Upgrade (\`pnpm add -D ${WORKFLOW_EXPORTS_UPGRADE}\`) and re-run.`;
+};
+
+/**
+ * Environment blocks are not rewritten (no reconcile step writes into them), so
+ * a `workflows[]` in one keeps bindings the runtime no longer reads — named here.
+ */
+const environmentWorkflowWarnings = (parsed: WranglerShape): string[] =>
+    Object.entries(parsed.env ?? {}).flatMap(([environment, block]) =>
+        Array.isArray((block as { workflows?: unknown } | null)?.workflows)
+            ? [
+                  `env.${environment}.workflows declares workflow bindings, but Lunora now declares workflows in \`exports\` and resolves them on ctx.exports — move them to that environment's own \`exports\` by hand.`,
+              ]
+            : [],
+    );
+
+/**
+ * Bring each EXISTING `exports.<Class>` workflow entry a `defineWorkflow` export
+ * generates in line with the settings it declares: a declared leaf that differs
+ * is written at its own path (so comments elsewhere in the entry survive). A
+ * leaf the export does not declare but the entry carries is left alone and
+ * reported: without an ownership record, a setting since removed from
+ * `defineWorkflow` and one set by hand look the same, and deleting the second is
+ * the worse mistake — but a stale `schedules` keeps starting instances, so it is
+ * named.
+ */
+const retuneWorkflowExports = (
+    text: string,
+    exported: NonNullable<WranglerShape["exports"]>,
+    workflows: ReadonlyArray<InferredWorkflow>,
+): { text: string; updated: string[]; warnings: string[] } => {
+    let nextText = text;
+    const updated: string[] = [];
+    const warnings: string[] = [];
+
+    for (const workflow of workflows) {
+        const entry = exported[workflow.className];
+
+        if (entry?.type !== "workflow") {
+            continue;
+        }
+
+        for (const { of, path } of WORKFLOW_SETTINGS) {
+            const value = of(workflow);
+            const current = settingLeaf(entry, path);
+            const label = `exports/${workflow.className}.${path.join(".")}`;
+
+            if (value === undefined) {
+                if (current !== undefined) {
+                    warnings.push(
+                        `${label} is set in wrangler.jsonc but defineWorkflow "${workflow.exportName}" does not declare it — reconcile leaves it in place. Remove it by hand if it was dropped from the definition.`,
+                    );
+                }
+
+                continue;
+            }
+
+            if (JSON.stringify(current) !== JSON.stringify(value)) {
+                nextText = applyModify(nextText, ["exports", workflow.className, ...path], value);
+                updated.push(label);
+            }
+        }
+    }
+
+    return { text: nextText, updated, warnings };
+};
+
+/**
+ * Declare every `defineWorkflow` and `defineAgent` export as a wrangler
+ * `exports.<Class>` workflow (`{ type: "workflow", name, …settings }`), which the
+ * runtime reaches through `ctx.exports.<Class>` — no `workflows[]` binding. One
+ * step owns both keys (the reconcile pipeline's disjoint-key invariant): it
+ * adds the missing export entries (matched by class name), and MOVES a
+ * `workflows[]` binding for a declared class that this worker defines (no
+ * `script_name`) into its export. Cloudflare shares instances between a binding
+ * and an export of the same `name`, so the move keeps every running instance.
+ * Workflows and agents are NOT Durable Objects, so nothing else is written. An
+ * existing export has its declared settings brought in line by
+ * {@link retuneWorkflowExports}.
  *
- * Add-only: an entry whose `class_name` no declaration generates is left in
- * place and reported by {@link orphanedEntryWarnings} instead — see there for
- * why removal needs ownership this file cannot establish. Pure.
+ * Add-only for classes nothing declares: an entry whose class no declaration
+ * generates is left in place and reported by `orphanedEntryWarnings`
+ * (`reconcile-warnings.ts`) instead — see there for why removal needs ownership
+ * this file cannot establish. Pure.
  */
 const reconcileWorkflows = (
     text: string,
     parsed: WranglerShape,
     workflows: ReadonlyArray<InferredWorkflow>,
-    agents: ReadonlyArray<InferredAgent> = [],
+    agents: ReadonlyArray<InferredAgent>,
+    toolchainGap: string | undefined,
 ): ReconcileStep => {
-    const existing = parsed.workflows ?? [];
-    const existingClasses = new Set(existing.map((entry) => entry.class_name));
-    const missingWorkflows = workflows.filter((workflow) => !existingClasses.has(workflow.className));
-    const missingAgents = agents.filter((agent) => !existingClasses.has(agent.className));
-
-    if (missingWorkflows.length === 0 && missingAgents.length === 0) {
-        return { added: [], text };
+    if (toolchainGap !== undefined) {
+        return { added: [], text, warnings: [toolchainGap] };
     }
 
-    const nextText = applyModify(
-        text,
-        ["workflows"],
-        [...existing, ...missingWorkflows.map((workflow) => workflowEntryFor(workflow)), ...missingAgents.map((agent) => workflowEntryFor(agent))],
-    );
+    // Agents declare no deploy settings; only a `defineWorkflow` contributes any.
+    const declared: ReadonlyArray<{ settings: Record<string, unknown>; workflow: InferredAgent | InferredWorkflow }> = [
+        ...workflows.map((workflow) => {
+            return { settings: workflowSettingsFor(workflow), workflow };
+        }),
+        ...agents.map((agent) => {
+            return { settings: {}, workflow: agent };
+        }),
+    ];
+    const declaredClasses = new Set(declared.map(({ workflow }) => workflow.className));
+    const bindings = parsed.workflows ?? [];
+    const moved = bindings.filter((entry) => entry.script_name === undefined && entry.class_name !== undefined && declaredClasses.has(entry.class_name));
+    const exported = parsed.exports ?? {};
+    const added: string[] = [];
+    const updated: string[] = [];
+    const warnings: string[] = [];
+    let nextText = text;
 
-    return {
-        added: [...missingWorkflows.map((workflow) => `workflows/${workflow.className}`), ...missingAgents.map((agent) => `workflows/${agent.className}`)],
-        text: nextText,
-    };
-};
+    for (const { settings, workflow } of declared) {
+        if (exported[workflow.className] !== undefined && exported[workflow.className] !== null) {
+            continue;
+        }
 
-/**
- * Add any missing `queues.producers[]` (matched by binding) and
- * `queues.consumers[]` (matched by queue name) from the declared `defineQueue`
- * exports. Every queue gets a producer; push queues add a worker consumer, pull
- * queues add a `type: "http_pull"` consumer. Like workflows, queues are NOT
- * Durable Objects — this writes only the `queues` block.
- *
- * Add-only: a producer or consumer no `defineQueue` export declares is left in
- * place and reported by {@link orphanedEntryWarnings} instead — see there for
- * why removal needs ownership this file cannot establish. Pure.
- */
-const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyArray<InferredQueue>): ReconcileStep => {
-    const existing = parsed.queues ?? {};
-    const existingProducers = existing.producers ?? [];
-    const existingConsumers = existing.consumers ?? [];
+        const binding = moved.find((entry) => entry.class_name === workflow.className);
+        // Settings set by hand on the binding move with it; the declaration's own win.
+        const carried = Object.fromEntries(
+            WORKFLOW_SETTING_KEYS.flatMap((key) => {
+                const value = settingLeaf(binding, [key]);
 
-    const haveProducer = new Set(existingProducers.map((entry) => entry.binding));
-    const haveConsumer = new Set(existingConsumers.map((entry) => entry.queue));
+                return value === undefined ? [] : [[key, value]];
+            }),
+        );
+        // A moved binding keeps its DEPLOYED name: Cloudflare keys a workflow's
+        // instances by name, so taking the declaration's instead would start a
+        // new, empty workflow and orphan every running instance.
+        const name = binding?.name ?? workflow.name;
 
-    const missingProducers = queues.filter((queue) => !haveProducer.has(queue.bindingName));
-    const missingConsumers = queues.filter((queue) => !haveConsumer.has(queue.name));
+        if (binding?.name !== undefined && binding.name !== workflow.name) {
+            warnings.push(
+                `workflows/${workflow.className} is deployed as "${binding.name}" but declared as "${workflow.name}" — its export keeps "${binding.name}" so running instances survive. Change the declaration to match, or rename deliberately (it starts a new, empty workflow).`,
+            );
+        }
 
-    if (missingProducers.length === 0 && missingConsumers.length === 0) {
-        return { added: [], text };
+        nextText = applyModify(nextText, ["exports", workflow.className], { type: "workflow", ...carried, ...settings, name });
+        (binding === undefined ? added : updated).push(`exports/${workflow.className}`);
     }
 
-    const nextProducers = [
-        ...existingProducers,
-        ...missingProducers.map((queue) => {
-            return { binding: queue.bindingName, queue: queue.name };
-        }),
-    ];
-    const nextConsumers = [
-        ...existingConsumers,
-        ...missingConsumers.map((queue) => {
-            const consumer: Record<string, unknown> = { queue: queue.name };
+    // Drop the moved bindings last: rewriting the array from `parsed` never
+    // touches `exports`, and an emptied array goes rather than lingering as `[]`.
+    if (moved.length > 0) {
+        const remaining = bindings.filter((entry) => !moved.includes(entry));
 
-            if (queue.mode === "pull") {
-                consumer.type = "http_pull";
-            }
+        nextText = applyModify(nextText, ["workflows"], remaining.length === 0 ? undefined : remaining);
+        updated.push(...moved.map((entry) => `workflows/${String(entry.class_name)} → exports`));
+    }
 
-            if (queue.tuning.maxBatchSize !== undefined) {
-                consumer.max_batch_size = queue.tuning.maxBatchSize;
-            }
+    warnings.push(...environmentWorkflowWarnings(parsed));
 
-            if (queue.tuning.maxBatchTimeout !== undefined) {
-                consumer.max_batch_timeout = queue.tuning.maxBatchTimeout;
-            }
+    const retune = retuneWorkflowExports(nextText, exported, workflows);
 
-            if (queue.tuning.maxRetries !== undefined) {
-                consumer.max_retries = queue.tuning.maxRetries;
-            }
-
-            if (queue.tuning.deadLetterQueue !== undefined) {
-                consumer.dead_letter_queue = queue.tuning.deadLetterQueue;
-            }
-
-            if (queue.tuning.retryDelay !== undefined) {
-                consumer.retry_delay = queue.tuning.retryDelay;
-            }
-
-            return consumer;
-        }),
-    ];
-
-    const nextText = applyModify(text, ["queues"], { consumers: nextConsumers, producers: nextProducers });
-
-    return {
-        added: [
-            ...missingProducers.map((queue) => `queues.producers/${queue.bindingName}`),
-            ...missingConsumers.map((queue) => `queues.consumers/${queue.name}`),
-        ],
-        text: nextText,
-    };
+    return { added, text: retune.text, updated: [...updated, ...retune.updated], warnings: [...warnings, ...retune.warnings] };
 };
 
 /**
@@ -847,11 +894,13 @@ const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyAr
  * Writes only when something is missing; returns `changed: false` when the
  * config already satisfies the inferred needs.
  *
- * `environment`, when passed, does NOT change where this writes — every step
- * below still only touches the TOP-LEVEL config; wrangler's `env.<name>`
- * blocks have no auto-provisioning path today. It is used only to emit an
+ * `environment`, when passed, does NOT change where this provisions — every
+ * step below still only ADDS to the TOP-LEVEL config; wrangler's `env.<name>`
+ * blocks have no auto-provisioning path today. The one write into the block is
+ * {@link reconcileEnvQueues}, which retunes queue consumers the block already
+ * declares and adds nothing. Otherwise it is used only to emit an
  * advisory warning, because bindings (`durable_objects`, `d1_databases`, …)
- * are non-inheritable (see `wrangler-validator.ts`'s `NON_INHERITABLE_KEYS`):
+ * are non-inheritable (see `wrangler-environment.ts`'s `NON_INHERITABLE_KEYS`):
  * a `--env production` deploy needs its OWN copy of each one, and silently
  * writing only to the top level would leave that gap unmentioned. Extending
  * the JSONC writer itself to target `env.<name>.*` idempotently for every
@@ -860,14 +909,18 @@ const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyAr
  * attempt — `lunora deploy --env <name>` now VALIDATES the env-scoped view
  * (closing the reported gap), it just doesn't yet auto-provision it.
  */
-const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindings, environment?: string): ReconcileBindingsResult => {
+const reconcileWranglerBindings = (
+    projectRoot: string,
+    inferred: InferredBindings,
+    { environment, target }: { environment?: string; target?: string } = {},
+): ReconcileBindingsResult => {
     const wranglerPath = findWranglerFile(projectRoot);
 
     const exportGaps = collectExportGaps(inferred);
 
     if (!wranglerPath) {
         // No config to inspect — emit the raw capability hints unfiltered.
-        return { added: [], changed: false, exportGaps, reason: "wrangler.jsonc not found", warnings: collectWarnings(inferred, projectRoot) };
+        return { added: [], changed: false, exportGaps, reason: "wrangler.jsonc not found", updated: [], warnings: collectWarnings(inferred, projectRoot) };
     }
 
     const { parsed, text: original } = readWranglerJsonc<WranglerShape>(wranglerPath);
@@ -878,13 +931,14 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
             changed: false,
             exportGaps,
             reason: `failed to parse ${wranglerPath} as JSONC`,
+            updated: [],
             warnings: collectWarnings(inferred, projectRoot),
             wranglerPath,
         };
     }
 
     // Hints are filtered against the existing config so a wired-up project is quiet.
-    const warnings = collectWarnings(inferred, projectRoot, parsed);
+    const warnings = collectWarnings(inferred, projectRoot, parsed, target);
 
     // See the doc comment above: auto-provisioning has no env-scoped write
     // path, so a `--env <name>` deploy is told plainly rather than silently
@@ -894,7 +948,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
 
         warnings.push(
             envBlockDeclared
-                ? `auto-provisioned bindings are written to the top level of wrangler.jsonc only — "env.${environment}" has its own (non-inheritable) bindings and must be reconciled by hand; \`lunora deploy --env ${environment}\` now validates them, so a gap here will be reported at deploy time.`
+                ? `auto-provisioned bindings are written to the top level of wrangler.jsonc only (queue consumers "env.${environment}" already declares are retuned, nothing is added) — "env.${environment}" has its own (non-inheritable) bindings and must be reconciled by hand; \`lunora deploy --env ${environment}\` now validates them, so a gap here will be reported at deploy time.`
                 : `--env "${environment}" was requested but wrangler.jsonc declares no "env.${environment}" block — auto-provisioned bindings are written to the top level only and will not apply to that environment.`,
         );
     }
@@ -909,7 +963,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // `durable_objects` binding + `new_sqlite_classes` migration, reconciled
     // through the same `reconcileDurableObjects` step as the built-ins and
     // containers. Non-voice agents add nothing here (they only touch
-    // `workflows[]` via `exportedAgents`).
+    // `exports` via `exportedAgents`).
     const voiceAgents = inferred.agents.filter(
         (agent): agent is InferredAgent & { voiceBindingName: string; voiceClassName: string } =>
             agent.exported && agent.voice === true && agent.voiceBindingName !== undefined && agent.voiceClassName !== undefined,
@@ -926,42 +980,131 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
 
     // Only exported workflow classes are provisionable — wrangler rejects a
     // class_name the worker doesn't export. Workflows are NOT Durable Objects,
-    // so they get their own `workflows[]` step and never touch durable_objects
+    // so they get their own `exports` step and never touch durable_objects
     // / migrations (no `requiredDurableObjects` entry, unlike containers).
     const exportedWorkflows = inferred.workflows.filter((workflow) => workflow.exported);
     // Agents compile onto Cloudflare Workflows, so their exported agent
-    // WorkflowEntrypoint classes reconcile into the SAME `workflows[]` array
-    // (via the single `reconcileWorkflows` step below — see its doc for why one
-    // step must own that key). Same export gate as workflows.
+    // WorkflowEntrypoint classes reconcile into the SAME `exports` map (via the
+    // single `reconcileWorkflows` step below — see its doc for why one step must
+    // own that key). Same export gate as workflows.
     const exportedAgents = inferred.agents.filter((agent) => agent.exported);
+
+    // Which queue consumer fields earlier passes wrote, so one taken out of
+    // `defineQueue` can be taken back out of the config (see retuneConsumers).
+    // The queue steps below fill `ownedScopes` with what THIS pass owns.
+    const manifest = readManifest(projectRoot);
+    const ownedTuning = readOwnedTuning(manifest, warnings);
+    const ownedScopes: Record<string, OwnedTuning> = {};
+    const ownedServicesRecord = readOwnedServices(manifest);
+    let ownedServices: OwnedServices | undefined;
 
     // The reconcile pipeline: each enabled step rewrites `text` but reads the
     // original `parsed`. This is only safe because the steps touch disjoint
     // top-level keys (durable_objects / migrations vs d1_databases vs ai vs
-    // browser vs images vs analytics_engine_datasets vs containers /
-    // observability vs workflows). A future step that depends on a key an
+    // ai_search_namespaces vs analytics vs browser vs images vs analytics_engine_datasets vs worker_loaders vs containers /
+    // observability vs exports + workflows vs queues vs services + env.*.services;
+    // the env queue step writes only env.<name>.queues). A future step that depends on a key an
     // earlier step mutated must re-parse rather than reuse `parsed`.
-    // Self-describing bindings (ai/browser/images/analytics) auto-write here;
-    // their hint-only siblings (kv/hyperdrive/pipelines) carry an un-mintable
-    // remote id and only surface as warnings (see collectWarnings).
+    // Self-describing bindings (SELF_DESCRIBING_BINDINGS, plus the array-shaped
+    // ai_search_namespaces and analytics_engine_datasets) auto-write here;
+    // kv is written without a remote id (wrangler creates the namespace on
+    // deploy; the celld projection derives one), hyperdrive with a
+    // placeholder id that deploy replaces once it has a connection string, and
+    // artifacts with the Worker's name as its namespace; hyperdrive and artifacts
+    // only for a Cloudflare target. Pipelines stays a hint: it carries an
+    // un-mintable remote resource.
     const pipeline: ReadonlyArray<{ enabled: boolean; run: (text: string) => ReconcileStep }> = [
         { enabled: true, run: (text) => reconcileDurableObjects(text, parsed, requiredDurableObjects) },
         { enabled: inferred.needsD1, run: (text) => reconcileD1(text, parsed) },
-        { enabled: inferred.usesAi, run: (text) => reconcileSelfDescribing(text, parsed, "ai", "AI", "AI (Workers AI)") },
-        { enabled: inferred.usesBrowser, run: (text) => reconcileSelfDescribing(text, parsed, "browser", "BROWSER", "BROWSER (Browser Rendering)") },
-        { enabled: inferred.usesImages, run: (text) => reconcileSelfDescribing(text, parsed, "images", "IMAGES", "IMAGES (Cloudflare Images)") },
-        { enabled: inferred.usesAnalytics, run: (text) => reconcileAnalytics(text, parsed) },
+        { enabled: inferred.usesKv, run: (text) => reconcileKv(text, parsed, inferred.jurisdiction, target) },
+        { enabled: inferred.usesHyperdrive, run: (text) => reconcileHyperdrive(text, parsed, target) },
+        { enabled: inferred.usesArtifacts, run: (text) => reconcileArtifacts(text, parsed, inferred.jurisdiction, target) },
+        { enabled: inferred.usesAi, run: (text) => reconcileSelfDescribing(text, parsed, "ai") },
+        {
+            enabled: inferred.usesAiSearch,
+            run: (text) =>
+                reconcileSelfDescribingArray(
+                    text,
+                    parsed,
+                    "ai_search_namespaces",
+                    { binding: "AI_SEARCH", namespace: "default" },
+                    "AI_SEARCH (AI Search namespace)",
+                ),
+        },
+        // No `remote: true`: wrangler rates the Analytics SQL binding as never
+        // having a local simulator and proxies it remotely in plain dev, like `ai`.
+        // Skipped when the app points `ctx.analyticsSql` elsewhere with
+        // `defineApp().analyticsSql(...)` (the REST transport, typically): the
+        // binding would then be dead config that wrangler < 4.145.0 rejects.
+        {
+            enabled: wantsAnalyticsSqlBinding(inferred, projectRoot),
+            run: (text) => reconcileSelfDescribing(text, parsed, "analytics"),
+        },
+        { enabled: inferred.usesBrowser, run: (text) => reconcileSelfDescribing(text, parsed, "browser") },
+        { enabled: inferred.usesImages, run: (text) => reconcileSelfDescribing(text, parsed, "images") },
+        {
+            enabled: inferred.usesAnalytics,
+            run: (text) =>
+                reconcileSelfDescribingArray(
+                    text,
+                    parsed,
+                    "analytics_engine_datasets",
+                    { binding: "ANALYTICS", dataset: "ANALYTICS" },
+                    "ANALYTICS (Analytics Engine)",
+                ),
+        },
+        { enabled: inferred.usesWorkerLoader, run: (text) => reconcileWorkerLoaders(text, parsed) },
         { enabled: true, run: (text) => reconcileObservability(text, parsed) },
+        // Cloudflare-only; an omitted target is the default, Cloudflare.
+        { enabled: target === undefined || target === "cloudflare", run: (text) => reconcileUploadSourceMaps(text, parsed) },
         { enabled: exportedContainers.length > 0, run: (text) => reconcileContainers(text, parsed, exportedContainers) },
         {
             enabled: exportedWorkflows.length > 0 || exportedAgents.length > 0,
-            run: (text) => reconcileWorkflows(text, parsed, exportedWorkflows, exportedAgents),
+            run: (text) => reconcileWorkflows(text, parsed, exportedWorkflows, exportedAgents, workflowExportsToolchainGap(projectRoot)),
         },
-        { enabled: inferred.queues.length > 0, run: (text) => reconcileQueues(text, parsed, inferred.queues) },
+        {
+            enabled: inferred.queues.length > 0,
+            run: (text) => {
+                const step = reconcileQueues(text, parsed, inferred.queues, ownedTuning.queues ?? {});
+
+                ownedScopes.queues = step.owned;
+
+                return step;
+            },
+        },
+        {
+            // Also runs with nothing declared, so an owned entry goes once its declaration does.
+            // Skipped when the declaration is unreadable: reconciling against "none"
+            // would strip every owned entry over a typo.
+            enabled: inferred.services !== undefined && (inferred.services.length > 0 || Object.keys(ownedServicesRecord).length > 0),
+            run: (text) => {
+                const step = reconcileServices(text, parsed, inferred.services ?? [], ownedServicesRecord);
+
+                ownedServices = step.owned;
+
+                return step;
+            },
+        },
+        ...(environment === undefined || parsed.env?.[environment] === undefined
+            ? []
+            : [
+                  {
+                      enabled: inferred.queues.length > 0,
+                      run: (text: string) => {
+                          const scope = `env.${environment}.queues`;
+                          const step = reconcileEnvQueues(text, parsed, inferred.queues, environment, ownedTuning[scope] ?? {});
+
+                          ownedScopes[scope] = step.owned;
+
+                          return step;
+                      },
+                  },
+              ]),
     ];
 
     let text = original;
     const added: string[] = [];
+    const updated: string[] = [];
 
     for (const step of pipeline) {
         if (!step.enabled) {
@@ -972,25 +1115,90 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
 
         text = result.text;
         added.push(...result.added);
+        updated.push(...(result.updated ?? []));
+        warnings.push(...(result.warnings ?? []));
+    }
+
+    // Ownership is recorded only once the config it describes is on disk, never
+    // before: a record ahead of the file would let the next pass remove a field
+    // this one never managed to write.
+    const recordOwnership = (wranglerWritten: boolean): void => {
+        if (manifest === undefined) {
+            return;
+        }
+
+        const servicesOwned = ownedServices;
+        const records = [
+            ...(Object.keys(ownedScopes).length > 0
+                ? [
+                      {
+                          consequence: "an option removed from defineQueue stays deployed",
+                          key: "queueTuning",
+                          label: "queue tuning",
+                          write: (current: Manifest) => {
+                              recordOwnedTuning(current, ownedTuning, ownedScopes);
+                          },
+                      },
+                  ]
+                : []),
+            ...(servicesOwned === undefined
+                ? []
+                : [
+                      {
+                          consequence: "a service removed from lunora.config stays bound",
+                          key: "services",
+                          label: "service bindings",
+                          write: (current: Manifest) => {
+                              recordOwnedServices(current, servicesOwned);
+                          },
+                      },
+                  ]),
+        ];
+
+        for (const record of records) {
+            // Its own failure, not the caller's "binding inference skipped": the
+            // config change it describes may already be on disk.
+            try {
+                // Re-read per record: each write starts from the file as the last
+                // one left it, or the second would drop the key the first wrote.
+                record.write(readManifest(projectRoot) ?? manifest);
+            } catch (error: unknown) {
+                warnings.push(
+                    `${wranglerWritten ? "wrangler.jsonc was updated, but " : ""}recording the ${record.label} reconcile owns in ${manifest.path} (lunora.${record.key}) failed: ${error instanceof Error ? error.message : String(error)}. Until it is recorded, ${record.consequence}.`,
+                );
+            }
+        }
+    };
+
+    // The SvelteKit / Nuxt dev sidecar runs its own `wrangler.dev.jsonc`; its
+    // worker hosts the actions, so it gets the same service bindings. Same
+    // skip-when-unreadable rule as the step above.
+    let devConfig: ReconcileBindingsResult["devConfig"];
+
+    if (inferred.services !== undefined) {
+        const devStep = reconcileDevConfigServices(projectRoot, inferred.services, ownedServicesRecord);
+
+        warnings.push(...devStep.warnings);
+        ownedServices = { ...ownedServices, ...devStep.owned };
+        devConfig = devStep.added.length > 0 || devStep.updated.length > 0 ? { added: devStep.added, path: devStep.path, updated: devStep.updated } : undefined;
     }
 
     // A freshly-written DB binding carries a placeholder id; surface it so the
     // user runs `wrangler d1 create` before the deploy reaches wrangler (which
     // would otherwise fail late on the literal placeholder). `reconcileD1` is the
     // only step that emits this label.
-    if (added.includes("DB (D1)")) {
-        warnings.push(
-            `wrote a DB binding with a placeholder database_id ("${D1_PLACEHOLDER_ID}") — run \`wrangler d1 create <name>\` and replace it before deploying.`,
-        );
-    }
+    warnings.push(...placeholderWarnings(added, target));
 
     if (text === original) {
-        return { added: [], changed: false, exportGaps, reason: "bindings already in sync", warnings, wranglerPath };
+        recordOwnership(false);
+
+        return { added, changed: false, devConfig, exportGaps, reason: "bindings already in sync", updated, warnings, wranglerPath };
     }
 
     writeFileSync(wranglerPath, text, "utf8");
+    recordOwnership(true);
 
-    return { added, changed: true, exportGaps, warnings, wranglerPath };
+    return { added, changed: true, devConfig, exportGaps, updated, warnings, wranglerPath };
 };
 
 export type { ExportGap, ReconcileBindingsResult };

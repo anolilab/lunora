@@ -9,9 +9,9 @@
  * left alone — `decodeWire` is not idempotent, so a double encode reaches the
  * handler as a tagged array, and for a `Date` it does so silently.
  */
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { createDispatchRunner } from "../src/create-dispatch-runner";
 import type { FunctionReference } from "../src/types";
 

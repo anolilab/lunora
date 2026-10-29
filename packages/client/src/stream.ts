@@ -48,7 +48,12 @@ interface PendingResolve<T> {
  * when the consumer calls `.cancel()` (or `.return()`) so the client can
  * send a `{type:"unsubscribe"}` frame to the server.
  */
-const createStream = <T>(options: { maxBuffer?: number; onCancel: () => void }): { handle: StreamHandle<T>; iterable: StreamIterable<T> } => {
+const createStream = <T>(options: {
+    maxBuffer?: number;
+    onCancel: () => void;
+    /** Invoked once the stream is failed, so a producer can stop feeding it. */
+    onFail?: () => void;
+}): { handle: StreamHandle<T>; iterable: StreamIterable<T> } => {
     const maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
     const buffer: T[] = [];
     const pending: PendingResolve<T>[] = [];
@@ -121,6 +126,8 @@ const createStream = <T>(options: { maxBuffer?: number; onCancel: () => void }):
             while (flushOne()) {
                 /* keep flushing */
             }
+
+            options.onFail?.();
         },
         push(value) {
             if (done || failure || cancelled) {

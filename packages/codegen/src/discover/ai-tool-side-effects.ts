@@ -1,10 +1,12 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName, referencesArgs } from "../argument-taint";
+import { referencesArgs } from "../argument-taint";
 import type { AiToolSideEffectIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { bindingKeyName, descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
+import { contextSurfaceText } from "./context-root";
 
 /** The AI SDK text-generation entrypoints that accept a `tools` map — the injection sink surface. Matched by callee name, `import`-agnostic like the other feeders. */
 const GENERATION_CALLEES = new Set(["generateText", "streamText"]);
@@ -17,11 +19,12 @@ const MODEL_INPUT_KEYS = new Set(["messages", "prompt", "system"]);
  * receiver-chain prefix the call must sit on, mapping to the method names that
  * count. A tool that both is model-callable *and* performs one of these is the
  * hazard: the model — steerable by injected instructions in user input — decides
- * whether to fire a real write / dispatch / external send.
+ * whether to fire a real write / dispatch / external send. The `context`
+ * prefixes match a receiver as written (see {@link sideEffectLabel}).
  */
 const SIDE_EFFECT_SINKS: ReadonlyArray<{ methods: ReadonlySet<string>; prefixes: ReadonlyArray<string> }> = [
     // Database writes.
-    { methods: new Set(["delete", "insert", "insertManyUnsafe", "patch", "replace"]), prefixes: ["context.db", "ctx.db"] },
+    { methods: new Set(["delete", "insert", "insertManyUnsafe", "patch", "patchIf", "replace"]), prefixes: ["context.db", "ctx.db"] },
     // Function dispatch (runs another mutation / action with the caller's authority).
     { methods: new Set(["run", "runAction", "runMutation"]), prefixes: ["context", "ctx"] },
     // Outbound network / mail / queue sends.
@@ -29,7 +32,21 @@ const SIDE_EFFECT_SINKS: ReadonlyArray<{ methods: ReadonlySet<string>; prefixes:
     { methods: new Set(["queue", "send"]), prefixes: ["context.email", "context.mail", "ctx.email", "ctx.mail"] },
 ];
 
-/** The privileged side-effect label a call matches (`ctx.db.insert`, `ctx.run`, …), or `undefined` when the call is not a tracked sink. */
+/** Whether `receiver` (a `ctx.*` / `context.*` spelling) sits on a sink prefix for `method`. */
+const isSinkReceiver = (receiver: string, method: string): boolean =>
+    SIDE_EFFECT_SINKS.some(
+        (candidate) => candidate.methods.has(method) && candidate.prefixes.some((prefix) => receiver === prefix || receiver.startsWith(`${prefix}.`)),
+    );
+
+/**
+ * The privileged side-effect label a call matches (`ctx.db.insert`, `ctx.run`,
+ * …), or `undefined` when the call is not a tracked sink. Preferred: the ctx
+ * surface the receiver denotes, through any spelling of a handler's ctx (`c.db`,
+ * a destructured `db` → `ctx.db`). Otherwise the receiver as written: generation
+ * calls are scanned file-wide, so a tool built in a helper outside any handler
+ * (`(context: ActionCtx) => generateText({ tools })`) still matches by its
+ * `ctx.` / `context.` spelling, as it always has.
+ */
 const sideEffectLabel = (call: CallExpression): string | undefined => {
     const callee = call.getExpression();
 
@@ -38,15 +55,11 @@ const sideEffectLabel = (call: CallExpression): string | undefined => {
     }
 
     const method = callee.getName();
-    const receiver = callee.getExpression().getText();
+    const receiver = [contextSurfaceText(callee.getExpression()), callee.getExpression().getText()].find(
+        (candidate) => candidate !== undefined && isSinkReceiver(candidate, method),
+    );
 
-    for (const sink of SIDE_EFFECT_SINKS) {
-        if (sink.methods.has(method) && sink.prefixes.some((prefix) => receiver === prefix || receiver.startsWith(`${prefix}.`))) {
-            return `${receiver}.${method}`;
-        }
-    }
-
-    return undefined;
+    return receiver === undefined ? undefined : `${receiver}.${method}`;
 };
 
 /** The first privileged side-effect label reached inside a `tool({ execute })` construction, or `undefined` when the tool performs none. */
@@ -82,7 +95,7 @@ const destructuredArgumentNames = (node: TsNode): Set<string> => {
     }
 
     for (const element of pattern.getElements()) {
-        const propertyName = element.getPropertyNameNode()?.getText() ?? element.getName();
+        const propertyName = bindingKeyName(element);
         const valueNode = element.getNameNode();
 
         if (propertyName === "args" && Node.isObjectBindingPattern(valueNode)) {
@@ -113,7 +126,7 @@ const isUserInputDerived = (inputNode: TsNode): boolean => {
 /** True when any of the generation call's model-input options (`prompt` / `messages` / `system`) is derived from user input. */
 const hasUserDerivedInput = (optionsObject: ObjectLiteralExpression): boolean => {
     for (const property of optionsObject.getProperties()) {
-        if (!Node.isPropertyAssignment(property) || !MODEL_INPUT_KEYS.has(property.getName())) {
+        if (!Node.isPropertyAssignment(property) || !MODEL_INPUT_KEYS.has(propertyKeyName(property))) {
             continue;
         }
 
@@ -131,7 +144,7 @@ const hasUserDerivedInput = (optionsObject: ObjectLiteralExpression): boolean =>
 const generationsInSourceFile = (sourceFile: SourceFile, relativePath: string): AiToolSideEffectIR[] => {
     const rows: AiToolSideEffectIR[] = [];
 
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
         const callee = calleeName(call.getExpression());
 
         if (callee === undefined || !GENERATION_CALLEES.has(callee)) {
@@ -163,7 +176,7 @@ const generationsInSourceFile = (sourceFile: SourceFile, relativePath: string): 
         }
 
         rows.push({
-            exportName: enclosingExportName(call),
+            scope: callSiteScopeOf(call),
             file: relativePath,
             line: call.getStartLineNumber(),
             method: callee as AiToolSideEffectIR["method"],

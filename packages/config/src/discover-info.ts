@@ -19,14 +19,19 @@ interface DiscoverIrResult<T> {
     value?: T;
 }
 
+/**
+ * `filename` is the declaring file to probe for; `undefined` probes only the
+ * schema directory, for a kind declared in more than one file (queues: the root
+ * `queues.ts` plus each module's), whose discovery finds the files itself.
+ */
 const discoverIr = <T>(
     projectRoot: string,
     schemaDirectory: string,
-    filename: string,
+    filename: string | undefined,
     discover: (project: Project, directory: string) => T,
     projectOptions: ConstructorParameters<typeof Project>[0] = {},
 ): DiscoverIrResult<T> => {
-    if (!existsSync(join(projectRoot, schemaDirectory, filename))) {
+    if (!existsSync(join(projectRoot, schemaDirectory, filename ?? ""))) {
         return {};
     }
 

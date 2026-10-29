@@ -16,12 +16,10 @@
  * `PaymentAdapter` contract.
  *
  * **Post-add wiring** (see `docs` in registry.json):
- *   0. **Declare the payment tables in your own `lunora/schema.ts`.** Copy the
- *      block from `lunora/payment/schema.ts` (shipped by this item) into your
- *      `defineSchema({ … })` call. Codegen parses that file as an AST, so a
- *      spread (`defineSchema({ ...paymentTables })`) is silently skipped, and a
- *      `.extend(...)` merge would prefix the names the store reads. Skip this
- *      and the first `ctx.payments.*` call fails with `UNKNOWN_TABLE`.
+ *   0. **Merge the payment tables into your `lunora/schema.ts`**:
+ *      `defineSchema({ … }).extend(paymentExtension)`, with `paymentExtension`
+ *      imported from `@lunora/payment`. Skip this and the first `ctx.payments.*`
+ *      call fails with `UNKNOWN_TABLE`.
  *   1. Wire `payment: (env) => ({ adapter: ..., ... })` in your worker entry
  *      `createShardDO({ ... })` call — the adapter reads `STRIPE_SECRET_KEY`
  *      and `STRIPE_WEBHOOK_SECRET` from env.
@@ -52,19 +50,47 @@
  *      `.dev.vars` (locally) and push the secrets to production with
  *      `wrangler secret put`.
  */
-import { env } from "cloudflare:workers";
+import { env as workerEnv } from "cloudflare:workers";
 
 import { LunoraError } from "@lunora/errors";
+import type { SubscriptionState } from "@lunora/payment";
 import { action, internalAction, query, v } from "#lunora/_generated/server.js";
+import type { CloudflareBindings } from "#lunora/_generated/server.js";
 
-import { SUBSCRIPTIONS_TABLE } from "./schema.js";
+/**
+ * The Worker's bindings, narrowed so they can be looked up by name.
+ *
+ * `cloudflare:workers` types `env` as `Cloudflare.Env`, which
+ * `@cloudflare/workers-types` declares EMPTY until the project runs
+ * `wrangler types` — so indexing it is a `tsc` error in a fresh scaffold. The
+ * generated `CloudflareBindings` is the open index signature this needs; the
+ * value stays `unknown`, so `appOrigin` still has to narrow it.
+ */
+const env = workerEnv as CloudflareBindings;
 
 /**
  * Public origin of this deployment, used to build the checkout return URLs and
  * the billing-portal return URL. Read from env rather than the request: a Lunora
  * context carries no `Request` (a mutation can be replayed, a query re-run from
  * a live subscription), so there is nothing to derive an origin from at handler
- * time. Set `APP_BASE_URL` in `.dev.vars` and in production.
+ * time.
+ *
+ * `APP_BASE_URL` is declared BOTH as a wrangler `vars` entry (by this item's
+ * manifest) and in `.dev.vars`. That is a RUNTIME split, not a typing one:
+ * `.dev.vars` is read locally and never deployed, so a var declared only there
+ * is absent from the deployed Worker; the `vars` entry is what carries it to
+ * production, and `.dev.vars` wins over it under `wrangler dev`. Neither affects
+ * the type — `env` above is the `cloudflare:workers` export narrowed to the
+ * generated `CloudflareBindings`. Unnarrowed it is `Cloudflare.Env`, which only
+ * `wrangler types` populates, so that narrowing is what makes this read compile
+ * at all, and what it yields is `unknown` — hence the check below.
+ *
+ * The manifest ships the `vars` entry EMPTY. `vars` is deployed configuration,
+ * so a committed `http://localhost:…` placeholder is read only in production —
+ * where it is wrong — and the throw below could never fire: `checkout` would
+ * succeed and hand Stripe a `success_url` on the customer's own machine. Empty
+ * keeps the failure loud and local to the deploy, not to a paying customer's
+ * browser.
  */
 const appOrigin = (): string => {
     const value = env["APP_BASE_URL"];
@@ -152,10 +178,57 @@ export const portal = action.action(async ({ ctx }): Promise<{ url: string }> =>
     return ctx.payments.createPortalSession(referenceId, `${appOrigin()}/account`);
 });
 
+/*
+ * Column readers for the raw `subscriptions` row. `ctx.db` hands back
+ * `Record<string, unknown>`, and a bare `row["x"] as string` types a MISSING
+ * column as `string` while handing the client `undefined` — so a row written
+ * before a column existed reaches a screen as a non-string claiming to be one.
+ * These narrow instead of asserting, and an absent optional column reads back as
+ * `null` (not `undefined`) through the shard, which the `typeof` tests handle.
+ */
+const readString = (row: Record<string, unknown>, column: string): string => (typeof row[column] === "string" ? (row[column] as string) : "");
+
+const readOptionalNumber = (row: Record<string, unknown>, column: string): number | undefined =>
+    typeof row[column] === "number" ? (row[column] as number) : undefined;
+
+const readOptionalStringArray = (row: Record<string, unknown>, column: string): string[] | undefined => {
+    const value = row[column];
+
+    return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : undefined;
+};
+
+/**
+ * What a billing screen reads. A hand-rolled projection rather than
+ * `@lunora/payment`'s `Subscription` because this is a `query` and the canonical
+ * decoder sits behind `ctx.payments`, which is ActionCtx-only — so the field set
+ * here has to be kept in step with `@lunora/payment`'s `paymentExtension` by hand.
+ */
 interface SubscriptionRow {
+    /** Outranks `state` in the UI: a subscription can be `active` AND ending. */
+    cancelAtPeriodEnd: boolean;
+    currentPeriodEnd?: number;
+    /** Start of the billing period metered usage is summed over. Without it a client falls back to `createdAt` and shows LIFETIME usage against a per-period limit. */
+    currentPeriodStart?: number;
+    /** The PRIMARY price id — `priceIds[0]`. For display; match plans against `priceIds`. */
+    priceId: string;
+
+    /**
+     * EVERY price id the subscription bills. This — not `priceId` — is what a plan
+     * lookup tests membership in, mirroring `hasActivePrice`: a Stripe subscription
+     * is a list of items, so a base plan alongside an add-on or a metered price has
+     * a `priceId` naming only one of them.
+     *
+     * Absent on rows written by the webhook path (which carries one price id);
+     * read it as `priceIds ?? [priceId]`.
+     */
+    priceIds?: string[];
+    /** Which provider's row this is. Load-bearing while two providers coexist during a migration. */
+    provider: string;
     providerSubscriptionId: string;
+    /** Seats BILLED — which lags an invite by however long a webhook takes. Count members for display. */
+    quantity: number;
     referenceId: string;
-    state: string;
+    state: SubscriptionState;
 }
 
 /**
@@ -163,8 +236,8 @@ interface SubscriptionRow {
  *
  * A `query` rather than an action because this is the one payment read that
  * should stay live — `ctx.payments` is ActionCtx-only, so it reads the
- * `subscriptions` table directly. That table has to exist: declare it in your
- * `lunora/schema.ts` from `lunora/payment/schema.ts` (see the file header).
+ * `payment_subscriptions` table directly. That table exists once your
+ * `lunora/schema.ts` merges `paymentExtension` (see the file header).
  *
  * The `by_reference` index is given its `.eq()` predicate, so the scan is bounded
  * to this caller's rows. Without it `withIndex("by_reference")` collects EVERY
@@ -179,14 +252,21 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
     }
 
     const rows = await ctx.db
-        .query(SUBSCRIPTIONS_TABLE)
+        .query("payment_subscriptions")
         .withIndex("by_reference", (q) => q.eq("referenceId", referenceId))
         .collect();
 
     return rows.map((row) => ({
-        providerSubscriptionId: row["providerSubscriptionId"] as string,
-        referenceId: row["referenceId"] as string,
-        state: row["state"] as string,
+        cancelAtPeriodEnd: row["cancelAtPeriodEnd"] === true,
+        currentPeriodEnd: readOptionalNumber(row, "currentPeriodEnd"),
+        currentPeriodStart: readOptionalNumber(row, "currentPeriodStart"),
+        priceId: readString(row, "priceId"),
+        priceIds: readOptionalStringArray(row, "priceIds"),
+        provider: readString(row, "provider"),
+        providerSubscriptionId: readString(row, "providerSubscriptionId"),
+        quantity: typeof row["quantity"] === "number" ? row["quantity"] : 0,
+        referenceId: readString(row, "referenceId"),
+        state: readString(row, "state") as SubscriptionState,
     }));
 });
 

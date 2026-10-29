@@ -5,7 +5,7 @@ import { keyHash, lunoraQueryKey, serializeQueryKey } from "../src/query-key";
 
 /**
  * `keyHash`/`serializeQueryKey` route a queryKey through the shared
- * `stableStringify` encoder (`shared/stable-key.ts`) so two structurally-equal
+ * `stableStringify` encoder (`packages/wire/src/stable-key.ts`) so two structurally-equal
  * keys built with a different property order hash identically — preventing
  * duplicate WS subscriptions and spurious effect re-attaches. These tests pin
  * the now-shared semantics (order stability + `undefined`-field skipping) so they

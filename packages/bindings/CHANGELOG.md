@@ -1,3 +1,930 @@
+## @lunora/bindings [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.139...@lunora/bindings@1.0.0-alpha.140) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.76
+
+## @lunora/bindings [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.138...@lunora/bindings@1.0.0-alpha.139) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.75
+
+## @lunora/bindings [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.137...@lunora/bindings@1.0.0-alpha.138) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.74
+
+## @lunora/bindings [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.136...@lunora/bindings@1.0.0-alpha.137) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+
+## @lunora/bindings [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.135...@lunora/bindings@1.0.0-alpha.136) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+
+## @lunora/bindings [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.134...@lunora/bindings@1.0.0-alpha.135) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+
+## @lunora/bindings [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.133...@lunora/bindings@1.0.0-alpha.134) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.75
+
+## @lunora/bindings [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.132...@lunora/bindings@1.0.0-alpha.133) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+
+## @lunora/bindings [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.131...@lunora/bindings@1.0.0-alpha.132) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+
+## @lunora/bindings [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.130...@lunora/bindings@1.0.0-alpha.131) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.74
+
+## @lunora/bindings [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.129...@lunora/bindings@1.0.0-alpha.130) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+
+## @lunora/bindings [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.128...@lunora/bindings@1.0.0-alpha.129) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.73
+
+## @lunora/bindings [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.127...@lunora/bindings@1.0.0-alpha.128) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/platform:** upgraded to 1.0.0-alpha.72
+
+## @lunora/bindings [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.126...@lunora/bindings@1.0.0-alpha.127) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/platform:** upgraded to 1.0.0-alpha.71
+
+## @lunora/bindings [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.125...@lunora/bindings@1.0.0-alpha.126) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+
+## @lunora/bindings [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.124...@lunora/bindings@1.0.0-alpha.125) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+
+## @lunora/bindings [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.123...@lunora/bindings@1.0.0-alpha.124) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/platform:** upgraded to 1.0.0-alpha.70
+
+## @lunora/bindings [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.122...@lunora/bindings@1.0.0-alpha.123) (2026-10-18)
+
+### Features
+
+* **config:** write the Artifacts binding and leave it out when logged out ([#1243](https://github.com/anolilab/lunora/issues/1243)) ([5e7f80f](https://github.com/anolilab/lunora/commit/5e7f80fb9b3f28868606455d9f48a05000e45162))
+
+## @lunora/bindings [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.121...@lunora/bindings@1.0.0-alpha.122) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/platform:** upgraded to 1.0.0-alpha.69
+
+## @lunora/bindings [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.120...@lunora/bindings@1.0.0-alpha.121) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+
+## @lunora/bindings [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.119...@lunora/bindings@1.0.0-alpha.120) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/platform:** upgraded to 1.0.0-alpha.68
+
+## @lunora/bindings [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.118...@lunora/bindings@1.0.0-alpha.119) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.67
+
+## @lunora/bindings [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.117...@lunora/bindings@1.0.0-alpha.118) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+
+## @lunora/bindings [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.116...@lunora/bindings@1.0.0-alpha.117) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+
+## @lunora/bindings [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.115...@lunora/bindings@1.0.0-alpha.116) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.66
+
+## @lunora/bindings [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.114...@lunora/bindings@1.0.0-alpha.115) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.57
+* **@lunora/platform:** upgraded to 1.0.0-alpha.65
+
+## @lunora/bindings [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.113...@lunora/bindings@1.0.0-alpha.114) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.56
+
+## @lunora/bindings [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.112...@lunora/bindings@1.0.0-alpha.113) (2026-10-15)
+
+### Performance Improvements
+
+* **ai:** write rag chunks in upsertMany batches ([#1179](https://github.com/anolilab/lunora/issues/1179)) ([4f34594](https://github.com/anolilab/lunora/commit/4f34594f8fa3d4b1c1f397ba01a331dcf000969e)), closes [#0](https://github.com/anolilab/lunora/issues/0) [#0](https://github.com/anolilab/lunora/issues/0) [#0](https://github.com/anolilab/lunora/issues/0) [#0](https://github.com/anolilab/lunora/issues/0)
+
+## @lunora/bindings [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.111...@lunora/bindings@1.0.0-alpha.112) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+
+## @lunora/bindings [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.110...@lunora/bindings@1.0.0-alpha.111) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.64
+
+## @lunora/bindings [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.109...@lunora/bindings@1.0.0-alpha.110) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.63
+
+## @lunora/bindings [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.108...@lunora/bindings@1.0.0-alpha.109) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.62
+
+## @lunora/bindings [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.107...@lunora/bindings@1.0.0-alpha.108) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+
+## @lunora/bindings [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.106...@lunora/bindings@1.0.0-alpha.107) (2026-10-13)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.61
+
+## @lunora/bindings [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.105...@lunora/bindings@1.0.0-alpha.106) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+
+## @lunora/bindings [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.104...@lunora/bindings@1.0.0-alpha.105) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+
+## @lunora/bindings [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.103...@lunora/bindings@1.0.0-alpha.104) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.59
+
+## @lunora/bindings [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.102...@lunora/bindings@1.0.0-alpha.103) (2026-10-08)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.58
+
+## @lunora/bindings [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.101...@lunora/bindings@1.0.0-alpha.102) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+
+## @lunora/bindings [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.100...@lunora/bindings@1.0.0-alpha.101) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.51
+
+## @lunora/bindings [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.99...@lunora/bindings@1.0.0-alpha.100) (2026-10-07)
+
+### Features
+
+* **cli:** check artifacts namespace jurisdiction on deploy ([#1017](https://github.com/anolilab/lunora/issues/1017)) ([2a53718](https://github.com/anolilab/lunora/commit/2a53718e565c5b0f322b29915248940ab2b34e48))
+
+## @lunora/bindings [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.98...@lunora/bindings@1.0.0-alpha.99) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.57
+
+## @lunora/bindings [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.97...@lunora/bindings@1.0.0-alpha.98) (2026-10-06)
+
+### Features
+
+* stabilize the experimental exports of core and stable packages ([#1002](https://github.com/anolilab/lunora/issues/1002)) ([4938687](https://github.com/anolilab/lunora/commit/4938687662d8be5af5a1e138ce7c6a007dc078b4))
+
+## @lunora/bindings [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.96...@lunora/bindings@1.0.0-alpha.97) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.56
+
+## @lunora/bindings [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.95...@lunora/bindings@1.0.0-alpha.96) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.55
+
+## @lunora/bindings [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.94...@lunora/bindings@1.0.0-alpha.95) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.54
+
+## @lunora/bindings [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.93...@lunora/bindings@1.0.0-alpha.94) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.53
+
+## @lunora/bindings [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.92...@lunora/bindings@1.0.0-alpha.93) (2026-10-03)
+
+### ⚠ BREAKING CHANGES
+
+* `@lunora/bindings/analytics` no longer exports `createAnalyticsSqlClient`,
+`AnalyticsSqlError` or the `AnalyticsSqlClient`, `AnalyticsSqlConfig`, `AnalyticsSqlResult` and
+`AnalyticsSqlColumnMeta` types, and the `ANALYTICS_SQL_ERROR` code is gone. Query with
+`ctx.analyticsSql` or `createAnalyticsSql({ binding: createAnalyticsSqlRest(...) })` in the
+Analytics SQL dialect; failures are `AnalyticsSqlQueryError` (`ANALYTICS_SQL_QUERY_ERROR`).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* refactor(advisor): read ae metrics in the analytics sql dialect only
+
+The quarantined Analytics Engine feeder speaks only the Analytics SQL dialect, the one
+`ctx.analyticsSql` runs: `events.analyticsEngine."<dataset>"`, the SQL API's sample-weighted
+`COUNT(*)`, and every value bound as a parameter - `$since`, `$event`, and `$group` when a group
+is given. The `AnalyticsMetricsDialect` union, `dialectParts`, the `sqlString` literal escaper
+and the hidden "were params passed" dialect switch are gone; the dataset, which names the table
+and so cannot be a parameter, keeps its identifier guard.
+* `AnalyticsMetricsOptions` requires `since` (an ISO-8601 lower `timestamp`
+bound) and has no `dialect`; `AnalyticsMetricsSource.query` always receives `params`; the
+`AnalyticsMetricsDialect` type is removed. Pass `ctx.analyticsSql` as the source.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(studio): ask the host for usage panels by key, never with sql
+
+The Analytics tab has one runner, `analyticsSqlQuery(panel)`, which receives a panel key
+(`"volume"`, `"latency"`, `"hotShards"`) and resolves the rows. The host answers through an
+admin-gated action that builds the statement server-side with `functionUsageQuery(panel)` and
+runs it on `ctx.analyticsSql`. The old shape handed the host a SQL string to execute, which
+invited an action that runs caller-supplied SQL against the whole account. The prop docs and the
+not-wired message now say the action must be admin-only and take the key.
+
+The panel drops the second (token-dialect) runner, the precedence between the two, the dataset
+prop (now the server's choice) and `toPanelResult`: columns are `string[]`, read off the first
+row's keys in SELECT order.
+* `StudioProps.analyticsQuery` is removed and `analyticsSqlQuery` now has the
+signature `(panel: FunctionUsagePanel) => Promise<AnalyticsSqlQueryResult>`.
+`AnalyticsPanelProps` loses `dataset` and `runAnalyticsSql`, and its `runQuery` takes a panel
+key.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(config): report artifacts as unsupported in the alchemy translation
+
+The Alchemy translator emits only D1, R2, KV and Queue resources, but an
+artifacts[] binding was neither emitted nor listed in unsupported, so a
+config using ctx.artifacts produced a Worker without env.ARTIFACTS and no
+diagnostic. Raised by review on #941.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* docs(bindings): list the analytics-sql subpath in the readme table
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Features
+
+* cloudflare analytics sql binding as ctx.analyticsSql ([#946](https://github.com/anolilab/lunora/issues/946)) ([9c931dd](https://github.com/anolilab/lunora/commit/9c931dd11bc3f6770dd893d5792b3b31627c0f7b))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+* **@lunora/platform:** upgraded to 1.0.0-alpha.52
+
+## @lunora/bindings [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.91...@lunora/bindings@1.0.0-alpha.92) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.51
+
+## @lunora/bindings [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.90...@lunora/bindings@1.0.0-alpha.91) (2026-10-02)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/platform:** upgraded to 1.0.0-alpha.50
+
+## @lunora/bindings [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.89...@lunora/bindings@1.0.0-alpha.90) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.49
+
+## @lunora/bindings [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.88...@lunora/bindings@1.0.0-alpha.89) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.48
+
+## @lunora/bindings [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.87...@lunora/bindings@1.0.0-alpha.88) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.47
+
+## @lunora/bindings [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.86...@lunora/bindings@1.0.0-alpha.87) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/platform:** upgraded to 1.0.0-alpha.46
+
+## @lunora/bindings [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.85...@lunora/bindings@1.0.0-alpha.86) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.45
+
+## @lunora/bindings [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.84...@lunora/bindings@1.0.0-alpha.85) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.44
+
+## @lunora/bindings [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.83...@lunora/bindings@1.0.0-alpha.84) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.43
+
+## @lunora/bindings [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.82...@lunora/bindings@1.0.0-alpha.83) (2026-09-29)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** a query reached from a mutation or action (runQuery,
+tracked or untracked, or createCaller) now has run* guarded as a query's,
+so runMutation/runAction from it throws RUN_KIND_FORBIDDEN, and an untracked
+sub-query from an action no longer carries action-only helpers.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* chore(examples): regenerate generated files for the composed-query view
+
+Re-run codegen in every example so the committed _generated/functions.ts and
+shard.ts match the emitter (lint:generated).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* refactor(codegen): split emit.ts into per-emitter modules
+
+The 7k-line emit.ts becomes src/emit/, one module per emitter plus shared
+helpers; src/emit/index.ts keeps every existing ./emit import working.
+emitShard's static and feature-gated sections move out of its 2.2k-line
+template into shard-context (buildCtx), shard-dispatch (dispatchRun, RPC and
+subscription methods), shard-admin, shard-shapes, shard-sources and
+shard-vectors. Every module is now under 1k lines.
+
+Emitted output is byte-identical: the golden fixtures are unchanged and the
+public API snapshot still matches. Comments elsewhere that pointed at
+emit.ts now name the module that owns the code.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **codegen:** give a composed ctx.runQuery its own query context ([#907](https://github.com/anolilab/lunora/issues/907)) ([3291182](https://github.com/anolilab/lunora/commit/3291182a45b111b25e8aa0c10897341863978296)), closes [#905](https://github.com/anolilab/lunora/issues/905)
+
+## @lunora/bindings [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.81...@lunora/bindings@1.0.0-alpha.82) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.42
+
+## @lunora/bindings [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.80...@lunora/bindings@1.0.0-alpha.81) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.47
+
+## @lunora/bindings [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.79...@lunora/bindings@1.0.0-alpha.80) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+
+## @lunora/bindings [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.78...@lunora/bindings@1.0.0-alpha.79) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+
+## @lunora/bindings [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.77...@lunora/bindings@1.0.0-alpha.78) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.41
+
+## @lunora/bindings [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.76...@lunora/bindings@1.0.0-alpha.77) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+* **@lunora/platform:** upgraded to 1.0.0-alpha.40
+
+## @lunora/bindings [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.75...@lunora/bindings@1.0.0-alpha.76) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+
+## @lunora/bindings [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.74...@lunora/bindings@1.0.0-alpha.75) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+
+## @lunora/bindings [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.73...@lunora/bindings@1.0.0-alpha.74) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.39
+
+## @lunora/bindings [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.72...@lunora/bindings@1.0.0-alpha.73) (2026-09-25)
+
+### Bug Fixes
+
+* **vectors:** backfill follow-ups for [#818](https://github.com/anolilab/lunora/issues/818) and [#820](https://github.com/anolilab/lunora/issues/820) ([#826](https://github.com/anolilab/lunora/issues/826)) ([f6f8e9c](https://github.com/anolilab/lunora/commit/f6f8e9c222c7a6b9f968fb24144c7f364c3ac513))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.38
+
+## @lunora/bindings [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.71...@lunora/bindings@1.0.0-alpha.72) (2026-09-25)
+
+### Features
+
+* **vectors:** re-embed a table when its declared model changes ([#820](https://github.com/anolilab/lunora/issues/820)) ([ddbafa6](https://github.com/anolilab/lunora/commit/ddbafa6c35bf9b3d9ae68ed3db115465da876d38))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.37
+
+## @lunora/bindings [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.70...@lunora/bindings@1.0.0-alpha.71) (2026-09-25)
+
+### ⚠ BREAKING CHANGES
+
+* **vectors:** a schema declaring a vector index on a `.global()` table no
+longer loads. It never synced; drop `.global()` or maintain the index with
+`ctx.vectors.upsert`/`deleteByIds`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* feat(do): backfill pre-existing rows into vector indexes
+
+Vector sync only ever saw writes made after an index existed. Rows already in
+a table when `.vectorize()` was added were never indexed, and changing an
+index's field or dimensions never re-embedded anything. There was no path to
+fix either: nothing called `upsertMany` and no admin op existed.
+
+`__lunora_admin__:backfillVectors` walks each vectorized table through the
+same sync hook `ctx.db` uses, so soft-deleted rows are purged, not indexed.
+
+- Paged and resumable: 100 rows a page, one page per call unless `maxPages`
+  says otherwise, since every row is a remote embed plus an upsert. Progress
+  lives in `__lunora_vector_backfill`; the cursor only advances after a page's
+  hooks all succeeded, so a failed page is retried, not skipped.
+- Config changes: each table records a profile of its indexes (names, field,
+  dimensions, metric, metadata). A different profile re-walks the table,
+  overwriting vectors in place. An embedder change the profile cannot see
+  takes `restart: true`, which resets every table up front so a later call
+  without the flag still finishes the walk.
+- No lost updates: a page is read inside the single-writer gate and synced as
+  a link on the after-commit chain (`ShardDO.runOrderedAfterWrites`). A write
+  committed while a page embeds has its hook run after the page, so the
+  index ends on the newer vector, or none for a delete.
+
+Codegen emits the `runShardVectorBackfill` override only where it emits
+`ctx.vectors`. Node rates `vectorStore` unsupported, so it gets no override and
+the op answers NOT_IMPLEMENTED; the capability notes say so.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(bindings): match the vector docs to ctx.vectors
+
+The package docs promised three things the typed ctx does not have:
+
+- `upsertMany` on `ctx.vectors` (TS2339 against a real app)
+- a third `namespace` argument on `getByIds`/`deleteByIds` (TS2554); that
+  argument exists on the adapter `@lunora/ai/rag` uses, not on `ctx.vectors`
+- `query` falling back to the index's embedder; it throws without `embed`,
+  and both examples omitted it
+
+The docs now describe the API as it is. Each corrected call was type-checked
+against the blog example. The vector search concept page covers the three
+behaviours this branch changes: soft-deleted rows have no vector, `.global()`
+tables are rejected, and `backfillVectors` indexes pre-existing rows.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* refactor(search-core): share backfill pass planning and paging
+
+The vector backfill needs the same three pieces the search backfill already
+has, so they move to neutral names instead of being copied:
+
+- `planSearchBackfillPass` / `SearchBackfillState` / `SearchBackfillPass`
+  become `planBackfillPass` / `BackfillState` / `BackfillPass`; sql-store and
+  shard-engine call the renamed ones.
+- shard-engine's progress reader takes the state table as a parameter
+  (`readBackfillState`); `readSearchBackfillState` is a thin wrapper.
+- the keyset page read (`readKeysetPage`) is lifted out of the search page.
+* **vectors:** `@lunora/search-core` renames `planSearchBackfillPass`,
+`SearchBackfillState` and `SearchBackfillPass` to `planBackfillPass`,
+`BackfillState` and `BackfillPass`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* refactor(server): share the global vector index rejection message
+
+`defineSchema` and codegen's schema discovery each spelled out the same
+refusal for a vector index on a `.global()` table. They share no runtime edge,
+so the wording moves to `shared/global-vector-index.ts` and both import it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): check ctx.vectors.upsertNow for user-supplied namespaces
+
+The namespace-from-user-input lint watched `query`, `upsert` and `upsertMany`.
+`upsertMany` is not a `ctx.vectors` method: the facade `createContextVectors`
+builds has no such member, so it was never reachable and matched nothing.
+`upsertNow` is a method and takes the same `{ namespace }` input, but it wasn't
+checked. Swap it in, and correct the lint text that listed `upsertMany`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(do): harden the vector backfill against actions, bad rows and slow pages
+
+Action writes could be overwritten by a page. `deferAfterCommit` joined the
+after-commit chain only when a transaction was open and otherwise ran the
+hook inline. An action's patch or delete therefore landed before a page the
+chain was still holding, and the page's stale snapshot then overwrote it: a
+hard-deleted row got its vector back. With no transaction open, the work is
+now its own link on the chain, and the call waits for it (bounded by
+`AFTER_COMMIT_WAIT_MS`, like a mutation), so the action still sees its hook's
+result and error. The cost: an action now also waits for work committed before
+it. Nothing on the chain writes through a hook-carrying `ctx.db` outside a
+transaction; if something did, the bounded wait would turn that into a stall,
+not a deadlock.
+
+One bad row wedged the backfill for good. A non-string source, text the
+model refuses or metadata Vectorize rejects failed the page on every retry,
+and so blocked every later table. These failures are now kept separate:
+- Row failures are counted, the first 20 ids are reported, and the row is
+  skipped.
+- A page that fails as a whole keeps its cursor. That is two or more attempts
+  all failing, or a failed delete. The call returns the progress made so far
+  with `error` set; the admin op answers 503 with that body and records it in
+  the audit log.
+
+A page held the write-hook chain for a remote call per row. Pages now hold 50
+rows. They are embedded 8 at a time and written with one `upsertMany` and one
+`deleteByIds` per index. A refused batch is retried one row at a time to find
+the bad row. At ~300 ms per embed, a page takes about 2 s, well under the 15 s
+stall bound. `maxPages` is capped at 20.
+
+Also:
+- a table ending on a page boundary no longer spends a call on an empty
+  page: the page read peeks one row past the page.
+- the generated override builds its adapters through one `vectorSync(env)`
+  method shared with `buildCtx`, and throws `LunoraError("NOT_IMPLEMENTED")`.
+- `runOrderedAfterWrites` returns the work's result.
+- the search and vector admin ops share `maxPages` parsing. Search still
+  defaults to running to completion; vectors default to one page.
+- `VECTOR_BACKFILL_PAGE_ROWS` and `OrderedAfterWrites` are no longer exported.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(platform-node): sync the vectorStore note with NODE_CAPABILITIES
+
+The capabilities matrix gained a note about the backfillVectors admin op answering
+NOT_IMPLEMENTED on Node; the docs table must restate it verbatim. Also formats a
+soft-delete companion test with Prettier.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **vectors:** sync gaps — global tables, pre-existing rows, soft deletes ([#818](https://github.com/anolilab/lunora/issues/818)) ([89d2c3f](https://github.com/anolilab/lunora/commit/89d2c3feace888c2bf5238687cd077d6f5cfa395))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.36
+
+## @lunora/bindings [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.69...@lunora/bindings@1.0.0-alpha.70) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.35
+
+## @lunora/bindings [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.68...@lunora/bindings@1.0.0-alpha.69) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.34
+
+## @lunora/bindings [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.67...@lunora/bindings@1.0.0-alpha.68) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+
+## @lunora/bindings [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.66...@lunora/bindings@1.0.0-alpha.67) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+
+## @lunora/bindings [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.65...@lunora/bindings@1.0.0-alpha.66) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.33
+
+## @lunora/bindings [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.64...@lunora/bindings@1.0.0-alpha.65) (2026-09-22)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `ShardRunner.runInTransaction` takes an optional second
+argument, and `ctx.vectors.upsert` no longer writes before the mutation commits.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **do:** order post-commit write hooks by commit, and defer ctx.vectors.upsert ([#778](https://github.com/anolilab/lunora/issues/778)) ([b8b02ab](https://github.com/anolilab/lunora/commit/b8b02ab27d2d3266708dcff294230db26c811c3a))
+
+## @lunora/bindings [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.63...@lunora/bindings@1.0.0-alpha.64) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* `createVectorSyncHook` no longer compensates a partial
+fan-out with deletes — a partially applied write is left partial.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(studio): make the SQL export replayable
+
+The data browser's `.sql` export targeted the grid's DISPLAY columns. A shard
+table physically holds `(id, _creationTime, __doc__)` and the browser lifts
+every `__doc__` field to a top-level column, so the dump named columns that do
+not exist: replaying `notes.sql` answers `table notes has no column named
+authorId`, and had SQLite accepted it the rows would have carried no `__doc__`
+at all, which every read path fails on.
+
+`toSql` now takes the page's `sqlColumns` — already reported alongside
+`columns` for exactly this reason — and, when the table carries a `__doc__`,
+targets the physical columns and re-assembles the blob from the lifted fields.
+The SQL console keeps the literal column-for-column dump: its grid is an
+arbitrary query's result set with no table behind it.
+
+Proved end to end rather than on the statement text: the new suite writes rows
+through `ctx.db`, exports the page, replays the dump into a fresh database and
+reads a row back through `readTablePage` — the call the browser itself makes.
+It fails on the old emitter at the replay, not at an assertion.
+
+Still lossy in the way the CSV and JSON exports already are: a bigint field
+re-assembles as its decimal string and a `v.bytes()` field as the
+`<bytes: n B>` placeholder, because the grid holds the decoded value rather
+than the sort-key projection the writer stores beside it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* chore(do): record deferAfterCommit in the api snapshot
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* two write-path defects — post-commit hooks and the SQL export ([#753](https://github.com/anolilab/lunora/issues/753)) ([4c2bb4a](https://github.com/anolilab/lunora/commit/4c2bb4af0b24cc988b6651f97001745799982f72))
+
+## @lunora/bindings [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.62...@lunora/bindings@1.0.0-alpha.63) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/bindings [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.61...@lunora/bindings@1.0.0-alpha.62) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/bindings [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.60...@lunora/bindings@1.0.0-alpha.61) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/bindings [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.59...@lunora/bindings@1.0.0-alpha.60) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.32
+
+## @lunora/bindings [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.58...@lunora/bindings@1.0.0-alpha.59) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+
+## @lunora/bindings [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.57...@lunora/bindings@1.0.0-alpha.58) (2026-09-12)
+
+### Bug Fixes
+
+* **bindings:** scope vector compensation to what was written ([#716](https://github.com/anolilab/lunora/issues/716)) ([ba5a1d5](https://github.com/anolilab/lunora/commit/ba5a1d5f889ea567713b8d47efde7bfbe5db4cc9))
+
+### Documentation
+
+* correct stale symbol names in comments ([#701](https://github.com/anolilab/lunora/issues/701)) ([64536f9](https://github.com/anolilab/lunora/commit/64536f9f8f89c4286ae95635a8c5fe20ef5816db))
+
+## @lunora/bindings [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.56...@lunora/bindings@1.0.0-alpha.57) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/platform:** upgraded to 1.0.0-alpha.30
+
+## @lunora/bindings [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.55...@lunora/bindings@1.0.0-alpha.56) (2026-09-10)
+
+### Features
+
+* **bindings:** export the r2sql identifier helpers ([#686](https://github.com/anolilab/lunora/issues/686)) ([8b1ba6a](https://github.com/anolilab/lunora/commit/8b1ba6a7d15be54792e57b4926097392ca1a2e0c))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+
+## @lunora/bindings [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.54...@lunora/bindings@1.0.0-alpha.55) (2026-09-08)
+
+### Bug Fixes
+
+* the five alpha.238 field reports — auth inserts, invite-only, .vectors(), findUnique ([#671](https://github.com/anolilab/lunora/issues/671)) ([34677ef](https://github.com/anolilab/lunora/commit/34677ef5661a487340319de66bd37feaa73e7d71))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+
 ## @lunora/bindings [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.53...@lunora/bindings@1.0.0-alpha.54) (2026-09-07)
 
 

@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import { useNavigate, useRouter, useSearch } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
@@ -6,6 +5,7 @@ import { useEffect, useState } from "react";
 import type { StorageTier } from "../../components/storage-tier";
 import { TIER_META } from "../../components/storage-tier";
 import useMirroredRef from "../../hooks/use-mirrored-ref";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import type { DataViewSearch } from "../../lib/data-view-params";
 import { dataViewToSearch, searchToDataView } from "../../lib/data-view-params";
@@ -16,6 +16,9 @@ import { DataBrowser } from "./data-browser";
 import { GlobalDataBrowser } from "./global-data-browser";
 
 interface TableEditorProps {
+    /** Offer "Generate rows" — only where the host serves the seed endpoint. Forwarded to the shard {@link DataBrowser}. */
+    readonly canGenerateRows?: boolean;
+
     /**
      * Allow editing the shard-local tables (insert/edit/delete). Forwarded to the
      * shard {@link DataBrowser}; the global D1 browser is always read-only. Off by
@@ -81,8 +84,8 @@ const onCopyLink = (): void => {
  * URL and browser back/forward moves between tables and tiers. The browsers push on
  * selection and re-open whatever the URL names.
  */
-export const TableEditor = ({ editable = false, initialShardKey }: TableEditorProps): ReactElement => {
-    const client = useLunora();
+export const TableEditor = ({ canGenerateRows = false, editable = false, initialShardKey }: TableEditorProps): ReactElement => {
+    const client = useStudioClient();
     const navigate = useNavigate();
     const router = useRouter();
 
@@ -290,6 +293,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
         <GlobalDataBrowser initialTable={tableParameter} onSelectTable={onSelectTable} schemaSwitch={schemaSwitch} />
     ) : (
         <DataBrowser
+            canGenerateRows={canGenerateRows}
             editable={editable}
             globalTableNames={globalTableNames}
             initialFilters={view.filters}

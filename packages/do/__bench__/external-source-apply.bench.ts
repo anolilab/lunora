@@ -46,15 +46,17 @@ const schema: SchemaLike = {
 let writer: DatabaseWriterLike;
 let batchBase = 0;
 
+// File-level, not inside the `describe`: vitest's bench runner skips hooks registered in a `describe` (its
+// `runBenchmarkSuite` recurses into sub-suites without running their hooks), so the writer would stay undefined.
+beforeAll(() => {
+    const harness = createSqliteExec();
+
+    runShardMigrations(harness.sql, schema, { cdc: true });
+
+    writer = createShardContextDatabase({ broadcast: () => undefined, cdc: true, clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+});
+
 describe("external-source apply (applyCdcChanges ingress)", () => {
-    beforeAll(() => {
-        const harness = createSqliteExec();
-
-        runShardMigrations(harness.sql, schema, { cdc: true });
-
-        writer = createShardContextDatabase({ broadcast: () => undefined, cdc: true, clock: () => 1_700_000_000_000, schema, sql: harness.sql });
-    });
-
     bench(`apply ${String(BATCH)} fresh upserts (insert path, cdc append)`, async () => {
         batchBase += 1;
 

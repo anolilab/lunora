@@ -1,7 +1,10 @@
 import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import { sqliteEncode } from "@lunora/sql-store";
+import { decodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
+import type { D1Exec } from "../src/d1-ctx-db";
+import type { GlobalFilterClause } from "../src/introspect";
 import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "../src/introspect";
 import { createD1Exec } from "./_helpers/node-sqlite-d1";
 
@@ -58,9 +61,13 @@ describe("d1 introspect", () => {
         // An external table with a real FK constraint (better-auth emits these) — its
         // ref must surface via PRAGMA foreign_key_list so the diagram can draw the edge.
         harness.ddl(`CREATE TABLE "session" ("id" TEXT PRIMARY KEY, "token" TEXT, "userId" TEXT REFERENCES "user" ("id") ON DELETE CASCADE)`);
+        // better-auth's one-time tokens live in a generically named `value` column.
+        harness.ddl(`CREATE TABLE "verification" ("id" TEXT PRIMARY KEY, "identifier" TEXT, "value" TEXT)`);
         // Internal/companion tables that must never surface.
         harness.ddl(`CREATE TABLE "_cf_KV" ("k" TEXT, "v" BLOB)`);
         harness.ddl(`CREATE TABLE "organizations__agg_byActive" ("__key__" TEXT, "__value__" REAL)`);
+        harness.ddl(`CREATE TABLE "organizations__geo_near" ("id" TEXT, "cell" TEXT)`);
+        harness.ddl(`CREATE TABLE "__idempotency" ("key" TEXT PRIMARY KEY)`);
         // MigrationRunner's own tracking table, created by this same package — it is
         // Lunora bookkeeping, so the browser must not list it either.
         harness.ddl(`CREATE TABLE "__drizzle_migrations" ("id" INTEGER PRIMARY KEY AUTOINCREMENT, "hash" TEXT NOT NULL UNIQUE, "created_at" NUMERIC)`);
@@ -68,6 +75,7 @@ describe("d1 introspect", () => {
         await harness.exec.run(`INSERT INTO "organizations" VALUES ('o1', 1, 'Acme', 1), ('o2', 2, 'Globex', 0)`, []);
         await harness.exec.run(`INSERT INTO "plans" VALUES ('p1', 1, 'free')`, []);
         await harness.exec.run(`INSERT INTO "user" VALUES ('u1', 'ada@example.com', 'super-secret-hash')`, []);
+        await harness.exec.run(`INSERT INTO "verification" VALUES ('v1', 'ada@example.com', 'one-time-token-value')`, []);
     });
 
     afterEach(() => {
@@ -83,6 +91,7 @@ describe("d1 introspect", () => {
                 { name: "plans", rowCount: 1 },
                 { name: "session", rowCount: 0 },
                 { name: "user", rowCount: 1 },
+                { name: "verification", rowCount: 1 },
             ]);
         });
     });
@@ -149,6 +158,30 @@ describe("d1 introspect", () => {
             expect(page.total).toBe(2);
         });
 
+        it("pages a WITHOUT ROWID table with a composite key by that key", async () => {
+            // Such a table has no `rowid` to order by, so only its key columns make a valid ORDER BY.
+            expect.assertions(1);
+
+            harness.ddl(`CREATE TABLE "memberships" ("org" TEXT, "member" TEXT, PRIMARY KEY ("org", "member")) WITHOUT ROWID`);
+            await harness.exec.run(`INSERT INTO "memberships" VALUES ('b', 'x'), ('a', 'y'), ('a', 'x')`, []);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { table: "memberships" });
+
+            expect(page.rows).toStrictEqual([
+                { member: "x", org: "a" },
+                { member: "y", org: "a" },
+                { member: "x", org: "b" },
+            ]);
+        });
+
+        it("answers a huge or non-finite offset with an empty page rather than invalid SQL", async () => {
+            // Inlined as a literal, 1e21 would print as `1e+21` and NaN as `NaN`, neither of which parses.
+            expect.assertions(2);
+
+            await expect(readGlobalTablePage(harness.exec, schema, { offset: 1e21, table: "organizations" })).resolves.toMatchObject({ rows: [], total: 2 });
+            await expect(readGlobalTablePage(harness.exec, schema, { offset: Number.NaN, table: "organizations" })).resolves.toMatchObject({ total: 2 });
+        });
+
         it("recovers an external table's foreign keys as a column→table ref map", async () => {
             expect.assertions(2);
 
@@ -192,6 +225,17 @@ describe("d1 introspect", () => {
             expect(page.rows[0]).toMatchObject({ _id: "o1", name: "Acme" });
         });
 
+        it("matches the NULL group when an eq filter carries a null value (a NULL cell's filter)", async () => {
+            expect.assertions(2);
+
+            await harness.exec.run(`INSERT INTO "organizations" VALUES ('o3', 3, NULL, 1)`, []);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { filters: [{ column: "name", value: null }], table: "organizations" });
+
+            expect(page.total).toBe(1);
+            expect(page.rows[0]).toMatchObject({ _id: "o3" });
+        });
+
         it("maps a displayed `_id` filter to the physical `id` column", async () => {
             expect.assertions(2);
 
@@ -221,6 +265,23 @@ describe("d1 introspect", () => {
             await expect(
                 readGlobalTablePage(harness.exec, schema, { filters: [{ column: "passwordHash", value: "wrong-guess" }], table: "user" }),
             ).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+        });
+
+        it("redacts a token column by table (verification.value) that no column-name pattern catches", async () => {
+            expect.assertions(4);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { table: "verification" });
+
+            expect(page.rows[0]).toEqual({ id: "v1", identifier: "ada@example.com", value: "•••" });
+            expect(JSON.stringify(page.rows)).not.toContain("one-time-token-value");
+
+            await expect(
+                readGlobalTablePage(harness.exec, schema, { filters: [{ column: "value", value: "one-time-token-value" }], table: "verification" }),
+            ).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+
+            const facet = await facetGlobalColumn(harness.exec, schema, { column: "value", table: "verification" });
+
+            expect(facet.values).toEqual([{ count: 1, value: "•••" }]);
         });
 
         it("allows an eq filter on a non-sensitive external column", async () => {
@@ -321,6 +382,70 @@ describe("d1 introspect", () => {
 
             expect(page.total).toBe(1);
             expect(page.rows[0]?.["_id"]).toBe("l1");
+        });
+
+        it("decodes a bigint facet and matches a typed number against the stored key", async () => {
+            expect.assertions(4);
+
+            const wireSchema: SchemaLike = {
+                tables: {
+                    ledger: {
+                        indexes: [],
+                        shape: { blob: col("bytes"), cents: col("bigint") },
+                        shardMode: { kind: "global" } as never,
+                    },
+                },
+            };
+
+            harness.ddl(`CREATE TABLE "ledger" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "blob" BLOB, "cents" TEXT)`);
+            await harness.exec.run(`INSERT INTO "ledger" VALUES ('l1', 1, X'01', ?), ('l2', 2, X'02', ?)`, [sqliteEncode(10n), sqliteEncode(200n)]);
+
+            const facet = overJson(await facetGlobalColumn(harness.exec, wireSchema, { column: "cents", table: "ledger" })) as { values: { value: unknown }[] };
+
+            expect(facet.values.map((entry) => entry.value).toSorted((a, b) => Number(a) - Number(b))).toStrictEqual([10n, 200n]);
+
+            // The operator's typed `200` arrives as a number; the facet click as a bigint.
+            const typed = await readGlobalTablePage(harness.exec, wireSchema, { filters: [{ column: "cents", value: 200 }], table: "ledger" });
+            const clicked = await readGlobalTablePage(harness.exec, wireSchema, { filters: [{ column: "cents", value: 10n }], table: "ledger" });
+
+            expect(typed.total).toBe(1);
+            expect(typed.rows[0]?.["_id"]).toBe("l2");
+            expect(clicked.rows.map((row) => row["_id"])).toStrictEqual(["l1"]);
+        });
+
+        it("a facet value on an untyped (union/any) column filters back to its row", async () => {
+            expect.assertions(2);
+
+            const wireSchema: SchemaLike = {
+                tables: {
+                    mixed: {
+                        indexes: [],
+                        shape: { loose: col("any"), u: col("union") },
+                        shardMode: { kind: "global" } as never,
+                    },
+                },
+            };
+
+            harness.ddl(`CREATE TABLE "mixed" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "u" TEXT, "loose" TEXT)`);
+            await harness.exec.run(`INSERT INTO "mixed" VALUES ('m1', 1, ?, ?), ('m2', 2, ?, ?)`, [
+                sqliteEncode(42, "union"),
+                sqliteEncode(true, "any"),
+                sqliteEncode("x", "union"),
+                sqliteEncode(false, "any"),
+            ]);
+
+            // The facet hands back each value in its STORED (marked) form; clicking
+            // it must match that row, not be marked a second time and match nothing.
+            const clickedRows = async (column: string, predicate: (value: unknown) => boolean): Promise<unknown[]> => {
+                const facet = overJson(await facetGlobalColumn(harness.exec, wireSchema, { column, table: "mixed" })) as { values: { value: unknown }[] };
+                const value = facet.values.find((entry) => predicate(entry.value))?.value;
+                const page = await readGlobalTablePage(harness.exec, wireSchema, { filters: [{ column, value }], table: "mixed" });
+
+                return page.rows.map((row) => row["_id"]);
+            };
+
+            await expect(clickedRows("u", (value) => value !== sqliteEncode("x", "union"))).resolves.toStrictEqual(["m1"]);
+            await expect(clickedRows("loose", (value) => value === sqliteEncode(true, "any"))).resolves.toStrictEqual(["m1"]);
         });
 
         it("reflects the active view (eq filters)", async () => {
@@ -477,6 +602,163 @@ describe("d1 introspect", () => {
                 { count: 1, value: "free" },
             ]);
             expect(facet.truncated).toBe(true);
+        });
+    });
+});
+
+/** `count` identical eq clauses on a text column — each binds one parameter. */
+const repeatedClauses = (count: number): GlobalFilterClause[] =>
+    Array.from({ length: count }, () => {
+        return { column: "name", value: "Acme" };
+    });
+
+describe("d1 introspect — operators and nested paths on the global path", () => {
+    let recorded: { params: unknown[]; sql: string }[];
+    let recordingExec: D1Exec;
+
+    beforeEach(() => {
+        harness = createD1Exec();
+        harness.ddl(`CREATE TABLE "organizations" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "name" TEXT, "active" INTEGER)`);
+        harness.ddl(`INSERT INTO "organizations" VALUES ('o1', 1, 'Acme', 1), ('o2', 2, 'Globex', 0), ('o3', 3, NULL, 1)`);
+
+        recorded = [];
+        recordingExec = {
+            ...harness.exec,
+            all: (query, parameters) => {
+                recorded.push({ params: [...parameters], sql: query });
+
+                return harness.exec.all(query, parameters);
+            },
+        };
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const countStatement = (): { params: unknown[]; sql: string } | undefined => recorded.find((entry) => entry.sql.includes("COUNT(*)"));
+
+    it("compiles an explicit eq to a bound equality, with the value out of the SQL text", async () => {
+        expect.assertions(3);
+
+        const page = await readGlobalTablePage(recordingExec, schema, { filters: [{ column: "name", operator: "eq", value: "Acme" }], table: "organizations" });
+
+        expect(page.total).toBe(1);
+        expect(countStatement()?.sql).toContain(`WHERE "name" = ?`);
+        expect(countStatement()?.params).toEqual(["Acme"]);
+    });
+
+    it("binds an injection-looking value and matches nothing for it", async () => {
+        expect.assertions(3);
+
+        const injected = "x' OR '1'='1";
+        const page = await readGlobalTablePage(recordingExec, schema, { filters: [{ column: "name", value: injected }], table: "organizations" });
+
+        expect(page.total).toBe(0);
+        expect(countStatement()?.sql).not.toContain("OR");
+        expect(countStatement()?.params).toEqual([injected]);
+    });
+
+    it.each(["has", "contains", "gt"])("refuses the %s operator, naming it, rather than matching it as eq", async (operator) => {
+        expect.assertions(3);
+
+        const error = await readGlobalTablePage(recordingExec, schema, {
+            filters: [{ column: "name", operator, value: "Acme" }],
+            table: "organizations",
+        }).catch((error_: unknown) => error_);
+
+        expect(error).toMatchObject({ code: "BAD_REQUEST" });
+        expect((error as Error).message).toContain(`"${operator}"`);
+        expect(countStatement()).toBeUndefined();
+    });
+
+    it("refuses has on a v.any or union column, naming the operator, since that storage is JSON text with no json_each here", async () => {
+        expect.assertions(5);
+
+        const untyped: SchemaLike = {
+            tables: {
+                mixed: {
+                    indexes: [],
+                    shape: { loose: col("any"), u: col("union") },
+                    shardMode: { kind: "global" } as never,
+                },
+            },
+        };
+
+        harness.ddl(`CREATE TABLE "mixed" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "u" TEXT, "loose" TEXT)`);
+        harness.ddl(`INSERT INTO "mixed" VALUES ('m1', 1, '["blue"]', '["blue"]')`);
+
+        for (const column of ["loose", "u"]) {
+            // eslint-disable-next-line no-await-in-loop -- one read per column, each must reject
+            const error = await readGlobalTablePage(recordingExec, untyped, { filters: [{ column, operator: "has", value: "blue" }], table: "mixed" }).catch(
+                (error_: unknown) => error_,
+            );
+
+            expect(error).toMatchObject({ code: "BAD_REQUEST" });
+            expect((error as Error).message).toContain('"has"');
+        }
+
+        expect(countStatement()).toBeUndefined();
+    });
+
+    it("refuses a nested path, since D1 columns are physical, and reads an empty path list as the column itself", async () => {
+        expect.assertions(3);
+
+        const error = await readGlobalTablePage(recordingExec, schema, {
+            filters: [{ column: "name", path: ["city"], value: "x" }],
+            table: "organizations",
+        }).catch((error_: unknown) => error_);
+
+        expect(error).toMatchObject({ code: "BAD_REQUEST" });
+        expect((error as Error).message).toMatch(/nested path/u);
+
+        const page = await readGlobalTablePage(recordingExec, schema, { filters: [{ column: "name", path: [], value: "Acme" }], table: "organizations" });
+
+        expect(page.total).toBe(1);
+    });
+
+    it("runs a page whose statement binds exactly 100 parameters, and refuses 101", async () => {
+        expect.assertions(3);
+
+        // One bound value per clause; LIMIT and OFFSET are inlined literals.
+        const fits = await readGlobalTablePage(harness.exec, schema, { filters: repeatedClauses(100), table: "organizations" });
+
+        expect(fits.total).toBe(1);
+
+        const error = await readGlobalTablePage(harness.exec, schema, { filters: repeatedClauses(101), table: "organizations" }).catch(
+            (error_: unknown) => error_,
+        );
+
+        expect(error).toMatchObject({ code: "BAD_REQUEST" });
+        expect((error as Error).message).toContain("binds 101 parameters");
+    });
+
+    it("refuses a sensitive-column facet whose count binds more than 100 parameters, before running it", async () => {
+        expect.assertions(3);
+
+        harness.ddl(`CREATE TABLE "user" ("id" TEXT PRIMARY KEY, "email" TEXT, "passwordHash" TEXT)`);
+        harness.ddl(`INSERT INTO "user" VALUES ('u1', 'a@example.com', 'hash')`);
+
+        const filters = Array.from({ length: 101 }, () => {
+            return { column: "email", value: "a@example.com" };
+        });
+        const error = await facetGlobalColumn(recordingExec, schema, { column: "passwordHash", filters, table: "user" }).catch((error_: unknown) => error_);
+
+        expect(error).toMatchObject({ code: "BAD_REQUEST" });
+        expect((error as Error).message).toContain("binds 101 parameters");
+        expect(countStatement()).toBeUndefined();
+    });
+
+    it("runs a facet whose statement binds exactly 100 parameters, and refuses 101", async () => {
+        expect.assertions(2);
+
+        const fits = await facetGlobalColumn(harness.exec, schema, { column: "active", filters: repeatedClauses(100), table: "organizations" });
+
+        expect(fits.values).toHaveLength(1);
+        await expect(
+            facetGlobalColumn(harness.exec, schema, { column: "active", filters: repeatedClauses(101), table: "organizations" }),
+        ).rejects.toMatchObject({
+            code: "BAD_REQUEST",
         });
     });
 });

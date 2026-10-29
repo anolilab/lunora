@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { listLunoraSourceFiles } from "../../src/discover/ast";
+import { isTestPath, listLunoraSourceFiles } from "../../src/discover/ast";
 
 let workdir: string;
 let lunoraDirectory: string;
@@ -34,6 +34,83 @@ describe("listLunoraSourceFiles", () => {
         writeFileSync(join(lunoraDirectory, "node_modules", "dep.ts"), "export const d = 1;\n", "utf8");
 
         expect(names(listLunoraSourceFiles(lunoraDirectory))).toStrictEqual(["messages.ts"]);
+    });
+
+    it("skips colocated test files and test/mock/fixture directories", () => {
+        expect.assertions(1);
+
+        for (const directory of ["__tests__", "__mocks__", "__fixtures__", "__snapshots__"]) {
+            mkdirSync(join(lunoraDirectory, "chat", directory), { recursive: true });
+            writeFileSync(join(lunoraDirectory, "chat", directory, "helper.ts"), "export const h = 1;\n", "utf8");
+        }
+
+        for (const file of ["a.test.ts", "a.spec.ts", "a.test-d.ts", "a.spec-d.ts", "a.bench.ts", "a.e2e.ts", "a.e2e-spec.ts"]) {
+            writeFileSync(join(lunoraDirectory, "chat", file), "export const t = 1;\n", "utf8");
+        }
+
+        // Look-alikes that are ordinary source.
+        writeFileSync(join(lunoraDirectory, "chat", "latest.ts"), "export const e = 1;\n", "utf8");
+        writeFileSync(join(lunoraDirectory, "chat", "contest.ts"), "export const f = 1;\n", "utf8");
+        writeFileSync(join(lunoraDirectory, "chat", "testimonials.ts"), "export const g = 1;\n", "utf8");
+        // Ambiguous names a real feature may carry stay source; `codegen.exclude` opts them out.
+        writeFileSync(join(lunoraDirectory, "chat", "test-drive.ts"), "export const d = 1;\n", "utf8");
+        mkdirSync(join(lunoraDirectory, "tests"));
+        writeFileSync(join(lunoraDirectory, "tests", "quiz.ts"), "export const q = 1;\n", "utf8");
+
+        expect(names(listLunoraSourceFiles(lunoraDirectory))).toStrictEqual([
+            "contest.ts",
+            "latest.ts",
+            "messages.ts",
+            "quiz.ts",
+            "test-drive.ts",
+            "testimonials.ts",
+        ]);
+    });
+
+    it("skips the globs `codegen.exclude` in lunora.config adds", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { codegen: { exclude: ["**/*.fixture.ts", "seed/**"] } };\n`, "utf8");
+        mkdirSync(join(lunoraDirectory, "seed"));
+        mkdirSync(join(lunoraDirectory, "chat"));
+        writeFileSync(join(lunoraDirectory, "seed", "users.ts"), "export const s = 1;\n", "utf8");
+        writeFileSync(join(lunoraDirectory, "chat", "rows.fixture.ts"), "export const r = 1;\n", "utf8");
+        writeFileSync(join(lunoraDirectory, "chat", "rows.ts"), "export const q = 1;\n", "utf8");
+        // Globs anchor at `lunora/`: a nested `seed/` and a look-alike name stay source.
+        mkdirSync(join(lunoraDirectory, "chat", "seed"));
+        writeFileSync(join(lunoraDirectory, "chat", "seed", "nested.ts"), "export const n = 1;\n", "utf8");
+        writeFileSync(join(lunoraDirectory, "seedling.ts"), "export const l = 1;\n", "utf8");
+
+        expect(names(listLunoraSourceFiles(lunoraDirectory))).toStrictEqual(["messages.ts", "nested.ts", "rows.ts", "seedling.ts"]);
+    });
+
+    it("refuses a negated glob instead of excluding every file", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { codegen: { exclude: ["seed/**", "!seed/keep.ts"] } };\n`, "utf8");
+
+        expect(names(listLunoraSourceFiles(lunoraDirectory))).toStrictEqual(["messages.ts"]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("codegen.exclude"));
+    });
+
+    it("keeps test files and excluded globs when asked for everything", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { codegen: { exclude: ["seed/**"] } };\n`, "utf8");
+        mkdirSync(join(lunoraDirectory, "seed"));
+        mkdirSync(join(lunoraDirectory, "__tests__"));
+        writeFileSync(join(lunoraDirectory, "seed", "users.ts"), "export const s = 1;\n", "utf8");
+        writeFileSync(join(lunoraDirectory, "__tests__", "helper.ts"), "export const h = 1;\n", "utf8");
+        writeFileSync(join(lunoraDirectory, "messages.test.ts"), "export const t = 1;\n", "utf8");
+
+        expect(names(listLunoraSourceFiles(lunoraDirectory, { includeSkipped: true }))).toStrictEqual([
+            "helper.ts",
+            "messages.test.ts",
+            "messages.ts",
+            "users.ts",
+        ]);
     });
 
     it("follows a symlinked source file and a symlinked directory", () => {
@@ -76,5 +153,23 @@ describe("listLunoraSourceFiles", () => {
         symlinkSync(lunoraDirectory, join(lunoraDirectory, "loop"), "dir");
 
         expect(names(listLunoraSourceFiles(lunoraDirectory))).toStrictEqual(["messages.ts"]);
+    });
+});
+
+describe(isTestPath, () => {
+    it.each([
+        ["chat/x.test", true],
+        ["chat/x.spec.ts", true],
+        ["chat/__tests__/helper", true],
+        ["chat/__mocks__/db.ts", true],
+        ["tests/seed.ts", false],
+        ["test-utils", false],
+        ["chat/latest", false],
+        ["chat/contest.ts", false],
+        ["testimonials", false],
+    ])("%s → %s", (path, expected) => {
+        expect.assertions(1);
+
+        expect(isTestPath(path)).toBe(expected);
     });
 });

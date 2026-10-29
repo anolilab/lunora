@@ -31,11 +31,11 @@ const coverage = {
  *  - `mocks`   — Node unit suite over the x402 protocol glue (charge middleware
  *                + pay wallet/policy) against in-memory facilitator/account
  *                doubles — no real chain, no network. Always on.
- *  - `workerd` — real workerd via `@cloudflare/vitest-plugin`: boots
- *                `@x402/core` +
- *                `@x402/evm` in the pool and drives the `withX402` charge
- *                middleware + the `.x402({ price })` procedure seam to a real
- *                402 challenge, with the facilitator mocked at the fetch
+ *  - `workerd` — real workerd via `@cloudflare/vitest-plugin`: drives the
+ *                `withX402` charge middleware + the `.x402({ price })`
+ *                procedure seam to a real 402 challenge, then pays it with the
+ *                pay rail (a viem EIP-712 signature made inside workerd) through
+ *                verify + settle, with the facilitator mocked at the fetch
  *                boundary (see `__tests__/workerd/`).
  */
 const runWorkerd = process.env.LUNORA_WORKERD_TESTS === "1";

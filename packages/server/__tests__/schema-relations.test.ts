@@ -45,7 +45,7 @@ describe("defineTable().relations", () => {
             };
         });
 
-        expect(orders.relationMap.customer!.references).toBe("slug");
+        expect(orders.relationMap.customer).toMatchObject({ references: "slug" });
     });
 
     it("one without onDelete leaves the action undefined", () => {
@@ -57,7 +57,7 @@ describe("defineTable().relations", () => {
             };
         });
 
-        expect(messages.relationMap.author!.onDelete).toBeUndefined();
+        expect(messages.relationMap.author).toMatchObject({ onDelete: undefined });
     });
 
     it("supports self-referential relations", () => {

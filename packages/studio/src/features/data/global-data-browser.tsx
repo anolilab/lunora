@@ -1,13 +1,14 @@
 import type { GlobalFacetResult, GlobalFilterClause, GlobalTableInfo, GlobalTablePage } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useMirroredRef from "../../hooks/use-mirrored-ref";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
+import { facetFilterValue, fireAndForget } from "../../lib/internal";
 import DataFacets from "./data-facets";
 import GlobalDataPage from "./global-data-page";
 import GlobalTablesEmptyState from "./global-tables-empty-state";
@@ -62,7 +63,7 @@ export const GlobalDataBrowser = ({
     pageSize: initialPageSize = DEFAULT_PAGE_SIZE,
     schemaSwitch,
 }: GlobalDataBrowserProps = {}): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     // Seed from `initialTable` (a cross-tier ref jump from the Table editor) so the
@@ -119,23 +120,17 @@ export const GlobalDataBrowser = ({
 
     // Refetch every toggled-on facet for the active view — called after a filter
     // changes (and on each poll tick) so the summaries track the previewed rows.
-    const refetchFacets = (table: string, activeFilters: GlobalFilterClause[]): void => {
-        refetchFacetsViaHook(facetFetcher(table, activeFilters));
-    };
+    const refetchFacets = (table: string, activeFilters: GlobalFilterClause[]): Promise<void> => refetchFacetsViaHook(facetFetcher(table, activeFilters));
 
     // D1 is HTTP-only (no subscription channel), so poll to keep the table list
     // and the current page current without a manual reload — `useAutoRefresh`
     // pauses while the tab is hidden. The tick closure is held in a ref, so it
     // always sees the latest selection/filters; it re-runs the two TanStack reads
     // and the open facets.
-    useAutoRefresh(() => {
-        tablesQuery.refetch();
-
-        if (selectedTable !== null) {
-            pageQuery.refetch();
-            refetchFacets(selectedTable, filtersRef.current);
-        }
-    }, true);
+    // One timer per read: a failing facet backs off only the facet refresh, not the table list or the page.
+    useAutoRefresh(() => tablesQuery.poll(), true);
+    useAutoRefresh(() => pageQuery.poll(), selectedTable !== null);
+    useAutoRefresh(() => (selectedTable === null ? undefined : refetchFacets(selectedTable, filtersRef.current)), selectedTable !== null);
 
     // The table last applied to the selection (cross-tier jump, deep link, or
     // back/forward). Lets the URL-reconcile effect skip values this component itself
@@ -174,14 +169,14 @@ export const GlobalDataBrowser = ({
         setOffset(0);
 
         if (selectedTable !== null) {
-            refetchFacets(selectedTable, next);
+            fireAndForget(refetchFacets(selectedTable, next));
         }
     };
 
     // Clicking a facet value adds an `eq` filter for that column/value, narrowing the
     // view. Replaces any existing clause for the same column so repeated clicks don't stack.
     const onFacetFilter = (column: string, value: unknown): void => {
-        applyFilters([...filtersRef.current.filter((clause) => clause.column !== column), { column, value }]);
+        applyFilters([...filtersRef.current.filter((clause) => clause.column !== column), { column, value: facetFilterValue(value) }]);
     };
 
     // Remove one active drill-down filter (its chip's ✕).

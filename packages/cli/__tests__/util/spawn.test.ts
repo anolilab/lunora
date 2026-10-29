@@ -1,5 +1,8 @@
+import type { LunoraErrorLike } from "@lunora/errors";
+import { isLunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
+import { EXIT_CODE, exitCodeForError } from "../../src/util/exit-code";
 import { defaultSpawner, spawnShellCompat } from "../../src/util/spawn";
 
 describe("spawnShellCompat", () => {
@@ -76,6 +79,28 @@ describe("spawnShellCompat", () => {
             command: "pnpm",
             shell: true,
         });
+    });
+
+    it("doubles every backslash run before an embedded quote", () => {
+        expect.assertions(1);
+
+        expect(spawnShellCompat("pnpm", ["--msg", String.raw`a\\"b \x\"`], "win32")).toStrictEqual({
+            args: ["--msg", String.raw`"a\\\\\"b \x\\\""`],
+            command: "pnpm",
+            shell: true,
+        });
+    });
+
+    // The escaping was a regex pair that re-scanned a backslash run from every position in it
+    // (CodeQL js/polynomial-redos); one pass keeps a long run linear.
+    it("escapes a very long run of backslashes in linear time", () => {
+        expect.assertions(1);
+
+        const started = performance.now();
+
+        spawnShellCompat("pnpm", [`a ${"\\".repeat(200_000)}x`], "win32");
+
+        expect(performance.now() - started).toBeLessThan(1000);
     });
 
     it("emits an explicit empty token for an empty argument so following positionals don't shift", () => {
@@ -157,5 +182,49 @@ describe("defaultSpawner", () => {
         });
 
         expect(result.code).toBe(3);
+    });
+
+    // Every shell-out in the CLI goes through this spawner, so it is the one
+    // place that can turn "wrangler/git/docker isn't installed" into something
+    // a script can branch on — exit 9 rather than the generic 1.
+    it("codes a command that is not on PATH as LOCAL_DEPENDENCY_MISSING", async () => {
+        expect.assertions(3);
+
+        const error = await defaultSpawner({ args: [], command: "lunora-definitely-not-a-real-binary" }).catch((error_: unknown) => error_);
+
+        expect(isLunoraError(error)).toBe(true);
+        expect((error as LunoraErrorLike).code).toBe("LOCAL_DEPENDENCY_MISSING");
+        expect(exitCodeForError(error)).toBe(EXIT_CODE.MISSING_DEPENDENCY);
+    });
+
+    it("decodes a multi-byte character split across two output chunks once", async () => {
+        expect.assertions(1);
+
+        // "é" is 0xC3 0xA9 in UTF-8; written as two separate chunks, a per-chunk
+        // `toString()` decoded each half as a replacement character.
+        const result = await defaultSpawner({
+            args: ["-e", "process.stdout.write(Buffer.from([0xc3])); setTimeout(() => process.stdout.write(Buffer.from([0xa9])), 50);"],
+            captureStdoutSilently: true,
+            command: process.execPath,
+        });
+
+        expect(result.stdout).toBe("é");
+    });
+
+    it("captures all of a large stdout written immediately before exit", async () => {
+        expect.assertions(5);
+
+        const size = 1_000_000;
+
+        for (let run = 0; run < 5; run += 1) {
+            // eslint-disable-next-line no-await-in-loop -- runs are sequential so each is a separate exit race
+            const result = await defaultSpawner({
+                args: ["-e", `process.stdout.write("x".repeat(${String(size)}), () => process.exit(0));`],
+                captureStdoutSilently: true,
+                command: process.execPath,
+            });
+
+            expect(result.stdout?.length).toBe(size);
+        }
     });
 });

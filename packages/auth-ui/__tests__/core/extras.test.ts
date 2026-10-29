@@ -362,6 +362,69 @@ describe("redirectTo reaches every sign-in transport", () => {
         expect(replace).toHaveBeenCalledWith("/invite/xyz");
     });
 
+    it("sends a phone code to a corrected number inside the cooldown, but not a repeat of the same one", async () => {
+        expect.assertions(3);
+
+        const { createPhoneVerifyController, resolveContext } = await import("../../src/core");
+
+        const sendOtp = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const context = resolveContext({
+            authClient: { getSession: vi.fn(), phoneNumber: { sendOtp, verify: vi.fn() } } as never,
+            nav: { navigate: vi.fn(), replace: vi.fn() },
+            redirects: { afterSignIn: "/app" },
+        });
+        const controller = createPhoneVerifyController(context);
+
+        await controller.actions.send("+15551234567");
+        await controller.actions.send("+15551234567");
+
+        // The refused repeat says why: a silent no-op reads as a broken button.
+        expect(controller.getState().status).toBe("error");
+        expect(controller.getState().error).toBeDefined();
+
+        controller.actions.restart();
+        await controller.actions.send("+15557654321");
+
+        expect(sendOtp).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps an in-flight phone send's status when a refused repeat arrives", async () => {
+        expect.assertions(1);
+
+        const { createPhoneVerifyController, resolveContext } = await import("../../src/core");
+
+        const completions: (() => void)[] = [];
+        const sendOtp = vi.fn(
+            () =>
+                new Promise((resolve) => {
+                    completions.push(() => {
+                        resolve({ data: {}, error: null });
+                    });
+                }),
+        );
+        const context = resolveContext({
+            authClient: { getSession: vi.fn(), phoneNumber: { sendOtp, verify: vi.fn() } } as never,
+            nav: { navigate: vi.fn(), replace: vi.fn() },
+            redirects: { afterSignIn: "/app" },
+        });
+        const controller = createPhoneVerifyController(context);
+
+        const first = controller.actions.send("+15551234567");
+        completions[0]?.();
+        await first;
+
+        controller.actions.restart();
+        const second = controller.actions.send("+15557654321");
+
+        // A repeat of the first number is refused while the second send is in flight; that send keeps its status.
+        await controller.actions.send("+15551234567");
+
+        expect(controller.getState().status).toBe("submitting");
+
+        completions[1]?.();
+        await second;
+    });
+
     it("falls back to the configured default on a client-side door when redirectTo would leave the origin", async () => {
         expect.assertions(1);
 

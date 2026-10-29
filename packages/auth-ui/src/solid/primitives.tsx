@@ -1,7 +1,8 @@
 import type { JSX } from "solid-js";
-import { createUniqueId, For, Index, Show } from "solid-js";
+import { createEffect, createSignal, createUniqueId, For, Index, onCleanup, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 
+import { cooldownLabel, watchCooldown } from "../core/cooldown";
 import { providerLabel } from "../core/labels";
 import type { PasswordRequirement } from "../core/password-policy";
 import { passwordRequirements, passwordScore } from "../core/password-policy";
@@ -108,20 +109,38 @@ const Field = (props: FieldProps): JSX.Element => {
     );
 };
 
-/** Primary submit button with a pending state. */
+/** Primary submit button with a pending state and an optional resend cooldown. */
 interface SubmitButtonProps {
+    /** A send/resend flow's `resendAvailableAt`: disabled, with a countdown, until then. */
+    availableAt?: number;
     children: JSX.Element;
     pending: boolean;
 }
 
-const SubmitButton = (props: SubmitButtonProps): JSX.Element => (
-    <button class="lunora-auth-button" disabled={props.pending} type="submit">
-        <Show when={props.pending}>
-            <span aria-hidden="true" class="lunora-auth-button__spinner" />
-        </Show>
-        {props.children}
-    </button>
-);
+const SubmitButton = (props: SubmitButtonProps): JSX.Element => {
+    const { localization: t } = useAuthUI();
+    const [wait, setWait] = createSignal(0);
+
+    createEffect(() => {
+        onCleanup(
+            watchCooldown(props.availableAt, (seconds) => {
+                setWait(seconds);
+            }),
+        );
+    });
+
+    return (
+        <button class="lunora-auth-button" disabled={props.pending || wait() > 0} type="submit">
+            <Show when={props.pending}>
+                <span aria-hidden="true" class="lunora-auth-button__spinner" />
+            </Show>
+            {props.children}
+            <Show when={wait() > 0}>
+                <span class="lunora-auth-button__cooldown">{cooldownLabel(t, wait())}</span>
+            </Show>
+        </button>
+    );
+};
 
 /** Top-level error / success banner (error is announced via `role="alert"`). */
 interface FormBannerProps {

@@ -1,10 +1,10 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "API", "Fn", and "Docs" are the domain terms for this API-docs panel; the file name and default-export name are fixed by the studio's tab wiring. */
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { EmptyState } from "../../components/ui/empty-state";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import type { TableInfo } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -289,7 +289,7 @@ const groupByFile = (functionList: ReadonlyArray<FunctionDescriptor>): ReadonlyA
  */
 const ApiDocsPanel = ({ functions, initialShardKey }: ApiDocsPanelProps): ReactElement => {
     const t = useT();
-    const client = useLunora();
+    const client = useStudioClient();
 
     const [tables, setTables] = useState<TableInfo[] | null>(null);
     const [selected, setSelected] = useState<Selection | null>(null);

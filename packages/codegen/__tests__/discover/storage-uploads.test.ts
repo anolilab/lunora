@@ -37,7 +37,7 @@ describe("discoverStorageUploads", () => {
         const found = discoverStorageUploads(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ analyzable: true, exportName: "save", method: "upload", presentKeys: [] });
+        expect(found[0]).toMatchObject({ analyzable: true, scope: { kind: "export", name: "save" }, method: "upload", presentKeys: [] });
     });
 
     it("records the present option keys on an upload() options object (arg index 2)", () => {

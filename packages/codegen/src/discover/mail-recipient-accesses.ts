@@ -1,9 +1,11 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { MailRecipientAccessIR } from "../ir";
-import { collectCallRows } from "./ast";
+import { collectCallRows, propertyKeyName } from "./ast";
+import { callSiteScopeOf } from "./attribution";
+import { isContextSurface } from "./context-root";
 
 /** The mailer methods whose first argument is an options object carrying recipient fields. */
 const MAIL_METHODS = new Set(["queue", "send"]);
@@ -29,9 +31,9 @@ const mailRecipientMethod = (node: TsNode): string | undefined => {
         return undefined;
     }
 
-    const receiver = node.getExpression().getText();
+    const receiver = node.getExpression();
 
-    return receiver === "ctx.mail" || receiver === "ctx.email" ? method : undefined;
+    return isContextSurface(receiver, ["mail"]) || isContextSurface(receiver, ["email"]) ? method : undefined;
 };
 
 /**
@@ -52,10 +54,10 @@ const hasUnscopedArgumentDerivedRecipient = (argument: TsNode): boolean => {
         if (Node.isShorthandPropertyAssignment(property)) {
             const value = property.getNameNode();
 
-            return RECIPIENT_FIELDS.has(property.getName()) && isArgumentDerived(value) && !isScopedByContext(value);
+            return RECIPIENT_FIELDS.has(propertyKeyName(property)) && isArgumentDerived(value) && !isScopedByContext(value);
         }
 
-        if (!Node.isPropertyAssignment(property) || !RECIPIENT_FIELDS.has(property.getName())) {
+        if (!Node.isPropertyAssignment(property) || !RECIPIENT_FIELDS.has(propertyKeyName(property))) {
             return false;
         }
 
@@ -79,7 +81,7 @@ const mailAccessInCall = (call: CallExpression, relativePath: string): MailRecip
         return undefined;
     }
 
-    return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber(), method };
+    return { scope: callSiteScopeOf(call), file: relativePath, line: call.getStartLineNumber(), method };
 };
 
 /**

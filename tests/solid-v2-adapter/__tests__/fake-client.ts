@@ -39,6 +39,7 @@ export const createFakeClient = (): FakeClient => {
     const client = {
         acquireConnectionContext: () => () => undefined,
         connectionStatus: () => status,
+        identityEpoch: (): number => 0,
         mutation: (function_: FunctionReference, args: unknown) => {
             mutationCalls.push({ args, functionPath: function_.__lunoraRef });
 
@@ -56,6 +57,7 @@ export const createFakeClient = (): FakeClient => {
                 statusListeners.delete(listener);
             };
         },
+        onIdentityChange: (): Unsubscribe => () => undefined,
         subscribe: (
             function_: FunctionReference,
             args: Record<string, unknown>,

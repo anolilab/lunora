@@ -57,5 +57,15 @@
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
+    },
+    "lunora": {
+        "queueTuning": {
+            "queues": {
+                "notifications": {
+                    "max_retries": 3,
+                    "dead_letter_queue": "notifications-dlq"
+                }
+            }
+        }
     }
 }

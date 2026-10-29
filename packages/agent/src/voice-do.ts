@@ -1,10 +1,10 @@
-import type { AiBindingLike } from "@lunora/ai";
-import { createAi } from "@lunora/ai";
+import { createAi } from "@lunora/ai/create";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { createDispatchRunner } from "@lunora/dispatch";
 
 import { toBase64 } from "../../../shared/base64";
 import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
+import resolveAgentAi from "./agent-ai";
 import { createCompact, createStreamGenerate } from "./generate";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import type { AgentDefinition, AgentFunctionPaths, AgentRunFunction, AgentStreamGenerate } from "./types";
@@ -170,7 +170,8 @@ class VoiceSessionDO {
         this.exportName = exportName;
         this.paths = DEFAULT_AGENT_FUNCTION_PATHS;
         // `env` also enables opt-in AI Gateway routing (LUNORA_AI_GATEWAY_*).
-        this.ai = createAi({ binding: env["AI"] as AiBindingLike, env });
+        // Without a binding the facade still exists and every call throws a directed error.
+        this.ai = resolveAgentAi(env) ?? createAi({ env });
         this.streamGenerate = createStreamGenerate(agent, env);
         this.sttModel = agent.voice?.stt ?? DEFAULT_STT_MODEL;
         this.ttsModel = agent.voice?.tts ?? DEFAULT_TTS_MODEL;
@@ -220,7 +221,7 @@ class VoiceSessionDO {
             dropExpiredCredentialSocket(server);
 
             // eslint-disable-next-line unicorn/no-null -- Web Response body for a 101 upgrade is `BodyInit | null`; null is the standard "no body" value
-            return new Response(null, { status: 101, webSocket: client } as unknown as ResponseInit);
+            return new Response(null, { status: 101, webSocket: client });
         }
 
         (server as unknown as HibernatableWebSocket).serializeAttachment?.({
@@ -241,7 +242,7 @@ class VoiceSessionDO {
         }
 
         // eslint-disable-next-line unicorn/no-null -- Web Response body for a 101 upgrade is `BodyInit | null`; null is the standard "no body" value
-        return new Response(null, { status: 101, webSocket: client } as unknown as ResponseInit);
+        return new Response(null, { status: 101, webSocket: client });
     }
 
     /** Hibernation message handler — never throws (a thrown handler is fatal to the socket). */

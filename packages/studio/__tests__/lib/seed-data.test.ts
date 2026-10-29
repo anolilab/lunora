@@ -1,6 +1,6 @@
+import { encodeWire } from "@lunora/wire";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { encodeWire } from "../../../../shared/wire-codec";
 import { collectUnresolvableFkColumns, requestSeedRows, SEED_ENDPOINT } from "../../src/lib/seed-data";
 
 /** A minimal `Response`-like the seed-data client reads (`.ok` + `.json()` + `.status`). */
@@ -141,6 +141,20 @@ describe("requestSeedRows", () => {
         await expect(requestSeedRows(request)).resolves.toStrictEqual({
             kind: "error",
             message: expect.stringContaining("users, teams"),
+        });
+    });
+
+    it("shows the planner's message for a seed-refused refusal", async () => {
+        expect.assertions(1);
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => jsonResponse(false, { error: "seed-refused", message: 'cannot seed "nodes": required foreign key "parentId"', ok: false })),
+        );
+
+        await expect(requestSeedRows(request)).resolves.toStrictEqual({
+            kind: "error",
+            message: 'cannot seed "nodes": required foreign key "parentId"',
         });
     });
 

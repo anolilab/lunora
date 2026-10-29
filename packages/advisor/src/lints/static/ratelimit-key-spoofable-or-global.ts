@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * Flags a `rateLimit`/`dbRateLimit` middleware call (`@lunora/ratelimit`) whose
@@ -39,8 +40,12 @@ const ratelimitKeySpoofableOrGlobal: Lint = {
         return context.ratelimitKeySelectors.map((selector) =>
             emit(ratelimitKeySpoofableOrGlobal, {
                 cacheKey: `ratelimit_key_spoofable_or_global:${selector.file}:${selector.line.toString()}`,
-                detail: `\`${selector.callee}(…, "${selector.limitName}", { key })\` in \`${selector.exportName}\` (${selector.file}:${selector.line.toString()}) derives its \`key\` from \`args\` with no server-side scoping — an attacker can rotate the key per request and bypass the limit. Derive \`key\` from \`ctx.auth.userId\` / \`ctx.ip\` instead.`,
-                metadata: { callee: selector.callee, exportName: selector.exportName, file: selector.file, limitName: selector.limitName, line: selector.line },
+                detail: `\`${selector.callee}(…, "${selector.limitName}", { key })\` in ${callSiteWhere(selector)} derives its \`key\` from \`args\` with no server-side scoping — an attacker can rotate the key per request and bypass the limit. Derive \`key\` from \`ctx.auth.userId\` / \`ctx.ip\` instead.`,
+                metadata: {
+                    callee: selector.callee,
+                    ...callSiteFields(selector),
+                    limitName: selector.limitName,
+                },
             }),
         );
     },

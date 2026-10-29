@@ -2,7 +2,16 @@ export type { ActionHandle } from "./action";
 export { action } from "./action";
 export type { AgentApi, AgentHandle, AgentOptions, AgentThreadRecord, AgentThreadStatus } from "./agent";
 export { agent } from "./agent";
-export type { AgentChatApi, AgentChatHandle, AgentChatMessage, AgentChatOptions, AgentLiveEvent, AgentProgressEvent, AgentTokenDelta } from "./agent-chat";
+export type {
+    AgentApprovalGrant,
+    AgentChatApi,
+    AgentChatHandle,
+    AgentChatMessage,
+    AgentChatOptions,
+    AgentLiveEvent,
+    AgentProgressEvent,
+    AgentTokenDelta,
+} from "./agent-chat";
 export { agentChat } from "./agent-chat";
 export type { AgentStateApi, AgentStateHandle, AgentStateOptions } from "./agent-state";
 export { agentState } from "./agent-state";
@@ -38,6 +47,8 @@ export { getLunoraClient, setLunoraClient } from "./context";
 export type { FlagValue } from "./flag";
 export { flag, flags } from "./flag";
 export { hydratePreloaded } from "./hydrate-preloaded";
+export type { LiveTopicState } from "./live-topic";
+export { liveTopic } from "./live-topic";
 export type { MutationHandle } from "./mutation";
 export { mutation } from "./mutation";
 export type { MutatorHandle, MutatorHandleStore, MutatorTransaction } from "./mutator";

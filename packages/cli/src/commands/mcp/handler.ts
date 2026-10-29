@@ -1,6 +1,7 @@
 import { VERSION } from "../../cli";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { McpScope } from "../../util/mcp-clients";
 import type { McpOptions } from "./index";
 import { runMcpInstall, runMcpInstallList } from "./install";
@@ -27,6 +28,7 @@ const serve = async (cwd: string, options: McpOptions): Promise<{ code: number }
     const { code } = await runMcpServe({
         allowWrites: options.allowWrites === true,
         cwd,
+        functions: options.functions === true,
         // cerebro exposes `--no-docs` as `docs: false`.
         noDocs: options.docs === false,
         version: VERSION,
@@ -86,7 +88,7 @@ const execute: CommandHandler<McpOptions> = defineHandler<McpOptions>(async ({ a
 
     logger.error("mcp: unknown subcommand. Usage: lunora mcp <install|uninstall|serve>");
 
-    return { code: 1 };
+    return { code: EXIT_CODE.USAGE };
 });
 
 export { execute };

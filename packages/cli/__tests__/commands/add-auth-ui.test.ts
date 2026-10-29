@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { detectAuthUiItem, isReactNativeProject, isSolid2Project, normalizeFeature } from "../../src/commands/add/features";
 import { runAddFeature } from "../../src/commands/add/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const makeLogger = (): { lines: string[]; logger: Logger } => {
@@ -202,7 +203,7 @@ describe("runAddFeature (auth-ui)", () => {
         // have installed `auth-ui-react` without asking.
         const result = await runAddFeature({ cwd: workdir, feature: "auth-ui", from: registryRoot, logger, yes: true });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(lines.join("\n")).toMatch(/no React Native port/);
         expect(existsSync(join(workdir, "lunora", "auth-ui"))).toBe(false);
     });

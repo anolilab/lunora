@@ -15,9 +15,12 @@ export const UPSERT_EMBED_CONCURRENCY = 8;
  * eagerly like `Promise.all`. It records the first error, stops every worker
  * from pulling any NEW item, then waits for all already-in-flight calls to
  * settle before re-throwing that first error. Eager rejection would leave
- * sibling calls running past the caller's `catch`; the vector sync hook relies
- * on quiescence so its compensating deletes can't race a still-in-flight upsert
- * (an upsert landing after its index's compensation would leave a stale vector).
+ * sibling calls running past the caller's `catch` — and for the vector sync
+ * hook that is a correctness bug, not just untidiness: the hook is one link in
+ * the shard's commit-ordered chain of post-commit work, so an upsert still in
+ * flight when the hook "failed" can land after the NEXT commit's hook for the
+ * same row and leave the stale vector behind. Quiescence is what makes
+ * "this hook is done" true.
  */
 export const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number, function_: (item: T, index: number) => Promise<U>): Promise<U[]> => {
     if (items.length === 0) {
@@ -33,9 +36,10 @@ export const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number
     const workers = Array.from({ length: effectiveLimit }, async () => {
         for (;;) {
             // Once any worker has recorded a failure, stop pulling new items so
-            // no NEW call starts after the caller may begin compensating. Calls
-            // already awaited below still settle (they are not cancelled), which
-            // is what guarantees quiescence by the time this function throws.
+            // no NEW call starts after the caller has been told this hook is
+            // over. Calls already awaited below still settle (they are not
+            // cancelled), which is what guarantees quiescence by the time this
+            // function throws.
             if (failed) {
                 return;
             }

@@ -6,6 +6,7 @@ import { LINKED_PROJECT_FILE } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runLinkCommand } from "../../src/commands/link/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): { errors: string[]; logger: Logger; warns: string[] } => {
@@ -77,7 +78,7 @@ describe("lunora link", () => {
         const { errors, logger } = silentLogger();
         const result = runLinkCommand({ cwd: workdir, logger });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(errors.some((line) => line.includes("--url"))).toBe(true);
     });
 
@@ -87,7 +88,7 @@ describe("lunora link", () => {
         const { logger } = silentLogger();
         const result = runLinkCommand({ cwd: workdir, logger, url: "not-a-url" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(existsSync(join(workdir, LINKED_PROJECT_FILE))).toBe(false);
     });
 

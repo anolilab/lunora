@@ -42,8 +42,8 @@ interface FunctionReference {
 ### `LunoraQueuesOptions` (interface)
 
 ```ts
-interface LunoraQueuesOptions {
-    bindings: Record<string, QueueBindingLike>;
+interface LunoraQueuesOptions<Name extends string = string> {
+    bindings: Record<Name, QueueBindingLike>;
 }
 ```
 
@@ -66,9 +66,9 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 ### `QueueBindingSpec` (interface)
 
 ```ts
-interface QueueBindingSpec {
+interface QueueBindingSpec<Name extends string = string> {
     binding: string;
-    exportName: string;
+    exportName: Name;
     name: string;
 }
 ```
@@ -111,6 +111,7 @@ interface QueueConsumerTuning {
     deadLetterQueue?: string;
     maxBatchSize?: number;
     maxBatchTimeout?: number;
+    maxConcurrency?: number;
     maxRetries?: number;
     retryDelay?: number;
 }
@@ -139,6 +140,16 @@ type QueueEnv = Record<string, unknown>;
 
 ```ts
 type QueueHandler<Body = unknown> = (context: QueueRunContext, batch: QueueMessageBatch<Body>) => Promise<void> | void;
+```
+
+### `QueueLivePublisher` (interface)
+
+```ts
+interface QueueLivePublisher {
+    publish: <Payload>(topic: QueueLiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: {
+        shardKey?: string;
+    }) => Promise<void>;
+}
 ```
 
 ### `QueueLogger` (interface)
@@ -187,6 +198,7 @@ type QueueRegistry = Record<string, QueueRegistryEntry>;
 
 ```ts
 interface QueueRegistryEntry {
+    binding?: string;
     definition: QueueDefinition<any>;
     exportName: string;
 }
@@ -201,6 +213,7 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 ```ts
 interface QueueRunContext {
     readonly env: Record<string, unknown>;
+    readonly live?: QueueLivePublisher;
     readonly log: DispatchLogger;
     readonly run: DispatchRunFunction;
 }
@@ -220,12 +233,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
-### `Queues` (interface)
+### `Queues` (type)
 
 ```ts
-interface Queues {
-    [exportName: string]: QueueProducer;
-}
+type Queues<Name extends string = string> = Readonly<Record<Name, QueueProducer>>;
 ```
 
 ### `RunFunctionOptions` (interface)
@@ -239,6 +250,61 @@ interface RunFunctionOptions {
 }
 ```
 
+### `SubscriptionConfig` (interface)
+
+```ts
+interface SubscriptionConfig<Payload = unknown> extends QueueConsumerTuning {
+    handler: QueueHandler<Payload>;
+    name?: string;
+}
+```
+
+### `SubscriptionDefinition` (interface)
+
+```ts
+interface SubscriptionDefinition<Payload = unknown> extends QueueDefinition<Payload> {
+    handler: QueueHandler<Payload>;
+    mode: "push";
+    topic: TopicDefinition<Payload>;
+}
+```
+
+### `TopicBindingSpec` (interface)
+
+```ts
+interface TopicBindingSpec<Name extends string = string> {
+    exportName: Name;
+    subscriptions: ReadonlyArray<{
+        binding: string;
+        exportName: string;
+    }>;
+}
+```
+
+### `TopicDefinition` (interface)
+
+```ts
+interface TopicDefinition<Payload = unknown> {
+    readonly __lunoraBody?: Payload;
+    isLunoraTopic: true;
+}
+```
+
+### `TopicPublisher` (interface)
+
+```ts
+interface TopicPublisher<Payload = unknown> {
+    publish: (payload: Payload, options?: QueueSendOptions) => Promise<void>;
+    publishBatch: (messages: Iterable<MessageSendRequestLike<Payload>>, options?: QueueSendBatchOptions) => Promise<void>;
+}
+```
+
+### `Topics` (type)
+
+```ts
+type Topics<Name extends string = string> = Readonly<Record<Name, TopicPublisher>>;
+```
+
 ### `createQueueCaptureSink` (const)
 
 ```ts
@@ -248,7 +314,7 @@ const createQueueCaptureSink: (env: QueueEnv, options?: QueueCaptureOptions) => 
 ### `createQueueContext` (const)
 
 ```ts
-const createQueueContext: (env: Record<string, unknown>, specs: ReadonlyArray<QueueBindingSpec>) => Queues;
+const createQueueContext: <Name extends string>(env: Record<string, unknown>, specs: ReadonlyArray<QueueBindingSpec<Name>>) => Queues<Name>;
 ```
 
 ### `createQueueRunContext` (const)
@@ -260,13 +326,31 @@ const createQueueRunContext: (options: RunContextOptions) => QueueRunContext;
 ### `createQueues` (const)
 
 ```ts
-const createQueues: (options: LunoraQueuesOptions) => Queues;
+const createQueues: <Name extends string>(options: LunoraQueuesOptions<Name>) => Queues<Name>;
+```
+
+### `createTopicContext` (const)
+
+```ts
+const createTopicContext: <Name extends string>(env: Record<string, unknown>, specs: ReadonlyArray<TopicBindingSpec<Name>>) => Topics<Name>;
 ```
 
 ### `defineQueue` (const)
 
 ```ts
 const defineQueue: <Body = unknown>(config: QueueConfig<Body>) => QueueDefinition<Body>;
+```
+
+### `defineSubscription` (const)
+
+```ts
+const defineSubscription: <Payload>(topic: TopicDefinition<Payload>, config: SubscriptionConfig<Payload>) => SubscriptionDefinition<Payload>;
+```
+
+### `defineTopic` (const)
+
+```ts
+const defineTopic: <Payload = unknown>() => TopicDefinition<Payload>;
 ```
 
 ### `dispatchQueueBatch` (const)
@@ -312,7 +396,18 @@ interface DispatchOptions {
     capture?: QueueCaptureSink;
     env: Record<string, unknown>;
     fetchImpl?: typeof fetch;
+    live?: QueueLivePublisher;
     traceparent?: string;
+}
+```
+
+### `QueueLiveTopicRef` (interface)
+
+```ts
+interface QueueLiveTopicRef<Payload = unknown> {
+    readonly __lunoraLive: string;
+    readonly __payload?: Payload;
+    readonly topic: string;
 }
 ```
 
@@ -329,6 +424,7 @@ interface RunContextOptions {
     env: Record<string, unknown>;
     exportName: string;
     fetchImpl?: typeof fetch;
+    live?: QueueLivePublisher;
     traceparent?: string;
 }
 ```

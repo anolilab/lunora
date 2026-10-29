@@ -2,7 +2,7 @@
  * Agent-wallet resolution for the pay rail.
  *
  * A wallet holds spending authority, so this module lives behind the pay rail's
- * `ActionCtx`-only surface and reads its key material through {@link WalletDeps}
+ * `ActionCtx`-only surface and reads its key material through `X402PayDeps.getSecret`
  * (wired to `ctx.secrets.get` at the call site) — a private key is a secret, never
  * a plain var. The right scheme family is registered on the client by the
  * configured network: `@x402/evm` (viem) for `eip155:*`, `@x402/svm` for Solana.
@@ -29,15 +29,13 @@ import type { ClientSvmSigner } from "@x402/svm";
 import type { X402CdpSignerConfig, X402PayConfig } from "../config";
 import { isEvmNetwork, toCaip2 } from "../networks";
 import { importOptionalPeer } from "../optional-peer";
-
-/** Reads a secret by name; resolves `undefined` when unset. */
-type GetSecret = (name: string) => Promise<string | undefined> | string | undefined;
+import type { X402PayDeps } from "./fetch";
 
 /** A 32-byte hex private key (64 hex chars), with the `0x` prefix normalised on. */
 const HEX_PRIVATE_KEY = /^0x[0-9a-fA-F]{64}$/;
 
 /** Read a required secret, failing with a clear error when it is missing. */
-const requireSecret = async (getSecret: GetSecret, name: string): Promise<string> => {
+const requireSecret = async (getSecret: X402PayDeps["getSecret"], name: string): Promise<string> => {
     const value = await getSecret(name);
 
     if (value === undefined || value.length === 0) {
@@ -72,7 +70,7 @@ const assertSignerFamily = (signer: ClientEvmSigner | ClientSvmSigner, evm: bool
  * the x402 EIP-712 authorization directly, so the key never leaves Coinbase. Needs
  * the optional `@coinbase/cdp-sdk` peer installed — a clear error says so if not.
  */
-const resolveCdpEvmAccount = async (signer: X402CdpSignerConfig, getSecret: GetSecret): Promise<ClientEvmSigner> => {
+const resolveCdpEvmAccount = async (signer: X402CdpSignerConfig, getSecret: X402PayDeps["getSecret"]): Promise<ClientEvmSigner> => {
     // Load the optional peer first: if it is missing, a "not installed" error is
     // far more actionable than a "secret not set" one for the same misconfig.
     const { CdpClient } = await importOptionalPeer(
@@ -92,21 +90,11 @@ const resolveCdpEvmAccount = async (signer: X402CdpSignerConfig, getSecret: GetS
 };
 
 /**
- * How the wallet reads its key material — wired to `ctx.secrets.get` in an action.
- * @experimental
- */
-export interface WalletDeps {
-    /** Read a secret (e.g. a private key) by name; `undefined` when unset. */
-    readonly getSecret: GetSecret;
-}
-
-/**
  * Resolve a signer from a raw private key (a viem `LocalAccount` under the hood).
  * The key may be given with or without the `0x` prefix. Typed as the structural
  * `ClientEvmSigner` (`address` + `signTypedData`) rather than viem's own
  * `PrivateKeyAccount` so the published declarations don't require the optional
  * viem peer to type-check.
- * @experimental
  */
 export const resolveEvmAccount = async (privateKey: string): Promise<ClientEvmSigner> => {
     const key = privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`;
@@ -129,7 +117,6 @@ export const resolveEvmAccount = async (privateKey: string): Promise<ClientEvmSi
  * format) or as a base58 string. A 64-byte value is a full secret key (seed ‖
  * public key); a 32-byte value is the seed alone. The returned signer is a
  * structural `ClientSvmSigner` (`TransactionSigner`), so `@x402/svm` accepts it.
- * @experimental
  */
 export const resolveSvmSigner = async (secret: string): Promise<ClientSvmSigner> => {
     const trimmed = secret.trim();
@@ -185,9 +172,8 @@ export const resolveSvmSigner = async (secret: string): Promise<ClientSvmSigner>
  * read), `"raw-key"` (a `ctx.secrets` private key → viem account on EVM or a
  * `@solana/kit` keypair on SVM), or `"cdp"` (a Coinbase-managed wallet via
  * `@coinbase/cdp-sdk`).
- * @experimental
  */
-export const registerWallet = async (client: x402Client, config: X402PayConfig, deps: WalletDeps): Promise<void> => {
+export const registerWallet = async (client: x402Client, config: X402PayConfig, deps: Pick<X402PayDeps, "getSecret">): Promise<void> => {
     const network = toCaip2(config.network);
     const { signer } = config;
     const evm = isEvmNetwork(config.network);

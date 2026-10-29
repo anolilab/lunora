@@ -23,13 +23,11 @@ import type { ssoClient } from "@better-auth/sso/client";
 /**
  * Adds `authClient.signIn.sso({ email | domain | providerId })`. Registering the
  * server `sso` plugin without this leaves those actions unavailable and untyped.
- * @experimental
  */
 export { ssoClient } from "@better-auth/sso/client";
 
 /**
  * The plugin instance `ssoClient()` returns. Exported so an app can type the array it
  * passes to `createAuthClient` when it assembles plugins conditionally.
- * @experimental
  */
 export type SSOClientPlugin = ReturnType<typeof ssoClient>;

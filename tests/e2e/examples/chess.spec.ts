@@ -23,15 +23,24 @@ const signUp = async (page: Page, name: string): Promise<void> => {
 test("seats two players and plays a move that both boards show", async ({ browser, page }) => {
     await signUp(page, `Host${unique()}`);
 
-    // The host opens a public table, which then appears in the other player's list.
-    await page.getByRole("button", { name: "Quick match" }).click();
+    // The host opens a PRIVATE table and the guest joins it by code. Nothing
+    // resets the example between runs, and "Quick match" / "Sit down" take the
+    // oldest open public table, so any table an earlier run left open (a failed
+    // CI attempt leaves one for its own retry) would seat these two apart.
+    await page.getByRole("button", { name: "Private table" }).click();
     await expect(page.getByRole("heading", { name: "Your table" })).toBeVisible();
+
+    const inviteCode = /code (\w+)/.exec((await page.getByText(/· code /).textContent()) ?? "")?.[1] ?? "";
+
+    expect(inviteCode).not.toBe("");
 
     const guestContext = await browser.newContext();
     const guest = await guestContext.newPage();
 
     await signUp(guest, `Guest${unique()}`);
-    await guest.getByRole("button", { name: "Sit down" }).first().click();
+    await guest.getByLabel("Invite code").fill(inviteCode);
+    await guest.getByLabel("Invite code").press("Enter");
+    await expect(guest.getByRole("heading", { name: "Your table" })).toBeVisible();
 
     await page.getByRole("button", { name: "Start game" }).click();
 

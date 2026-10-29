@@ -12,22 +12,25 @@ library;
 /// rejected the write, which is terminal; an uncoded throw is a transport
 /// failure, which is transient and re-queues.
 class LunoraApiException implements Exception {
-  const LunoraApiException(this.code, this.message, [this.data, this.transient = false]);
+  const LunoraApiException(this.code, this.message, [this.data, this.transient = false, this.cause]);
 
   final String code;
   final String message;
   final Object? data;
 
-  /// The call never reached a verdict — a 5xx, or a non-2xx carrying no error
-  /// envelope at all (an edge error page, a WAF block, a proxy).
+  /// The transport error behind a refusal that was raised instead of the raw
+  /// throw, so the caller can still see why the write never reached the server.
+  final Object? cause;
+
+  /// The call never reached a verdict: a reply carrying no error envelope at all
+  /// (an edge error page, a WAF block, a proxy, a body that is not a JSON
+  /// object) other than a 413.
   ///
-  /// Set where the HTTP STATUS is still in scope, because nothing downstream can
-  /// recover it: [code] alone cannot tell a `BAD_REQUEST` a function returned
-  /// from the `INTERNAL` this client synthesises for a body that never came from
-  /// one. Without it a flush of exactly ONE queued write dropped it terminally
-  /// on a gateway blip, while the same response with two or more writes was
-  /// already classified transient by the batch path — so whether a durable write
-  /// survived depended on how deep the queue happened to be.
+  /// Set where the reply is still in scope, because nothing downstream can
+  /// recover it: [code] alone cannot tell an `INTERNAL` a function returned from
+  /// the `INTERNAL` this client synthesises for a body that never came from one.
+  /// A CODED envelope never sets it, whatever its status: a coded 5xx is the
+  /// server's verdict, and is classified by its code alone on every replay path.
   final bool transient;
 
   @override
@@ -51,6 +54,10 @@ const String offlineQueueOverflow = 'OFFLINE_QUEUE_OVERFLOW';
 /// A queued write's `precondition` returned false just before replay, so the
 /// write was discarded instead of being sent against state it no longer suits.
 const String offlinePreconditionFailed = 'OFFLINE_PRECONDITION_FAILED';
+
+/// An `onlineOnly` write was refused because the connection is not live, so it
+/// was never queued, persisted or sent.
+const String offlineNotQueued = 'OFFLINE_NOT_QUEUED';
 
 /// The client was closed with writes still queued.
 const String clientClosed = 'CLIENT_CLOSED';
@@ -76,7 +83,7 @@ const String offlineWriteUnencodable = 'OFFLINE_WRITE_UNENCODABLE';
 /// and the distinction is load-bearing: a replay treats every OTHER coded error
 /// as terminal, so without this list a shard that was briefly unreachable would
 /// permanently reject a durable write the server never even saw.
-const Set<String> transientBatchErrorCodes = <String>{'SHARD_ERROR', 'SHARD_UNAVAILABLE'};
+const Set<String> transientBatchErrorCodes = <String>{'DELIVERY_FENCED', 'SHARD_ERROR', 'SHARD_UNAVAILABLE'};
 
 /// Codes that say "not now" rather than "no".
 ///
@@ -103,13 +110,39 @@ const String payloadTooLarge = 'PAYLOAD_TOO_LARGE';
 /// caller made.
 const String offlineWriteUndecodable = 'OFFLINE_WRITE_UNDECODABLE';
 
+/// The server answered with a success whose `result` does not wire-decode.
+///
+/// The write COMMITTED — only its value is unreadable — so a replay settles it
+/// committed and attaches this error rather than retrying it, which could only
+/// return the same undecodable result forever. A direct call throws it: the
+/// caller cannot be handed a value, but it must be able to tell this apart from
+/// a transport failure, where the write may never have reached the server.
+const String wireDecodeFailed = 'WIRE_DECODE_FAILED';
+
 /// Whether a failed replay may be retried, or is a verdict on the write.
 ///
-/// An uncoded throw is a transport failure and always transient. A coded one is
-/// transient when the status said so ([LunoraApiException.transient]), when the
-/// shard never reached the write, or when the server asked for it later.
+/// ONE predicate for the single-call and batch replay paths alike. An uncoded
+/// throw is a transport failure and always transient. A coded one is transient
+/// when no envelope was read ([LunoraApiException.transient]), when the shard
+/// never reached the write, when the server asked for it later, or when it
+/// refused the credential rather than the write ([authReplayErrorCodes]) — and a coded
+/// envelope is judged by its code alone, never by the HTTP status it came with.
 bool isTransientFailure(Object error) =>
-    error is! LunoraApiException || error.transient || transientBatchErrorCodes.contains(error.code) || rateLimitErrorCodes.contains(error.code);
+    error is! LunoraApiException ||
+    error.transient ||
+    transientBatchErrorCodes.contains(error.code) ||
+    rateLimitErrorCodes.contains(error.code) ||
+    authReplayErrorCodes.contains(error.code);
+
+/// Codes that refused the CREDENTIAL, not the write.
+///
+/// A write queued offline replays with whatever bearer the client held when it
+/// went offline, which has very often expired by the time it reconnects.
+/// Settling the write on that refusal destroys the user's own durable write
+/// over a problem one token refresh fixes, so it HOLDS: it stays queued and
+/// persisted, and replays on the next flush — which setting a fresh token
+/// starts by itself on every connected shard (see `LunoraClient.authToken`).
+const Set<String> authReplayErrorCodes = <String>{'TOKEN_EXPIRED', 'UNAUTHENTICATED', 'UNAUTHORIZED'};
 
 /// The longest delay a rate limit may hold a flush off for, matching the
 /// reference client's own clamp.
@@ -119,6 +152,22 @@ bool isTransientFailure(Object error) =>
 /// otherwise strand every durable write on the queue for that hour with nothing
 /// able to shorten it.
 const int maxRetryAfterMs = 60000;
+
+/// The first wait of a hintless replay backoff, doubled per consecutive answered
+/// failure up to [maxRetryAfterMs] — the reference's `BASE_REPLAY_RETRY_DELAY_MS`.
+const int baseReplayRetryDelayMs = 1000;
+
+/// The wait before retrying a transient refusal that named no delay: exponential
+/// in [attempt] (1-based), capped at [maxRetryAfterMs], then jittered across the
+/// top half of that ceiling so clients refused by one limiter do not come back
+/// in lockstep. [random] returns a value in `[0, 1)`.
+int replayBackoffMs(int attempt, double Function() random) {
+  final exponent = attempt < 1 ? 0 : (attempt - 1 > 16 ? 16 : attempt - 1);
+  final raw = baseReplayRetryDelayMs * (1 << exponent);
+  final ceiling = raw < maxRetryAfterMs ? raw : maxRetryAfterMs;
+
+  return (ceiling * (0.5 + random() * 0.5)).round();
+}
 
 /// How long a rate-limited replay asks the caller to wait, if the envelope said,
 /// clamped to [maxRetryAfterMs].

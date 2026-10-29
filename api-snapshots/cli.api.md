@@ -19,8 +19,8 @@ interface AddCommandOptions {
     cwd?: string;
     diff?: boolean;
     dryRun?: boolean;
+    format?: OutputFormat;
     from?: string;
-    json?: boolean;
     list?: boolean;
     logger: Logger;
     names: ReadonlyArray<string>;
@@ -36,9 +36,8 @@ interface AddCommandOptions {
 ### `AddCommandResult` (interface)
 
 ```ts
-interface AddCommandResult {
+interface AddCommandResult extends CommandResult<RegistryCommandData> {
     bindings: ReadonlyArray<string>;
-    code: number;
     deps: ReadonlyArray<string>;
     skipped: ReadonlyArray<string>;
     written: ReadonlyArray<string>;
@@ -55,18 +54,19 @@ const COMMANDS: readonly [
     "codegen",
     "build",
     "deploy",
-    "containers",
     "prepare",
     "link",
-    "deployments",
+    "cloudflare",
     "logs",
     "run",
     "insights",
+    "profile",
     "reset",
     "migrate",
     "export",
     "import",
     "seed",
+    "shards",
     "backup",
     "eval",
     "verify",
@@ -78,7 +78,8 @@ const COMMANDS: readonly [
     "docs",
     "registry",
     "rules",
-    "mcp"
+    "mcp",
+    "workflow"
 ];
 ```
 
@@ -108,31 +109,44 @@ const DEFAULT_IMPORT_BATCH_SIZE = 500;
 
 ```ts
 interface DeployCommandOptions {
+    allowOpenShards?: boolean;
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
+    bundleMetaPath?: string;
+    celldToolchain?: (options: CelldToolchainProbeOptions) => Promise<CelldToolchainProbe>;
+    clientBuildEnvironment?: string;
+    clientBuildOutputJson?: boolean;
+    clientBuildRan?: boolean;
     commandName?: PreDeployCommand;
     cwd?: string;
+    discoveryCache?: DiscoveryCache;
     dockerAvailable?: DockerProbe;
     dryRun?: boolean;
     emitBindings?: string;
     env?: string;
     fetchImpl?: FetchLike;
-    format?: string;
+    format?: OutputFormat;
+    frameworkBuild?: boolean;
     healthCheck?: boolean;
     healthFetch?: HealthFetch;
     healthSleep?: (ms: number) => Promise<void>;
     interactive?: boolean;
+    lazyFunctions?: boolean;
     logger: Logger;
     migrate?: boolean;
     migrateToken?: string;
     migrateUrl?: string;
     migrateYes?: boolean;
+    openShardGatePassed?: boolean;
     outDir?: string;
     preview?: boolean;
     railpackAvailable?: DockerProbe;
     secretConfirm?: (message: string) => Promise<boolean>;
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
     skipCodegen?: boolean;
+    skipServices?: boolean;
+    smokeLauncher?: DevProcessSpawner;
+    smokeLoad?: boolean;
     spawner?: Spawner;
     strictAdvisories?: boolean;
     target?: string;
@@ -154,6 +168,7 @@ interface DeployCommandResult {
         ok: boolean;
         url: string;
     };
+    logsAvailable?: boolean;
     mintedSecretsFile?: string;
     schemaDrift?: {
         blocked: boolean;
@@ -193,20 +208,28 @@ interface DevCommandOptions {
     findFreePort?: (preferred: number) => Promise<number>;
     flavor?: DevFlavor;
     hasIpv6Loopback?: () => boolean;
+    inspectorPort?: number;
     jsonLogs?: boolean;
+    lazyFunctions?: boolean;
+    local?: boolean;
     logger: Logger;
-    materializeRemote?: typeof materializeRemoteWranglerConfig;
+    materializeDev?: typeof materializeDevWranglerConfig;
+    materializeServiceConfigs?: typeof materializeServiceDevConfigs;
     port?: number;
     probeReady?: ReadinessProbe;
     remote?: boolean;
+    startCelldSession?: typeof startCelldDevSession;
     startCodegen?: typeof startCodegenWatch;
+    startHyperdrive?: typeof startLocalHyperdrive;
     startStudio?: typeof startStudioServer;
     startWorker?: WorkerSpawner;
     studio?: boolean;
     target?: string;
+    tunnel?: DevTunnelRequest;
     waitForInterrupt?: (logger: Logger) => Promise<number>;
     worker?: boolean;
     workerPort?: number;
+    writeCelldProjection?: typeof writeCelldDevProjection;
 }
 ```
 
@@ -214,11 +237,13 @@ interface DevCommandOptions {
 
 ```ts
 interface DevCommandPlan {
+    celldSession?: true;
     flavor: DevFlavor;
     frameworkHint?: string;
     ipv4LoopbackForced: boolean;
     remote: DevRemotePlan;
     runsCodegenWatch: boolean;
+    serviceConfigCleanup?: () => void;
     sidecar?: SpawnDescriptor & {
         tag: string;
     };
@@ -243,12 +268,37 @@ interface DiffEntry {
 }
 ```
 
+### `EXIT_CODE` (const)
+
+```ts
+const EXIT_CODE: {
+    readonly SUCCESS: 0;
+    readonly FAILURE: 1;
+    readonly USAGE: 2;
+    readonly AUTH: 3;
+    readonly PERMISSION: 4;
+    readonly NOT_FOUND: 5;
+    readonly CONFLICT: 6;
+    readonly RATE_LIMITED: 7;
+    readonly UNAVAILABLE: 8;
+    readonly MISSING_DEPENDENCY: 9;
+    readonly CANCELLED: 130;
+};
+```
+
+### `ExitCode` (type)
+
+```ts
+type ExitCode = (typeof EXIT_CODE)[keyof typeof EXIT_CODE];
+```
+
 ### `ExportCommandOptions` (interface)
 
 ```ts
 interface ExportCommandOptions {
     cwd?: string;
     fetchImpl?: StreamingFetchLike;
+    format?: OutputFormat;
     logger: Logger;
     out?: string;
     prod?: boolean;
@@ -261,9 +311,8 @@ interface ExportCommandOptions {
 ### `ExportCommandResult` (interface)
 
 ```ts
-interface ExportCommandResult {
+interface ExportCommandResult extends CommandResult<ExportCommandData> {
     bytes: number;
-    code: number;
     rows: number;
 }
 ```
@@ -291,9 +340,11 @@ interface ImportCommandOptions {
     cwd?: string;
     fetchImpl?: StreamingFetchLike;
     file: string;
+    format?: OutputFormat;
     from?: ImportSourceName;
     logger: Logger;
     prod?: boolean;
+    replace?: boolean;
     scan?: boolean;
     storageDir?: string;
     table?: string;
@@ -308,10 +359,10 @@ interface ImportCommandOptions {
 ### `ImportCommandResult` (interface)
 
 ```ts
-interface ImportCommandResult {
+interface ImportCommandResult extends CommandResult<ImportCommandData> {
     body: ImportSummary | undefined;
-    code: number;
     inserted: number;
+    replaced?: number;
 }
 ```
 
@@ -331,6 +382,7 @@ interface IndexSnapshot {
 interface InitCommandOptions {
     add?: string;
     allowUnsafeSource?: boolean;
+    auth?: string;
     ci?: CiProvider;
     cwd?: string;
     dryRun?: boolean;
@@ -346,7 +398,7 @@ interface InitCommandOptions {
     name?: string;
     overlayBaseFrom?: string;
     packageManagerProbe?: PackageManagerProbe;
-    prompt?: Pick<OfferDeps, "multiSelect" | "select" | "text">;
+    prompt?: Partial<Pick<OfferDeps, "selectAuth">> & Pick<OfferDeps, "multiSelect" | "select" | "text">;
     ref?: string;
     registryFrom?: string;
     registrySource?: string;
@@ -409,6 +461,7 @@ interface MigrateGenerateCommandOptions {
 interface MigrateGenerateCommandResult {
     code: number;
     empty: boolean;
+    error?: string;
     migrationFile: string;
 }
 ```
@@ -506,6 +559,7 @@ interface RunCommandOptions {
     claims?: string;
     cwd?: string;
     fetchImpl?: FetchLike;
+    format?: OutputFormat;
     functionPath: string;
     logger: Logger;
     shard?: string;
@@ -520,6 +574,7 @@ interface RunCommandOptions {
 interface RunCommandResult {
     body: unknown;
     code: number;
+    error?: string;
     requestUrl: string;
 }
 ```
@@ -605,7 +660,7 @@ interface TableSnapshot {
 ### `Template` (type)
 
 ```ts
-type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "react-router" | "solid-v2" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid" | "vinext" | "vinext-pages";
+type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "rspack-react" | "solid-v2" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-react-rspack" | "tanstack-start-solid" | "vinext" | "vinext-pages";
 ```
 
 ### `UnsupportedEntry` (interface)
@@ -668,6 +723,24 @@ const defaultSpawner: Spawner;
 
 ```ts
 const diffSnapshots: (previous: SchemaSnapshot | undefined, next: SchemaSnapshot) => SchemaDiff;
+```
+
+### `exitCodeForCode` (const)
+
+```ts
+const exitCodeForCode: (code: string) => ExitCode;
+```
+
+### `exitCodeForError` (const)
+
+```ts
+const exitCodeForError: (error: unknown) => ExitCode;
+```
+
+### `exitCodeForStatus` (const)
+
+```ts
+const exitCodeForStatus: (status: number | undefined) => ExitCode;
 ```
 
 ### `insertSchemaExtension` (const)
@@ -831,6 +904,34 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 const validatorKindToSqlType: (kind: string) => ColumnSnapshot["sqlType"];
 ```
 
+## `@lunora/cli/cli`
+
+### `COMMANDS` (const)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `CommandName` (type)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `REGISTERED_COMMAND_NAMES` (const)
+
+```ts
+const REGISTERED_COMMAND_NAMES: ReadonlyArray<string>;
+```
+
+### `RunCliOptions` (interface)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `VERSION` (const)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `runCli` (const)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
 ## Referenced internal declarations
 
 Not exported, and reachable only through a signature above. Their members
@@ -841,6 +942,12 @@ public API and is gated as one. Listed once per package, sorted by name.
 
 ```ts
 type ApiSpec = NonNullable<CodegenOptions["apiSpec"]>;
+```
+
+### `AuthChoice` (type)
+
+```ts
+type AuthChoice = ExternalAuthProvider | "lunora" | "none";
 ```
 
 ### `AuthUiItem` (type)
@@ -864,13 +971,30 @@ interface CatalogItem {
 type CiProvider = "github" | "gitlab";
 ```
 
+### `CodegenCommandData` (interface)
+
+```ts
+interface CodegenCommandData {
+    advisories: ReadonlyArray<{
+        detail: string;
+        level: Finding["level"];
+        name: string;
+        remediation: string;
+    }>;
+    cronTriggers: ReadonlyArray<string>;
+    failedAdvisories: number;
+    outputDirectory: string;
+}
+```
+
 ### `CodegenCommandOptions` (interface)
 
 ```ts
 interface CodegenCommandOptions {
     apiSpec?: ApiSpec;
     cwd?: string;
-    format?: string;
+    format?: OutputFormat;
+    lazyFunctions?: boolean;
     logger: Logger;
     strictAdvisories?: boolean;
     target?: string;
@@ -880,17 +1004,9 @@ interface CodegenCommandOptions {
 ### `CodegenCommandResult` (interface)
 
 ```ts
-interface CodegenCommandResult {
-    advisories: ReadonlyArray<{
-        detail: string;
-        level: Finding["level"];
-        name: string;
-        remediation: string;
-    }>;
-    cronTriggers: ReadonlyArray<string>;
+interface CodegenCommandResult extends CodegenCommandData {
+    code?: number;
     error?: string;
-    failedAdvisories: number;
-    outputDirectory: string;
 }
 ```
 
@@ -911,11 +1027,23 @@ interface CodegenWatcherOptions {
     apiSpec?: CodegenOptions["apiSpec"];
     debounceMs?: number;
     jsonLogs?: boolean;
+    lazyFunctions?: CodegenOptions["lazyFunctions"];
     logger: Logger;
     lunoraDirectory?: string;
     projectRoot: string;
     spawner?: Spawner;
     target?: string;
+}
+```
+
+### `CommandResult` (interface)
+
+```ts
+interface CommandResult<TData> {
+    code: number;
+    data?: TData;
+    delegated?: boolean;
+    error?: string;
 }
 ```
 
@@ -933,6 +1061,17 @@ interface DevRemotePlan {
     cleanup: () => void;
     enabled: boolean;
     reason?: string;
+    withheld: WithheldBinding[];
+}
+```
+
+### `DevTunnelRequest` (interface)
+
+```ts
+interface DevTunnelRequest {
+    allowMail: ReadonlyArray<string>;
+    spawner?: Spawner;
+    startChild?: LongLivedSpawner;
 }
 ```
 
@@ -951,10 +1090,28 @@ interface EntrypointReexport {
 }
 ```
 
+### `ExportCommandData` (interface)
+
+```ts
+interface ExportCommandData {
+    bytes: number;
+    out: string;
+    rows: number;
+    tables?: string[];
+}
+```
+
+### `ExternalAuthProvider` (type)
+
+```ts
+type ExternalAuthProvider = "auth0" | "clerk" | "workos";
+```
+
 ### `FeatureApply` (interface)
 
 ```ts
 interface FeatureApply {
+    externalAuth?: ExternalAuthProvider;
     label: string;
     names: ReadonlyArray<string>;
     transformManifest?: OfferTransformManifest;
@@ -983,6 +1140,16 @@ const IMPORT_SOURCE_NAMES: readonly [
     "firebase",
     "supabase"
 ];
+```
+
+### `ImportCommandData` (interface)
+
+```ts
+interface ImportCommandData {
+    file: string;
+    inserted: number;
+    summary: ImportSummary;
+}
 ```
 
 ### `ImportRowError` (interface)
@@ -1021,6 +1188,7 @@ interface ImportSummary {
     failed?: ImportShardFailure[];
     inserted: Record<string, number>;
     received: number;
+    replaced: number;
     storage?: {
         ambiguous: StorageRemapReport["ambiguous"];
         ambiguousTotal: number;
@@ -1072,6 +1240,7 @@ interface ListRemoteSecretsInputs {
     cwd: string;
     env?: string;
     runner?: SecretListRunner;
+    target?: string;
     temporary?: boolean;
 }
 ```
@@ -1086,11 +1255,30 @@ interface ListRemoteSecretsResult {
 }
 ```
 
+### `LongLivedDescriptor` (interface)
+
+```ts
+interface LongLivedDescriptor {
+    args: ReadonlyArray<string>;
+    command: string;
+    cwd?: string;
+    direct?: boolean;
+    env?: Readonly<Record<string, string>>;
+}
+```
+
+### `LongLivedSpawner` (type)
+
+```ts
+type LongLivedSpawner = (descriptor: LongLivedDescriptor, onLine: (line: string, kind: "stderr" | "stdout") => void, onError?: (error: Error) => void) => WorkerProcess;
+```
+
 ### `OfferDeps` (interface)
 
 ```ts
 interface OfferDeps {
     applyAll: (plans: ReadonlyArray<FeatureApply>) => Promise<boolean>;
+    auth?: AuthChoice;
     interactive: boolean;
     logger: Logger;
     multiSelect: (message: string, options: ReadonlyArray<{
@@ -1110,6 +1298,13 @@ interface OfferDeps {
     }>, settings?: {
         default?: FeatureItem;
     }) => Promise<FeatureItem | undefined>;
+    selectAuth: (message: string, options: ReadonlyArray<{
+        description?: string;
+        label: string;
+        value: AuthChoice;
+    }>, settings?: {
+        default?: AuthChoice;
+    }) => Promise<AuthChoice | undefined>;
     text: (message: string, settings?: {
         default?: string;
         placeholder?: string;
@@ -1121,6 +1316,12 @@ interface OfferDeps {
 
 ```ts
 type OfferTransformManifest = (manifest: RegistryManifest) => RegistryManifest;
+```
+
+### `OutputFormat` (type)
+
+```ts
+type OutputFormat = "json" | "pretty";
 ```
 
 ### `PailLogger` (interface)
@@ -1147,6 +1348,14 @@ type PreDeployCommand = "build" | "deploy" | "prepare";
 type ReadinessProbe = (origin: string, signal?: AbortSignal) => Promise<boolean>;
 ```
 
+### `RegistryCommandData` (interface)
+
+```ts
+interface RegistryCommandData {
+    items: ReadonlyArray<CatalogItem | RegistryPlanItem>;
+}
+```
+
 ### `RegistryEnvVariable` (interface)
 
 ```ts
@@ -1155,6 +1364,35 @@ interface RegistryEnvVariable {
     name: string;
     secret?: boolean;
     value?: string;
+}
+```
+
+### `RegistryPlanItem` (interface)
+
+```ts
+interface RegistryPlanItem {
+    bindings: {
+        path: string;
+        value: unknown;
+    }[];
+    deps: string[];
+    devDependencies: string[];
+    entrypointReexports: {
+        comment?: string;
+        module: string;
+    }[];
+    envVars: {
+        name: string;
+        secret?: boolean;
+        value?: string;
+    }[];
+    files: {
+        merge: RegistryFile["merge"];
+        to: string;
+    }[];
+    name: string;
+    requires: ReadonlyArray<string>;
+    title?: string;
 }
 ```
 
@@ -1206,6 +1444,7 @@ interface StudioServerOptions {
     apiSpec?: CodegenOptions["apiSpec"];
     cwd: string;
     host?: string;
+    lazyFunctions?: CodegenOptions["lazyFunctions"];
     logger?: {
         warnOnce?: (message: string) => void;
     };

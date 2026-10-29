@@ -304,7 +304,7 @@ const defineAgent = (config: AgentConfig): AgentDefinition => {
     const composedInstructions = composeInstructions(config, skills);
 
     // `asTool` ignores the parent config — it delegates by the child's export
-    // name (its `AGENT_*` binding) — so a plain function works as the method.
+    // name (its `ctx.exports` key) — so a plain function works as the method.
     // It is runtime-only: codegen discovers agents by AST, never by evaluating
     // the object, so the extra property does not perturb emission. Each override
     // only replaces `...config` when a skill actually changed it, so an agent

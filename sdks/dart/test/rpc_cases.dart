@@ -39,6 +39,24 @@ void caseEmptyShardKeyIsOmitted() {
 
   equals(client.wsUrl(shardKey: ''), client.wsUrl(), 'an empty shard key is byte-identical to sending none');
   check(client.wsUrl(shardKey: 'room-1').contains('shard='), 'a real shard key still rides the socket URL');
+
+  // protocol/README.md 6: the URL carries only the admin ticket, as ?token=.
+  equals(
+    canonical(Uri.parse(client.wsUrl(ticket: 'tkt-1')).queryParametersAll),
+    canonical(<String, List<String>>{
+      'token': ['tkt-1'],
+    }),
+    'the ticket is the only ?token= on the socket',
+  );
+  equals(
+    canonical(Uri.parse(client.wsUrl(shardKey: 'room-1', ticket: 'tkt-1')).queryParametersAll),
+    canonical(<String, List<String>>{
+      'shard': ['room-1'],
+      'token': ['tkt-1'],
+    }),
+    'a shard and a ticket are the only query parameters',
+  );
+  equals(client.wsUrl(), 'wss://app.example/_lunora/ws', 'no credential, no query on the socket URL');
 }
 
 void caseRpcRequestBodies() {
@@ -79,6 +97,11 @@ void caseRpcResponses() {
       if (testCase.containsKey('dataWire')) {
         equals(canonical(encodeWire(error.data)), canonical(testCase['dataWire']), 'error data for ${testCase['name']}');
       }
+
+      // `data` the codec refuses is dropped; the coded verdict stands.
+      if (testCase['dataDropped'] == true) {
+        equals(error.data, null, 'undecodable error data is dropped for ${testCase['name']}');
+      }
     }
   }
 }
@@ -87,9 +110,75 @@ void caseNon2xxWithoutErrorEnvelopeFails() {
   covers('non_2xx_without_error_envelope_fails');
 
   // protocol/README.md §4.2. Without the status check this returned a null
-  // result and threw nothing — the caller believes its mutation committed.
-  throws(
-    () => LunoraClient.parseRpcResponse(<String, Object?>{'message': 'bad gateway'}, status: 502),
-    'a non-2xx with no error envelope must fail',
-  );
+  // result and threw nothing — the caller believes its mutation committed. The
+  // fixture's non-object `error` slots are the other half: a slot holding a
+  // string, a null or an array is not an envelope either, and a port reading one
+  // without a type check throws its LANGUAGE's error rather than
+  // LunoraApiException — which is why this catches the SDK's own type rather
+  // than using `throws`, whose `on Object` would accept either.
+  for (final testCase in objectList(fixture('rpc.json')['responseTransportError'])) {
+    final response = testCase['response'] as Map<String, Object?>;
+
+    try {
+      LunoraClient.parseRpcResponse(response, status: testCase['status'] as int);
+      failures.add('${testCase['name']} — expected a LunoraApiException, got none');
+    } on LunoraApiException catch (error) {
+      equals(error.code, testCase['code'], 'error code for ${testCase['name']}');
+      // Nothing reached the shard, so a queued write must be replayed rather
+      // than dropped — the batch path already says so.
+      equals(error.transient, true, 'transient for ${testCase['name']}');
+    }
+  }
+}
+
+/// A response the RPC cannot read a result OR an error envelope out of — a body
+/// that is not JSON, or JSON that is not an object — fails with this SDK's own
+/// error type, coded, never with a language exception. `{}` stays a valid void
+/// result.
+Future<void> caseRpcUnreadableSuccessBodyRaisesSdkError() async {
+  covers('rpc_unreadable_success_body_raises_sdk_error');
+
+  LunoraClient over(int status, String body) => LunoraClient(url: 'https://app.example', post: (url, headers, sent) async => LunoraHttpResponse(status, body));
+
+  for (final testCase in objectList(fixture('rpc.json')['unreadableSuccessBody'])) {
+    final client = over(testCase['status']! as int, testCase['rawBody']! as String);
+    final calls = <String, Future<Object?> Function()>{
+      'query': () => client.query('messages:list'),
+      'mutation': () => client.mutation('messages:send'),
+      'action': () => client.action('messages:notify'),
+    };
+
+    for (final call in calls.entries) {
+      final what = '${call.key} over ${testCase['name']}';
+
+      try {
+        await call.value();
+        failures.add('$what — expected a LunoraApiException, got a result');
+      } on LunoraApiException catch (error) {
+        equals(error.code, testCase['code'], 'error code for $what');
+      } on Object catch (error) {
+        failures.add('$what — a ${error.runtimeType} escaped instead of a LunoraApiException: $error');
+      }
+    }
+  }
+
+  equals(await over(200, '{}').query('messages:list'), null, 'an empty object is a void result');
+}
+
+/// The bearer token never reaches a printed value.
+void caseAuthTokenRedactedWhenPrinted() {
+  covers('auth_token_redacted_when_printed');
+
+  const token = 'lunora-secret-7f3a9c';
+  final client = LunoraClient(url: 'https://app.example', authToken: token);
+
+  for (final (what, printed) in <(String, String)>[
+    ('client', client.toString()),
+    ('client interpolated', '$client'),
+    ('transport', client.transport.toString()),
+    ('offline queue', client.offlineQueue.toString()),
+    ('safeToString', Error.safeToString(client)),
+  ]) {
+    check(!printed.contains(token), '$what printed the auth token: $printed');
+  }
 }

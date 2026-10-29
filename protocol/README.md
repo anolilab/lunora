@@ -14,7 +14,7 @@ targets the same files (see `sdks/README.md`).
     - Worker endpoints / RPC + WS handshake: `packages/runtime/src/create-worker.ts`
     - RPC + WS client: `packages/client/src/lunora-client.ts`
     - Live-subscription state: `packages/client/src/subscription.ts`
-    - Value codec: `shared/wire-codec.ts`; stable key: `shared/wire-key.ts`
+    - Value codec: `packages/wire/src/wire-codec.ts`; stable key: `packages/wire/src/wire-key.ts`
     - HTTP-SSE stream framing: `packages/client/src/http-stream.ts`
     - Ephemeral WS admin token (plan 095): `shared/ws-admin-token.ts`
 
@@ -117,7 +117,9 @@ Notes that a port MUST honour:
   present.
 - **Depth** is capped at 64 levels (throw beyond). On decode, a `bigint` digit
   string is rejected beyond 1024 digits, and `__proto__` keys are assigned as
-  plain data properties (never via the prototype setter).
+  plain data properties (never via the prototype setter). The reference encoder
+  refuses the same over-long `bigint` and counts an `Error`'s `ownProps` fields
+  at the depth they decode at, so it never emits a frame its decoder rejects.
 - **Map entries** are exactly two elements. A shorter or LONGER entry is
   refused — a decoder that reads slots 0 and 1 out of a 3-element entry accepts
   a frame the reference throws on.
@@ -133,16 +135,24 @@ Notes that a port MUST honour:
 - **Duplicate map keys collapse, last value wins, at the FIRST occurrence's
   position** — the reference decodes into a real `Map`, and `Map.prototype.set`
   on a key already present overwrites in place. It overwrites the VALUE only:
-  the key already stored is kept, so `[[0,"a"],[-0,"b"]]` re-encodes with the
-  `0` it first held, not the `-0` that collapsed onto it. So
+  the key already stored is kept. So
   `[TAG, "map", [["a",1],["b",2],["a",3]]]` decodes to two entries and
   re-encodes as `[["a",3],["b",2]]`. Keys collapse under SameValueZero: the
   scalar kinds (`null`, `undefined`, boolean, number — `NaN` equal to itself —
   string, `bigint`) compare by VALUE, and everything else (`Date`, `URL`, bytes,
   a nested `Map`/`Set`, an object or array) compares by REFERENCE, so two
-  structurally identical non-scalar keys stay two entries. SameValueZero holds
-  `-0` equal to `0`, so a signed zero is never its own key — a port whose number
-  formatting keeps the sign must clear it before comparing.
+  structurally identical non-scalar keys stay two entries. Values of different
+  kinds never collapse: bytes holding `"a"` are not the string `"a"`, and none
+  of `1n`, `"1"` or `true` is the number `1`.
+- **A signed zero in a `set` or a map key is stored as `+0`.** `Set.prototype.add`
+  and `Map.prototype.set` both normalise `-0` to `+0` on INSERT, not only when
+  it collides with a `0` already held — so `[TAG, "set", [-0]]` re-encodes as
+  `[TAG, "set", [0]]`, `[TAG, "map", [[-0,1]]]` as `[[0,1]]`, and
+  `[[-0,"a"],[0,"b"]]` as `[[0,"b"]]`. A port that only clears the sign when
+  comparing keeps a lone `-0`, which §3 keys as its own `-0` token: a different
+  subscription than the TS client's for the same args. (A map VALUE or an array
+  element keeps its sign; only set members and map keys go through the
+  collection.)
 - **Error** `ownProps` is neither optional nor nullable: the reference reads it
   with `Object.keys`, which throws on a missing or `null` slot, so a 4-element
   error tag and `[TAG, "error", n, m, null]` are both refused.
@@ -170,6 +180,15 @@ and (b) `decode` produces a value that re-`encode`s to the identical tag —
 guaranteeing `encode(decode(x)) == x` (the conformance contract, modulo the two
 shapes in §2.3 that are not fixed points of it). Plain ints/floats/dicts/lists
 map to JSON numbers/objects/arrays.
+
+A JSON number off the wire is a float64 whatever its spelling. `JSON.stringify`
+writes every double in `[2^53, 1e21)` as an INTEGER literal, so a port whose
+JSON parser types integer literals as native integers must decode one outside
+`±(2^53 − 1)` to the nearest double, as `JSON.parse` does
+(`9007199254740993` → `9007199254740992`). Refusing it — the range guard below
+applies to integers the caller CONSTRUCTS — made a server value impossible to
+re-encode or key. `number-integer-literal-past-exact-range` in
+`fixtures/stable-wire-key.json` pins it.
 
 Golden cases: [`fixtures/wire-codec.json`](./fixtures/wire-codec.json).
 
@@ -229,6 +248,19 @@ the key is spelled and must keep it here; `negative-zero` in the fixture below
 is what catches that. (Every other spelling divergence — `1e+21`, `1e-7`,
 non-finite tokens — is `String(v)`'s, which the key follows exactly.)
 
+`String(v)` spells the SHORTEST digit string that reads back as the same double
+(ECMA-262 Number::toString), laid out positionally for exponents in `[-6, 21)`.
+A port must take those digits from a shortest-round-trip formatter (Python
+`repr`, Ruby `Float#to_s`, Dart `double.toString`, Swift `description`, the JDK's
+`Double.toString` from JDK 19) and reposition the point itself — never print a
+fixed number of places and trim: 20 places spelled three adjacent doubles near
+`-6.07e-6` identically, so one subscription received another's frames and
+optimistic overlays. The key also spells the DECODED double, so a JSON parser
+that is not correctly rounded (Darwin's `JSONSerialization`, `serde_json`
+without `float_roundtrip`) splits it just the same. `number-adjacent-double-*`,
+`number-positional-shortest-digits` and `number-decode-correctly-rounded` below
+pin all three.
+
 Code-unit order, not code-point order: the reference implementation is
 `Object.keys(record).sort()`, whose default comparator compares UTF-16 code
 units. The two orders disagree for any key that starts with a surrogate — an
@@ -252,6 +284,19 @@ Headers:
 - `x-lunora-mutation-id: <id>` — idempotency key for a mutation replay (optional).
 - `x-lunora-client-id` / `x-lunora-client-seq` — custom-mutator push path (optional).
 - `x-d1-bookmark: <bookmark>` — D1 read-your-writes (optional).
+- `x-lunora-expect-subject: <base64url(JSON {"subject": "<userId>" | null})>` —
+  the user a replayed offline write was queued by (optional; also accepted on
+  §4.3's batch request, where it covers every entry). The worker resolves the
+  request's identity as usual and, when it is a different user — or `null`
+  (anonymous) where a user is named, or the reverse — refuses the request with
+  `409` and `{ "error": { "code": "IDENTITY_MISMATCH" } }` before any shard sees
+  it. A malformed value is refused with `400 BAD_REQUEST`. The reference client
+  sends it only on a replay made under a cookie session, where the credential
+  rides implicitly and can change hands (a sign-out, another user's sign-in)
+  without the client seeing it; a bearer request states its credential and has
+  no need. A client receiving `IDENTITY_MISMATCH` should re-resolve who is signed
+  in and settle the write against that answer — it is not a verdict on the write
+  itself. Omitting the header keeps the previous behaviour.
 
 Body:
 
@@ -278,14 +323,28 @@ and `lastMutationId` (per-client watermark) are optional echoes.
 Failure — the body carries an `error` envelope (HTTP status also non-2xx):
 
 ```json
-{ "error": { "code": "<CODE>", "message": "<msg>", "data": <encodeWire(data)?>, "hint": <string|string[]?>, "docsUrl": <string?> } }
+{ "error": { "code": "<CODE>", "message": "<msg>", "data": <encodeWire(data)?>, "hint": <string|string[]?>, "docsUrl": <string?>, "why": <string?> } }
 ```
 
-The client raises an error carrying `code`, `message`, and `decodeWire(data)`.
+The client raises an error carrying `code`, `message`, `decodeWire(data)`, and `why`
+(the cause explanation, when the server sent a string). `why` is client-visible like
+`hint`; the operator-only `internal` context is never part of the envelope.
 A non-2xx response whose JSON body has no `error` envelope is surfaced as an
-`INTERNAL` transport error.
+`INTERNAL` transport error. An `error` slot holding anything but an OBJECT is no
+envelope either — a proxy's `{"error": "bad gateway"}` page is the everyday shape
+— and takes the same path, rather than being read as one: a client that indexes
+it unchecked raises its own language's error past every handler the caller
+wrote.
 
-Golden cases: [`fixtures/rpc.json`](./fixtures/rpc.json) → `responseOk`, `responseError`.
+A 2xx body that is not a JSON OBJECT — `null`, `[]`, a bare string or number, an
+HTML page — carries neither a result nor an envelope, and is classified by
+status the same way (`INTERNAL`, a transport error). `{}` is not one of these: it
+is how a function returning nothing is answered. A 2xx whose `result` does not
+DECODE is different again: the call ran and, for a mutation, committed, so the
+client raises `WIRE_DECODE_FAILED` rather than a transport error, and an offline
+replay settles that write committed instead of retrying it (§4.3).
+
+Golden cases: [`fixtures/rpc.json`](./fixtures/rpc.json) → `responseOk`, `responseError`, `responseTransportError`, `unreadableSuccessBody`.
 
 ### 4.3 Batched RPC (`POST /_lunora/rpc-batch`)
 
@@ -345,10 +404,25 @@ Each slot's `body` is exactly a §4.2 envelope — `{ result }` or `{ error }` �
 a client classifies a slot the way it classifies a whole single-call response.
 Four rules a conforming client MUST follow, because each one is a durable write:
 
-- A slot whose `error.code` is `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED`
-  or `TOO_MANY_REQUESTS` is **transient**: the server reached no verdict on that
-  entry — it could not reach the shard, or a limiter refused to look — so it is
-  retried rather than reported failed. Every other coded error is a verdict, and
+- A slot whose `error.code` is `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
+  `RATE_LIMITED` or `TOO_MANY_REQUESTS` is **transient**: the server reached no verdict on that
+  entry — it could not reach the shard, a limiter refused to look, or its delivery authorization
+  changed before the reply could be released (the write may have committed; a retry under the same
+  mutation id replays its stored result, or fails with the terminal `DELIVERY_RECEIPT_FENCED` when
+  that result belongs to an older authority epoch) — so it is
+  retried rather than reported failed. So is a refused CREDENTIAL —
+  `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` — which the client HOLDS
+  rather than settles: a write queued offline replays with the bearer it held
+  when it went offline, often expired by reconnect, and a token refresh is what
+  lets it through. A client that flushes on its own when its socket connects
+  MUST also flush when a new token is set while connected: a healthy socket does
+  not reconnect, so nothing else would replay the held write. The replay reads
+  the token current when it is SENT, and still gates each write on who queued
+  it, so a new token never carries another user's write. An envelope whose `data` does not decode is still that coded
+  error: the `data` is dropped and the code classifies it. And a server that
+  answers `WIRE_DECODE_FAILED` refused the write — only a result the CLIENT could
+  not decode marks one committed, so a client tells the two apart by where the
+  failure arose, never by the code string. Every other coded error is a verdict, and
   terminal. A rate-limited retry SHOULD wait out the hint the server sent, either
   `error.data.retryAfterMs` or the `Retry-After` header — which RFC 9110 defines
   as EITHER delta-seconds or an HTTP-date, so a client that parses only the first
@@ -357,20 +431,59 @@ Four rules a conforming client MUST follow, because each one is a durable write:
   so nothing reconnects to trigger the next flush, and a client MUST fall back to
   a bounded, jittered backoff rather than leave the write parked.
 - A slot the server never returned is **retried** — it may or may not have
-  committed, and the entry's `mutationId` is what makes that safe.
+  committed, and the entry's `mutationId` is what makes that safe. So is a slot
+  whose `error` key holds no envelope: a slot carries no HTTP status of its own,
+  so there is nothing to classify it by, which leaves the entry in exactly the
+  position of one that never came back.
 - A body with **no** `results` array is a whole-batch outcome, classified by the
   same rule: a transient code retries the whole chunk, and any other coded
   `{ error }` is a verdict on every entry and terminal. A reply carrying no
-  envelope to read at all — a non-JSON body, an edge's HTML page — is classified
-  by HTTP STATUS instead, per the paragraph below.
+  envelope to read at all — a non-JSON body, an edge's HTML page, or an `error`
+  slot that is not an object (§4.2) — is classified by HTTP STATUS instead, per
+  the paragraph below. This is the sharpest edge the §4.2 rule has: a codeless
+  failure here settles every write in the chunk, so reading a proxy's
+  `{"error": "bad gateway"}` as an envelope discards durable writes that the
+  same reply, classified by its 502, keeps.
 - A `413` is a verdict on the REQUEST, not on the writes inside it: a chunk of
-  more than one entry MUST be split and retried rather than settled. A client
+  more than one entry MUST be split and retried rather than settled — on ANY
+  `413`, with or without an envelope, since an edge refuses an oversized body with
+  its own page before the worker can write a coded one. A single entry still
+  refused settles with `PAYLOAD_TOO_LARGE`, coded or not. A client
   also holds the request body under the 1 MiB cap up front, splitting before it
   sends — chunking by the 500-entry cap alone refuses a whole chunk of durable
   writes as soon as they average a couple of KiB each.
 
 The same classification governs a **single-call** replay, so a durable write's
-fate never depends on how many siblings were queued alongside it.
+fate never depends on how many siblings were queued alongside it. A coded
+envelope is classified by its CODE alone, whatever the HTTP status: a coded `500`
+is the server's verdict and terminal on both paths, a `503` carrying
+`SHARD_UNAVAILABLE` transient on both. Only a reply with no envelope falls back
+to its status (below).
+
+The table below names the codes a replay classifies explicitly, so a port does not
+have to infer them from the prose above. Any code not listed is a verdict and
+terminal, which is the default for every coded error.
+
+| Outcome                             | Codes or condition                                                                                                                                                | Replay behaviour                                                                                                                                                          |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transient, retry with backoff       | `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`, `RATE_LIMITED`, `TOO_MANY_REQUESTS`; a `429`/`5xx` with no envelope                                        | Keep the write queued; honour `retryAfterMs` / `Retry-After` when present, otherwise a bounded jittered backoff                                                           |
+| Hold for a credential               | `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`                                                                                                                | Hold until a new token is set, then replay under the current token. Never settle                                                                                          |
+| Split and retry                     | `413` on a chunk of more than one entry                                                                                                                           | Split the chunk and resend; do not settle the writes                                                                                                                      |
+| Terminal, the write is dropped      | `CONFLICT` (unique-index breach, or an optimistic-concurrency conflict), `WIRE_DECODE_FAILED`, `PAYLOAD_TOO_LARGE` on a single entry, and every other coded error | Settle rejected with the server's code. The write is not retried. Re-running it with different arguments is the application's job, because the client never rewrites args |
+| Committed, the result is unreadable | Success whose `result` does not decode                                                                                                                            | Settle committed with the decode error attached. Never retry                                                                                                              |
+
+`CONFLICT` is listed because it is the most common terminal outcome an application
+will meet on replay. The server re-runs the handler against current state, so a
+duplicate create replays into the same `CONFLICT` it would have raised live. The
+handler can avoid this itself with `skipDuplicates` or `upsert`, which is the
+documented merge path.
+
+A slot — or a single-call reply — that SUCCEEDED but whose `result` does not
+decode is COMMITTED. It settles committed (its optimistic layer confirmed, its
+durable record removed) with the decode error attached, and is never retried:
+replaying returns the same result. Each slot is decoded on its own, so one such
+result never abandons the slots after it, and a client removes a durable record
+only after it has decided the slot's outcome.
 
 A response carrying no `{ error }` envelope to classify — a proxy's HTML page, a
 captive portal, a truncated body — is classified by its HTTP status, and MUST be:
@@ -394,25 +507,73 @@ the calls, the slot outcomes and the normative entry cap, and
 
 Frames are JSON text. A keepalive is the literal non-JSON string `lunora-ping`
 (the server auto-responds `lunora-pong` without waking the DO); non-JSON frames
-are ignored by the client parser.
+are ignored by the client parser. So is a frame that parses but is not shaped
+like any below — not an object, an `id` that is not a string, a `cursor` that is
+not an integer: a client MUST NOT raise out of its frame handler over one (that
+ends the read loop and every subscription on the socket), and a non-integer
+`cursor` never replaces the tracked one. `malformedFrames` in
+[`fixtures/ws-frames.json`](./fixtures/ws-frames.json) pins it.
+
+The server caps a frame it RECEIVES at 1Mi UTF-16 units (`MAX_WS_FRAME_UNITS`),
+but nothing but the platform bounds what it SENDS: a large query result or shape
+seed is one frame, up to the Workers per-message WebSocket limit of 32 MiB. A
+client whose WebSocket library has a smaller default (Python's `websockets`
+defaults to 1 MiB and closes with `1009`, on every reconnect) must raise it.
 
 ### 5.1 Client → server frames
 
-| `type`                                      | Shape                                                                               |
-| ------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `connect`                                   | `{ type, id: "connect", clientId?, caps?, context? }` — one-shot, first on open     |
-| `subscribe`                                 | `{ type, id, query: { functionPath, args, table, sinceSeq?, sinceEpoch? } }`        |
-| `unsubscribe`                               | `{ type, id }`                                                                      |
-| `shape_subscribe`                           | `{ type, id, shape: { name, args? }, sinceCheckpoint?, sinceEpoch? }`               |
-| `shape_unsubscribe`                         | `{ type, id }`                                                                      |
-| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? }, sinceChunk?, generation? }` |
-| `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                                   |
-| `whisper`                                   | `{ type, topic, data? }`                                                            |
+| `type`                                      | Shape                                                                                   |
+| ------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `connect`                                   | `{ type, id: "connect", clientId?, caps?, context?, token? }` — one-shot, first on open |
+| `subscribe`                                 | `{ type, id, query: { functionPath, args, table, sinceSeq?, sinceEpoch? } }`            |
+| `unsubscribe`                               | `{ type, id }`                                                                          |
+| `shape_subscribe`                           | `{ type, id, shape: { name, args? }, sinceCheckpoint?, sinceEpoch? }`                   |
+| `shape_unsubscribe`                         | `{ type, id }`                                                                          |
+| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? }, sinceChunk?, generation? }`     |
+| `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                                       |
+| `whisper`                                   | `{ type, topic, data? }`                                                                |
 
-`subscribe.query.args` is `encodeWire(args)`. `table` defaults to
-`functionPath` (unless codegen surfaced a distinct table). `sinceSeq` /
+`subscribe.query.args` is `encodeWire(args)`. `functionPath` selects the query
+the server re-executes; `table` addresses the legacy raw-delta fan-out
+(`ShardDO.broadcastDelta`), which compares it to `delta.table` verbatim. A client
+that has no table name to give sends the function path there — `@lunora/client`
+always does, because a function reference carries only its `namespace:fn` id — so
+those subscriptions are fed by re-execution alone. The non-JS SDKs carry `table`
+on their frame BUILDERS only (`build_subscribe_frame` / `BuildSubscribeFrame` /
+`buildSubscribeFrame`), where it likewise defaults to `functionPath`; no public
+`subscribe` in any of the eight takes it, and every one of them passes that
+default. So `broadcastDelta` is not addressable from any client in this tree —
+only by a consumer that builds the frame itself. `sinceSeq` /
 `sinceEpoch` ride along only on a resume. Subscription ids are conventionally
 `sub_<n>`; shape ids `shape_<n>`; stream ids `stream_<n>`.
+
+`whisper_subscribe` and `whisper` are authorized per topic when the app declares
+an `onWhisper` authorizer; with none declared the topic's only boundary is the
+shard. A denied frame is **dropped silently**, and adding an error frame for a
+denial would let a client probe which topics exist. A `whisper_subscribe` to a
+**live (non-room) topic** is answered with a `whisper_subscribed` frame (below)
+once the shard has made its admit-or-deny decision and written membership, whatever
+that decision was, so the answer carries no authorization signal. A denied join
+still gets it and then receives nothing. A client that must publish or receive
+only after its join took effect waits for that frame.
+
+A **room** topic (one a `defineRoom` handler serves) is never acknowledged. Its
+join is answered by its own history frame, and its `onJoin` runs after the
+membership write and can take longer than a client's grant timeout, so an ack
+there would reveal whether the join was admitted. A client must not wait for an
+ack on a room topic.
+
+The shard sends no `whisper_subscribed` on these paths: the socket is closing, so
+the join is dropped; a `whisper_subscribe` is refused by the delivery-authorization
+guard, which answers with a `NOT_IMPLEMENTED` subscription error instead; or the
+frame is malformed (an empty or non-string `topic` is ignored). An authorizer that
+throws is a denial, so it still gets the ack. A leave (`whisper_unsubscribe`) is
+never acknowledged.
+
+The `identity` frame carries `whisperAck: true` when the shard acknowledges live
+joins as described above. A client waits for the ack before it posts a live grant
+for a topic only when that flag was advertised on the socket's `identity` frame;
+a shard that omits it gets the grant at once, as it did before the ack existed.
 
 `stream.sinceChunk` is the **durable-stream** resume watermark and is unrelated
 to `subscribe.query.sinceSeq` (a CDC cursor): it is the highest `chunk.seq` the
@@ -436,6 +597,13 @@ entirely, exactly as they ignore `sinceChunk`.
 The `connect` frame is sent once per socket open, **before** resubscribing, so
 `onConnect`/`onDisconnect` lifecycle hooks fire symmetrically.
 
+`connect.token` is the session credential for a socket opened without an
+`Authorization` header (see §6). It is the only way a browser or SDK presents
+one: it never goes in the URL. A socket that needs it is refused — `error`
+frame with code `UNAUTHENTICATED`, then close `4003` — when `connect` is not its
+first frame, or when `token` does not match. The deadline for a missing `connect`
+and the pending cap are in §6.
+
 #### 5.1.1 `connect.caps` — capability negotiation
 
 `caps` is an optional array of string tokens naming wire behaviours the client
@@ -444,9 +612,10 @@ what an SDK should do until it implements a token: the server then keeps to the
 behaviour every client has always understood. A server that does not recognise a
 token ignores it, so the field is additive in both directions.
 
-| Token       | The client guarantees                                                                     |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| `pageDelta` | It can merge a `delta` frame's `RowOp` into the `page` array of a paginated query result. |
+| Token          | The client guarantees                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------------- |
+| `pageDelta`    | It can merge a `delta` frame's `RowOp` into the `page` array of a paginated query result.      |
+| `refreshBatch` | It holds the frames between `batchStart` and `batchEnd` and applies them as one update (§5.5). |
 
 **`pageDelta` in detail.** A paginated read (`.paginate()`) returns
 `{ page: [...], isDone, continueCursor }` — an object, not an array. Without this
@@ -488,17 +657,45 @@ Run `pageDeltaFrames` only once you announce the token.
 
 ### 5.2 Server → client frames
 
-| `type`     | Shape                                                           | Effect                                                                     |
-| ---------- | --------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `ack`      | `{ type, id }`                                                  | subscription acknowledged                                                  |
-| `data`     | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`  | deliver `decodeWire(data)` as the new value                                |
-| `delta`    | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId? }` | merge delta into server base; the LAST frame of a run carries the cursor   |
-| `resume`   | `{ type, id, cursor?, epoch?, lastMutationId? }`                | nothing changed; keep value, advance cursor                                |
-| `settled`  | `{ type, id, cursor?, epoch?, lastMutationId? }`                | write touched tables, byte-identical result; advance only                  |
-| `error`    | `{ type, id?, error: { code?, message? }, message? }`           | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)  |
-| `complete` | `{ type, id }`                                                  | subscription/stream closed server-side                                     |
-| `chunk`    | `{ type, id, data: <wire>, seq?, generation? }`                 | one streaming-query chunk (`seq` + run `generation` on a durable run only) |
-| `whisper`  | `{ type, topic, data: <wire>, from? }`                          | ephemeral relay                                                            |
+| `type`               | Shape                                                                  | Effect                                                                                                                                                     |
+| -------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ack`                | `{ type, id }`                                                         | subscription acknowledged                                                                                                                                  |
+| `data`               | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`         | deliver `decodeWire(data)` as the new value                                                                                                                |
+| `delta`              | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId?, more? }` | merge delta into server base; the LAST frame of a run carries the cursor                                                                                   |
+| `resume`             | `{ type, id, cursor?, epoch?, lastMutationId? }`                       | nothing changed; keep value, advance cursor                                                                                                                |
+| `settled`            | `{ type, id, cursor?, epoch?, lastMutationId? }`                       | write touched tables, byte-identical result; advance only                                                                                                  |
+| `error`              | `{ type, id?, error: { code?, message?, hint?, why? }, message? }`     | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)                                                                                  |
+| `complete`           | `{ type, id }`                                                         | subscription/stream closed server-side                                                                                                                     |
+| `chunk`              | `{ type, id, data: <wire>, seq?, generation? }`                        | one streaming-query chunk (`seq` + run `generation` on a durable run only)                                                                                 |
+| `whisper`            | `{ type, topic, data: <wire>, from? }`                                 | ephemeral relay                                                                                                                                            |
+| `live`               | `{ type, stream, topic, data: <wire> }`                                | a server live publish to a WebSocket member granted the stream (server-only; a client `live` frame is refused)                                             |
+| `identity`           | `{ type, connectionId, subject: <string \| null>, whisperAck? }`       | the user this socket is authenticated as (`null` = anonymous); `connectionId` names the socket for live control; `whisperAck` advertises the live-join ack |
+| `whisper_subscribed` | `{ type, topic }`                                                      | a live (non-room) `whisper_subscribe` was processed, admitted or not (server-only; additive, an unknown frame is a no-op)                                  |
+
+`identity` is sent in reply to every `connect` frame (§5.1), including a re-sent
+one, and only after the socket has passed the §6 gate. `subject` is the resolved
+user id the socket was upgraded under, or `null` for an anonymous socket — never
+absent. It exists for a client whose credential it cannot see: under a browser
+cookie session nothing on the client changes when the user signs out or someone
+else signs in, and a socket keeps the identity it was upgraded with for its whole
+life. The reference client adopts it as its identity when it holds no credential
+at all (no `connect.token`, no ticket, no bearer), and retires every live query on
+a change between two known identities. A client
+that states its own credential — every `sdks/*` port — MAY ignore the frame, and
+all eight do: an unknown `type` is already a no-op in each of them.
+
+A `complete` naming a live SUBSCRIPTION is a cancellation, NOT a de-registration:
+a client MUST report it to that subscription's error listener (the reference and
+all eight `sdks/*` ports use the code `SUBSCRIPTION_CANCELLED`) and MUST KEEP the
+registration, so the next reconnect resubscribes it under §5.1's resume rules.
+Dropping the state instead takes it out of the set the resubscribe loop walks,
+which freezes the query for the life of the process across every future
+reconnect — and reports nothing, because the listener was dropped with it. Today
+only `stream_*` ids receive this frame, so the two id spaces do not overlap and a
+stream's own completion is unaffected; the rule is what makes a
+user-subclassed shard, or a future server that sends it for a `sub_*` id, safe.
+`serverFrames`'s `complete` case in
+[`fixtures/ws-frames.json`](./fixtures/ws-frames.json) pins both halves.
 
 ### 5.3 Shape poke protocol (partial replication)
 
@@ -513,8 +710,18 @@ A `RowOp` is `{ op: "insert"|"update"|"delete", key, table, value? }`. The clien
 `pokeEnd`: `insert`/`update` set `key → decodeWire(value)` in the shape's keyed
 view; `delete` removes `key` (a value-less upsert is a membership-only no-op).
 The view's checkpoint advances to `pokeEnd.checkpoint`. A socket that drops
-mid-poke discards the buffer and re-seeds on reconnect (no torn view). An
-`epoch` mismatch or a `baseCheckpoint` gap forces a full re-seed.
+mid-poke discards the buffer and re-seeds on reconnect (no torn view). A shape
+whose parts carry a row `decodeWire` refuses is refused WHOLE for that poke:
+every row is decoded before the view is touched, and on a failure the view, its
+checkpoint and its epoch stay as they were and the shape's error listeners are
+told (`WIRE_DECODE_FAILED`) — applying the decodable rest would advance the
+resume position past a row the view never held. Other shapes in the poke still
+apply. The refused rows come back through the NEXT poke: the server stamps its
+`baseCheckpoint` with the checkpoint it believes it delivered, which no longer
+matches the view's, so the base check below re-seeds the shape
+(`undecodableRowPokeSequence` then `gapPokeSequence` in
+`fixtures/ws-frames.json`). An `epoch` mismatch or a `baseCheckpoint` gap forces
+a full re-seed.
 
 A buffer is released at `pokeEnd`, and a poke abandoned mid-flight never sends
 one — so a client MUST bound its pending buffers and evict oldest-first, rather
@@ -550,20 +757,27 @@ the part to splice on cleanly, and takes precedence over `pokeStart.baseCheckpoi
 own delivered-through cursor. Absent means the sender cannot name a base and the
 gap check is disarmed for that part.
 
-> **Outstanding in the non-JS ports.** Only `@lunora/client` acts on this field:
-> on a mismatch it drops the shape's view, clears its cursor, skips the ops and
-> re-subscribes. None of the eight SDKs implements the comparison — one stores
-> the value and never reads it, the rest only mention it in a comment about
-> `reset`. A poke can genuinely be dropped on the cross-DO owner→relay POST, so
-> until a port adds the check its shape views can diverge where the JS client
-> recovers. A port adding it needs no wire change; the field is already sent.
+On a mismatch with the view's checkpoint — or an `epoch` that differs from the
+view's — a part that is not a `reset` makes the client drop the shape's view,
+clear its checkpoint and epoch, tell its listeners `[]`, skip the ops and send a
+COLD `shape_subscribe` (no `sinceCheckpoint`/`sinceEpoch`) so the server re-seeds
+it. A view with no checkpoint yet has nothing to diverge from. The reference and
+all eight `sdks/*` ports implement it; before they did, a poke dropped on the
+cross-DO owner→relay POST — or refused for an undecodable row — was spliced over
+by the next one, losing its rows for good. `gapPokeSequence` and its
+counterweight `contiguousPokeSequence` pin both directions.
 
 ### 5.4 Delta runs and the resume cursor
 
 One value change can go out as a RUN of `delta` frames (one per changed row).
-Unlike a poke the run has no start/end envelope — the client applies each frame
-as it arrives — so `cursor`/`epoch` ride only the **last** frame of the run, and a
-client MUST NOT advance its resume position on a frame that omits them.
+Unlike a poke the run has no start/end envelope, so `cursor`/`epoch` ride only
+the **last** frame of the run, and a client MUST NOT advance its resume position on
+a frame that omits them. Every frame of a run except the last carries
+`more: true`; a client SHOULD hold those frames and commit the run once its last
+frame (which carries no `more`) arrives. A client that applies each frame as it
+arrives still converges, but subscribers see every intermediate state. A delta
+without `more` is a whole change on its own, which is how the legacy
+`broadcastDelta` fan-out is delivered, and is applied on arrival.
 `lastMutationId` is the opposite and rides every frame (it is idempotent and
 monotonic on the read side).
 
@@ -576,36 +790,138 @@ does the `data` snapshot.
 
 Golden cases: [`fixtures/ws-frames.json`](./fixtures/ws-frames.json).
 
-## 6. Auth & the ephemeral WS token (plan 095)
+### 5.5 Refresh batches (`refreshBatch`)
+
+One write can change several live queries on one socket — a count and the list
+it counts. Sent one frame at a time, a client renders the first before the
+second arrives, and for that moment its views disagree. A socket that announced
+`refreshBatch` (§5.1.1) and holds more than one subscription receives the frames
+one write produces for it between two markers:
+
+| `type`       | Shape      | Effect                                                                          |
+| ------------ | ---------- | ------------------------------------------------------------------------------- |
+| `batchStart` | `{ type }` | start holding `data`, `delta`, `settled`, `resume` and any `error` with an `id` |
+| `batchEnd`   | `{ type }` | apply every held frame in arrival order, then notify each changed query once    |
+
+Every other frame (pokes, whispers, stream chunks, `identity`, an `error` with
+no `id`) is handled as it arrives. A frame another path sends while a bracket is
+open — a fresh subscription's seed — is held with the rest. The server opens a
+bracket only when the visit sends a frame, never nests one, and always closes
+it; a socket that closes mid-bracket drops what it held (nothing was applied, so
+the reconnect resumes from the cursor before the batch). Each held frame keeps
+its own `cursor`, so §5.4's rules apply inside a batch unchanged.
+
+A client that does not announce the token never sees either marker, and a
+client that ignores unknown types applies the frames unbracketed — which is
+what every `sdks/*` port does today.
+
+## 6. WebSocket credentials and the upgrade gate
 
 - **HTTP RPC** auth is the `authorization: Bearer <token>` header.
-- **WebSocket** auth rides the `?token=` query param (browsers cannot set WS
-  headers). The server matches it against `LUNORA_WS_BEARER` (upgrade gate) and/or
-  `LUNORA_ADMIN_TOKEN` (admin subscriptions).
+- **WebSocket** credentials stay out of URLs. There are three channels:
+    1. **`Authorization: Bearer <LUNORA_WS_BEARER>` on the upgrade.** For clients
+       that can set headers. A match admits the socket authenticated.
+    2. **`connect.token`** (the session credential; browsers and every SDK). The
+       upgrade is accepted without a credential and the socket stays
+       unauthenticated until its first frame. That frame must be `connect` with a
+       `token` equal to `LUNORA_WS_BEARER`. A token that does not match, or any
+       other first frame, gets an `error` frame (`code: "UNAUTHENTICATED"`) and a
+       close with code `4003`. The check runs before `identity` is sent and before
+       `onConnect` fires. With `LUNORA_WS_BEARER` unset the token is ignored and
+       every socket is authenticated as before. A socket still awaiting `connect`
+       10 seconds after its upgrade is closed with `4003` (`connect deadline`) when
+       the shard next admits an unauthenticated upgrade. A shard holds at most 1024
+       such sockets; past that, an unauthenticated upgrade gets `503`. That is
+       transient: retry with backoff.
+    3. **`?token=<ticket>`**, the only credential that may appear in a URL. A ticket
+       is an ephemeral admin sub-token minted by `POST /_lunora/admin/ws-token`
+       (authenticated by the master admin token in the `Authorization` **header**):
+       `{ token, expiresAtMs }`, where
 
-Because a URL token lands in logs/history, the studio path uses a short-lived
-**ephemeral sub-token**. `POST /_lunora/admin/ws-token` (authenticated by the
-master admin token in the `Authorization` **header**) returns
-`{ token, expiresAtMs }`, where:
+        ```
+        token = "v1." + expEpochMs + "." + base64url(HMAC_SHA256(key = LUNORA_ADMIN_TOKEN, msg = "v1." + expEpochMs))
+        ```
+
+        Default TTL 60s. Verification is stateless (worker and DO both hold the
+        master token in `env`); rotating the master token invalidates all
+        outstanding tickets. A lapsed ticket grants nothing: the socket is admitted
+        unauthenticated, like any other socket without a credential.
+
+A raw `LUNORA_WS_BEARER` or `LUNORA_ADMIN_TOKEN` in `?token=` is refused with
+`403` at upgrade. The query string is where it leaks (access logs, history,
+`Referer`), so a client that still sends one fails at once instead of working
+quietly.
+
+Admin subscriptions (`__lunora_admin__:*`) are granted only at upgrade: by the
+master token in the `Authorization` header or by a valid ticket. A
+`connect.token` never grants admin, so a studio socket uses a ticket.
+
+A `defineWebSocket` route socket has no `connect` frame, so it cannot present
+`connect.token`. Under `LUNORA_WS_BEARER` it is admitted only with the
+`Authorization` header or an admin ticket; a route that a browser reaches with
+the session credential alone is refused (`403`).
+
+### 6.1 User identity on the upgrade
+
+The channels above admit the **socket**. The **user** a socket acts as comes from
+the worker's `resolveIdentity` on the upgrade request, once, and holds for the
+socket's life (a past `exp` closes it with `4001`) unless a same-user refresh
+moves the expiry (below). A browser sends its session
+cookie automatically. A client whose session is a bearer (an external IdP's JWT,
+or a cross-origin API) presents it in one of two ways:
+
+- **`Authorization: Bearer <session token>`**, for clients that can set headers
+  on an upgrade (React Native, server SDKs).
+- **`Sec-WebSocket-Protocol: lunora, lunora.bearer.<base64url(token)>`**, for
+  browsers. The token is UTF-8, base64url-encoded without padding. The worker
+  passes it to `resolveIdentity` as `Authorization: Bearer <token>` (a real
+  `Authorization` header wins), forwards only `lunora` to the shard, and answers
+  the handshake selecting `lunora`. A client that offers `lunora` MUST accept
+  `lunora` as the selected subprotocol.
+
+This bearer is a user credential only. It never satisfies the `LUNORA_WS_BEARER`
+or admin checks above, which read the forwarded upgrade and the `connect` frame.
+
+**Refreshing the credential on an open socket.** A socket's frames reach only
+its shard, which cannot run `resolveIdentity`, so a refreshed bearer does not go
+on the socket. The client posts it to the worker instead:
 
 ```
-token = "v1." + expEpochMs + "." + base64url(HMAC_SHA256(key = LUNORA_ADMIN_TOKEN, msg = "v1." + expEpochMs))
+POST /_lunora/ws/reauth?shard=<key>
+Authorization: Bearer <refreshed token>
+{ "connectionId": "<from the socket's identity frame>" }
 ```
 
-Default TTL 60s. Verification is stateless (worker and DO both hold the master
-token in `env`); rotating the master token invalidates all outstanding
-sub-tokens.
+The worker resolves the credential as it would an upgrade — a lapsed one is
+`401 TOKEN_EXPIRED`, none at all `401 UNAUTHENTICATED` — and forwards only the
+server-minted identity to the shard. The shard moves the socket's expiry when the
+socket belongs to the same user and every claim except `exp`, `expiresAtMs`,
+`iat`, `nbf` and `jti` is unchanged, and answers `200 { ok: true }`; nothing is
+re-sent on the socket. It refuses an unknown or another user's socket (`404`), a
+credential older than the one the socket holds or, for a socket that has an
+expiry, one without any (`409 STALE_CREDENTIAL`), and changed claims
+(`409 IDENTITY_CHANGED`). A client counts only the `{ ok: true }` body as success. On any refusal the socket is left as it
+was: it still closes with `4001` at its old expiry, and a client SHOULD reconnect
+it under the new credential, which re-seeds as any upgrade does. A server
+without the route answers `404`, so the same fallback covers it.
 
-A client SHOULD accept an **async token provider** (`() -> token`) resolved fresh
-on every (re)connect, so a short-lived credential is re-minted after a `4001`
-`token_expired` close. The TS contract is `WsTokenProvider`
-(`packages/client/src/types.ts`).
+A client SHOULD accept an **async token provider** (`() -> token`) for both
+credentials, resolved fresh on every (re)connect. The TS contract is
+`WsTokenProvider` (`packages/client/src/types.ts`): `wsToken` takes the session
+credential, which is sent in `connect`, and `wsTicket` takes the ticket, which
+goes in `?token=`. A provider re-mints the ticket on every reconnect, so a lapsed
+ticket is replaced on the next attempt.
+
+**Ceiling:** while `LUNORA_WS_BEARER` is set, an unauthenticated socket is
+accepted and held until its first frame. An attacker can open such sockets
+without sending a credential. Gate them at the edge if this matters.
 
 ## 7. HTTP streaming routes (SSE)
 
 `httpRoute.<verb>(path).stream()` routes stream Server-Sent Events: one
 `data: <json>\n\n` frame per chunk, a terminal `event: complete` frame, and an
-`event: error` frame carrying `{ code, message }` on throw. Frames are separated
+`event: error` frame carrying `{ code, message }` (plus `hint` and `why` when the error is not
+redacted) on throw. Frames are separated
 by `\n\n`; multiple `data:` lines join with `\n`; one optional space after the
 field colon is stripped. See `packages/client/src/http-stream.ts`.
 

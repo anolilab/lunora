@@ -2,7 +2,9 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { RlsProcedureIR } from "../../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, tablesAccessedIn } from "../ast";
+import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "../ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "../attribution";
+import { tablesAccessedIn } from "../database-calls";
 import { classifyProcedureCall } from "../functions/classify-procedure-call";
 import { rlsCallsInChain } from "./internal/chain";
 
@@ -29,7 +31,7 @@ const extractPolicyTables = (rlsCall: CallExpression): string[] => {
             continue;
         }
 
-        const tableProperty = element.getProperty("table");
+        const tableProperty = findObjectProperty(element, "table");
 
         if (!tableProperty || !Node.isPropertyAssignment(tableProperty)) {
             continue;
@@ -62,10 +64,10 @@ const rlsFromBuilderChain = (receiver: TsNode): { rlsTables: string[]; usesRls: 
 /**
  * Read-access call sites: `ctx.db.query("table")` / `db.query("table")`,
  * `ctx.db.findMany("table", ...)` / `db.findMany("table", ...)`, and the same
- * for `findFirst` / `findFirstOrThrow` / `get`. These are the public
+ * for `findFirst` / `findFirstOrThrow` / `get` / `explain` (an RLS-gated read that returns a plan, not rows). These are the public
  * `DatabaseWriter` read entry points that RLS wraps.
  */
-const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get", "query"]);
+const READ_METHODS = new Set(["explain", "findFirst", "findFirstOrThrow", "findMany", "get", "query"]);
 
 /**
  * Write-access call sites: `ctx.db.insert("table", ...)` / `db.insert(...)`,
@@ -76,7 +78,7 @@ const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get"
  * policy-gated table ONLY via a batch method would slip past the
  * `rls-uncovered-table` advisor.
  */
-const WRITE_METHODS = new Set(["delete", "deleteMany", "insert", "insertMany", "patch", "patchMany", "replace"]);
+const WRITE_METHODS = new Set(["delete", "deleteMany", "insert", "insertMany", "patch", "patchIf", "patchMany", "replace"]);
 
 // ---------------------------------------------------------------------------
 // Top-level discovery
@@ -119,7 +121,7 @@ const procedureIrFromDeclaration = (declaration: TsNode, relativePath: string): 
     const { tablesRead, tablesWritten } = tablesAccessedIn(declaration, READ_METHODS, WRITE_METHODS);
 
     return {
-        exportName: declaration.getName(),
+        exportName: exportedNameOf(declaration) ?? declaration.getName(),
         file: relativePath,
         rlsTables: chain.rlsTables,
         tablesRead,
@@ -136,17 +138,11 @@ const discoverRlsProcedures = (project: Project, lunoraDirectory: string): RlsPr
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        for (const statement of sourceFile.getVariableStatements()) {
-            if (!statement.isExported()) {
-                continue;
-            }
+        for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+            const ir = procedureIrFromDeclaration(declaration, relativePath);
 
-            for (const declaration of statement.getDeclarations()) {
-                const ir = procedureIrFromDeclaration(declaration, relativePath);
-
-                if (ir) {
-                    procedures.push(ir);
-                }
+            if (ir) {
+                procedures.push(ir);
             }
         }
     }

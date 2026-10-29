@@ -43,7 +43,7 @@ const clampRecall = (value: number | undefined): number => {
  * `--isolatedDeclarations` reason as `graphTables` (an exported const with a
  * computed key can't be inferred; see graph-component.ts).
  */
-const episodeTables: Record<string, TableDefinition> = {
+const episodeTables: Record<"episodes", TableDefinition> = {
     /**
      * One episode per completed run — a short natural-language summary of the
      * exchange, time-ordered for recency recall. `messageKey` (the extract
@@ -137,7 +137,7 @@ const episodicComponent = (): EpisodicComponentFunctions => {
 
             for (const stale of overflow.slice(0, Math.max(0, overflow.length - MAX_EPISODE_RETENTION))) {
                 // eslint-disable-next-line no-await-in-loop -- sequential deletes in a serialized mutation
-                await context.db.delete(stale["_id"] as never);
+                await context.db.delete(EPISODES_TABLE, stale["_id"] as never);
             }
 
             return { recorded: true };
@@ -185,5 +185,4 @@ const episodicComponent = (): EpisodicComponentFunctions => {
     };
 };
 
-export type { EpisodicComponentFunctions };
 export { episodeTables, episodicComponent };

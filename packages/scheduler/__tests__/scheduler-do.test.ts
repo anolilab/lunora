@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
+import { toBase64Url } from "../../../shared/base64";
 import { SchedulerDO } from "../src/scheduler-do";
 import type { ScheduleRecord } from "../src/types";
 import { createAlarmHarness } from "./alarm-harness";
+import { BlockingScheduler, settle } from "./blocking-scheduler";
 import { createFakeSocket, createFakeState, createFakeStateWithSockets } from "./fake-state";
 
 interface ScheduleResponseBody {
@@ -166,14 +168,14 @@ describe("schedulerDO", () => {
         const now = Date.now();
 
         // A workflow/agent schedule carries a `workflow` binding instead of a functionPath.
-        const response = await scheduler.fetch(post("/schedule", { args: { prompt: "digest" }, scheduledFor: now - 1000, workflow: "AGENT_SUPPORT" }));
+        const response = await scheduler.fetch(post("/schedule", { args: { prompt: "digest" }, scheduledFor: now - 1000, workflow: "SupportAgentWorkflow" }));
 
         expect(response.status).toBe(200);
 
         await scheduler.alarm();
 
         expect(scheduler.dispatched).toHaveLength(1);
-        expect(scheduler.dispatched[0]?.workflow).toBe("AGENT_SUPPORT");
+        expect(scheduler.dispatched[0]?.workflow).toBe("SupportAgentWorkflow");
         // The stored record carries no functionPath — the two targets are exclusive.
         expect(scheduler.dispatched[0]?.functionPath).toBeUndefined();
     });
@@ -637,7 +639,8 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         // the time-index deletion alone, so no `dispatched:` key should ever
         // appear, and a successful fire leaves nothing behind.
         expect([...state.storageMap.keys()].filter((key) => key.startsWith("dispatched:"))).toHaveLength(0);
-        expect(state.storageMap.size).toBe(0);
+        // Only the store's own "nothing is unindexed" marker remains.
+        expect([...state.storageMap.keys()]).toStrictEqual(["meta:clean"]);
     });
 
     it("deletes a dangling time-index entry whose id: header is missing instead of busy-looping", async () => {
@@ -786,7 +789,8 @@ describe("schedulerDO — dead-letter admin endpoints", () => {
 
         expect(response.status).toBe(400);
         await expect(response.json<{ error: { code: string } }>()).resolves.toMatchObject({ error: { code: "INVALID_SCHEDULE_ID" } });
-        expect([...state.storageMap.keys()]).toStrictEqual([]);
+        // No job rows — only the store's own "nothing is unindexed" marker.
+        expect([...state.storageMap.keys()]).toStrictEqual(["meta:clean"]);
     });
 
     it("refuses a caller-supplied id a dead-letter record still holds, so /dead/retry cannot overwrite the new job", async () => {
@@ -1013,12 +1017,12 @@ describe("schedulerDO — real dispatch() fetch contract", () => {
     });
 
     /** Stub global fetch with a fixed status; capture every request it sees. */
-    const stubFetch = (status: number): { calls: { headers: Headers; url: string }[] } => {
-        const calls: { headers: Headers; url: string }[] = [];
+    const stubFetch = (status: number): { calls: { body: string; headers: Headers; url: string }[] } => {
+        const calls: { body: string; headers: Headers; url: string }[] = [];
         const stub = vi.fn<typeof fetch>(async (input: RequestInfo | URL, init?: RequestInit) => {
             const url = input instanceof Request ? input.url : String(input);
 
-            calls.push({ headers: new Headers(init?.headers), url });
+            calls.push({ body: typeof init?.body === "string" ? init.body : "", headers: new Headers(init?.headers), url });
 
             return new Response(null, { status });
         });
@@ -1080,6 +1084,76 @@ describe("schedulerDO — real dispatch() fetch contract", () => {
         expect(state.storageMap.has(`id:${id}`)).toBe(true);
     });
 
+    it("re-arms a `409 DISPATCH_IN_PROGRESS` decline without clearing, dead-lettering, or charging an attempt", async () => {
+        expect.assertions(4);
+
+        // The shard declines a re-delivery whose first attempt is still running.
+        // Temporary, never terminal: clearing the record would make the job
+        // at-most-once, and charging the retry budget would dead-letter a job
+        // that is running fine before the attempt that is doing the work ends.
+        const spy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () =>
+                Response.json(
+                    { error: { code: "DISPATCH_IN_PROGRESS", message: "already running" } },
+                    { headers: { "x-lunora-dispatch-declined": "1" }, status: 409 },
+                ),
+            );
+        const start = Date.now();
+        const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+
+        restoreFetch = () => {
+            spy.mockRestore();
+            clock.mockRestore();
+        };
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", retry: { maxAttempts: 1 }, scheduledFor: start - 1000 })),
+        );
+
+        // Two declines against a budget of ONE retry: charged, the second would park it.
+        await scheduler.alarm();
+        clock.mockReturnValue(start + 3_600_000);
+        await scheduler.alarm();
+
+        const dispatches = spy.mock.calls.length;
+
+        expect(dispatches).toBe(2);
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("dead:"))).toHaveLength(0);
+        expect(state.storageMap.has(`id:${id}`)).toBe(true);
+        expect((state.storageMap.get(`id:${id}`) as { attempts?: number }).attempts ?? 0).toBe(0);
+    });
+
+    it("charges a DISPATCH_IN_PROGRESS-coded 409 the shard's claim path did not mark — a handler threw it", async () => {
+        expect.assertions(1);
+
+        // The shard echoes a handler-thrown error's code and status. Without the
+        // claim's header this is the job failing, and an uncharged failure would
+        // re-arm forever instead of dead-lettering.
+        const spy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () => Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "forwarded" } }, { status: 409 }));
+        const start = Date.now();
+        const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+
+        restoreFetch = () => {
+            spy.mockRestore();
+            clock.mockRestore();
+        };
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", retry: { maxAttempts: 3 }, scheduledFor: start - 1000 })),
+        );
+
+        await scheduler.alarm();
+
+        expect((state.storageMap.get(`id:${id}`) as { attempts?: number }).attempts ?? 0).toBe(1);
+    });
+
     it("routes a thrown dispatch (network error / crypto failure) to retry rather than orphaning the job", async () => {
         expect.assertions(3);
 
@@ -1125,6 +1199,40 @@ describe("schedulerDO — real dispatch() fetch contract", () => {
         expect(calls[0]?.url).toBe("https://app.test/_lunora/scheduler/dispatch");
         // The body is HMAC-signed so the receiver can reject anonymous callers.
         expect((calls[0]?.headers.get("x-lunora-scheduler-signature") ?? "").length).toBeGreaterThan(0);
+    });
+
+    it("imports the HMAC key once and signs every dispatch with it", async () => {
+        expect.assertions(3);
+
+        const { calls } = stubFetch(200);
+        const importKey = vi.spyOn(crypto.subtle, "importKey");
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, {
+            LUNORA_ORIGIN_URL: "https://app.test",
+            LUNORA_SCHEDULER_SECRET: "import-once-s3cr3t",
+        });
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 }));
+        await scheduler.alarm();
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "g", scheduledFor: Date.now() - 1000 }));
+        await scheduler.alarm();
+
+        const imports = importKey.mock.calls.length;
+
+        importKey.mockRestore();
+
+        const verifyKey = await crypto.subtle.importKey("raw", new TextEncoder().encode("import-once-s3cr3t"), { hash: "SHA-256", name: "HMAC" }, false, [
+            "sign",
+        ]);
+        const expected = await Promise.all(
+            calls.map(async (call) => toBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", verifyKey, new TextEncoder().encode(call.body))))),
+        );
+
+        // The key cache is per isolate, so this test owns its secret to see the first import.
+        expect(imports).toBe(1);
+        expect(calls).toHaveLength(2);
+        expect(calls.map((call) => call.headers.get("x-lunora-scheduler-signature"))).toStrictEqual(expected);
     });
 
     it("falls back to a bearer admin token when no HMAC secret is configured", async () => {
@@ -1366,6 +1474,9 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
         const claimKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
 
         state.storageMap.delete(claimKey ?? "");
+        // The drain withdrew the store's clean marker before claiming anything,
+        // and the dead instance never wrote it back.
+        state.storageMap.delete("meta:clean");
 
         expect([...state.storageMap.keys()].filter((key) => key.startsWith("t:"))).toHaveLength(0);
         expect(state.storageMap.has(`id:${id}`)).toBe(true);
@@ -1395,6 +1506,7 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
         const claimKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
 
         state.storageMap.delete(claimKey ?? "");
+        state.storageMap.delete("meta:clean");
         await state.storage.deleteAlarm();
 
         // A FRESH instance, woken the only way anything can still wake it: a
@@ -1412,5 +1524,78 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
 
         expect(revived.dispatched.map((record) => record.id)).toEqual([id]);
         expect(state.storageMap.has(`id:${id}`)).toBe(false);
+    });
+
+    describe("orphan walk gating", () => {
+        /** Start recording the prefix of every `storage.list()` call; read the result after the fact. */
+        const recordListedPrefixes = (state: ReturnType<typeof createFakeState>): (() => (string | undefined)[]) => {
+            const spy = vi.spyOn(state.storage, "list");
+
+            return () => spy.mock.calls.map(([options]) => options?.prefix);
+        };
+
+        it("skips the full walk on a fresh instance once a drain settled cleanly", async () => {
+            expect.assertions(2);
+
+            const state = createFakeState();
+            const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 }));
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() + 60_000 }));
+            await scheduler.alarm();
+
+            const listedPrefixes = recordListedPrefixes(state);
+            const revived = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+            await revived.alarm();
+
+            expect(state.storageMap.has("meta:clean")).toBe(true);
+            expect(listedPrefixes()).not.toContain("id:");
+        });
+
+        it("walks on the successor of an instance that died mid-drain", async () => {
+            expect.assertions(2);
+
+            const state = createFakeState();
+            const hanging = new BlockingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+            await hanging.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 }));
+            // The instance is "evicted" with this dispatch still open.
+            const draining = hanging.alarm();
+
+            await settle();
+
+            expect(hanging.started).toHaveLength(1);
+
+            const listedPrefixes = recordListedPrefixes(state);
+
+            await new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }).fetch(get("/status"));
+
+            expect(listedPrefixes()).toContain("id:");
+
+            hanging.releaseAll();
+            await draining;
+        });
+
+        it("walks on the successor of an instance that swallowed a failed header cleanup", async () => {
+            expect.assertions(1);
+
+            const state = createFakeState();
+            const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+            const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 })));
+            const innerDelete = state.storage.delete.bind(state.storage);
+
+            state.storage.delete = async (keyOrKeys: string | string[]): Promise<number> => {
+                if (Array.isArray(keyOrKeys) && keyOrKeys.includes(`id:${id}`)) {
+                    throw new Error("simulated cleanup failure");
+                }
+
+                return (await innerDelete(keyOrKeys)) as number;
+            };
+
+            await scheduler.alarm();
+
+            expect(state.storageMap.has("meta:clean")).toBe(false);
+        });
     });
 });

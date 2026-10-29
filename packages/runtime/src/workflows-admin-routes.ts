@@ -22,6 +22,7 @@
  */
 import type { WorkflowInstanceStatus, WorkflowsRestClient } from "@lunora/workflow";
 
+import { readLooseJsonBody } from "./body-readers";
 import { LunoraError } from "./errors";
 import { assertMethod } from "./method-guard";
 
@@ -41,6 +42,7 @@ const INSTANCE_STATUSES = {
     errored: true,
     paused: true,
     queued: true,
+    rollingBack: true,
     running: true,
     terminated: true,
     unknown: true,
@@ -167,7 +169,14 @@ const buildWorkflowsAdminRoutes = (
             return throwNotConfigured();
         }
 
-        const body = (await request.json().catch(() => undefined)) as { action?: unknown; id?: unknown; name?: unknown } | undefined;
+        // Read under the shared byte budget, like every sibling admin route: a
+        // bare `request.json()` drains whatever is sent, so a chunked body slips
+        // the cap the `Content-Length` fast path only loosely enforces.
+        // `| null`, not `| undefined`: the reader returns `{}` for an empty body,
+        // the parsed value, or throws — so it never resolves `undefined`, but
+        // `JSON.parse("null")` is a perfectly good parsed value, and reading a
+        // property off it would 500 a request that deserves the 400 below.
+        const body = (await readLooseJsonBody(request, "Workflows status")) as { action?: unknown; id?: unknown; name?: unknown } | null;
 
         if (typeof body?.name !== "string" || body.name === "" || typeof body.id !== "string" || body.id === "") {
             throw new LunoraError("Workflows status action requires string `name` and `id`", { code: "BAD_REQUEST", status: 400 });
@@ -175,8 +184,8 @@ const buildWorkflowsAdminRoutes = (
 
         const { action } = body;
 
-        if (action !== "pause" && action !== "resume" && action !== "terminate") {
-            throw new LunoraError("Workflows status action must be one of: pause, resume, terminate", { code: "BAD_REQUEST", status: 400 });
+        if (action !== "pause" && action !== "restart" && action !== "resume" && action !== "terminate") {
+            throw new LunoraError("Workflows status action must be one of: pause, restart, resume, terminate", { code: "BAD_REQUEST", status: 400 });
         }
 
         return Response.json(await client.setInstanceStatus({ action, instanceId: body.id, workflowName: body.name }));

@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /** Human-readable surface name for a finding's prose. */
 const surfaceLabel = (kind: "httpAction" | "httpRoute", method?: string): string =>
@@ -25,8 +26,10 @@ const surfaceLabel = (kind: "httpAction" | "httpRoute", method?: string): string
  * (`context.httpActionGuards`); a runtime caller flags nothing. The feeder only
  * records handlers that already perform a side effect and whose `ctx` binding was
  * statically resolvable (a named-function or wrapped handler is skipped,
- * fail-safe), so this lint just filters to those that never read `ctx.auth`. One
- * finding per handler.
+ * fail-safe), and never records a handler that reads a signature-shaped request
+ * header — a provider webhook is authenticated by signature and carries no user
+ * identity, so `ctx.auth` is unsatisfiable on it. This lint just filters what is
+ * left to those that never read `ctx.auth`. One finding per handler.
  */
 const httpActionMissingAuthGuard: Lint = {
     categories: ["SECURITY"],
@@ -49,12 +52,10 @@ const httpActionMissingAuthGuard: Lint = {
 
                 return emit(httpActionMissingAuthGuard, {
                     cacheKey: `http_action_missing_auth_guard:${row.file}:${row.line.toString()}`,
-                    detail: `${surface} \`${row.exportName}\` (${row.file}:${row.line.toString()}) calls \`ctx.${row.sideEffect}\` but never reads \`ctx.auth\` — an anonymous caller can drive this write. Authenticate the request before the side effect.`,
+                    detail: `${surface} ${callSiteWhere(row)} calls \`ctx.${row.sideEffect}\` but never reads \`ctx.auth\` — an anonymous caller can drive this write. Authenticate the request before the side effect.`,
                     metadata: {
-                        exportName: row.exportName,
-                        file: row.file,
+                        ...callSiteFields(row),
                         kind: row.kind,
-                        line: row.line,
                         sideEffect: row.sideEffect,
                         ...(row.method ? { method: row.method } : {}),
                     },

@@ -30,6 +30,32 @@ const resolveIntegration = (telemetry: TelemetryOptions | undefined): Telemetry 
 };
 
 /**
+ * Export whatever a buffering integration (`otlpTelemetry`) still holds. Called
+ * once per run, success or failure; a flush fault is a telemetry fault and never
+ * reaches the run.
+ *
+ * `flush` is optional and may be asynchronous — the built-in OTLP integration is
+ * synchronous, but `TelemetryOptions` accepts any {@link Telemetry} — so the
+ * helper awaits every integration and the loop awaits the helper, or a Promise
+ * rejection would escape the run's `finally`.
+ */
+const flushTelemetry = async (telemetry: TelemetryOptions | undefined): Promise<void> => {
+    if (telemetry === undefined || telemetry.isEnabled === false) {
+        return;
+    }
+
+    await Promise.all(
+        [telemetry.integrations].flat().map(async (integration) => {
+            try {
+                await (integration as { flush?: () => Promise<void> | void } | undefined)?.flush?.();
+            } catch {
+                // Telemetry must never fail the run.
+            }
+        }),
+    );
+};
+
+/**
  * Report one tool execution to the agent's telemetry integrations, from the
  * place the tool actually runs.
  *
@@ -133,4 +159,4 @@ const traceToolExecution = async <T>(telemetry: TelemetryOptions | undefined, ca
 };
 
 export type { TracedToolCall };
-export { traceToolExecution };
+export { flushTelemetry, traceToolExecution };

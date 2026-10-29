@@ -21,7 +21,7 @@ const pool = new Pool({
   connectionTimeoutMillis: 2000, // Timeout connection attempts
 });
 
-export const db = drizzle(pool);
+export const db = drizzle({ client: pool });
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
@@ -49,7 +49,7 @@ const poolConnection = mysql.createPool({
   keepAliveInitialDelay: 0,
 });
 
-export const db = drizzle(poolConnection);
+export const db = drizzle({ client: poolConnection });
 ```
 
 ### SQLite (better-sqlite3)
@@ -71,7 +71,7 @@ sqlite.pragma('synchronous = normal');
 sqlite.pragma('cache_size = -64000'); // 64MB cache
 sqlite.pragma('temp_store = memory');
 
-export const db = drizzle(sqlite);
+export const db = drizzle({ client: sqlite });
 
 process.on('exit', () => sqlite.close());
 ```
@@ -189,7 +189,7 @@ export const runtime = 'edge';
 
 export async function GET() {
   const sql = neon(process.env.DATABASE_URL!);
-  const db = drizzle(sql);
+  const db = drizzle({ client: sql });
 
   const users = await db.select().from(users);
 
@@ -206,7 +206,7 @@ import postgres from 'postgres';
 
 Deno.serve(async (req) => {
   const client = postgres(Deno.env.get('DATABASE_URL')!);
-  const db = drizzle(client);
+  const db = drizzle({ client });
 
   const data = await db.select().from(users);
 
@@ -374,7 +374,7 @@ async function bulkUpdate(updates: { id: number; name: string }[]) {
 // ❌ Bad: New connection per request
 export async function handler() {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-  const db = drizzle(pool);
+  const db = drizzle({ client: pool });
 
   const users = await db.select().from(users);
 
@@ -391,7 +391,7 @@ export async function handler() {
       connectionString: process.env.DATABASE_URL,
       max: 1, // Serverless: single connection per instance
     });
-    cachedDb = drizzle(pool);
+    cachedDb = drizzle({ client: pool });
   }
 
   const users = await cachedDb.select().from(users);
@@ -407,7 +407,7 @@ import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
 
 const sql = neon(process.env.DATABASE_URL!);
-const db = drizzle(sql);
+const db = drizzle({ client: sql });
 
 // Each query is a single HTTP request
 const users = await db.select().from(users);
@@ -418,24 +418,30 @@ const users = await db.select().from(users);
 ```typescript
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
+import { withReplicas } from 'drizzle-orm/pg-core';
 
 // Primary (writes)
 const primaryPool = new Pool({ connectionString: process.env.PRIMARY_DB_URL });
-const primaryDb = drizzle(primaryPool);
+const primaryDb = drizzle({ client: primaryPool });
 
 // Replica (reads)
 const replicaPool = new Pool({ connectionString: process.env.REPLICA_DB_URL });
-const replicaDb = drizzle(replicaPool);
+const replicaDb = drizzle({ client: replicaPool });
 
-// Route queries appropriately
+// Reads and writes go to the primary by default in rc.5. Reads reach a
+// replica only through $replica.
+const db = withReplicas(primaryDb, [replicaDb]);
+
 async function getUsers() {
-  return replicaDb.select().from(users); // Read from replica
+  return db.$replica.select().from(users); // Read from replica
 }
 
 async function createUser(data: NewUser) {
-  return primaryDb.insert(users).values(data).returning(); // Write to primary
+  return db.insert(users).values(data).returning(); // Write to primary
 }
 ```
+
+`withReplicas` picks a random replica for each `$replica` use. `db.$primary` still works but is deprecated.
 
 ## Monitoring & Profiling
 
@@ -444,7 +450,8 @@ async function createUser(data: NewUser) {
 ```typescript
 import { drizzle } from 'drizzle-orm/node-postgres';
 
-const db = drizzle(pool, {
+const db = drizzle({
+  client: pool,
   logger: {
     logQuery(query: string, params: unknown[]) {
       console.log('Query:', query);

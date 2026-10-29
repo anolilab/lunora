@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { OTLP_GZIP_THRESHOLD, otlpSend } from "../src/otlp-export";
+import type { ObservabilityEvent } from "../src/observability";
+import { encodeSignalAttributes, OTLP_GZIP_THRESHOLD, otlpSend, otlpTraceBody } from "../src/otlp-export";
 
 /** Pull the request headers off a recorded `fetch` call. */
 const headersOf = (init: RequestInit): Record<string, string> => (init.headers ?? {}) as Record<string, string>;
@@ -94,5 +95,33 @@ describe("otlpSend gzip threshold", () => {
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(headersOf((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1])["content-encoding"]).toBeUndefined();
+    });
+});
+
+describe("reserved fields win over caller attributes", () => {
+    it("keeps the built-in span route when the enricher's bag names the same key", () => {
+        expect.assertions(2);
+
+        const event = {
+            attributes: { "http.route": "/evil" },
+            durationMs: 3,
+            functionPath: "orders:place",
+            ok: true,
+            traceId: "0af7651916cd43dd8448eb211c80319c",
+        } as ObservabilityEvent;
+        const body = JSON.stringify(otlpTraceBody(event, 1_000_000));
+
+        expect(body).not.toContain("/evil");
+        expect(body).toContain("orders:place");
+    });
+
+    it("never lets a caller key replace the function path in a signal's attributes", () => {
+        expect.assertions(1);
+
+        const attributes = encodeSignalAttributes({ functionPath: "orders:place" }, { "lunora.function_path": "evil" });
+
+        expect(attributes.find((attribute) => attribute.key === "lunora.function_path")).toEqual(
+            expect.objectContaining({ value: expect.objectContaining({ stringValue: "orders:place" }) }),
+        );
     });
 });

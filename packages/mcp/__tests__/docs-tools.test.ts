@@ -232,6 +232,17 @@ describe("lunora_get_doc", () => {
         expect(result.isError).toBe(true);
         expect(textOf(result)).toContain("lunora_search_docs");
     });
+
+    it("answers a malformed url as a bad request that names the fault, not as an internal failure", async () => {
+        expect.assertions(3);
+
+        const { asIndex } = stubIndex();
+        const result = await call(asIndex, "lunora_get_doc", { url: "/docs/%zz" });
+
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).toContain("malformed percent-escape");
+        expect(textOf(result)).not.toContain("internal");
+    });
 });
 
 describe("lunora_list_docs", () => {

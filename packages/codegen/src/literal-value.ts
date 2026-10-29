@@ -11,7 +11,7 @@
  *
  * Anything fancier (exponents, a referenced constant, a non-canonical escape) is
  * rejected so neither consumer ever emits an unsafe expression. Shared by
- * `emit.ts` (`v.literal(...)` type emission) and `compile-validator.ts` (AOT
+ * `emit/shared.ts` (`v.literal(...)` type emission) and `compile-validator.ts` (AOT
  * inlining) so the two safety judgments can't drift apart.
  */
 // eslint-disable-next-line sonarjs/regex-complexity -- validated JSON-literal allowlist; splitting the alternation would risk a correctness gap

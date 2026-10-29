@@ -151,7 +151,8 @@ describe("lunora sdk generate", () => {
         const spec = writeSpec({ openrpc: "1.2.6" });
         const { code, output } = await runSdk({ from: transportRoot, lang: "python", spec });
 
-        expect(code).toBe(1);
+        // BAD_REQUEST maps to the taxonomy's usage/validation code.
+        expect(code).toBe(2);
         expect(output).toContain(`${spec} is not an OpenRPC document (no \`methods\` array)`);
     });
 
@@ -161,7 +162,7 @@ describe("lunora sdk generate", () => {
         const spec = writeSpec(SPEC);
         const { code, output } = await runSdk({ from: transportRoot, lang: "cobol", spec });
 
-        expect(code).toBe(1);
+        expect(code).toBe(2);
         expect(output).toContain('unsupported --lang "cobol"');
     });
 
@@ -178,7 +179,8 @@ describe("lunora sdk generate", () => {
         const { code, output } = await runSdk({ from: transportRoot, lang: "python", spec });
         const outputDirectory = join(workdir, "sdk", "python");
 
-        expect(code).toBe(1);
+        // NOT_FOUND maps to the taxonomy's not-found code.
+        expect(code).toBe(5);
         expect(output).toContain("is not a python transport");
         // The transport is vendored FIRST: its failure must leave no generated
         // files and no stamp behind in the (created but empty) output directory.

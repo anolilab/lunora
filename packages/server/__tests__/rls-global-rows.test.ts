@@ -55,7 +55,7 @@ const createSplitWriter = (seed: ReadonlyArray<SeedRow>) => {
             return rowsOfTable(tableName).length;
         },
 
-        async delete(id: string) {
+        async delete(_table: string, id: string) {
             deleted.push(id);
             rows.delete(id);
         },
@@ -64,7 +64,7 @@ const createSplitWriter = (seed: ReadonlyArray<SeedRow>) => {
             return { deleted: 0 };
         },
 
-        async deleteMany(ids: ReadonlyArray<string>) {
+        async deleteMany(_table: string, ids: ReadonlyArray<string>) {
             return { deleted: ids.length };
         },
         async findFirst(tableName: string, args?: { where?: { _id?: string } }) {
@@ -92,13 +92,16 @@ const createSplitWriter = (seed: ReadonlyArray<SeedRow>) => {
         },
         // `get` reaches BOTH backends — the writer falls back to the global one.
 
-        async get(id: string) {
+        async get(_table: string, id: string) {
             return rows.get(id) ?? null;
         },
 
         async groupBy() {
             return [];
         },
+
+        // The split writer models a mutation's writer: inside a transaction, so only listed tables re-locate.
+        inTransaction: () => true,
 
         async insert(_tableName: string, document: Record<string, unknown>) {
             return (document["_id"] as string | undefined) ?? "new-id";
@@ -119,7 +122,7 @@ const createSplitWriter = (seed: ReadonlyArray<SeedRow>) => {
             return row && !row.global ? { row, tableName: row.table } : null;
         },
 
-        async patch(id: string, patch: Record<string, unknown>) {
+        async patch(_table: string, id: string, patch: Record<string, unknown>) {
             patched.push(id);
 
             const row = rows.get(id);
@@ -175,7 +178,9 @@ describe("rls — .global() rows addressed by id", () => {
         expect.assertions(1);
 
         const database = createSplitWriter(seed);
-        const handler = lunora.query.use(rlsForTest<TestContext>(readOnlyPolicies)).query(async ({ ctx }) => (ctx as TestContext & { db: any }).db.get("p1"));
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>(readOnlyPolicies))
+            .query(async ({ ctx }) => (ctx as TestContext & { db: any }).db.get("profiles", "p1"));
 
         await expect(handler.handler(makeContext(database.writer, "attacker"), {})).resolves.toMatchObject({ _id: "p1", userId: "victim" });
     });
@@ -186,7 +191,7 @@ describe("rls — .global() rows addressed by id", () => {
         const database = createSplitWriter(seed);
         const handler = lunora.mutation
             .use(rlsForTest<TestContext>(readOnlyPolicies))
-            .mutation(async ({ ctx }) => (ctx as TestContext & { db: any }).db.patch("p1", { userId: "attacker" }));
+            .mutation(async ({ ctx }) => (ctx as TestContext & { db: any }).db.patch("profiles", "p1", { userId: "attacker" }));
 
         await expect(handler.handler(makeContext(database.writer, "attacker"), {})).rejects.toThrow(/denied by policy/u);
 
@@ -199,7 +204,7 @@ describe("rls — .global() rows addressed by id", () => {
         const database = createSplitWriter(seed);
         const handler = lunora.mutation
             .use(rlsForTest<TestContext>(readOnlyPolicies))
-            .mutation(async ({ ctx }) => (ctx as TestContext & { db: any }).db.delete("p1"));
+            .mutation(async ({ ctx }) => (ctx as TestContext & { db: any }).db.delete("profiles", "p1"));
 
         await expect(handler.handler(makeContext(database.writer, "attacker"), {})).rejects.toThrow(/denied by policy/u);
 
@@ -232,7 +237,7 @@ describe("rls — .global() rows addressed by id", () => {
             }),
         ];
         const database = createSplitWriter(seed);
-        const handler = lunora.query.use(rlsForTest<TestContext>(scoped)).query(async ({ ctx }) => (ctx as TestContext & { db: any }).db.get("p1"));
+        const handler = lunora.query.use(rlsForTest<TestContext>(scoped)).query(async ({ ctx }) => (ctx as TestContext & { db: any }).db.get("profiles", "p1"));
 
         await expect(handler.handler(makeContext(database.writer, "attacker"), {})).resolves.toBeNull();
     });
@@ -250,7 +255,9 @@ describe("rls — .global() rows addressed by id", () => {
                 return database.writer.findFirst(tableName, args);
             },
         };
-        const handler = lunora.query.use(rlsForTest<TestContext>(readOnlyPolicies)).query(async ({ ctx }) => (ctx as TestContext & { db: any }).db.get("s1"));
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>(readOnlyPolicies))
+            .query(async ({ ctx }) => (ctx as TestContext & { db: any }).db.get("profiles", "s1"));
 
         await expect(handler.handler(makeContext(spied, "attacker"), {})).resolves.toMatchObject({ _id: "s1" });
 
@@ -262,13 +269,14 @@ describe("rls — .global() rows addressed by id", () => {
  * The cost of the fallback above, bounded.
  *
  * A `.global()` row always misses `lookupById`, so every id falls through to the
- * probe path. `deleteAll`/`deleteWhere` must leave `expectedTable` unpinned —
- * pinning it blocks the writer's global fallback and makes every global delete a
- * silent no-op — and unpinned USED to mean "probe every policy-gated table", so a
- * chunked erase of N rows over a T-table schema issued N × T `findFirst` round
- * trips (2 + T subrequests per row) and hit workerd's 1000-subrequest ceiling
- * partway through an account deletion. Both callers know the table their ids came
- * from, so it rides along as a probe scope that pins nothing.
+ * probe path. `deleteAll`/`deleteWhere` pin `tableName` as `expectedTable`, which
+ * the engine still routes to D1 (`globalFallbackFor` allows the fall-through and
+ * re-applies the pin over there), so a global delete is never a silent no-op —
+ * and the pin keeps the probe set to that one table. Unpinned USED to mean "probe
+ * every policy-gated table", so a chunked erase of N rows over a T-table schema
+ * issued N × T `findFirst` round trips (2 + T subrequests per row) and hit
+ * workerd's 1000-subrequest ceiling partway through an account deletion. Both
+ * callers know the table their ids came from, so it rides along as a pin.
  */
 describe("rls — probe scope on chunked erases", () => {
     /** Three policy-gated tables; only `profiles` is ever erased. */
@@ -286,6 +294,11 @@ describe("rls — probe scope on chunked erases", () => {
             probes,
             writer: {
                 ...database.writer,
+                get: async (table: string, id: string) => {
+                    probes.push(`get:${id}`);
+
+                    return database.writer.get(table, id);
+                },
                 findFirst: async (tableName: string, args?: { where?: { _id?: string } }) => {
                     probes.push(tableName);
 
@@ -295,7 +308,7 @@ describe("rls — probe scope on chunked erases", () => {
         };
     };
 
-    it("deleteAll() probes only the table it erases, once per row", async () => {
+    it("deleteAll() re-locates no row: the delete verdict runs on the rows already read", async () => {
         expect.assertions(3);
 
         const database = createSplitWriter(seed);
@@ -306,11 +319,11 @@ describe("rls — probe scope on chunked erases", () => {
 
         await expect(handler.handler(makeContext(spied.writer, "admin"), {})).resolves.toStrictEqual({ deleted: 2 });
 
-        expect(spied.probes).toStrictEqual(["profiles", "profiles"]);
+        expect(spied.probes).toStrictEqual([]);
         expect(database.rows.size).toBe(0);
     });
 
-    it("deleteWhere() probes only the matched table, once per row", async () => {
+    it("deleteWhere() re-locates no row: the delete verdict runs on the rows already read", async () => {
         expect.assertions(2);
 
         const database = createSplitWriter(seed);
@@ -321,6 +334,6 @@ describe("rls — probe scope on chunked erases", () => {
 
         await expect(handler.handler(makeContext(spied.writer, "admin"), {})).resolves.toStrictEqual({ deleted: 2 });
 
-        expect(spied.probes).toStrictEqual(["profiles", "profiles"]);
+        expect(spied.probes).toStrictEqual([]);
     });
 });

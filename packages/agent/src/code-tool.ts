@@ -1,5 +1,5 @@
+import { asSchema, jsonSchema } from "@ai-sdk/provider-utils";
 import { LunoraError } from "@lunora/errors";
-import { asSchema, jsonSchema } from "ai";
 
 import isPositiveInteger from "./positive-integer";
 import { capToolOutputText, MAX_TOOL_OUTPUT_CHARS } from "./tool-output";
@@ -316,8 +316,8 @@ const CODE_TOOL_SCHEMA = jsonSchema<ToolScript>({
  * SCRIPT that composes several of the tools you hand `codeTool` — chaining a
  * later call's input to an earlier call's output — and the whole thing runs in a
  * single turn. This is a SAFE interpreted data-flow between whitelisted tools
- * (no `eval`, no isolate), so it runs natively in workerd; arbitrary-code
- * execution (the Cloudflare Worker Loader path) is a separate future mode.
+ * (no `eval`, no isolate), so it runs natively in workerd; for arbitrary code
+ * in a Worker Loader isolate, see `jsCodeTool`.
  *
  * Each composed tool dispatches through the same durable context a normal call
  * gets (inheriting RLS), with a per-step idempotency key. A code-mode script runs
@@ -369,6 +369,14 @@ const codeTool = (tools: Record<string, AnyAgentTool>, options: CodeToolOptions 
             throw new LunoraError(
                 "INTERNAL",
                 `@lunora/agent: codeTool cannot compose "${name}" — it has a \`needsApproval\` gate a code-mode script can't pause for. Expose it as a normal top-level tool, or gate the whole script via codeTool's \`needsApproval\`.`,
+            );
+        }
+
+        // Same reason as the gate above: only the loop's top-level path pauses for a secret. A script step runs `execute`, which always throws.
+        if (tool.secretRequest !== undefined) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/agent: codeTool cannot compose "${name}" — it is a requestSecretTool, which a code-mode script can't pause for the owner to supply. Expose it as a normal top-level tool.`,
             );
         }
     }

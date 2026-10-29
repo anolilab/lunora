@@ -18,9 +18,12 @@ import { evaluationAttributes } from "../../../shared/evaluation-attributes";
 import type { LogFields } from "../../../shared/log-fields";
 import { normalizeLogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
-import { buildTraceparent, LUNORA_ATTR, OTLP_SPAN_KIND, otlpRandomHex } from "../../../shared/otlp";
+import { buildTraceparent, OTLP_SPAN_KIND, otlpRandomHex } from "../../../shared/otlp";
 import type { SpanContextIds, SpanEvent, SpanEventPoint, SpanHandle, SpanIdentity, SpanLink, SpanOptions } from "../../../shared/span-event";
-import { redactArgs } from "./request-log";
+import type { HostSpanLike, HostTracingResolver } from "./host-span";
+import { applyHostSpanAttributes } from "./host-span";
+import type { SensitiveScope } from "./request-log";
+import { NO_SENSITIVE_SCOPE, redactArgs, redactCredentials } from "./request-log";
 import { toErrorType } from "./trace-context";
 
 /**
@@ -181,7 +184,7 @@ const resolveSpanOptions = (options: LogFields | SpanOptions | undefined): SpanO
 // local use in `MetricsDeps`/`TracerDeps` etc.) — `export…from` keeps the
 // single source of truth per `unicorn/prefer-export-from`.
 export type { MetricEvent, MetricKind } from "../../../shared/metric-event";
-export type { SpanContextIds, SpanEvent, SpanEventPoint, SpanHandle, SpanIdentity, SpanKind, SpanLink, SpanOptions } from "../../../shared/span-event";
+export type { SpanContextIds, SpanEvent, SpanEventPoint, SpanHandle, SpanKind, SpanLink, SpanOptions } from "../../../shared/span-event";
 
 /**
  * Structural shape of the `ctx.trace` span factory (see the server
@@ -209,6 +212,13 @@ export interface ContextMetrics {
 
 /** The trace a ctx's spans hang off: the shared id, and the span they parent to. */
 export interface TraceAnchor {
+    /**
+     * Cloudflare Ray ID of the request this dispatch serves, forwarded by the
+     * runtime alongside `traceparent`. Carried on the anchor so every span and
+     * log line of the dispatch stamps the same value. Absent off the edge.
+     * Informational only, as `parseRayId` in `shared/ray-id.ts` defines it.
+     */
+    rayId?: string;
     rootSpanId: string;
 
     /**
@@ -222,50 +232,13 @@ export interface TraceAnchor {
 }
 
 /**
- * Minimal structural shape of one **host-native custom span** — the object a
- * `tracing.enterSpan(name, (span) => …)` callback receives (GA 2026-06-16). Only
- * the surface the bridge touches is declared, so `@lunora/do` needs no runtime
- * dependency on `cloudflare:workers`; the real platform span is structurally
- * assignable.
+ * The span fields every span of a dispatch copies off its {@link TraceAnchor}:
+ * the trace id, and the Ray ID when the anchor carries one. One helper so a span
+ * builder cannot stamp the trace id and forget the Ray ID (or emit an explicit
+ * `rayId: undefined` key, which a sink would serialize).
  */
-
-/**
- * A host-supplied span, structurally.
- *
- * Named for the role rather than the provider: this is whatever the runtime's
- * own tracer hands back, and Cloudflare's `enterSpan` callback argument is one
- * shape that satisfies it. Kept structural so no provider type is imported —
- * the repo's documented `*Like` pattern.
- */
-export interface HostSpanLike {
-    /**
-     * Whether this span is actually being recorded by the runtime's sampler.
-     * `false` off the traced path (unsampled) — the bridge skips its
-     * `setAttribute` work in that case rather than building attribute strings for
-     * a span nobody will read.
-     */
-    readonly isTraced: boolean;
-    /** Attach one primitive attribute to the CF span. */
-    setAttribute: (key: string, value: boolean | number | string | undefined) => void;
-}
-
-/**
- * Minimal structural shape of the `tracing` namespace exported by
- * `cloudflare:workers`. `enterSpan` opens a custom span that auto-nests under the
- * runtime's ambient span and ends when `callback` settles.
- */
-export interface HostTracingLike {
-    enterSpan: <T>(name: string, callback: (span: HostSpanLike) => T) => T;
-}
-
-/**
- * Resolves CF's `tracing` namespace, or `undefined` when it is unavailable —
- * on a host with no native tracer, on a Cloudflare compat date predating custom spans, or when
- * `tracing.enterSpan` is not a function. **Injected, never imported here**, so the
- * tracer stays pure and unit-testable without `cloudflare:workers`; the shard
- * supplies the real resolver, tests a fake or `undefined`.
- */
-export type HostTracingResolver = () => HostTracingLike | Promise<HostTracingLike | undefined> | undefined;
+export const spanAnchorFields = (anchor: TraceAnchor): { rayId?: string; traceId: string } =>
+    anchor.rayId === undefined ? { traceId: anchor.traceId } : { rayId: anchor.rayId, traceId: anchor.traceId };
 
 /** What {@link createTracer} needs from the shard to build a span. */
 export interface TracerDeps {
@@ -311,6 +284,12 @@ export interface TracerDeps {
      */
     resolveHostTracing?: HostTracingResolver;
 
+    /**
+     * The invocation's `v.sensitive` values (see {@link SensitiveScope}). Applied
+     * to every span this tracer records, and to the body's own collector.
+     */
+    scope?: SensitiveScope;
+
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey: string | undefined;
 
@@ -322,64 +301,10 @@ export interface TracerDeps {
 export interface MetricsDeps {
     functionPath: string;
     record: (event: MetricEvent) => void;
+    /** The invocation's `v.sensitive` values, applied to each measurement's attributes. */
+    scope?: SensitiveScope;
     shardKey: string | undefined;
 }
-
-/**
- * Mirror a finished span's name-independent key attributes onto its Cloudflare
- * custom span, best-effort. Pure and side-effect-only, so the wrapping in
- * {@link createTracer} stays readable and this is directly unit-testable with a
- * fake span.
- *
- * Gated on `span.isTraced`: an untraced span discards attributes, so building the
- * strings would be waste. User attributes are already coerced to JSON primitives
- * by `normalizeLogFields` (a nested value arrives as its JSON string), so every
- * one is copyable; the `typeof` guard is a defensive net against a non-primitive
- * ever reaching CF's `setAttribute`, which takes `string | number | boolean |
- * undefined`.
- */
-export const applyHostSpanAttributes = (
-    span: HostSpanLike,
-    meta: {
-        attributes: Record<string, LogFields[string]>;
-        durationMs: number;
-        error: SpanEvent["error"];
-        functionPath: string;
-        ok: boolean;
-        shardKey: string | undefined;
-        userId: string | undefined;
-    },
-): void => {
-    if (!span.isTraced) {
-        return;
-    }
-
-    span.setAttribute(LUNORA_ATTR.functionPath, meta.functionPath);
-    span.setAttribute(LUNORA_ATTR.ok, meta.ok);
-    span.setAttribute(LUNORA_ATTR.durationMs, meta.durationMs);
-
-    if (meta.shardKey !== undefined) {
-        span.setAttribute(LUNORA_ATTR.shardKey, meta.shardKey);
-    }
-
-    if (meta.userId !== undefined) {
-        span.setAttribute(LUNORA_ATTR.userId, meta.userId);
-    }
-
-    if (meta.error !== undefined) {
-        // Wire change: these were `lunora.error.type` / `lunora.error.message`;
-        // they now converge on the OTel-standard `error.type` / `error.message`
-        // so a collector query matches the worker exporter's span too.
-        span.setAttribute(LUNORA_ATTR.errorType, meta.error.type);
-        span.setAttribute(LUNORA_ATTR.errorMessage, meta.error.message);
-    }
-
-    for (const [key, value] of Object.entries(meta.attributes)) {
-        if (typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
-            span.setAttribute(`lunora.attr.${key}`, value);
-        }
-    }
-};
 
 /** Everything a {@link SpanHandle}'s body attached, ready to merge into the recorded span. */
 export interface SpanCollection {
@@ -409,8 +334,13 @@ export interface SpanCollector {
  * error message — a stack is file paths and internals by definition, the exact
  * class `isInternalCode` redaction exists for, so it rides the same dev-only
  * escape hatch rather than shipping to a third-party collector by default.
+ *
+ * `scope` scrubs the invocation's `v.sensitive` values out of everything written
+ * here, at write time, so the collector never holds the raw value. It is applied
+ * whatever `captureRaw` says: the dev escape hatch exists for stacks and
+ * internals, not for a marked argument.
  */
-export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): SpanCollector => {
+export const createSpanCollector = (ids: SpanContextIds, captureRaw = false, scope: SensitiveScope = NO_SENSITIVE_SCOPE): SpanCollector => {
     const collected: SpanCollection = { attributes: {}, events: [], links: [] };
 
     const handle: SpanHandle = {
@@ -420,11 +350,11 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
                 return;
             }
 
-            const normalized = boundedAttributes(attributes);
+            const normalized = redactCredentials(scope.fields(boundedAttributes(attributes)), captureRaw) as LogFields | undefined;
 
             collected.events.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
-                name,
+                name: scope.name(name),
                 ts: Date.now(),
             });
         },
@@ -433,7 +363,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
                 return;
             }
 
-            const normalized = boundedAttributes(link.attributes);
+            const normalized = redactCredentials(scope.fields(boundedAttributes(link.attributes)), captureRaw) as LogFields | undefined;
 
             collected.links.push({
                 ...(normalized === undefined ? {} : { attributes: normalized }),
@@ -448,7 +378,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
             // no special casing downstream. `evaluationAttributes` throws on an
             // empty name / non-finite score — caller misuse, so it surfaces in the
             // body rather than being silently dropped.
-            assignBoundedAttributes(collected.attributes, normalizeLogFields(evaluationAttributes(evaluation)));
+            assignBoundedAttributes(collected.attributes, scope.fields(normalizeLogFields(evaluationAttributes(evaluation))));
         },
         recordException: (error) => {
             // The OTel-conventional `exception` event. `exception.stacktrace` is
@@ -456,6 +386,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
             // other record (nothing re-throws it for a top-level handler to log),
             // but a stack is exactly the kind of internal detail the production
             // redaction posture exists to keep off third-party sinks.
+            // `addEvent` scrubs every field value it stores, so the message and stack are covered there.
             const rawMessage = error instanceof Error ? error.message : String(error);
 
             handle.addEvent("exception", {
@@ -465,10 +396,10 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
             });
         },
         setAttribute: (key, value) => {
-            assignBoundedAttributes(collected.attributes, normalizeLogFields({ [key]: value }));
+            assignBoundedAttributes(collected.attributes, scope.fields(normalizeLogFields({ [key]: value })));
         },
         setAttributes: (fields) => {
-            assignBoundedAttributes(collected.attributes, normalizeLogFields(fields));
+            assignBoundedAttributes(collected.attributes, scope.fields(normalizeLogFields(fields)));
         },
     };
 
@@ -532,7 +463,7 @@ export const createSpanCollector = (ids: SpanContextIds, captureRaw = false): Sp
  * waterfall is unaffected.
  */
 export const createTracer = (deps: TracerDeps): ContextTracer => {
-    const { anchor, captureRaw = false, fuseHostSpans, functionPath, record, resolveHostTracing, shardKey, userId } = deps;
+    const { anchor, captureRaw = false, fuseHostSpans, functionPath, record, resolveHostTracing, scope = NO_SENSITIVE_SCOPE, shardKey, userId } = deps;
 
     const tracerFor =
         (parentSpanId: string): ContextTracer =>
@@ -555,7 +486,10 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
             const resolved: SpanOptions = resolveSpanOptions(options);
             // Normalized once, before the body runs, so a caller mutating the
             // attributes object mid-span can't alter what gets recorded.
-            const normalized = normalizeLogFields(resolved.attributes);
+            const normalized = scope.fields(normalizeLogFields(resolved.attributes));
+            // The span name is the same on the recorded span and on the Cloudflare trace it is mirrored
+            // to, so a marked property name is masked once here, before either sees it.
+            const spanName = scope.name(name);
 
             // Post-hoc attributes/events/links the body attaches through its
             // `SpanHandle`. Attributes merge over `normalized` at record time
@@ -564,7 +498,12 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
             const { collected, handle: spanHandle } = createSpanCollector(
                 { ...(anchor.sampled === undefined ? {} : { sampled: anchor.sampled }), spanId, traceId: anchor.traceId },
                 captureRaw,
+                scope,
             );
+
+            // Held from here until the span is recorded: the body can outlive the
+            // dispatch that opened it, and the record must still be scrubbed.
+            const releaseScope = scope.hold();
 
             // The recorded span (our `SpanBuffer`/`otlpSink`) is produced here
             // IDENTICALLY whether or not the CF bridge is active. An optional
@@ -584,7 +523,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     // instrumentation, never flow control.
                     ok = false;
 
-                    const rawMessage = error_ instanceof Error ? error_.message : String(error_);
+                    const rawMessage = scope.text(error_ instanceof Error ? error_.message : String(error_));
 
                     error = {
                         // Redacted like the request log's error message by default
@@ -619,9 +558,15 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
 
                     assignBoundedAttributes(merged, normalized);
                     assignBoundedAttributes(merged, collected.attributes);
+
+                    // Credentials masked: `ctx.trace(name, fn, args)` and
+                    // `span.setAttributes(...)` take whatever the handler holds,
+                    // and a span is what ships to a third-party collector. PII
+                    // rules are deliberately not applied — see `redactCredentials`.
+                    const attributes = redactCredentials(merged, captureRaw) as LogFields;
                     // Start links (known up front) then post-hoc ones, in the order
                     // they were declared — a link list is causal history, not a set.
-                    const links = [...(resolved.links ?? []), ...collected.links];
+                    const links = scope.value([...(resolved.links ?? []), ...collected.links]);
 
                     // Guarded here, not only in the injected `record`: the span is
                     // recorded *after* the body already settled, so a telemetry
@@ -632,7 +577,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     // can't lose it.
                     try {
                         record({
-                            ...(Object.keys(merged).length === 0 ? {} : { attributes: merged }),
+                            ...(Object.keys(attributes).length === 0 ? {} : { attributes }),
                             durationMs,
                             ...(collected.events.length === 0 ? {} : { events: collected.events }),
                             ...(error === undefined ? {} : { error }),
@@ -641,13 +586,13 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                             // bytes and pre-existing recorded spans stay identical.
                             ...(resolved.kind === undefined || resolved.kind === "internal" ? {} : { kind: resolved.kind }),
                             ...(links.length === 0 ? {} : { links }),
-                            name,
+                            name: spanName,
                             ok,
                             parentSpanId: parentId,
+                            ...spanAnchorFields(anchor),
                             shardKey,
                             spanId,
                             startTs,
-                            traceId: anchor.traceId,
                             userId: resolvedUserId,
                         });
                     } catch {
@@ -660,7 +605,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     if (hostSpan !== undefined) {
                         try {
                             applyHostSpanAttributes(hostSpan, {
-                                attributes: merged,
+                                attributes,
                                 durationMs,
                                 error,
                                 functionPath,
@@ -672,6 +617,8 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                             // Best-effort — the CF mirror is additive telemetry.
                         }
                     }
+
+                    releaseScope();
                 }
             };
 
@@ -693,7 +640,7 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                     const cfTracing = await resolveHostTracing();
 
                     if (cfTracing !== undefined && typeof cfTracing.enterSpan === "function") {
-                        return await cfTracing.enterSpan(name, (span) => {
+                        return await cfTracing.enterSpan(spanName, (span) => {
                             bodyStarted = true;
 
                             return runRecorded(span);
@@ -740,8 +687,11 @@ export interface TracedFetchDeps {
      * predicate, to which destinations. Default `true`.
      */
     propagate?: ((url: URL) => boolean) | boolean;
+
     /** Hand a finished span to the buffer + sink. */
     record: (span: SpanEvent) => void;
+    /** The invocation's `v.sensitive` values; a query string or path can carry one. */
+    scope?: SensitiveScope;
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey: string | undefined;
     /** Read lazily — the acting user is resolved per span. */
@@ -785,7 +735,7 @@ export type ContextFetch = (input: Request | string | URL, init?: RequestInit) =
  * control.
  */
 export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): ContextFetch => {
-    const { anchor, captureRaw = false, functionPath, propagate = true, record, shardKey, userId } = deps;
+    const { anchor, captureRaw = false, functionPath, propagate = true, record, scope = NO_SENSITIVE_SCOPE, shardKey, userId } = deps;
 
     return async (input: Request | string | URL, init?: RequestInit): Promise<Response> => {
         const spanId = otlpRandomHex(8);
@@ -808,6 +758,9 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
         // seeded `let ok = true` was a dead write CodeQL rightly flagged.
         let error: SpanEvent["error"];
         let status: number | undefined;
+        // Held until the span is recorded, as in `createTracer`: the response can
+        // arrive after the dispatch has settled.
+        const releaseScope = scope.hold();
 
         try {
             const response = await base(request);
@@ -820,12 +773,10 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
 
             return response;
         } catch (error_) {
-            // Redacted like every other span error: a `fetch` failure message
-            // routinely embeds the full request URL (query string included), and
-            // this is the span pipeline — the one sink with third-party fan-out.
-            // Shipping it raw here would leak exactly what `redactUrl` strips off
-            // `url.full` two lines below.
-            const rawMessage = error_ instanceof Error ? error_.message : String(error_);
+            // A `fetch` failure message routinely embeds the full request URL,
+            // query string included; `redactArgs` drops every URL's query,
+            // fragment and userinfo, the same as `redactUrl` does for `url.full`.
+            const rawMessage = scope.text(error_ instanceof Error ? error_.message : String(error_));
 
             error = { message: redactArgs(rawMessage, captureRaw) as string, type: toErrorType(error_) };
 
@@ -836,7 +787,7 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
                     attributes: {
                         "http.request.method": request.method,
                         ...(status === undefined ? {} : { "http.response.status_code": status }),
-                        "url.full": redactUrl(request.url),
+                        "url.full": scope.text(redactUrl(request.url)),
                     },
                     durationMs: Date.now() - startTs,
                     ...(error === undefined ? {} : { error }),
@@ -846,18 +797,20 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
                     // path. A span name built from a path with ids in it makes
                     // every request its own group in a collector, which is how a
                     // trace backend's aggregate views get destroyed.
-                    name: `${request.method} ${safeHost(request.url)}`,
+                    name: scope.text(`${request.method} ${safeHost(request.url)}`),
                     ok: error === undefined,
                     parentSpanId: anchor.rootSpanId,
+                    ...spanAnchorFields(anchor),
                     shardKey,
                     spanId,
                     startTs,
-                    traceId: anchor.traceId,
                     userId: userId(),
                 });
             } catch {
                 // Best-effort — see createTracer.
             }
+
+            releaseScope();
         }
     };
 };
@@ -873,7 +826,7 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
  * built for exactly this, does the aggregation.
  */
 export const createMetrics = (deps: MetricsDeps): ContextMetrics => {
-    const { functionPath, record, shardKey } = deps;
+    const { functionPath, record, scope = NO_SENSITIVE_SCOPE, shardKey } = deps;
 
     const emit = (kind: MetricKind, name: string, value: number, attributes?: LogFields): void => {
         // A NaN/Infinity measurement has no meaningful encoding and would poison
@@ -882,7 +835,8 @@ export const createMetrics = (deps: MetricsDeps): ContextMetrics => {
             return;
         }
 
-        const normalized = normalizeLogFields(attributes);
+        // Credentials masked like span attributes: metric attributes ship to the same collector.
+        const normalized = redactCredentials(scope.fields(normalizeLogFields(attributes))) as LogFields | undefined;
 
         // Guarded for the same reason as a span's — see `createTracer`.
         try {
@@ -890,7 +844,7 @@ export const createMetrics = (deps: MetricsDeps): ContextMetrics => {
                 ...(normalized === undefined ? {} : { attributes: normalized }),
                 functionPath,
                 kind,
-                name,
+                name: scope.name(name),
                 shardKey,
                 ts: Date.now(),
                 value,
@@ -945,12 +899,16 @@ export const dispatchRootSpan = (input: {
     durationMs: number;
     failure: { thrown: unknown } | undefined;
     functionPath: string;
+    /** The invocation's `v.sensitive` values; the failure message can quote one. */
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     startTs: number;
     userId: string | undefined;
 }): SpanEvent => {
-    const { anchor, captureRaw = false, collected, durationMs, failure, functionPath, shardKey, startTs, userId } = input;
-    const attributes = collected?.attributes ?? {};
+    const { anchor, captureRaw = false, collected, durationMs, failure, functionPath, scope = NO_SENSITIVE_SCOPE, shardKey, startTs, userId } = input;
+    // Credentials masked, like `ctx.trace` attributes: `ctx.span` writes
+    // whatever the handler holds onto the span a collector receives.
+    const attributes = redactCredentials(collected?.attributes ?? {}, captureRaw) as LogFields;
 
     return {
         ...(Object.keys(attributes).length === 0 ? {} : { attributes }),
@@ -961,7 +919,7 @@ export const dispatchRootSpan = (input: {
             ? {}
             : {
                   error: {
-                      message: redactArgs(failure.thrown instanceof Error ? failure.thrown.message : String(failure.thrown), captureRaw) as string,
+                      message: redactArgs(scope.text(failure.thrown instanceof Error ? failure.thrown.message : String(failure.thrown)), captureRaw) as string,
                       type: toErrorType(failure.thrown),
                   },
               }),
@@ -973,10 +931,10 @@ export const dispatchRootSpan = (input: {
         // sits above it in a full collector-side trace, but it is not in this
         // buffer, so naming it here would dangle.
         parentSpanId: "",
+        ...spanAnchorFields(anchor),
         shardKey,
         spanId: anchor.rootSpanId,
         startTs,
-        traceId: anchor.traceId,
         userId,
     };
 };

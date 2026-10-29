@@ -6,7 +6,7 @@ import { bindTableFacade } from "../src/facade";
 
 /**
  * `bindTableFacade` pins a `tableName` on the structural writer so the per-table
- * accessor (`ctx.db.<table>.*`) forwards it as `expectedTable` on by-id calls —
+ * accessor (`ctx.db.<table>.*`) forwards it as the table on by-id calls —
  * the IDOR guard. These tests assert the batch forms (added alongside `insertMany`)
  * forward the bound table, and that `patchMany` maps the facade's `values` payload
  * onto the writer's `{ id, patch }` shape.
@@ -19,6 +19,7 @@ const makeWriter = () => {
     const insertMany = vi.fn<NonNullable<FacadeWriterLike["insertMany"]>>();
     const deleteOne = vi.fn<FacadeWriterLike["delete"]>();
     const patchOne = vi.fn<FacadeWriterLike["patch"]>();
+    const findMany = vi.fn<FacadeWriterLike["findMany"]>();
 
     const writer = {
         aggregate: vi.fn<FacadeWriterLike["aggregate"]>(),
@@ -28,7 +29,7 @@ const makeWriter = () => {
         deleteWhere,
         findFirst: vi.fn<FacadeWriterLike["findFirst"]>(),
         findFirstOrThrow: vi.fn<FacadeWriterLike["findFirstOrThrow"]>(),
-        findMany: vi.fn<FacadeWriterLike["findMany"]>(),
+        findMany,
         get: vi.fn<FacadeWriterLike["get"]>(),
         groupBy: vi.fn<FacadeWriterLike["groupBy"]>(),
         insert: vi.fn<FacadeWriterLike["insert"]>(),
@@ -42,18 +43,28 @@ const makeWriter = () => {
         replace: vi.fn<FacadeWriterLike["replace"]>(),
     } as unknown as FacadeWriterLike;
 
-    return { deleteMany, deleteOne, deleteWhere, entry: bindTableFacade(writer, "messages"), insertMany, patchMany, patchOne, patchWhere };
+    return {
+        deleteMany,
+        deleteOne,
+        deleteWhere,
+        entry: bindTableFacade(writer, "messages"),
+        findMany,
+        insertMany,
+        patchMany,
+        patchOne,
+        patchWhere,
+    };
 };
 
 describe("bindTableFacade — per-table batch forms", () => {
-    it("deleteMany(ids) forwards the bound table as expectedTable", async () => {
+    it("deleteMany(ids) forwards the bound table first", async () => {
         expect.assertions(1);
 
         const { deleteMany, entry } = makeWriter();
 
         await entry.deleteMany(["a", "b"], { limit: 5 });
 
-        expect(deleteMany).toHaveBeenCalledWith(["a", "b"], { limit: 5 }, "messages");
+        expect(deleteMany).toHaveBeenCalledWith("messages", ["a", "b"], { limit: 5 });
     });
 
     it("deleteMany({ where }) routes to the writer's deleteWhere with the bound table", async () => {
@@ -73,7 +84,7 @@ describe("bindTableFacade — per-table batch forms", () => {
 
         await entry.patchMany([{ id: "a", values: { body: "x" } }], { limit: 5 });
 
-        expect(patchMany).toHaveBeenCalledWith([{ id: "a", patch: { body: "x" } }], { limit: 5 }, "messages");
+        expect(patchMany).toHaveBeenCalledWith("messages", [{ id: "a", patch: { body: "x" } }], { limit: 5 });
     });
 
     it("patchMany({ where, values }) routes to the writer's patchWhere with the bound table", async () => {
@@ -104,8 +115,8 @@ describe("bindTableFacade — per-table batch forms", () => {
         await entry.delete("a");
         await entry.patch("a", { body: "x" });
 
-        expect(deleteOne).toHaveBeenCalledWith("a", "messages");
-        expect(patchOne).toHaveBeenCalledWith("a", { body: "x" }, "messages");
+        expect(deleteOne).toHaveBeenCalledWith("messages", "a");
+        expect(patchOne).toHaveBeenCalledWith("messages", "a", { body: "x" });
     });
 });
 
@@ -223,7 +234,7 @@ describe("bindTableFacade — upsert / upsertMany", () => {
         await expect(entry.upsert({ create: { email: "a@b.c", name: "new" }, target: "email" })).resolves.toStrictEqual({ created: false, id: "u1" });
         // The lookup uses the target value from `create`; the patch scopes to the bound table.
         expect(findFirst).toHaveBeenCalledWith("users", { where: { email: "a@b.c" } });
-        expect(patch).toHaveBeenCalledWith("u1", { email: "a@b.c", name: "new" }, "users");
+        expect(patch).toHaveBeenCalledWith("users", "u1", { email: "a@b.c", name: "new" });
         expect(insert).not.toHaveBeenCalled();
     });
 
@@ -236,7 +247,7 @@ describe("bindTableFacade — upsert / upsertMany", () => {
 
         await entry.upsert({ create: { email: "a@b.c", name: "n" }, target: "email", update: { name: "patched" } });
 
-        expect(patch).toHaveBeenCalledWith("u1", { name: "patched" }, "users");
+        expect(patch).toHaveBeenCalledWith("users", "u1", { name: "patched" });
     });
 
     it("inserts and reports created:true when no row matches", async () => {
@@ -317,5 +328,55 @@ describe("bindTableFacade — upsert / upsertMany", () => {
         patch.mockRejectedValue(new Error('update on "users" denied by policy'));
 
         await expect(entry.upsert({ create: { email: "a@b.c", name: "x" }, target: "email" })).rejects.toThrow(/denied by policy/u);
+    });
+});
+
+describe("bindTableFacade — findUnique", () => {
+    it("reads exactly one row past the one expected, and overrides a limit that reached it untyped", async () => {
+        expect.assertions(1);
+
+        const { entry, findMany } = makeWriter();
+
+        findMany.mockResolvedValue({ page: [] });
+
+        await entry.findUnique({ limit: 50, where: { slug: "s" } });
+
+        expect(findMany).toHaveBeenCalledWith("messages", { limit: 2, where: { slug: "s" } });
+    });
+
+    it("returns the single match, and null when nothing matched", async () => {
+        expect.assertions(2);
+
+        const { entry, findMany } = makeWriter();
+
+        findMany.mockResolvedValue({ page: [{ _id: "m1" }] });
+
+        await expect(entry.findUnique({ where: { slug: "s" } })).resolves.toStrictEqual({ _id: "m1" });
+
+        findMany.mockResolvedValue({ page: [] });
+
+        await expect(entry.findUnique({ where: { slug: "s" } })).resolves.toBeNull();
+    });
+
+    it("refuses a second match instead of silently answering with the first", async () => {
+        expect.assertions(1);
+
+        const { entry, findMany } = makeWriter();
+
+        findMany.mockResolvedValue({ page: [{ _id: "m1" }, { _id: "m2" }] });
+
+        await expect(entry.findUnique({ where: { slug: "s" } })).rejects.toThrow(LunoraError);
+    });
+});
+
+describe("bindTableFacade — explain", () => {
+    it("describes findMany for the bound table, forwarding the args untouched", async () => {
+        expect.assertions(2);
+
+        const explain = vi.fn<FacadeWriterLike["explain"]>().mockResolvedValue({ params: [], plan: ["SCAN messages"], sql: "SELECT 1" });
+        const entry = bindTableFacade({ explain } as unknown as FacadeWriterLike, "messages");
+
+        await expect(entry.explain({ where: { room: "lobby" } })).resolves.toStrictEqual({ params: [], plan: ["SCAN messages"], sql: "SELECT 1" });
+        expect(explain).toHaveBeenCalledWith("messages", { where: { room: "lobby" } });
     });
 });

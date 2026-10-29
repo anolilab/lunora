@@ -52,25 +52,26 @@ render(
 
 ## Exports
 
-| Symbol                                              | Kind      | Role                                                                                             |
-| --------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------ |
-| `LunoraProvider`                                    | component | Provides the shared `LunoraClient` to the tree via context. Required at the root.                |
-| `useLunora`                                         | function  | Read the `LunoraClient` from the nearest `<LunoraProvider>`. Throws if none is mounted.          |
-| `LunoraContext`                                     | context   | The underlying Solid context, for advanced manual `useContext`.                                  |
-| `createQuery`                                       | primitive | Live query as a reactive accessor. Accessor args re-subscribe; `"skip"` short-circuits.          |
-| `createMutation`                                    | primitive | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` accessors.                 |
-| `createMutationForClient`                           | primitive | Build a mutation handle bound to an explicit client (test/internal seam).                        |
-| `createAction`                                      | primitive | Action handle: `{ data, error, pending, call, reset }` accessors. No optimistic options.         |
-| `createActionForClient`                             | primitive | Build an action handle bound to an explicit client (test/internal seam).                         |
-| `createSubscription`                                | primitive | Raw live stream as `{ data, error }` accessors. `"skip"` tears down.                             |
-| `createPaginatedQuery`                              | primitive | Cursor pagination: `{ results, status, isLoading, loadMore, error }`.                            |
-| `createInfiniteQuery`                               | primitive | Infinite-scroll variant: `{ pages, status, hasNextPage, fetchNextPage, ... }`.                   |
-| `createAuth`                                        | primitive | Identity plumbing: `{ token, user }` signals + `setToken`.                                       |
-| `Authenticated` / `AuthLoading` / `Unauthenticated` | component | Render `children` per identity state (signed-in / resolving / signed-out).                       |
-| `createPresence`                                    | primitive | Collaborative awareness: heartbeat + live `present` member list.                                 |
-| `createRateLimit`                                   | primitive | Client-side rate-limit mirror: `{ ok, disabled, retryAfter, check, consume, reset }`.            |
-| `createConnectionStatus`                            | primitive | Reactive accessor of the live-socket `ConnectionStatus`.                                         |
-| `hydratePreloaded`                                  | primitive | Seed a query accessor synchronously from an SSR `Preloaded` token, then attach the subscription. |
+| Symbol                                              | Kind      | Role                                                                                                               |
+| --------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------ |
+| `LunoraProvider`                                    | component | Provides the shared `LunoraClient` to the tree via context. Required at the root.                                  |
+| `useLunora`                                         | function  | Read the `LunoraClient` from the nearest `<LunoraProvider>`. Throws if none is mounted.                            |
+| `LunoraContext`                                     | context   | The underlying Solid context, for advanced manual `useContext`.                                                    |
+| `createQuery`                                       | primitive | Live query as a reactive accessor. Accessor args re-subscribe; `"skip"` short-circuits.                            |
+| `createMutation`                                    | primitive | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` accessors.                                   |
+| `createMutationForClient`                           | primitive | Build a mutation handle bound to an explicit client (test/internal seam).                                          |
+| `createAction`                                      | primitive | Action handle: `{ data, error, pending, call, reset }` accessors. No optimistic options.                           |
+| `createActionForClient`                             | primitive | Build an action handle bound to an explicit client (test/internal seam).                                           |
+| `createSubscription`                                | primitive | Raw live stream as `{ data, error }` accessors. `"skip"` tears down.                                               |
+| `createLiveTopic`                                   | primitive | One declared live topic (`live.posts.post({ postId })`): `{ lastEvent, error }` accessors. Resubscribes on change. |
+| `createPaginatedQuery`                              | primitive | Cursor pagination: `{ results, status, isLoading, loadMore, error }`.                                              |
+| `createInfiniteQuery`                               | primitive | Infinite-scroll variant: `{ pages, status, hasNextPage, fetchNextPage, ... }`.                                     |
+| `createAuth`                                        | primitive | Identity plumbing: `{ status, token, user }` signals + `setToken`. Gate on `status`.                               |
+| `Authenticated` / `AuthLoading` / `Unauthenticated` | component | Render `children` per identity state (signed-in / resolving / signed-out).                                         |
+| `createPresence`                                    | primitive | Collaborative awareness: heartbeat + live `present` member list.                                                   |
+| `createRateLimit`                                   | primitive | Client-side rate-limit mirror: `{ ok, disabled, retryAfter, check, consume, reset }`.                              |
+| `createConnectionStatus`                            | primitive | Reactive accessor of the live-socket `ConnectionStatus`.                                                           |
+| `hydratePreloaded`                                  | primitive | Seed a query accessor synchronously from an SSR `Preloaded` token, then attach the subscription.                   |
 
 Re-exported types: `ArgsOf`, `FunctionReference`, `OptimisticUpdate`,
 `Preloaded`, `ReturnOf`, `Unsubscribe`, plus `LunoraProviderProps`,
@@ -235,6 +236,13 @@ during hydration returns the server-rendered value with no loading flash and no
 mount, a WebSocket subscription attaches in an effect and every subsequent delta
 flows into the same signal, so the UI goes live with zero refetch.
 
+The preloaded value was read for whoever was signed in when the page loaded.
+After a sign-out or user switch retires that identity, every `hydratePreloaded`
+on the client — mounted then or later — stops using it and holds `undefined`
+until the live value arrives, so the previous user's rows are never shown to the
+next one. A same-user token refresh does not count as a switch. The accessor
+is typed `Accessor<T | undefined>` for that reason, like `createQuery`.
+
 Pass `{ onError }` as the second argument to observe a subscription-scoped error
 the server pushes after hydration (a session expiry, an RLS denial). Without it
 such an error is dropped and the accessor keeps rendering the SSR snapshot as if
@@ -367,6 +375,10 @@ The part the type signature does not tell you:
   `AudioContext` resumption outside one. It is idempotent while a call is
   active, and a denied permission lands in `error` rather than throwing at the
   call site.
+- **A failed turn drops its partial answer.** When the model fails mid-answer (or its
+  stream is cut short), the text already streamed for that turn is cleared from
+  `interimTranscript` and `error` is set; the call returns to `listening`. A retried
+  turn starts its text from empty, never from the failed attempt's prefix.
 - **`endCall()` releases everything** — the socket, the microphone tracks, and
   the Web Audio graph — and is idempotent. `onCleanup` calls it for you, so
   disposing the owning root ends the call.

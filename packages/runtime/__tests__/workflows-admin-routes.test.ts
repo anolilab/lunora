@@ -65,6 +65,21 @@ describe("workflows admin routes", () => {
         expect(calls[0]).toStrictEqual({ args: { instanceId: "i1", workflowName: "orders" }, method: "getInstance" });
     });
 
+    it("forwards a `rollingBack` status filter to the instance list", async () => {
+        expect.assertions(1);
+
+        const { calls, client } = fakeClient();
+        const routes = buildWorkflowsAdminRoutes({ assertAdmin: allow, resolveWorkflowsClient: () => client });
+
+        await routes[WORKFLOWS_INSTANCES_PATH]?.(
+            get(WORKFLOWS_INSTANCES_PATH, "?name=orders&status=rollingBack"),
+            {},
+            new URL(`https://app.test${WORKFLOWS_INSTANCES_PATH}?name=orders&status=rollingBack`),
+        );
+
+        expect(calls[0]).toMatchObject({ args: { status: "rollingBack", workflowName: "orders" }, method: "listInstances" });
+    });
+
     it("patches status for a valid lifecycle action", async () => {
         expect.assertions(2);
 
@@ -79,6 +94,22 @@ describe("workflows admin routes", () => {
 
         expect(response?.status).toBe(200);
         expect(calls[0]).toStrictEqual({ args: { action: "pause", instanceId: "i1", workflowName: "orders" }, method: "setInstanceStatus" });
+    });
+
+    it("patches status for a restart action", async () => {
+        expect.assertions(2);
+
+        const { calls, client } = fakeClient();
+        const routes = buildWorkflowsAdminRoutes({ assertAdmin: allow, resolveWorkflowsClient: () => client });
+
+        const response = await routes[WORKFLOWS_STATUS_PATH]?.(
+            post(WORKFLOWS_STATUS_PATH, { action: "restart", id: "i1", name: "orders" }),
+            {},
+            new URL(`https://app.test${WORKFLOWS_STATUS_PATH}`),
+        );
+
+        expect(response?.status).toBe(200);
+        expect(calls[0]).toStrictEqual({ args: { action: "restart", instanceId: "i1", workflowName: "orders" }, method: "setInstanceStatus" });
     });
 
     it("returns a 200 `configured: false` sentinel from the instances list when no client is resolvable", async () => {

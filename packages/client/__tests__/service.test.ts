@@ -1,6 +1,6 @@
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { createServiceClient, RPC_PATH } from "../src/service";
 import type { FunctionReference } from "../src/types";
 
@@ -125,6 +125,25 @@ describe("createServiceClient", () => {
         await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:get"))).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
+    it("keeps the server code when the error data cannot be wire-decoded", async () => {
+        expect.assertions(2);
+
+        // The worker's verdict is the coded envelope. A `data` the codec refuses
+        // must be dropped, as the HTTP path does. Thrown bare, the codec's own
+        // SyntaxError replaced the verdict, so a caller saw no `code` at all.
+        const service = binding(
+            { error: { code: "NOT_FOUND", data: ["$lunora.wire$", "bigint", "not-a-number"], message: "no such thread" } },
+            { status: 404 },
+        );
+
+        const failure = await createServiceClient(service)
+            .query(reference<"query", undefined, null>("threads:get"))
+            .catch((error: unknown) => error);
+
+        expect(failure).toMatchObject({ code: "NOT_FOUND", message: "no such thread" });
+        expect(failure).not.toHaveProperty("data");
+    });
+
     it("says the binding may be pointed at the wrong Worker when the reply is not JSON", async () => {
         expect.assertions(1);
 
@@ -135,14 +154,14 @@ describe("createServiceClient", () => {
         await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:list"))).rejects.toThrow(/service binding points at/u);
     });
 
-    it("preserves hint and docsUrl, not just code", async () => {
-        expect.assertions(2);
+    it("preserves hint, why and docsUrl, not just code", async () => {
+        expect.assertions(3);
 
         // These come from the error catalog and are what make a failure
         // actionable; restoring only `code`/`data` would give a service-binding
         // caller a weaker error than the same function throws over HTTP.
         const service = binding(
-            { error: { code: "NOT_FOUND", docsUrl: "https://lunora.dev/e/not-found", hint: "check the id", message: "nope" } },
+            { error: { code: "NOT_FOUND", docsUrl: "https://lunora.dev/e/not-found", hint: "check the id", message: "nope", why: "no such thread" } },
             { status: 404 },
         );
 
@@ -150,6 +169,7 @@ describe("createServiceClient", () => {
         await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:get"))).rejects.toMatchObject({
             docsUrl: "https://lunora.dev/e/not-found",
         });
+        await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:get"))).rejects.toMatchObject({ why: "no such thread" });
     });
 
     it("reports a JSON body that is not an object instead of crashing on it", async () => {
@@ -170,6 +190,22 @@ describe("createServiceClient", () => {
         const service = binding({ unexpected: true }, { status: 502 });
 
         await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:list"))).rejects.toThrow(/502/u);
+    });
+
+    it("treats a non-object error slot as no envelope at all", async () => {
+        expect.assertions(4);
+
+        // §4.2: only an OBJECT `error` slot is an envelope. This path narrowed
+        // the BODY (above) but not the slot, so a proxy's `{"error": null}` page
+        // raised `TypeError: Cannot read properties of null` and
+        // `{"error": "bad gateway"}` an `Error` with no `code` — the two shapes
+        // the eight ports are now held to on the same fixture.
+        for (const slot of [null, "bad gateway", ["bad gateway"], 7]) {
+            const service = binding({ error: slot }, { status: 502 });
+
+            // eslint-disable-next-line no-await-in-loop -- one binding per slot shape; the shapes are the table
+            await expect(createServiceClient(service).query(reference<"query", undefined, null>("threads:list"))).rejects.toMatchObject({ code: "INTERNAL" });
+        }
     });
 
     it("passes the binding's own fetch, not the global one", async () => {

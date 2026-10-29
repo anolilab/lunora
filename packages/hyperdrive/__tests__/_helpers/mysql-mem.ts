@@ -2,7 +2,6 @@ import type { SqlExec } from "@lunora/sql-store";
 import { createDB } from "mysql-memory-server";
 import mysql from "mysql2/promise";
 
-import type { Mysql2Execute } from "../../src/global-exec";
 import { buildMysqlExec } from "../../src/global-exec";
 
 /**
@@ -26,7 +25,7 @@ interface MysqlHarness {
     close: () => Promise<void>;
     /** Connection details, e.g. for building an `env.HYPERDRIVE`-shaped binding double. */
     connection: { database: string; host: string; port: number; user: string };
-    /** The {@link SqlExec} the store core / migrations run against (wraps `connection.execute`). */
+    /** The {@link SqlExec} the store core / migrations run against (wraps `connection.query`). */
     exec: SqlExec;
     /** Raw query escape hatch (text protocol) for assertions + per-test table resets. */
     query: (sql: string, parameters?: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
@@ -49,8 +48,7 @@ const createMysqlHarness = async (): Promise<MysqlHarness> => {
             await database.stop?.();
         },
         connection: { database: database.dbName, host: "127.0.0.1", port: database.port, user: database.username },
-        // mysql2's overloaded `execute` doesn't structurally match Mysql2Execute, but the runtime shape is exactly it.
-        exec: buildMysqlExec(connection as unknown as Mysql2Execute),
+        exec: buildMysqlExec(connection),
         query: async (sql, parameters = []) => {
             const [rows] = await connection.query(sql, parameters as unknown[]);
 
@@ -96,4 +94,4 @@ const tryCreateMysqlHarness = async (): Promise<{ harness?: MysqlHarness; unavai
 };
 
 export type { MysqlHarness };
-export { createMysqlHarness, tryCreateMysqlHarness };
+export { tryCreateMysqlHarness };

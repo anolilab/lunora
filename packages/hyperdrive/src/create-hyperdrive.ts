@@ -1,3 +1,4 @@
+import toMysqlParams from "./mysql-params";
 import type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, PostgresJsLike, SqlClient } from "./types";
 
 /**
@@ -15,9 +16,18 @@ import type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, Post
  * import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
  * import postgres from "postgres";
  *
- * // inside an action (never a query/mutation):
- * const { connectionString } = createHyperdrive(env.HYPERDRIVE);
- * ctx.sql = fromPostgresJs(postgres(connectionString));
+ * // Wire the client once, on the app builder — called per shard construction,
+ * // not per request. `ctx.sql` is emitted `readonly`; it is never assigned.
+ * const app = defineApp<Env>()
+ *     .shard((env) => env.SHARD)
+ *     .hyperdrive((env) => {
+ *         const { connectionString } = createHyperdrive(env.HYPERDRIVE);
+ *
+ *         return fromPostgresJs(postgres(connectionString, { fetch_types: false, max: 5 }));
+ *     })
+ *     .build();
+ *
+ * // Then, inside an action (never a query/mutation):
  * const rows = await ctx.sql.query("select id from users where org = $1", [orgId]);
  * ```
  * @remarks
@@ -49,11 +59,19 @@ export const createHyperdrive = (binding: HyperdriveLike): { config: HyperdriveC
  * Uses the driver's `.unsafe(text, params)` escape hatch so the caller supplies
  * a plain SQL string with `$1, $2, …` placeholders and a positional params
  * array. postgres.js's `.unsafe` resolves to a row array.
+ *
+ * `prepare: true` because `.unsafe` defaults to `prepare: false`, which
+ * Cloudflare warns against: under Hyperdrive's transaction pooling unnamed
+ * statements can hang or fail intermittently, and each one costs a Describe
+ * round trip before it executes. A client built with `prepare: false` still
+ * wins. Prepared reads are cacheable by Hyperdrive, so a `.global()` store's
+ * config must have caching disabled (see `@lunora/hyperdrive/global`).
  */
 export const fromPostgresJs = (client: PostgresJsLike): SqlClient => {
     return {
+        dbSystem: "postgresql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
-            const rows = await client.unsafe(text, params);
+            const rows = await client.unsafe(text, params, { prepare: true });
 
             return rows as Row[];
         },
@@ -67,6 +85,7 @@ export const fromPostgresJs = (client: PostgresJsLike): SqlClient => {
  */
 export const fromNodePg = (client: NodePgLike): SqlClient => {
     return {
+        dbSystem: "postgresql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
             const result = await client.query(text, params);
 
@@ -78,7 +97,7 @@ export const fromNodePg = (client: NodePgLike): SqlClient => {
 /**
  * Wrap a `mysql2/promise` connection or pool as a {@link SqlClient}.
  *
- * Use `?` placeholders (MySQL positional syntax). `mysql2`'s `execute` resolves
+ * Use `?` placeholders (MySQL positional syntax). `mysql2`'s `query` resolves
  * to a `[rows, fields]` tuple; the adapter returns the first element. For a
  * non-`SELECT` (DML), `mysql2` yields a `ResultSetHeader` object rather than a
  * row array, so the adapter normalises that to `[]` — matching the empty-array
@@ -86,8 +105,9 @@ export const fromNodePg = (client: NodePgLike): SqlClient => {
  */
 export const fromMysql2 = (connection: Mysql2Like): SqlClient => {
     return {
+        dbSystem: "mysql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
-            const [rows] = await connection.execute(text, params);
+            const [rows] = await connection.query(text, toMysqlParams(params));
 
             return Array.isArray(rows) ? (rows as Row[]) : [];
         },

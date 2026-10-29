@@ -20,19 +20,6 @@ export interface RateLimitConfig {
     rate: number;
 
     /**
-     * Split a hot limit across N independent sub-buckets to avoid a single
-     * contended key/Durable Object. Each shard enforces `rate / shards` (and
-     * `capacity / shards`); a request is routed to a shard via a deterministic
-     * hash of `(name, key)`, so the same key always lands on the same shard and
-     * a single key's effective throughput is exactly `rate / shards`. Aggregate
-     * throughput across many distinct keys approaches `rate` as keys spread
-     * uniformly across shards. Reserve it for high-volume limits where
-     * contention bites; leave unset (one bucket) otherwise. Must be a positive
-     * integer — `1` is equivalent to unset.
-     */
-    shards?: number;
-
-    /**
      * Phase offset in epoch milliseconds for windowed algorithms — windows
      * align to `start + n * period`. Ignored by token buckets. Defaults to `0`.
      */
@@ -101,4 +88,34 @@ export interface RateLimitStore {
     delete: (storageKey: string) => Promise<void> | void;
     get: (storageKey: string) => Promise<RateLimitValue | undefined> | RateLimitValue | undefined;
     set: (storageKey: string, value: RateLimitValue) => Promise<void> | void;
+
+    /**
+     * Optional conditional write: persist `value` only while the stored value is
+     * still `prior` (what `get` returned for this consume, `undefined` for no
+     * row), and resolve `false` when it no longer is. When present the limiter
+     * writes through it instead of `set`, and a `false` makes it read and decide
+     * again rather than admit off a stale read.
+     *
+     * A store whose `get` and write cannot be interleaved by another consume
+     * (memory, SQL: synchronous) needs none. One whose calls can be
+     * (`createDbStore`: every call is awaited I/O) must have it.
+     */
+    setIf?: (storageKey: string, value: RateLimitValue, prior: RateLimitValue | undefined) => Promise<boolean>;
+
+    /**
+     * Optional eviction hint, called by the limiter after each successful write.
+     * Remove up to `limit` entries whose `ts` is at or before `olderThanTs`, except
+     * entries with a negative `value`: a reserved debt is kept, whatever its age.
+     * The memory store examines up to `limit` entries from its oldest end; the
+     * durable stores delete at most `limit` matching rows. A returned promise is
+     * awaited, so a store whose sweep is I/O (`createDbStore`) finishes it before the
+     * consume returns. The durable stores implement it so a table stays bounded
+     * without a scheduled job; see `createSqlStore` and `createDbStore` for the
+     * table shape.
+     *
+     * `owns` says whether a storage key belongs to the limiter asking for the
+     * sweep. A store shared with another limiter must leave the other limiter's
+     * keys alone: its horizon is not this one's. Absent means every key is owned.
+     */
+    sweep?: (olderThanTs: number, limit: number, owns?: (storageKey: string) => boolean) => Promise<void> | void;
 }

@@ -18,7 +18,7 @@
  *
  * ```ts
  * import { createShardClient } from "@lunora/runtime";
- * import { internal } from "../lunora/_generated/api";
+ * import { internal } from "../lunora/_generated/internal";
  *
  * // As the signed-in user: RLS and ownership apply exactly as on the client path.
  * const shard = createShardClient(env.SHARD).as({ userId }).forShard(userId);
@@ -41,10 +41,10 @@
  */
 
 import { LunoraError } from "@lunora/errors";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./resolve-shard";
 import { applyJurisdiction, resolveShard } from "./resolve-shard";
 
@@ -111,7 +111,7 @@ interface ShardCallOptions {
 
 /** The error half of the shard RPC envelope. */
 interface ShardErrorEnvelope {
-    error: { code: string; data?: unknown; message: string };
+    error: { code: string; data?: unknown; message: string; why?: string };
 }
 
 /** The success half of the shard RPC envelope. */
@@ -170,11 +170,15 @@ const referencePath = (reference: unknown): string => {
  * machine-readable `code` and any wire-encoded `data`, so a server-side caller can
  * branch on the verdict exactly like a browser caller.
  */
-const reconstructShardError = (error: { code: string; data?: unknown; message: string }): LunoraError => {
+const reconstructShardError = (error: { code: string; data?: unknown; message: string; why?: unknown }): LunoraError => {
     const rebuilt = new LunoraError(error.code, error.message);
 
     if (error.data !== undefined) {
         (rebuilt as LunoraError & { data?: unknown }).data = decodeWire(error.data);
+    }
+
+    if (typeof error.why === "string") {
+        (rebuilt as LunoraError & { why?: string }).why = error.why;
     }
 
     return rebuilt;

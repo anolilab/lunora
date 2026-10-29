@@ -55,7 +55,7 @@ describe("emitShard — transactional ctx.runMutation", () => {
         expect(methodBody(emitted, "public override async handleRpc(")).toContain("await this.runMutationTransaction(ctx, async () => {");
         expect(methodBody(emitted, "protected override async runReactor(")).toContain("await this.runMutationTransaction(ctx, async () =>");
         expect(emitted).toContain(
-            'dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx, contextKind, async (work) => this.runMutationTransaction(ctx, work))',
+            'dispatchRun("mutation", reference.__lunoraRef, fnArgs, mutationCtx, kind, async (work) => this.runMutationTransaction(mutationCtx, work))',
         );
     });
 
@@ -77,8 +77,8 @@ describe("emitShard — transactional ctx.runMutation", () => {
 
         // A `ctx.runMutation` from inside a mutation is NESTED: SQLite-in-DO has no
         // savepoints, so it rides the enclosing span rather than opening a second.
-        expect(helper).toContain("if (this.isInTransaction()) {");
-        expect(helper.indexOf("if (this.isInTransaction()) {")).toBeLessThan(helper.indexOf("await this.runInTransaction(work)"));
+        expect(helper).toContain("if (this.mutationContexts.has(ctx as object)) {");
+        expect(helper.indexOf("if (this.mutationContexts.has(ctx as object)) {")).toBeLessThan(helper.indexOf("await this.runInTransaction(async () => {"));
     });
 
     it("dispatches the handler under the caller's wrapper when one is supplied", () => {
@@ -103,7 +103,13 @@ describe("emitShard — deferred scheduling", () => {
         // admin/lifecycle ctx with no registered kind — got the BEGIN/COMMIT span
         // for a mutation they composed with the schedule buffer missing, and the
         // job reached the SchedulerDO while that span was still open.
-        expect(emitted).toContain('const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase);');
+        //
+        // The second argument is the durable custody the buffer needs to be honest:
+        // everything between the COMMIT and the scheduler's acknowledgement is
+        // outside the transaction, so without it a failure there leaves durable
+        // writes, a durable replay-dedup row answering the client's retry with a
+        // cached success, and a job that exists nowhere.
+        expect(emitted).toContain('const scheduler = contextKind === "query" ? schedulerBase : withDeferredSchedules(schedulerBase, this.scheduleOutbox());');
         expect(emitted).toContain("scheduler,");
     });
 
@@ -128,7 +134,7 @@ describe("emitShard — deferred scheduling", () => {
         expect(emitted).toContain(
             'const schedulerBase = markUnvouchableReads((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, options.onRead, ["get", "list"]);',
         );
-        expect(emitted.indexOf("const schedulerBase =")).toBeLessThan(emitted.indexOf("withDeferredSchedules(schedulerBase)"));
+        expect(emitted.indexOf("const schedulerBase =")).toBeLessThan(emitted.indexOf("withDeferredSchedules(schedulerBase,"));
     });
 
     it("settles the buffer against the transaction outcome, and only after it resolves", () => {
@@ -137,7 +143,7 @@ describe("emitShard — deferred scheduling", () => {
         const emitted = shard();
         const helper = methodBody(emitted, "private async runMutationTransaction<T>(");
         const open = helper.indexOf("beginDeferredSchedules(ctx as { scheduler?: unknown })");
-        const span = helper.indexOf("await this.runInTransaction(work)");
+        const span = helper.indexOf("await this.runInTransaction(async () => {");
 
         expect(open).toBeGreaterThan(-1);
         // The window opens before the span and the commit settle comes after it: a
@@ -156,7 +162,7 @@ describe("emitShard — deferred scheduling", () => {
 });
 
 describe("emitShard — ctx.run* caller guard", () => {
-    it("refuses a mutation or action composed from a query context", () => {
+    it("refuses a mutation or action composed from a query or stream context", () => {
         expect.assertions(2);
 
         const emitted = shard();
@@ -164,7 +170,7 @@ describe("emitShard — ctx.run* caller guard", () => {
         // The ctx installs `run*` on every kind (one object shape), so the TYPE is
         // all that stops a read-only handler from writing — and a cast walks past
         // it, inside a subscription re-run that may execute many times per write.
-        expect(emitted).toContain('if (callerKind === "query" && expected !== "query") {');
+        expect(emitted).toContain('if ((callerKind === "query" || callerKind === "stream") && expected !== "query") {');
         expect(emitted).toContain('throw new LunoraError(\n            "RUN_KIND_FORBIDDEN",');
     });
 
@@ -173,11 +179,11 @@ describe("emitShard — ctx.run* caller guard", () => {
 
         const emitted = shard();
 
-        expect(emitted).toContain('dispatchRun("action", reference.__lunoraRef, fnArgs, ctx, contextKind)');
-        expect(emitted).toContain('dispatchRun("mutation", reference.__lunoraRef, fnArgs, ctx, contextKind,');
-        // `runQuery` passes it too: its untracked form builds a fresh ctx, so the
-        // kind cannot be recovered from the ctx it is handed.
-        expect(methodBody(emitted, "private buildCtx(")).toContain("                    contextKind,\n                );");
+        expect(emitted).toContain('dispatchRun("action", reference.__lunoraRef, fnArgs, target, kind)');
+        expect(emitted).toContain('dispatchRun("mutation", reference.__lunoraRef, fnArgs, mutationCtx, kind,');
+        // `runQuery` passes it too: it hands the callee a query context, so the
+        // caller's kind cannot be recovered from the ctx it is handed.
+        expect(methodBody(emitted, "private buildCtx(")).toContain("                        kind,\n                    );");
     });
 
     it("checks the caller before the registry lookup, so the refusal does not depend on the target", () => {
@@ -185,7 +191,7 @@ describe("emitShard — ctx.run* caller guard", () => {
 
         const emitted = shard();
         const dispatch = emitted.indexOf("const dispatchRun = async (");
-        const guard = emitted.indexOf('if (callerKind === "query" && expected !== "query")', dispatch);
+        const guard = emitted.indexOf('if ((callerKind === "query" || callerKind === "stream") && expected !== "query")', dispatch);
         // eslint-disable-next-line no-secrets/no-secrets -- matching an emitted TypeScript statement, not a credential
         const lookup = emitted.indexOf("const registered = LUNORA_FUNCTIONS[functionPath];", dispatch);
 

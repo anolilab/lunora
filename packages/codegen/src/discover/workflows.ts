@@ -2,13 +2,16 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
-import { workflowBindingName, workflowClassName, workflowDefaultName } from "@lunora/workflow";
-import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
+import isValidCronExpression from "@lunora/scheduler/validate";
+import { workflowClassName, workflowDefaultName } from "@lunora/workflow";
+import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
-import type { WorkflowIR, WorkflowStepIR } from "../ir";
-import { stringPropertyFor, unwrapToCallExpression } from "./ast";
+import type { HandlerSiteIR, WorkflowIR, WorkflowStepIR } from "../ir";
+import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
+import { addressableExportNameOf } from "./attribution";
+import { resolveHandlerReference } from "./handler-reference";
 
 /** The only file workflows may be declared in — mirrors `lunora/containers.ts`. */
 const WORKFLOWS_FILENAME = "workflows.ts";
@@ -47,6 +50,106 @@ const isDefineWorkflow = (identifier: Identifier): boolean => {
 /** Read a property's string-literal value, or throw a located diagnostic. */
 const stringProperty = stringPropertyFor("workflow");
 
+/** Read a property's numeric-literal value, or throw a located diagnostic. */
+const numberProperty = (expression: Expression, exportName: string, property: string): number => {
+    if (Node.isNumericLiteral(expression)) {
+        return expression.getLiteralValue();
+    }
+
+    throw diagnosticAt(
+        expression,
+        `workflow "${exportName}": \`${property}\` must be a static number literal — it is deploy configuration codegen writes into wrangler.jsonc`,
+    );
+};
+
+/** The initializer of `object.<name>` when it is a plain `name: value` assignment. */
+const assignedProperty = (object: ObjectLiteralExpression, name: string): Expression | undefined => {
+    const property = findObjectProperty(object, name);
+
+    return property && Node.isPropertyAssignment(property) ? property.getInitializerOrThrow() : undefined;
+};
+
+/** Require an inline object literal for a nested settings block (`limits`, `defaultRetention`). */
+const objectProperty = (expression: Expression, exportName: string, property: string): ObjectLiteralExpression => {
+    if (Node.isObjectLiteralExpression(expression)) {
+        return expression;
+    }
+
+    throw diagnosticAt(
+        expression,
+        `workflow "${exportName}": \`${property}\` must be an inline object literal — it is deploy configuration codegen writes into wrangler.jsonc`,
+    );
+};
+
+/**
+ * Lift `schedules: ["0 * * * *", …]` — each a string literal holding a valid
+ * cron expression, since the list is written verbatim to wrangler and a typo
+ * would otherwise surface only as a rejected deploy.
+ */
+const schedulesFrom = (expression: Expression, exportName: string): string[] => {
+    if (!Node.isArrayLiteralExpression(expression) || expression.getElements().length === 0) {
+        throw diagnosticAt(expression, `workflow "${exportName}": \`schedules\` must be a non-empty inline array of cron expression string literals`);
+    }
+
+    return expression.getElements().map((element) => {
+        const schedule = stringProperty(element, exportName, "schedules[]");
+
+        if (!isValidCronExpression(schedule)) {
+            throw diagnosticAt(element, `workflow "${exportName}": schedule "${schedule}" is not a valid cron expression`);
+        }
+
+        return schedule;
+    });
+};
+
+/** Lift the optional deploy settings (`schedules`, `limits`, `defaultRetention`). */
+const settingsFrom = (argument: ObjectLiteralExpression, exportName: string): Pick<WorkflowIR, "defaultRetention" | "limits" | "schedules"> => {
+    const settings: Pick<WorkflowIR, "defaultRetention" | "limits" | "schedules"> = {};
+    const schedules = assignedProperty(argument, "schedules");
+
+    if (schedules !== undefined) {
+        settings.schedules = schedulesFrom(schedules, exportName);
+    }
+
+    const limits = assignedProperty(argument, "limits");
+
+    if (limits !== undefined) {
+        const steps = assignedProperty(objectProperty(limits, exportName, "limits"), "steps");
+
+        if (steps === undefined) {
+            settings.limits = {};
+        } else {
+            const value = numberProperty(steps, exportName, "limits.steps");
+
+            // The rule `defineWorkflow` and the wrangler validator apply too.
+            if (!Number.isInteger(value) || value <= 0) {
+                throw diagnosticAt(steps, `workflow "${exportName}": \`limits.steps\` must be a positive integer (got ${String(value)})`);
+            }
+
+            settings.limits = { steps: value };
+        }
+    }
+
+    const retention = assignedProperty(argument, "defaultRetention");
+
+    if (retention !== undefined) {
+        const block = objectProperty(retention, exportName, "defaultRetention");
+        const defaultRetention: NonNullable<WorkflowIR["defaultRetention"]> = {};
+
+        for (const key of ["errorRetention", "successRetention"] as const) {
+            const value = assignedProperty(block, key);
+
+            if (value !== undefined) {
+                defaultRetention[key] = stringProperty(value, exportName, `defaultRetention.${key}`);
+            }
+        }
+
+        settings.defaultRetention = defaultRetention;
+    }
+
+    return settings;
+};
+
 /**
  * True when a call expression is a native durable-step invocation —
  * `ctx.step.do(...)`, `ctx.step.sleep(...)`, etc., or a destructured
@@ -75,18 +178,12 @@ const isStepCall = (call: CallExpression): boolean => {
  * Lift the durable step labels from a workflow's `handler` body — the first
  * string-literal argument of each native step call. Steps named by a non-literal
  * (a variable, template with substitutions) are omitted: they can't be compared
- * for duplication statically. A shorthand/external handler (no inline body) yields
- * `[]`. Order follows source order so the lint's "first wins" is deterministic.
+ * for duplication statically. A handler passed by reference (`handler: onboard`,
+ * local or imported) is followed to its declaration by the caller; one that
+ * cannot be resolved yields `[]`. Order follows source order so the lint's
+ * "first wins" is deterministic.
  */
-const stepsFromHandler = (argument: ObjectLiteralExpression): WorkflowStepIR[] => {
-    const handlerProperty = argument.getProperty("handler");
-
-    if (!handlerProperty) {
-        return [];
-    }
-
-    const body = Node.isPropertyAssignment(handlerProperty) ? handlerProperty.getInitializer() : handlerProperty;
-
+const stepsFromHandler = (body: Node | undefined): WorkflowStepIR[] => {
     if (!body) {
         return [];
     }
@@ -167,8 +264,31 @@ const resolveWorkflowConfig = (argument: Node | undefined): ObjectLiteralExpress
     return undefined;
 };
 
+/** A workflow's handler as discovery reads it: the function, and — for one passed by reference — where it is declared. */
+interface WorkflowHandler {
+    body: Node | undefined;
+    file?: string;
+    site?: HandlerSiteIR;
+}
+
+/**
+ * The `handler` property's function: the inline one, or — for a reference — the
+ * function it resolves to (see `resolveHandlerReference`).
+ */
+const handlerOfWorkflow = (argument: ObjectLiteralExpression, lunoraDirectory: string): WorkflowHandler => {
+    const property = findObjectProperty(argument, "handler");
+    const resolved = resolveHandlerReference(property, lunoraDirectory);
+
+    if (resolved !== undefined) {
+        return resolved;
+    }
+
+    // An inline `handler: async (ctx) => …` or `async handler(ctx) { … }` method.
+    return { body: property !== undefined && Node.isPropertyAssignment(property) ? property.getInitializer() : property };
+};
+
 /** Lift one exported `defineWorkflow({...})` declaration into {@link WorkflowIR}. */
-const workflowFromCall = (call: CallExpression, exportName: string): WorkflowIR => {
+const workflowFromCall = (call: CallExpression, exportName: string, lunoraDirectory: string): WorkflowIR => {
     const argument = resolveWorkflowConfig(call.getArguments()[0]);
 
     if (!argument) {
@@ -179,21 +299,23 @@ const workflowFromCall = (call: CallExpression, exportName: string): WorkflowIR 
         );
     }
 
+    const handler = handlerOfWorkflow(argument, lunoraDirectory);
     const ir: WorkflowIR = {
-        bindingName: workflowBindingName(exportName),
         className: workflowClassName(exportName),
         exportName,
         name: workflowDefaultName(exportName),
-        steps: stepsFromHandler(argument),
+        steps: stepsFromHandler(handler.body),
+        ...(handler.file === undefined ? {} : { handlerFile: handler.file }),
+        ...(handler.site === undefined ? {} : { handlerSite: handler.site }),
     };
 
-    const nameProperty = argument.getProperty("name");
+    const nameProperty = findObjectProperty(argument, "name");
 
     if (nameProperty && Node.isPropertyAssignment(nameProperty)) {
         ir.name = stringProperty(nameProperty.getInitializerOrThrow(), exportName, "name");
     }
 
-    return ir;
+    return { ...ir, ...settingsFrom(argument, exportName) };
 };
 
 /**
@@ -201,14 +323,10 @@ const workflowFromCall = (call: CallExpression, exportName: string): WorkflowIR 
  * `defineWorkflow({...})` initializer may be wrapped in `as`/`satisfies`/parens
  * — {@link unwrapToCallExpression} sees through those to the inner call.
  */
-const workflowsFromSource = (source: SourceFile): WorkflowIR[] => {
+const workflowsFromSource = (source: SourceFile, lunoraDirectory: string): WorkflowIR[] => {
     const workflows: WorkflowIR[] = [];
 
     for (const declaration of source.getVariableDeclarations()) {
-        if (!declaration.isExported()) {
-            continue;
-        }
-
         const call = unwrapToCallExpression(declaration.getInitializer());
 
         if (!call) {
@@ -223,26 +341,37 @@ const workflowsFromSource = (source: SourceFile): WorkflowIR[] => {
 
         const nameNode = declaration.getNameNode();
 
+        // Only the `export` keyword can export a destructuring; an unexported one is a local.
         if (!Node.isIdentifier(nameNode)) {
+            if (declaration.getVariableStatement()?.hasExportKeyword() !== true) {
+                continue;
+            }
+
             throw diagnosticAt(nameNode, "defineWorkflow exports must be plain named exports (no destructuring)");
         }
 
-        workflows.push(workflowFromCall(call, nameNode.getText()));
+        const exportName = addressableExportNameOf(declaration, "binding");
+
+        if (exportName === undefined) {
+            continue;
+        }
+
+        workflows.push(workflowFromCall(call, exportName, lunoraDirectory));
     }
 
     return workflows;
 };
 
 /**
- * Reject workflows whose deployed `name` or `bindingName` collide across exports
- * — both flow into wrangler (`workflows[].name` / the `Workflow` binding), so a
- * `name` collision emits conflicting `workflows[]` entries and a `bindingName`
- * collision (e.g. `myFlow`/`myFLOW` both → `WORKFLOW_MY_FLOW`) clobbers a
- * binding. Mirrors the cron/migration uniqueness guards.
+ * Reject workflows whose deployed `name` or generated `className` collide across
+ * exports — both flow into wrangler (`exports.<Class>.name` / the `exports` key),
+ * so a `name` collision emits conflicting entries and a `className` collision
+ * (e.g. `myFlow`/`MyFlow` both → `MyFlowWorkflow`) makes two workflows compete
+ * for one export. Mirrors the cron/migration uniqueness guards.
  */
 const assertUniqueNames = (workflows: ReadonlyArray<WorkflowIR>): void => {
     const seenNames = new Map<string, string>();
-    const seenBindings = new Map<string, string>();
+    const seenClasses = new Map<string, string>();
 
     for (const workflow of workflows) {
         const priorName = seenNames.get(workflow.name);
@@ -258,26 +387,26 @@ const assertUniqueNames = (workflows: ReadonlyArray<WorkflowIR>): void => {
 
         seenNames.set(workflow.name, workflow.exportName);
 
-        const priorBinding = seenBindings.get(workflow.bindingName);
+        const priorClass = seenClasses.get(workflow.className);
 
-        if (priorBinding !== undefined) {
+        if (priorClass !== undefined) {
             throw new LunoraError(
-                // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
-                "DUPLICATE_WORKFLOW_BINDING",
-                `Duplicate workflow binding "${workflow.bindingName}": produced by both "${priorBinding}" and "${workflow.exportName}". Workflow export names must yield unique binding names.`,
+                "DUPLICATE_WORKFLOW_CLASS",
+                `Duplicate workflow class "${workflow.className}": produced by both "${priorClass}" and "${workflow.exportName}". Workflow export names must yield unique generated class names.`,
                 { status: 500 },
             );
         }
 
-        seenBindings.set(workflow.bindingName, workflow.exportName);
+        seenClasses.set(workflow.className, workflow.exportName);
     }
 };
 
 /**
  * Discover every workflow the project declares: exported `defineWorkflow()`
  * calls in `lunora/workflows.ts`. Returns `[]` when the file doesn't exist. The
- * only wrangler-relevant literal is the optional `name` override; the workflow
- * body is runtime-only, so codegen never evaluates it.
+ * wrangler-relevant literals are the optional `name` override and the deploy
+ * settings (`schedules`, `limits`, `defaultRetention`); the workflow body is
+ * runtime-only, so codegen never evaluates it.
  */
 const discoverWorkflows = (project: Project, lunoraDirectory: string): WorkflowIR[] => {
     const workflowsPath = join(lunoraDirectory, WORKFLOWS_FILENAME);
@@ -287,7 +416,7 @@ const discoverWorkflows = (project: Project, lunoraDirectory: string): WorkflowI
     }
 
     const source = project.getSourceFile(workflowsPath) ?? project.addSourceFileAtPath(workflowsPath);
-    const workflows = workflowsFromSource(source);
+    const workflows = workflowsFromSource(source, lunoraDirectory);
 
     workflows.sort((a, b) => a.exportName.localeCompare(b.exportName));
     assertUniqueNames(workflows);

@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -19,11 +20,14 @@ from lunora.client import LunoraClient
 from lunora.errors import LunoraError
 from lunora.offline import (
     ABSENT_IDENTITY,
+    OFFLINE_NOT_QUEUED,
+    OfflineError,
     OfflineQueue,
     QueuedMutation,
-    identity_allows_replay,
     is_stale_version,
     random_id,
+    replay_identity_verdict,
+    token_digest,
 )
 from lunora.submit import MAX_BATCH_ENTRIES, SubmitOptions
 from lunora.wire import WireBigInt, WireBytes, WireDate
@@ -298,7 +302,7 @@ class TestIdentityGate(unittest.TestCase):
             stamped = ABSENT_IDENTITY if spec["stamped"] == "absent" else spec["stamped"]
 
             with self.subTest(spec["name"]):
-                self.assertEqual(identity_allows_replay(stamped, spec["current"]), spec["replays"])
+                self.assertEqual(replay_identity_verdict(stamped, spec["current"], None) == "match", spec["replays"])
 
     def test_flush_rejects_a_write_stamped_under_another_identity(self):
         covers("offline_queue_identity_gate_rejects_replay")
@@ -330,6 +334,198 @@ class TestIdentityGate(unittest.TestCase):
         # queued writes as the current one.
         self.assertEqual(posts, [])
         self.assertEqual(settled[0].error.code, case["code"])
+
+
+class TestTokenDigestIdentity(unittest.TestCase):
+    """With no ``identity`` set, the token's digest is who a write belongs to.
+
+    Every write goes through ``submit`` — the path that stamps it — and every
+    flush is the caller's own, so nothing here depends on a socket.
+    """
+
+    def _client(self, token):
+        posts = []
+
+        def post(_url, headers, _body):
+            posts.append(headers.get("authorization"))
+            return 200, {"result": None}
+
+        client = LunoraClient("https://app.example", auth_token=token, http_post=post)
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        settled = []
+        client.on_mutation_settled(settled.append)
+        asyncio.run(client.submit(SubmitOptions("messages:send", {})))
+        self.assertEqual(client.pending_mutation_count, 1)
+
+        return client, posts, settled
+
+    def test_a_token_switched_mid_flush_does_not_carry_the_rest_of_it(self):
+        # The gate judged the pass against token-a, so every request in that
+        # pass carries token-a: a later chunk must not go out with token-b.
+        client = None
+        posts = []
+
+        def post(_url, headers, body):
+            calls = json.loads(body).get("calls", [])
+            posts.append((headers.get("authorization"), len(calls)))
+            client.auth_token = "token-b"
+            return 200, {"results": [{"body": {"commitCursor": 1, "result": None}, "id": call["id"]} for call in calls]}
+
+        client = LunoraClient("https://app.example", auth_token="token-a", http_post=post)
+        client.offline_queue = OfflineQueue(max_items=MAX_BATCH_ENTRIES + 1, queue_before_first_connect=True)
+
+        async def queue_and_flush():
+            for _ in range(MAX_BATCH_ENTRIES + 1):
+                await client.submit(SubmitOptions("messages:send", {}))
+            await client.flush_offline_queue()
+
+        asyncio.run(queue_and_flush())
+
+        self.assertEqual(posts, [("Bearer token-a", MAX_BATCH_ENTRIES), ("Bearer token-a", 1)])
+
+    def test_any_string_is_accepted_as_an_identity(self):
+        for identity in ("org:team:u1", "tenant:42:user", "a:b:c", token_digest("token-a")):
+            with self.subTest(identity):
+                self.assertEqual(LunoraClient("https://app.example", identity=identity).identity, identity)
+                client = LunoraClient("https://app.example")
+                client.identity = identity
+                self.assertEqual(client.identity, identity)
+
+    def _flush_after(self, queue_as, replay_as):
+        """Queue one write under ``queue_as`` and flush it under ``replay_as``.
+
+        Each is ``(identity, token)``; returns the authorization headers sent.
+        """
+
+        posts = []
+
+        def post(_url, headers, _body):
+            posts.append(headers.get("authorization"))
+            return 200, {"result": None}
+
+        client = LunoraClient("https://app.example", identity=queue_as[0], auth_token=queue_as[1], http_post=post)
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        asyncio.run(client.submit(SubmitOptions("messages:send", {})))
+        client.identity, client.auth_token = replay_as
+        asyncio.run(client.flush_offline_queue())
+
+        return posts
+
+    def test_an_identity_spelled_like_a_digest_never_matches_that_tokens_writes(self):
+        # A token write is stamped as a token digest, an identity as itself, so
+        # neither can be taken for the other however the identity is spelled.
+        digest = token_digest("token-a")
+
+        self.assertEqual(self._flush_after((None, "token-a"), (digest, None)), [])
+        self.assertEqual(self._flush_after((digest, None), (None, "token-a")), [])
+        self.assertEqual(replay_identity_verdict({"tokenDigest": digest}, digest, None), "mismatch")
+        self.assertEqual(replay_identity_verdict(digest, {"tokenDigest": digest}, "token-a"), "mismatch")
+
+    def test_a_token_stamp_survives_persistence(self):
+        client = LunoraClient("https://app.example", auth_token="token-a")
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+        asyncio.run(client.submit(SubmitOptions("messages:send", {})))
+        [item] = client.offline_queue.items()
+        stamp = {"tokenDigest": token_digest("token-a")}
+        self.assertEqual(item.identity, stamp)
+
+        restored = QueuedMutation.from_record(json.loads(json.dumps(item.to_record())))
+
+        self.assertEqual(restored.identity, stamp)
+        self.assertEqual(replay_identity_verdict(restored.identity, stamp, "token-a"), "match")
+
+    def test_plain_string_and_none_stamps_are_judged_as_before(self):
+        cases = [
+            # (stamped, current, token, verdict)
+            ("user-a", "user-a", None, "match"),
+            ("user-a", "user-b", None, "mismatch"),
+            ("user-a", None, None, "unknown"),
+            (None, None, None, "match"),
+            (None, "user-a", None, "mismatch"),
+            (None, {"tokenDigest": token_digest("token-b")}, "token-b", "mismatch"),
+            (ABSENT_IDENTITY, "user-a", None, "match"),
+        ]
+
+        for stamped, current, token, verdict in cases:
+            with self.subTest(stamped=stamped, current=current):
+                self.assertEqual(replay_identity_verdict(stamped, current, token), verdict)
+
+    def test_the_digest_matches_the_reference_client(self):
+        covers("offline_unset_identity_stamps_token_digest")
+
+        for spec in FIXTURES["tokenIdentity"]["digests"]:
+            with self.subTest(spec["token"]):
+                self.assertEqual(token_digest(spec["token"]), spec["digest"])
+
+        switch = FIXTURES["tokenIdentity"]["accountSwitch"]
+        client, posts, settled = self._client(switch["queuedUnder"])
+        client.auth_token = switch["flushedUnder"]
+        asyncio.run(client.flush_offline_queue())
+        self.assertEqual(posts, [], "the previous token's write is never sent with the next one")
+        self.assertEqual(settled[0].error.code, FIXTURES["identityGate"]["code"])
+
+        client, posts, settled = self._client(switch["queuedUnder"])
+        asyncio.run(client.flush_offline_queue())
+        self.assertEqual(posts, [f"Bearer {switch['queuedUnder']}"])
+        self.assertEqual(settled[0].status, "committed")
+
+    def test_a_write_queued_under_one_token_never_travels_with_another(self):
+        client, posts, settled = self._client("token-a")
+        client.auth_token = "token-b"
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual(posts, [], "user A's write must not be sent with user B's bearer")
+        self.assertEqual(report.rejected, [settled[0].mutation_id])
+        self.assertEqual(settled[0].error.code, FIXTURES["identityGate"]["code"])
+        self.assertEqual(client.pending_mutation_count, 0)
+
+    def test_a_write_replays_under_the_token_it_was_queued_with(self):
+        client, posts, settled = self._client("token-a")
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual(posts, ["Bearer token-a"])
+        self.assertEqual(len(report.committed), 1)
+        self.assertEqual(settled[0].status, "committed")
+
+    def test_a_write_queued_with_no_token_replays_with_none(self):
+        client, posts, settled = self._client(None)
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual(posts, [None])
+        self.assertEqual(len(report.committed), 1)
+        self.assertEqual(settled[0].status, "committed")
+
+    def test_a_write_queued_under_a_token_is_held_once_the_token_is_cleared(self):
+        # Nobody is signed in, so whose write it is cannot be told: held, neither
+        # sent nor dropped, as the reference's "unknown" verdict holds it.
+        client, posts, settled = self._client("token-a")
+        client.auth_token = None
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual((posts, settled, report.rejected), ([], [], []))
+        self.assertEqual(client.pending_mutation_count, 1)
+
+        client.auth_token = "token-a"
+        asyncio.run(client.flush_offline_queue())
+        self.assertEqual(posts, ["Bearer token-a"])
+
+    def test_a_record_stamped_none_by_an_earlier_build_is_not_sent_under_a_token(self):
+        # Before token digests a write queued with no identity was stamped
+        # `None` whatever token was held, so `None` no longer says whose it is.
+        # Signed in, it is a mismatch, as a `null` stamp is in the reference.
+        posts = []
+        client = LunoraClient(
+            "https://app.example", auth_token="token-b", http_post=lambda _url, headers, _body: posts.append(headers) or (200, {"result": None})
+        )
+        client.offline_queue.enqueue(QueuedMutation("messages:send", {}, mutation_id="m1", identity=None))
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual((posts, report.rejected), ([], ["m1"]))
 
 
 class TestFlushIntegration(unittest.TestCase):
@@ -393,7 +589,11 @@ class TestFlushIntegration(unittest.TestCase):
 
     def test_two_or_more_writes_coalesce_into_one_batch_round_trip(self):
         covers("offline_flush_batches_multiple_writes")
+        covers("offline_flush_unreadable_slot_is_retried")
         case = FIXTURES["batchReplay"]
+        # A slot the fixture no longer describes is a case that asserts nothing.
+        unreadable = [slot for slot in case["slots"] if slot.get("outcome") == "unreadable-error" and "rawError" in slot]
+        self.assertEqual(len(unreadable), 1, "batchReplay must carry one unreadable slot")
         urls = []
         calls = []
 
@@ -405,6 +605,12 @@ class TestFlushIntegration(unittest.TestCase):
             for slot in case["slots"]:
                 if slot["outcome"] == "ok":
                     results.append({"body": {"commitCursor": slot["commitCursor"], "result": None}, "id": slot["id"]})
+                elif slot["outcome"] == "unreadable-error":
+                    # An `error` key holding a NON-object: no envelope to read a
+                    # verdict out of, and no per-slot HTTP status to fall back
+                    # on. Verbatim from the fixture, so a port cannot pass by
+                    # sending itself a shape the spec does not describe.
+                    results.append({"body": {"error": slot["rawError"]}, "id": slot["id"]})
                 else:
                     results.append({"body": {"error": {"code": slot["code"], "message": "slot failed"}}, "id": slot["id"]})
 
@@ -816,6 +1022,264 @@ class TestFlushIntegration(unittest.TestCase):
         """
         covers("batch_entry_cap_matches_protocol")
         self.assertEqual(MAX_BATCH_ENTRIES, FIXTURES["batchReplay"]["maxEntries"])
+
+
+class TestOnlineOnlyWrites(unittest.TestCase):
+    """An ``online_only`` write is never queued, persisted or replayed.
+
+    The sentinel is a credential-shaped argument: the assertions are that it never
+    reaches the persistence adapter, which is what a durable queue would put on disk.
+    """
+
+    SECRET = "sentinel-secret-7731"
+
+    def _disconnected(self, store):
+        posts = []
+
+        def post(_url, _headers, body):
+            posts.append(body)
+            return 200, {"commitCursor": 3, "result": {"ok": True}}
+
+        client = LunoraClient("https://app.example", http_post=post)
+        client.offline_queue = OfflineQueue(persistence=store, queue_before_first_connect=True)
+        return client, posts
+
+    def test_an_online_only_write_is_refused_when_disconnected_and_never_persisted(self):
+        covers("offline_online_only_refused_when_disconnected")
+        store = _Store()
+        client, posts = self._disconnected(store)
+
+        # A subscription on the write's own path and args, primed with a server value,
+        # so an overlay the write applied would be displayed.
+        seen = []
+        client.attach_socket(lambda _frame: None)
+        client.subscribe("auth:setPassword", {"token": self.SECRET}, seen.append)
+        client.handle_frame({"cursor": 1, "data": ["a"], "id": "sub_1", "type": "data"})
+        client.detach_socket()
+
+        with self.assertRaises(OfflineError) as refused:
+            asyncio.run(
+                client.submit(
+                    SubmitOptions(
+                        args={"token": self.SECRET},
+                        function_path="auth:setPassword",
+                        online_only=True,
+                        optimistic=lambda current: [*(current or []), "c"],
+                    )
+                )
+            )
+
+        self.assertEqual(refused.exception.code, OFFLINE_NOT_QUEUED)
+        self.assertEqual(client.pending_mutation_count, 0)
+        self.assertEqual(store.appended, [])
+        self.assertNotIn(self.SECRET, json.dumps(store.records))
+        self.assertEqual(posts, [])
+        self.assertNotIn(["a", "c"], seen, "a refused write's overlay is never displayed")
+
+    def test_an_online_only_write_is_sent_when_connected(self):
+        covers("offline_online_only_sends_when_connected")
+        store = _Store()
+        client, posts = self._disconnected(store)
+        client.attach_socket(lambda _frame: None)
+
+        outcome = asyncio.run(client.submit(SubmitOptions(args={"token": self.SECRET}, function_path="auth:setPassword", online_only=True)))
+
+        self.assertEqual(outcome.status, "committed")
+        self.assertEqual(len(posts), 1)
+        self.assertIn(self.SECRET.encode(), posts[0])
+        self.assertEqual(store.appended, [])
+
+    def test_an_online_only_transport_failure_is_refused_with_its_cause(self):
+        covers("offline_online_only_transport_failure_refused")
+        store = _Store()
+        refusal = ConnectionRefusedError("connection refused")
+        posts = []
+        replies = []
+
+        def post(_url, _headers, body):
+            posts.append(body)
+            if replies:
+                return replies.pop(0)
+            raise refusal
+
+        # Never connected and not queueing before the first connect, so the write takes the direct path.
+        client = LunoraClient("https://app.example", http_post=post)
+        client.offline_queue = OfflineQueue(persistence=store)
+
+        seen = []
+        client.subscribe("auth:setPassword", {"token": self.SECRET}, seen.append)
+        client.handle_frame({"cursor": 1, "data": ["a"], "id": "sub_1", "type": "data"})
+
+        with self.assertRaises(OfflineError) as refused:
+            asyncio.run(
+                client.submit(
+                    SubmitOptions(
+                        args={"token": self.SECRET},
+                        function_path="auth:setPassword",
+                        online_only=True,
+                        optimistic=lambda current: [*(current or []), "c"],
+                    )
+                )
+            )
+
+        self.assertEqual(refused.exception.code, OFFLINE_NOT_QUEUED)
+        self.assertIs(refused.exception.__cause__, refusal)
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(client.pending_mutation_count, 0)
+        self.assertEqual(store.appended, [])
+        self.assertNotIn(self.SECRET, json.dumps(store.records))
+        self.assertIn(["a", "c"], seen, "the overlay was shown while the write was in flight")
+        self.assertEqual(seen[-1], ["a"], "and rolled back once the write was refused")
+
+        # A coded server rejection is the server's verdict and surfaces as itself.
+        replies.append((400, {"error": {"code": "CONFLICT", "message": "nope"}}))
+
+        with self.assertRaises(LunoraError) as rejected:
+            asyncio.run(client.submit(SubmitOptions(args={"token": self.SECRET}, function_path="auth:setPassword", online_only=True)))
+
+        self.assertEqual(rejected.exception.code, "CONFLICT")
+        self.assertNotIsInstance(rejected.exception, OfflineError)
+
+        # Once the socket is up, the same failure is the server's to report, not a refusal.
+        client.attach_socket(lambda _frame: None)
+
+        with self.assertRaises(ConnectionRefusedError) as raised:
+            asyncio.run(client.submit(SubmitOptions(args={"token": self.SECRET}, function_path="auth:setPassword", online_only=True)))
+
+        self.assertIs(raised.exception, refusal)
+
+        # An argument the codec refuses never left the process, so it surfaces as itself, not as a refusal.
+        disconnected = LunoraClient("https://app.example", http_post=post)
+        sent = len(posts)
+
+        with self.assertRaises(TypeError):
+            asyncio.run(disconnected.submit(SubmitOptions(args={"token": object()}, function_path="auth:setPassword", online_only=True)))
+
+        self.assertEqual(len(posts), sent, "and nothing was sent")
+
+    def test_an_online_only_transport_type_error_is_raised_as_is_because_its_fate_is_unknown(self):
+        covers("offline_online_only_transport_failure_refused")
+        store = _Store()
+        refusal = TypeError("transport raised after the request left the process")
+        posts = []
+
+        # The transport sends the request, then raises: the write may have committed on the server.
+        def post(_url, _headers, body):
+            posts.append(body)
+            raise refusal
+
+        client = LunoraClient("https://app.example", http_post=post)
+        client.offline_queue = OfflineQueue(persistence=store)
+
+        with self.assertRaises(TypeError) as raised:
+            asyncio.run(
+                client.submit(
+                    SubmitOptions(
+                        args={"token": self.SECRET},
+                        function_path="auth:setPassword",
+                        online_only=True,
+                    )
+                )
+            )
+
+        self.assertIs(raised.exception, refusal)
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(store.appended, [])
+
+    def test_a_normal_write_still_queues_when_disconnected_beside_an_online_only_one(self):
+        covers("offline_online_only_leaves_normal_writes_queued")
+        store = _Store()
+        client, posts = self._disconnected(store)
+
+        outcome = asyncio.run(client.submit(SubmitOptions(args={"text": "hi"}, function_path="messages:send")))
+
+        self.assertEqual(outcome.status, "queued")
+        self.assertEqual(client.pending_mutation_count, 1)
+        self.assertEqual(len(store.appended), 1)
+        self.assertEqual(posts, [])
+
+
+class TestCallbackDisconnect(unittest.TestCase):
+    def test_an_online_only_write_whose_callback_drops_the_socket_is_refused_not_sent(self):
+        posts = []
+
+        def post(_url, _headers, body):
+            posts.append(body)
+            return 200, {"commitCursor": 3, "result": {"ok": True}}
+
+        client = LunoraClient("https://app.example", http_post=post)
+
+        def drop_on_overlay(value):
+            # The subscriber sees the overlay, and the connection goes down inside its notification.
+            if value and "c" in value:
+                client.detach_socket()
+
+        client.attach_socket(lambda _frame: None)
+        client.subscribe("auth:setPassword", {"token": "x"}, drop_on_overlay)
+        client.handle_frame({"cursor": 1, "data": ["a"], "id": "sub_1", "type": "data"})
+        options = SubmitOptions(
+            args={"token": "x"},
+            function_path="auth:setPassword",
+            online_only=True,
+            optimistic=lambda current: [*(current or []), "c"],
+        )
+
+        with self.assertRaises(OfflineError) as refused:
+            asyncio.run(client.submit(options))
+
+        self.assertEqual(refused.exception.code, OFFLINE_NOT_QUEUED)
+        self.assertEqual(posts, [])
+
+
+class TestCodecFailureIsNotOffline(unittest.TestCase):
+    def test_an_argument_the_codec_cannot_encode_surfaces_as_itself_not_as_offline(self):
+        # A stack too shallow to encode the arguments fails in the codec, before any send. It must not be
+        # read as an unreached transport failure, which an online-only write refuses as OFFLINE_NOT_QUEUED.
+        posts = []
+
+        def post(_url, _headers, body):
+            posts.append(body)
+            return 200, {"commitCursor": 3, "result": {"ok": True}}
+
+        client = LunoraClient("https://app.example", http_post=post)
+
+        overflow = RecursionError("maximum recursion depth exceeded")
+
+        with (
+            mock.patch("lunora.client.encode_wire", side_effect=overflow),
+            mock.patch("lunora.submit.encode_wire", side_effect=overflow),
+            self.assertRaises(RecursionError),
+        ):
+            asyncio.run(client.submit(SubmitOptions(args={"token": "x"}, function_path="auth:setPassword", online_only=True)))
+
+        self.assertEqual(posts, [])
+
+    def test_a_failed_encoding_rolls_back_the_optimistic_overlay_it_installed(self):
+        # The overlay is installed before the arguments are encoded. A refused encoding must take the
+        # overlay back out, or a subscriber keeps showing a write that was never sent or queued.
+        posts = []
+
+        def post(_url, _headers, body):
+            posts.append(body)
+            return 200, {"commitCursor": 3, "result": {"ok": True}}
+
+        client = LunoraClient("https://app.example", http_post=post)
+        seen = []
+        client.attach_socket(lambda _frame: None)
+        client.subscribe("auth:setPassword", {"token": "x"}, seen.append)
+        client.handle_frame({"cursor": 1, "data": ["a"], "id": "sub_1", "type": "data"})
+        options = SubmitOptions(args={"token": "x"}, function_path="auth:setPassword", optimistic=lambda current: [*(current or []), "c"])
+        overflow = RecursionError("maximum recursion depth exceeded")
+
+        with (
+            mock.patch("lunora.client.encode_wire", side_effect=overflow),
+            mock.patch("lunora.submit.encode_wire", side_effect=overflow),
+            self.assertRaises(RecursionError),
+        ):
+            asyncio.run(client.submit(options))
+
+        self.assertEqual(seen[-1], ["a"])
+        self.assertEqual(posts, [])
 
 
 if __name__ == "__main__":  # pragma: no cover

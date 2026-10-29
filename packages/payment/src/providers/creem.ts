@@ -17,8 +17,9 @@
 import type { Creem } from "creem";
 
 import type { PaymentAdapter, WebhookInput } from "../adapter";
-import { asRecord, parseTimestamp, readAny, readAnyNumber, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
-import { money, zeroMoney } from "../money";
+import { LunoraPaymentError } from "../errors";
+import { asRecord, readAny, readAnyNumber, readBoolean, readEpochMs, readNumber, readString, referenceFromMetadata } from "../json";
+import { moneyFromMinor, zeroMoney } from "../money";
 import type {
     CaptureInput,
     CheckoutInput,
@@ -44,7 +45,6 @@ const ALREADY_EXISTS_PATTERN = /already exists/iu;
  * The `creem` SDK surface the adapter uses, as a structural type — a real `Creem` instance satisfies
  * it without a cast. Resources are `unknown` (the adapter re-types the client as the real `Creem`
  * internally); this keeps the SDK's full type out of the published declarations.
- * @experimental
  */
 interface CreemClientLike {
     readonly checkouts: unknown;
@@ -52,10 +52,6 @@ interface CreemClientLike {
     readonly subscriptions: unknown;
 }
 
-/**
- * `CreemAdapterOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 interface CreemAdapterOptions {
     readonly client: CreemClientLike;
     readonly webhookSecret: string;
@@ -91,13 +87,24 @@ const SUBSCRIPTION_STATE_BY_CREEM_STATUS: Record<string, SubscriptionState> = {
 
 const notSupported = makeNotSupported("creem (merchant-of-record)");
 
+/** Creem's `updateBehavior` for each neutral {@link SubscriptionPatch.proration} choice. */
+const UPDATE_BEHAVIOR_BY_PRORATION = {
+    immediate: "proration-charge-immediately",
+    "next-invoice": "proration-charge",
+    none: "proration-none",
+} as const;
+
 /** Creem `product`/`customer` fields are either an expanded object or a bare id string. */
 const idOf = (value: unknown): string | undefined => (typeof value === "string" ? value : readString(asRecord(value), "id"));
 
 const readCheckoutUrl = (checkout: Record<string, unknown>): string => readAny(checkout, "checkout_url", "checkoutUrl") ?? "";
 
+/** `units` is top-level on older shapes; the SDK's `SubscriptionEntity` carries it on `items[].units`. */
+const readUnits = (subscription: Record<string, unknown>): number | undefined =>
+    readNumber(subscription, "units") ?? readNumber(asRecord(Array.isArray(subscription.items) ? subscription.items[0] : undefined), "units");
+
 const isCanceling = (subscription: Record<string, unknown>): boolean =>
-    readAny(subscription, "canceled_at", "canceledAt") !== undefined || readString(subscription, "status") === "scheduled_cancel";
+    readEpochMs(subscription, "canceled_at", "canceledAt") !== undefined || readString(subscription, "status") === "scheduled_cancel";
 
 /**
  * Whether a `customers.create` rejection is Creem's known duplicate-email conflict (safe to recover
@@ -129,13 +136,15 @@ const subscriptionFromCreem = (input: unknown): Subscription => {
     return {
         cancelAtPeriodEnd: isCanceling(subscription),
         createdAt: now,
-        currentPeriodEnd: parseTimestamp(readAny(subscription, "current_period_end_date", "currentPeriodEndDate")),
-        currentPeriodStart: parseTimestamp(readAny(subscription, "current_period_start_date", "currentPeriodStartDate")),
+        currentPeriodEnd: readEpochMs(subscription, "current_period_end_date", "currentPeriodEndDate"),
+        currentPeriodStart: readEpochMs(subscription, "current_period_start_date", "currentPeriodStartDate"),
         id: readString(subscription, "id") ?? "",
         priceId: idOf(subscription.product) ?? "",
         provider: "creem",
-        quantity: readNumber(subscription, "units") ?? 1,
-        referenceId: referenceFromMetadata(subscription) ?? idOf(subscription.customer) ?? "",
+        quantity: readUnits(subscription) ?? 1,
+        // Never fall back to the customer id: a reference the app does not know entitles nobody and
+        // looks owned. Blank is the explicit orphan a later event or `checkout.completed` heals.
+        referenceId: referenceFromMetadata(subscription) ?? "",
         // Fail closed: an unrecognized Creem status is treated as non-entitling `past_due`.
         state: SUBSCRIPTION_STATE_BY_CREEM_STATUS[status] ?? "past_due",
         updatedAt: now,
@@ -148,7 +157,7 @@ const checkoutToSession = (input: unknown): PaymentSession => {
     const now = Date.now();
     const order = asRecord(checkout.order);
     const currency = readString(order, "currency") ?? readString(checkout, "currency") ?? "usd";
-    const amount = money(BigInt(Math.round(readNumber(order, "amount") ?? readNumber(checkout, "amount") ?? 0)), currency);
+    const amount = moneyFromMinor(readNumber(order, "amount") ?? readNumber(checkout, "amount") ?? 0, currency);
     const state = PAYMENT_STATE_BY_CREEM_STATUS[readString(order, "status") ?? readString(checkout, "status") ?? ""] ?? "initiated";
     const settled = state === "captured" || state === "partially_refunded" || state === "refunded";
 
@@ -176,9 +185,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
             return {
                 ...base,
-                // Round before BigInt: Creem documents integer minor units, but a stray fractional amount
-                // would throw a RangeError out of `parseWebhook` (a 400 → provider retry loop). Match Autumn.
-                amount: amount === undefined ? undefined : money(BigInt(Math.round(amount)), currency),
+                amount: amount === undefined ? undefined : moneyFromMinor(amount, currency),
                 customerId: idOf(object.customer),
                 referenceId: referenceFromMetadata(object),
                 sessionId: readString(object, "id"),
@@ -188,6 +195,21 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         }
 
         case "refund.created": {
+            // `RefundEntity.status` is pending | requiresAction | succeeded | failed | canceled, and
+            // Creem documents `pending`/`requiresAction` as non-terminal processing states — so this
+            // event alone does not mean money moved. Booking one leaves the ledger claiming a refund
+            // the customer never received, and the facade's over-refund guard then rejects every later
+            // attempt to issue it for real.
+            //
+            // Creem ships no `refund.updated`/`refund.succeeded` event, so a refund that settles AFTER
+            // this event is not observable from here — and `checkoutToSession` cannot recover it
+            // either (Creem's order/checkout carry no refunded total), so reconcile will not heal it.
+            // A ledger that lags is still the lesser error: over-stating it is unrecoverable, because
+            // it locks out the refund that would have corrected it.
+            if (readString(object, "status") !== "succeeded") {
+                return { ...base, type: "unhandled" };
+            }
+
             // Creem's refund object is flat: the amount lives in `refund_amount`/`refund_currency`
             // (not `amount`), and it references the original payment via a nested `transaction`
             // (fallback `subscription`), not an `order`. Read those first, keeping the legacy fields
@@ -198,7 +220,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
             return {
                 ...base,
-                amount: amount === undefined ? undefined : money(BigInt(Math.round(amount)), refundCurrency),
+                amount: amount === undefined ? undefined : moneyFromMinor(amount, refundCurrency),
                 referenceId: referenceFromMetadata(object),
                 // The event object IS the refund, so its `id` is this refund's id. Creem issues refunds
                 // only from the dashboard (`refundPayment` throws), so no marker can ever match it —
@@ -227,16 +249,27 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "subscription.trialing":
         case "subscription.unpaid":
         case "subscription.update": {
-            const status = eventType === "subscription.scheduled_cancel" ? "scheduled_cancel" : readString(object, "status");
+            // The event name is authoritative where Creem's `SubscriptionStatus` cannot say it: there is
+            // no `expired` member, so an expired subscription's payload may still read `active`.
+            let status = readString(object, "status");
+
+            if (eventType === "subscription.scheduled_cancel") {
+                status = "scheduled_cancel";
+            } else if (eventType === "subscription.expired") {
+                status = "canceled";
+            }
 
             return {
                 ...base,
                 cancelAtPeriodEnd: readBoolean(object, "cancel_at_period_end") ?? isCanceling(object),
-                currentPeriodEnd: parseTimestamp(readAny(object, "current_period_end_date", "currentPeriodEndDate")),
-                currentPeriodStart: parseTimestamp(readAny(object, "current_period_start_date", "currentPeriodStartDate")),
+                currentPeriodEnd: readEpochMs(object, "current_period_end_date", "currentPeriodEndDate"),
+                currentPeriodStart: readEpochMs(object, "current_period_start_date", "currentPeriodStartDate"),
                 customerId: idOf(object.customer),
                 priceId: idOf(object.product),
-                referenceId: referenceFromMetadata(object) ?? idOf(object.customer),
+                // Creem copies the checkout's metadata onto the subscription it creates. Without it the
+                // row is stored orphaned and `checkout.completed` (which carries both the reference and
+                // the subscription id) adopts it — never the customer id, which no app reference matches.
+                referenceId: referenceFromMetadata(object),
                 subscriptionId: readString(object, "id"),
                 // Fail closed before `stateToEventType` — an unmapped status must not degrade to a
                 // state-preserving metadata patch.
@@ -251,10 +284,6 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
     }
 };
 
-/**
- * `createCreemAdapter` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
     // Use the injected client as the real `Creem` internally so every call is checked against the SDK.
@@ -275,6 +304,11 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
 
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
             const checkout = await client.checkouts.create({
+                // Creem has no cancel URL, so `input.cancelUrl` has nowhere to go.
+                // No customer id means this reference's email already belongs to another reference's
+                // Creem customer (see `getOrCreateCustomer`). Do NOT prefill that email: Creem would
+                // attach the purchase to the other reference's customer, and that reference's billing
+                // portal would then list and manage this subscription. The buyer enters an email.
                 customer: input.customerId ? { id: input.customerId } : undefined,
                 // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
                 metadata: { ...input.metadata, referenceId: input.referenceId },
@@ -288,12 +322,38 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         },
 
         createPortalSession: async (input: PortalInput) => {
+            // Creem's hosted portal is customer-wide, and Creem keeps one customer per email, so a
+            // customer can hold another reference's subscription (the same person paying for a second
+            // org). Opening it would let this reference see and cancel that one: refuse instead, and
+            // manage those subscriptions in-app through the per-reference facade calls. Subscriptions
+            // without a recorded reference (created outside this app) do not block.
+            for (let page = 1; ; page += 1) {
+                // eslint-disable-next-line no-await-in-loop -- pages are fetched in order until one names another owner
+                const { items, pagination } = await client.customers.listSubscriptions(input.customerId, page, 100);
+                const foreign = items.find((subscription) => {
+                    const owner = referenceFromMetadata(asRecord(subscription));
+
+                    return owner !== undefined && owner !== "" && owner !== input.referenceId;
+                });
+
+                if (foreign !== undefined) {
+                    throw new LunoraPaymentError(
+                        "FORBIDDEN",
+                        `the Creem billing portal for this customer would expose a subscription owned by another reference; manage it in-app instead`,
+                    );
+                }
+
+                if (pagination.nextPage === null) {
+                    break;
+                }
+            }
+
             const link = await client.customers.generateBillingLinks({ customerId: input.customerId });
 
             return { url: readAny(link, "customer_portal_link", "customerPortalLink") ?? "" };
         },
 
-        getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
+        getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer | undefined> => {
             const toCustomer = (record: Record<string, unknown>): Customer => {
                 return {
                     createdAt: Date.now(),
@@ -313,10 +373,10 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
                     asRecord(
                         await client.customers.create({
                             email: ref.email ?? "",
+                            externalId: ref.referenceId,
                             // Pin the framework-controlled `referenceId` LAST so caller metadata can never
-                            // override it (same pattern as `createCheckout`) — this is the only thing Creem
-                            // lets us key a customer on (no `externalId`-style create, unlike Polar/Dodo), so
-                            // the recovery path below can verify it before ever adopting a retrieved customer.
+                            // override it (same pattern as `createCheckout`). The recovery path below looks
+                            // up by email, so it verifies this before ever adopting a retrieved customer.
                             metadata: { ...ref.metadata, referenceId: ref.referenceId },
                             name: ref.metadata?.name ?? ref.referenceId,
                         }),
@@ -332,15 +392,14 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
 
                     // SECURITY: never bind this reference to a Creem customer minted for a DIFFERENT
                     // reference just because they share an email (two orgs/users can legitimately share
-                    // one inbox). `createPortalSession` builds the hosted billing link from `customerId`
-                    // alone, so adopting the wrong customer here would let one reference's portal expose
-                    // another's subscriptions, invoices, and payment methods. Only the same-reference retry
-                    // (the case this recovery path exists for) is adopted; anything else fails closed.
+                    // one inbox, and the email is caller-supplied). `createPortalSession` builds the hosted
+                    // billing link from `customerId` alone, so adopting it would let one reference's portal
+                    // expose another's subscriptions, invoices, and payment methods. But one person paying
+                    // under two references (a personal plan and their org's) is normal, so don't throw:
+                    // report "no customer of its own" and the checkout starts unbound and un-prefilled
+                    // (subscriptions are attributed by checkout metadata, not by customer).
                     if (existingReferenceId !== ref.referenceId) {
-                        throw new Error(
-                            `Creem customer for email "${ref.email}" already belongs to a different reference; refusing to bind it to "${ref.referenceId}".`,
-                            { cause: error },
-                        );
+                        return undefined;
                     }
 
                     return toCustomer(existing);
@@ -366,7 +425,11 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
             // parameter (WebhookAction.eventId is non-optional) — it is NOT a "safe default": a blank
             // id still flows through as `eventId: ""`, and `applyWebhookAction`'s central guard
             // (sync.ts) is what actually rejects it before it can ever reach the dedupe store.
-            return mapEvent(readAny(event, "id", "event_id", "eventId") ?? "", readAny(event, "eventType", "type") ?? "", asRecord(event.object));
+            // `created_at` is epoch milliseconds — the unit of every event in Creem's webhook docs.
+            return {
+                ...mapEvent(readAny(event, "id", "event_id", "eventId") ?? "", readAny(event, "eventType", "type") ?? "", asRecord(event.object)),
+                occurredAt: readEpochMs(event, "created_at", "createdAt"),
+            };
         },
 
         // Creem refunds are issued from the dashboard; there is no SDK endpoint to initiate one.
@@ -375,15 +438,57 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         resumeSubscription: async (subscriptionId) => subscriptionFromCreem(await client.subscriptions.resume(subscriptionId)),
 
         updateSubscription: async (subscriptionId, patch: SubscriptionPatch) => {
-            // A plan change is an `upgrade` to the new product (prorated immediately); a bare
-            // metadata/quantity patch has no upgrade semantics, so return the current truth.
-            // Un-deduped on purpose, for want of anywhere to put a key: neither
-            // `UpgradeSubscriptionRequestEntity` nor Creem's `RequestOptions` carries one (checkout's
-            // `requestId` has no counterpart here), so a retry charges the proration twice.
-            if (patch.priceId) {
-                return subscriptionFromCreem(
-                    await client.subscriptions.upgrade(subscriptionId, { productId: patch.priceId, updateBehavior: "proration-charge-immediately" }),
+            // `upgrade` changes the product and `update` changes item units; neither takes the other's
+            // field. Two calls are not atomic, so refuse the combined patch rather than apply half of it.
+            if (patch.priceId && patch.quantity !== undefined) {
+                return notSupported("changing the plan and the quantity in one update; apply them as two updates");
+            }
+
+            if (patch.quantity !== undefined && (!Number.isSafeInteger(patch.quantity) || patch.quantity < 0)) {
+                throw new LunoraPaymentError(
+                    "VALIDATION_ERROR",
+                    `updateSubscription(): \`quantity\` must be a non-negative safe integer (got ${String(patch.quantity)})`,
                 );
+            }
+
+            const updateBehavior = UPDATE_BEHAVIOR_BY_PRORATION[patch.proration ?? "immediate"];
+
+            // A plan change is an `upgrade` to the new product. `upgrade` is un-deduped on purpose, for
+            // want of anywhere to put a key: neither `UpgradeSubscriptionRequestEntity` nor Creem's
+            // `RequestOptions` carries one (checkout's `requestId` has no counterpart here), so a retry
+            // after an applied upgrade charges the proration again. Seat changes below are absolute, so
+            // a retry of an applied one is a no-op.
+            if (patch.priceId) {
+                return subscriptionFromCreem(await client.subscriptions.upgrade(subscriptionId, { productId: patch.priceId, updateBehavior }));
+            }
+
+            if (patch.quantity !== undefined) {
+                const current = asRecord(await client.subscriptions.get(subscriptionId));
+                const productId = idOf(current.product);
+                const items = Array.isArray(current.items) ? current.items.map((item) => asRecord(item)) : [];
+                // Units belong to the item for the current product; an add-on item carries its own count.
+                const itemId = readString(asRecord(items.find((item) => readString(item, "productId") === productId)), "id");
+
+                // Falling back to the unchanged subscription here would report success for a seat change
+                // that never happened, which is the failure this branch exists to prevent.
+                if (itemId === undefined) {
+                    return notSupported("a seat change for a subscription with no item for its current product");
+                }
+
+                const subscription = subscriptionFromCreem(
+                    await client.subscriptions.update(subscriptionId, { items: [{ id: itemId, units: patch.quantity }], updateBehavior }),
+                );
+
+                // Confirm the unit count landed rather than trusting the call: a silent no-op would read back
+                // as the old count and look like success.
+                if (subscription.quantity !== patch.quantity) {
+                    throw new LunoraPaymentError(
+                        "PROVIDER_ERROR",
+                        `creem did not apply the unit count ${String(patch.quantity)} to subscription ${subscriptionId}`,
+                    );
+                }
+
+                return subscription;
             }
 
             return subscriptionFromCreem(await client.subscriptions.get(subscriptionId));

@@ -1,4 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
+
+import { LunoraError } from "@lunora/errors";
 
 /**
  * Matches any character that would make cmd.exe re-split, redirect, or otherwise
@@ -9,10 +12,34 @@ import { spawn as nodeSpawn } from "node:child_process";
  * `C:\Dev&Ops\dist` can't spawn `Ops\dist` as a second command.
  */
 const NEEDS_CMD_QUOTING = /[\s"%&<>^|]/u;
-// eslint-disable-next-line sonarjs/slow-regex -- linear (no nested quantifier); input is a bounded developer-supplied CLI argument
-const BACKSLASH_RUN_BEFORE_QUOTE = /(\\*)"/gu;
-// eslint-disable-next-line sonarjs/slow-regex -- linear; bounded CLI-argument input
-const TRAILING_BACKSLASH_RUN = /(\\+)$/u;
+
+/** How long a child may hold its piped stdio open after it has exited before its captured output is returned. */
+const STDIO_EXIT_GRACE_MS = 500;
+
+/**
+ * Escapes `value` for the child's CommandLineToArgvW re-parse inside the double quotes that
+ * `quote` wraps it in: a run of backslashes right before a `"` (an embedded quote, or the closing
+ * quote appended after the value) is doubled, and each embedded `"` becomes `\"`. Without this,
+ * `C:\path\` before the closing quote would escape it and re-split the value mid-argument.
+ *
+ * One pass, so a long run of backslashes costs linear time: the regex pair this replaces scanned
+ * the run again from every position in it (CodeQL js/polynomial-redos).
+ */
+const escapeForCommandLineToArgv = (value: string): string => {
+    let escaped = "";
+    let backslashes = 0;
+
+    for (const character of value) {
+        if (character === "\\") {
+            backslashes += 1;
+        } else {
+            escaped += character === '"' ? `${"\\".repeat(backslashes * 2 + 1)}"` : `${"\\".repeat(backslashes)}${character}`;
+            backslashes = 0;
+        }
+    }
+
+    return escaped + "\\".repeat(backslashes * 2);
+};
 
 export interface SpawnDescriptor {
     args: ReadonlyArray<string>;
@@ -117,14 +144,7 @@ export const spawnShellCompat = (
             return value;
         }
 
-        // Escape for the child's CommandLineToArgvW re-parse: any run of
-        // backslashes immediately before a `"` (an embedded quote, or the closing
-        // quote we append) must be doubled, and each embedded `"` becomes `\"`.
-        // Without this, `C:\path\` before the closing quote would escape it and
-        // re-split the value mid-argument.
-        const escaped = value.replaceAll(BACKSLASH_RUN_BEFORE_QUOTE, String.raw`$1$1\"`).replace(TRAILING_BACKSLASH_RUN, "$1$1");
-
-        return `"${escaped}"`;
+        return `"${escapeForCommandLineToArgv(value)}"`;
     };
 
     return { args: args.map((argument) => quote(argument)), command: quote(command), shell: true };
@@ -136,8 +156,9 @@ export const defaultSpawner: Spawner = (descriptor) =>
         const wantCapture = descriptor.captureStdout === true;
         const wantSilentCapture = descriptor.captureStdoutSilently === true;
         // When the caller pipes input we need a writable stdin handle — "inherit"
-        // gives us the parent's stdin which we can't write to. stderr always stays
-        // inherited so errors land where the user can see them. stdout is normally
+        // gives us the parent's stdin which we can't write to. stderr is inherited
+        // so errors land where the user can see them, unless `captureStderr` pipes
+        // it (still teed to the parent below). stdout is normally
         // inherited; in `--format json` mode it is mapped to the parent's stderr fd
         // (2) so the child's human output never pollutes the JSON on stdout; and in
         // either capture mode it is piped so we can buffer it (and, for
@@ -157,12 +178,16 @@ export const defaultSpawner: Spawner = (descriptor) =>
             stdio: [hasInput ? "pipe" : "inherit", stdout, descriptor.captureStderr === true ? "pipe" : "inherit"],
         });
 
+        // Decoders, not `chunk.toString()`: a multi-byte character split across
+        // two chunks would otherwise decode as two replacement characters.
+        const stdoutDecoder = new StringDecoder("utf8");
+        const stderrDecoder = new StringDecoder("utf8");
         let captured = "";
         let capturedError = "";
 
         if (descriptor.captureStderr === true && child.stderr) {
             child.stderr.on("data", (chunk: Buffer) => {
-                capturedError += chunk.toString("utf8");
+                capturedError += stderrDecoder.write(chunk);
                 // Tee to the parent so the user still sees the tool's own output.
                 process.stderr.write(chunk);
             });
@@ -170,7 +195,7 @@ export const defaultSpawner: Spawner = (descriptor) =>
 
         if ((wantCapture || wantSilentCapture) && child.stdout) {
             child.stdout.on("data", (chunk: Buffer) => {
-                captured += chunk.toString("utf8");
+                captured += stdoutDecoder.write(chunk);
 
                 if (wantCapture) {
                     // Tee to the parent so the user still sees live deploy progress.
@@ -181,20 +206,67 @@ export const defaultSpawner: Spawner = (descriptor) =>
             });
         }
 
+        let settled = false;
+
         child.on("error", (error) => {
+            settled = true;
+
+            // The single chokepoint for "that program isn't installed": every
+            // shell-out in the CLI goes through this spawner, and Node reports a
+            // command that isn't on PATH as an `ENOENT` on the child (no PID, no
+            // exit code). Re-coding it gives the failure a machine-readable
+            // identity — and, through the exit-code taxonomy, its own exit code
+            // — instead of a bare `spawn wrangler ENOENT` that exits 1 like
+            // every other failure.
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                reject(
+                    new LunoraError("LOCAL_DEPENDENCY_MISSING", `\`${descriptor.command}\` is not installed or not on your PATH — nothing was run.`, {
+                        cause: error,
+                    }),
+                );
+
+                return;
+            }
+
             reject(error);
         });
+
+        let exitCode = 0;
+
+        let stdioGrace: ReturnType<typeof setTimeout> | undefined;
+
+        const finish = (): void => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            clearTimeout(stdioGrace);
+            resolve({
+                code: exitCode,
+                stderr: descriptor.captureStderr === true ? capturedError + stderrDecoder.end() : undefined,
+                stdout: wantCapture || wantSilentCapture ? captured + stdoutDecoder.end() : undefined,
+            });
+        };
 
         child.on("exit", (code, signal) => {
             // A signal-killed child reports `code === null`; treat that as a
             // failure (non-zero) rather than silently passing — e.g. an
             // OOM-killed `tsc` must not read as a clean type-check.
-            resolve({
-                code: code ?? (signal ? 1 : 0),
-                stderr: descriptor.captureStderr === true ? capturedError : undefined,
-                stdout: wantCapture || wantSilentCapture ? captured : undefined,
-            });
+            exitCode = code ?? (signal ? 1 : 0);
+            // `close` waits for every holder of the piped stdio. A grandchild that
+            // inherited it keeps `close` from ever firing, so after a short grace
+            // the output captured so far is the result, and the pipes are dropped.
+            stdioGrace = setTimeout(() => {
+                child.stdout?.destroy();
+                child.stderr?.destroy();
+                finish();
+            }, STDIO_EXIT_GRACE_MS);
         });
+
+        // Settle on `close`, not `exit`: `exit` can fire while the piped stdio
+        // is still draining, which would truncate the captured output.
+        child.on("close", finish);
 
         if (hasInput && child.stdin) {
             // A child that exits before draining stdin (e.g. `wrangler secret put`

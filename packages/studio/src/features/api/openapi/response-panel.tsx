@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Button } from "../../../components/ui/button";
 import type { TFunction } from "../../../i18n/i18n-context";
 import { useT } from "../../../i18n/i18n-context";
-import { copyToClipboard } from "../../../lib/internal";
+import { copyToClipboard, jsonRowReplacer } from "../../../lib/internal";
 import { cn } from "../../../lib/utils";
 import JsonHighlight from "./json-highlight";
 import type { ApiOperation, ApiResponse } from "./openapi-model";
@@ -42,7 +42,7 @@ const liveBody = (error: null | string, response: unknown, failed: boolean): str
         return error ?? "";
     }
 
-    return response === undefined ? "" : JSON.stringify(response, undefined, 2);
+    return response === undefined ? "" : JSON.stringify(response, jsonRowReplacer, 2);
 };
 
 interface ResponseBodyProps {

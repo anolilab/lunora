@@ -150,8 +150,23 @@ const renderCreateTable = (table: TableSnapshot): string => {
 
 const renderDropTable = (tableName: string): string => `DROP TABLE IF EXISTS ${quoteIdentifier(tableName)};`;
 
-const renderAddColumn = (tableName: string, columnName: string, column: ColumnSnapshot): string =>
-    `ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${renderColumnDefinition(columnName, column)};`;
+/**
+ * `ALTER TABLE … ADD COLUMN`, always nullable. SQLite rejects `ADD COLUMN … NOT NULL` without a default on a table
+ * that already has rows, and D1 is SQLite, so a NOT NULL add fails exactly when it matters. The runtime
+ * auto-provisioner makes the same choice (see `alterGlobalTableDrift` in `@lunora/sql-store`), and the declared
+ * `notNull` is still enforced on write. Existing rows read the new column as NULL until they are written, so for a
+ * required column the statement is followed by a comment that says so and gives the backfill to run. The snapshot
+ * records no default value, so the value is left for the author to fill in rather than guessed.
+ */
+const renderAddColumn = (tableName: string, columnName: string, column: ColumnSnapshot): string => {
+    const statement = `ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${renderColumnDefinition(columnName, { ...column, nullable: true })};`;
+
+    if (column.nullable) {
+        return statement;
+    }
+
+    return `${statement}\n-- ${quoteIdentifier(tableName)}.${quoteIdentifier(columnName)} is required, so rows written before it read NULL. Backfill them:\n-- UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(columnName)} = <value> WHERE ${quoteIdentifier(columnName)} IS NULL;`;
+};
 
 const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
     const fields = index.fields.map((field) => columnRef(field)).join(", ");
@@ -173,6 +188,9 @@ const shapeForm = (column: ColumnSnapshot): string | undefined =>
     // other — `JSON.stringify` omits undefined values and a re-assignment keeps
     // the original key position, so the form stays order-stable.
     column.field === undefined ? undefined : JSON.stringify({ ...column.field, optional: undefined });
+
+/** Where the D1 table-rebuild recipe for dropping a `NOT NULL` lives. */
+const RELAX_NOT_NULL_DOCS = "https://lunora.sh/docs/concepts/migrations#relaxing-not-null-on-a-d1-table";
 
 /** Surface type/nullability changes on an existing column as unsupported deltas. */
 const diffExistingColumn = (tableName: string, columnName: string, old: ColumnSnapshot, column: ColumnSnapshot, unsupported: UnsupportedEntry[]): void => {
@@ -199,11 +217,15 @@ const diffExistingColumn = (tableName: string, columnName: string, old: ColumnSn
     }
 
     if (old.nullable !== column.nullable) {
+        // SQLite cannot drop a column constraint in place, so relaxing one means a
+        // table rebuild; the guide carries the recipe.
+        const remedy = column.nullable ? `rebuild the table — ${RELAX_NOT_NULL_DOCS}` : "write SQL manually";
+
         unsupported.push({
             kind: "columnTypeChange",
             summary: `nullability change on ${tableName}.${columnName}: ${
                 old.nullable ? "NULL" : "NOT NULL"
-            } → ${column.nullable ? "NULL" : "NOT NULL"} (write SQL manually)`,
+            } → ${column.nullable ? "NULL" : "NOT NULL"} (${remedy})`,
         });
     }
 };

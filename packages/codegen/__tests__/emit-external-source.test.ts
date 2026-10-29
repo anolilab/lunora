@@ -113,7 +113,7 @@ describe("emitShard — external-source ingest", () => {
         const plain = membersOf(emitShard({ schema: discover(PLAIN) }));
         const added = [...membersOf(emitShard({ schema: discover(SOURCED) }))].filter((member) => !plain.has(member)).toSorted((a, b) => a.localeCompare(b));
 
-        expect(added).toStrictEqual(["alarmHeadroom", "currentShardKey", "recordExternalSourceError", "recordExternalSourceWarning", "scheduleSourcePoll"]);
+        expect(added).toStrictEqual(["alarmHeadroom", "recordExternalSourceError", "recordExternalSourceWarning", "scheduleSourcePoll"]);
     });
 
     it("stays byte-identical (none of the ingest surface) for a non-sourced schema", () => {

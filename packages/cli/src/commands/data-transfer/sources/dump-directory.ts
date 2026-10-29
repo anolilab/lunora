@@ -120,5 +120,5 @@ const readDumpFiles = async function* (
     }
 };
 
-export type { DumpFile, ListDumpOptions };
+export type { DumpFile };
 export { listDumpFiles, readDumpFiles };

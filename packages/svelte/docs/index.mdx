@@ -58,8 +58,8 @@ required to build or use it.
 
 The table above lists the core handful. The package also exports the live
 stores covered under [Additional stores](#additional-stores): `subscription`,
-`paginatedQuery`, `infiniteQuery`, `presence`, `rateLimit`, `auth`, and
-`connectionStatus`.
+`paginatedQuery`, `infiniteQuery`, `presence`, `liveTopic`, `rateLimit`, `auth`,
+and `connectionStatus`.
 
 Re-exported types from `@lunora/client`: `ArgsOf`, `ConnectionStatus`,
 `FunctionReference`, `LunoraClient`, `MutationCallOptions`, `Preloaded`,
@@ -233,6 +233,13 @@ hydration mismatch. When the store gains its first subscriber on the client, a
 live WS subscription attaches and every subsequent delta re-emits, exactly like a
 plain `query` store.
 
+The preloaded value was read for whoever was signed in when the page loaded.
+After a sign-out or user switch retires that identity, every `hydratePreloaded`
+on the client — mounted then or later — stops using it and holds `undefined`
+until the live value arrives, so the previous user's rows are never shown to the
+next one. A same-user token refresh does not count as a switch. The store is
+typed `Readable<T | undefined>` for that reason, like `query`.
+
 Pass `{ onError }` as the third argument (after the optional `client`) to observe
 a subscription-scoped error the server pushes after hydration (a session expiry,
 an RLS denial). Without it such an error is dropped and the store keeps
@@ -249,7 +256,7 @@ rendering the SSR snapshot as if it were live.
 </script>
 
 <ul>
-    {#each $posts as p (p._id)}
+    {#each $posts ?? [] as p (p._id)}
         <li>{p.title}</li>
     {/each}
 </ul>
@@ -380,6 +387,45 @@ are `api.*` references. The handle is `{ present, sessionId, setData, teardown }
 {#each $present ?? [] as p (p.userId)}<span>{p.data?.name}</span>{/each}
 ```
 
+### `liveTopic(topic, options?)`
+
+Follows one topic a `defineLiveStream` declares. Pass the reference
+`_generated/live.ts` hands out; the stream's route is resolved against the
+`LunoraClient` in context, and `lastEvent` and `onEvent` are typed by the payload
+the topic declares. The readable holds `{ lastEvent, error }`: the last payload
+delivered on the topic, and the shard's refusal of the subscription. Nothing opens
+until the first subscriber, and the subscription closes when the last one leaves,
+so there is no `teardown()`.
+
+Call `liveTopic` while a component initialises: it reads the client with
+`getContext`, which throws outside that window. `topic` is a reference or a
+`Readable` of one, and a new topic resubscribes. `options` are `onEvent`,
+`onError`, `shardKey`, `sessionKey`, and the transport tuning `headers`,
+`withCredentials`, `retryDelay` and `maxDelayMs`. `options` may be a `Readable` as
+well, e.g. to move to a new `sessionKey` on sign-out; a new `onEvent` or `onError`
+is read at call time and does not resubscribe.
+
+```svelte
+<script lang="ts">
+    import { liveTopic } from "@lunora/svelte";
+    import { writable } from "svelte/store";
+
+    import { live } from "../lunora/_generated/live";
+
+    export let postId: string;
+
+    // Call `liveTopic` once, during init (it reads the client from context), and hand it a store of the
+    // reference, so a new `postId` moves the same subscription to the new post's topic.
+    const topic = writable(live.posts.comments({ postId }));
+
+    $: topic.set(live.posts.comments({ postId }));
+
+    const comments = liveTopic(topic);
+</script>
+
+{#if $comments.lastEvent !== undefined}<p>New comment</p>{/if}
+```
+
 ### `rateLimit(config, options?)`
 
 A client-side mirror of a server rate limit for instant UX: disable a button or
@@ -404,22 +450,31 @@ tickMs? }`.
 
 ### `auth(client?)` and `connectionStatus(client?)`
 
-`auth` returns `{ user, token, setToken }`: `user` and `token` are readable
-stores (`null` when signed out), and `setToken(jwt)` sets the token on the
-client after sign-in. `connectionStatus` returns a readable store of the
-aggregate live-socket state (`idle` → `connecting` → `connected` → `offline`),
-for driving a connection indicator.
+`auth` returns `{ status, user, token, setToken }`: `status`, `user` and `token`
+are readable stores, and `setToken(jwt)` sets the token on the client after
+sign-in. `connectionStatus` returns a readable store of the aggregate
+live-socket state (`idle` → `connecting` → `connected` → `offline`), for driving
+a connection indicator.
+
+`$status` is the auth gate — `"loading"`, `"authenticated"`, `"unauthenticated"`
+or `"unreachable"` (a credential is held but the identity endpoint could not be
+reached; gates as authenticated). Branch on it, not on `$user`: `$user` is null
+both when signed out and when a held credential's identity has not resolved, so
+a `$user` gate shows the sign-in prompt to a signed-in user on an offline
+reload. See the [`@lunora/client` reference](/docs/packages/client) for the
+table. `authGate()` returns `{ isAuthenticated, isLoading }` derived from the
+same `status`, when a boolean is all a template needs.
 
 ```svelte
 <script lang="ts">
     import { auth, connectionStatus } from "@lunora/svelte";
 
-    const { user, setToken } = auth();
-    const status = connectionStatus();
+    const { setToken, status: authStatus, user } = auth();
+    const connection = connectionStatus();
 </script>
 
-{#if $user}Signed in as {$user.name}{/if}
-<span data-status={$status}>{$status}</span>
+{#if $authStatus === "loading"}Checking…{:else if $authStatus === "unauthenticated"}Signed out{:else}Signed in as {$user?.name}{/if}
+<span data-status={$connection}>{$connection}</span>
 ```
 
 ## Agent tool events — `agentToolEvents(options)`
@@ -512,6 +567,10 @@ The part the type signature does not tell you:
   `AudioContext` resumption outside one. It is idempotent while a call is
   active, and a denied permission lands in `error` rather than throwing at the
   call site.
+- **A failed turn drops its partial answer.** When the model fails mid-answer (or its
+  stream is cut short), the text already streamed for that turn is cleared from
+  `interimTranscript` and `error` is set; the call returns to `listening`. A retried
+  turn starts its text from empty, never from the failed attempt's prefix.
 - **`endCall()` releases everything** — the socket, the microphone tracks, and
   the Web Audio graph — and is idempotent. **Svelte has no auto-dispose here.**
   Unlike the other adapters nothing tears the call down for you, so call it

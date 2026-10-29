@@ -10,6 +10,7 @@ const captureContext = (calls: { args: Record<string, unknown> | undefined }[], 
         env: {},
         getState: async () => undefined,
         idempotencyKey: "tool:searchMemory:call_1",
+        instanceId: "wf-1",
         reportProgress: () => {},
         run: async (_reference, args) => {
             calls.push({ args });

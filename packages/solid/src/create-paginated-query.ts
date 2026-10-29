@@ -1,11 +1,12 @@
 import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { stableWireKey } from "@lunora/wire";
 import type { Accessor } from "solid-js";
 import { createMemo, createSignal } from "solid-js";
 
-import { stableWireKey } from "../../../shared/wire-key";
 import { useLunora } from "./context";
+import { trackedArgsEffect } from "./reactive-args";
 import { trackedEffect } from "./solid-compat";
 
 /** The args a paginated query exposes minus the framework-supplied page cursor. */
@@ -319,8 +320,11 @@ const createPaginatedCore = <T>(
         pendingPageKeys.clear();
     };
 
-    // Re-subscribe whenever the base args (or skip) change.
-    trackedEffect(resolveArgs, (current) => {
+    // Re-subscribe whenever the base args (or skip) change. Keyed on the args'
+    // CONTENT, so an equal-but-new args object — e.g. an accessor recomputed
+    // from an unrelated signal — never tears down and collapses a multi-page
+    // loaded feed back to page one.
+    trackedArgsEffect(resolveArgs, (current) => {
         teardownAll();
         setPages(initialPages(initialNumItems));
         setPageResults([]);

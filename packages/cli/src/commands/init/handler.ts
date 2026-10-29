@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { applyLintIgnores, BADGES, detectLintTools, isInteractive } from "@lunora/config";
+import { applyLintIgnores, BADGES, detectLintTools, isInteractive, readProjectDependencies, readProjectManifest } from "@lunora/config";
 import { walkSync } from "@visulima/fs";
 import { basename, dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
@@ -15,9 +15,10 @@ import type { DetectedFramework, FrameworkDetection } from "../../util/detect-fr
 import { detectFramework } from "../../util/detect-framework";
 import type { PackageManager, PackageManagerProbe } from "../../util/detect-package-manager";
 import { addArgsFor, detectInstalledManagers, detectPackageManager, installArgsFor, runScriptCommand } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
-import { PromptCancelledError } from "../../util/prompt-cancelled";
+import PromptCancelledError from "../../util/prompt-cancelled";
 import { resolveDistTag, resolvePinnedRepoRef, resolvePinnedSourceRef, resolveSourceRef, resolveTagVersions } from "../../util/source-ref";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
@@ -37,8 +38,10 @@ import {
 } from "../../util/tui-prompts";
 import type { FeatureItem } from "../add/features";
 import { detectAuthUiItem, isReactNativeProject } from "../add/features";
-import { runAddCommand } from "../registry";
+import { runAddCommand } from "../registry/commands";
 import describeDownloadFailure from "./download-failure";
+import type { AuthChoice } from "./external-auth";
+import { parseAuthChoice, wireExternalAuth } from "./external-auth";
 import { emitMascot, emitStep } from "./flow";
 import type { InitOptions } from "./index";
 import type { FeatureApply, OfferDeps } from "./offer-extras";
@@ -68,11 +71,12 @@ type Template =
     | "expo"
     | "next"
     | "nuxt"
-    | "react-router"
+    | "rspack-react"
     | "solid-v2"
     | "standalone"
     | "sveltekit"
     | "tanstack-start-react"
+    | "tanstack-start-react-rspack"
     | "tanstack-start-solid"
     | "vinext"
     | "vinext-pages";
@@ -80,7 +84,7 @@ type Template =
 interface InitCommandOptions {
     /**
      * Add features non-interactively after scaffolding (the `--add` flag): a
-     * comma-separated list of `ai | auth | backup | browser | cloudflare-access | crons | email | flags | hyperdrive | payment | presence | queue | storage | workflow`.
+     * comma-separated list of `ai | auth | auth-ui | backup | browser | cloudflare-access | crons | email | flags | hyperdrive | payment | presence | queue | storage | workflow`.
      * Bypasses the interactive multi-select and sub-prompts —
      * each named feature is applied with its shipped defaults.
      */
@@ -93,6 +97,13 @@ interface InitCommandOptions {
      * pulled without the caller opting in.
      */
     allowUnsafeSource?: boolean;
+
+    /**
+     * The auth choice (the `--auth` flag): `lunora` (better-auth), `clerk`,
+     * `workos`, `auth0` or `none`. Skips the interactive auth question; without a
+     * TTY it is applied with its shipped defaults.
+     */
+    auth?: string;
     /** When set, also scaffold a CI deploy pipeline for the given provider. */
     ci?: CiProvider;
 
@@ -164,7 +175,7 @@ interface InitCommandOptions {
      * interactive regardless of TTY, and these drive the feature multi-select,
      * the auth-provider sub-select, and the storage bucket-name text input.
      */
-    prompt?: Pick<OfferDeps, "multiSelect" | "select" | "text">;
+    prompt?: Partial<Pick<OfferDeps, "selectAuth">> & Pick<OfferDeps, "multiSelect" | "select" | "text">;
 
     /**
      * Override the git ref (branch, tag, or commit) the default template source
@@ -313,18 +324,11 @@ const resolveLunoraVersions = async (files: ReadonlyArray<string>, distTag: stri
             continue;
         }
 
-        try {
-            const parsed = JSON.parse(readFileSync(file, "utf8")) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-
-            for (const section of ["dependencies", "devDependencies"] as const) {
-                for (const name of Object.keys(parsed[section] ?? {})) {
-                    if (isLunoraDep(name)) {
-                        names.add(name);
-                    }
-                }
+        // An unparseable package.json contributes nothing; stamping leaves it untouched too.
+        for (const name of Object.keys(readProjectDependencies(dirname(file)))) {
+            if (isLunoraDep(name)) {
+                names.add(name);
             }
-        } catch {
-            // Unparseable package.json — skip; stamping leaves it untouched too.
         }
     }
 
@@ -437,6 +441,28 @@ const pnpmWorkspaceYaml = (): string =>
         ...PNPM_DENIED_BUILD_DEPENDENCIES.map((name) => `    '${name}': false`),
         "",
     ].join("\n");
+
+/**
+ * Write the build-script allowlist into a scaffold, unless it already has one.
+ *
+ * Idempotent, because there are two moments that know pnpm is in play and
+ * neither subsumes the other: the scaffold step knows the manager DETECTED for
+ * the new project (what the next-steps hint tells the user to run), and the
+ * install offer knows the manager the user actually PICKED, which can differ —
+ * `npx lunora init` detects npm while the offer still defaults to pnpm.
+ *
+ * Without it `pnpm install` exits 1 with `ERR_PNPM_IGNORED_BUILDS` on a tree
+ * that contains esbuild/workerd — i.e. every scaffold — which is precisely the
+ * command the printed next steps and the getting-started docs hand the user.
+ * @param target the scaffolded project directory.
+ */
+const writePnpmBuildAllowlist = (target: string): void => {
+    const workspacePath = join(target, PNPM_WORKSPACE_FILENAME);
+
+    if (!existsSync(workspacePath)) {
+        writeFileSync(workspacePath, pnpmWorkspaceYaml(), "utf8");
+    }
+};
 
 const collectFiles = (directory: string): ReadonlyArray<string> => {
     const out: string[] = [];
@@ -563,7 +589,7 @@ const logWould = (logger: Logger, action: string): void => {
 const failEmptyScaffold = (logger: Logger, target: string, source: string): InitCommandResult => {
     logger.error(`init: the template at ${source} contains no files — nothing was scaffolded. Check the template name, \`--source\` layout and \`--ref\`.`);
 
-    return { code: 1, files: [], target };
+    return { code: EXIT_CODE.NOT_FOUND, files: [], target };
 };
 
 /**
@@ -620,18 +646,8 @@ const isWorkspaceRoot = (directory: string): boolean => {
         return true;
     }
 
-    const packagePath = join(directory, "package.json");
-
-    if (!existsSync(packagePath)) {
-        return false;
-    }
-
-    try {
-        return (JSON.parse(readFileSync(packagePath, "utf8")) as { workspaces?: unknown }).workspaces !== undefined;
-    } catch {
-        // Unreadable / invalid package.json — not a workspace root we can trust.
-        return false;
-    }
+    // An unreadable / invalid package.json is not a workspace root we can trust.
+    return readProjectManifest(directory)?.["workspaces"] !== undefined;
 };
 
 /**
@@ -775,17 +791,12 @@ const maybeOfferInstall = async (options: InitCommandOptions, target: string): P
         return undefined;
     }
 
-    // Only when pnpm is the chosen manager: write the build-script allowlist to
-    // pnpm-workspace.yaml just before the install (pnpm v10.16+ no longer reads
-    // the package.json `pnpm` field), so `pnpm install` runs the toolchain's
-    // native builds (esbuild/sharp/workerd) without a follow-up
-    // `pnpm approve-builds`. npm/yarn scaffolds don't get a stray pnpm file.
+    // The scaffold step already wrote this for a project whose DETECTED manager
+    // is pnpm; repeat it here for the case detection cannot reach — the user
+    // picking pnpm at the prompt after `npx lunora init` detected npm. No-op
+    // when the file is already there. npm/yarn scaffolds get no stray pnpm file.
     if (manager === "pnpm") {
-        const workspacePath = join(target, PNPM_WORKSPACE_FILENAME);
-
-        if (!existsSync(workspacePath)) {
-            writeFileSync(workspacePath, pnpmWorkspaceYaml(), "utf8");
-        }
+        writePnpmBuildAllowlist(target);
     }
 
     const spawner = options.spawner ?? defaultSpawner;
@@ -825,7 +836,7 @@ const scaffoldFromLocal = async (
     if (!existsSync(templateDirectory)) {
         logger.error(`template not found in local source: ${templateDirectory}`);
 
-        return { code: 1, files: [], target };
+        return { code: EXIT_CODE.NOT_FOUND, files: [], target };
     }
 
     const written = await copyTemplate(templateDirectory, target, name);
@@ -989,7 +1000,7 @@ const scaffoldViteOverlay = async (options: {
             if (!existsSync(localBase)) {
                 logger.error(`create-vite base not found on disk: ${localBase}`);
 
-                return { code: 1, files: [], target };
+                return { code: EXIT_CODE.NOT_FOUND, files: [], target };
             }
         }
 
@@ -1337,7 +1348,10 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
 
         // --dry-run: report what would be added without touching the project.
         if (options.dryRun === true) {
-            logWould(options.logger, `add ${plans.map((plan) => plan.label).join(", ")}`);
+            logWould(
+                options.logger,
+                `add ${plans.map((plan) => (plan.externalAuth === undefined ? plan.label : `${plan.label} (and wire resolveIdentity)`)).join(", ")}`,
+            );
 
             return true;
         }
@@ -1388,11 +1402,27 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
             options.logger[level](message);
         }
 
+        // An external provider's registry item scaffolds the resolver; wiring it
+        // into the Worker and the client edits project files the item cannot know.
+        for (const [index, plan] of plans.entries()) {
+            if (plan.externalAuth !== undefined && results[index]?.code === 0) {
+                wireExternalAuth(projectDirectory, plan.externalAuth, options.logger);
+            }
+        }
+
         return results.every((result) => result.code === 0);
     };
 
+    const auth: AuthChoice | undefined =
+        options.auth === undefined
+            ? undefined
+            : parseAuthChoice(options.auth, (message) => {
+                  options.logger.warn(message);
+              });
+
     const deps: OfferDeps = {
         applyAll,
+        auth,
         interactive,
         logger: options.logger,
         multiSelect: options.prompt?.multiSelect ?? ((message, choices, settings) => tuiMultiSelect(message, choices, { ...settings, badge: BADGES.add })),
@@ -1400,18 +1430,7 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         projectName: basename(projectDirectory),
         // Detect the per-framework auth-UI item from the scaffolded template's deps.
         resolveAuthUiItem: () => {
-            let dependencies: Record<string, string>;
-
-            try {
-                const pkg = JSON.parse(readFileSync(join(projectDirectory, "package.json"), "utf8")) as {
-                    dependencies?: Record<string, string>;
-                    devDependencies?: Record<string, string>;
-                };
-
-                dependencies = { ...pkg.dependencies, ...pkg.devDependencies };
-            } catch {
-                return "auth-ui-react";
-            }
+            const dependencies = readProjectDependencies(projectDirectory);
 
             // The same gate `lunora add auth-ui` applies, and for the same reason:
             // every auth-UI port renders DOM, so there is no item that fits an Expo
@@ -1427,11 +1446,16 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         select:
             options.prompt?.select ??
             ((message, choices, settings): Promise<FeatureItem | undefined> => tuiSelect(message, choices, { ...settings, badge: BADGES.add })),
+        // Injected prompts (tests) without an auth answer decline auth rather than reaching for a TTY.
+        selectAuth:
+            options.prompt === undefined
+                ? (message, choices, settings): Promise<AuthChoice | undefined> => tuiSelect(message, choices, { ...settings, badge: BADGES.add })
+                : (options.prompt.selectAuth ?? (() => Promise.resolve("none" as const))),
         text: options.prompt?.text ?? ((message, settings) => tuiText(message, { ...settings, badge: BADGES.add })),
     };
 
-    // `--add` applies its features directly (no headline, no multi-select).
-    if (preselected.length > 0) {
+    // `--add` applies its features directly (no headline, no multi-select), as does `--auth` without a TTY.
+    if (preselected.length > 0 || (auth !== undefined && !interactive)) {
         const added = await offerRegistryExtras(deps);
 
         await offerLintIgnores(projectDirectory, interactive, options);
@@ -1471,12 +1495,17 @@ const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; val
     // different renderer package, JSX source and Vite plugin major.
     { description: "Solid 2.0 SPA — the Solid 2 line (@solidjs/web, vite-plugin-solid 3)", label: "Solid 2", value: "solid-v2" },
     { description: "Svelte SPA — create-vite base + Lunora", label: "Svelte", value: "svelte" },
+    { description: "React SPA on Rsbuild — the Worker runs under wrangler dev behind the dev server", label: "React · Rsbuild", value: "rspack-react" },
     { description: "Next.js (App Router) — OpenNext on Cloudflare + a standalone Lunora worker", label: "Next.js", value: "next" },
     { description: "TanStack Start (React) — SSR with live-loader routes", label: "TanStack Start · React", value: "tanstack-start-react" },
+    {
+        description: "TanStack Start (React) on Rsbuild — SSR composed into the Lunora worker",
+        label: "TanStack Start · React · Rsbuild",
+        value: "tanstack-start-react-rspack",
+    },
     { description: "TanStack Start (Solid)", label: "TanStack Start · Solid", value: "tanstack-start-solid" },
     { description: "Next.js App Router on Vite (vinext) — composed into the Lunora worker (experimental)", label: "vinext · App Router", value: "vinext" },
     { description: "Next.js Pages Router on Vite (vinext) — composed into one worker (experimental)", label: "vinext · Pages Router", value: "vinext-pages" },
-    { description: "React Router (v7, framework mode) — SSR composed into the Lunora worker", label: "React Router", value: "react-router" },
     { description: "Astro (islands) — single-worker, Lunora composed into the adapter worker", label: "Astro", value: "astro" },
     { description: "AnalogJS (Angular) — single-worker, Lunora mounted in Nitro", label: "Analog", value: "analog" },
     { description: "Nuxt (Vue) — single-worker, Lunora mounted in Nitro", label: "Nuxt", value: "nuxt" },
@@ -1568,7 +1597,7 @@ const scaffoldOverlayPath = async (
     if (!isOverlayFramework(framework)) {
         options.logger.error(`init: unknown framework "${framework}". Supported overlays: ${Object.keys(ADAPTERS).join(", ")}.`);
 
-        return { code: 1, files: [], target };
+        return { code: EXIT_CODE.USAGE, files: [], target };
     }
 
     if (!(await verifyRemoteTemplate({ isLocal: options.overlayBaseFrom !== undefined, logger: options.logger }))) {
@@ -1602,7 +1631,7 @@ const scaffoldTemplatePath = async (
                 " Re-run with --allow-unsafe-source if you really want this.",
         );
 
-        return { code: 1, files: [], target };
+        return { code: EXIT_CODE.USAGE, files: [], target };
     }
 
     if (!(await verifyRemoteTemplate({ isLocal: false, logger: options.logger, source: resolveTemplateSource(templateType, options.source, options.ref) }))) {
@@ -1610,6 +1639,48 @@ const scaffoldTemplatePath = async (
     }
 
     return scaffoldFromRemote({ logger: options.logger, markComplete, name, ref: options.ref, source: options.source, target, templateType });
+};
+
+/**
+ * Part of the scaffold itself, not of the install offer: a project whose
+ * detected package manager is pnpm gets the build-script allowlist on disk the
+ * moment its files are written.
+ *
+ * It used to be written inside `maybeOfferInstall`, after `confirm()` returned
+ * true — so `--yes`, a non-TTY (CI, an agent), and "No" at the prompt all
+ * scaffolded a project whose `pnpm install` exits 1 with
+ * `ERR_PNPM_IGNORED_BUILDS`. That is the command the next steps printed three
+ * lines further down, and the one the getting-started docs give.
+ *
+ * Skipped inside a monorepo, deliberately. The new package is not a workspace
+ * member yet, so its install has to run from the workspace ROOT — whose own
+ * `pnpm-workspace.yaml` already governs `allowBuilds`. Writing a second one here
+ * would make the scaffold a workspace root in its own right: `workspace:` deps
+ * would stop resolving, and `isWorkspaceRoot` would from then on read the new
+ * package as a monorepo root, silently suppressing the install offer for
+ * anything scaffolded beneath it.
+ * @param target the scaffolded project directory.
+ * @param cwd the directory `init` was invoked from — the monorepo probe's start.
+ */
+const writeScaffoldPackageManagerConfig = (target: string, cwd: string): void => {
+    if (isInsideMonorepo(cwd)) {
+        return;
+    }
+
+    let manager: PackageManager;
+
+    try {
+        manager = detectPackageManager(target);
+    } catch {
+        // Nothing resolved: no lock file or `packageManager` field above the
+        // scaffold, no launching manager, none on PATH. `printNextSteps` surfaces
+        // that separately; there is no manager to write config for.
+        return;
+    }
+
+    if (manager === "pnpm") {
+        writePnpmBuildAllowlist(target);
+    }
 };
 
 const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, tracker: ScaffoldTracker): Promise<InitCommandResult> => {
@@ -1622,7 +1693,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
     if (blocked !== undefined) {
         options.logger.error(blocked);
 
-        return { code: 1, files: [], target: "" };
+        return { code: EXIT_CODE.USAGE, files: [], target: "" };
     }
 
     // No name argument → ask for one (a TTY shows the prompt; with `--yes` /
@@ -1643,7 +1714,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
     if (name.length === 0) {
         options.logger.error(`init: refusing an empty project name — pass a directory name (e.g. \`lunora init my-app\`).`);
 
-        return { code: 1, files: [], target: "" };
+        return { code: EXIT_CODE.USAGE, files: [], target: "" };
     }
 
     // Guard the project name against path traversal: it becomes a directory
@@ -1652,7 +1723,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
     if (name.includes("/") || name.includes("\\") || name === ".." || name === ".") {
         options.logger.error(`init: refusing project name "${name}" — must not contain path separators or be "." / "..".`);
 
-        return { code: 1, files: [], target: "" };
+        return { code: EXIT_CODE.USAGE, files: [], target: "" };
     }
 
     // The name is substituted verbatim into `wrangler.jsonc`'s `name` field, and
@@ -1668,7 +1739,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
                 `(starting with a letter, digit or "_"), and wrangler rejects anything else. Try \`${suggestWorkerName(name)}\`.`,
         );
 
-        return { code: 1, files: [], target: "" };
+        return { code: EXIT_CODE.USAGE, files: [], target: "" };
     }
 
     const target = resolve(cwd, name);
@@ -1684,7 +1755,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
     if (existing?.isSymbolicLink() === true) {
         options.logger.error(`init: refusing to scaffold into "${target}" — it is a symlink. Remove it, or scaffold into a different directory name.`);
 
-        return { code: 1, files: [], target };
+        return { code: EXIT_CODE.CONFLICT, files: [], target };
     }
 
     const targetPreExisted = existing !== undefined;
@@ -1695,7 +1766,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
         if (entries.length > 0) {
             options.logger.error(`target directory not empty: ${target}`);
 
-            return { code: 1, files: [], target };
+            return { code: EXIT_CODE.CONFLICT, files: [], target };
         }
     }
 
@@ -1715,9 +1786,16 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string, trac
     // emptied back out) — see `resetPartialScaffold`.
     tracker.record(target, targetPreExisted);
 
-    return choice.kind === "overlay"
-        ? scaffoldOverlayPath(options, choice.framework, name, target, tracker.complete)
-        : scaffoldTemplatePath(options, choice.templateType, name, target, tracker.complete);
+    const result =
+        choice.kind === "overlay"
+            ? await scaffoldOverlayPath(options, choice.framework, name, target, tracker.complete)
+            : await scaffoldTemplatePath(options, choice.templateType, name, target, tracker.complete);
+
+    if (result.code === 0) {
+        writeScaffoldPackageManagerConfig(target, cwd);
+    }
+
+    return result;
 };
 
 /** Tracks the project directory a `lunora init` run creates, so a Ctrl-C abort can reset it. */
@@ -1974,11 +2052,12 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
     if ("error" in template) {
         logger.error(template.error);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     return runInitCommand({
         add: options.add,
+        auth: options.auth,
         allowUnsafeSource: options.allowUnsafeSource === true,
         cwd,
         ci: resolveCiProvider(options.ci, logger),
@@ -1998,6 +2077,6 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
     });
 });
 
-export { execute, isTemplate, resolveTemplateFlag, resolveTemplateSource };
+export { execute, FRAMEWORK_CHOICES, isTemplate, resolveTemplateFlag, resolveTemplateSource };
 export type { InitCommandOptions, InitCommandResult, Template };
 export { runInitCommand };

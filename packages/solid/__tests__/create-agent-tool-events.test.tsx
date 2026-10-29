@@ -66,6 +66,31 @@ describe(createAgentToolEvents, () => {
         ]);
     });
 
+    it("lists a pending secret request (awaiting-secret) until the server retires its marker", () => {
+        const fake = createFakeClient();
+        let latest: CreateAgentToolEventsResult | undefined;
+
+        render(
+            () => {
+                latest = createAgentToolEvents({ api: buildApi(), threadKey: "t1" });
+
+                return <pre>{JSON.stringify(latest.events())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        pushTo(fake.subscriptions, MESSAGES_REF, [
+            { content: 'Awaiting a secret for tool "requestKey".', role: "tool", seq: 4, status: "awaiting_secret", toolCallId: "c3", toolName: "requestKey" },
+        ]);
+
+        expect(latest?.events()).toStrictEqual([{ seq: 4, toolCallId: "c3", toolName: "requestKey", type: "awaiting-secret" }]);
+
+        // Supply and decline both delete the marker, so the next history push drops it.
+        pushTo(fake.subscriptions, MESSAGES_REF, []);
+
+        expect(latest?.events()).toStrictEqual([]);
+    });
+
     it("forwards the history limit to agents:agentMessages", () => {
         const fake = createFakeClient();
 

@@ -158,3 +158,20 @@ describe("auditPanel", () => {
         expect(rows[0]?.textContent).toContain("applyCdc");
     });
 });
+
+describe("auditPanel — long detail", () => {
+    it("keeps a PITR restore's full undo bookmark reachable", async () => {
+        expect.assertions(2);
+
+        const undoBookmark = "0000018a".repeat(8);
+        const detail = { restart: false, restoredTo: "0000017f".repeat(8), undoBookmark };
+
+        render(renderPanel(createClient([{ detail, id: undefined, op: "pitrRestore", seq: 1, table: undefined, ts: 1 }])));
+
+        const row = await screen.findByTestId("au-row");
+        const cell = within(row).getAllByRole("cell").at(-1);
+
+        expect(cell?.title).toBe(JSON.stringify(detail));
+        expect(cell?.textContent).toContain(undoBookmark);
+    });
+});

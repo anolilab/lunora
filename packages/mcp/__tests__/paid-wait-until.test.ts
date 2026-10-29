@@ -50,7 +50,9 @@ const text = (value: string): ToolResult => {
 const paidServer = (): ReturnType<typeof createPaidMcpServer> => {
     const mcp = createPaidMcpServer({ charge });
 
-    mcp.paidTool({ description: "the paid report", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () => text("secret"));
+    mcp.paidTool({ description: "the paid report", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () =>
+        text("secret"),
+    );
 
     return mcp;
 };

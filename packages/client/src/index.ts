@@ -1,19 +1,17 @@
-// The `api` / `internal` proxy the generated `_generated/api.ts` imports.
-// Served from here as well as `@lunora/server` so a SIBLING package (a web
-// app, another Worker) consuming `<backend>/api` needs only the client
-// package at runtime, not the server runtime. One shared implementation, so
-// the two cannot drift.
-export { anyApi } from "../../../shared/any-api";
 export type { OptimisticMessage, ReconcileDurableMessage } from "./agent-chat-reconcile";
 export { maxSeq, reconcileOptimistic, RETIRE_AFTER_DURABLE_SEQ_ADVANCE } from "./agent-chat-reconcile";
 export type { AsyncStorageLike, AsyncStoragePersistenceOptions } from "./async-storage-persistence";
 export { createAsyncStoragePersistence } from "./async-storage-persistence";
 export type { AsyncStorageQueryCacheOptions } from "./async-storage-query-cache";
 export { createAsyncStorageQueryCache } from "./async-storage-query-cache";
+export type { AuthTokenFetcher, AuthTokenProviderOptions } from "./auth-token-provider";
+export { setAuthTokenProvider } from "./auth-token-provider";
 export { default as createInMemoryBookmarkStorage } from "./bookmark";
 export { createCallRunner } from "./call-runner";
+export type { BatchSlot } from "./call-wire";
 export type { ClientQueryRef } from "./client-query-store";
 export { createClientQuery } from "./client-query-store";
+export type { ConnectionStatus } from "./connection-state";
 export { TabCoordinator } from "./cross-tab";
 export type { MutationDelta } from "./delta-merge";
 export { applyDelta, isMutationDelta } from "./delta-merge";
@@ -22,6 +20,7 @@ export {
     CONFLICT_ERROR_CODE,
     getErrorCode,
     getRetryAfterMs,
+    isAuthReplayFailure,
     isConflictError,
     isForbiddenError,
     isRateLimitedError,
@@ -30,19 +29,22 @@ export {
 } from "./errors";
 export type { HttpStreamOptions } from "./http-stream";
 export { httpStream } from "./http-stream";
+export type { ConnectLiveStreamOptions, LiveStream, LiveStreamEvent, LiveStreamSubscribeError, LiveStreamSubscribeOptions } from "./live-stream";
+export { connectLiveStream } from "./live-stream";
+export type { LiveTopicOptions, LiveTopicRef, SubscribeLiveTopicOptions } from "./live-topic";
+export { liveTopicSubscription, subscribeLiveTopic } from "./live-topic";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
 export type {
     ActionCallOptions,
-    BatchSlot,
     ClientDebugShard,
     ClientDebugSnapshot,
     ClientDebugSubscription,
-    ConnectionStatus,
-    LunoraClientError,
     MutationCallOptions,
     MutationSettledEvent,
-    SyncWatermark,
+    ReplayCredential,
+    ReplayIdentityVerdict,
+    SyncStatus,
 } from "./lunora-client";
 export { LunoraClient } from "./lunora-client";
 export type { MutatorHandle, MutatorRunnerSinks, MutatorTransaction } from "./mutator-runner";
@@ -59,12 +61,9 @@ export { createReconnect } from "./reconnect";
 export { default as createSnapshotPrecondition } from "./snapshot-precondition";
 export type { StreamHandle, StreamIterable } from "./stream";
 export { createStream, DEFAULT_MAX_BUFFER } from "./stream";
+export type { SyncWatermark } from "./subscription";
 export type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState } from "./subscription";
 export { SubscriptionRegistry } from "./subscription";
-export type { ClientSwOptions, ServiceWorkerStatus } from "./sw/client-sw";
-export { ClientServiceWorker } from "./sw/client-sw";
-export type { ClientToSwMessage, SwToClientMessage } from "./sw/message-bridge";
-export { createReply, sendToSw } from "./sw/message-bridge";
 export type {
     ArgsOf,
     AuthCapabilities,
@@ -98,6 +97,7 @@ export type {
     KvValueResult,
     LunoraClientOptions,
     OfflineQueueOptions,
+    OnlineOnlyOption,
     OutboxMutation,
     OutboxSink,
     PersistedMutation,
@@ -112,6 +112,7 @@ export type {
     QueryCacheAdapter,
     ReconnectOptions,
     ReturnOf,
+    RoomRef,
     RowOp,
     RpcEnvelope,
     RpcResponseBody,
@@ -140,3 +141,4 @@ export type {
     WorkflowStepDetail,
     WsTokenProvider,
 } from "./types";
+export type { LunoraClientError } from "./wire-errors";

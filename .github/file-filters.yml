@@ -149,6 +149,9 @@ generated_files:
     - "**/project.json"
     - "apps/docs/src/data/packages-metadata.json"
     - "apps/docs/scripts/generate-*.js"
+    # The generated error-code reference itself: a hand edit to the output is drift
+    # too, and its generator's only other input (packages/errors) is listed below.
+    - "apps/docs/src/content/docs/errors.mdx"
     - "scripts/generate-*.js"
     - "scripts/check-generated-files.mjs"
     - "packages/advisor/**"
@@ -180,6 +183,7 @@ generated_files:
     - "packages/shard-engine/**"
     - "packages/sql-store/**"
     - "packages/values/**"
+    - "packages/wire/**"
     - "packages/workflow/**"
     - "shared/**"
     - "examples/**"
@@ -221,11 +225,38 @@ benchmarks:
     - "vis.config.ts"
     - ".github/workflows/codspeed.yml"
 
-# The auth-ui → registry/auth-ui-* copy-sync check.
+# The registry-item suite (`packages/cli/__tests__/commands/registry-items.test.ts`),
+# which scaffolds every shipped item into a throwaway project and runs the real
+# codegen + advisor over it, on top of the manifest/binding/dependency sweeps.
+#
+# Its own filter and its own job because `registry/` is not a `vis` project: a
+# registry-only PR marks NOTHING affected, so `test:affected` never reaches
+# packages/cli and every gate in that file — the advisor sweep included — was
+# skipped on exactly the PRs it exists for. The `packages` filter in test.yml
+# already lists `registry/**`, which starts the job but not the affected set.
+#
+# `packages/advisor/**` and `packages/codegen/**` are listed because the findings
+# are theirs: a new ERROR-level lint, or a feeder that starts seeing a shape,
+# changes this gate's verdict without touching registry/ or the CLI.
+registry_items:
+    - "registry/**"
+    - "packages/cli/**"
+    - "packages/advisor/**"
+    - "packages/codegen/**"
+    - ".github/workflows/lint.yml"
+    - ".github/file-filters.yml"
+
+# The auth-ui → registry/auth-ui-* copy-sync check, and the ratelimit copies (including the one the CLI overlay embeds).
 registry_sync:
     - "packages/auth-ui/**"
     - "registry/**"
     - "scripts/sync-auth-ui-registry.mjs"
+    - "scripts/sync-ratelimit-copies.mjs"
+    - "templates/*/lunora/ratelimit/**"
+    - "examples/*/lunora/ratelimit/**"
+    - "packages/cli/src/commands/init/overlay/apply.ts"
+    # Root manifest: `lint:registry:sync` is defined there, so editing the gate runs it.
+    - "package.json"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 
@@ -237,6 +268,31 @@ worker_size:
     # This file too, or the hole reopens one level up.
     - ".github/file-filters.yml"
 
+# Browser bundle budget (`@lunora/client` + one adapter). Self-lists like `worker_size`.
+client_size:
+    - "scripts/check-client-size.js"
+    - "client-size.json"
+    # The gate bundles third-party code (TanStack Query, the adapters' framework
+    # runtimes) whose bump touches nothing under `packages/**`.
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
+# Studio first-load budget. Self-lists like `worker_size`.
+studio_size:
+    - "scripts/check-studio-size.js"
+    - "studio-size.json"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
+# Worker startup budget (Cloudflare's 1 s startup-CPU limit). Self-lists like `worker_size`.
+worker_startup:
+    - "scripts/check-worker-startup.js"
+    - "worker-startup.json"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
 # The non-JS SDK conformance suites. `protocol/**` is listed because the golden frames
 # under `protocol/fixtures/` ARE the contract those SDKs are tested against: a wire
 # change lands there first, and this is the only gate catching a port that drifts off
@@ -244,18 +300,23 @@ worker_size:
 sdks:
     - "sdks/**"
     - "protocol/**"
-    - "shared/wire-codec.ts"
-    - "shared/stable-key.ts"
+    - "packages/wire/src/wire-codec.ts"
+    - "shared/is-plain-object.ts"
+    - "packages/wire/src/stable-key.ts"
     # The generator too: a target template hardcodes the runtime's call signatures, so
     # an edit here breaks every generated SDK while every other gate stays green.
     - "packages/codegen/src/sdk/**"
+    # And the spec `generated-check.sh` generates its second suite from. It is the
+    # emitter's golden, so a change to how a validator schemas (the `v.bigint()`
+    # spelling that once went unnoticed) lands here when the golden is recaptured.
+    - "packages/codegen/__tests__/fixtures/sdk-surface/**"
     # And the CLI the job invokes: the generate-and-build step shells out to
     # `sdk generate`, so a change there breaks every leg while matching no filter.
     - "packages/cli/src/commands/sdk/**"
     # The normative codec's base64 and the key composition from `protocol/README.md`
     # §3 — a change to either is a wire change every port must mirror.
     - "shared/base64.ts"
-    - "shared/wire-key.ts"
+    - "packages/wire/src/wire-key.ts"
     # The batch transport's entry shape and its `MAX_BATCH_ENTRIES` cap, which every
     # port mirrors as its own literal. `scripts/check-batch-cap-drift.js` reconciles the
     # values; this listing is what re-runs the ports against the fixtures when the
@@ -293,6 +354,26 @@ templates:
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
 
+# The Expo leg of the scaffold matrix, split out because its `pnpm install` pulls
+# the react-native/expo graph and nothing else in the matrix shares it. Narrower
+# than `templates` ON PURPOSE: editing another template (say `templates/next`)
+# cannot break this one, so it should not pay for it.
+#
+# What CAN break it is still all here — the packages it consumes, the inlined
+# `shared/` sources, its own tree, the harness, and the lockfiles that decide
+# what its install resolves. Keep this in step with `templates` for everything
+# except `templates/**` and `registry/**`; a path that belongs in both and is
+# only in `templates` reopens the hole this leg exists to close.
+templates_expo:
+    - "templates/expo/**"
+    - "packages/**"
+    - "shared/**"
+    - "scripts/template-build-smoke.sh"
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
 # The two batch caps — `MAX_BATCH_ENTRIES` (shared/batch-wire.ts) and `MAX_BATCH_BYTES`
 # (packages/client/src/replay.ts, derived from the worker's own body cap in
 # packages/runtime/src/body-readers.ts) — vs the literal every non-JS port,
@@ -311,11 +392,36 @@ batch_cap:
     - ".github/file-filters.yml"
 
 # packages/platform-node/docs/index.mdx's capability table vs NODE_CAPABILITIES in
-# packages/platform/src/capabilities.ts. Separate from `packages` per the self-listing
+# packages/platform/src/capabilities/node.ts. Separate from `packages` per the self-listing
 # rule at the top.
 node_capabilities_docs:
-    - "packages/platform/src/capabilities.ts"
+    - "packages/platform/src/capabilities/node.ts"
     - "packages/platform-node/docs/index.mdx"
     - "scripts/check-node-capabilities-docs.js"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
+
+# The `test-celld` job: a live celld (GitHub release), moto (pipx) and a Docker Hub
+# image, so it runs only when something it can observe changes — the packages its
+# harness (packages/platform-celld/__tests__/celld) builds on, the inlined `shared/`
+# source, and the lockfile — plus its own workflow and this file, per the self-listing
+# rule above.
+celld:
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - "shared/**"
+    - "packages/bindings/**"
+    - "packages/config/**"
+    - "packages/container/**"
+    - "packages/d1/**"
+    - "packages/platform/**"
+    - "packages/platform-celld/**"
+    - "packages/platform-cloudflare/**"
+    - "packages/queue/**"
+    - "packages/shard-engine/**"
+    - "packages/sql-store/**"
+    - "packages/storage/**"
+    - "packages/workflow/**"
+    - "packages/wire/**"

@@ -1,5 +1,6 @@
 import { tagMaskMiddleware, unionMaskColumns } from "../mask/policy-tag";
 import { readRlsTags, tagRlsMiddleware } from "../rls/policy-tag";
+import { isPerDispatchMiddleware, tagPerDispatchMiddleware } from "./per-dispatch-tag";
 import runMiddlewareChain from "./run-middleware";
 import type { Middleware, MiddlewareNext } from "./types";
 
@@ -55,6 +56,16 @@ const composeMiddleware = <ContextIn, ContextOut>(chain: ReadonlyArray<Middlewar
 
     if (columns) {
         tagMaskMiddleware(composed, { columns });
+    }
+
+    // Re-stamped for the same reason and with the same consequence if forgotten:
+    // the builder reads the per-dispatch mark off the DIRECT `.use()` elements,
+    // so a `protectPublic({ rateLimit })` bundle that lost it would leave the
+    // procedure looking cacheable — and a reactive-cache hit answers without
+    // running the chain, so the limiter would meter one dispatch out of however
+    // many the memo serves.
+    if (chain.some((middleware) => isPerDispatchMiddleware(middleware))) {
+        tagPerDispatchMiddleware(composed);
     }
 
     return composed;

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/ai",
-    "version": "1.0.0-alpha.78",
+    "version": "1.0.0-alpha.153",
     "description": "Workers AI helper for Lunora: provider-agnostic AI SDK access from functions, Workers AI by default",
     "keywords": [
         "ai",
@@ -43,6 +43,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./create": {
+            "types": "./dist/create.d.ts",
+            "import": "./dist/create.mjs"
+        },
         "./rag": {
             "types": "./dist/rag/index.d.ts",
             "import": "./dist/rag/index.mjs"
@@ -67,36 +71,25 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.35",
+        "@ai-sdk/anthropic": "catalog:ai",
+        "@ai-sdk/google": "catalog:ai",
+        "@ai-sdk/openai": "catalog:ai",
+        "@ai-sdk/provider-utils": "catalog:ai",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/wire": "1.0.0-alpha.3",
         "ai": "catalog:ai",
         "workers-ai-provider": "catalog:ai"
     },
     "devDependencies": {
-        "@ai-sdk/anthropic": "catalog:ai",
-        "@ai-sdk/openai": "catalog:ai",
-        "@cloudflare/vitest-plugin": "catalog:cloudflare",
-        "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/search-core": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
+        "sqlite-vec": "catalog:sql",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test",
-        "wrangler": "catalog:cloudflare"
-    },
-    "peerDependencies": {
-        "@ai-sdk/anthropic": "^4.0.0",
-        "@ai-sdk/openai": "^4.0.0"
-    },
-    "peerDependenciesMeta": {
-        "@ai-sdk/anthropic": {
-            "optional": true
-        },
-        "@ai-sdk/openai": {
-            "optional": true
-        }
+        "vitest": "catalog:test"
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

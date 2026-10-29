@@ -2,7 +2,7 @@ import { Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
 import discoverSchema from "../../src/discover/schema";
-import { emitDataModel } from "../../src/emit";
+import { emitDataModel, emitDrizzleSchema, emitShard } from "../../src/emit";
 
 /**
  * Discovery of the two table modes this branch added: `.commitOrdered()` and
@@ -81,6 +81,95 @@ describe("discoverSchema — table modes", () => {
 
             expect(schema.tables[0]?.commitOrdered).toBe(false);
             expect(emitDataModel(schema)).not.toContain("_commitSeq");
+        });
+    });
+
+    describe(".timestamps()", () => {
+        const TABLE = "{ status: v.string() }";
+        const withTimestamps = `
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({ orders: defineTable(${TABLE}).timestamps() });
+        `;
+        // The column `.timestamps()` stands for, written out by hand.
+        const handWritten = `
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                orders: defineTable({ status: v.string(), updatedAt: v.timestamp().defaultNow().$onUpdateFn(() => Date.now()) }),
+            });
+        `;
+
+        it("is indistinguishable from declaring the column by hand", () => {
+            expect.assertions(4);
+
+            const sugar = discover(withTimestamps);
+            const manual = discover(handWritten);
+
+            // The same IR means the same Doc (required) / Insert (optional) split,
+            // the same schema-drift hash, and the same output from every emitter.
+            expect(sugar.tables[0]?.shape["updatedAt"]).toStrictEqual(manual.tables[0]?.shape["updatedAt"]);
+            expect(emitDataModel(sugar)).toBe(emitDataModel(manual));
+            expect(emitDrizzleSchema(sugar)).toStrictEqual(emitDrizzleSchema(manual));
+            expect(emitShard({ schema: sugar })).toBe(emitShard({ schema: manual }));
+        });
+
+        it.each([
+            [
+                "a field that is not a string literal",
+                'const F = "modifiedAt"; export const schema = defineSchema({ a: defineTable({ s: v.string() }).timestamps({ field: F }) });',
+                "string literal",
+            ],
+            [
+                "a second call",
+                'export const schema = defineSchema({ a: defineTable({ s: v.string() }).timestamps().timestamps({ field: "x" }) });',
+                "more than once",
+            ],
+            [
+                "the soft-delete field",
+                'export const schema = defineSchema({ a: defineTable({ s: v.string() }).softDelete({ field: "t" }).timestamps({ field: "t" }) });',
+                "both use",
+            ],
+            [
+                "a declared column that does not restamp",
+                "export const schema = defineSchema({ a: defineTable({ updatedAt: v.timestamp().defaultNow() }).timestamps() });",
+                "already declares it",
+            ],
+            [
+                "a declared column with no insert default",
+                "export const schema = defineSchema({ a: defineTable({ updatedAt: v.timestamp().$onUpdateFn(() => 1) }).timestamps() });",
+                "already declares it",
+            ],
+            [
+                "a declared column that is not a timestamp",
+                "export const schema = defineSchema({ a: defineTable({ updatedAt: v.string().$onUpdateFn(() => 'x') }).timestamps() });",
+                "already declares it",
+            ],
+            [
+                "options that are not an object literal",
+                'const O = { field: "modifiedAt" }; export const schema = defineSchema({ a: defineTable({ s: v.string() }).timestamps(O) });',
+                "object literal",
+            ],
+        ])("refuses %s, as the runtime builder does", (_label, source, message) => {
+            expect.assertions(1);
+
+            expect(() => discover(`import { defineSchema, defineTable, v } from "@lunora/server"; ${source}`)).toThrow(message);
+        });
+
+        it("honors a custom field and keeps a user-declared column", () => {
+            expect.assertions(2);
+
+            const schema = discover(`
+                import { defineSchema, defineTable, v } from "@lunora/server";
+
+                export const schema = defineSchema({
+                    a: defineTable({ status: v.string() }).timestamps({ field: "modifiedAt" }),
+                    b: defineTable({ updatedAt: v.timestamp().defaultNow().$onUpdateFn(() => 1) }).timestamps(),
+                });
+            `);
+
+            expect(schema.tables[0]?.shape["modifiedAt"]?.kind).toBe("timestamp");
+            expect(schema.tables[1]?.shape["updatedAt"]?.column?.hasOnUpdate).toBe(true);
         });
     });
 

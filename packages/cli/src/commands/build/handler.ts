@@ -1,17 +1,24 @@
-import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+
+import type { DevProcessSpawner } from "@lunora/config";
+import { DEFAULT_BUNDLE_META_PATH, resolveLazyFunctions } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
+import projectRootFor from "../../util/project-root";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
-import type { DeployCommandResult } from "../deploy/handler";
 import { runDeployCommand } from "../deploy/handler";
+import type { DeployCommandResult } from "../deploy/types";
 import type { BundleSize } from "./bundle-size";
-import { measureBundle } from "./bundle-size";
+import { measureBundle, WORKER_SIZE_LIMIT_BYTES } from "./bundle-size";
+import { viteBundleMetaPath } from "./framework-build";
 import type { BuildOptions } from "./index";
 
 /** Default artifact directory — gitignored alongside the other `.lunora/` state. */
@@ -38,10 +45,18 @@ interface BuildCommandOptions {
      */
     emitBindings?: string;
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
+    /** `false` skips the vite/rsbuild client build even when wrangler reads its output. */
+    frameworkBuild?: boolean;
+    /** Opt into per-module lazy function imports. */
+    lazyFunctions?: boolean;
     logger: Logger;
     /** Directory the bundled worker is written to (default `.lunora/build`). */
     outDir?: string;
+    /** Starts the smoke check's `wrangler dev`; the deploy command's `smokeLauncher` option, passed through unchanged. */
+    smokeLauncher?: DevProcessSpawner;
+    /** `false` skips evaluating lazy function modules before the bundle is written. */
+    smokeLoad?: boolean;
     spawner?: Spawner;
 
     /**
@@ -54,7 +69,7 @@ interface BuildCommandOptions {
 
     /**
      * Deploy target the artifact is built for. Defaults to `"target"` in
-     * `lunora.json`, then `"cloudflare"`. `build` is the artifact half of the
+     * `lunora.config.*`, then `"cloudflare"`. `build` is the artifact half of the
      * `lunora build` → `lunora deploy --prebuilt` CI split, so without this that
      * split can only ever produce a default-target artifact.
      */
@@ -71,6 +86,19 @@ interface BuildCommandResult extends DeployCommandResult {
 }
 
 /**
+ * The `--format json` payload. The weight of what was produced is what a CI
+ * consumer runs this command for, so `build` reports it rather than delegating
+ * to deploy's payload, which has no field to carry it.
+ */
+interface BuildCommandData {
+    bundle?: BundleSize;
+    deployment?: DeployCommandResult["deployment"];
+    /** Where the bundle was written. */
+    outDir: string;
+    validation: DeployCommandResult["validation"];
+}
+
+/**
  * `defaultSpawner` with every child's stdout folded into stderr.
  *
  * `build` takes over its own `--format json` document (below), which means the
@@ -83,6 +111,26 @@ const stderrOnlySpawner: Spawner = async (descriptor) => defaultSpawner({ ...des
 /** Bundle sizes are always kilobytes-and-up; one unit keeps the two halves comparable at a glance. */
 const kib = (bytes: number): string => `${(bytes / 1024).toFixed(1)} KiB`;
 
+// What the out-dir holds, by name, size and mtime. Taken before and after a run, it shows whether the run rewrote anything, without reading the clock.
+const outDirectoryFingerprint = (directory: string): string => {
+    if (!existsSync(directory)) {
+        return "";
+    }
+
+    return readdirSync(directory, { encoding: "utf8", recursive: true })
+        .map((name) => {
+            try {
+                const stat = lstatSync(join(directory, name));
+
+                return `${name}:${String(stat.size)}:${String(stat.mtimeMs)}`;
+            } catch {
+                // Removed between listing and reading: its absence is part of what changed.
+                return `${name}:gone`;
+            }
+        })
+        .join("\n");
+};
+
 /**
  * Build the Worker without deploying: this is `deploy` in its dry-run +
  * `--outdir` mode, so it reuses the entire pre-deploy pipeline (codegen, the
@@ -91,54 +139,82 @@ const kib = (bytes: number): string => `${(bytes / 1024).toFixed(1)} KiB`;
  */
 const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildCommandResult> => {
     const outDirectory = options.outDir ?? DEFAULT_OUT_DIR;
-    const jsonMode = isJsonFormat(options.format);
+    const jsonMode = options.format === "json";
 
-    // `build` owns its `--format json` document instead of delegating to
-    // deploy's: the bundle measurement below is what a CI consumer runs this
-    // command for, and the deploy result has no field to carry it. Everything
-    // human therefore goes to stderr from here on.
-    const logger = loggerForFormat(options.format, options.logger);
-    const emit = (result: BuildCommandResult): BuildCommandResult => {
-        if (jsonMode) {
-            printJson(result);
+    // `build` owns its `--format json` payload instead of delegating to deploy's:
+    // the bundle measurement below is what a CI consumer runs this command for,
+    // and the deploy result has no field to carry it.
+    const { logger } = options;
+    const projectRoot = options.cwd ?? process.cwd();
+
+    // The Vite child writes a per-run file, but the out-dir destination keeps its stable name. Both are cleared first, so a leftover
+    // from an earlier run cannot stand in for this run's output.
+    const destination = resolve(projectRoot, outDirectory, "bundle-meta.json");
+    const viteMeta = viteBundleMetaPath(projectRoot, randomUUID());
+
+    // Held in memory so a failed run can put back the metafile it did not replace.
+    const previous = existsSync(destination) ? readFileSync(destination) : undefined;
+
+    rmSync(destination, { force: true });
+    rmSync(viteMeta, { force: true });
+
+    const outDirectoryPath = resolve(projectRoot, outDirectory);
+    const outBefore = outDirectoryFingerprint(outDirectoryPath);
+    let result: DeployCommandResult | undefined;
+
+    try {
+        result = await runDeployCommand({
+            allowSchemaDrift: options.allowSchemaDrift,
+            apiSpec: options.apiSpec,
+            bundleMetaPath: viteMeta,
+            frameworkBuild: options.frameworkBuild,
+            lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+            // So the drift gate names `build` and offers only the flags `build`
+            // registers — it does NOT accept `--update-schema-baseline`, because it
+            // publishes nothing and re-blessing a baseline for an artifact that never
+            // shipped is what lets a breaking change through on the retry.
+            commandName: "build",
+            clientBuildOutputJson: jsonMode,
+            cwd: options.cwd,
+            dryRun: true,
+            // The requirements document has to describe the PROVISIONED config, so
+            // deploy writes it inside its own dry-run rollback window rather than
+            // handing it back here, where the committed config is already restored.
+            emitBindings: options.emitBindings,
+            format: undefined,
+            interactive: jsonMode ? false : undefined,
+            logger,
+            outDir: outDirectory,
+            smokeLauncher: options.smokeLauncher,
+            smokeLoad: options.smokeLoad,
+            spawner: options.spawner ?? (jsonMode ? stderrOnlySpawner : undefined),
+            strictAdvisories: options.strictAdvisories,
+            target: options.target,
+        });
+
+        // Wrangler writes its own metafile into the out-dir for a worker it bundles. A
+        // Vite-built worker is uploaded as Vite's output, so wrangler leaves that file
+        // absent and the Vite plugin's copy stands in, under the same name.
+        // A prebuilt worker has no per-run file; the plain `vite build` that produced it left its metafile at the default path.
+        const source = options.frameworkBuild === false ? join(projectRoot, DEFAULT_BUNDLE_META_PATH) : viteMeta;
+
+        if (result.code === 0 && !existsSync(destination) && existsSync(source)) {
+            mkdirSync(dirname(destination), { recursive: true });
+            copyFileSync(source, destination);
         }
+    } finally {
+        rmSync(viteMeta, { force: true });
 
-        return result;
-    };
-
-    const formatError = validateOutputFormat("build", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: 1, descriptor: undefined, error: formatError, validation: { problems: [], wranglerPath: undefined } };
+        // `destination` is empty unless this run wrote it, so a failed run puts the previous file back only where nothing new landed
+        // and the out-dir was not rewritten.
+        if (previous !== undefined && !existsSync(destination) && outDirectoryFingerprint(outDirectoryPath) === outBefore && result?.code !== 0) {
+            mkdirSync(dirname(destination), { recursive: true });
+            writeFileSync(destination, previous);
+        }
     }
 
-    const result = await runDeployCommand({
-        allowSchemaDrift: options.allowSchemaDrift,
-        apiSpec: options.apiSpec,
-        // So the drift gate names `build` and offers only the flags `build`
-        // registers — it does NOT accept `--update-schema-baseline`, because it
-        // publishes nothing and re-blessing a baseline for an artifact that never
-        // shipped is what lets a breaking change through on the retry.
-        commandName: "build",
-        cwd: options.cwd,
-        dryRun: true,
-        // The requirements document has to describe the PROVISIONED config, so
-        // deploy writes it inside its own dry-run rollback window rather than
-        // handing it back here, where the committed config is already restored.
-        emitBindings: options.emitBindings,
-        format: undefined,
-        interactive: jsonMode ? false : undefined,
-        logger,
-        outDir: outDirectory,
-        spawner: options.spawner ?? (jsonMode ? stderrOnlySpawner : undefined),
-        strictAdvisories: options.strictAdvisories,
-        target: options.target,
-    });
-
     if (result.code !== 0) {
-        return emit(result);
+        return result;
     }
 
     logger.success(`build complete — bundle written to ${outDirectory}`);
@@ -150,32 +226,49 @@ const runBuildCommand = async (options: BuildCommandOptions): Promise<BuildComma
         // recognise would measure as the healthiest possible bundle.
         logger.warn(`could not weigh the bundle — nothing uploadable was found in ${outDirectory}`);
     } else {
-        logger.info(
-            `bundle: ${kib(bundle.rawBytes)} raw, ${kib(bundle.gzipBytes)} gzipped across ${String(bundle.files)} file(s) — ` +
-                `Cloudflare's Worker size limit (3 MB Free, 10 MB Paid) applies to the gzipped number`,
-        );
+        const percent = ((bundle.rawBytes / WORKER_SIZE_LIMIT_BYTES) * 100).toFixed(1);
+        const summary =
+            `bundle: ${kib(bundle.rawBytes)} raw across ${String(bundle.files)} file(s) — ${percent}% of Cloudflare's ` +
+            `64 MiB uncompressed Worker size limit (${kib(bundle.gzipBytes)} gzipped, for reference; there is no compressed limit)`;
+
+        // Measuring is reporting: an oversized bundle warns but never changes the
+        // exit code — `wrangler deploy` is what rejects it at upload.
+        if (bundle.rawBytes > WORKER_SIZE_LIMIT_BYTES) {
+            logger.warn(`${summary} — Cloudflare will reject this upload`);
+        } else {
+            logger.info(summary);
+        }
     }
 
-    return emit({ ...result, bundle });
+    return { ...result, bundle };
 };
 
 /** `lunora build` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<BuildOptions> = defineHandler<BuildOptions, BuildCommandData>(async ({ cwd: workingDirectory, format, logger, options }) => {
+    const cwd = projectRootFor(workingDirectory, options.root);
+
     const result = await runBuildCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         cwd,
         emitBindings: options.emitBindings,
-        format: options.format,
+        format,
+        frameworkBuild: options.frameworkBuild,
         logger,
         outDir: options.outDir,
+        smokeLoad: options.smokeLoad,
         strictAdvisories: options.strictAdvisories,
         target: options.target,
     });
 
-    return { code: result.code };
+    return {
+        code: result.code,
+        data: { bundle: result.bundle, deployment: result.deployment, outDir: options.outDir ?? DEFAULT_OUT_DIR, validation: result.validation },
+        error: result.error,
+    };
 });
 
 export { execute };
-export type { BuildCommandOptions, BuildCommandResult };
+export type { BuildCommandData, BuildCommandOptions, BuildCommandResult };
 export { runBuildCommand };

@@ -17,19 +17,22 @@
  *
  * One thing it is NOT free of is the dialect's NULL ordering. A keyset seek has
  * to place NULLs exactly where the ORDER BY does or a nullable ordered column
- * cannot be paged at all. {@link pivotCondition} fixes ONE placement for every
- * dialect — the SQLite/MySQL default, NULLs first ascending and last descending
- * — rather than branching on the engine, because the seek tree it returns is
- * compiled by a shared dialect-blind compiler. Postgres defaults the other way,
- * so `@lunora/sql-store` writes the placement out as an explicit
- * `NULLS FIRST`/`NULLS LAST` on the nullable keys of its ORDER BY; see
+ * cannot be paged at all. {@link pivotCondition} reads each key's placement — the
+ * SQLite/MySQL default (NULLs first ascending, last descending) unless the key
+ * carries an explicit one — and is the same on every dialect, because the seek
+ * tree it returns is compiled by a shared dialect-blind compiler. Postgres
+ * defaults the other way, so `@lunora/sql-store` writes the placement out as an
+ * explicit `NULLS FIRST`/`NULLS LAST` on the nullable keys of its ORDER BY; see
  * `compileOrderBySql` there.
  */
 import { LunoraError } from "@lunora/errors";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import type { OrderByInput, OrderKey, SortDirection, ValidatorLike } from "./schema-types";
+import { validatorAcceptsNull } from "../../../shared/accepts-null";
+import { readFieldPath } from "../../../shared/json-field-path";
+import type { NullPlacement, OrderByInput, OrderKey, SortDirection, ValidatorLike } from "./schema-types";
 import type { WhereInput } from "./where-types";
+import { SEEK_RANGE } from "./where-types";
 
 /** The implicit tiebreak appended to every sort so the order is total. */
 const TIEBREAK_FIELD = "id";
@@ -67,11 +70,13 @@ const NEVER_NULL_FIELDS = new Set(["_creationTime", "_id", "id"]);
  * `OR col IS NULL` arm, and that arm is what turns an index seek into a table
  * scan — so the answer has to come from the schema, not from a guess.
  *
- * Two spellings make a column nullable, and both have to be read: `.nullable()`
- * clears `column.notNull` and keeps the base kind, while `v.optional(inner)`
- * wraps it in a fresh `"optional"` validator whose own column meta is the
- * DEFAULT `notNull: true` — so an optional column that only checked `notNull`
- * would read as non-nullable and lose exactly the rows this arm exists for.
+ * Three spellings make a column nullable, and all have to be read: `.nullable()`
+ * clears `column.notNull` and keeps the base kind, `v.optional(inner)` wraps it
+ * in a fresh `"optional"` validator whose own column meta is the DEFAULT
+ * `notNull: true`, and `v.union(x, v.null())` / `v.any()` / `v.null()` parse
+ * `null` while keeping that same default flag (`validatorAcceptsNull`). A check
+ * that only read `notNull` would call each of them non-nullable and lose
+ * exactly the rows this arm exists for.
  *
  * A field the shape does not declare answers `true` (emit the arm, take the
  * slow plan). Both stores read undeclared fields out of a JSON document, where
@@ -91,7 +96,7 @@ const columnIsNullable = (field: string, shape: Record<string, ValidatorLike> | 
         return true;
     }
 
-    return validator.kind === "optional" || validator._meta?.column?.notNull === false;
+    return validator.kind === "optional" || validator._meta?.column?.notNull === false || validatorAcceptsNull(validator);
 };
 
 /** Boolean combinator keys in a `where` tree — never a column, so never a pin. */
@@ -183,6 +188,51 @@ interface OrderKeyConstraints {
 }
 
 /**
+ * Do this key's NULLs sort before its other values? The default is the SQLite/MySQL one — first
+ * ascending, last descending — unless the key carries an explicit placement.
+ */
+const nullsFirstOf = (key: Pick<OrderKey, "direction" | "nulls">): boolean => (key.nulls === undefined ? key.direction !== "desc" : key.nulls === "first");
+
+/** The ORDER BY suffix that states a NULL placement: the one spelling the SQL text of every dialect shares. */
+const nullsOrderSuffix = (nullsFirst: boolean): string => (nullsFirst ? " NULLS FIRST" : " NULLS LAST");
+
+/**
+ * Is `spec` a well-formed `{ sort, nulls }`? `orderBy` arrives from callers the type system does not
+ * reach (an RPC argument), so a malformed entry is refused loudly rather than silently sorted some
+ * other way.
+ */
+const isPlacementSpec = (spec: unknown): spec is { nulls: NullPlacement; sort: SortDirection } => {
+    if (typeof spec !== "object" || spec === null) {
+        return false;
+    }
+
+    const { nulls, sort } = spec as { nulls?: unknown; sort?: unknown };
+
+    return (sort === "asc" || sort === "desc") && (nulls === "first" || nulls === "last");
+};
+
+/**
+ * The sort key for one `orderBy` entry. A NULL placement is recorded only when it differs from the
+ * default AND the column can hold NULL, so otherwise the key is byte-identical to the one an
+ * un-annotated `orderBy` produces — and a column that never holds NULL never gets the clause that
+ * could cost its index.
+ */
+const orderKeyFor = (field: string, spec: OrderByInput[string], shape: Record<string, ValidatorLike> | undefined): OrderKey => {
+    if (spec !== "asc" && spec !== "desc" && !isPlacementSpec(spec)) {
+        throw new LunoraError("VALIDATION_ERROR", `orderBy "${field}": expected "asc", "desc" or { sort: "asc" | "desc", nulls: "first" | "last" }`);
+    }
+
+    const direction = typeof spec === "string" ? spec : spec.sort;
+    const nullable = columnIsNullable(field, shape);
+
+    if (typeof spec === "string" || !nullable || nullsFirstOf({ direction }) === (spec.nulls === "first")) {
+        return { direction, field, nullable };
+    }
+
+    return { direction, field, nullable, nulls: spec.nulls };
+};
+
+/**
  * Flatten the `{ field: dir }[]` authoring form into an ordered list of sort
  * keys. An absent or empty `orderBy` defaults to creation order, matching the
  * legacy reader.
@@ -204,7 +254,10 @@ const normalizeOrderKeys = (orderBy: OrderByInput[] | undefined, shape?: Record<
     let lastDirection: SortDirection = "asc";
 
     for (const entry of orderBy ?? []) {
-        for (const [field, direction] of Object.entries(entry)) {
+        for (const [field, spec] of Object.entries(entry)) {
+            const key = orderKeyFor(field, spec, shape);
+            const { direction } = key;
+
             lastDirection = direction;
             determined.add(field);
 
@@ -220,7 +273,7 @@ const normalizeOrderKeys = (orderBy: OrderByInput[] | undefined, shape?: Record<
                 continue;
             }
 
-            keys.push({ direction, field, nullable: columnIsNullable(field, shape) });
+            keys.push(key);
         }
     }
 
@@ -351,7 +404,7 @@ const encodeCursor = (record: Record<string, unknown>, keys: OrderKey[]): string
     // `where: { col: { eq: undefined } }` keeps failing loudly instead of
     // quietly becoming `col IS NULL`.
     // eslint-disable-next-line unicorn/no-null -- SQL NULL is the domain value a cursor carries, not a JS absence
-    const values: unknown[] = keys.map((key) => record[key.field] ?? null);
+    const values: unknown[] = keys.map((key) => readFieldPath(record, key.field) ?? null);
 
     values.push(record["_id"]);
 
@@ -425,11 +478,13 @@ const decodeCursor = (cursor: string): unknown[] => {
  * both UNKNOWN, so no comparator expresses either side of a NULL pivot, and none
  * matches a NULL row sitting on the far side of a non-null pivot — a nullable
  * ordered column cannot be paged without writing the ordering's NULL placement
- * out. The placement assumed here is the SQLite/MySQL default — NULLs FIRST
- * ascending, LAST descending — and every ORDER BY builder that pairs with this
+ * out. The placement is the key's own ({@link nullsFirstOf}): the SQLite/MySQL
+ * default — NULLs FIRST ascending, LAST descending — unless the caller asked for
+ * another with `{ sort, nulls }`. Every ORDER BY builder that pairs with this
  * seek has to agree with it (Postgres does not by default, so `sql-store` states
- * it explicitly). Hence a non-null row is on the wanted side of a NULL pivot exactly when
- * `ascending === wantLater`, and NULL rows are on the wanted side of a non-null
+ * it explicitly; MySQL has no syntax for it, so a non-default one is emulated).
+ * Hence a non-null row is on the wanted side of a NULL pivot exactly when
+ * `nullsFirst === wantLater`, and NULL rows are on the wanted side of a non-null
  * pivot exactly when it is not.
  *
  * `undefined` is the same pivot as `null`: a column absent from a document reads
@@ -438,12 +493,16 @@ const decodeCursor = (cursor: string): unknown[] => {
  */
 const pivotCondition = (column: OrderKey, value: unknown, wantLater: boolean, inclusive: boolean): WhereInput => {
     const { field } = column;
-    const nonNullWanted = (column.direction !== "desc") === wantLater;
+    // Which way the value comparison runs: later rows are greater under `asc`, smaller under `desc`.
+    const greaterWanted = (column.direction !== "desc") === wantLater;
+    // The NULL group lies on the side the seek is moving away from.
+    const nullsBehind = nullsFirstOf(column) === wantLater;
 
     // Only `null`: both a fresh cursor (normalised at mint) and a legacy one
     // (normalised in `decodeCursor`) carry SQL NULL by the time they reach here.
     if (value === null) {
-        if (nonNullWanted) {
+        // Non-null rows are on the wanted side of a NULL pivot when the NULL group is behind the seek.
+        if (nullsBehind) {
             // Inclusive at a NULL pivot is "the non-nulls, plus the NULL group itself" — every row.
             return inclusive ? { OR: [{ [field]: { isNull: false } }, { [field]: { isNull: true } }] } : { [field]: { isNull: false } };
         }
@@ -452,15 +511,19 @@ const pivotCondition = (column: OrderKey, value: unknown, wantLater: boolean, in
         return inclusive ? { [field]: { isNull: true } } : { OR: [] };
     }
 
-    let operator = nonNullWanted ? "gt" : "lt";
+    let operator = greaterWanted ? "gt" : "lt";
 
     if (inclusive) {
-        operator = nonNullWanted ? "gte" : "lte";
+        operator = greaterWanted ? "gte" : "lte";
     }
 
-    const comparison: WhereInput = { [field]: { [operator]: value } };
+    // `SEEK_RANGE`: the seek continues the ORDER BY, which sorts every JSON type of a path together.
+    const comparison: WhereInput = { [field]: { [operator]: value, [SEEK_RANGE]: true } };
 
-    if (nonNullWanted || !column.nullable) {
+    // NULL rows are on the wanted side of a non-null pivot when the NULL group is ahead of the seek.
+    // Otherwise a comparator reaches everything wanted, and a column that never holds NULL has
+    // nothing more to reach.
+    if (nullsBehind || !column.nullable) {
         return comparison;
     }
 
@@ -475,9 +538,10 @@ const pivotCondition = (column: OrderKey, value: unknown, wantLater: boolean, in
     // covering `(priority, id)` index: 9.3us seeking, 469us scanning. On the DO's
     // `json_extract` expression index the same shape went 23us -> 5033us.
     //
-    // `nonNullWanted` is `(direction !== "desc") === wantLater`, so the arm lands
-    // on EVERY `desc` pivot of the forward seek — "newest first", the dominant
-    // read shape — which is why an unconditional arm was not a corner case.
+    // Under the default placement the arm lands on EVERY `desc` pivot of the forward seek —
+    // "newest first", the dominant read shape — which is why an unconditional arm was not a corner case.
+    // A non-default placement (`asc` + `nulls: "last"`, `desc` + `nulls: "first"`) hits the same arm on every
+    // page after the first, so only the first page is served from the index walk.
     return { OR: [comparison, { [field]: { isNull: true } }] };
 };
 
@@ -662,14 +726,13 @@ export {
     encodeCursor,
     equalityPinnedFields,
     fromBase64,
-    invalidCursor,
     isLiveForCompanion,
     normalizeOrderKeys,
+    nullsFirstOf,
+    nullsOrderSuffix,
     type OrderKeyConstraints,
     softDeleteScope,
     tiebreakDirectionFor,
     toBase64,
     uniqueIndexFields,
 };
-
-export { type OrderByInput, type OrderKey, type QueryArgs, type QueryPage, type SortDirection } from "./schema-types";

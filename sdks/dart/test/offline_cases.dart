@@ -412,8 +412,14 @@ Future<void> caseGoldenBatchEntryCapMatchesProtocol() async {
 /// and each slot is classified exactly as a whole single-call response is.
 Future<void> caseGoldenOfflineFlushBatchesMultipleWrites() async {
   covers('offline_flush_batches_multiple_writes');
+  covers('offline_flush_unreadable_slot_is_retried');
 
   final case_ = _scenario('batchReplay');
+  // A slot the fixture no longer describes is a case that asserts nothing.
+  final unreadable = objectList(case_['slots']).where((slot) => slot['outcome'] == 'unreadable-error' && slot.containsKey('rawError')).length;
+
+  equals(unreadable, 1, 'batchReplay must carry one unreadable slot');
+
   final store = _RecordingPersistence();
   final queue = OfflineQueue(persistence: store);
   final poster = Poster();
@@ -446,6 +452,12 @@ Future<void> caseGoldenOfflineFlushBatchesMultipleWrites() async {
     for (final slot in objectList(case_['slots']))
       if (slot['outcome'] == 'ok')
         '{"id":${slot['id']},"body":{"result":null,"commitCursor":${slot['commitCursor']}}}'
+      // An `error` key holding a NON-object: no envelope to read a verdict out
+      // of, and no per-slot HTTP status to fall back on. Encoded from the
+      // fixture's own value, so a port cannot pass by answering itself a shape
+      // the spec does not describe.
+      else if (slot['outcome'] == 'unreadable-error')
+        '{"id":${slot['id']},"body":{"error":${jsonEncode(slot['rawError'])}}}'
       else
         '{"id":${slot['id']},"body":{"error":{"code":"${slot['code']}","message":"slot failed"}}}',
   ];
@@ -693,6 +705,181 @@ Future<void> casePreconditionFailureDiscardsBeforeReplay() async {
   equals(poster.paths.length, 0, 'nothing was sent for the discarded write');
 }
 
+/// The credential-shaped argument an online-only write carries; it must never
+/// reach the queue or the persistence adapter.
+const String _onlineOnlySecret = 'sentinel-secret-7731';
+
+/// With the socket down an online-only write is refused before anything is
+/// queued, persisted or sent.
+Future<void> caseOnlineOnlyRefusedWhenDisconnected() async {
+  covers('offline_online_only_refused_when_disconnected');
+  final store = MemoryPersistence();
+  final poster = Poster(result: 'null');
+  final client = LunoraClient(url: 'https://app.example', post: poster.call, offlineQueue: OfflineQueue(persistence: store, queueBeforeFirstConnect: true))
+    ..attachSocket((_) {})
+    ..setConnected(true)
+    ..setConnected(false);
+
+  // A subscription on the write's own path and args, primed with a server value, so
+  // an overlay the write applied would be displayed.
+  final args = <String, Object?>{'token': _onlineOnlySecret};
+  final seen = <Object?>[];
+
+  client.subscribe('auth:setPassword', args: args, onData: seen.add);
+  pushData(client, 'sub_1', <Object?>['a'], cursor: 1);
+
+  try {
+    await client.mutation(
+      'auth:setPassword',
+      args: args,
+      onlineOnly: true,
+      optimistic: (current) => <Object?>[...(current! as List<Object?>), 'c'],
+    );
+    failures.add('an online-only write must be refused while disconnected');
+  } on LunoraApiException catch (error) {
+    equals(error.code, offlineNotQueued, 'the refusal names why');
+  }
+
+  equals(client.pendingWrites, 0, 'nothing is queued');
+  equals(store.records.length, 0, 'the persistence adapter never sees the write');
+  equals(poster.paths.length, 0, 'and a refused write never reaches the wire');
+  check(seen.every((value) => canonical(value) != canonical(<Object?>['a', 'c'])), "a refused write's overlay is never displayed");
+}
+
+/// A socket that drops inside the write's own optimistic callback refuses an online-only write
+/// the same way one that was down before it began does: nothing is sent or queued.
+Future<void> caseOnlineOnlyRefusedWhenDisconnectedInCallback() async {
+  covers('offline_online_only_refused_when_disconnected_in_callback');
+  final store = MemoryPersistence();
+  final poster = Poster(result: 'null');
+  final client = LunoraClient(url: 'https://app.example', post: poster.call, offlineQueue: OfflineQueue(persistence: store, queueBeforeFirstConnect: true))
+    ..attachSocket((_) {})
+    ..setConnected(true);
+
+  // The optimistic callback runs only for a subscription the write matches, so one is primed first.
+  final args = <String, Object?>{'token': _onlineOnlySecret};
+  client.subscribe('auth:setPassword', args: args, onData: (_) {});
+  pushData(client, 'sub_1', <Object?>['a'], cursor: 1);
+
+  try {
+    await client.mutation(
+      'auth:setPassword',
+      args: args,
+      onlineOnly: true,
+      optimistic: (current) {
+        client.setConnected(false);
+
+        return <Object?>[...(current! as List<Object?>), 'c'];
+      },
+    );
+    failures.add('an online-only write whose socket drops in its callback must be refused');
+  } on LunoraApiException catch (error) {
+    equals(error.code, offlineNotQueued, 'the refusal names why');
+  }
+
+  equals(client.pendingWrites, 0, 'nothing is queued');
+  equals(store.records.length, 0, 'the persistence adapter never sees the write');
+  equals(poster.paths.length, 0, 'and the refused write never reaches the wire');
+}
+
+/// With the socket up an online-only write is sent normally and commits.
+Future<void> caseOnlineOnlySendsWhenConnected() async {
+  covers('offline_online_only_sends_when_connected');
+  final store = MemoryPersistence();
+  final poster = Poster(result: 'null');
+  final client = LunoraClient(url: 'https://app.example', post: poster.call, offlineQueue: OfflineQueue(persistence: store, queueBeforeFirstConnect: true))
+    ..attachSocket((_) {})
+    ..setConnected(true);
+
+  await client.mutation('auth:setPassword', args: <String, Object?>{'token': _onlineOnlySecret}, onlineOnly: true);
+
+  equals(poster.paths.length, 1, 'the write is sent once');
+  check(jsonEncode(poster.bodies).contains(_onlineOnlySecret), 'with its arguments on the wire');
+  equals(store.records.length, 0, 'and is never persisted');
+}
+
+/// A normal write made with the socket down still queues beside an online-only one.
+Future<void> caseOnlineOnlyLeavesNormalWritesQueued() async {
+  covers('offline_online_only_leaves_normal_writes_queued');
+  final store = MemoryPersistence();
+  final poster = Poster(result: 'null');
+  final client = LunoraClient(url: 'https://app.example', post: poster.call, offlineQueue: OfflineQueue(persistence: store, queueBeforeFirstConnect: true));
+
+  client.mutation('messages:send', args: <String, Object?>{'text': 'hi'});
+
+  equals(client.pendingWrites, 1, 'a normal write queues while disconnected');
+  equals(store.records.length, 1, 'and is persisted');
+  equals(poster.paths.length, 0, 'and nothing is sent');
+}
+
+/// An online-only write that never reached the server while the socket is down is
+/// refused as `OFFLINE_NOT_QUEUED`, with the transport error as its cause, after its
+/// overlay is rolled back. A coded rejection surfaces as itself.
+Future<void> caseOnlineOnlyTransportFailureRefused() async {
+  covers('offline_online_only_transport_failure_refused');
+  final store = _RecordingPersistence();
+  final poster = Poster(result: 'null')..transportFailures = 1;
+  final client = LunoraClient(url: 'https://app.example', post: poster.call, offlineQueue: OfflineQueue(persistence: store));
+
+  final args = <String, Object?>{'token': _onlineOnlySecret};
+  final seen = <Object?>[];
+
+  client.subscribe('auth:setPassword', args: args, onData: seen.add);
+  pushData(client, 'sub_1', <Object?>['a'], cursor: 1);
+
+  try {
+    await client.mutation(
+      'auth:setPassword',
+      args: args,
+      onlineOnly: true,
+      optimistic: (current) => <Object?>[...(current! as List<Object?>), 'c'],
+    );
+    failures.add('a transport failure on an online-only write must be refused');
+  } on LunoraApiException catch (error) {
+    equals(error.code, offlineNotQueued, 'the refusal names why');
+    check(error.cause is SocketFailure, 'the transport error is kept as the cause');
+  }
+
+  equals(poster.paths.length, 1, 'the write was sent once');
+  equals(client.pendingWrites, 0, 'nothing is queued');
+  equals(store.appended.length, 0, 'nothing is persisted');
+  check(seen.any((value) => canonical(value) == canonical(<Object?>['a', 'c'])), 'the overlay was shown while the write was in flight');
+  equals(canonical(seen.last), canonical(<Object?>['a']), 'and rolled back once the write was refused');
+
+  poster.codedFailures = 1;
+
+  try {
+    await client.mutation('auth:setPassword', args: args, onlineOnly: true);
+    failures.add('a coded rejection must surface');
+  } on LunoraApiException catch (error) {
+    equals(error.code, 'CONFLICT', 'a coded rejection surfaces as itself');
+    check(error.cause == null, 'and is not a transport refusal');
+  }
+
+  // Once the socket is up, the same failure is the server's to report, not a refusal.
+  client.attachSocket((_) {});
+  client.setConnected(true);
+  poster.transportFailures = 1;
+
+  try {
+    await client.mutation('auth:setPassword', args: args, onlineOnly: true);
+    failures.add('a failure while connected must surface');
+  } on SocketFailure {
+    // Surfaced as the raw throw, as before.
+  }
+
+  // An argument the codec refuses never left the process, so it surfaces as itself, not as a refusal.
+  final other = Poster(result: 'null');
+  final disconnected = LunoraClient(url: 'https://app.example', post: other.call, offlineQueue: OfflineQueue(persistence: _RecordingPersistence()));
+
+  try {
+    await disconnected.mutation('auth:setPassword', args: <String, Object?>{'token': Object()}, onlineOnly: true);
+    failures.add('an unencodable argument must surface');
+  } on WireFormatException {
+    equals(other.paths.length, 0, 'and nothing was sent');
+  }
+}
+
 /// Durable order is authoritative: a prior session's write is older than
 /// anything from this one, so it must replay first.
 Future<void> caseHydrateRestoresAheadOfThisSession() async {
@@ -744,21 +931,17 @@ Future<void> caseIdentityChangeDiscardsQueuedWrites() async {
 }
 
 /// The identity stamp is a digest, not the token: an app's queue file must not
-/// become somewhere a bearer token sits at rest. Values captured from the
-/// reference client, so the two cannot drift apart silently.
-void caseTokenDigestMatchesTheReferenceClient() {
-  const expectations = <(String, String)>[
-    ('', '0:ztntfp:45h'),
-    ('a', '1:1r9wi7g:3t3a'),
-    ('token-abc', '9:6xtdsz:ku9cs9'),
-    ('eyJhbGciOiJIUzI1NiJ9.payload.sig', 'w:t846r5:1i09z6p'),
-    // A surrogate pair, because the digest walks code UNITS and a rune-wise
-    // walk would silently produce a different value here and nowhere else.
-    ('\u{1F511}ünïcode', '9:zq7trr:4ipgmf'),
-  ];
+/// become somewhere a bearer token sits at rest. The values are the reference
+/// client's, read from the shared fixture every port asserts, so none can
+/// drift from it silently.
+Future<void> caseTokenDigestMatchesTheReferenceClient() async {
+  covers('offline_unset_identity_stamps_token_digest');
 
-  for (final (token, want) in expectations) {
-    equals(LunoraClient(url: 'https://app.example', authToken: token).identityFingerprint(), want, 'digest of a ${token.length}-unit token');
+  for (final raw in _scenario('tokenIdentity')['digests']! as List<Object?>) {
+    final spec = raw! as Map<String, Object?>;
+    final token = spec['token']! as String;
+
+    equals(LunoraClient(url: 'https://app.example', authToken: token).identityFingerprint(), spec['digest'], 'digest of a ${token.length}-unit token');
   }
 
   equals(LunoraClient(url: 'https://app.example').identityFingerprint(), null, 'no token is the signed-out identity');
@@ -767,6 +950,39 @@ void caseTokenDigestMatchesTheReferenceClient() {
     'subj:user_1',
     'a subject wins over the token, so a refresh keeps the queue',
   );
+
+  // The account switch: with no subject, a write queued under one token is
+  // never sent with another, and replays under the one it was queued with.
+  final tokenSwitch = _scenario('tokenIdentity')['accountSwitch']! as Map<String, Object?>;
+  final queuedUnder = tokenSwitch['queuedUnder']! as String;
+
+  for (final flushedUnder in <String>[tokenSwitch['flushedUnder']! as String, queuedUnder]) {
+    final poster = Poster(result: 'null');
+    final client = LunoraClient(url: 'https://app.example', post: poster.call, authToken: queuedUnder)
+      ..attachSocket((_) {})
+      ..setConnected(true)
+      ..setConnected(false);
+    final pending = client.mutation('messages:send');
+
+    client
+      ..authToken = flushedUnder
+      ..setConnected(true);
+
+    if (flushedUnder == queuedUnder) {
+      await pending;
+      equals(canonical(poster.headers.map((headers) => headers['authorization']).toList()), canonical(<Object?>['Bearer $queuedUnder']),
+          'the same token replays the write');
+    } else {
+      try {
+        await pending;
+        failures.add('a write queued under another token should reject');
+      } on LunoraApiException catch (error) {
+        equals(error.code, offlineIdentityChanged, 'the discarded write names why');
+      }
+
+      equals(poster.paths.length, 0, 'the previous token\'s write is never sent with the next one');
+    }
+  }
 }
 
 /// A reconnect that lands WHILE a flush is running must not be dropped: the
@@ -1176,4 +1392,273 @@ Future<void> caseRateLimitedBatchSlotIsTransient() async {
   equals(committed.error, null, 'and its sibling still commits');
   equals(canonical(_ids(client.offlineQueue.items)), canonical(<String>['m-limited']), 'only the rate-limited write is re-queued');
   equals(retryAfter, maxRetryAfterMs, 'the delay is honoured but clamped: 90000 asked, 60000 held');
+}
+
+/// Timers the test advances by hand. Only NON-zero timers are captured, so the
+/// `Future.delayed(Duration.zero)` turns a case awaits still run for real.
+class _FakeTimers {
+  final List<({void Function() callback, _FakeTimer timer})> pending = <({void Function() callback, _FakeTimer timer})>[];
+  final List<int> delays = <int>[];
+
+  ZoneSpecification get spec => ZoneSpecification(
+        createTimer: (self, parent, zone, duration, callback) {
+          if (duration == Duration.zero) {
+            return parent.createTimer(zone, duration, callback);
+          }
+
+          final timer = _FakeTimer();
+
+          delays.add(duration.inMilliseconds);
+          pending.add((callback: zone.bindCallback(callback), timer: timer));
+
+          return timer;
+        },
+      );
+
+  List<_FakeTimer> get live => <_FakeTimer>[
+        for (final entry in pending)
+          if (entry.timer.isActive) entry.timer,
+      ];
+
+  /// Fire every live timer, as though its whole delay had passed.
+  void fire() {
+    final due = pending.where((entry) => entry.timer.isActive).toList();
+
+    pending.clear();
+
+    for (final entry in due) {
+      entry.timer.cancel();
+      entry.callback();
+    }
+  }
+}
+
+class _FakeTimer implements Timer {
+  bool _active = true;
+
+  @override
+  void cancel() => _active = false;
+
+  @override
+  bool get isActive => _active;
+
+  @override
+  int get tick => 0;
+}
+
+Future<void> _settle() async {
+  for (var turn = 0; turn < 10; turn += 1) {
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
+/// A transient refusal on a HEALTHY socket is re-flushed on a timer.
+///
+/// A 429 or a 503 leaves the socket open, so nothing reconnects to flush again:
+/// the write replays after the server's `retryAfterMs`, or — lacking one — a
+/// bounded jittered backoff, and each retry waits for its timer (no hot loop).
+/// Timers are faked through the zone, so no case waits in real time.
+Future<void> caseTransientRefusalOnAHealthySocketIsRetried() async {
+  covers('offline_flush_replays_and_confirms_optimistic');
+
+  const limited = LunoraHttpResponse(429, '{"error":{"code":"TOO_MANY_REQUESTS","message":"slow down","data":{"retryAfterMs":100}}}');
+  const unavailable = LunoraHttpResponse(503, '{"error":{"code":"SHARD_UNAVAILABLE","message":"try again"}}');
+
+  for (final (label, refusals) in <(String, List<LunoraHttpResponse>)>[
+    ('hinted 429', <LunoraHttpResponse>[limited]),
+    ('hintless 503', <LunoraHttpResponse>[unavailable, unavailable, unavailable]),
+  ]) {
+    final timers = _FakeTimers();
+
+    await runZoned(zoneSpecification: timers.spec, () async {
+      var posts = 0;
+
+      Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+        posts += 1;
+
+        return posts <= refusals.length ? refusals[posts - 1] : const LunoraHttpResponse(200, '{"result":null}');
+      }
+
+      final client = LunoraClient(
+        url: 'https://app.example',
+        post: post,
+        offlineQueue: OfflineQueue(persistence: MemoryPersistence(), queueBeforeFirstConnect: true),
+      );
+      final pending = Settled(client.mutation('messages:send', mutationId: 'm-$label'));
+
+      client
+        ..attachSocket((_) {})
+        ..setConnected(true);
+      await _settle();
+
+      for (var refused = 1; refused <= refusals.length; refused += 1) {
+        equals(posts, refused, '$label: nothing posts until the timer fires');
+        equals(timers.live.length, 1, '$label: one retry is scheduled, not a loop');
+        timers.fire();
+        await _settle();
+      }
+
+      await pending.done;
+      equals(pending.error, null, '$label: the write commits on the retry');
+      equals(posts, refusals.length + 1, '$label: once per timer');
+      equals(timers.live.length, 0, '$label: a committed write schedules nothing more');
+
+      if (label == 'hinted 429') {
+        equals(canonical(timers.delays), canonical(<int>[100]), '$label: the hint is the delay');
+      } else {
+        check(timers.delays[0] >= 500 && timers.delays[0] <= 1000, '$label: first backoff in [500, 1000], got ${timers.delays}');
+        check(timers.delays[1] >= 1000 && timers.delays[1] <= 2000, '$label: then [1000, 2000], got ${timers.delays}');
+        check(timers.delays[2] >= 2000 && timers.delays[2] <= 4000, '$label: then [2000, 4000], got ${timers.delays}');
+      }
+
+      client.close();
+    });
+  }
+}
+
+/// A retry is an ordinary flush pass, judged against the token held when it
+/// fires: with no subject the write is stamped with the token's digest, so a
+/// retry that fires after the token was cleared holds it rather than sending it
+/// with no bearer, and the same token set again replays it with that token.
+Future<void> caseRetryFlushIsGatedOnTheToken() async {
+  covers('offline_unset_identity_stamps_token_digest');
+
+  final timers = _FakeTimers();
+
+  await runZoned(zoneSpecification: timers.spec, () async {
+    final bearers = <String?>[];
+
+    Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+      bearers.add(headers['authorization']);
+
+      return bearers.length == 1
+          ? const LunoraHttpResponse(503, '{"error":{"code":"SHARD_UNAVAILABLE","message":"try again"}}')
+          : const LunoraHttpResponse(200, '{"result":null}');
+    }
+
+    final client = LunoraClient(
+      url: 'https://app.example',
+      post: post,
+      authToken: 'token-a',
+      offlineQueue: OfflineQueue(persistence: MemoryPersistence(), queueBeforeFirstConnect: true),
+    );
+    final pending = Settled(client.mutation('messages:send', mutationId: 'm-retry-gate'));
+
+    client
+      ..attachSocket((_) {})
+      ..setConnected(true);
+    await _settle();
+    equals(timers.live.length, 1, 'the 503 arms a retry');
+
+    client.authToken = null;
+    await _settle();
+    timers.fire();
+    await _settle();
+    equals(bearers.length, 1, 'held: the retry sends nothing once the token is gone');
+    equals(client.pendingWrites, 1, 'the write is still queued');
+
+    client.authToken = 'token-a';
+    await _settle();
+    await pending.done;
+    equals(pending.error, null, 'the same token replays the write');
+    equals(canonical(bearers), canonical(<Object?>['Bearer token-a', 'Bearer token-a']), 'every send carries token-a');
+
+    client.close();
+  });
+}
+
+/// The retry timer dies with the socket and with the client.
+Future<void> caseRetryTimerIsCancelledOnDisconnectAndClose() async {
+  covers('offline_flush_replays_and_confirms_optimistic');
+
+  final timers = _FakeTimers();
+
+  await runZoned(zoneSpecification: timers.spec, () async {
+    Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async =>
+        const LunoraHttpResponse(503, '{"error":{"code":"SHARD_UNAVAILABLE","message":"try again"}}');
+
+    final client = LunoraClient(
+      url: 'https://app.example',
+      post: post,
+      offlineQueue: OfflineQueue(persistence: MemoryPersistence(), queueBeforeFirstConnect: true),
+    );
+
+    unawaited(client.mutation('messages:send', mutationId: 'm-cancel').then((_) {}, onError: (_) {}));
+    client
+      ..attachSocket((_) {})
+      ..setConnected(true);
+    await _settle();
+    equals(timers.live.length, 1, 'a retry is scheduled');
+
+    client.setConnected(false);
+    equals(timers.live.length, 0, 'a dropped socket cancels it: the reconnect flushes');
+
+    client.setConnected(true);
+    await _settle();
+    equals(timers.live.length, 1, 'the reconnect flush schedules again');
+
+    client.close();
+    equals(timers.live.length, 0, 'close cancels it');
+  });
+}
+
+/// A retry that fires while another flush of its shard is running is folded into
+/// that flush. When the socket drops before that flush finishes, the retry's
+/// "already waited out the window" mark must go with the timer — or the next
+/// reconnect's flush skips a rate-limit window the server set in the meantime.
+Future<void> caseCancelledRetryDoesNotSkipTheRateLimitWindow() async {
+  covers('offline_flush_replays_and_confirms_optimistic');
+
+  final timers = _FakeTimers();
+
+  await runZoned(zoneSpecification: timers.spec, () async {
+    final held = Completer<void>();
+    var posts = 0;
+
+    Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+      posts += 1;
+
+      if (posts == 1) {
+        return const LunoraHttpResponse(503, '{"error":{"code":"SHARD_UNAVAILABLE","message":"try again"}}');
+      }
+
+      if (posts == 2) {
+        await held.future;
+
+        return const LunoraHttpResponse(429, '{"error":{"code":"TOO_MANY_REQUESTS","message":"slow down","data":{"retryAfterMs":60000}}}');
+      }
+
+      return const LunoraHttpResponse(200, '{"result":null}');
+    }
+
+    final client = LunoraClient(
+      url: 'https://app.example',
+      post: post,
+      offlineQueue: OfflineQueue(persistence: MemoryPersistence(), queueBeforeFirstConnect: true),
+    );
+
+    unawaited(client.mutation('messages:send', mutationId: 'm-window').then((_) {}, onError: (_) {}));
+    client
+      ..attachSocket((_) {})
+      ..setConnected(true);
+    await _settle();
+    equals(timers.live.length, 1, 'the 503 arms a retry');
+
+    final running = client.flushOfflineQueue();
+
+    await _settle();
+    equals(posts, 2, 'a second flush is waiting on its post');
+
+    timers.fire();
+    client.setConnected(false);
+    held.complete();
+    await running;
+    await _settle();
+
+    client.setConnected(true);
+    await _settle();
+    equals(posts, 2, 'the reconnect waits out the 60 s window the 429 set');
+
+    client.close();
+  });
 }

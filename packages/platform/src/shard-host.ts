@@ -30,22 +30,49 @@ export type SqlRow = Record<string, unknown>;
 /**
  * The result of one statement: a cursor over its rows.
  *
- * Every member here is required, because the engine uses all three and a host
- * that omits one fails at runtime rather than at compile time. That is not
- * hypothetical — an earlier revision of this contract made `toArray` optional
- * and offered a `rowsAffected` nothing reads, which meant a host could satisfy
- * the type and still be unusable.
+ * The three members the ENGINE uses are required, because a host that omits one
+ * fails at runtime rather than at compile time. That is not hypothetical — an
+ * earlier revision of this contract made `toArray` optional and offered a
+ * `rowsAffected` nothing reads, which meant a host could satisfy the type and
+ * still be unusable.
  *
  * Iteration is part of the contract because read paths stream cursors directly
  * rather than buffering; `toArray` is the buffered form, and `one` is the
  * exactly-one-row form used by lookups and aggregates.
+ *
+ * `columnNames` / `raw` are the exception and are deliberately optional: no
+ * engine path needs them, one admin read-back reports a better result when they
+ * are there, and that surface degrades explicitly when they are not. Requiring
+ * them would make a host unusable over a detail it can live without.
  */
 export interface ShardSqlCursor<Row = SqlRow> extends Iterable<Row> {
+    /**
+     * The result columns in SELECT order, as the statement declares them, before
+     * a row object collapses them into keys. Mirrors Cloudflare
+     * `SqlStorageCursor`'s field of the same name.
+     *
+     * Optional, and absent is a supported answer rather than a bug: a host
+     * supplies it when its driver has one (Cloudflare's cursor, better-sqlite3's
+     * `Statement#columns`, `node:sqlite`'s `columns()` from Node 22.14 on) and
+     * omits it otherwise. A reader with it can report a result faithfully;
+     * without it, a zero-row result has no column list at all and two same-named
+     * result columns (`SELECT u.id, o.id`) collapse to one.
+     */
+    readonly columnNames?: string[];
+
     /**
      * The single row this statement produced.
      * @throws when the result does not hold exactly one row.
      */
     one: () => Row;
+
+    /**
+     * The rows as positional value arrays aligned with `columnNames` rather
+     * than as objects — the only shape that survives two result columns sharing
+     * a name. Optional alongside `columnNames` (a host offers both or neither),
+     * and consuming it consumes the cursor: call it *or* `toArray`, never both.
+     */
+    raw?: () => IterableIterator<unknown[]>;
     /** Buffer every row. */
     toArray: () => Row[];
 }
@@ -91,6 +118,17 @@ export interface ShardAlarms {
 
 /**
  * The core shard host contract. One instance per shard key.
+ *
+ * **At most one LIVE instance per shard key, at any moment — a requirement,
+ * not a convention.** `ShardDO` keeps correctness-bearing state in memory on
+ * that basis: its in-flight dispatch claim (`@lunora/do`'s `InFlightClaims`)
+ * declines a second concurrent delivery of the same idempotency id only because
+ * every delivery for the shard reaches the same instance, and treats a missing
+ * claim as "the holder is gone" only because a replaced instance takes its
+ * running handlers with it. A host that could run two instances of one shard
+ * side by side (a second Node process, a celld failover that overlaps the old
+ * cell) would let an action run twice concurrently. Cloudflare Durable Objects
+ * provide this natively; every other host must enforce it.
  */
 export interface ShardHost {
     /** Durable alarm scheduling for the shard. */

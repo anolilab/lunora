@@ -1,8 +1,8 @@
 import type { StorageListPage, StorageObject } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAutoRefresh } from "../../../hooks/use-auto-refresh";
+import useStudioClient from "../../../hooks/use-studio-client";
 import type { DanglingReference, DanglingReferenceResult, StorageReference, StorageReferenceResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, copyToClipboard, errorMessage, fireAndForget } from "../../../lib/internal";
@@ -186,7 +186,7 @@ const triggerDownload = (url: string, filename: string): void => {
 const keyOf = (object: StorageObject): string => object.key;
 
 const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): FileBrowserModel => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     // The loaded prefix (drives deriveEntries + name-slicing) vs. the draft the
     // input edits live — kept apart so typing never garbles the loaded rows.
@@ -231,6 +231,13 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     // below discard any result whose id is no longer the latest.
     const listSeq = useRef(0);
     const orphanSeq = useRef(0);
+    // Bumped on every bucket switch. A write (upload / delete) captures it before
+    // its request and reloads afterwards only if it still matches: its closure's
+    // `list` is bound to the bucket the write started in, and reloading through it
+    // after a switch would supersede the new bucket's listing with the old one's
+    // rows — under a picker naming the new bucket, whose row actions then send the
+    // old bucket's keys to it.
+    const bucketEpoch = useRef(0);
 
     useEffect(() => {
         const token = { cancelled: false };
@@ -277,7 +284,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     }, [bucket, client]);
 
     const list = useCallback(
-        async (searchPrefix: string, cursor: string | undefined, append: boolean): Promise<void> => {
+        async (searchPrefix: string, cursor: string | undefined, append: boolean, propagate = false): Promise<void> => {
             listSeq.current += 1;
             const seq = listSeq.current;
 
@@ -307,6 +314,11 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 }
 
                 setError(errorMessage(error_));
+
+                // The poll tick needs the failure to back off or stop; the page still shows it through `error`.
+                if (propagate) {
+                    throw error_;
+                }
             } finally {
                 // Leave `busy` for the superseding request to clear (it set it too).
                 if (seq === listSeq.current) {
@@ -329,9 +341,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     // `useAutoRefresh` pauses while the tab is hidden.
     const onFirstPage = (objects?.length ?? 0) <= pageSize;
 
-    useAutoRefresh(() => {
-        fireAndForget(list(prefix, undefined, false));
-    }, onFirstPage);
+    useAutoRefresh(() => list(prefix, undefined, false, true), onFirstPage);
 
     // Split the loaded keys into the immediate folders + files at this prefix.
     const { files, folders } = deriveEntries(objects ?? [], prefix);
@@ -461,30 +471,46 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         setExpiry(seconds);
     };
 
-    // Delete every selected object (one schema-aware call each) then reload + clear.
-    const bulkDelete = (): void => {
+    // Run a write against the active bucket, then reload the listing — unless the
+    // operator switched bucket while it was in flight (see `bucketEpoch`); the
+    // switch already re-lists the new bucket and owns the busy flag from there.
+    const runWrite = (write: () => Promise<void>): void => {
+        const epoch = bucketEpoch.current;
+
         setError(undefined);
         setBusy(true);
 
         fireAndForget(
             (async (): Promise<void> => {
                 try {
-                    for (const key of selected) {
-                        /* eslint-disable no-await-in-loop -- one delete per selected object; sequential so a failure pins the offending key */
-                        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: R2 deletes are ordered so a failure pins the offending key instead of leaving a half-applied batch
-                        await storageApi.remove(key);
-                        /* eslint-enable no-await-in-loop */
-                    }
+                    await write();
 
-                    await list(prefix, undefined, false);
-                    clearSelection();
+                    if (epoch === bucketEpoch.current) {
+                        await list(prefix, undefined, false);
+                    }
                 } catch (error_) {
                     setError(errorMessage(error_));
                 }
 
-                setBusy(false);
+                if (epoch === bucketEpoch.current) {
+                    setBusy(false);
+                }
             })(),
         );
+    };
+
+    // Delete every selected object (one schema-aware call each) then reload + clear.
+    const bulkDelete = (): void => {
+        runWrite(async () => {
+            for (const key of selected) {
+                /* eslint-disable no-await-in-loop -- one delete per selected object; sequential so a failure pins the offending key */
+                // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: R2 deletes are ordered so a failure pins the offending key instead of leaving a half-applied batch
+                await storageApi.remove(key);
+                /* eslint-enable no-await-in-loop */
+            }
+
+            clearSelection();
+        });
     };
 
     const onCopy = (key: string): void => {
@@ -543,21 +569,9 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     }, [copiedKey]);
 
     const onDelete = (key: string): void => {
-        setError(undefined);
-        setBusy(true);
-
-        fireAndForget(
-            (async (): Promise<void> => {
-                try {
-                    await storageApi.remove(key);
-                    await list(prefix, undefined, false);
-                } catch (error_) {
-                    setError(errorMessage(error_));
-                }
-
-                setBusy(false);
-            })(),
-        );
+        runWrite(async () => {
+            await storageApi.remove(key);
+        });
     };
 
     const onFile = (file: File): void => {
@@ -565,23 +579,11 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         // operator is browsing.
         const key = `${prefix}${file.name}`;
 
-        setError(undefined);
-        setBusy(true);
+        runWrite(async () => {
+            const body = await file.arrayBuffer();
 
-        fireAndForget(
-            (async (): Promise<void> => {
-                try {
-                    const body = await file.arrayBuffer();
-
-                    await storageApi.upload({ body, contentType: file.type === "" ? undefined : file.type, key });
-                    await list(prefix, undefined, false);
-                } catch (error_) {
-                    setError(errorMessage(error_));
-                }
-
-                setBusy(false);
-            })(),
-        );
+            await storageApi.upload({ body, contentType: file.type === "" ? undefined : file.type, key });
+        });
     };
 
     // The orphan check spans the whole bucket against `referenceShard`'s records,
@@ -659,6 +661,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         // late response can't paint its rows or dangling report under the new bucket.
         listSeq.current += 1;
         orphanSeq.current += 1;
+        bucketEpoch.current += 1;
         setBucket(name);
         setPrefix(initialPrefix ?? "");
         setDraftPrefix(initialPrefix ?? "");

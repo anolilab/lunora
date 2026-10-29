@@ -10,7 +10,7 @@ interface Env {
     SHARD: ShardNamespaceLike;
 }
 
-let worker: ReturnType<typeof createWorker> | null = null;
+let worker: ReturnType<typeof createWorker> | undefined;
 
 /**
  * Minimal Worker entry: just hand the ShardDO binding to `createWorker`. No
@@ -18,11 +18,9 @@ let worker: ReturnType<typeof createWorker> | null = null;
  */
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
-        if (!worker) {
-            // `openApiSpec` (regenerated on every `lunora/` change) backs the
-            // studio's always-current API-reference tab.
-            worker = createWorker({ openApiSpec, shardDO: env.SHARD });
-        }
+        // `openApiSpec` (regenerated on every `lunora/` change) backs the
+        // studio's always-current API-reference tab.
+        worker ??= createWorker({ openApiSpec, shardDO: env.SHARD });
 
         return worker.fetch(request, env, ctx);
     },

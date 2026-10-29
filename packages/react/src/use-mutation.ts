@@ -1,13 +1,13 @@
 "use client";
 
-import type { ArgsOf, FunctionReference, OptimisticUpdate, ReturnOf } from "@lunora/client";
-import { useMutation as useTanStackMutation } from "@tanstack/react-query";
+import type { ArgsOf, FunctionReference, OnlineOnlyOption, OptimisticUpdate, ReturnOf } from "@lunora/client";
+import { onlineManager, useMutation as useTanStackMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
 
 import { useLunora } from "./lunora-provider";
 import type { UseMutationCallOptions } from "./types";
 
-type CallOptions<F extends FunctionReference> = UseMutationCallOptions<unknown, unknown, ArgsOf<F>>;
+type CallOptions<F extends FunctionReference> = OnlineOnlyOption<F> & UseMutationCallOptions<unknown, unknown, ArgsOf<F>>;
 type MutateVariables<F extends FunctionReference> = { args: ArgsOf<F>; options?: CallOptions<F> };
 
 interface MutationHook<F extends FunctionReference> {
@@ -32,10 +32,30 @@ interface MutationHook<F extends FunctionReference> {
     withOptimisticUpdate: (update: OptimisticUpdate<ArgsOf<F>>) => MutationHook<F>;
 }
 
+/** Resolve once TanStack's `onlineManager` reports the browser online. */
+const whenOnline = async (): Promise<void> =>
+    new Promise((resolve) => {
+        if (onlineManager.isOnline()) {
+            resolve();
+
+            return;
+        }
+
+        const unsubscribe = onlineManager.subscribe((online) => {
+            if (online) {
+                unsubscribe();
+                resolve();
+            }
+        });
+    });
+
 /**
  * Returns `{ mutate, pending, data, error, reset, withOptimisticUpdate }` for the
  * given mutation reference. Prefer destructuring at the call site so the React
  * linter can track dependencies on each field independently.
+ *
+ * Not callable: `const send = useMutation(api.x.y); send({ … })` is a `TS2349`.
+ * Destructure the invoker — `const { mutate: send } = useMutation(api.x.y)`.
  *
  * Built on TanStack Query's mutation cache (the same cache the query hooks use),
  * so it composes with Query Devtools and exposes the latest call's `data`/`error`
@@ -52,16 +72,55 @@ interface MutationHook<F extends FunctionReference> {
  * call options pass straight through to `client.mutation`, which applies and
  * rolls them back against the Lunora subscription cache (Convex parity) — not
  * through TanStack's `onMutate`.
+ *
+ * Offline, a write the client can queue reaches `client.mutation` at once,
+ * which queues it (the offline queue or a durable outbox) and paints the
+ * optimistic update. A write it cannot queue (before the shard's first connect,
+ * or with no WebSocket) waits until the browser is online again, then sends.
+ * TanStack never retries; the queue owns replays. An online-only write (`onlineOnly:
+ * true`, or any call to a function with a `v.sensitive` argument) is not held for a
+ * later send: it reaches `client.mutation` at once and rejects with
+ * `OFFLINE_NOT_QUEUED` if the network is down. Such a call also leaves TanStack's
+ * mutation cache, and with it the call's arguments, as soon as nothing observes it
+ * (the hook still holds the latest call while mounted).
  */
 const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F> => {
     const client = useLunora();
+    const queryClient = useQueryClient();
+    const sensitive = (function_ as { sensitive?: unknown }).sensitive === true;
 
     // Local, ref-counted pending across overlapping calls of this hook instance.
     const pendingCountRef = useRef(0);
     const [pending, setPending] = useState(false);
 
     const mutation = useTanStackMutation<ReturnOf<F>, Error, MutateVariables<F>>({
-        mutationFn: ({ args, options }) => client.mutation(function_, args, options),
+        mutationFn: async ({ args, options }) => {
+            // A write the client cannot queue would fail at once offline. Hold it
+            // until the network is back instead, as TanStack's default did. An
+            // online-only write is not held: it goes straight to `client.mutation`,
+            // which refuses it when the network is down.
+            const onlineOnly = sensitive || options?.onlineOnly === true;
+
+            if (!onlineOnly && !client.canQueueOffline(options?.shardKey)) {
+                await whenOnline();
+            }
+
+            return client.mutation(function_, args, options);
+        },
+        // `client.mutation` owns offline behaviour when it can queue: it applies
+        // the optimistic update, mints the `mutationId`, and hands the write to
+        // the offline queue or durable outbox. TanStack's default `"online"` mode
+        // paused every call before `client.mutation` ran, so an offline write got
+        // none of that, and closing the tab lost it.
+        networkMode: "always",
+        // A settled mutation keeps its variables, which here are the call's arguments, in
+        // TanStack's mutation cache until `gcTime` passes with nothing observing it. The
+        // default is five minutes in a browser, so a credential would outlive the component
+        // that sent it. A sensitive call drops out of the cache as soon as it is unobserved.
+        ...(sensitive ? { gcTime: 0 } : {}),
+        // A retry re-runs `mutationFn`, which mints a fresh `mutationId`, so the
+        // server cannot dedupe it against an attempt that already committed.
+        retry: 0,
         // `onMutate` fires when a call starts, `onSettled` when it resolves or
         // rejects — so overlapping calls compose and `pending` only clears once
         // the last one settles.
@@ -69,9 +128,22 @@ const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F>
             pendingCountRef.current += 1;
             setPending(true);
         },
-        onSettled: () => {
+        onSettled: (_data, _error, variables) => {
             pendingCountRef.current -= 1;
             setPending(pendingCountRef.current > 0);
+
+            // `gcTime` is fixed per hook, so a per-call `onlineOnly` on an ordinary reference
+            // cannot get the zero garbage-collection time a sensitive reference has. A zero time
+            // also waits for the hook to stop observing the call, so a mounted hook would keep a
+            // sensitive call's arguments. Drop the entry, and the arguments it holds, from the
+            // mutation cache as soon as it settles.
+            if (sensitive || variables.options?.onlineOnly === true) {
+                const cache = queryClient.getMutationCache();
+
+                for (const entry of cache.findAll({ predicate: (candidate) => candidate.state.variables === variables })) {
+                    cache.remove(entry);
+                }
+            }
         },
     });
 
@@ -86,8 +158,10 @@ const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F>
         (update: OptimisticUpdate<ArgsOf<F>>): MutationHook<F> => {
             // Bound update is the default; a per-call `optimisticUpdate` in
             // `options` overrides it (spread last wins).
+            // The spread of a conditional intersection does not narrow back to `CallOptions<F>`;
+            // the caller's options were already checked against it at `mutate`'s signature.
             const boundMutate = (args: ArgsOf<F>, options?: CallOptions<F>): Promise<ReturnOf<F>> =>
-                mutateAsync({ args, options: { optimisticUpdate: update, ...options } });
+                mutateAsync({ args, options: { optimisticUpdate: update, ...options } as CallOptions<F> });
 
             return { data, error, isError, mutate: boundMutate, pending, reset, withOptimisticUpdate };
         },

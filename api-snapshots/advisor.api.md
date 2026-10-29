@@ -31,9 +31,9 @@ interface AdvisorAdminRoute {
 
 ```ts
 interface AdvisorAiRawRun {
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -41,10 +41,10 @@ interface AdvisorAiRawRun {
 
 ```ts
 interface AdvisorAiToolSideEffect {
-    exportName: string;
     file: string;
     line: number;
     method: "generateText" | "streamText";
+    scope: AdvisorCallSiteScope;
     sideEffect: string;
     userInputDerived: boolean;
 }
@@ -54,9 +54,9 @@ interface AdvisorAiToolSideEffect {
 
 ```ts
 interface AdvisorArgumentDerivedFetch {
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -76,11 +76,11 @@ interface AdvisorArgumentValidator {
 
 ```ts
 interface AdvisorAuthApiCall {
-    exportName: string;
     file: string;
     hasHeaders: boolean;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -91,11 +91,11 @@ interface AdvisorAuthConfig {
     analyzable: boolean;
     disableCsrfCheck: boolean;
     emailPasswordEnabled: boolean;
-    exportName: string;
     file: string;
     line: number;
     requireEmailVerification: boolean;
     scimOnNonTransactionalAdapter: boolean;
+    scope: AdvisorCallSiteScope;
     secureCookiesDisabled: boolean;
     sessionFreshAgeZero: boolean;
     trustedOriginsWildcard: boolean;
@@ -106,11 +106,46 @@ interface AdvisorAuthConfig {
 
 ```ts
 interface AdvisorBrowserUrlAccess {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
 }
+```
+
+### `AdvisorCallEdge` (interface)
+
+```ts
+interface AdvisorCallEdge {
+    conditional?: true;
+    file: string;
+    kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
+    line: number;
+    loopOnly?: true;
+    reason?: string;
+    schedule?: {
+        argKeys?: string[];
+        delayMs?: number;
+    };
+    scope: AdvisorCallSiteScope;
+    target?: string;
+}
+```
+
+### `AdvisorCallSiteScope` (type)
+
+```ts
+type AdvisorCallSiteScope = {
+    callers: ReadonlyArray<string>;
+    kind: "helper";
+    name: string;
+    untracked?: true;
+} | {
+    kind: "export";
+    name: string;
+} | {
+    kind: "module";
+};
 ```
 
 ### `AdvisorConfigCall` (interface)
@@ -132,6 +167,7 @@ interface AdvisorConfigCall {
 interface AdvisorContainer {
     enableInternet?: boolean;
     exportName: string;
+    hardTimeout?: number | string;
     instanceType?: string | {
         diskMb?: number;
         memoryMib?: number;
@@ -146,10 +182,10 @@ interface AdvisorContainer {
 
 ```ts
 interface AdvisorContainerKeyAccess {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -158,10 +194,36 @@ interface AdvisorContainerKeyAccess {
 ```ts
 interface AdvisorContainerOverride {
     detail: string;
-    exportName: string;
     file: string;
     kind: "egress_relaxation" | "enable_internet";
     line: number;
+    scope: AdvisorCallSiteScope;
+}
+```
+
+### `AdvisorCountRead` (interface)
+
+```ts
+interface AdvisorCountRead {
+    file: string;
+    filterFields?: string[];
+    indexed: boolean;
+    line: number;
+    scope: AdvisorCallSiteScope;
+    table: string;
+}
+```
+
+### `AdvisorCron` (interface)
+
+```ts
+interface AdvisorCron {
+    cron: string;
+    functionPath?: string;
+    name: string;
+    workflow?: {
+        exportName: string;
+    };
 }
 ```
 
@@ -183,11 +245,11 @@ interface AdvisorExportSink {
 ```ts
 interface AdvisorFailOpenGuard {
     callee: string;
-    exportName: string;
     failOpen: boolean;
     file: string;
     limitName: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -207,10 +269,10 @@ interface AdvisorFlagRead {
 ```ts
 interface AdvisorFlagSecurityDefault {
     defaultValue: boolean;
-    exportName: string;
     file: string;
     key: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -228,12 +290,12 @@ interface AdvisorGeoIndexUsage {
 
 ```ts
 interface AdvisorHttpActionGuard {
-    exportName: string;
     file: string;
     kind: "httpAction" | "httpRoute";
     line: number;
     method?: string;
     readsAuth: boolean;
+    scope: AdvisorCallSiteScope;
     sideEffect: string;
 }
 ```
@@ -242,10 +304,10 @@ interface AdvisorHttpActionGuard {
 
 ```ts
 interface AdvisorHttpHeaderWrite {
-    exportName: string;
     file: string;
     headerName: string;
     line: number;
+    scope: AdvisorCallSiteScope;
     via: "headers-append" | "headers-ctor" | "headers-set" | "response-init";
 }
 ```
@@ -267,10 +329,10 @@ interface AdvisorHyperdriveCall {
 ```ts
 interface AdvisorIdentityClaimRead {
     declared: boolean;
-    exportName: string;
     file: string;
     key: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -278,9 +340,9 @@ interface AdvisorIdentityClaimRead {
 
 ```ts
 interface AdvisorImageDeliveryUrlAccess {
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -309,10 +371,24 @@ interface AdvisorIndexHit {
 
 ```ts
 interface AdvisorInsertWrite {
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
     table: string;
+}
+```
+
+### `AdvisorKeyedRelation` (interface)
+
+```ts
+interface AdvisorKeyedRelation {
+    field: string;
+    kind: "many" | "one";
+    name: string;
+    onDelete?: "cascade" | "restrict" | "set null";
+    references: string;
+    table: string;
+    through?: never;
 }
 ```
 
@@ -320,10 +396,10 @@ interface AdvisorInsertWrite {
 
 ```ts
 interface AdvisorKvKeyAccess {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
     visibility?: "internal" | "public";
 }
 ```
@@ -332,10 +408,10 @@ interface AdvisorKvKeyAccess {
 
 ```ts
 interface AdvisorMailRecipientAccess {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -380,6 +456,28 @@ interface AdvisorMaskStrategy {
     line: number;
     strategy: string;
     table: string;
+}
+```
+
+### `AdvisorModule` (interface)
+
+```ts
+interface AdvisorModule {
+    installed?: true;
+    name: string;
+    ownsFolder?: false;
+    tables: ReadonlyArray<string>;
+}
+```
+
+### `AdvisorMutatorDeclaration` (interface)
+
+```ts
+interface AdvisorMutatorDeclaration {
+    exportName: string;
+    file: string;
+    line: number;
+    owner?: string;
 }
 ```
 
@@ -442,15 +540,27 @@ interface AdvisorNotifyConfig {
 }
 ```
 
+### `AdvisorOpenShardAccess` (interface)
+
+```ts
+interface AdvisorOpenShardAccess {
+    file: string;
+    line: number;
+}
+```
+
 ### `AdvisorOwnerFieldWrite` (interface)
 
 ```ts
 interface AdvisorOwnerFieldWrite {
-    exportName: string;
+    adminOnly?: true;
     field: string;
     file: string;
+    guarded?: true;
     line: number;
     method: string;
+    ownerScoped?: true;
+    scope: AdvisorCallSiteScope;
     visibility?: "internal" | "public";
 }
 ```
@@ -460,9 +570,9 @@ interface AdvisorOwnerFieldWrite {
 ```ts
 interface AdvisorPaymentWebhook {
     callee: "createAutumnAdapter" | "createDodoPaymentsAdapter" | "createPolarAdapter" | "createStripeAdapter";
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
     toleranceSeconds?: number;
 }
 ```
@@ -473,8 +583,8 @@ interface AdvisorPaymentWebhook {
 interface AdvisorPrivilegedDispatch {
     dispatchKind: "queue" | "workflow";
     file: string;
-    handlerExport: string;
     line: number;
+    scope: AdvisorCallSiteScope;
     targetExport: string;
     targetFile: string;
 }
@@ -514,14 +624,20 @@ interface AdvisorProcedureProtection {
 
 ```ts
 interface AdvisorQueryRead {
-    exportName?: string;
     file: string;
+    filterFields?: string[];
     filtersPrimaryKey?: boolean;
     hasFilter: boolean;
     hasIndex: boolean;
+    index?: {
+        bounds?: string[];
+        name?: string;
+    };
     line: number;
+    scope: AdvisorCallSiteScope;
     table: string;
     terminal?: string;
+    visibility?: "internal" | "public";
 }
 ```
 
@@ -530,8 +646,14 @@ interface AdvisorQueryRead {
 ```ts
 interface AdvisorQueue {
     exportName: string;
+    filePath?: string;
+    handlerSite?: {
+        exportName: string;
+        file: string;
+    };
     mode: "pull" | "push";
     name: string;
+    topic?: string;
     tuning: AdvisorQueueTuning;
 }
 ```
@@ -562,10 +684,10 @@ interface AdvisorR2sqlCall {
 ```ts
 interface AdvisorRatelimitKeySelector {
     callee: string;
-    exportName: string;
     file: string;
     limitName: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -583,17 +705,10 @@ interface AdvisorRawRowReturn {
 }
 ```
 
-### `AdvisorRelation` (interface)
+### `AdvisorRelation` (type)
 
 ```ts
-interface AdvisorRelation {
-    field: string;
-    kind: "many" | "one";
-    name: string;
-    onDelete?: "cascade" | "restrict" | "set null";
-    references: string;
-    table: string;
-}
+type AdvisorRelation = AdvisorKeyedRelation | AdvisorThroughRelation;
 ```
 
 ### `AdvisorRelationLoad` (interface)
@@ -620,6 +735,18 @@ interface AdvisorRlsProcedure {
     tablesWritten: ReadonlyArray<string>;
     usesRls: boolean;
     visibility: "internal" | "public";
+}
+```
+
+### `AdvisorRowEffect` (interface)
+
+```ts
+interface AdvisorRowEffect {
+    exportName: string;
+    fields?: string[];
+    file: string;
+    method: string;
+    table: string;
 }
 ```
 
@@ -681,9 +808,9 @@ interface AdvisorSoftDeleteRead {
 
 ```ts
 interface AdvisorSqlInterpolation {
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -702,10 +829,10 @@ interface AdvisorStaleMigrationImport {
 
 ```ts
 interface AdvisorStorageKeyAccess {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
     visibility?: "internal" | "public";
 }
 ```
@@ -716,11 +843,11 @@ interface AdvisorStorageKeyAccess {
 interface AdvisorStorageUpload {
     analyzable: boolean;
     expiresInSeconds?: number;
-    exportName: string;
     file: string;
     line: number;
     method: "generateUploadUrl" | "getPresignedUrl" | "getSignedUrl" | "store" | "upload";
     presentKeys: string[];
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -757,14 +884,49 @@ interface AdvisorTableScan {
 }
 ```
 
+### `AdvisorTableWrite` (interface)
+
+```ts
+interface AdvisorTableWrite extends AdvisorInsertWrite {
+    fields?: string[];
+    method: string;
+}
+```
+
+### `AdvisorThroughRelation` (interface)
+
+```ts
+interface AdvisorThroughRelation {
+    kind: "many";
+    name: string;
+    table: string;
+    through: {
+        from: string;
+        table: string;
+        to: string;
+    };
+}
+```
+
+### `AdvisorUnboundedLoop` (interface)
+
+```ts
+interface AdvisorUnboundedLoop {
+    file: string;
+    kind: "do" | "for" | "while";
+    line: number;
+    scope: AdvisorCallSiteScope;
+}
+```
+
 ### `AdvisorVectorNamespaceAccess` (interface)
 
 ```ts
 interface AdvisorVectorNamespaceAccess {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -773,6 +935,7 @@ interface AdvisorVectorNamespaceAccess {
 ```ts
 interface AdvisorWorkflow {
     exportName: string;
+    handlerFile?: string;
     steps?: ReadonlyArray<AdvisorWorkflowStep>;
 }
 ```
@@ -781,9 +944,9 @@ interface AdvisorWorkflow {
 
 ```ts
 interface AdvisorWorkflowCall {
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
     workflow: string;
 }
 ```
@@ -809,6 +972,7 @@ interface AnalyticsMetricsOptions {
         table: string;
     }>;
     group?: string;
+    since: string;
 }
 ```
 
@@ -816,7 +980,7 @@ interface AnalyticsMetricsOptions {
 
 ```ts
 interface AnalyticsMetricsSource {
-    query: (sql: string) => Promise<{
+    query: (sql: string, params: Readonly<Record<string, string>>) => Promise<{
         rows: ReadonlyArray<Record<string, unknown>>;
     }>;
 }
@@ -847,6 +1011,18 @@ type BaselineComparison = {
     scoreDelta: number;
     worsened: string[];
 };
+```
+
+### `CallSiteMetadata` (type)
+
+```ts
+type CallSiteMetadata = {
+    callers: ReadonlyArray<string>;
+    helper: string;
+    untracked?: true;
+} | {
+    exportName: string;
+} | Record<never, never>;
 ```
 
 ### `Category` (type)
@@ -935,10 +1111,14 @@ interface LintContext {
     authApiCalls?: ReadonlyArray<AdvisorAuthApiCall>;
     authConfigs?: ReadonlyArray<AdvisorAuthConfig>;
     browserUrlAccesses?: ReadonlyArray<AdvisorBrowserUrlAccess>;
+    callEdges?: ReadonlyArray<AdvisorCallEdge>;
     configCalls?: ReadonlyArray<AdvisorConfigCall>;
     containerKeyAccesses?: ReadonlyArray<AdvisorContainerKeyAccess>;
     containerOverrides?: ReadonlyArray<AdvisorContainerOverride>;
     containers?: ReadonlyArray<AdvisorContainer>;
+    countReads?: ReadonlyArray<AdvisorCountRead>;
+    crons?: ReadonlyArray<AdvisorCron>;
+    cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<AdvisorFailOpenGuard>;
     flagReads?: ReadonlyArray<AdvisorFlagRead>;
@@ -955,11 +1135,14 @@ interface LintContext {
     mailRecipientAccesses?: ReadonlyArray<AdvisorMailRecipientAccess>;
     maskProcedures?: ReadonlyArray<AdvisorMaskProcedure>;
     maskStrategies?: ReadonlyArray<AdvisorMaskStrategy>;
+    modules?: ReadonlyArray<AdvisorModule>;
+    mutators?: ReadonlyArray<AdvisorMutatorDeclaration>;
     mutatorWrites?: ReadonlyArray<AdvisorMutatorWrite>;
     nondeterministicCalls?: ReadonlyArray<AdvisorNondeterministicCall>;
     normalizeIdAuthorizations?: ReadonlyArray<AdvisorNormalizeIdAuthorization>;
     notifyCalls?: ReadonlyArray<AdvisorNotifyCall>;
     notifyConfig?: AdvisorNotifyConfig;
+    openShardAccess?: ReadonlyArray<AdvisorOpenShardAccess>;
     ownerFieldWrites?: ReadonlyArray<AdvisorOwnerFieldWrite>;
     paymentWebhooks?: ReadonlyArray<AdvisorPaymentWebhook>;
     privilegedDispatches?: ReadonlyArray<AdvisorPrivilegedDispatch>;
@@ -971,6 +1154,7 @@ interface LintContext {
     rawRowReturns?: ReadonlyArray<AdvisorRawRowReturn>;
     relationLoads?: ReadonlyArray<AdvisorRelationLoad>;
     rlsProcedures?: ReadonlyArray<AdvisorRlsProcedure>;
+    rowEffects?: ReadonlyArray<AdvisorRowEffect>;
     schema: AdvisorSchema;
     secretLiterals?: ReadonlyArray<AdvisorSecretLiteral>;
     shapes?: ReadonlyArray<AdvisorShape>;
@@ -981,6 +1165,8 @@ interface LintContext {
     storageKeyAccesses?: ReadonlyArray<AdvisorStorageKeyAccess>;
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
     tableScans?: ReadonlyArray<AdvisorTableScan>;
+    tableWrites?: ReadonlyArray<AdvisorTableWrite>;
+    unboundedLoops?: ReadonlyArray<AdvisorUnboundedLoop>;
     unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     vectorNamespaceAccesses?: ReadonlyArray<AdvisorVectorNamespaceAccess>;
     workflowCalls?: ReadonlyArray<AdvisorWorkflowCall>;
@@ -1204,6 +1390,30 @@ const browserUserUrlWithoutAllowlist: Lint;
 const byCodepoint: (a: string, b: string) => number;
 ```
 
+### `callSiteCallers` (const)
+
+```ts
+const callSiteCallers: (scope: AdvisorCallSiteScope) => ReadonlyArray<string>;
+```
+
+### `callSiteDescription` (const)
+
+```ts
+const callSiteDescription: (scope: AdvisorCallSiteScope) => string;
+```
+
+### `callSiteLabel` (const)
+
+```ts
+const callSiteLabel: (scope: AdvisorCallSiteScope) => string;
+```
+
+### `callSiteMetadata` (const)
+
+```ts
+const callSiteMetadata: (scope: AdvisorCallSiteScope) => CallSiteMetadata;
+```
+
 ### `circularFk` (const)
 
 ```ts
@@ -1234,6 +1444,12 @@ const compareToBaseline: (current: AdvisorMap, baseline: AdvisorMap) => Baseline
 const containerInstanceKeyFromUserInput: Lint;
 ```
 
+### `containerLongSleepAfter` (const)
+
+```ts
+const containerLongSleepAfter: Lint;
+```
+
 ### `containerOversizedInstance` (const)
 
 ```ts
@@ -1258,10 +1474,34 @@ const containerRuntimeEgressRelaxation: Lint;
 const containerStartEnableInternetOverride: Lint;
 ```
 
+### `countWithoutIndex` (const)
+
+```ts
+const countWithoutIndex: Lint;
+```
+
+### `cronEveryMinute` (const)
+
+```ts
+const cronEveryMinute: Lint;
+```
+
+### `crossModuleTableWrite` (const)
+
+```ts
+const crossModuleTableWrite: Lint;
+```
+
 ### `dedupeCacheKeys` (const)
 
 ```ts
 const dedupeCacheKeys: (findings: ReadonlyArray<Finding>) => Finding[];
+```
+
+### `dispatchCycle` (const)
+
+```ts
+const dispatchCycle: Lint;
 ```
 
 ### `duplicateIndex` (const)
@@ -1310,6 +1550,12 @@ const externalSourceUnscoped: Lint;
 
 ```ts
 const fanOutBreadth: Lint;
+```
+
+### `filterAfterIndexScan` (const)
+
+```ts
+const filterAfterIndexScan: Lint;
 ```
 
 ### `filterOnPrimaryKey` (const)
@@ -1372,6 +1618,14 @@ const gradeFromScore: (score: number) => Grade;
 const hardcodedSecret: Lint;
 ```
 
+### `helperRole` (const)
+
+```ts
+const helperRole: (scope: Extract<AdvisorCallSiteScope, {
+    kind: "helper";
+}>) => string;
+```
+
 ### `hotShard` (const)
 
 ```ts
@@ -1426,6 +1680,12 @@ const indexUtilization: Lint;
 const insertManyUnsafeUserData: Lint;
 ```
 
+### `isReachableSite` (const)
+
+```ts
+const isReachableSite: (scope: AdvisorCallSiteScope) => boolean;
+```
+
 ### `kvUnscopedUserKeyIdor` (const)
 
 ```ts
@@ -1468,6 +1728,12 @@ const maskedRelationLeakViaWith: Lint;
 const mutatorFullRowReplace: Lint;
 ```
 
+### `mutatorWithoutOwnerScope` (const)
+
+```ts
+const mutatorWithoutOwnerScope: Lint;
+```
+
 ### `nondeterministicQueryMutation` (const)
 
 ```ts
@@ -1490,6 +1756,12 @@ const notifyMissingPushConfig: Lint;
 
 ```ts
 const notifySendOutsideAction: Lint;
+```
+
+### `openShardAccess` (const)
+
+```ts
+const openShardAccess: Lint;
 ```
 
 ### `outputProjectionMissingOnPublicRead` (const)
@@ -1570,6 +1842,12 @@ const publicMutationWithoutRatelimit: Lint;
 const publicTableRlsOptoutConfusion: Lint;
 ```
 
+### `queueDispatchCycle` (const)
+
+```ts
+const queueDispatchCycle: Lint;
+```
+
 ### `queueWithoutDlq` (const)
 
 ```ts
@@ -1600,6 +1878,12 @@ const ratelimitKeySpoofableOrGlobal: Lint;
 const ratelimitMiddlewareFailOpen: Lint;
 ```
 
+### `readCallSiteCallers` (const)
+
+```ts
+const readCallSiteCallers: (metadata: Readonly<Record<string, unknown>>) => string[];
+```
+
 ### `relationReferencesUnknownField` (const)
 
 ```ts
@@ -1628,6 +1912,12 @@ const runAdvisor: (context: LintContext, options?: RunAdvisorOptions) => Finding
 
 ```ts
 const scoreAdvisor: (procedures: ReadonlyArray<AdvisorProcedureProtection>, findings: ReadonlyArray<Finding>, options?: ScoreAdvisorOptions) => AdvisorMap;
+```
+
+### `selfRescheduleWithoutProgress` (const)
+
+```ts
+const selfRescheduleWithoutProgress: Lint;
 ```
 
 ### `shapeTargetsGlobalTable` (const)
@@ -1696,10 +1986,34 @@ const storageUploadWithoutMaxSize: Lint;
 const tableWithoutInsert: Lint;
 ```
 
+### `throughRelationMissingUniqueIndex` (const)
+
+```ts
+const throughRelationMissingUniqueIndex: Lint;
+```
+
+### `topicTooManySubscriptions` (const)
+
+```ts
+const topicTooManySubscriptions: Lint;
+```
+
 ### `ttlFieldNotTimestamp` (const)
 
 ```ts
 const ttlFieldNotTimestamp: Lint;
+```
+
+### `unboundedCollectOnOpenRange` (const)
+
+```ts
+const unboundedCollectOnOpenRange: Lint;
+```
+
+### `unboundedLoop` (const)
+
+```ts
+const unboundedLoop: Lint;
 ```
 
 ### `unboundedStringArgument` (const)

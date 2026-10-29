@@ -201,5 +201,5 @@ type OverlayFramework = "react" | "solid" | "svelte" | "vanilla" | "vue";
 
 const isOverlayFramework = (value: string): value is OverlayFramework => Object.hasOwn(ADAPTERS, value);
 
-export type { FrameworkAdapter, OverlayFile, OverlayFramework };
+export type { FrameworkAdapter, OverlayFramework };
 export { ADAPTERS, isOverlayFramework };

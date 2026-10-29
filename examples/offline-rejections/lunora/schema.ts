@@ -1,5 +1,7 @@
 import { defineSchema, defineTable, v } from "lunorash/server";
 
+import { ratelimit } from "./ratelimit/schema.js";
+
 /**
  * offline-rejections — a demo of surfacing rejected offline writes.
  *
@@ -15,4 +17,4 @@ export default defineSchema({
         author: v.string(),
         createdAt: v.number(),
     }).index("by_creation", ["createdAt"]),
-});
+}).extend(ratelimit.extension);

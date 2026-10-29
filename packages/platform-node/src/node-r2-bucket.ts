@@ -47,6 +47,17 @@
  * overwhelming majority — pass through byte-identical, so the bucket directory
  * stays browsable.
  *
+ * # Limits R2 enforces, enforced here
+ *
+ * A put this host accepts has to be one R2 would accept, or an app is written
+ * against a bucket more permissive than the one it deploys to. So `put` refuses
+ * `customMetadata` over R2's summed 2048-byte ceiling, verifies a declared
+ * `sha256` against the bytes it actually received and stores nothing on a
+ * mismatch, and — because R2 has no directories — never lets a deleted key's
+ * empty directory stand in the way of a later object at that prefix, nor lets
+ * `delete` of a prefix escape as a raw `fs` error rather than the no-op R2
+ * makes of a key it does not hold.
+ *
  * Not emulated: multipart upload (`createMultipartUpload`/`resumeMultipartUpload`
  * are absent, so `@lunora/storage` throws its clear "binding does not support
  * multipart" error) and S3 presigned URLs (those need real R2 credentials anyway).
@@ -54,11 +65,11 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
-import { mkdir, open, readdir, rename, unlink } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { lstat, mkdir, open, readdir, rename, rmdir, unlink } from "node:fs/promises";
+import { dirname, join, sep } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
-import type { R2BucketLike, R2ObjectBodyLike, R2ObjectLike, R2RangeLike } from "@lunora/platform";
+import type { R2BucketLike, R2ConditionalLike, R2ObjectBodyLike, R2ObjectLike, R2PutBodyLike, R2PutOptionsLike, R2RangeLike } from "@lunora/platform";
 
 import { hasControlChar } from "../../../shared/hmac-url";
 import { toArrayBuffer } from "./to-array-buffer";
@@ -77,6 +88,16 @@ const MAX_KEY_LENGTH = 1024;
 
 /** The name limit every filesystem this runs on shares. Applied to the ESCAPED segment. */
 const MAX_SEGMENT_BYTES = 255;
+
+/**
+ * R2's ceiling on `customMetadata`, measured over the SUM of every entry's key
+ * and value bytes — not per entry. Probed against Miniflare's R2 emulator: one
+ * entry totalling 2048 bytes is accepted, 2049 is not, and two entries of 1003
+ * bytes each (2006 in total) are accepted while two of 1303 are not. Over it R2
+ * answers `Your metadata headers exceed the maximum allowed metadata size.
+ * (10012)` and stores nothing.
+ */
+const MAX_CUSTOM_METADATA_BYTES = 2048;
 
 /** Per-object metadata, persisted in the object file's trailer. */
 interface NodeObjectMeta {
@@ -145,23 +166,6 @@ const encodeKey = (key: string): string =>
         .map((segment) => encodeSegment(segment))
         .join("/");
 
-/** Inverse of {@link encodeKey}, or `undefined` when any segment is undecodable. */
-const decodeKey = (relativePath: string): string | undefined => {
-    const segments: string[] = [];
-
-    for (const segment of relativePath.split("/")) {
-        const decoded = decodeSegment(segment);
-
-        if (decoded === undefined) {
-            return undefined;
-        }
-
-        segments.push(decoded);
-    }
-
-    return segments.join("/");
-};
-
 /** Shared encoder for measuring UTF-8 byte length (not UTF-16 `String.length`). */
 const R2_KEY_ENCODER = new TextEncoder();
 
@@ -228,7 +232,7 @@ const validateKey = (key: string): void => {
             throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key has an empty, \`.\` or \`..\` path segment ("${key}")`);
         }
 
-        // Reserved at every depth, not just the first: `walkObjects` skips the
+        // Reserved at every depth, not just the first: the listing walk skips the
         // staging tree wherever it appears, so a key like `a/.lunora-tmp/b` would
         // otherwise be writable and readable but invisible to `list()` — and
         // anything that reconciles through `list` would quietly lose it.
@@ -236,6 +240,53 @@ const validateKey = (key: string): void => {
             throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key is reserved (no segment may be "${TMP_DIR}")`);
         }
     }
+};
+
+/**
+ * Refuse `customMetadata` over R2's ceiling, so a put that this host accepts is
+ * one R2 would accept. Measured the way R2 measures it — the summed UTF-8
+ * length of every key and value — and raised before anything is staged, because
+ * R2 stores nothing on this failure either.
+ */
+const validateCustomMetadata = (customMetadata: Record<string, string> | undefined): void => {
+    if (customMetadata === undefined) {
+        return;
+    }
+
+    let total = 0;
+
+    for (const [name, value] of Object.entries(customMetadata)) {
+        total += Buffer.byteLength(name, "utf8") + Buffer.byteLength(value, "utf8");
+    }
+
+    if (total > MAX_CUSTOM_METADATA_BYTES) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: R2 customMetadata is ${String(total)} bytes, over the ${String(MAX_CUSTOM_METADATA_BYTES)}-byte ceiling R2 applies to the summed keys and values — your metadata headers exceed the maximum allowed metadata size`,
+        );
+    }
+};
+
+/** A SHA-256 in the hex form R2 accepts: 64 hex digits, either case. */
+const SHA256_HEX = /^[\da-f]{64}$/;
+
+/** Lowercase hex of a caller-declared SHA-256, which R2 accepts as hex or as a 32-byte buffer. */
+const normalizeSha256 = (sha256: ArrayBuffer | string): string => {
+    if (typeof sha256 === "string") {
+        const hex = sha256.toLowerCase();
+
+        if (!SHA256_HEX.test(hex)) {
+            throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 put sha256 must be 64 hex characters or a 32-byte buffer");
+        }
+
+        return hex;
+    }
+
+    if (sha256.byteLength !== 32) {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 put sha256 must be 64 hex characters or a 32-byte buffer");
+    }
+
+    return Buffer.from(sha256).toString("hex");
 };
 
 /** True when an `fs/promises` error is a missing path. */
@@ -536,88 +587,289 @@ const toChunks = async function* (body: ReadableStream | ArrayBuffer | ArrayBuff
     throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: unsupported R2 put body");
 };
 
-/** Recursively collect object keys under the bucket directory, skipping the staging tree. */
-const walkObjects = async (directory: string): Promise<string[]> => {
-    const keys: string[] = [];
+/** Codepoint order, the order R2 lists in. `localeCompare` would interleave case differently. */
+const byCodepoint = (a: string, b: string): number => (a < b ? -1 : Number(a > b));
 
-    const walk = async (currentPath: string, relative: string): Promise<void> => {
-        let entries;
+/** The entries of one bucket directory as decoded names, in key order; unrelated and staging names drop out. */
+const readSegments = async (path: string): Promise<{ isDirectory: boolean; name: string; sortKey: string }[]> => {
+    let entries;
+
+    try {
+        entries = await readdir(path, { withFileTypes: true });
+    } catch (error: unknown) {
+        // `ENOTDIR`: a leading prefix segment names an object, not a directory.
+        if (isMissing(error) || (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOTDIR")) {
+            return [];
+        }
+
+        throw error;
+    }
+
+    const segments = [];
+
+    for (const entry of entries) {
+        // A name that does not decode was not written by this bucket, so it drops
+        // out the same way an unrelated file without a trailer does.
+        const text = entry.name === TMP_DIR ? undefined : decodeSegment(entry.name);
+
+        if (text !== undefined) {
+            const isDirectory = entry.isDirectory();
+
+            // A directory's keys all continue with `/`, which is what orders it
+            // against its siblings (`a.b` sorts before everything under `a/`).
+            segments.push({ isDirectory, name: entry.name, sortKey: isDirectory ? `${text}/` : text });
+        }
+    }
+
+    // Order is by decoded key, not file name: escaping moves `A` (`%41`) around.
+    return segments.toSorted((a, b) => byCodepoint(a.sortKey, b.sortKey));
+};
+
+/** True when any key lives under `path`; stops at the first one. */
+const hasAnyKey = async (path: string): Promise<boolean> => {
+    for (const segment of await readSegments(path)) {
+        // eslint-disable-next-line no-await-in-loop -- stops at the first key, so siblings are not read ahead
+        if (!segment.isDirectory || (await hasAnyKey(join(path, segment.name)))) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/** The common prefix `key` rolls up into: everything through the first `delimiter` after `prefix`. */
+const commonPrefixOf = (key: string, prefix: string, delimiter: string | undefined): string | undefined => {
+    if (delimiter === undefined || !key.startsWith(prefix)) {
+        return undefined;
+    }
+
+    const at = key.slice(prefix.length).indexOf(delimiter);
+
+    return at === -1 ? undefined : key.slice(0, prefix.length + at + delimiter.length);
+};
+
+/**
+ * List keys under `prefix` in key order, touching only the directories the
+ * prefix, the cursor and the page need. Collects up to `limit + 1` keys after
+ * `after` (the extra one decides `truncated`) and, with a delimiter, every
+ * common prefix - collapsing a subdirectory to one entry without descending
+ * when the delimiter already occurs in its path.
+ */
+const walkUnder = async (
+    directory: string,
+    { after, delimiter, limit, prefix }: { after: string | undefined; delimiter: string | undefined; limit: number; prefix: string },
+): Promise<{ keys: string[]; prefixes: Set<string> }> => {
+    const keys: string[] = [];
+    const prefixes = new Set<string>();
+    // Complete leading segments of the prefix select the directory to start in.
+    // Keys never hold empty, `.`, `..`, staging or backslash segments, so a prefix
+    // that does matches nothing (and must not walk outside the bucket).
+    const leading = prefix.split("/").slice(0, -1);
+
+    if (leading.some((segment) => segment === "" || segment === "." || segment === ".." || segment === TMP_DIR || segment.includes("\\"))) {
+        return { keys, prefixes };
+    }
+
+    // Whether a directory (`full` ends in `/`) can hold anything this listing wants.
+    const wanted = (full: string): boolean =>
+        (full.startsWith(prefix) || prefix.startsWith(full)) && (delimiter !== undefined || after === undefined || full > after || after.startsWith(full));
+
+    // Without a delimiter nothing past the page can change the answer.
+    const pageIsFull = (): boolean => delimiter === undefined && keys.length > limit;
+    const wantsKey = (key: string): boolean => key.startsWith(prefix) && keys.length <= limit && (after === undefined || key > after);
+
+    const walk = async (path: string, relative: string): Promise<void> => {
+        for (const segment of await readSegments(path)) {
+            const full = relative + segment.sortKey;
+
+            if (pageIsFull()) {
+                return;
+            }
+
+            const rolled = commonPrefixOf(full, prefix, delimiter);
+
+            if (segment.isDirectory && rolled !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- key order matters, and a directory husk must not yield a prefix
+                if (await hasAnyKey(join(path, segment.name))) {
+                    prefixes.add(rolled);
+                }
+            } else if (segment.isDirectory) {
+                if (wanted(full)) {
+                    // eslint-disable-next-line no-await-in-loop -- strictly in key order so the walk can stop at the page bound
+                    await walk(join(path, segment.name), full);
+                }
+            } else if (rolled !== undefined) {
+                prefixes.add(rolled);
+            } else if (wantsKey(full)) {
+                keys.push(full);
+            }
+        }
+    };
+
+    // The root walk never follows a symlink (`Dirent.isDirectory()` is false for one), so
+    // a prefix must not either: every selected component has to be a real directory.
+    let start = directory;
+
+    for (const segment of leading) {
+        start = join(start, encodeSegment(segment));
+
+        let stats;
 
         try {
-            entries = await readdir(currentPath, { withFileTypes: true });
+            // eslint-disable-next-line no-await-in-loop -- each component is checked before descending into it
+            stats = await lstat(start);
         } catch (error: unknown) {
-            if (isMissing(error)) {
-                return;
+            // A segment longer than the filesystem allows (`ENAMETOOLONG`) can hold no stored key, since
+            // `validateKey` rejects it on write: like a missing component, it is an empty page.
+            const code = error instanceof Error && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
+
+            if (code === "ENOENT" || code === "ENOTDIR" || code === "ENAMETOOLONG") {
+                return { keys, prefixes };
             }
 
             throw error;
         }
 
-        const promises: Promise<void>[] = [];
-
-        for (const entry of entries) {
-            if (entry.name === TMP_DIR) {
-                continue;
-            }
-
-            // Keys always join with `/`, never the platform separator — `sep` would
-            // hand back `a\b` on Windows for a key stored as `a/b`.
-            const relativePath = relative === "" ? entry.name : `${relative}/${entry.name}`;
-
-            if (entry.isDirectory()) {
-                promises.push(walk(join(currentPath, entry.name), relativePath));
-            } else {
-                // Back to the key the caller wrote — the tree holds encoded
-                // segments, and `list` deals in keys. A name that does not decode
-                // was not written by this bucket, so it drops out the same way an
-                // unrelated file without a trailer does.
-                const key = decodeKey(relativePath);
-
-                if (key !== undefined) {
-                    keys.push(key);
-                }
-            }
-        }
-
-        await Promise.all(promises);
-    };
-
-    await walk(directory, "");
-    // Codepoint order, matching the `<=` comparison `firstIndexGreaterThan` uses
-    // to place the cursor. `localeCompare` would order them differently and the
-    // binary search would land in the wrong place.
-    keys.sort((a, b) => (a < b ? -1 : Number(a > b)));
-
-    return keys;
-};
-
-/** Index of the first element strictly greater than `value` in a sorted array. */
-const firstIndexGreaterThan = (values: ReadonlyArray<string>, value: string): number => {
-    let low = 0;
-    let high = values.length;
-
-    while (low < high) {
-        const mid = low + Math.floor((high - low) / 2);
-        const candidate = values[mid];
-
-        if (candidate === undefined || candidate <= value) {
-            low = mid + 1;
-        } else {
-            high = mid;
+        if (!stats.isDirectory()) {
+            return { keys, prefixes };
         }
     }
 
-    return low;
+    await walk(
+        leading.length === 0 ? directory : join(directory, ...leading.map((segment) => encodeSegment(segment))),
+        leading.length === 0 ? "" : `${leading.join("/")}/`,
+    );
+
+    return { keys, prefixes };
 };
+
+/**
+ * Errors `unlinkIfPresent` reads as "no object at this path".
+ *
+ * `ENOENT` is the obvious one. The rest are what `unlink` says about a
+ * DIRECTORY — `EPERM` on macOS, `EISDIR` on Linux, `ENOTDIR` when a parent of
+ * the path is a file — and a directory is never an object: it is the prefix
+ * holding other keys, or the husk one left behind. R2 answers a delete of a key
+ * it does not hold by doing nothing, so letting a raw `fs` code out here made
+ * `delete("a")` after `put("a/b")` throw where R2 succeeds, and made
+ * `flushDeferredDeletes` log "object leaked" for an object that never existed.
+ */
+const ABSENT_UNLINK_CODES = new Set(["EISDIR", "ENOENT", "ENOTDIR", "EPERM"]);
 
 const unlinkIfPresent = async (path: string): Promise<void> => {
     try {
         await unlink(path);
     } catch (error: unknown) {
-        if (!isMissing(error)) {
+        const code = error instanceof Error && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
+
+        if (code === undefined || !ABSENT_UNLINK_CODES.has(code)) {
             throw error;
         }
     }
+};
+
+/**
+ * Remove `path` and each ancestor up to (but never including) `root` that is
+ * now an empty directory.
+ *
+ * A directory in this tree is never an object — it exists only to hold the keys
+ * under a prefix, so once the last of them is gone it is a husk. Leaving it
+ * made the bucket contradict itself: `put("a/b")`, `delete("a/b")`, `put("a")`
+ * reported that `a` "collides with an existing object at one of its path
+ * prefixes" while `list()` returned nothing, and R2 accepts that same sequence.
+ * Any keyspace that reuses a prefix after cleanup (`users/<id>` after
+ * `users/<id>/avatar`) hits it.
+ */
+const pruneEmptyDirectories = async (path: string, root: string): Promise<void> => {
+    let current = path;
+
+    while (current !== root && current.startsWith(`${root}${sep}`)) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- strictly sequential: a parent cannot be empty until its child is gone
+            await rmdir(current);
+        } catch (error: unknown) {
+            // `ENOENT` is the ordinary case one level in: `delete` has just
+            // unlinked the object file, so its own path is gone and its parent
+            // is the first directory worth trying. Anything else — a file, or a
+            // prefix still holding objects — means this level is occupied, and
+            // then no ancestor of it is empty either.
+            if (!isMissing(error)) {
+                return;
+            }
+        }
+
+        current = dirname(current);
+    }
+};
+
+/**
+ * Move a staged object file into place: the one operation that publishes it.
+ * Body and metadata are in this file together, so there is no window where
+ * they disagree.
+ */
+const publish = async (temporaryPath: string, filePath: string, key: string): Promise<void> => {
+    try {
+        await rename(temporaryPath, filePath);
+    } catch {
+        // Two recoverable states, both left by an object that is gone: an
+        // EMPTY directory sitting where this key goes (the husk of a
+        // deleted key under this prefix — R2 has no directories, so it
+        // cannot be a real collision), and a parent a concurrent
+        // `delete`'s prune removed between the `mkdir` above and here.
+        // Clear both and publish once more; a prefix still holding
+        // objects fails `rmdir` and then fails the retry, which is the
+        // genuine collision `asKeyCollision` is there to name.
+        try {
+            await rmdir(filePath);
+        } catch {
+            // Not an empty directory — the retry reports what it is.
+        }
+
+        try {
+            await mkdir(dirname(filePath), { recursive: true });
+            await rename(temporaryPath, filePath);
+        } catch (retryError: unknown) {
+            await unlinkIfPresent(temporaryPath);
+
+            throw asKeyCollision(key, retryError);
+        }
+    }
+};
+
+/** The tail of the conditional puts queued per key; each waits for the one before it. */
+const keyLocks = new Map<string, Promise<unknown>>();
+
+const withKeyLock = async <T>(key: string, function_: () => Promise<T>): Promise<T> => {
+    const previous = keyLocks.get(key) ?? Promise.resolve();
+    const run = previous.then(function_, function_);
+    const settled = run.catch(() => undefined);
+
+    keyLocks.set(key, settled);
+
+    try {
+        return await run;
+    } finally {
+        if (keyLocks.get(key) === settled) {
+            keyLocks.delete(key);
+        }
+    }
+};
+
+/**
+ * R2's etag preconditions against the object at `filePath`: `etagMatches` needs
+ * the object to exist with that etag, `etagDoesNotMatch` needs it absent or
+ * carrying another etag, and `"*"` stands for any etag.
+ */
+const meetsCondition = async (filePath: string, condition: R2ConditionalLike): Promise<boolean> => {
+    const stored = await readTrailer(filePath);
+    const etag = stored?.meta.sha256Hex;
+    const matches = (expected: string): boolean => etag !== undefined && (expected === "*" || expected === etag);
+
+    if (condition.etagMatches !== undefined && !matches(condition.etagMatches)) {
+        return false;
+    }
+
+    return condition.etagDoesNotMatch === undefined || !matches(condition.etagDoesNotMatch);
 };
 
 /**
@@ -629,10 +881,25 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
     const { directory } = options;
 
     return {
-        delete: async (key: string): Promise<void> => {
-            validateKey(key);
+        delete: async (keys: string | string[]): Promise<void> => {
+            const all = typeof keys === "string" ? [keys] : keys;
 
-            await unlinkIfPresent(join(directory, encodeKey(key)));
+            // Validated up front, so a bad key in a batch deletes nothing.
+            for (const key of all) {
+                validateKey(key);
+            }
+
+            for (const key of all) {
+                const filePath = join(directory, encodeKey(key));
+
+                // eslint-disable-next-line no-await-in-loop -- one file at a time, as the prune below walks shared parents
+                await unlinkIfPresent(filePath);
+                // Starting at the key's own path, not its parent: the key may itself
+                // be an empty directory left by an earlier prefix, and the unlink
+                // above reads that as "no object here" rather than removing it.
+                // eslint-disable-next-line no-await-in-loop -- see above
+                await pruneEmptyDirectories(filePath, directory);
+            }
         },
 
         get: async (key: string, getOptions?: { range?: R2RangeLike }): Promise<R2ObjectBodyLike | null> => {
@@ -730,34 +997,8 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
                 throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 list prefix contains a NUL byte");
             }
 
-            const all = await walkObjects(directory);
             const prefix = listOptions.prefix ?? "";
-            const underPrefix = all.filter((key) => key.startsWith(prefix));
             const { delimiter } = listOptions;
-            const filtered = delimiter === undefined ? underPrefix : underPrefix.filter((key) => !key.slice(prefix.length).includes(delimiter));
-
-            // Keys the delimiter rolled up. R2 does not drop them — it returns
-            // the common prefix (through the delimiter) in `delimitedPrefixes`,
-            // which is the entire point of asking for a delimiter. Filtering
-            // them out and returning nothing else made a delimited list report
-            // an empty, untruncated page over a full bucket.
-            const delimitedPrefixes =
-                delimiter === undefined
-                    ? undefined
-                    : [
-                          ...new Set(
-                              underPrefix
-                                  .map((key) => {
-                                      const rest = key.slice(prefix.length);
-                                      const at = rest.indexOf(delimiter);
-
-                                      return at === -1 ? undefined : key.slice(0, prefix.length + at + delimiter.length);
-                                  })
-                                  .filter((value): value is string => value !== undefined),
-                          ),
-                          // Codepoint order, the order R2 itself lists in.
-                          // `localeCompare` would interleave case differently.
-                      ].toSorted((a, b) => (a < b ? -1 : Number(a > b)));
 
             // `startAfter` and `cursor` are the same operation on a sorted key
             // list — resume strictly after a key — and R2 honours both when both
@@ -777,9 +1018,14 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
                 after = listOptions.startAfter;
             }
 
-            const startIndex = after === undefined ? 0 : firstIndexGreaterThan(filtered, after);
-            const page = filtered.slice(startIndex, startIndex + limit);
-            const truncated = startIndex + limit < filtered.length;
+            const { keys, prefixes } = await walkUnder(directory, { after, delimiter, limit, prefix });
+            const page = keys.slice(0, limit);
+            const truncated = keys.length > limit;
+            // Keys the delimiter rolled up. R2 does not drop them — it returns
+            // the common prefix (through the delimiter) in `delimitedPrefixes`,
+            // which is the entire point of asking for a delimiter.
+            const delimitedPrefixes = delimiter === undefined ? undefined : [...prefixes].toSorted(byCodepoint);
+
             // A key can vanish (or turn out to be an unrelated file) between the
             // walk and the trailer read; those drop out of the page rather than
             // failing the whole listing.
@@ -800,13 +1046,13 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
             return { cursor: truncated ? page.at(-1) : undefined, delimitedPrefixes, objects, truncated };
         },
 
-        put: async (
-            key: string,
-            body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null,
-            putOptions?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string } },
-        ): Promise<R2ObjectLike> => {
+        put: (async (key: string, body: R2PutBodyLike, putOptions?: R2PutOptionsLike & { onlyIf?: R2ConditionalLike }): Promise<R2ObjectLike | null> => {
             validateKey(key);
+            validateCustomMetadata(putOptions?.customMetadata);
 
+            // Normalised before a byte is staged so a malformed digest fails the
+            // same way an over-large metadata block does — with nothing written.
+            const declaredSha256 = putOptions?.sha256 === undefined ? undefined : normalizeSha256(putOptions.sha256);
             const filePath = join(directory, encodeKey(key));
             const temporaryPath = join(directory, TMP_DIR, randomUUID());
 
@@ -832,10 +1078,27 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
                         await handle.write(chunk);
                     }
 
+                    const sha256Hex = hash.digest("hex");
+
+                    // A declared digest makes the write a CHECKED one on R2, and
+                    // it has to be one here too. Recording the digest of
+                    // whatever bytes arrived instead published a corrupt object
+                    // under a verified write, and then reported a `head()`
+                    // checksum contradicting the one the caller declared — while
+                    // the same call against R2 stores nothing at all. Raised
+                    // here, before the trailer and therefore before the rename,
+                    // so the staged file is discarded by the handler below.
+                    if (declaredSha256 !== undefined && declaredSha256 !== sha256Hex) {
+                        throw new LunoraError(
+                            "VALIDATION_ERROR",
+                            `@lunora/platform-node: the SHA-256 checksum you specified for R2 key "${key}" did not match what we received. You provided a SHA-256 checksum with value: ${declaredSha256}. Actual SHA-256 was: ${sha256Hex}`,
+                        );
+                    }
+
                     meta = {
                         customMetadata: putOptions?.customMetadata,
                         httpMetadata: putOptions?.httpMetadata,
-                        sha256Hex: hash.digest("hex"),
+                        sha256Hex,
                         size,
                         uploaded: new Date().toISOString(),
                     };
@@ -850,18 +1113,28 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
                 throw error;
             }
 
-            // The one operation that publishes the object — body and metadata are
-            // in this file together, so there is no window where they disagree.
-            try {
-                await rename(temporaryPath, filePath);
-            } catch (error: unknown) {
-                await unlinkIfPresent(temporaryPath);
+            const onlyIf = putOptions?.onlyIf;
 
-                throw asKeyCollision(key, error);
+            if (onlyIf !== undefined) {
+                // A conditional put is checked and published under a per-key lock,
+                // so two of them in this process cannot both pass the check.
+                return withKeyLock(key, async () => {
+                    if (!(await meetsCondition(filePath, onlyIf))) {
+                        await unlinkIfPresent(temporaryPath);
+
+                        return null; // eslint-disable-line unicorn/no-null
+                    }
+
+                    await publish(temporaryPath, filePath, key);
+
+                    return toObject(key, meta);
+                });
             }
 
+            await publish(temporaryPath, filePath, key);
+
             return toObject(key, meta);
-        },
+        }) as R2BucketLike["put"],
     };
 };
 

@@ -66,7 +66,7 @@ interface ScheduledFunctionDoc {
     shardKey?: string;
 
     /**
-     * The `WORKFLOW_*`/`AGENT_*` binding a fresh durable instance is started from
+     * The workflow/agent class name (its `ctx.exports` key) a fresh durable instance is started from
      * on fire (the {@link ScheduledFunctionDoc.args} become its `params`). Set
      * instead of {@link ScheduledFunctionDoc.functionPath}.
      */

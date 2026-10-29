@@ -43,26 +43,32 @@
  * `customers.create` type-checks and never leaves the process. Dodo's only working idempotency in
  * this SDK version is body-level (`event_id` on usage ingestion), which we do use.
  *
- * **A key is stable for the logical OPERATION, not fresh per attempt.** A plan change is keyed on
- * the subscription AND the target plan/quantity, so an identical retry replays while a different
- * target is a different key — one key across two parameter sets is a provider-side mismatch error.
- * The cost of that stability is a toggle: re-issuing a target that was applied and then changed
- * away from, inside the provider's idempotency window (24h on Stripe), replays the first response
- * instead of acting. Pass an explicit key (`SubscriptionPatch.idempotencyKey`,
- * `CancelSubscriptionOptions.idempotencyKey`, `resumeSubscription`'s `options`) for that case.
- * Those overrides are honoured by the Stripe adapter only — per the list above, no other
- * provider's plan-change endpoint accepts a key at all.
+ * **A key is stable for the logical OPERATION, not fresh per attempt**, and changes when the
+ * operation does: captures and refunds key on their amount, a subscription cancel on its mode and the
+ * row's `updatedAt`. Plan changes and resumes derive no key (they set absolute state, so a retry is a
+ * no-op). Every key the facade forwards is hashed and namespaced to the object it acts on, a
+ * caller-supplied one included, so one tenant's key never claims another's.
  */
-import type { Money } from "./types";
+import type { Money, ProviderId } from "./types";
 
 const encoder = new TextEncoder();
+
+/**
+ * Providers whose usage-ingestion body carries a dedupe handle, so re-sending ONE recorded usage
+ * event is a no-op at the provider rather than a second debit: Stripe meter events (`identifier`,
+ * plus a real per-request `Idempotency-Key`), Polar (`externalId`), Dodo (`event_id`).
+ *
+ * Autumn is deliberately absent — see {@link usageForwardIsIdempotent}. Creem never reaches this,
+ * its `capabilities.usageMetering` is `false`. Membership, not exclusion, so a provider added later
+ * fails closed until somebody checks its ingestion body for a key.
+ */
+const KEYED_USAGE_PROVIDERS: ReadonlySet<ProviderId> = new Set<ProviderId>(["dodopayments", "polar", "stripe"]);
 
 const sha256Hex = async (value: string): Promise<string> =>
     [...new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /**
  * Build a deterministic idempotency key from an operation name and stable parts.
- * @experimental
  */
 export const idempotencyKey = (operation: string, ...parts: ReadonlyArray<number | string>): string => [operation, ...parts.map(String)].join(":");
 
@@ -101,3 +107,19 @@ export const localRefundKey = (sessionId: string, refundId: string | undefined, 
  * delivery — the `marker.` prefix is what separates the two in the `events` audit log.
  */
 export const LOCAL_REFUND_CLAIM_TYPE = "marker.local_refund";
+
+/**
+ * Whether re-forwarding a recorded usage event to `provider` is safe, i.e. whether the key travels.
+ *
+ * `reconcile`'s usage sweep exists to retry a forward that failed — but a row can be unreported
+ * because the REQUEST failed or because only the RESPONSE was lost, and the two are indistinguishable
+ * from here. Where the key travels, both resolve to one debit. Where it does not, the second case
+ * bills the customer twice and eats their remaining allowance, so the sweep must not run.
+ *
+ * `autumn-js` is the one that does not: its `TrackParams` has no idempotency field, its
+ * `RequestOptions` carries none either, and the package contains no `idempot` match at all — every
+ * `track` call applies. The cost of skipping is a genuinely-failed forward that stays lost (Autumn
+ * under-counts, `track`'s `usage.report_failed` signal is what surfaces it); the alternative is
+ * charging for usage that never happened, which is the worse of the two on a money path.
+ */
+export const usageForwardIsIdempotent = (provider: ProviderId): boolean => KEYED_USAGE_PROVIDERS.has(provider);

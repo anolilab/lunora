@@ -101,36 +101,41 @@ describe("createAdminWsTokenProvider", () => {
         expect(calls).toHaveLength(2);
     });
 
-    it("falls back to the master token on a 404 (pre-095 worker) and remembers the miss", async () => {
-        expect.assertions(2);
-
-        const { calls, fetchImpl } = mintFetch([new Response("not found", { status: 404 })]);
-        const provider = createAdminWsTokenProvider({ adminToken: ADMIN_TOKEN, baseUrl: BASE_URL, fetchImpl });
-
-        await expect(provider.getToken()).resolves.toBe(ADMIN_TOKEN);
-
-        // The miss is remembered — a reconnect resolves without re-probing.
-        await provider.getToken();
-
-        expect(calls).toHaveLength(1);
-    });
-
-    it("invalidate() clears the 404 latch so a transient miss does not pin the master token forever", async () => {
+    it("rejects on a 404 mint response and never returns the master token", async () => {
         expect.assertions(3);
 
-        // The latch exists so a pre-095 worker isn't re-probed on every reconnect.
-        // But one 404 is reachable without a legacy worker at all — a proxy/CDN
-        // that 404s an unknown POST, or a BYO dev setup where Vite answers the
-        // mint path — and `invalidate()` IS the rotation-recovery path (wired to
-        // `client.onTokenExpired`). Leaving the latch set there downgraded the WS
-        // credential to the master admin token for the provider's whole life,
-        // putting it in the `?token=` query string this module exists to keep it
-        // out of.
+        const { calls, fetchImpl } = mintFetch([new Response("not found", { status: 404 }), new Response("not found", { status: 404 })]);
+        const provider = createAdminWsTokenProvider({ adminToken: ADMIN_TOKEN, baseUrl: BASE_URL, fetchImpl });
+
+        await expect(provider.getToken()).rejects.toThrow("ws-token mint failed: 404");
+
+        // No latch: a reconnect re-probes the mint endpoint and still refuses to
+        // hand back the master token.
+        await expect(provider.getToken()).rejects.toThrow("ws-token mint failed: 404");
+
+        expect(calls).toHaveLength(2);
+    });
+
+    it("rejects on a 405 mint response and re-probes on the next resolution", async () => {
+        expect.assertions(3);
+
+        const { calls, fetchImpl } = mintFetch([new Response("method not allowed", { status: 405 }), new Response("method not allowed", { status: 405 })]);
+        const provider = createAdminWsTokenProvider({ adminToken: ADMIN_TOKEN, baseUrl: BASE_URL, fetchImpl });
+
+        await expect(provider.getToken()).rejects.toThrow("ws-token mint failed: 405");
+        await expect(provider.getToken()).rejects.toThrow("ws-token mint failed: 405");
+
+        expect(calls).toHaveLength(2);
+    });
+
+    it("invalidate() after a 404 re-mints a real sub-token (no master-token memory)", async () => {
+        expect.assertions(3);
+
         const now = Date.now();
         const { calls, fetchImpl } = mintFetch([new Response("not found", { status: 404 }), mintedResponse("eph-1", now + 60_000)]);
         const provider = createAdminWsTokenProvider({ adminToken: ADMIN_TOKEN, baseUrl: BASE_URL, fetchImpl });
 
-        await expect(provider.getToken()).resolves.toBe(ADMIN_TOKEN);
+        await expect(provider.getToken()).rejects.toThrow("ws-token mint failed: 404");
 
         provider.invalidate();
 

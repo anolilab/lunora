@@ -82,6 +82,40 @@ describe("createAccessResolver", () => {
         expect(onError).toHaveBeenCalledTimes(1);
     });
 
+    it("resolves a genuine but expired token WITH its past `exp`, so the runtime answers TOKEN_EXPIRED rather than anonymous", async () => {
+        expect.assertions(3);
+
+        const onError = vi.fn<(error: unknown, request: Request) => void>();
+        const resolve = createAccessResolver({ aud: AUD, keySet: publicKey, onError, teamDomain: TEAM });
+        const past = Math.floor(Date.now() / 1000) - 60;
+        const token = await new SignJWT({ sub: "user-1" })
+            .setProtectedHeader({ alg: "RS256" })
+            .setIssuedAt(past - 3600)
+            .setIssuer(ISSUER)
+            .setAudience(AUD)
+            .setExpirationTime(past)
+            .sign(privateKey);
+
+        const identity = await resolve(requestWithHeader(token));
+
+        expect(identity?.userId).toBe("user-1");
+        expect(identity?.exp).toBe(past);
+        expect(onError).toHaveBeenCalledTimes(1);
+    });
+
+    it("still resolves an expired token that is forged or for another application to null", async () => {
+        expect.assertions(2);
+
+        const resolve = createAccessResolver({ aud: AUD, keySet: publicKey, teamDomain: TEAM });
+        const past = Math.floor(Date.now() / 1000) - 60;
+        const attacker = await generateKeyPair("RS256");
+        const expiredToken = (audience: string, key: CryptoKey): Promise<string> =>
+            new SignJWT({ sub: "user-1" }).setProtectedHeader({ alg: "RS256" }).setIssuer(ISSUER).setAudience(audience).setExpirationTime(past).sign(key);
+
+        await expect(resolve(requestWithHeader(await expiredToken(AUD, attacker.privateKey)))).resolves.toBeNull();
+        await expect(resolve(requestWithHeader(await expiredToken("other-app", privateKey)))).resolves.toBeNull();
+    });
+
     it("does not call onError when there is simply no token", async () => {
         expect.assertions(1);
 
@@ -130,6 +164,23 @@ describe("createAccessResolver", () => {
         const identity = await resolve(requestWithHeader(token));
 
         expect(identity?.userId).toBe("user-7");
+    });
+
+    it("never lets mapClaims set the identity's expiry", async () => {
+        expect.assertions(2);
+
+        const resolve = createAccessResolver({
+            aud: AUD,
+            keySet: publicKey,
+            mapClaims: () => {
+                return { exp: 9_999_999_999, expiresAtMs: Date.now() + 86_400_000 };
+            },
+            teamDomain: TEAM,
+        });
+        const identity = await resolve(requestWithHeader(await sign({ sub: "user-7" })));
+
+        expect(identity?.exp).toBeLessThan(9_999_999_999);
+        expect(identity).not.toHaveProperty("expiresAtMs");
     });
 
     it("mints the mapped roles as an identity claim, where both RLS paths read them", async () => {

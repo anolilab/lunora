@@ -22,6 +22,7 @@ import type {
     ExportRow,
     FilterClause,
     FilterOperator,
+    ImportConflictMode,
     MigrationDirection,
     OrderByClause,
     QueueMessageOutcome,
@@ -29,7 +30,7 @@ import type {
     RecordQueueMessageInput,
     WorkflowInstanceStatusResult,
 } from "@lunora/shard-engine";
-import { ADMIN_FUNCTION_PREFIX, tableFromDepKey } from "@lunora/shard-engine";
+import { ADMIN_FUNCTION_PREFIX, isVacuousFilterClause, tableFromDepKey } from "@lunora/shard-engine";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { decodeIdentityHeader } from "../../../shared/identity-header";
@@ -46,7 +47,7 @@ const CONTAINER_EXIT_CODE_PATTERN = /\(exit (\d+)\)/;
 type ContainerLogEntry = LogEntry & { functionPath: string };
 
 /** The structured-filter operators accepted over the wire (mirrors `FilterOperator`). */
-const FILTER_OPERATORS: ReadonlySet<string> = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "lt", "lte", "ne"]);
+const FILTER_OPERATORS: ReadonlySet<string> = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "has", "lt", "lte", "ne"]);
 
 /** Cloudflare Queues accepts 1–100 messages per `sendBatch` call (a 0 or >100 batch is a `BatchCountOutOfBounds` error). */
 const MAX_QUEUE_SEND_BATCH = 100;
@@ -60,6 +61,7 @@ const WORKFLOW_INSTANCE_STATES: ReadonlySet<string> = new Set<WorkflowInstanceSt
     "errored",
     "paused",
     "queued",
+    "rollingBack",
     "running",
     "terminated",
     "unknown",
@@ -89,6 +91,10 @@ interface RunShardExportArgs {
 
 /** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface RunShardImportArgs {
+    /** Check the rows and report their shape errors, writing nothing. See `ImportShardArgs.dryRun` in `@lunora/shard-engine`. */
+    dryRun?: boolean;
+    /** What a row whose `_id` already exists does. See `ImportConflictMode` in `@lunora/shard-engine`. */
+    onConflict?: ImportConflictMode;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -108,6 +114,18 @@ interface RunShardImportArgs {
  */
 interface RunShardWriteArgs {
     doc?: Record<string, unknown>;
+
+    /**
+     * `delete` only: remove the row PHYSICALLY even on a `.softDelete()` table,
+     * instead of stamping the marker column.
+     *
+     * Internal — {@link parseWriteRowArgs} does not read it off the wire, so the
+     * single-row `writeRow` op cannot set it. The bulk delete arm builds its args
+     * in-process and is the only caller that does: its bounded scan re-reads the
+     * physical table each batch, so a delete that leaves the row in place never
+     * shrinks the match set and the drain cannot converge.
+     */
+    hard?: boolean;
     id?: string;
     op: "delete" | "insert" | "patch" | "replace";
     table: string;
@@ -204,6 +222,26 @@ interface RunShardRankBeforeArgs {
     partitionKey: string;
     rowId: string;
     sortValues: unknown[];
+    table: string;
+}
+
+/**
+ * Arguments accepted by the `__lunora_admin__:findRelated` admin RPC — a
+ * read-only `ctx.db.related(...)` traversal from `{ table, id }`, exposed so an
+ * AI agent (`@lunora/mcp`'s `lunora_find_related`) can follow the schema's
+ * foreign keys without the app having to write a query for it.
+ *
+ * Every optional field is the same option `related` takes; nothing here widens
+ * the surface, and the writer refuses an out-of-range `depth`/`limit` or an
+ * unknown edge name itself, so this parser only enforces SHAPE.
+ */
+interface RunShardFindRelatedArgs {
+    cursor?: null | string;
+    depth?: number;
+    direction?: "both" | "in" | "out";
+    edges?: string[];
+    id: string;
+    limit?: number;
     table: string;
 }
 
@@ -358,16 +396,18 @@ const parseSeverityArgument = (args: Record<string, unknown>): IssueSeverity | n
 /**
  * Minimal structural shape of a created/fetched workflow instance handle, mirrored
  * from `@lunora/workflow`'s WorkflowInstanceLike so `@lunora/do` stays free of a
- * dependency on the workflow package. Only the members the admin ops touch (`id`
- * and `status()`) are modelled.
+ * dependency on the workflow package. Only the members the admin ops touch (`id`,
+ * `status()` and `sendEvent()`) are modelled. `sendEvent` is optional because the
+ * binding check only vouches for `create`/`get`.
  */
 interface WorkflowInstanceHandle {
     id: string;
+    sendEvent?: (event: { payload?: unknown; type: string }) => Promise<void>;
     status: () => Promise<{ error?: { message?: unknown; name?: unknown }; output?: unknown; status?: unknown }>;
 }
 
 /**
- * Minimal structural shape of a Cloudflare Workflows binding (the `env.WORKFLOW_*`
+ * Minimal structural shape of a Cloudflare Workflows binding (a `ctx.exports.<Class>`
  * object), mirrored from `@lunora/workflow`'s `WorkflowBindingLike`. Only `create`
  * and `get` — the members the studio's start/observe ops call — are modelled.
  */
@@ -395,7 +435,9 @@ const parseCreateWorkflowInstanceArgs = (args: Record<string, unknown>): CreateW
         throw new LunoraError("BAD_REQUEST", "createWorkflowInstance: `exportName` is required");
     }
 
-    const id = typeof args["id"] === "string" && args["id"] !== "" ? args["id"] : undefined;
+    // Trimmed like the status and send-event parses, so the id a create returns is the one the others look up.
+    const trimmedId = typeof args["id"] === "string" ? args["id"].trim() : "";
+    const id = trimmedId === "" ? undefined : trimmedId;
 
     // Admin-token-gated, but reject the reserved workflow branch-marker key for
     // uniformity with every other create surface — a forged marker could
@@ -434,6 +476,57 @@ const parseGetWorkflowInstanceStatusArgs = (args: Record<string, unknown>): GetW
     return { exportName, id };
 };
 
+/** Parsed `sendWorkflowEvent` admin-RPC payload: which instance of which declared workflow, and the event to deliver. */
+interface SendWorkflowEventArgs {
+    exportName: string;
+    id: string;
+    payload?: unknown;
+    type: string;
+}
+
+/**
+ * The event-type namespace `@lunora/workflow` reserves for its own events
+ * (`RESERVED_EVENT_TYPE_PREFIX` there; `@lunora/do` has no dependency on that
+ * package). `ctx.parallel` children report their outcome to the parent as a
+ * `lunora:branch:*` event, so an admin-sent one could forge a branch result.
+ */
+const RESERVED_WORKFLOW_EVENT_PREFIX = "lunora:";
+
+/**
+ * Validate the `sendWorkflowEvent` admin-RPC payload. Requires non-empty
+ * `exportName`, `id` and `type`, and refuses a reserved `lunora:` type. Only the shape is
+ * checked here: `payload` is returned as received, and `ShardDO.handleSendWorkflowEvent`
+ * validates it against the type's `defineWorkflowEvent` definition before sending. Throws a
+ * 400 `LunoraError` on a bad shape.
+ */
+const parseSendWorkflowEventArgs = (args: Record<string, unknown>): SendWorkflowEventArgs => {
+    const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
+    const id = typeof args["id"] === "string" ? args["id"].trim() : "";
+    // Untrimmed: delivery matches the type a workflow waits for byte for byte, so only emptiness is judged on the trimmed value.
+    const type = typeof args["type"] === "string" ? args["type"] : "";
+
+    if (exportName === "") {
+        throw new LunoraError("BAD_REQUEST", "sendWorkflowEvent: `exportName` is required");
+    }
+
+    if (id === "") {
+        throw new LunoraError("BAD_REQUEST", "sendWorkflowEvent: `id` is required");
+    }
+
+    if (type.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", "sendWorkflowEvent: `type` is required");
+    }
+
+    if (type.startsWith(RESERVED_WORKFLOW_EVENT_PREFIX)) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `sendWorkflowEvent: event type "${type}" is reserved — the "${RESERVED_WORKFLOW_EVENT_PREFIX}" prefix is used by the framework's own events`,
+        );
+    }
+
+    return { exportName, id, payload: args["payload"], type };
+};
+
 /** Coerce an unknown `status()` payload field into a known instance state, defaulting to `"unknown"`. */
 const toWorkflowInstanceState = (raw: unknown): WorkflowInstanceStatusResult["status"] =>
     typeof raw === "string" && WORKFLOW_INSTANCE_STATES.has(raw) ? (raw as WorkflowInstanceStatusResult["status"]) : "unknown";
@@ -453,11 +546,41 @@ const toWorkflowInstanceError = (raw: unknown): WorkflowInstanceStatusResult["er
 };
 
 /**
+ * The nested `path` of a filter clause: an absent key or an empty list means the
+ * field itself; `null` or any non-list is refused.
+ * @returns the field names under the column, or `undefined` when the clause is not nested
+ * @throws LunoraError `BAD_REQUEST` when `raw` is present but is not a list of strings
+ */
+const parseClausePath = (column: string, raw: unknown): string[] | undefined => {
+    // Only an absent key means "no path". An explicit `null` is a request for a
+    // nested field the caller failed to name, and dropping it would test the
+    // parent column instead — under "delete matching", that deletes rows the
+    // caller never asked for.
+    if (raw === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(raw) || !raw.every((segment): segment is string => typeof segment === "string")) {
+        throw new LunoraError("BAD_REQUEST", `the path for ${column} must be a list of field names`);
+    }
+
+    return raw.length === 0 ? undefined : raw;
+};
+
+/**
  * Parse the loosely-typed `filters` admin arg into validated {@link FilterClause}s,
  * dropping any malformed entry (non-object, missing/blank column, unknown
- * operator). Returns `undefined` when nothing valid remains so `readTablePage`
- * takes its no-predicate fast path.
+ * operator) and any clause that constrains nothing ({@link isVacuousFilterClause}
+ * — an empty `contains`, an empty range bound), which the SQL builder drops too.
+ * Returns `undefined` when nothing valid remains so `readTablePage` takes its
+ * no-predicate fast path — and so `deleteRows`' predicate guard sees an empty
+ * `contains` for what it is.
+ *
+ * A malformed `path` throws instead of being skipped: dropping the path would
+ * keep the clause and test the parent field, and under "delete matching" that
+ * widens the delete.
  * @returns the validated filter clauses, or `undefined` when no valid clauses remain
+ * @throws LunoraError `BAD_REQUEST` when a clause carries a `path` that is not a list of field names
  */
 const parseTablePageFilters = (raw: unknown): FilterClause[] | undefined => {
     if (!Array.isArray(raw)) {
@@ -478,7 +601,12 @@ const parseTablePageFilters = (raw: unknown): FilterClause[] | undefined => {
             continue;
         }
 
-        clauses.push({ column, operator: operator as FilterOperator, value: record["value"] });
+        const path = parseClausePath(column, record["path"]);
+        const clause: FilterClause = { column, operator: operator as FilterOperator, value: record["value"], ...(path === undefined ? {} : { path }) };
+
+        if (!isVacuousFilterClause(clause)) {
+            clauses.push(clause);
+        }
     }
 
     return clauses.length > 0 ? clauses : undefined;
@@ -532,7 +660,14 @@ const parseBulkDeleteArgs = (args: Record<string, unknown>): RunShardBulkRowArgs
     //
     // Same shape as `parseBulkPatchArgs` refusing an empty `doc` two functions
     // below, rather than treating it as a no-op.
-    if ((filters === undefined || filters.length === 0) && (search === undefined || search === "")) {
+    //
+    // `search` is tested TRIMMED because the reader normalises it the same way
+    // (`options.search?.trim() ?? ""`): a blank-but-not-empty term compiles to no
+    // search conjunct at all, so it would walk past a raw `=== ""` guard and run
+    // the predicate-free scan — a full `clearTable` recorded under the
+    // `deleteRows` audit verb. A guard that tests the raw value while the reader
+    // normalises it is not a guard.
+    if ((filters === undefined || filters.length === 0) && (search === undefined || search.trim() === "")) {
         throw new LunoraError("BAD_REQUEST", "deleteRows: a predicate (`filters` or `search`) is required — use `clearTable` to empty the table");
     }
 
@@ -969,6 +1104,26 @@ const parseReplayQueueMessageArgs = (args: Record<string, unknown>): { id: strin
  * be an array; anything else throws a 400 `LunoraError` so the cross-shard
  * coordinator surfaces a uniform error rather than a downstream SQL failure.
  */
+/** Arguments accepted by the `__lunora_admin__:releaseShardRegistration` admin RPC. */
+interface ReleaseShardRegistrationArgs {
+    /** Report what would be released without touching the registry. */
+    dryRun: boolean;
+    /** The `.shardBy()` tables the registry lists this shard for. */
+    tables: string[];
+}
+
+const parseReleaseShardRegistrationArgs = (args: Record<string, unknown>): ReleaseShardRegistrationArgs => {
+    const tables = Array.isArray(args["tables"])
+        ? (args["tables"] as unknown[]).filter((table): table is string => typeof table === "string" && table !== "")
+        : [];
+
+    if (tables.length === 0) {
+        throw new LunoraError("BAD_REQUEST", "releaseShardRegistration: `tables` must name at least one table");
+    }
+
+    return { dryRun: args["dryRun"] === true, tables };
+};
+
 const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeArgs => {
     const table = typeof args["table"] === "string" ? args["table"] : "";
     const index = typeof args["index"] === "string" ? args["index"] : "";
@@ -998,6 +1153,93 @@ const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeA
     }
 
     return { index, partitionKey: args["partitionKey"], rowId, sortValues: args["sortValues"], table };
+};
+
+/**
+ * Narrow `findRelated`'s optional `edges` allowlist, 400ing on anything that is
+ * not an array of strings.
+ *
+ * A non-array used to fall back to "every edge" and a non-string ENTRY used to
+ * be filtered out, both silently — so `edges: "orders.customerId"` (the string a
+ * model reaches for first) walked the whole graph instead of one relation.
+ * @returns the validated edge names, or `undefined` when the caller named none
+ */
+const parseFindRelatedEdges = (raw: unknown): string[] | undefined => {
+    if (raw === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(raw) || !raw.every((entry): entry is string => typeof entry === "string")) {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `edges` must be an array of edge-name strings");
+    }
+
+    return raw;
+};
+
+/**
+ * Validate the `__lunora_admin__:findRelated` payload. `table` and `id` are
+ * required; each traversal option is either absent or the right SHAPE, and a
+ * wrong one is a 400 rather than a silent fallback to its default.
+ *
+ * Rejecting matters more here than in the other read parsers because every
+ * default this op has is the WIDEST setting, so dropping a malformed narrowing
+ * option runs a bigger traversal than the caller asked for:
+ *
+ * - `direction: "sideways"` fell back to `"both"` — both directions instead of one.
+ * - `edges: "orders.customerId"` (a string, not an array) fell back to EVERY edge.
+ * - `limit: "1"` and `depth: "1"` fell back to the defaults.
+ *
+ * The caller is an AI agent composing JSON (`@lunora/mcp`'s
+ * `lunora_find_related`), which is exactly the caller most likely to send
+ * `"1"` for a number, and the traversal reads through the ADMIN writer with RLS
+ * and column masks bypassed. Silently widening its blast radius on malformed
+ * input is the wrong direction to fail. Non-string `edges` entries are rejected
+ * for the same reason rather than filtered away: a caller that asked for three
+ * edges and named two of them wrongly gets told, not quietly given one.
+ *
+ * Ranges are still the writer's to enforce — an out-of-range `depth`/`limit` or
+ * an unknown edge name fails there with the message that names the cap, rather
+ * than one invented here.
+ */
+const parseFindRelatedArgs = (args: Record<string, unknown>): RunShardFindRelatedArgs => {
+    const table = typeof args["table"] === "string" ? args["table"] : "";
+    const id = typeof args["id"] === "string" ? args["id"] : "";
+
+    if (table.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `table` is required");
+    }
+
+    if (id.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `id` is required");
+    }
+
+    const { cursor, depth, direction, edges, limit } = args;
+
+    if (cursor !== undefined && cursor !== null && typeof cursor !== "string") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `cursor` must be a string");
+    }
+
+    if (depth !== undefined && typeof depth !== "number") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `depth` must be a number");
+    }
+
+    if (direction !== undefined && direction !== "both" && direction !== "in" && direction !== "out") {
+        throw new LunoraError("BAD_REQUEST", 'findRelated: `direction` must be one of "in", "out" or "both"');
+    }
+
+    if (limit !== undefined && typeof limit !== "number") {
+        throw new LunoraError("BAD_REQUEST", "findRelated: `limit` must be a number");
+    }
+
+    return {
+        cursor: typeof cursor === "string" ? cursor : undefined,
+        depth,
+        direction,
+        edges: parseFindRelatedEdges(edges),
+        id,
+        limit,
+        table,
+    };
 };
 
 /** Throw a uniform 400 `LunoraError` for a malformed admin payload field. */
@@ -1104,6 +1346,24 @@ const decodeIndexHitKey = (key: string): IndexHit | undefined => {
 /** Arguments accepted by the `__lunora_admin__:cdcSync` admin RPC. */
 interface RunShardCdcSyncArgs {
     limit?: number;
+
+    /**
+     * The CDC epoch this consumer last saw on a served page, echoed back so the
+     * shard can prove the cursor beside it still indexes the same timeline.
+     *
+     * Optional, and that is the contract rather than an oversight: absent means
+     * the consumer carries no epoch (it predates the field, or has never been
+     * served a page), and the read falls back to the high-watermark proof alone
+     * — exactly the guarantee it had before.
+     *
+     * Same spelling and same meaning as the `sinceEpoch` the subscribe/resume
+     * path already takes (`ShardDO.evaluateResume`), with one deliberate
+     * difference on ABSENCE: a resume treats a missing epoch as
+     * unprovable and falls back to a full snapshot, which costs a snapshot.
+     * Here the equivalent fallback is a refusal, and refusing every connector
+     * that has not been updated is not a cost this may impose.
+     */
+    sinceEpoch?: string;
     sinceSeq: number;
 }
 
@@ -1174,7 +1434,10 @@ const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs 
 /**
  * Validate the `__lunora_admin__:cdcSync` payload. `sinceSeq` is the caller's
  * per-shard cursor (defaults to 0 = from the beginning); `limit` is an optional
- * page cap. Both are coerced to finite non-negative integers.
+ * page cap. Both are coerced to finite non-negative integers. `sinceEpoch` is
+ * the optional timeline token the caller echoes back; anything that is not a
+ * non-empty string reads as absent, so a malformed value degrades to the
+ * pre-epoch behaviour instead of refusing the caller on a parse artefact.
  */
 const parseCdcSyncArgs = (args: Record<string, unknown>): RunShardCdcSyncArgs => {
     const toCount = (value: unknown): number | undefined => {
@@ -1183,7 +1446,13 @@ const parseCdcSyncArgs = (args: Record<string, unknown>): RunShardCdcSyncArgs =>
         return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
     };
 
-    return { limit: toCount(args["limit"]), sinceSeq: toCount(args["sinceSeq"]) ?? 0 };
+    const { sinceEpoch } = args;
+
+    return {
+        limit: toCount(args["limit"]),
+        ...(typeof sinceEpoch === "string" && sinceEpoch.length > 0 ? { sinceEpoch } : {}),
+        sinceSeq: toCount(args["sinceSeq"]) ?? 0,
+    };
 };
 
 /**
@@ -1214,6 +1483,50 @@ const parseIdentityHeader = (raw: string | null): Record<string, unknown> | unde
  * malformed value disables the watermark path for that call rather than
  * throwing — the call then rides the legacy idempotency dedup.
  */
+
+/**
+ * Parse the `x-lunora-base-seq` header into a CDC baseline cursor, or
+ * `undefined` when absent / non-numeric / negative.
+ *
+ * Deliberately NOT {@link parseClientSeqHeader}: a client mutation sequence
+ * starts at 1, so that parser floors at `> 0` — but `0` is a valid **baseline**.
+ * It means "this client had seen nothing", which is what `readCdcCursor` reports
+ * for an empty changelog and what a brand-new subscription carries. Flooring it
+ * to `undefined` makes `.dropStalePatches()` apply the write unchanged, which is
+ * the opposite verdict: a caller that had seen nothing should have its patch
+ * judged against everything that has happened since, not waved through.
+ */
+const parseBaselineSeqHeader = (raw: string | null): number | undefined => {
+    if (!raw) {
+        return undefined;
+    }
+
+    const seq = Number(raw);
+
+    return Number.isInteger(seq) && seq >= 0 ? seq : undefined;
+};
+
+/**
+ * Parse the runtime's `x-lunora-sample-errors` tail-bias toggle, or `undefined`
+ * when the header is absent.
+ *
+ * Absent and `"0"` are deliberately different answers, which is why this returns
+ * a tri-state rather than the `!== "0"` boolean the export gate wants. Absent
+ * means NO verdict was propagated — an alarm, a subscription re-run, a
+ * non-Lunora caller — and the shard forwards that absence to an outbound
+ * container so it stays on its own configuration. Collapsing absent to `true`
+ * here would instead TELL the container "the tail bias is on", overriding a
+ * container that was deliberately configured otherwise. The export gate applies
+ * its own `?? true` where keep-by-default is the right reading.
+ */
+const parseSampleErrorsHeader = (raw: string | null): boolean | undefined => {
+    if (raw === null) {
+        return undefined;
+    }
+
+    return raw !== "0";
+};
+
 const parseClientSeqHeader = (raw: string | null): number | undefined => {
     if (!raw) {
         return undefined;
@@ -1280,12 +1593,20 @@ const parseEmit = (raw: string | undefined, devDefault: boolean): boolean => {
 };
 
 /** Parse a 0..1 sample rate (`LUNORA_REQUEST_LOG_SAMPLE`); clamped to `[0, 1]`, defaulting to `1` (record all) when unset/invalid. */
-const parseSampleRate = (raw: string | undefined): number => {
+const parseSampleRate = (raw: unknown): number => {
     if (raw === undefined) {
         return 1;
     }
 
-    const value = Number.parseFloat(raw);
+    // `Number`, not `parseFloat`: "0.25garbage" must be invalid, not 0.25. A blank string would coerce to 0.
+    // A bare number in wrangler config arrives as a number, not a string.
+    let value = Number.NaN;
+
+    if (typeof raw === "number") {
+        value = raw;
+    } else if (typeof raw === "string" && raw.trim() !== "") {
+        value = Number(raw);
+    }
 
     return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
 };
@@ -1333,6 +1654,7 @@ export {
     isIssueStatus,
     parseApplyCdcArgs,
     parseAssigneeArgument,
+    parseBaselineSeqHeader,
     parseBulkDeleteArgs,
     parseBulkPatchArgs,
     parseCdcSyncArgs,
@@ -1340,6 +1662,7 @@ export {
     parseClientSeqHeader,
     parseCreateWorkflowInstanceArgs,
     parseEmit,
+    parseFindRelatedArgs,
     parseGetWorkflowInstanceStatusArgs,
     parseIdentityHeader,
     parseIssueHash,
@@ -1350,11 +1673,14 @@ export {
     parseRecordContainerEventArgs,
     parseRecordMailArgs,
     parseRecordQueueMessageArgs,
+    parseReleaseShardRegistrationArgs,
     parseReplayQueueMessageArgs,
     parseRunAsArgs,
     parseRunMigrationArgs,
+    parseSampleErrorsHeader,
     parseSampleRate,
     parseSendQueueMessageArgs,
+    parseSendWorkflowEventArgs,
     parseSeverityArgument,
     parseTablePageFilters,
     parseTablePageOrderBy,
@@ -1366,10 +1692,7 @@ export {
     toWorkflowInstanceState,
 };
 export type {
-    CreateWorkflowInstanceArgs,
-    GetWorkflowInstanceStatusArgs,
     QueueBindingHandle,
-    RunAsArgs,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
     RunShardBulkPatchArgs,
@@ -1377,13 +1700,12 @@ export type {
     RunShardBulkRowResult,
     RunShardCdcSyncArgs,
     RunShardExportArgs,
+    RunShardFindRelatedArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,
     RunShardRankPageArgs,
     RunShardWriteArgs,
     RunShardWriteResult,
-    SendQueueMessageArgs,
     WorkflowBindingHandle,
-    WorkflowInstanceHandle,
 };

@@ -61,7 +61,8 @@ export const toQueuedPayload = (options: SendOptions): QueuedSend => {
  * ```ts
  * export default {
  *   queue: async (batch, env) => {
- *     const mailer = createMailer({ apiKey: env.RESEND_API_KEY, from: "..." });
+ *     // createMailerFromEnv, so dev captures the message here instead of sending it.
+ *     const mailer = createMailerFromEnv(env);
  *     for (const message of batch.messages) {
  *       const { idempotencyKey } = message.body;
  *       if (await env.SENT.get(idempotencyKey)) { message.ack(); continue; }

@@ -1,14 +1,14 @@
 import { LunoraError } from "@lunora/errors";
 import type { CronScheduleKind } from "@lunora/scheduler";
-import { compileCronSchedule, CRON_SCHEDULE_KINDS, isValidCronExpression, warnIfSecondsLeading } from "@lunora/scheduler";
+import { compileCronSchedule, CRON_SCHEDULE_KINDS, warnIfSecondsLeading } from "@lunora/scheduler";
+import isValidCronExpression from "@lunora/scheduler/validate";
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { CodegenDiagnosticError, diagnosticAt } from "../diagnostics";
 import type { AgentIR, CronJobIR, WorkflowIR } from "../ir";
 import { isCronSourceModule } from "../module-specifiers";
-import sanitizeNamespace from "../paths";
-import { listLunoraSourceFiles } from "./ast";
+import { functionKeyOf, listLunoraSourceFiles, propertyKeyName } from "./ast";
 
 /** All builder method names — the structured schedules plus the raw `.cron`. */
 const CRON_METHODS = new Set<string>([...CRON_SCHEDULE_KINDS, "cron"]);
@@ -149,7 +149,7 @@ const objectLiteralValue = (object: ObjectLiteralExpression, jobName: string): R
         const initializer = property.getInitializer();
 
         if (initializer) {
-            result[property.getName()] = literalValue(initializer, jobName);
+            result[propertyKeyName(property)] = literalValue(initializer, jobName);
         }
     }
 
@@ -172,40 +172,34 @@ const functionPathFromArgument = (call: CallExpression, index: number, jobName: 
         );
     }
 
-    // `root.namespace.fn` → `${namespace}:${fn}`. The leading root
-    // (`internal`/`api`) is dropped; namespaces are sanitized exactly as
-    // `emitApi`/`emitServer`/the anyApi proxy do, so the ref matches dispatch.
-    const functionName = argument.getName();
-    const receiver = argument.getExpression();
+    const key = functionKeyOf(argument);
 
-    if (!Node.isPropertyAccessExpression(receiver)) {
-        throw diagnosticAt(argument, `Cron job "${jobName}" function reference must be of the form internal.file.fn (two property accesses).`, {
+    if (key === undefined) {
+        throw diagnosticAt(argument, `Cron job "${jobName}" function reference must be of the form internal.<…path>.fn (or api.<…path>.fn).`, {
             code: "CRON_NON_STATIC_FN",
             name: "LunoraError",
             status: 500,
         });
     }
 
-    const namespace = receiver.getName();
-
-    return `${sanitizeNamespace(namespace)}:${functionName}`;
+    return key;
 };
 
 /** Build a workflow target IR from a resolved {@link WorkflowIR}. */
 const workflowTarget = (workflow: WorkflowIR): Pick<CronJobIR, "workflow"> => {
-    return { workflow: { binding: workflow.bindingName, exportName: workflow.exportName } };
+    return { workflow: { className: workflow.className, exportName: workflow.exportName } };
 };
 
 /**
  * Build a workflow target IR from a resolved {@link AgentIR}. An agent compiles
- * onto a Cloudflare Workflow (its `AGENT_*` binding IS a Workflow binding), so a
+ * onto a Cloudflare Workflow (its `ctx.exports` entry IS a Workflow binding), so a
  * cron that targets it rides the exact same durable-workflow start path as a
  * `workflows.NAME` target — the runtime cron dispatcher calls `.create()` on the
  * binding per fire, and the agent's flat `AgentRunInput` args become the run
  * params.
  */
 const agentTarget = (agent: AgentIR): Pick<CronJobIR, "workflow"> => {
-    return { workflow: { binding: agent.bindingName, exportName: agent.exportName } };
+    return { workflow: { className: agent.className, exportName: agent.exportName } };
 };
 
 /**
@@ -249,7 +243,7 @@ const resolveReferenceAccess = <Definition>(
 /**
  * Resolve the cron's target argument into either a function dispatch
  * (`{ functionPath }`) or a durable-workflow start
- * (`{ workflow: { binding, exportName } }`).
+ * (`{ workflow: { className, exportName } }`).
  *
  * Targets mirror the generated reference objects in `_generated/api.ts`: a
  * `workflows.NAME` access is the canonical generated workflow reference; an

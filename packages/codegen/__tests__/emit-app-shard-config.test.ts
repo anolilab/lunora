@@ -1,35 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { emitApp } from "../src/emit-app";
-
-/** Minimal `EmitAppOptions` with every capability off — these knobs must be reachable regardless. */
-const baseOptions = {
-    hasAccess: false,
-    hasAi: false,
-    hasAnalytics: false,
-    hasAuth: false,
-    hasBrowser: false,
-    hasFramework: false,
-    hasGlobal: false,
-    hasHyperdrive: false,
-    hasHyperdriveGlobal: false,
-    hasImages: false,
-    hasKv: false,
-    hasKvIntrospector: false,
-    hasNotify: false,
-    hasPayments: false,
-    hasQueue: false,
-    hasR2sql: false,
-    hasScheduler: false,
-    hasStorage: false,
-    hasVectors: false,
-    hasWorkflow: false,
-    hasX402: false,
-    tableNames: [],
-    useUmbrella: false,
-    wantsOpenApi: false,
-    wantsOpenRpc: false,
-};
+import baseOptions from "./emit-app-options";
 
 /**
  * The plain-data `ShardDOConfig` knobs that `createShardDO` reads and the docs
@@ -63,6 +35,15 @@ describe("emitApp — ShardDOConfig knobs reachable from the builder", () => {
         expect(output).toContain("...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),");
         expect(output).toContain('public relationExistsPushDown(mode: NonNullable<ShardConfig["relationExistsPushDown"]>): this {');
         expect(output).toContain("...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),");
+    });
+
+    it("passes the delivery authorization selector to the shard", () => {
+        expect.assertions(2);
+
+        const output = emitApp(baseOptions);
+
+        expect(output).toContain('public deliveryAuthorization(selector: (env: Env) => ReturnType<NonNullable<ShardConfig["deliveryAuthorization"]>>): this {');
+        expect(output).toContain("...(this.deliveryAuthorizationSelector === undefined ? {} : { deliveryAuthorization: this.deliveryAuthorizationSelector }),");
     });
 
     it("declares the ShardConfig alias the always-on methods type against, with no capability enabled", () => {

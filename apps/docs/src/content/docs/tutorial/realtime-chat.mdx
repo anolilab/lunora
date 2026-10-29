@@ -23,7 +23,8 @@ pnpm install
 ```
 
 The template gives you a `lunora/schema.ts`, a starter `lunora/messages.ts`,
-and a `src/server/index.ts` that boots `@lunora/runtime`'s `createWorker`.
+and a `src/server.ts` that builds the worker from the generated `defineApp()`
+(`lunora/_generated/app`).
 
 </Step>
 
@@ -126,7 +127,7 @@ client subscribed to `list` for that `channelId` re-renders.
 <Step>
 ## 6. Wire the React app
 
-`src/client/main.tsx` already wraps your tree in `LunoraProvider`. Build the
+`src/main.tsx` already wraps your tree in `LunoraProvider`. Build the
 chat panel:
 
 ```tsx

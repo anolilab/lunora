@@ -1,17 +1,15 @@
 "use client";
 
-import { Download01Icon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
 import type { Edge, NodeTypes } from "@xyflow/react";
-import { Background, Controls, MiniMap, Panel, ReactFlow, useEdgesState, useNodes, useNodesInitialized, useNodesState, useReactFlow } from "@xyflow/react";
+import { Background, Controls, MiniMap, Panel, ReactFlow, useEdgesState, useNodesInitialized, useNodesState, useReactFlow } from "@xyflow/react";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import DiagramExportPanel from "../../components/diagram-export-panel";
 import type { StorageTier } from "../../components/storage-tier";
 import { TIER_META } from "../../components/storage-tier";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
 import { Input } from "../../components/ui/input";
 import { useT } from "../../i18n/i18n-context";
 import type { ColumnMeta } from "../../lib/admin";
@@ -19,7 +17,6 @@ import { fireAndForget } from "../../lib/internal";
 import { cn } from "../../lib/utils";
 import type { DatabaseSchemaNodeType } from "./database-schema-node";
 import { DatabaseSchemaNode } from "./database-schema-node";
-import { exportDiagramAsJson, exportDiagramAsPng, exportDiagramAsSvg } from "./diagram-export";
 import type { SchemaEdge } from "./layout";
 import { computeLayout } from "./layout";
 
@@ -280,99 +277,6 @@ const FitOnSeed = ({ containerRef, seedKey }: { readonly containerRef: React.Ref
 };
 
 /**
- * Export toolbar rendered inside the React Flow canvas via `Panel`.
- *
- * Must be mounted as a child of `ReactFlow` so it can call `useReactFlow()`
- * and `useNodes()`. The PNG/SVG handlers locate the `.react-flow__viewport`
- * element through a ref on the wrapping container and pass it to `html-to-image`.
- */
-const DiagramExportPanel = ({ containerRef, testIdPrefix }: { containerRef: React.RefObject<HTMLElement | null>; testIdPrefix: string }): ReactElement => {
-    const t = useT();
-    const nodes = useNodes();
-    const { getEdges } = useReactFlow();
-    const [exporting, setExporting] = useState<"json" | "png" | "svg" | null>(null);
-
-    const handlePng = async (): Promise<void> => {
-        const viewport = containerRef.current?.querySelector<HTMLElement>(".react-flow__viewport");
-
-        if (!viewport) {
-            return;
-        }
-
-        setExporting("png");
-
-        // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `try` without `catch`; the export must clear its in-flight marker on the throw path, and adding a catch just to satisfy the compiler would swallow the failure
-        try {
-            await exportDiagramAsPng(viewport, nodes, `${testIdPrefix}-schema-diagram.png`);
-        } finally {
-            setExporting(null);
-        }
-    };
-
-    const handleSvg = async (): Promise<void> => {
-        const viewport = containerRef.current?.querySelector<HTMLElement>(".react-flow__viewport");
-
-        if (!viewport) {
-            return;
-        }
-
-        setExporting("svg");
-
-        // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `try` without `catch`; the export must clear its in-flight marker on the throw path, and adding a catch just to satisfy the compiler would swallow the failure
-        try {
-            await exportDiagramAsSvg(viewport, nodes, `${testIdPrefix}-schema-diagram.svg`);
-        } finally {
-            setExporting(null);
-        }
-    };
-
-    const handleJson = (): void => {
-        setExporting("json");
-
-        // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `try` without `catch`; the export must clear its in-flight marker on the throw path, and adding a catch just to satisfy the compiler would swallow the failure
-        try {
-            exportDiagramAsJson(nodes, getEdges(), `${testIdPrefix}-schema-diagram.json`);
-        } finally {
-            setExporting(null);
-        }
-    };
-
-    const onClickPng = (): void => {
-        fireAndForget(handlePng());
-    };
-
-    const onClickSvg = (): void => {
-        fireAndForget(handleSvg());
-    };
-
-    return (
-        <Panel position="top-right">
-            <DropdownMenu>
-                <DropdownMenuTrigger
-                    className="group/button inline-flex shrink-0 cursor-pointer items-center justify-center gap-1 rounded-md border border-border bg-background px-2 text-xs font-medium whitespace-nowrap hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
-                    data-testid={`${testIdPrefix}-export-trigger`}
-                    disabled={exporting !== null}
-                >
-                    <HugeiconsIcon className="size-3.5" icon={Download01Icon} strokeWidth={2} />
-                    {t("Export")}
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                    <DropdownMenuItem data-testid={`${testIdPrefix}-export-png`} disabled={exporting !== null} onClick={onClickPng}>
-                        {t("PNG")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem data-testid={`${testIdPrefix}-export-svg`} disabled={exporting !== null} onClick={onClickSvg}>
-                        {t("SVG")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem data-testid={`${testIdPrefix}-export-json`} disabled={exporting !== null} onClick={handleJson}>
-                        {t("JSON")}
-                    </DropdownMenuItem>
-                </DropdownMenuContent>
-            </DropdownMenu>
-        </Panel>
-    );
-};
-
-/**
  * A Supabase-style schema diagram on a single React Flow canvas: every table —
  * shard-local and global alike — is one node listing its columns with types and
  * PK/FK markers, and `v.id()` foreign keys are drawn handle-to-handle, including
@@ -533,7 +437,7 @@ export const SchemaDiagram = ({ columnsError, fill = false, nodeClasses, tables,
                             zoomable
                         />
                     )}
-                    <DiagramExportPanel containerRef={canvasRef} testIdPrefix={testIdPrefix} />
+                    <DiagramExportPanel containerRef={canvasRef} filenameBase={`${testIdPrefix}-schema-diagram`} testIdPrefix={testIdPrefix} />
                     <FitOnSeed containerRef={canvasRef} seedKey={seedKey} />
                 </ReactFlow>
             </div>

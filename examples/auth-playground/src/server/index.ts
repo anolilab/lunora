@@ -1,4 +1,5 @@
-import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { handleAuthRequest } from "@lunora/auth";
+import { ensureMigrated } from "@lunora/auth/migrate";
 import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
 import { createWorker } from "lunorash/runtime";
 
@@ -14,9 +15,9 @@ interface Env {
     SHARD: ShardNamespaceLike;
 }
 
-let worker: ReturnType<typeof createWorker> | null = null;
-let authInstance: ReturnType<typeof buildAuth> | null = null;
-let authReady: Promise<ReturnType<typeof buildAuth>> | null = null;
+let worker: ReturnType<typeof createWorker> | undefined;
+let authInstance: ReturnType<typeof buildAuth> | undefined;
+let authReady: Promise<ReturnType<typeof buildAuth>> | undefined;
 
 /**
  * Worker entry for the auth-playground demo.
@@ -57,8 +58,7 @@ export default {
                 // replayed to every later request for the isolate's whole life,
                 // with no path back to a working state. Drop it so the next
                 // request retries.
-                // eslint-disable-next-line unicorn/no-null -- matches the declared `Promise<Auth> | null`; `??=` re-runs on either nullish value
-                authReady = null;
+                authReady = undefined;
 
                 throw error;
             }
@@ -71,26 +71,23 @@ export default {
             return authResponse;
         }
 
-        if (!worker) {
-            worker = createWorker({
-                // `openApiSpec` (regenerated on every `lunora/` change) backs the
-                // studio's always-current API-reference tab.
-                openApiSpec,
-                resolveIdentity: async (identityRequest) => {
-                    // Set by the memoized init above, which every request awaits
-                    // before reaching here.
-                    if (!authInstance) {
-                        return null;
-                    }
+        worker ??= createWorker({
+            // `openApiSpec` (regenerated on every `lunora/` change) backs the
+            // studio's always-current API-reference tab.
+            openApiSpec,
+            resolveIdentity: async (identityRequest) => {
+                // Set by the memoized init above, which every request awaits
+                // before reaching here.
+                if (!authInstance) {
+                    return null;
+                }
 
-                    const session = await authInstance.api.getSession({ headers: identityRequest.headers });
+                const session = await authInstance.api.getSession({ headers: identityRequest.headers });
 
-                    return session?.user?.id ? { userId: session.user.id } : null;
-                },
-                shardDO: env.SHARD,
-            });
-        }
-
+                return session?.user.id ? { userId: session.user.id } : null;
+            },
+            shardDO: env.SHARD,
+        });
         return worker.fetch(request, env, ctx);
     },
 };

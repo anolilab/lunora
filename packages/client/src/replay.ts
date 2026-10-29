@@ -9,8 +9,12 @@
  */
 import type { LunoraErrorCode } from "@lunora/errors";
 import { LunoraError } from "@lunora/errors";
+import { decodeWire } from "@lunora/wire";
 
-import { getRetryAfterMs, TransportError } from "./errors";
+import { isSlotEnvelope } from "./call-wire";
+import { AUTH_REPLAY_ERROR_CODES, getRetryAfterMs, TransportError } from "./errors";
+import type { LunoraClientError, RpcEnvelopeBody } from "./wire-errors";
+import { retryAfterHeaderMs, slotError, undecodableResultError, withResponseHeaders } from "./wire-errors";
 
 /**
  * Coded errors that a durable-write replay **re-queues** for the next attempt
@@ -21,38 +25,21 @@ import { getRetryAfterMs, TransportError } from "./errors";
  * or its response was unusable/partial — for a single-shard outbox flush these
  * fail every entry uniformly. `RATE_LIMITED` / `TOO_MANY_REQUESTS` mean a limiter
  * refused to look at the write at all (both are 429 in the catalog; the runtime's
- * REST limiter mints the first). "Not now" is not "no": dropping a durable write
+ * REST limiter mints the first). `DELIVERY_FENCED` means the response lost its
+ * authority after the operation may have committed. Retry under the original
+ * idempotency key: the server can return its cached result or refuse the caller's
+ * now-stale authorization. A receipt from a different authority epoch returns
+ * terminal `DELIVERY_RECEIPT_FENCED`; only an application with its own durable
+ * operation key can safely recover that committed result through a fresh call.
+ * "Not now" is not "no": dropping a durable write
  * because the client reconnected into a rate-limit window is exactly what the
  * outbox exists to prevent, and the retry hint rides back through
- * {@link replayRetryDelayMs}.
+ * `replayRetryDelayMs`.
  *
  * Every other coded error is a server verdict (terminal) — replaying it would
  * re-trigger the same failure (a poison-message loop).
  */
-const TRANSIENT_REPLAY_ERROR_CODES = new Set(["RATE_LIMITED", "SHARD_ERROR", "SHARD_UNAVAILABLE", "TOO_MANY_REQUESTS"]);
-
-/**
- * Coded errors that refuse the CREDENTIAL rather than the write.
- *
- * A write queued while offline replays with whatever bearer the client held
- * when it went offline, and that token has very often expired by the time the
- * socket comes back: the flush rides the shard's `open` handler, before
- * anything has had the chance to refresh it. Settling those terminally destroys
- * the queuing user's own durable write over a credential problem one round trip
- * fixes — and a write hydrated after a reload has no live awaiter, so nothing
- * ever tells the app it happened.
- *
- * So they HOLD instead: the write stays queued and persisted, the
- * `onTokenExpired` hook fires so the app can refresh, and `setAuthToken`
- * re-flushes the queue once a fresh credential lands. Unlike
- * {@link TRANSIENT_REPLAY_ERROR_CODES} they schedule no timed retry — nothing
- * changes until the credential does, and re-sending the same stale bearer on a
- * backoff can only earn the same 401.
- */
-const AUTH_REPLAY_ERROR_CODES = new Set(["TOKEN_EXPIRED", "UNAUTHENTICATED", "UNAUTHORIZED"]);
-
-/** Whether a replay failure refused the credential rather than the write (see {@link AUTH_REPLAY_ERROR_CODES}). */
-const isAuthReplayFailure = (error: unknown): boolean => AUTH_REPLAY_ERROR_CODES.has((error as { code?: string } | null | undefined)?.code ?? "");
+const TRANSIENT_REPLAY_ERROR_CODES = new Set(["DELIVERY_FENCED", "RATE_LIMITED", "SHARD_ERROR", "SHARD_UNAVAILABLE", "TOO_MANY_REQUESTS"]);
 
 /**
  * Whether a single-call replay failure leaves the durable write eligible for
@@ -76,50 +63,16 @@ const isTransientReplayFailure = (error: unknown): boolean => {
     return code === undefined || TRANSIENT_REPLAY_ERROR_CODES.has(code) || AUTH_REPLAY_ERROR_CODES.has(code);
 };
 
-/** Longest delay a `Retry-After` hint can push the next outbox flush out by — a server (or a proxy) asking for an hour must not strand the queue for one. */
-const MAX_REPLAY_RETRY_DELAY_MS = 60_000;
+/** Shortest wait of a hintless retryable failure, doubled per consecutive failure up to {@link REPLAY_MAX_DELAY_MS}. */
+const REPLAY_BASE_DELAY_MS = 1000;
 
-/** Shortest wait a hintless retryable failure backs off by, doubled per consecutive failure up to {@link MAX_REPLAY_RETRY_DELAY_MS}. */
-const BASE_REPLAY_RETRY_DELAY_MS = 1000;
-
-/**
- * Parse a `Retry-After` header into milliseconds. RFC 9110 defines TWO forms and
- * a proxy in front of the worker sends the one the runtime's own REST limiter
- * never does: `delta-seconds`, or an HTTP-date.
- *
- * `undefined` when the header is absent, unparseable, or already in the past —
- * an unusable hint has to read as NO hint (the caller then backs off on its own),
- * never as `NaN`, which every downstream comparison silently answers `false` to
- * and which would ride into `data.retryAfterMs` for an app to render. A date is
- * only clamped at the bottom here; the top is {@link replayRetryDelayMs}'s job,
- * which bounds both forms alike so an absurd date cannot strand the queue.
- */
-const retryAfterHeaderMs = (header: null | string): number | undefined => {
-    if (header === null) {
-        return undefined;
-    }
-
-    const seconds = Number(header);
-
-    if (Number.isFinite(seconds)) {
-        return seconds > 0 ? seconds * 1000 : undefined;
-    }
-
-    const at = Date.parse(header);
-
-    if (Number.isNaN(at)) {
-        return undefined;
-    }
-
-    const delta = at - Date.now();
-
-    return delta > 0 ? delta : undefined;
-};
+/** Longest delay of any retry — a server (or a proxy) asking for an hour must not strand the queue for one. */
+const REPLAY_MAX_DELAY_MS = 60_000;
 
 /**
  * Coded error a response the client could NOT read a `{ error }` envelope out of
  * is reported as, keyed by HTTP status. Anything else 4xx falls back to
- * `BAD_REQUEST` — see {@link unparseableResponseError} for which statuses reach
+ * `BAD_REQUEST` — see `unparseableResponseError` for which statuses reach
  * this table at all.
  */
 const UNPARSEABLE_STATUS_CODES: Record<number, LunoraErrorCode> = {
@@ -151,56 +104,23 @@ const UNPARSEABLE_STATUS_CODES: Record<number, LunoraErrorCode> = {
  * that is the one channel the hint travels on and these errors are built, not
  * reconstructed from an envelope a server sent.
  */
-const unparseableResponseError = (status: number, statusText: string, retryAfterHeader: null | string): LunoraError => {
-    const hint = retryAfterHeaderMs(retryAfterHeader);
+const unparseableResponseError = (status: number, statusText: string, responseHeaders: Headers): LunoraError => {
+    const hint = retryAfterHeaderMs(responseHeaders.get("retry-after"));
     const data = hint === undefined ? undefined : { retryAfterMs: hint };
     const message = `LunoraClient: response carried no error envelope (status ${status.toString()}${statusText ? ` ${statusText}` : ""})`;
+    // Headers are attached after construction: the published `@lunora/errors` ignores a `headers` option.
+    const error =
+        status < 400 || status >= 500 || status === 408
+            ? new TransportError(message, data)
+            : new LunoraError(UNPARSEABLE_STATUS_CODES[status] ?? "BAD_REQUEST", message, { data });
 
-    if (status < 400 || status >= 500 || status === 408) {
-        return new TransportError(message, data);
-    }
-
-    return new LunoraError(UNPARSEABLE_STATUS_CODES[status] ?? "BAD_REQUEST", message, { data });
-};
-
-/**
- * The `data` an error should carry once a `Retry-After` response header is
- * folded in as `data.retryAfterMs` — the ONE channel a retry hint travels on.
- * `undefined` when the header adds nothing, so the caller leaves the error
- * untouched.
- *
- * The runtime's REST limiter sends whole seconds in the header where an
- * application limiter puts milliseconds in the error envelope's `data`. This
- * normalises the header form into the envelope form at the response boundary, so
- * `data.retryAfterMs` is the only place anything downstream has to look —
- * including `@lunora/client`'s public {@link getRetryAfterMs}, which an app calls
- * to render "try again in N seconds" and which never saw the header form.
- *
- * An envelope hint the server actually sent wins: it is the limiter's own
- * number, where the header is rounded to whole seconds. A non-object `data` is
- * left alone rather than overwritten — losing an unusual payload is worse than
- * losing a hint.
- */
-const retryAfterData = (error: { data?: unknown }, header: null | string): Record<string, unknown> | undefined => {
-    const hint = retryAfterHeaderMs(header);
-
-    if (hint === undefined || getRetryAfterMs(error) !== undefined) {
-        return undefined;
-    }
-
-    if (error.data === undefined) {
-        return { retryAfterMs: hint };
-    }
-
-    return typeof error.data === "object" && error.data !== null && !Array.isArray(error.data)
-        ? { ...(error.data as Record<string, unknown>), retryAfterMs: hint }
-        : undefined;
+    return withResponseHeaders(error, responseHeaders);
 };
 
 /**
  * Backoff for a retryable failure that named no time to come back: exponential
- * in `attempt` from {@link BASE_REPLAY_RETRY_DELAY_MS}, capped at
- * {@link MAX_REPLAY_RETRY_DELAY_MS}, then jittered across the top half of that
+ * in `attempt` from {@link REPLAY_BASE_DELAY_MS}, capped at
+ * {@link REPLAY_MAX_DELAY_MS}, then jittered across the top half of that
  * ceiling so a fleet of clients refused by ONE limiter does not re-converge on
  * the same instant and refuse itself again.
  *
@@ -209,46 +129,49 @@ const retryAfterData = (error: { data?: unknown }, header: null | string): Recor
  * global to pin a delay pins it for everything else in the file too.
  */
 const defaultReplayRetryDelayMs = (attempt: number, random: () => number = Math.random): number => {
-    const ceiling = Math.min(BASE_REPLAY_RETRY_DELAY_MS * 2 ** Math.max(attempt - 1, 0), MAX_REPLAY_RETRY_DELAY_MS);
+    const ceiling = Math.min(REPLAY_BASE_DELAY_MS * 2 ** Math.max(attempt - 1, 0), REPLAY_MAX_DELAY_MS);
 
     return Math.round(ceiling * (0.5 + random() * 0.5));
 };
 
 /**
- * Whether a transient failure came back FROM a server or an edge — a retryable
- * code, or a status {@link unparseableResponseError} had to classify itself —
- * rather than from a `fetch` that never landed.
+ * Whether a transient failure needs a retry of its own scheduled: a retryable
+ * code, a status `unparseableResponseError` had to classify itself, or a
+ * codeless failure — a `fetch` that rejected before any reply.
  *
- * The two need different treatment: the socket stays open through a 429 or a
- * 503, so nothing else will ever schedule the flush again, whereas a `fetch`
- * that never landed means the device is offline and the reconnect that follows
- * flushes the queue anyway.
+ * The socket is independent of the HTTP path: it stays open through a 429, a 503,
+ * and equally through a `fetch` that never landed (an unreachable HTTP origin, a
+ * dropped request), so nothing else will ever flush the queue again. A device
+ * that is truly offline costs only a bounded, backed-off probe per interval.
  */
-const isAnsweredReplayFailure = (error: unknown): boolean =>
-    error instanceof TransportError || TRANSIENT_REPLAY_ERROR_CODES.has((error as { code?: string } | null | undefined)?.code ?? "");
+const needsReplayRetry = (error: unknown): boolean => {
+    const code = (error as { code?: string } | null | undefined)?.code;
+
+    return error instanceof TransportError || code === undefined || TRANSIENT_REPLAY_ERROR_CODES.has(code);
+};
 
 /**
  * How long a transient replay should wait before trying again, given how many
  * consecutive flushes of this shard key have now failed.
  *
  * A hint the server sent wins: the `data.retryAfterMs` the error carries — its
- * own, or a `Retry-After` header folded on via {@link retryAfterData} — clamped
- * to {@link MAX_REPLAY_RETRY_DELAY_MS}. Without one, a failure that was still
- * ANSWERED gets {@link defaultReplayRetryDelayMs}, because a hintless 429 or 503
- * arrives over a socket that stays open: with nothing scheduled the queued write
- * waits for a reconnect that a healthy connection never makes.
+ * own, or a `Retry-After` header folded on via `retryAfterData` — clamped
+ * to {@link REPLAY_MAX_DELAY_MS}. Without one, a transient failure gets
+ * {@link defaultReplayRetryDelayMs}, because it arrives over a socket that stays
+ * open: with nothing scheduled the queued write waits for a reconnect that a
+ * healthy connection never makes.
  *
- * `undefined` for a failure that never reached a server, which is the one case
- * the reconnect already covers.
+ * `undefined` for a coded verdict that is not transient, which settles the write
+ * instead of retrying it.
  */
 const replayRetryDelayMs = (error: unknown, attempt: number, random?: () => number): number | undefined => {
     const hint = getRetryAfterMs(error);
 
     if (hint !== undefined && hint > 0) {
-        return Math.min(hint, MAX_REPLAY_RETRY_DELAY_MS);
+        return Math.min(hint, REPLAY_MAX_DELAY_MS);
     }
 
-    return isAnsweredReplayFailure(error) ? defaultReplayRetryDelayMs(attempt, random) : undefined;
+    return needsReplayRetry(error) ? defaultReplayRetryDelayMs(attempt, random) : undefined;
 };
 
 /**
@@ -270,16 +193,70 @@ const MAX_BATCH_BODY_BYTES = 1_048_576 - 65_536;
  */
 const utf8ByteLength = (text: string): number => (typeof TextEncoder === "undefined" ? text.length : new TextEncoder().encode(text).length);
 
+/** A batch's answered slots keyed by slot index. A body that is not a readable envelope is left out, because the server never answered that slot (§4.3). */
+export const indexReplaySlots = (results: { body?: unknown; id?: number }[]): Map<number, RpcEnvelopeBody> => {
+    const bySlot = new Map<number, RpcEnvelopeBody>();
+
+    for (const entry of results) {
+        if (typeof entry.id === "number" && isSlotEnvelope(entry.body)) {
+            bySlot.set(entry.id, entry.body);
+        }
+    }
+
+    return bySlot;
+};
+
+/**
+ * What a batch slot means for the queued write it answers, decided in one place.
+ * `unanswered`: the server never replied, so retry under the same `mutationId`.
+ * `errored`: the server's error. The caller requeues or settles it by failure kind.
+ * `committed`: the write committed with a readable result.
+ * `undecodable`: the write committed, but its result cannot be decoded. It settles
+ * as committed and is never retried.
+ */
+export type ReplaySlotVerdict =
+    | { error: LunoraClientError; kind: "errored" }
+    | { commitCursor: number | undefined; error: LunoraError; kind: "undecodable" }
+    | { commitCursor: number | undefined; kind: "committed"; value: unknown }
+    | { kind: "unanswered" };
+
+/**
+ * `responseHeaders` are the headers of the reply the slot came in. Every verdict that
+ * is an error carries them, as a single call's error would (see `withResponseHeaders`).
+ */
+export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined, responseHeaders: Headers): ReplaySlotVerdict => {
+    if (inner === undefined) {
+        return { kind: "unanswered" };
+    }
+
+    if ("error" in inner) {
+        return { error: withResponseHeaders(slotError(inner), responseHeaders), kind: "errored" };
+    }
+
+    try {
+        return { commitCursor: inner.commitCursor, kind: "committed", value: decodeWire(inner.result) };
+    } catch (error: unknown) {
+        return { commitCursor: inner.commitCursor, error: withResponseHeaders(undecodableResultError(error), responseHeaders), kind: "undecodable" };
+    }
+};
+
 export {
-    AUTH_REPLAY_ERROR_CODES,
-    isAuthReplayFailure,
+    defaultReplayRetryDelayMs,
     isTransientReplayFailure,
     MAX_BATCH_BODY_BYTES,
-    MAX_REPLAY_RETRY_DELAY_MS,
+    REPLAY_BASE_DELAY_MS,
+    REPLAY_MAX_DELAY_MS,
     replayRetryDelayMs,
-    retryAfterData,
-    retryAfterHeaderMs,
-    TRANSIENT_REPLAY_ERROR_CODES,
     unparseableResponseError,
     utf8ByteLength,
 };
+
+export {
+    errorEnvelopeOf,
+    isUndecodableResult,
+    retryAfterData,
+    retryAfterHeaderMs,
+    type RpcEnvelopeBody,
+    undecodableResultError,
+    unreadableSlotError,
+} from "./wire-errors";

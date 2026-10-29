@@ -2,7 +2,7 @@
  * Shared "which findings are ERROR-level" read for a {@link CodegenResult}.
  *
  * Every caller that gates a run on codegen's output — `lunora codegen`,
- * `lunora deploy`, and the Vite plugin's `vite build` — needs the same
+ * `lunora deploy`, and the bundler plugins' production builds — needs the same
  * deduplicated, sorted name list for its ERROR-level advisories and platform
  * diagnostics. Before this file existed each of the three computed it inline
  * with `[...new Set(...)].toSorted(...)`, and they had already drifted:
@@ -27,11 +27,10 @@ const errorPlatformDiagnosticNames = (platformDiagnostics: ReadonlyArray<Pick<Pl
     sortedUniqueNames(platformDiagnostics.filter((diagnostic) => diagnostic.level === "error").map((diagnostic) => diagnostic.name));
 
 /**
- * Convenience read combining both categories from a full {@link CodegenResult}
- * — the shape the Vite plugin's `buildBlockingMessage` needs, which (unlike
- * the CLI's `lunora codegen`/`lunora deploy`) folds ERROR-level advisories and
- * platform diagnostics into a single blocking message with no strict/CI
- * opt-out.
+ * Convenience read combining both categories from a full {@link CodegenResult} —
+ * the shape the bundler plugins need, which (unlike the CLI's `lunora
+ * codegen`/`lunora deploy`) folds ERROR-level advisories and platform
+ * diagnostics into a single blocking message with no strict/CI opt-out.
  */
 const describeErrorLevelFindings = (
     result: Pick<CodegenResult, "advisories" | "platformDiagnostics">,
@@ -42,4 +41,4 @@ const describeErrorLevelFindings = (
     };
 };
 
-export { describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnosticNames };
+export { describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnosticNames, sortedUniqueNames };

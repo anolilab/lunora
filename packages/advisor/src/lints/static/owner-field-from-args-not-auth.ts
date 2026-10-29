@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * Flags a `ctx.db` write (`insert` / `replace` / `patch` / `insertManyUnsafe`)
@@ -26,19 +27,32 @@ const ownerFieldFromArgsNotAuth: Lint = {
     level: "ERROR",
     name: "owner_field_from_args_not_auth",
     remediation:
-        "Stamp the ownership column from the server-trusted identity (`ctx.auth.userId` / `ctx.identity`), never from request input. Drop the field from the accepted `args` so a caller cannot supply it.",
+        "Stamp the ownership column from the server-trusted identity (`ctx.auth.userId` / `ctx.identity`), never from request input. Drop the field from the accepted `args` so a caller cannot supply it. In an `owner`-scoped `defineMutator`, `args[owner]` is verified only while the `server` impl leaves `args` untouched: a `server` impl that uses `this` or refers to itself (its own name, or `<mutator>.server`) is reported, because it could re-enter with unverified args. Handing `args` to a function codegen cannot read (an imported validator) also counts as touching it; validate in a function declared in the same file that only reads its argument, or validate a copy (`{ ...args }`).",
     run: (context) => {
         if (context.ownerFieldWrites === undefined) {
             return [];
         }
 
-        return context.ownerFieldWrites.map((write) => {
-            const where = `\`${write.method}\` in \`${write.exportName}\` (${write.file}:${write.line.toString()})`;
+        return context.ownerFieldWrites.flatMap((write) => {
+            // The runtime already verified and stamped this column before the impl
+            // ran — see `AdvisorOwnerFieldWrite.ownerScoped`. Reporting it would
+            // flag the shape the docs prescribe as an IDOR. Nothing at INFO either,
+            // unlike the `internal` case below: there is no forwarding caller to
+            // chase, the guarantee is enforced at the declaration.
+            if (write.ownerScoped) {
+                return [];
+            }
+
+            // The handler proves the written value is the caller's own identity before
+            // the write (a guard or an assert against the identity). Nothing to report.
+            if (write.guarded) {
+                return [];
+            }
+
+            const where = `\`${write.method}\` in ${callSiteWhere(write)}`;
             const metadata = {
-                exportName: write.exportName,
+                ...callSiteFields(write),
                 field: write.field,
-                file: write.file,
-                line: write.line,
                 method: write.method,
                 visibility: write.visibility ?? "unknown",
             };
@@ -53,21 +67,40 @@ const ownerFieldFromArgsNotAuth: Lint = {
             // mutations, i.e. zero signal at ERROR. Kept at INFO rather than
             // dropped, because the public procedure that forwards raw `args` into
             // one is a real vector and this is the breadcrumb to it.
-            if (write.visibility === "internal") {
-                return emit(ownerFieldFromArgsNotAuth, {
-                    cacheKey: `owner_field_from_args_not_auth:${write.file}:${write.line.toString()}:${write.field}`,
-                    detail: `${where} sets the ownership field \`${write.field}\` from \`args\`. This is expected for an \`internal\` procedure — no caller can reach it directly, and the trusted caller passes the subject along. Audit the PUBLIC procedures that dispatch to it: if one forwards \`args.${write.field}\` straight through, the IDOR is there.`,
-                    facing: "INTERNAL",
-                    level: "INFO",
-                    metadata,
-                });
+            // A platform-admin procedure (`.use(platformAdmin(...))`) is reachable only by an
+            // admin, who is trusted with any account by design. The subject from `args` is the
+            // admin's choice; the lint keeps a breadcrumb at INFO, like `internal`.
+            if (write.adminOnly) {
+                return [
+                    emit(ownerFieldFromArgsNotAuth, {
+                        cacheKey: `owner_field_from_args_not_auth:${write.file}:${write.line.toString()}:${write.field}`,
+                        detail: `${where} sets the ownership field \`${write.field}\` from \`args\`. Expected for a platform-admin procedure: only an admin can reach it, and the admin gate is the trust boundary, not the subject field.`,
+                        facing: "INTERNAL",
+                        level: "INFO",
+                        metadata,
+                    }),
+                ];
             }
 
-            return emit(ownerFieldFromArgsNotAuth, {
-                cacheKey: `owner_field_from_args_not_auth:${write.file}:${write.line.toString()}:${write.field}`,
-                detail: `${where} sets the ownership field \`${write.field}\` from \`args\` instead of the server-trusted identity — any caller can write rows owned by another user/tenant (IDOR). Stamp \`${write.field}\` from \`ctx.auth\`/\`ctx.identity\`, never from request input.`,
-                metadata,
-            });
+            if (write.visibility === "internal") {
+                return [
+                    emit(ownerFieldFromArgsNotAuth, {
+                        cacheKey: `owner_field_from_args_not_auth:${write.file}:${write.line.toString()}:${write.field}`,
+                        detail: `${where} sets the ownership field \`${write.field}\` from \`args\`. This is expected for an \`internal\` procedure — no caller can reach it directly, and the trusted caller passes the subject along. Audit the PUBLIC procedures that dispatch to it: if one forwards \`args.${write.field}\` straight through, the IDOR is there.`,
+                        facing: "INTERNAL",
+                        level: "INFO",
+                        metadata,
+                    }),
+                ];
+            }
+
+            return [
+                emit(ownerFieldFromArgsNotAuth, {
+                    cacheKey: `owner_field_from_args_not_auth:${write.file}:${write.line.toString()}:${write.field}`,
+                    detail: `${where} sets the ownership field \`${write.field}\` from \`args\` instead of the server-trusted identity — any caller can write rows owned by another user/tenant (IDOR). Stamp \`${write.field}\` from \`ctx.auth\`/\`ctx.identity\`, never from request input.`,
+                    metadata,
+                }),
+            ];
         });
     },
     source: "static",

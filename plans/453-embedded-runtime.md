@@ -1,7 +1,9 @@
 # Plan 453 — Ship the in-process runtime as an embedded (browser / device) target
 
 **Baseline:** `f2541e3b0` (2026-08-29)
-**Status:** TODO (design ratified before implementation — the dependency and the package boundary are the decisions, not the code)
+**Status:** demand-gated — phase 1 DONE; phases 2–4 wait for a real user need. Node, Cloudflare
+and celld already cover server hosting, and the client already has an offline queue and
+persistence, so a browser-hosted backend has no adopter asking for it yet.
 
 ## 0. Headline finding
 
@@ -115,10 +117,21 @@ shipping a `ctx.*` that silently does nothing.
 
 | Phase | Work                                   | Gate                                                              |
 | ----- | -------------------------------------- | ----------------------------------------------------------------- |
-| 1     | Extract the engine seam                | `@lunora/testing` suite green, unchanged behaviour                |
+| 1     | Extract the engine seam — **DONE**     | `@lunora/testing` suite green, unchanged behaviour                |
 | 2     | wasm `SqlExec` adapter                 | The same suite passes on the wasm engine — parity, not new tests  |
 | 3     | `@lunora/embedded` + capability matrix | `api:check`, size budget, codegen diagnostics for unsupported ctx |
 | 4     | Browser example + docs                 | Example runs in-page with no backend                              |
+
+Phase 1 shipped as `@lunora/server/in-process` (`createInProcessRuntime`,
+`resolveInProcessIdentity`, `runRegisteredFunction`): migrations, the guarded and
+raw `ctx.db` writers with table facades, per-dispatch headroom and the serialized
+BEGIN/COMMIT runner, over any `SqlExec`. `lunoraTest` now consumes it unchanged in
+behaviour. A phase-2 spike against `@sqlite.org/sqlite-wasm` 3.53.4 passed the
+`@lunora/testing` suite unchanged on the wasm engine (only the file that spies on
+`node:sqlite`'s `StatementSync` was node-only), so the seam is proven; it was not
+merged. Decisions recorded for when demand appears: the wasm binary ships in the
+package, the name is `@lunora/embedded`, React Native / Expo SQLite is a follow-on
+plan, and one embedded runtime hosts exactly one shard (`shardKey`).
 
 ## 8. Risks & STOP conditions
 

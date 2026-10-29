@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useReducer } from "react";
 
@@ -6,6 +5,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Textarea } from "../../components/ui/textarea";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
 import { buildKvPutOptions, isJsonOrEmpty, isTtlValid } from "./kv-fields";
@@ -59,7 +59,7 @@ const KvCreateForm = ({
     readonly onCancel: () => void;
     readonly onCreated: () => void;
 }): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [state, dispatch] = useReducer(createReducer, INITIAL_CREATE_STATE);

@@ -1,12 +1,20 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { CAPABILITIES } from "../../src/capabilities";
 import type { FeatureUsage } from "../../src/discover/feature-usage";
-import { discoverFeatureUsage } from "../../src/discover/feature-usage";
+import {
+    capabilitiesUsedBy,
+    discoverFeatureUsage,
+    foldCapabilitySignals,
+    mayReadCapabilityContext,
+    sourceCapabilitySignals,
+} from "../../src/discover/feature-usage";
 import hasPaymentStoreTables from "../../src/discover/payment-store-tables";
 import { buildStudioFeatures } from "../../src/discover/studio-features";
 import type { TableIR } from "../../src/ir";
@@ -16,7 +24,10 @@ let workdir: string;
 const ALL_OFF: FeatureUsage = {
     access: false,
     ai: false,
+    aiSearch: false,
     analytics: false,
+    analyticsSql: false,
+    artifacts: false,
     browser: false,
     container: false,
     flags: false,
@@ -48,6 +59,9 @@ const NO_SIGNALS = {
     // no-platform-objection baseline every case below is written against.
     vectorStoreSupported: true,
     workflowCount: 0,
+    // No registered matrix, so no `platform` rides along; the platform arm is
+    // pinned end-to-end in platform-target.test.ts.
+    target: "unregistered",
 };
 
 describe("discover/feature-usage", () => {
@@ -82,6 +96,27 @@ describe("discover/feature-usage", () => {
         writeSource("notify.ts", `import { sendMail } from "@lunora/mail";\nexport const go = () => sendMail();`);
 
         expect(discoverFeatureUsage(newProject(), workdir)).toMatchObject({ mail: true });
+    });
+
+    it("ignores type-only imports, which compile away and use nothing", () => {
+        expect.assertions(2);
+
+        // An events-only consumer naming a payload type: neither form may wire `ctx.pipelines` / `ctx.kv`.
+        writeSource(
+            "events.ts",
+            `import type { PipelineRecord } from "@lunora/bindings/pipelines";\nexport const handle = (record: PipelineRecord) => record;`,
+        );
+        writeSource(
+            "cache.ts",
+            `import { type Kv, type KvEntry } from "@lunora/bindings/kv";\nexport const read = (kv: Kv): KvEntry | undefined => undefined;`,
+        );
+
+        expect(discoverFeatureUsage(newProject(), workdir)).toStrictEqual(ALL_OFF);
+
+        // One value specifier beside a type one is a real import.
+        writeSource("cache.ts", `import { createKv, type Kv } from "@lunora/bindings/kv";\nexport const read = (): Kv => createKv();`);
+
+        expect(discoverFeatureUsage(newProject(), workdir)).toMatchObject({ kv: true, pipelines: false });
     });
 
     it("detects ai and payments via the package import or the `ctx.*` helper", () => {
@@ -247,6 +282,28 @@ describe("discover/feature-usage", () => {
         expect(discoverFeatureUsage(newProject(), workdir).storage).toBe(true);
     });
 
+    it('detects a `ctx.*` helper read with a literal bracket key, as `ctx["storage"]`', () => {
+        expect.assertions(1);
+
+        writeSource("upload.ts", `export const put = async (ctx) => {\n  return ctx["storage"].put("k", new Blob());\n};`);
+
+        expect(discoverFeatureUsage(newProject(), workdir).storage).toBe(true);
+    });
+
+    it("reads a quoted destructuring key as its runtime property", () => {
+        expect.assertions(2);
+
+        // `{ "storage": bucket }` and `{ "ctx": c }` destructure `storage` / `ctx`
+        // exactly as the bare spellings do; the key used to be read with its quotes.
+        writeSource("upload.ts", `export const put = async (ctx) => {\n  const { "storage": bucket } = ctx;\n  return bucket.put("k", new Blob());\n};`);
+        writeSource("bill.ts", `export const charge = async ({ "ctx": c }) => c.payments.checkout();`);
+
+        const usage = discoverFeatureUsage(newProject(), workdir);
+
+        expect(usage.storage).toBe(true);
+        expect(usage.payments).toBe(true);
+    });
+
     it("detects containers via either the `@lunora/container` import or a `ctx.containers` read", () => {
         expect.assertions(2);
 
@@ -279,6 +336,137 @@ describe("discover/feature-usage", () => {
         expect(viaContext.scheduler).toBe(true);
     });
 
+    it("counts a value re-export of a capability package, but not a type-only one", () => {
+        expect.assertions(2);
+
+        writeSource("barrel.ts", `export { createKv } from "@lunora/bindings/kv";\nexport * from "@lunora/mail";`);
+        writeSource("types.ts", `export type { PipelineRecord } from "@lunora/bindings/pipelines";\nexport { type Images } from "@lunora/bindings/images";`);
+
+        const usage = discoverFeatureUsage(newProject(), workdir);
+
+        expect(usage).toMatchObject({ kv: true, mail: true });
+        expect(usage).toMatchObject({ images: false, pipelines: false });
+    });
+
+    it("does not wire a helper off a dynamic import (only `@lunora/config` counts those)", () => {
+        expect.assertions(1);
+
+        writeSource("lazy.ts", `export const shot = async () => (await import("@lunora/browser")).createBrowser;`);
+
+        expect(discoverFeatureUsage(newProject(), workdir).browser).toBe(false);
+    });
+
+    describe("sourceCapabilitySignals", () => {
+        const signalsOf = (source: string, fileName = "file.ts") =>
+            sourceCapabilitySignals(new Project({ useInMemoryFileSystem: true }).createSourceFile(fileName, source));
+
+        it("reads dynamic-import literals, value sandbox tools and re-exports in one pass", () => {
+            expect.assertions(3);
+
+            const signals = signalsOf(
+                [
+                    `import { browserTool, type jsCodeTool } from "@lunora/agent";`,
+                    `export * from "@lunora/mail";`,
+                    `const load = () => import("@lunora/bindings/kv");`,
+                    "const computed = (name: string) => import(name);",
+                ].join("\n"),
+            );
+
+            expect([...signals.dynamicImports]).toStrictEqual(["@lunora/bindings/kv"]);
+            expect(signals.sandboxTools).toStrictEqual({
+                usesSandboxBrowser: true,
+                usesSandboxContainer: false,
+                usesSandboxFs: false,
+                usesSandboxLoader: false,
+            });
+            expect([...signals.valueImports].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["@lunora/agent", "@lunora/mail"]);
+        });
+
+        it("folds files into one signal set that capabilitiesUsedBy judges", () => {
+            expect.assertions(1);
+
+            const folded = foldCapabilitySignals([
+                signalsOf(`import { createKv } from "@lunora/bindings/kv";`),
+                signalsOf(`export const f = async ({ ctx }) => ctx.r2sql.query("select 1");`),
+            ]);
+
+            expect([...capabilitiesUsedBy(folded)].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["kv", "r2sql"]);
+        });
+
+        // A capability's binding-free helpers (`bindingFreeExports`) need no
+        // binding, so naming only them must not mark it used; anything that may
+        // reach the binding-backed surface still does (fail closed).
+        it.each([
+            ["a binding-free named import", `import { buildSignedUrl } from "@lunora/storage";`, []],
+            ["several binding-free helpers, one aliased", `import { buildSignedUrl as sign, verifySignedUrl } from "@lunora/storage";`, []],
+            ["a binding-free helper beside a type", `import { type Storage, buildPresignedUrl } from "@lunora/storage";`, []],
+            ["the images URL helpers", `import { buildImageDeliveryUrl, buildSignedImageUrl, verifySignedImageUrl } from "@lunora/bindings/images";`, []],
+            ["a binding-free re-export", `export { buildSignedUrl } from "@lunora/storage";`, []],
+            ["a type-only import", `import type { Storage } from "@lunora/storage";`, []],
+            ["a type-only named list", `import { type Storage } from "@lunora/storage";`, []],
+            ["a binding-backed factory beside a helper", `import { buildSignedUrl, createStorage } from "@lunora/storage";`, ["storage"]],
+            ["the images factory", `import { createImages } from "@lunora/bindings/images";`, ["images"]],
+            ["a namespace import", `import * as storage from "@lunora/storage";`, ["storage"]],
+            ["a default import", `import storage from "@lunora/storage";`, ["storage"]],
+            ["a default import beside a helper", `import storage, { buildSignedUrl } from "@lunora/storage";`, ["storage"]],
+            ["a side-effect import", `import "@lunora/storage";`, ["storage"]],
+            ["an empty named list", `import {} from "@lunora/storage";`, ["storage"]],
+            ["a star re-export", `export * from "@lunora/storage";`, ["storage"]],
+            ["a namespace re-export", `export * as storage from "@lunora/storage";`, ["storage"]],
+            ["a binding-backed re-export", `export { buildSignedUrl, createStorage } from "@lunora/storage";`, ["storage"]],
+            [
+                "a helper of another capability's name",
+                `import { scopeKey } from "@lunora/storage";\nimport { scopeKey as kvKey } from "@lunora/bindings/kv";`,
+                [],
+            ],
+            ["a package with no binding-free exports", `import { createMailer } from "@lunora/mail";`, ["mail"]],
+            [
+                "a binding-free helper beside a ctx read",
+                `import { buildSignedUrl } from "@lunora/storage";\nexport const f = async ({ ctx }) => ctx.storage.getUrl("a");`,
+                ["storage"],
+            ],
+        ])("judges %s", (_case, source, expected) => {
+            expect.assertions(1);
+
+            expect([...capabilitiesUsedBy(signalsOf(source))]).toStrictEqual(expected);
+        });
+
+        it("counts a dynamic import of a package with binding-free exports once merged in (as `@lunora/config` does)", () => {
+            expect.assertions(1);
+
+            const signals = signalsOf(`export const load = () => import("@lunora/storage");`);
+
+            expect([
+                ...capabilitiesUsedBy({ contextReads: signals.contextReads, valueImports: new Set([...signals.valueImports, ...signals.dynamicImports]) }),
+            ]).toStrictEqual(["storage"]);
+        });
+    });
+
+    // A renamed or removed export would leave its entry matching nothing — the
+    // import it was meant to exempt would quietly count again.
+    it.each(
+        CAPABILITIES.flatMap(({ bindingFreeExports, moduleSpecifier }) =>
+            bindingFreeExports === undefined ? [] : [[moduleSpecifier, bindingFreeExports] as const],
+        ),
+    )("lists only real exports of %s as binding-free", (moduleSpecifier, names) => {
+        expect.assertions(1);
+
+        const [, packageName, subpath = ""] = /^@lunora\/([^/]+)(?:\/(.+))?$/u.exec(moduleSpecifier) ?? [];
+        const entry = new Project({ skipAddingFilesFromTsConfig: true }).addSourceFileAtPath(
+            join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", String(packageName), "src", subpath, "index.ts"),
+        );
+
+        expect(names.filter((name) => !entry.getExportedDeclarations().has(name))).toStrictEqual([]);
+    });
+
+    it("prefilters on `ctx` plus a helper name", () => {
+        expect.assertions(3);
+
+        expect(mayReadCapabilityContext("export const f = ({ ctx }) => ctx.kv.get('a');")).toBe(true);
+        expect(mayReadCapabilityContext("export const kv = 1;")).toBe(false);
+        expect(mayReadCapabilityContext("export const f = ({ ctx }) => ctx.db.get('posts', 'a');")).toBe(false);
+    });
+
     it("does not flag mail on an unrelated `mail` property read (import-only feature)", () => {
         expect.assertions(1);
 
@@ -287,6 +475,133 @@ describe("discover/feature-usage", () => {
         writeSource("u.ts", `export const f = (user) => user.mail;`);
 
         expect(discoverFeatureUsage(newProject(), workdir).mail).toBe(false);
+    });
+
+    describe("relative targets resolve the way TypeScript resolves them", () => {
+        const TOOLS_EXPORT = `export { requestSecretTool } from "@lunora/agent";`;
+        const agentsSource = (specifier: string) =>
+            `import { requestSecretTool } from "${specifier}";\nexport const ask = requestSecretTool({ consumer: "a", description: "d" });`;
+        const inMemory = (compilerOptions = {}): Project => new Project({ compilerOptions, useInMemoryFileSystem: true });
+
+        it("follows a .jsx specifier to a .tsx helper", () => {
+            expect.assertions(1);
+
+            const project = inMemory();
+
+            project.createSourceFile("/app/lunora/tools.tsx", TOOLS_EXPORT);
+
+            const agents = project.createSourceFile("/app/lunora/agents.ts", agentsSource("./tools.jsx"));
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
+
+        it("follows a relative barrel that exists only in an in-memory project", () => {
+            expect.assertions(1);
+
+            const project = inMemory();
+
+            project.createSourceFile("/app/lunora/tools.ts", TOOLS_EXPORT);
+
+            const agents = project.createSourceFile("/app/lunora/agents.ts", agentsSource("./tools"));
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
+
+        it("prefers the module suffix the project lists first", () => {
+            expect.assertions(2);
+
+            const project = inMemory({ moduleSuffixes: [".native", ""] });
+
+            project.createSourceFile("/app/lunora/tools.native.ts", TOOLS_EXPORT);
+            project.createSourceFile("/app/lunora/tools.ts", "export const other = 1;");
+
+            const native = project.createSourceFile("/app/lunora/native.ts", agentsSource("./tools"));
+
+            expect(sourceCapabilitySignals(native).requestSecretTool).toBe(true);
+
+            // The unsuffixed module exports the tool, but the suffixed one is what TypeScript picks.
+            const unsuffixed = inMemory({ moduleSuffixes: [".native", ""] });
+
+            unsuffixed.createSourceFile("/app/lunora/tools.native.ts", "export const other = 1;");
+            unsuffixed.createSourceFile("/app/lunora/tools.ts", TOOLS_EXPORT);
+
+            expect(sourceCapabilitySignals(unsuffixed.createSourceFile("/app/lunora/agents.ts", agentsSource("./tools"))).requestSecretTool).toBe(false);
+        });
+
+        it("follows a specifier that rootDirs maps into a sibling root", () => {
+            expect.assertions(1);
+
+            const project = inMemory({ rootDirs: ["/app/lunora", "/app/src/generated"] });
+
+            project.createSourceFile("/app/src/generated/tools.ts", TOOLS_EXPORT);
+
+            const agents = project.createSourceFile("/app/lunora/agents.ts", agentsSource("./tools"));
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
+
+        it("resolves a JS-only module the same from a barrel as from the importing file", () => {
+            expect.assertions(1);
+
+            const project = inMemory();
+            const fileSystem = project.getFileSystem();
+
+            fileSystem.writeFileSync("/app/lunora/tools.js", TOOLS_EXPORT);
+            fileSystem.writeFileSync("/app/lunora/barrel.ts", `export * from "./tools.js";`);
+
+            const direct = project.createSourceFile("/app/lunora/direct.ts", agentsSource("./tools.js"));
+            const viaBarrel = project.createSourceFile("/app/lunora/via.ts", agentsSource("./barrel"));
+
+            expect(sourceCapabilitySignals(viaBarrel).requestSecretTool).toBe(sourceCapabilitySignals(direct).requestSecretTool);
+        });
+
+        it("prefers the declaring project's copy of a helper that a barrel loaded from disk re-exports", () => {
+            expect.assertions(1);
+
+            // The disk copy of the helper has no tool; the declaring project holds an edit that does.
+            writeSource("helper.ts", "export const other = 1;");
+            writeSource("barrel.ts", `export * from "./helper";`);
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            project.createSourceFile(join(workdir, "helper.ts"), TOOLS_EXPORT, { overwrite: true });
+
+            const agents = project.createSourceFile(join(workdir, "agents.ts"), agentsSource("./barrel"));
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
+
+        it("keeps a barrel's next hop on the declaring project's rootDirs", () => {
+            expect.assertions(1);
+
+            const project = inMemory({ rootDirs: ["/app/lunora", "/app/src/generated"] });
+            const fileSystem = project.getFileSystem();
+
+            // Only on the file system, so the barrel is a target and its own relative hop is resolved from there.
+            fileSystem.writeFileSync("/app/src/generated/tools.ts", TOOLS_EXPORT);
+            fileSystem.writeFileSync("/app/lunora/barrel.ts", `export * from "./tools";`);
+
+            const agents = project.createSourceFile("/app/lunora/agents.ts", agentsSource("./barrel"));
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
+
+        it("sees a barrel edited between two scans of the same project", () => {
+            expect.assertions(2);
+
+            const project = inMemory();
+            const fileSystem = project.getFileSystem();
+
+            fileSystem.writeFileSync("/app/lunora/tools.ts", "export const other = 1;");
+
+            const agents = project.createSourceFile("/app/lunora/agents.ts", agentsSource("./tools"));
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(false);
+
+            fileSystem.writeFileSync("/app/lunora/tools.ts", TOOLS_EXPORT);
+
+            expect(sourceCapabilitySignals(agents).requestSecretTool).toBe(true);
+        });
     });
 
     describe("buildStudioFeatures", () => {
@@ -302,6 +617,7 @@ describe("discover/feature-usage", () => {
                 mail: false,
                 notifications: false,
                 payments: false,
+                privacy: false,
                 queues: false,
                 scheduler: false,
                 storage: false,
@@ -337,6 +653,13 @@ describe("discover/feature-usage", () => {
             });
         });
 
+        it("shows the privacy requests page only when the app declares @lunora/privacy", () => {
+            expect.assertions(2);
+
+            expect(buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/privacy"]) }).privacy).toBe(true);
+            expect(buildStudioFeatures(ALL_OFF, NO_SIGNALS).privacy).toBe(false);
+        });
+
         it("hides the vector browser for `ctx.vectors` usage against a schema that declares no index", () => {
             expect.assertions(1);
 
@@ -358,6 +681,7 @@ describe("discover/feature-usage", () => {
                 queueCount: 0,
                 storageColumnCount: 2,
                 storageRuleCount: 0,
+                target: "unregistered",
                 vectorIndexCount: 3,
                 vectorStoreSupported: true,
                 workflowCount: 0,
@@ -426,10 +750,9 @@ describe("discover/feature-usage", () => {
         const table = (name: string, columns: ReadonlyArray<string>): TableIR =>
             ({ name, shape: Object.fromEntries(columns.map((column) => [column, {}])) }) as unknown as TableIR;
 
-        // The `@lunora/payment` store's canonical `subscriptions` / `events` columns
-        // (mirrored by any real payment app — so this is the back-compat path too).
-        const paymentSubscriptions = table("subscriptions", ["providerSubscriptionId", "state", "priceId", "referenceId"]);
-        const paymentEvents = table("events", ["providerEventId", "processedAt", "type", "provider"]);
+        // The `@lunora/payment` store's tables as `.extend(paymentExtension)` merges them.
+        const paymentSubscriptions = table("payment_subscriptions", ["providerSubscriptionId", "state", "priceId", "referenceId"]);
+        const paymentEvents = table("payment_events", ["providerEventId", "processedAt", "type", "provider"]);
 
         it("detects the payment store by its signature columns", () => {
             expect.assertions(1);
@@ -437,15 +760,24 @@ describe("discover/feature-usage", () => {
             expect(hasPaymentStoreTables([paymentSubscriptions, paymentEvents])).toBe(true);
         });
 
-        it("does not fire on generically-named tables that lack the payment columns", () => {
+        it("does not fire on same-named tables that lack the payment columns", () => {
             expect.assertions(1);
 
-            // A newsletter `subscriptions` table and a domain `events` table — same names,
-            // wrong shape — must not spuriously show the Payments page.
-            const newsletter = table("subscriptions", ["email", "topic", "confirmedAt"]);
-            const domainEvents = table("events", ["title", "startsAt", "venue"]);
+            const newsletter = table("payment_subscriptions", ["email", "topic", "confirmedAt"]);
+            const domainEvents = table("payment_events", ["title", "startsAt", "venue"]);
 
             expect(hasPaymentStoreTables([newsletter, domainEvents])).toBe(false);
+        });
+
+        it("does not fire on the bare names the store no longer reads", () => {
+            expect.assertions(1);
+
+            expect(
+                hasPaymentStoreTables([
+                    { ...paymentSubscriptions, name: "subscriptions" },
+                    { ...paymentEvents, name: "events" },
+                ]),
+            ).toBe(false);
         });
 
         it("requires both store tables to be present", () => {

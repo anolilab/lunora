@@ -64,6 +64,31 @@ describe("@lunora/container (workerd)", () => {
         await expect(handle.fetch("/ping")).rejects.toThrow(NO_RUNTIME_GUARD);
     });
 
+    it("exec with a timeoutMs crosses the lunoraExec RPC boundary and answers", async () => {
+        expect.hasAssertions();
+
+        // An AbortSignal cannot be an RPC argument in workerd, and every exec
+        // with a `timeoutMs` or `signal` carries one — so this is the call that
+        // failed with "AbortSignal serialization is not enabled".
+        const containers = createContainerContext(env as unknown as Record<string, unknown>, [{ binding: "CONTAINER_EXEC_PROBE", exportName: "probe" }]);
+
+        await expect(containers.probe!.get("sandbox", { attempts: 1 }).exec("echo", { args: ["0"], timeoutMs: 5000 })).resolves.toStrictEqual({
+            code: 0,
+            stderr: "",
+            stdout: "echo POST /__lunora/exec #1",
+        });
+    });
+
+    it("exec with a timeoutMs over the RPC boundary still times out", async () => {
+        expect.hasAssertions();
+
+        const containers = createContainerContext(env as unknown as Record<string, unknown>, [{ binding: "CONTAINER_EXEC_PROBE", exportName: "probe" }]);
+
+        await expect(containers.probe!.get("sandbox", { attempts: 1 }).exec("sleep", { args: ["3000"], timeoutMs: 200 })).rejects.toThrow(
+            "ctx.containers: exec timed out after 200ms",
+        );
+    });
+
     it("a missing container binding degrades to a directed error on use", () => {
         expect.hasAssertions();
 

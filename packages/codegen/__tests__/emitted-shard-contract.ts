@@ -25,11 +25,14 @@
  *
  * When the emitter starts using a new base member, add it here.
  */
-import type { TraceRefLike } from "@lunora/do";
+import type { SubscriptionIdentity, TraceRefLike } from "@lunora/do";
 import { ShardDO } from "@lunora/do";
-import { beginDeferredSchedules, flushDeferredDeletes } from "@lunora/server";
+import { beginDeferredDeletes, beginDeferredSchedules, flushDeferredDeletes, withDeferredSchedules } from "@lunora/server";
+import type { SchedulerLike } from "@lunora/shard-engine";
 
 class EmittedShardContract extends ShardDO {
+    private readonly mutationContexts = new WeakSet<object>();
+
     public override async handleRpc(): Promise<unknown> {
         // Mirrors the shape of the emitted mutation branch, so the helper below is
         // reached from a real dispatch signature rather than sitting unreferenced.
@@ -59,16 +62,69 @@ class EmittedShardContract extends ShardDO {
     }
 
     /**
+     * Mirrors the two `.dropStalePatches()` seams the generated `databaseOptions`
+     * wires into `createShardCtxDb`: the per-dispatch baseline getter, and the
+     * callback the shard logs a dropped patch through. Both are `protected` for
+     * exactly this — the drop record used to want the private log ring, which is
+     * the mistake this whole file exists to catch.
+     */
+    protected ctxDbStaleSeams(): number | undefined {
+        this.recordStalePatchDropped({ fields: ["title"], id: "doc_1", table: "documents" });
+
+        return this.getCurrentBaselineSeq();
+    }
+
+    /**
+     * Mirrors the generated sensitive `resolveShape` wrapper: a scope opened from the raw args, a
+     * thrown error scrubbed through it before the scope is cleared on every exit.
+     */
+    protected resolveShapeScopeContract(name: string, args: Record<string, unknown>): void {
+        const sensitive = this.openSensitiveScope(`__shape__:${name}`, args);
+
+        try {
+            this.maskSensitiveError(new Error(name), sensitive);
+        } finally {
+            sensitive.clear();
+        }
+    }
+
+    /**
+     * Mirrors the generated `scheduleOutboxScheduler` override — the seam the
+     * deferred-schedule outbox retries through. The generated body answers
+     * `config.scheduler?.(env)`, so the base's return type has to admit
+     * `undefined`; if it stops doing so, every generated shard stops compiling and
+     * this is where that surfaces.
+     */
+    // eslint-disable-next-line class-methods-use-this -- mirrors the generated override's shape; the real body reads `config.scheduler`
+    protected override scheduleOutboxScheduler(): SchedulerLike | undefined {
+        return undefined;
+    }
+
+    /**
+     * Mirrors the generated `buildCtx`'s scheduler wiring: the facade is handed
+     * `this.scheduleOutbox()`, which is `protected` for exactly this call.
+     */
+    protected wrapScheduler(scheduler: SchedulerLike): SchedulerLike {
+        return withDeferredSchedules(scheduler, this.scheduleOutbox());
+    }
+
+    /**
      * Mirrors the generated `executeStream` override. Its third parameter is the
-     * socket's verified identity, which the generated body threads by value into
-     * `buildCtx` — if the base signature ever drops it, the generated shard stops
-     * compiling and this file is where that surfaces.
+     * socket's verified caller context, which the generated body threads by value
+     * into `buildCtx` — if the base signature ever drops it, the generated shard
+     * stops compiling and this file is where that surfaces.
+     *
+     * Named as `SubscriptionIdentity`, not restated inline. An inline structural
+     * copy compiles against the base even when it is missing a member the base
+     * declares — method parameters are bivariant — so a restated shape here would
+     * pass while the emitted shard silently stopped seeing a field. Naming the
+     * type is what makes `tsc` the enforcer rather than this file's author.
      */
     // eslint-disable-next-line class-methods-use-this -- mirrors the generated override's shape; the real body reaches `this.buildCtx`
     protected override executeStream(
         functionPath: string,
         args: Record<string, unknown>,
-        identity?: { identity?: Record<string, unknown>; userId?: string },
+        identity?: SubscriptionIdentity,
     ): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
         return {
             iterator: () =>
@@ -79,29 +135,93 @@ class EmittedShardContract extends ShardDO {
     }
 
     /**
+     * The emitted `ctx.live.publish` (action ctx, `liveStreams` only) awaits this.
+     * It is `protected` so the generated subclass can reach it; the publish itself
+     * stays inside the DO, so no worker hop and no private fan-out state is touched.
+     */
+    protected publishFromActionContract(topic: string, payload: unknown): Promise<number> {
+        return this.publishLiveFromAction(topic, payload, { stream: "s" });
+    }
+
+    /**
+     * The emitted `liveStreams()` override (declared streams only) returns the `defineLiveStream`
+     * values keyed by id; the base checks each publish against them.
+     */
+    // eslint-disable-next-line class-methods-use-this -- mirrors the emitted lazy override, which imports the stream's module on first publish
+    protected override loadLiveStream(_stream: string): Promise<void> | undefined {
+        return Promise.resolve();
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- mirrors the emitted override, which returns module constants
+    protected override liveStreams(): Readonly<Record<string, { validatePublish: (topic: string, payload: unknown) => unknown }>> {
+        return { s: { validatePublish: (_topic: string, payload: unknown) => payload } };
+    }
+
+    /**
      * Mirrors the generated `runMutationTransaction` — the single helper the
      * top-level RPC, `ctx.runMutation` and `runReactor` all dispatch a mutation
-     * handler through. It reaches three base members: `isInTransaction` (so a
-     * composed sub-mutation rides the enclosing span instead of opening an illegal
-     * nested one), `runInTransaction`, and `deferPastResponse`, which is
-     * `protected` for exactly this call — the host's `waitUntil` behind it is
-     * private.
+     * handler through. Nested ownership belongs to a ctx admitted by this helper,
+     * not to shard-wide transaction depth: independent callers queue at the
+     * writer gate, and a composed child reuses its admitted ctx. This mirror pins
+     * the context type and `runInTransaction` option along with the deferral
+     * helpers and `deferPastResponse` visibility. This is the rooms-enabled
+     * variant, which marks schedule failures that happen after commit.
      */
     private async runMutationTransaction<T>(context: unknown, work: () => Promise<T>): Promise<T> {
         const settleSchedules = beginDeferredSchedules(context as { scheduler?: unknown });
+        const settleDeletes = beginDeferredDeletes(context);
 
-        if (this.isInTransaction()) {
-            const nested = await work();
+        if (this.mutationContexts.has(context as object)) {
+            try {
+                const nested = await work();
 
-            await settleSchedules(true);
+                settleDeletes(true);
+                await settleSchedules(true);
 
-            return nested;
+                return nested;
+            } catch (error) {
+                settleDeletes(false);
+                await settleSchedules(false);
+
+                throw error;
+            }
         }
 
-        const result = await this.runInTransaction(work);
+        let result: T;
 
-        await settleSchedules(true);
-        await this.deferPastResponse(flushDeferredDeletes(context));
+        try {
+            result = await this.runInTransaction(
+                async () => {
+                    this.mutationContexts.add(context as object);
+
+                    try {
+                        return await work();
+                    } finally {
+                        this.mutationContexts.delete(context as object);
+                    }
+                },
+                { independent: true },
+            );
+        } catch (error) {
+            settleDeletes(false);
+            await settleSchedules(false);
+
+            throw error;
+        }
+
+        settleDeletes(true);
+
+        try {
+            await settleSchedules(true);
+        } catch (error) {
+            if (typeof error === "object" && error !== null) {
+                Object.assign(error, { committed: true });
+            }
+
+            throw error;
+        } finally {
+            await this.deferPastResponse(flushDeferredDeletes(context));
+        }
 
         return result;
     }

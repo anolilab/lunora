@@ -1,4 +1,4 @@
-import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, Unsubscribe } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import { LunoraError } from "@lunora/errors";
 import type { Readable } from "svelte/store";
@@ -11,7 +11,7 @@ import type { ReactiveArgs } from "./query";
 import { subscribeReactiveArgs } from "./subscribe-reactive-args";
 
 interface SubscriptionStoreOptions {
-    onError?: (error: Error) => void;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 
@@ -95,13 +95,15 @@ function subscription<F extends FunctionReference>(
                     onError: (subscriptionError) => {
                         // Preserve the server-supplied `code` (matching Vue/Solid's
                         // subscription primitives) so consumers can branch on it.
-                        const error =
+                        const error = Object.assign(
                             subscriptionError.code === undefined
                                 ? new Error(subscriptionError.message)
-                                : new LunoraError(subscriptionError.code, subscriptionError.message);
+                                : new LunoraError(subscriptionError.code, subscriptionError.message),
+                            subscriptionError.why === undefined ? {} : { why: subscriptionError.why },
+                        );
 
                         errorStore.set(error);
-                        onError?.(error);
+                        onError?.(subscriptionError);
                     },
                     onReset: () => {
                         set(undefined);

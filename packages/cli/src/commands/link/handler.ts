@@ -6,6 +6,7 @@ import { LINKED_PROJECT_FILE, writeLinkedProject } from "@lunora/config";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import readWranglerName from "../../util/wrangler-name";
 import type { LinkOptions } from "./index";
@@ -68,13 +69,13 @@ const runLinkCommand = (options: LinkCommandOptions): LinkCommandResult => {
     if (options.url === undefined || options.url === "") {
         logger.error("link requires a deployed Worker URL. Usage: lunora link --url <https://your-worker>");
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     if (!isValidWorkerUrl(options.url)) {
         logger.error(`link: invalid --url "${options.url}" — expected an http(s) URL`);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     const now = options.now ?? (() => new Date().toISOString());

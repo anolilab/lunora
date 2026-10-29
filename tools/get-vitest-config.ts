@@ -36,7 +36,7 @@ const VITEST_SEQUENCE_SEED = Date.now();
  * exists to prevent.
  */
 const visTaskSlots = Number.parseInt(process.env["VIS_TASK_SLOTS"] ?? "", 10);
-const MAX_WORKERS = Number.isFinite(visTaskSlots) && visTaskSlots > 1 ? Math.max(1, Math.floor((availableParallelism() || visTaskSlots) / visTaskSlots)) : undefined;
+export const MAX_WORKERS = Number.isFinite(visTaskSlots) && visTaskSlots > 1 ? Math.max(1, Math.floor((availableParallelism() || visTaskSlots) / visTaskSlots)) : undefined;
 
 export interface CoverageThresholds {
     branches?: number;
@@ -53,8 +53,8 @@ export interface CoverageThresholds {
  * Thresholds only apply when coverage is enabled (`vitest run --coverage`, the
  * `test:coverage` scripts); plain `vitest run` is unaffected. The workerd-gated
  * packages (client, container, d1, dispatch, do, queue, runtime, scheduler,
- * storage, workflow, x402) use inline `defineConfig` configs — not this
- * helper — because their `workerd` project runs without coverage (v8/
+ * sql-store, storage, workflow, x402) use inline `defineConfig` configs — not
+ * this helper — because their `workerd` project runs without coverage (v8/
  * `node:inspector` is unsupported in `@cloudflare/vitest-plugin`), so a
  * floor keyed to THIS default would gate on a structurally incomplete number.
  * That does not make every workerd-gated package threshold-free: a package

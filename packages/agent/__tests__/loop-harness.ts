@@ -3,11 +3,13 @@ import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import type { AgentDefinition, AgentFunctionReference, AgentGenerate, AgentGenerateResult, AgentRunFunction, AgentStepLike } from "../src/types";
 
 export interface StoredMessage {
+    approvalScope?: "thread";
     content: string;
+    expiresAt?: number;
     messageKey: string;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
-    status?: "approved" | "awaiting_approval" | "rejected";
+    status?: "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
     stepName?: string;
     threadKey: string;
     toolCallId?: string;
@@ -22,8 +24,19 @@ export interface StoredThread {
     key: string;
     messageCount: number;
     status: string;
+    summary?: string;
+    summaryConfig?: string;
+    summaryRebuiltSeq?: number;
+    summaryThroughSeq?: number;
     title?: string;
-    usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+    usage?: {
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
+        inputTokens?: number;
+        outputTokens?: number;
+        reasoningTokens?: number;
+        totalTokens?: number;
+    };
 }
 
 /**
@@ -94,13 +107,18 @@ export const memoryRuntime = (options?: {
     memory?: { path: string; result: Record<string, unknown> | ((args?: Record<string, unknown>) => unknown) };
 }): {
     dispatches: { args: Record<string, unknown> | undefined; path: string }[];
+    /** Thread-scoped approval grants as `"<threadKey>:<toolName>"` — a test adds/removes one to model the approve / revoke mutations. */
+    grants: Set<string>;
     messages: Map<string, StoredMessage>;
     run: AgentRunFunction;
     threads: Map<string, StoredThread>;
 } => {
     const threads = new Map<string, StoredThread>();
     const messages = new Map<string, StoredMessage>();
+    const grants = new Set<string>();
     const dispatches: { args: Record<string, unknown> | undefined; path: string }[] = [];
+
+    const approvalGranted = (args?: Record<string, unknown>): unknown => grants.has(`${args?.["key"] as string}:${args?.["toolName"] as string}`);
 
     const ensureThread = (args?: Record<string, unknown>): unknown => {
         const key = args?.["key"] as string;
@@ -180,20 +198,36 @@ export const memoryRuntime = (options?: {
         return [...messages.values()].filter((message) => message.threadKey === key).toSorted((a, b) => a.seq - b.seq);
     };
 
+    /** Mirrors `agentHistory`: the stored summary plus only the messages past `summaryThroughSeq`, unless the settings changed or a rebuild is due. */
+    const history = (args?: Record<string, unknown>): unknown => {
+        const key = args?.["key"] as string;
+        const configKey = args?.["configKey"] as string | undefined;
+        const thread = threads.get(key);
+        const all = listMessages(args) as StoredMessage[];
+        const hasSummary = thread?.summary !== undefined && thread.summaryThroughSeq !== undefined;
+        const configMatches = configKey === undefined || thread?.summaryConfig === configKey;
+        const rebuildDue = thread?.summaryRebuiltSeq === undefined || (thread?.summaryThroughSeq ?? 0) >= 2 * (thread.summaryRebuiltSeq ?? 0) + 1;
+
+        return hasSummary && configMatches && !rebuildDue
+            ? { messages: all.filter((message) => message.seq > (thread?.summaryThroughSeq ?? -1)), summary: thread?.summary }
+            : {
+                  ...(hasSummary ? { fallback: { summary: thread.summary, throughSeq: thread.summaryThroughSeq } } : {}),
+                  messages: all,
+              };
+    };
+
+    /** The thread fields `agentPatchThread` may set; each is copied onto the thread only when defined. */
+    const patchableFields = ["status", "error", "usage", "summary", "summaryConfig", "summaryRebuiltSeq", "summaryThroughSeq"] as const;
+
     const patchThread = (args?: Record<string, unknown>): unknown => {
         const thread = threads.get(args?.["key"] as string);
+        const patch = args ?? {};
 
-        if (thread) {
-            if (args?.["status"] !== undefined) {
-                thread.status = args["status"] as string;
-            }
-
-            if (args?.["error"] !== undefined) {
-                thread.error = args["error"] as string;
-            }
-
-            if (args?.["usage"] !== undefined) {
-                thread.usage = args["usage"] as StoredThread["usage"];
+        if (thread && (patch["ifInstanceId"] === undefined || thread.instanceId === (patch["ifInstanceId"] as string))) {
+            for (const key of patchableFields) {
+                if (patch[key] !== undefined) {
+                    (thread as unknown as Record<string, unknown>)[key] = patch[key];
+                }
             }
         }
 
@@ -241,9 +275,11 @@ export const memoryRuntime = (options?: {
 
     const handlers = new Map<string, (args?: Record<string, unknown>) => unknown>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
+        [DEFAULT_AGENT_FUNCTION_PATHS.approvalGranted, approvalGranted],
         [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, completeRun],
         [DEFAULT_AGENT_FUNCTION_PATHS.deleteMessage, deleteMessage],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
+        [DEFAULT_AGENT_FUNCTION_PATHS.history, history],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],
         ...(options?.memory ? ([[options.memory.path, memoryHandler]] as const) : []),
@@ -264,7 +300,7 @@ export const memoryRuntime = (options?: {
         return handler(args);
     };
 
-    return { dispatches, messages, run, threads };
+    return { dispatches, grants, messages, run, threads };
 };
 
 /** A scripted LLM: pops one decision per turn. */
@@ -339,14 +375,43 @@ export const collectConditions = (build: (q: unknown) => unknown): [string, unkn
 export const makeIndexQuery = (
     candidates: FakeRow[],
     build: (q: unknown) => unknown,
-): { collect: () => Promise<FakeRow[]>; first: () => Promise<FakeRow | null> } => {
+): {
+    collect: () => Promise<FakeRow[]>;
+    first: () => Promise<FakeRow | null>;
+    order: (direction: "asc" | "desc") => { take: (limit: number) => Promise<FakeRow[]> };
+} => {
     const conditions = collectConditions(build);
     const matches = (): FakeRow[] => candidates.filter((row) => conditions.every(([field, value]) => row[field] === value));
 
     return {
         collect: async () => matches(),
         first: async () => matches()[0] ?? null,
+        // Index order is ascending; `order("desc").take(n)` is the bounded newest-tail read.
+        order: (direction) => {
+            return {
+                take: async (limit: number) => (direction === "desc" ? matches().toReversed() : matches()).slice(0, limit),
+            };
+        },
     };
+};
+
+/**
+ * Mirror the store's explicit-`undefined` guard (shard-engine `ctx-db.ts`'s
+ * `assertNoExplicitUndefined`), byte-identical message included.
+ *
+ * The real `ctx.db.patch` REJECTS a key whose value is explicitly `undefined`
+ * rather than dropping it: the `{ ...existing, ...patch }` merge would delete the
+ * column instead of leaving it alone. A double that deletes the key is strictly
+ * MORE permissive than the store, and that is how a mutation which throws on
+ * every continued thread stayed green here. Shared so the three `ctx.db` doubles
+ * in this package cannot drift apart again.
+ */
+export const assertNoExplicitUndefined = (patch: Record<string, unknown>): void => {
+    for (const field of Object.keys(patch)) {
+        if (patch[field] === undefined) {
+            throw new Error(`Cannot patch field '${field}' to undefined \u2014 use null to clear a nullable field, or omit the key to leave it unchanged.`);
+        }
+    }
 };
 
 /**
@@ -373,13 +438,11 @@ export const fakeDatabase = (): { database: Record<string, unknown>; rows: Map<s
     };
 
     const database = {
-        delete: async (id: string) => {
-            for (const [table, tableContent] of rows) {
-                rows.set(
-                    table,
-                    tableContent.filter((row) => row["_id"] !== id),
-                );
-            }
+        delete: async (table: string, id: string) => {
+            rows.set(
+                table,
+                tableRows(table).filter((row) => row["_id"] !== id),
+            );
         },
         insert: async (table: string, document: Record<string, unknown>) => {
             const id = `id-${String(nextId)}`;
@@ -389,19 +452,13 @@ export const fakeDatabase = (): { database: Record<string, unknown>; rows: Map<s
 
             return id;
         },
-        patch: async (id: string, patch: Record<string, unknown>) => {
-            for (const tableContent of rows.values()) {
-                const row = tableContent.find((candidate) => candidate["_id"] === id);
+        patch: async (table: string, id: string, patch: Record<string, unknown>) => {
+            assertNoExplicitUndefined(patch);
 
-                if (row) {
-                    for (const [key, value] of Object.entries(patch)) {
-                        if (value === undefined) {
-                            Reflect.deleteProperty(row, key);
-                        } else {
-                            row[key] = value;
-                        }
-                    }
-                }
+            const row = tableRows(table).find((candidate) => candidate["_id"] === id);
+
+            if (row) {
+                Object.assign(row, patch);
             }
         },
         query: (table: string) => {

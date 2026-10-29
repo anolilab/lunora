@@ -1,10 +1,10 @@
 import { useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 
+import { api } from "../../lunora/_generated/api.js";
+import type { Id } from "../../lunora/_generated/dataModel.js";
 import type { PieceType } from "../../lunora/chess.js";
 import { deserializeState } from "../../lunora/chess.js";
-import { api } from "../../lunora/_generated/api.js";
-import type { Doc, Id } from "../../lunora/_generated/dataModel.js";
 import { Board } from "./Board.js";
 
 interface GameProperties {
@@ -43,11 +43,13 @@ export const Game = ({ gameId, nameOf, onLeave, userId }: GameProperties): React
     const position = deserializeState(game.position);
     // A spectator has no colour, so the board renders read-only for them —
     // watching is just a subscription to the same query the players use.
-    const myColor = userId === game.whiteId ? "white" : userId === game.blackId ? "black" : null;
+    const blackSeat = userId === game.blackId ? "black" : null;
+    const myColor = userId === game.whiteId ? "white" : blackSeat;
     const drawOfferedToMe = Boolean(game.drawOfferedBy) && game.drawOfferedBy !== userId && myColor !== null;
 
-    const status =
-        game.status === "completed" ? (RESULT_LABEL[game.result ?? ""] ?? "Finished") : `${position.currentTurn} to move${position.isCheck ? " · check" : ""}`;
+    const checkSuffix = position.isCheck ? " · check" : "";
+
+    const status = game.status === "completed" ? (RESULT_LABEL[game.result ?? ""] ?? "Finished") : `${position.currentTurn} to move${checkSuffix}`;
 
     return (
         <section className="game">
@@ -68,10 +70,20 @@ export const Game = ({ gameId, nameOf, onLeave, userId }: GameProperties): React
 
                 {myColor !== null && game.status === "active" && (
                     <div className="row">
-                        <button onClick={() => void offerDraw({ gameId })} type="button">
+                        <button
+                            onClick={() => {
+                                void offerDraw({ gameId });
+                            }}
+                            type="button"
+                        >
                             Offer draw
                         </button>
-                        <button onClick={() => void resign({ gameId })} type="button">
+                        <button
+                            onClick={() => {
+                                void resign({ gameId });
+                            }}
+                            type="button"
+                        >
                             Resign
                         </button>
                     </div>
@@ -81,10 +93,20 @@ export const Game = ({ gameId, nameOf, onLeave, userId }: GameProperties): React
             {drawOfferedToMe && (
                 <div className="banner">
                     <span>{nameOf(game.drawOfferedBy as string)} offers a draw.</span>
-                    <button onClick={() => void respondToDraw({ accept: true, gameId })} type="button">
+                    <button
+                        onClick={() => {
+                            void respondToDraw({ accept: true, gameId });
+                        }}
+                        type="button"
+                    >
                         Accept
                     </button>
-                    <button onClick={() => void respondToDraw({ accept: false, gameId })} type="button">
+                    <button
+                        onClick={() => {
+                            void respondToDraw({ accept: false, gameId });
+                        }}
+                        type="button"
+                    >
                         Decline
                     </button>
                 </div>
@@ -95,7 +117,9 @@ export const Game = ({ gameId, nameOf, onLeave, userId }: GameProperties): React
             <div className="game-body">
                 <Board
                     myColor={game.status === "active" ? myColor : null}
-                    onMove={(from, to, promotion?: PieceType) => void makeMove({ from, gameId, promotion, to })}
+                    onMove={(from, to, promotion?: PieceType) => {
+                        void makeMove({ from, gameId, promotion, to });
+                    }}
                     position={position}
                 />
 

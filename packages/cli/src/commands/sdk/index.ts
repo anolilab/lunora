@@ -1,4 +1,4 @@
-import { SDK_LANGUAGES } from "@lunora/codegen";
+import { SDK_LANGUAGES } from "@lunora/codegen/sdk";
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 const sdkCommand: Command = {

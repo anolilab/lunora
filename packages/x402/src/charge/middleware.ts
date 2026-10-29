@@ -3,13 +3,18 @@
  * Fetch `Request` / `Response`.
  *
  * For each request it runs the four-step protocol — match the route, challenge
- * (`402` + `PAYMENT-REQUIRED`) when unpaid, verify the client's `X-PAYMENT`
- * payload with the facilitator, run the resource handler, then settle on-chain
- * and attach `X-PAYMENT-RESPONSE`. Any Lunora HTTP surface (HTTP actions today,
- * procedures and MCP tools later) wraps its handler with this.
+ * (`402` + `PAYMENT-REQUIRED`) when unpaid, verify the client's
+ * `PAYMENT-SIGNATURE` payload with the facilitator, run the resource handler,
+ * then settle on-chain and attach `PAYMENT-RESPONSE`. Any Lunora HTTP surface
+ * (HTTP actions, procedures, MCP tools) wraps its handler with this.
+ *
+ * These are the x402 v2 header names, and the only ones: `@x402/core` v2 reads
+ * the payment from `PAYMENT-SIGNATURE` alone, so a v1 client sending `X-PAYMENT`
+ * is answered with a fresh `402` challenge and is never charged.
  */
+import { LunoraError } from "@lunora/errors";
 import type { HTTPAdapter, HTTPRequestContext, HTTPResponseInstructions, PaymentOption, ProcessSettleSuccessResponse, RouteConfig } from "@x402/core/http";
-import { x402HTTPResourceServer as X402HTTPResourceServer } from "@x402/core/http";
+import { getFacilitatorResponseError, RouteConfigurationError, x402HTTPResourceServer as X402HTTPResourceServer } from "@x402/core/http";
 
 import type { X402ChargeConfig } from "../config";
 import { isEvmNetwork, toCaip2 } from "../networks";
@@ -17,8 +22,68 @@ import type { X402ReceiptSink } from "./receipt";
 import { toReceipt } from "./receipt";
 import { buildResourceServer } from "./resource-server";
 
-/** The x402 request header carrying the client's signed payment payload. */
-const PAYMENT_HEADER = "X-PAYMENT";
+/** The x402 v2 request header carrying the client's signed payment payload. */
+const PAYMENT_HEADER = "PAYMENT-SIGNATURE";
+
+/**
+ * Whether a response header is a cache directive aimed at a CDN rather than at
+ * every cache: `CDN-Cache-Control` and any `<name>-CDN-Cache-Control` (RFC 9213 —
+ * `Cloudflare-CDN-Cache-Control`, `Vercel-CDN-Cache-Control`, …), and
+ * `Surrogate-Control` (Fastly, Akamai and other surrogate caches). A CDN obeys
+ * these instead of `Cache-Control`, so narrowing `Cache-Control` alone would
+ * leave a paid body storable at the edge.
+ */
+const isCdnCacheHeader = (name: string): boolean => {
+    const lower = name.toLowerCase();
+
+    return lower === "cdn-cache-control" || lower.endsWith("-cdn-cache-control") || lower === "surrogate-control";
+};
+
+/**
+ * A paid response's `Cache-Control`, with every shared-cache directive replaced
+ * by `private`.
+ *
+ * The payment is verified per request, so a paid body stored by a shared cache
+ * (a CDN, a colo cache, a proxy) would be served to the next caller for free,
+ * together with the payer's receipt. The handler may have set `public` for its
+ * unpaid life; once gated, the exchange is the payer's alone.
+ */
+const privateCacheControl = (value: string | null): string => {
+    const kept = (value ?? "")
+        .split(",")
+        .map((directive) => directive.trim())
+        .filter((directive) => {
+            const name = directive.split("=")[0]?.trim().toLowerCase();
+
+            return name !== "" && name !== "public" && name !== "private" && name !== "s-maxage";
+        });
+
+    return ["private", ...kept].join(", ");
+};
+
+/**
+ * Run a facilitator round trip, turning a malformed or timed-out facilitator
+ * answer (`@x402/core`'s `FacilitatorResponseError`) into a 502. Core rethrows
+ * that error out of `processHTTPRequest` / `processSettlement` rather than
+ * answering 402, so without this it reached the host as an anonymous 500. The
+ * caller has not run the handler when this throws.
+ */
+const facilitatorCall = async <T>(operation: string, call: () => Promise<T>): Promise<T> => {
+    try {
+        return await call();
+    } catch (error) {
+        const facilitatorError = getFacilitatorResponseError(error);
+
+        if (facilitatorError === null) {
+            throw error;
+        }
+
+        throw new LunoraError("X402_FACILITATOR_ERROR", `x402 charge: the facilitator failed during ${operation}: ${facilitatorError.message}`, {
+            cause: error,
+            status: 502,
+        });
+    }
+};
 
 /** Snapshot a `Headers` into a plain record (for the settlement transport context). */
 const headerRecord = (headers: Headers): Record<string, string> => {
@@ -73,13 +138,11 @@ export const reportReceipt = (
 
 /**
  * Runs the protected resource handler, producing the Response to gate.
- * @experimental
  */
 export type ChargeHandler = () => Promise<Response> | Response;
 
 /**
  * Per-request platform seams `handle` can use, beyond the request/handler pair.
- * @experimental
  */
 export interface ChargeHandlerDeps {
     /**
@@ -92,7 +155,6 @@ export interface ChargeHandlerDeps {
 
 /**
  * A prepared, initialised paywall. Build once (it fetches facilitator support), reuse per request.
- * @experimental
  */
 export interface ChargeMiddleware {
     /** Gate `request`: challenge / verify / settle around `runHandler`. */
@@ -109,7 +171,7 @@ export const resolvePayTo = (config: X402ChargeConfig): string => {
     const address = evm ? config.recipient.evm : config.recipient.svm;
 
     if (address === undefined || address.length === 0) {
-        throw new Error(`x402 charge on "${config.network}" needs recipient.${evm ? "evm" : "svm"} set.`);
+        throw new LunoraError("ENV_INVALID", `x402 charge on "${config.network}" needs recipient.${evm ? "evm" : "svm"} set.`);
     }
 
     return address;
@@ -186,7 +248,7 @@ export const toResponse = (instructions: HTTPResponseInstructions): Response => 
     return Response.json(body, { headers, status: instructions.status });
 };
 
-/** Return a copy of `response` with `extra` headers (e.g. `X-PAYMENT-RESPONSE`) merged in. */
+/** Return a copy of `response` with `extra` headers (e.g. `PAYMENT-RESPONSE`) merged in. */
 export const withHeaders = (response: Response, extra: Record<string, string>): Response => {
     const headers = new Headers(response.headers);
 
@@ -203,13 +265,11 @@ export const withHeaders = (response: Response, extra: Record<string, string>): 
  * names the paid function (x402 core falls back to the request URL otherwise —
  * every RPC POSTs to the same `/_lunora/rpc`, so the URL can't tell two paid
  * procedures apart).
- * @experimental
  */
 export type ChargeRouteOverrides = Pick<RouteConfig, "description" | "resource">;
 
 /**
  * Behaviour knobs for {@link createChargeMiddleware} beyond route metadata.
- * @experimental
  */
 export interface ChargeMiddlewareOptions {
     /**
@@ -240,7 +300,6 @@ export interface ChargeMiddlewareOptions {
  * and reuse the result across requests. `routeOverrides` layers extra route
  * metadata (e.g. `resource`) onto the generated catch-all route; `options`
  * controls settlement ordering (see {@link ChargeMiddlewareOptions}).
- * @experimental
  */
 export const createChargeMiddleware = async (
     config: X402ChargeConfig,
@@ -250,9 +309,38 @@ export const createChargeMiddleware = async (
     const server = await buildResourceServer(config);
     const http = new X402HTTPResourceServer(server, { ...buildRoute(config), ...routeOverrides });
 
-    await http.initialize();
+    try {
+        await http.initialize();
+    } catch (error) {
+        // The facilitator answered, but does not settle this scheme on this network: config.
+        if (error instanceof RouteConfigurationError) {
+            throw new LunoraError("ENV_INVALID", `x402 charge: ${error.message}`, { cause: error });
+        }
+
+        throw new LunoraError(
+            "X402_FACILITATOR_ERROR",
+            `x402 charge: could not load the facilitator's supported payment kinds: ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error, status: 502 },
+        );
+    }
 
     const settleBeforeHandler = options?.settleBeforeHandler ?? true;
+
+    /**
+     * The paid resource: the settlement receipt attached, and never shared-cacheable.
+     * `Cache-Control` is narrowed to `private` (see {@link privateCacheControl}), and
+     * every CDN-targeted cache header is dropped, because a CDN reads its own header
+     * AHEAD of `Cache-Control` (see {@link isCdnCacheHeader}).
+     */
+    const paidResponse = (response: Response, settlementHeaders: Record<string, string>): Response => {
+        const paid = withHeaders(response, { ...settlementHeaders, "cache-control": privateCacheControl(response.headers.get("cache-control")) });
+
+        for (const name of [...paid.headers.keys()].filter((key) => isCdnCacheHeader(key))) {
+            paid.headers.delete(name);
+        }
+
+        return paid;
+    };
 
     const handle = async (request: Request, runHandler: ChargeHandler, deps?: ChargeHandlerDeps): Promise<Response> => {
         const url = new URL(request.url);
@@ -263,7 +351,7 @@ export const createChargeMiddleware = async (
             paymentHeader: request.headers.get(PAYMENT_HEADER) ?? undefined,
         };
 
-        const result = await http.processHTTPRequest(context);
+        const result = await facilitatorCall("verification", async () => http.processHTTPRequest(context));
 
         if (result.type === "no-payment-required") {
             return runHandler();
@@ -282,9 +370,11 @@ export const createChargeMiddleware = async (
             // (no `responseHeaders` — there is no response yet). A settlement
             // failure here means `runHandler` never executes, so its effects
             // (e.g. a mutation's writes) can never be committed unpaid.
-            const settlement = await http.processSettlement(result.paymentPayload, result.paymentRequirements, result.declaredExtensions, {
-                request: context,
-            });
+            const settlement = await facilitatorCall("settlement", async () =>
+                http.processSettlement(result.paymentPayload, result.paymentRequirements, result.declaredExtensions, {
+                    request: context,
+                }),
+            );
 
             if (!settlement.success) {
                 return toResponse(settlement.response);
@@ -297,7 +387,7 @@ export const createChargeMiddleware = async (
 
             const response = await runHandler();
 
-            return withHeaders(response, settlement.headers);
+            return paidResponse(response, settlement.headers);
         }
 
         // Settle-after (opt-in via `settleBeforeHandler: false`): run the handler,
@@ -322,15 +412,20 @@ export const createChargeMiddleware = async (
             throw error;
         }
 
-        const settlement = await http.processSettlement(result.paymentPayload, result.paymentRequirements, result.declaredExtensions, {
-            request: context,
-            responseHeaders: headerRecord(response.headers),
-        });
+        // A facilitator failure here comes after the handler ran: the 502 withholds
+        // the resource, and whether the payment settled is unknown (a timeout may
+        // have landed), so it is not cancelled.
+        const settlement = await facilitatorCall("settlement", async () =>
+            http.processSettlement(result.paymentPayload, result.paymentRequirements, result.declaredExtensions, {
+                request: context,
+                responseHeaders: headerRecord(response.headers),
+            }),
+        );
 
         if (settlement.success) {
             reportReceipt(config.onReceipt, settlement, resource, deps?.waitUntil);
 
-            return withHeaders(response, settlement.headers);
+            return paidResponse(response, settlement.headers);
         }
 
         // Settlement failed after the handler ran: the client did not actually

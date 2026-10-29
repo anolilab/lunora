@@ -35,10 +35,34 @@ const AI_GATEWAY_ACCOUNT_ID_ENV = "LUNORA_AI_GATEWAY_ACCOUNT_ID";
 const AI_GATEWAY_ID_ENV = "LUNORA_AI_GATEWAY_ID";
 ```
 
+### `AI_GATEWAY_METADATA_MAX_KEYS` (const)
+
+```ts
+const AI_GATEWAY_METADATA_MAX_KEYS = 5;
+```
+
+### `AI_GATEWAY_TAGS_ENV` (const)
+
+```ts
+const AI_GATEWAY_TAGS_ENV = "LUNORA_AI_GATEWAY_TAGS";
+```
+
 ### `AI_GATEWAY_TOKEN_ENV` (const)
 
 ```ts
 const AI_GATEWAY_TOKEN_ENV = "LUNORA_AI_GATEWAY_TOKEN";
+```
+
+### `AI_PROXY_TOKEN_ENV` (const)
+
+```ts
+const AI_PROXY_TOKEN_ENV = "LUNORA_AI_PROXY_TOKEN";
+```
+
+### `AI_PROXY_URL_ENV` (const)
+
+```ts
+const AI_PROXY_URL_ENV = "LUNORA_AI_PROXY_URL";
 ```
 
 ### `AiBindingLike` (interface)
@@ -50,6 +74,78 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `AiGatewayOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiImage` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiImageGenerateInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiImageGenerateResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiMarkdownConversionResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiMarkdownDocument` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiMetrics` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiModelOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiRunOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiSpan` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiTelemetry` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiToMarkdownInput` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiToMarkdownOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiToMarkdownResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiTracer` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiWebSearchItem` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiWebSearchOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiWebSearchProvider` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiWebSearchResult` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
@@ -87,8 +183,11 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 ```ts
 interface ModelPrice {
-    input: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    input?: number;
     output?: number;
+    perImage?: number;
 }
 ```
 
@@ -96,6 +195,8 @@ interface ModelPrice {
 
 ```ts
 interface ModelUsage {
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
     inputTokens?: number;
     outputTokens?: number;
 }
@@ -129,6 +230,10 @@ Re-exported from `ai` — signature tracked at its source.
 
 Re-exported from `ai` — signature tracked at its source.
 
+### `estimateImageCost` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `estimateModelCost` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -153,6 +258,12 @@ Re-exported from `@ai-sdk/provider-utils` — signature tracked at its source.
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `readAiGatewayEnvTags` (const)
+
+```ts
+const readAiGatewayEnvTags: (env: Record<string, unknown>) => Record<string, string> | undefined;
+```
+
 ### `resolveAiGateway` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -168,6 +279,84 @@ Re-exported from `ai` — signature tracked at its source.
 ### `tool` (function)
 
 Re-exported from `@ai-sdk/provider-utils` — signature tracked at its source.
+
+## `@lunora/ai/create`
+
+### `AiBindingLike` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiImage` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiImageGenerateInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiImageGenerateResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiToMarkdownInput` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiToMarkdownOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiToMarkdownResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiWebSearchItem` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiWebSearchProvider` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `LunoraAi` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `USAGE_ATTRIBUTE` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `UsageCounts` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `UsageStatus` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `breakdownCount` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `createAi` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `estimateImageCost` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `estimateModelCost` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `tokenCount` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `usageStatus` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ## `@lunora/ai/rag`
 
@@ -186,6 +375,33 @@ interface BatchRerankerOptions {
 interface ChunkerOptions {
     overlap?: number;
     size?: number;
+}
+```
+
+### `FusionLeg` (interface)
+
+```ts
+interface FusionLeg {
+    chunks: ReadonlyArray<RetrievedChunk>;
+    weight?: FusionWeight;
+}
+```
+
+### `FusionWeight` (type)
+
+```ts
+type FusionWeight = "proximity" | "rank";
+```
+
+### `GraphMatch` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `HybridRankOptions` (interface)
+
+```ts
+interface HybridRankOptions {
+    k?: number;
 }
 ```
 
@@ -222,6 +438,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ```ts
 type RagExtractor = (raw: string, object: RagSourceObject) => Promise<string | undefined> | string | undefined;
 ```
+
+### `RagGraphStore` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `RagLexicalStore` (interface)
 
@@ -305,6 +525,8 @@ interface RagSyncActionReference {
 interface RagSyncArgs extends Record<string, unknown> {
     deleted?: boolean;
     id: string;
+    metadata?: Record<string, unknown>;
+    namespace?: string;
     text?: string;
 }
 ```
@@ -316,6 +538,8 @@ interface RagSyncOptions<Document extends Record<string, unknown> = Record<strin
     action: RagSyncActionReference;
     delayMs?: number;
     id?: (document: Document) => string;
+    metadata?: (document: Document) => Record<string, unknown> | undefined;
+    namespace?: (document: Document) => string | undefined;
     text: (document: Document) => string | undefined;
 }
 ```
@@ -368,10 +592,11 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ```ts
 interface RagVectorStore {
     capabilities: RagVectorStoreCapabilities;
-    deleteByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
+    deleteByIds: (ids: ReadonlyArray<string>, namespace?: string, operation?: object, afterDelete?: () => Promise<void>) => Promise<unknown>;
     getByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (input: RagVectorQueryInput) => Promise<RagVectorMatches>;
-    upsert: (input: RagVectorUpsertInput) => Promise<unknown>;
+    upsert: (input: RagVectorUpsertInput, operation?: object) => Promise<unknown>;
+    upsertMany?: (inputs: ReadonlyArray<RagVectorUpsertInput>, operation?: object) => Promise<unknown>;
 }
 ```
 
@@ -379,6 +604,7 @@ interface RagVectorStore {
 
 ```ts
 interface RagVectorStoreCapabilities {
+    deferredDelete?: boolean;
     maxDimensions: number | false;
     maxIdBytes: number | false;
     maxMetadataBytes: number | false;
@@ -433,6 +659,9 @@ interface SqlLexicalStoreOptions {
 
 ```ts
 interface SqliteVectorStoreOptions {
+    ann?: {
+        dimensions: number;
+    };
     exec: RagSqlExec;
     maxDimensions?: number | false;
     maxScan?: number;

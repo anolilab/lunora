@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
-import { availableAt, evaluate } from "./algorithms";
+import { ipRateLimitKey } from "../../../shared/ip-rate-limit-key";
+import { availableAt, evaluate, retentionMs } from "./algorithms";
 import RateLimitError from "./error";
 import { createMemoryStore } from "./store";
 import type { RateLimitArgs, RateLimitConfig, RateLimitConfigMap, RateLimitStatus, RateLimitStore } from "./types";
@@ -12,11 +13,15 @@ interface RateLimiterOptions<Names extends string> {
 
     /**
      * Optional key normalizer applied to every incoming `args.key` (the
-     * deny-list check, the storage key, and downstream shard selection all see
-     * the normalized form). Use for case-folding, trimming, or canonicalizing
-     * IPs/emails so equivalent inputs share a single bucket. The deny-list
+     * deny-list check and the storage key both see the normalized form). Use for case-folding, trimming, or canonicalizing
+     * emails so equivalent inputs share a single bucket. The deny-list
      * itself is consulted as-is; normalize the deny-list entries up front to
      * match.
+     *
+     * After it, a key that is an IPv6 address is always collapsed to its /64
+     * (`2001:db8:1:2::/64`) and an IPv4-mapped one to its IPv4 address, so a
+     * `ctx.ip`-keyed limit cannot be dodged by rotating addresses within one
+     * delegated prefix. A deny-list IPv6 entry therefore bans its whole /64.
      */
     normalize?: (key: string) => string;
     /** Clock injection for tests. Defaults to `Date.now`. */
@@ -26,29 +31,36 @@ interface RateLimiterOptions<Names extends string> {
 }
 
 // Both halves are percent-encoded so the separator stays unambiguous: a limit
-// named `a:b` (global) can't collide with limit `a` keyed by `b`. A sharded
-// limit appends `#<shard>`; `#` can't appear in either encoded half, so the
-// shard suffix is unambiguous too.
+// named `a:b` (global) can't collide with limit `a` keyed by `b`.
 const storageKeyFor = (name: string, key: string | undefined): string =>
     key === undefined ? encodeURIComponent(name) : `${encodeURIComponent(name)}:${encodeURIComponent(key)}`;
 
+/** Read-decide-write rounds one consume makes before failing closed; see `RateLimiter.decide`. */
+const MAX_DECIDE_ATTEMPTS = 16;
+
+/** Entries one successful write may examine for eviction; bounds the per-call sweep cost. */
+const SWEEP_LIMIT = 32;
+
+const isThenable = <T>(value: PromiseLike<T> | T): value is PromiseLike<T> => typeof (value as PromiseLike<T> | undefined)?.then === "function";
+
 /**
- * Deterministic shard selector. A FNV-1a-style rolling hash over the storage
- * key — same input always lands on the same shard so a single hot key can't
- * thrash across buckets the way `Math.random()` did. Per-key throughput is
- * therefore `rate/shards`; aggregate throughput across distinct keys spreads
- * uniformly. Use `shards: 1` (or unset) for a single bucket.
+ * A clock that never reads earlier than a previous reading. Decisions and
+ * eviction both use it: a rollback could otherwise make a request look older than
+ * an entry the sweep already dropped, reviving a spent bucket.
  */
-const hashToShard = (storageKey: string, shards: number): number => {
-    let hash = 0;
+const monotonic = (clock: () => number): (() => number) => {
+    let last = Number.NEGATIVE_INFINITY;
 
-    for (let index = 0; index < storageKey.length; index += 1) {
-        // eslint-disable-next-line unicorn/prefer-math-trunc, no-bitwise, unicorn/prefer-code-point -- 32-bit integer wraparound (`| 0`) is the correct hashing primitive here; Math.trunc would not wrap, the bitwise op is intentional, and charCodeAt hashes per UTF-16 code unit by design (codePointAt would skip low surrogates).
-        hash = (hash * 31 + storageKey.charCodeAt(index)) | 0;
-    }
+    return () => {
+        last = Math.max(last, clock());
 
-    return Math.abs(hash) % shards;
+        return last;
+    };
 };
+
+// The caller's normalizer (if any), then the IPv6 /64 collapse — see `normalize`.
+const withIpCollapse = (normalize: ((key: string) => string) | undefined): ((key: string) => string) =>
+    normalize ? (key: string): string => ipRateLimitKey(normalize(key)) : ipRateLimitKey;
 
 // Fires once per `new RateLimiter(...)` call that receives no explicit
 // `store` — never per check/limit call, which would be noise on the hot
@@ -66,28 +78,6 @@ const NO_STORE_WARNING =
     "across any of those, pass a durable `store` (`createDbStore` or `createSqlStore`) instead. Pass `store: createMemoryStore()` " +
     "explicitly once you've confirmed the in-memory default is correct here, to silence this warning.";
 
-// A sharded config splits its rate and capacity evenly across N sub-buckets,
-// each enforced independently. `shards <= 1` (or unset) leaves the config as-is.
-const perShardConfig = (config: RateLimitConfig, shards: number): RateLimitConfig =>
-    shards > 1 ? { ...config, capacity: (config.capacity ?? config.rate) / shards, rate: config.rate / shards } : config;
-
-/** Every storage key a `(name, key)` pair occupies — one per shard, or just one when unsharded. */
-const shardKeysFor = (name: string, key: string | undefined, shards: number): string[] => {
-    const base = storageKeyFor(name, key);
-
-    return shards > 1 ? Array.from({ length: shards }, (_, shard) => `${base}#${String(shard)}`) : [base];
-};
-
-// The single storage key a `(name, key)` pair routes to: the sole bucket when
-// unsharded, or the one shard the deterministic hash selects. `getValue` and
-// `run` must route identically (otherwise a peek reads a different bucket than
-// the consume writes), so both go through here.
-const routeStorageKey = (name: string, key: string | undefined, shards: number): string => {
-    const base = storageKeyFor(name, key);
-
-    return shards > 1 ? `${base}#${String(hashToShard(base, shards))}` : base;
-};
-
 /**
  * Enforces named rate limits over a pluggable store. Construct one per app with
  * a config map; call {@link RateLimiter.limit} to consume and
@@ -103,11 +93,22 @@ class RateLimiter<Names extends string = string> {
 
     private readonly now: () => number;
 
+    private readonly retention: number;
+
     private readonly store: RateLimitStore;
 
+    /** Whether a stored key is one of this limiter's names; a sweep only evicts those. */
+    private readonly owns: (storageKey: string) => boolean;
+
     public constructor(options: RateLimiterOptions<Names>) {
-        this.config = options.config;
-        this.normalize = options.normalize ?? ((key: string): string => key);
+        // Snapshot the config: decisions and the eviction horizon must read the same
+        // values, and a caller mutating its object after construction must not move
+        // the horizon out from under entries the sweep has not yet reached.
+        this.config = structuredClone(options.config);
+        // Keys are `encodeURIComponent(name)` plus an optional `:key`, so the part before the first `:` is the name.
+        const names = new Set(Object.keys(this.config).map((name) => encodeURIComponent(name)));
+        this.owns = (storageKey) => names.has(storageKey.split(":")[0] ?? "");
+        this.normalize = withIpCollapse(options.normalize);
         // Store every entry in BOTH forms so an entry can be written either way.
         // Storing it verbatim only, and matching the raw request key against
         // that, catches nothing but a byte-exact repeat of the stored string:
@@ -116,7 +117,7 @@ class RateLimiter<Names extends string = string> {
         // SAME bucket the stored form routes to — so a banned caller sheds the
         // ban by lower-casing their own email.
         this.denyList = new Set([...(options.denyList ?? [])].flatMap((entry) => [entry, this.normalize(entry)]));
-        this.now = options.now ?? Date.now;
+        this.now = monotonic(options.now ?? Date.now);
 
         if (options.store === undefined) {
             // eslint-disable-next-line no-console -- intentional: no injected logger, mirrors @lunora/auth's construction-time warning
@@ -124,10 +125,17 @@ class RateLimiter<Names extends string = string> {
         }
 
         this.store = options.store ?? createMemoryStore();
+        this.retention = retentionMs(Object.values<RateLimitConfig>(this.config));
 
         for (const [name, config] of Object.entries<RateLimitConfig>(this.config)) {
-            if (config.shards !== undefined && (!Number.isInteger(config.shards) || config.shards < 1)) {
-                throw new LunoraError("INTERNAL", `rate limit "${name}": shards must be a positive integer`);
+            // `shards` is gone. Ignoring a leftover one would silently enforce a
+            // different limit: an app that raised `rate` to offset the split
+            // would now admit `shards` times the traffic it meant to.
+            if (Object.hasOwn(config, "shards")) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `rate limit "${name}": \`shards\` is no longer supported — remove it; the limit now enforces its full \`rate\` (lower \`rate\` if you raised it to offset the split)`,
+                );
             }
 
             // A zero/negative/non-finite period divides by zero in the token
@@ -157,21 +165,13 @@ class RateLimiter<Names extends string = string> {
      * Read the current config and the units admittable right now for a
      * `(name, key)` pair. The value is projected forward to the current clock
      * (token-bucket refill, fixed-window rollover, sliding-window decay), not
-     * the last persisted figure. For a sharded limit it reads only the single
-     * shard `limit()`/`run()` would route this key to — the sibling shards are
-     * never touched by this key, so summing them would over-report.
+     * the last persisted figure.
      */
     public async getValue(name: Names, args: { key?: string } = {}): Promise<{ config: RateLimitConfig; ts: number; value: number }> {
         const config = this.resolve(name);
-        const shards = config.shards ?? 1;
         const now = this.now();
-        const normalizedKey = this.normalizeKey(args.key);
-
-        // Route to the exact bucket run() consumes from — for a sharded limit
-        // that is the single shard this key hashes to; summing siblings would
-        // over-report since this key never touches them.
-        const storageKey = routeStorageKey(name, normalizedKey, shards);
-        const current = availableAt(perShardConfig(config, shards), await this.store.get(storageKey), now);
+        const storageKey = storageKeyFor(name, this.normalizeKey(args.key));
+        const current = availableAt(config, await this.store.get(storageKey), now);
 
         return { config, ts: current.ts, value: current.value };
     }
@@ -183,10 +183,82 @@ class RateLimiter<Names extends string = string> {
 
     /** Clear accounting for a `(name, key)` pair (e.g. on successful login). */
     public async reset(name: Names, args: { key?: string } = {}): Promise<void> {
-        const shards = this.resolve(name).shards ?? 1;
-        const normalizedKey = this.normalizeKey(args.key);
+        this.resolve(name);
 
-        await Promise.all(shardKeysFor(name, normalizedKey, shards).map((storageKey) => Promise.resolve(this.store.delete(storageKey))));
+        await Promise.resolve(this.store.delete(storageKeyFor(name, this.normalizeKey(args.key))));
+    }
+
+    /**
+     * Read, evaluate and write one consume. A store that reports the write lost
+     * (`setIf` resolved `false`: another consume changed the value since this one
+     * read it) gets a fresh read and a fresh decision, so the admission always
+     * rests on the value the write replaced. Bounded: each lost round means some
+     * other consume was admitted (a refusal writes nothing), and past
+     * {@link MAX_DECIDE_ATTEMPTS} the call is refused with `retryAfter: 0` rather
+     * than admitted.
+     */
+    private async decide(
+        config: RateLimitConfig,
+        storageKey: string,
+        options: { consume: boolean; count: number; reserve: boolean },
+    ): Promise<RateLimitStatus> {
+        for (let attempt = 0; attempt < MAX_DECIDE_ATTEMPTS; attempt += 1) {
+            // Await the read only when the store is asynchronous. An `await` on a plain
+            // value still yields, and every consume started in the same tick would then
+            // read the same prior before any of them wrote: a synchronous store (memory,
+            // SQL) admitted all of them. Without the yield, read, decide and write run as
+            // one step. An asynchronous store yields at its own I/O regardless.
+            const read = this.store.get(storageKey);
+            // eslint-disable-next-line no-await-in-loop -- a retry must re-read what the lost write replaced
+            const prior = isThenable(read) ? await read : read;
+            const now = this.now();
+            const { status, value } = evaluate(config, prior, { ...options, now });
+
+            if (value === undefined) {
+                return status;
+            }
+
+            if (this.store.setIf === undefined) {
+                // eslint-disable-next-line no-await-in-loop -- returns on the first pass; only `setIf` loops
+                await this.store.set(storageKey, value);
+                // eslint-disable-next-line no-await-in-loop -- returns on the first pass
+                await this.sweep(now);
+
+                return status;
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            if (await this.store.setIf(storageKey, value, prior)) {
+                // eslint-disable-next-line no-await-in-loop -- returns on the first pass
+                await this.sweep(now);
+
+                return status;
+            }
+        }
+
+        // Refused, not thrown: an error would reach the middleware's failure policy,
+        // and `failOpen` would then admit exactly the call contention kept out.
+        return { ok: false, reason: "rate", retryAfter: 0 };
+    }
+
+    /**
+     * Evict what this limiter's horizon has expired, after a write has landed. The
+     * write is already done, so awaiting here does not reopen the read-decide-write
+     * window. Only a promise-returning sweep (`createDbStore`) is awaited for I/O.
+     */
+    private async sweep(now: number): Promise<void> {
+        try {
+            const swept = this.store.sweep?.(now - this.retention, SWEEP_LIMIT, this.owns);
+
+            if (isThenable(swept)) {
+                await swept;
+            }
+        } catch (error) {
+            // The write has already landed, so a failed cleanup must not fail the consume:
+            // the caller would then roll back a charge that was made, or fail open.
+            // eslint-disable-next-line no-console -- intentional: no injected logger; a skipped sweep only delays eviction
+            console.warn("@lunora/ratelimit: the retention sweep failed; the consume still stands", error);
+        }
     }
 
     private normalizeKey(key: string | undefined): string | undefined {
@@ -234,24 +306,8 @@ class RateLimiter<Names extends string = string> {
             throw new LunoraError("INTERNAL", `rate limit "${name}": count must be a positive integer`);
         }
 
-        const shards = config.shards ?? 1;
-        // Deterministic hash routes a given (name, key) to a fixed shard. Per
-        // sibling shards are independent — per-key rate is `rate/shards`,
-        // aggregate across distinct keys spreads to ~`rate`. Random shard
-        // selection (the old behavior) allowed a single key to drain every
-        // shard before any of them rate-limited, which defeated the cap.
-        const storageKey = routeStorageKey(name, normalizedKey, shards);
-        const prior = await this.store.get(storageKey);
-        const { status, value } = evaluate(perShardConfig(config, shards), prior, {
-            consume,
-            count,
-            now: this.now(),
-            reserve: args.reserve ?? false,
-        });
-
-        if (value !== undefined) {
-            await this.store.set(storageKey, value);
-        }
+        const storageKey = storageKeyFor(name, normalizedKey);
+        const status = await this.decide(config, storageKey, { consume, count, reserve: args.reserve ?? false });
 
         if (!status.ok && args.throws) {
             throw new RateLimitError(status);

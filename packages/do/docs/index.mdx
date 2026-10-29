@@ -81,6 +81,78 @@ hibernation, so a cold shard simply re-runs the query. Only registered
 counters (`hits`, `misses`, `evictions`, `entries`, `bytes`) show up on the
 studio's metrics panel.
 
+## Delivery authorization
+
+Opt in with the generated app builder's `.deliveryAuthorization(env => callback)`.
+The async callback receives
+`{ identity, shardKey, functionPath, args, transport, system, admin }`. `transport` is
+`"rpc" | "subscription"`; `system` and `admin` are booleans.
+Lunora sets `system: true` only for server-initiated RPCs at its trusted binding.
+It sets `admin: true` only when a reserved admin function passes the configured bearer check.
+Subscription callbacks receive `system: false` and `admin: false`. These flags describe
+the request. Your callback decides whether either context receives a permit. Return
+`undefined` to deny or `{ scope, epoch }` from current authority. Queries still own row
+and field filtering.
+
+For RPCs, coded `LunoraError`s keep their status and code. Explicit `INTERNAL` verdicts
+are terminal.
+Unclassified callback throws, including fetch failures reported as `TypeError`, return
+retryable `SHARD_UNAVAILABLE` (503). Invalid returned permits produce terminal `INTERNAL`
+(500). On subscription refresh, `FORBIDDEN` and `INTERNAL` authority failures end the
+registration; other failures retain it and retry on the next write flush.
+An unclassified throw during the first subscription seed ends that seed with
+`SUBSCRIPTION_SEED_FAILED`.
+
+```ts
+import { installDeliveryFence, type DeliveryPermit } from "@lunora/do";
+import { defineApp } from "../../lunora/_generated/app";
+import { readCurrentPermit } from "./authority";
+
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .deliveryAuthorization((env) => async (request) => readCurrentPermit(env, request))
+    .build();
+export const ShardDO = app.ShardDO;
+
+export async function fenceShard(env: Env, shardKey: string, fence: DeliveryPermit) {
+    await installDeliveryFence(env.SHARD.getByName(shardKey), { env, shardKey, fence });
+}
+```
+
+Implement `readCurrentPermit` in your application. `scope` is opaque, nonempty and at most
+256 UTF-8 bytes; `epoch` is a nonnegative safe integer that increases with authority changes.
+Each subscription's permit is kept on the socket's 16 KiB WebSocket attachment (about 270 bytes
+at the maximum scope length), which a socket with many subscriptions shares with their metadata.
+Keep scopes short; a subscription whose permit no longer fits fails with `SUBSCRIPTION_PERSIST_FAILED`.
+Set the same nonempty `LUNORA_RELAY_SECRET` on the installer and shard; pass the target's
+exact shard key. The helper signs a private binding request and waits for acknowledgement.
+Commit policy and durable pending invalidations together, deny stale permits immediately,
+and retry every affected shard's fence before acknowledging revocation.
+
+This supports RPCs and ordinary query-backed subscriptions. Guarded shards refuse
+shapes, streams, raw subscriptions, whispers, rooms and relays. The legacy
+`broadcastDelta` path throws `NOT_IMPLEMENTED` rather than delivering deltas. Replicas
+must route to the owner.
+Query caches and shared subscription evaluations are bypassed. Every write flush calls
+the authority callback again for guarded subscriptions. If the permit is unchanged, the
+subscription already has a delivered result and the write leaves its read set untouched,
+Lunora skips the query and sends a `settled` frame only when its cursor or client watermark advances. Reconnects send fresh full snapshots.
+
+`DELIVERY_FENCED` means the operation may have committed. Retry with the same native
+transport key to check for its receipt. If authority changed, the shard may return
+terminal `DELIVERY_RECEIPT_FENCED` (409), without the stored result or another execution.
+Receipt replay requires the exact original scope and epoch, including after access is
+regranted: a new epoch can grant different row visibility, so its permit does not authorize
+returning bytes produced under the old one.
+Reconcile that operation against your own durable operation key and state before deciding
+whether to start a new operation. Do not replace the native key just to get past the fence.
+
+Delivery authorization adds receipt markers to native idempotency rows. Rows written
+before opt-in have no marker. Replaying one while its native row is retained returns
+`DELIVERY_RECEIPT_FENCED`; the shard does not migrate or replay its stored result. Native
+rows and receipt markers use the same 24-hour retention window, so enabling delivery
+authorization can fence recent pre-opt-in operations.
+
 ## `SessionDO`
 
 A TTL'd session store in a Durable Object: records expire after
@@ -92,8 +164,8 @@ the secret is unset the DO rejects all calls with 401.
 
 <Callout type="warn">
     **`@lunora/auth` does not use this class.** It never has:
-    `grep -rn "SessionDO" packages/auth/src/` finds nothing, and no commit in that
-    package's history references it. So exporting `SessionDO`, binding it as `SESSION`,
+    `grep -rn "SessionDO" packages/auth/src/` finds only a comment in `auth-do.ts`;
+    nothing in that package imports or instantiates it. So exporting `SessionDO`, binding it as `SESSION`,
     and setting `SESSION_DO_SECRET` gets you a correctly-configured object that nothing
     ever calls; sessions still live in the auth database.
 
@@ -129,6 +201,99 @@ interface SessionRecord {
 until a message arrives. Exposed via the `HibernatableWebSocket` type for unit tests.
 (`SessionDO` has no WebSocket surface at all: it is HTTP-only, so hibernation does not
 apply to it.)
+
+## Alarm re-arm budget
+
+A shard's poll alarm re-arms itself on each tick while a global shape, a source or a
+TTL backlog still has work. Left unchecked, an always-due source turns that into a loop
+that wakes the DO as fast as the runtime allows. Each shard therefore gets a budget of
+**300 re-arms due sooner than the 2 s floor per 60 seconds**, a sliding-window count kept in
+the shard's own SQLite. Re-arms at or beyond the floor are not counted: they are at most one
+per 2 s, so 30 a minute, and the default is ten times that. Steady workloads never reach it.
+
+When the budget is spent, the re-arm is refused and the shard arms **one recovery wake
+one minute later**, one millisecond past the window so the previous window has begun to
+decay. That wake runs the poll and sweep tiers, so an idle shard resumes polling and
+sweeping (global-shape refresh, source pulls, TTL deletes) once the window drains. A
+shard whose workload never drains is throttled, never stopped. It re-arms in bursts of
+about the limit, with quieter windows between them. Measured on a loop that is always due,
+it averaged about 60% of the limit per window, with no window empty. Each trip logs one `error` record, whose message begins
+`alarm re-arm breaker tripped` and carries the `limit` and `rearms` fields, and counts
+`shard.alarm_rearm.refused`. That is about one record per window, not one per refused
+re-arm.
+
+Writes are never refused. A pending schedule-outbox retry is exempt, so a job the
+scheduler has not yet accepted still gets its retry. TTL rows and source updates are
+delayed by about one window, never discarded. The codegen constructor's cold-start arms
+are refused while the budget is spent, and they are not counted in it.
+
+**Only re-arms due sooner than the 2 s floor write the window.** A re-arm whose next wake
+is at least 2 s after its tick began is floor-paced. Those are checked against the window
+with a `SELECT` and recorded nowhere, so a healthy 2 s poll writes no window row. A
+healthy shard still reads the window row once per poll. A re-arm due sooner than 2 s, such
+as a source that is due now, is counted and written when admitted. Those are the re-arms
+that can loop, and they are the only ones the budget spends. A source with
+`refresh.everyMs` under 2 s is due sooner than the floor on every poll, so each of its
+polls is counted and written. A source at 2 s or slower is not. The window is one row, so an
+eviction does not reset it.
+
+Cold starts are floor-paced too. A shard whose schema has a sourced or TTL tier arms that
+tier from its constructor on every instance, which is one read and no write. A tripped
+window still refuses that arm, so an eviction-driven loop cannot get around the budget.
+
+Set `LUNORA_ALARM_REARM_LIMIT` to a positive integer to change the budget, or to `0` to
+disable it. An unset or malformed value keeps the default. A bulk backfill that drains a
+large TTL backlog can legitimately exceed the default, so raise the limit for that
+deployment.
+
+## Schedule rate budget
+
+A job that reschedules itself through `ctx.scheduler.runAfter` never touches the poll
+alarm, so the alarm budget above does not see it. Each run schedules the next, and
+nothing else bounds how often that happens. The schedule-rate budget covers that path.
+
+It counts **invocations per target per shard**, over a 60-second sliding window. A target
+is the function a schedule runs. An invocation is one mutation or action dispatch. A fan-out
+of many jobs to one target from one invocation counts once, so a legitimate import that
+schedules one job per row is not throttled. A self-loop counts once per iteration.
+
+The default is **600 invocations per minute**, or 10 per second. A self-loop runs at most
+one iteration per round trip (the scheduler's alarm pass, the dispatch, the run). At an
+assumed 100 ms round trip, a loop reaches the budget at 10 iterations per second, and its
+daily ceiling is 864,000 per target per shard.
+
+The budget is **not lowered** for slower loops, and a self-loop gets no lower limit. At
+600 per minute, a loop that reschedules itself 2 times per second (120 per minute,
+172,800 per day per target) is not caught. A blanket limit of 120 would defer any app
+that schedules one target from more than 2 invocations per second, the whole app
+being one shard by default. A self-only limit needs the calling function's path, which
+the generated `buildCtx` has but does not pass to the scheduler facade. Its composed
+calls also inherit the outer function's path, so a self-loop through `ctx.runMutation`
+would still count as fan-in. Only `ctx.scheduler` is covered: `createWorkpool` and
+`createQueueWorkpool` enqueues do not pass through this budget.
+
+When the budget is spent, the schedule is **deferred one minute**, not refused and not
+dropped. Its due time moves to one window out. A job already due later than that keeps its
+time. Each trip logs one `error` record, whose message begins
+`schedule rate breaker tripped` and names the target, and counts
+`shard.schedule_rate.deferred`. The error record is written at most once per window per
+target and instance, however many refusals follow, so steady load at the limit does not
+flood the log.
+
+Known false positive: a steady workload above 10 invocations per second per shard and
+target, such as one email job per request, is delayed by a window. It still runs. Raise the
+limit for that deployment.
+
+Ordering: a job admitted after a deferral can run before an earlier deferred job for the
+same target. Deferred jobs keep their own due times, and the window re-admits in the
+meantime. A self-loop has one job in flight, so this matters only for fan-in workloads.
+Do not rely on the order of same-target schedules across a throttle.
+
+Set `LUNORA_SCHEDULE_RATE_LIMIT` to a positive integer to change the budget, or to `0` to
+disable it. An unset or malformed value keeps the default.
+
+The window is one row per target in the shard's SQLite. It is written inside the
+invocation's transaction, so a rolled-back invocation does not count.
 
 ## `ShardDOState` / `MutationDelta`
 

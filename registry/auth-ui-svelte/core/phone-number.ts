@@ -6,7 +6,9 @@
  * own state machine like `email-otp.ts` does, rather than being one form. The
  * other two are single submits.
  */
+import { captchaSpends, resetCaptchaIfSpent } from "./captcha";
 import type { ControllerContext } from "./config";
+import { cooldownActive, cooldownLabel, RESEND_COOLDOWN_MS, secondsUntil } from "./cooldown";
 import { createFormController } from "./create-form-controller";
 import { assertOk, mapAuthError } from "./map-error";
 import { postAuthDestination, withRedirectTo } from "./redirect-to";
@@ -39,6 +41,8 @@ interface PhoneVerifyState {
     error?: string;
     /** The number a code was sent to, once `send` succeeds. */
     phoneNumber: string;
+    /** Epoch ms before which `send` is refused (see `cooldown.ts`). */
+    resendAvailableAt?: number;
     status: FlowStatus;
     step: "request" | "verify";
     successMessage?: string;
@@ -63,6 +67,9 @@ interface PhoneVerifyOptions {
 const createPhoneVerifyController = (context: ControllerContext, options: PhoneVerifyOptions = {}): PhoneVerifyController => {
     const store = createStore<PhoneVerifyState>({ phoneNumber: "", status: "idle", step: "request" });
 
+    /** The number the last code went to; a different one is not a resend, so it skips the cooldown. */
+    let sentTo: string | undefined;
+
     const run = async (work: () => Promise<Partial<PhoneVerifyState>>, fallback: string): Promise<void> => {
         if (store.get().status === "submitting") {
             return;
@@ -70,10 +77,16 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
 
         store.update({ error: undefined, status: "submitting", successMessage: undefined });
 
+        const mark = captchaSpends();
+
         try {
-            store.update({ status: "idle", ...(await work()) });
+            const next = await work();
+
+            resetCaptchaIfSpent(mark);
+            store.update({ status: "idle", ...next });
         } catch (error) {
             context.onError?.(error);
+            resetCaptchaIfSpent(mark);
             store.update({ error: mapAuthError(error, context.localization, fallback), status: "error" });
         }
     };
@@ -81,10 +94,21 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
     return {
         actions: {
             restart: () => {
-                store.set({ phoneNumber: "", status: "idle", step: "request" });
+                // Keeps the cooldown: restarting is how this flow resends.
+                store.set({ phoneNumber: "", resendAvailableAt: store.get().resendAvailableAt, status: "idle", step: "request" });
             },
             send: async (phoneNumber: string) => {
                 const trimmed = phoneNumber.trim();
+
+                if (cooldownActive(store.get().resendAvailableAt) && trimmed === sentTo) {
+                    // Say why nothing was sent: this flow has no shipped countdown, so a silent refusal reads as a broken button.
+                    // A send still in flight keeps its status, or the single-flight guard in `run` would let another one overlap it.
+                    if (store.get().status !== "submitting") {
+                        store.update({ error: cooldownLabel(context.localization, secondsUntil(store.get().resendAvailableAt)), status: "error" });
+                    }
+
+                    return;
+                }
 
                 if (trimmed === "") {
                     store.update({ error: context.localization.phoneRequired, status: "error" });
@@ -95,7 +119,14 @@ const createPhoneVerifyController = (context: ControllerContext, options: PhoneV
                 await run(async () => {
                     assertOk(await context.authClient.phoneNumber.sendOtp({ phoneNumber: trimmed }));
 
-                    return { phoneNumber: trimmed, step: "verify", successMessage: context.localization.phoneOtpSent };
+                    sentTo = trimmed;
+
+                    return {
+                        phoneNumber: trimmed,
+                        resendAvailableAt: Date.now() + RESEND_COOLDOWN_MS,
+                        step: "verify",
+                        successMessage: context.localization.phoneOtpSent,
+                    };
                 }, context.localization.genericError);
             },
             verify: async (code: string) => {

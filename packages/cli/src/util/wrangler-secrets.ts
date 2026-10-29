@@ -9,7 +9,7 @@
  */
 import { resolveDeployDriver, resolveProjectTarget } from "@lunora/config";
 
-import { detectPackageManager, execArgsFor } from "./detect-package-manager";
+import { detectPackageManager, toolchainExecArgs } from "./detect-package-manager";
 import { defaultSpawner } from "./spawn";
 
 interface SecretListRunnerResult {
@@ -27,6 +27,8 @@ interface ListRemoteSecretsInputs {
     env?: string;
     /** Injected command runner; defaults to a real `wrangler secret list`. */
     runner?: SecretListRunner;
+    /** The deploy target the caller resolved (`--target`, else the config's). Defaults to the config's. */
+    target?: string;
     /** Target a temporary-account deployment (`--temporary`). */
     temporary?: boolean;
 }
@@ -93,17 +95,19 @@ const parseSecretNames = (stdout: string): ReadonlyArray<string> | undefined => 
 };
 
 const listRemoteSecrets = async (inputs: ListRemoteSecretsInputs): Promise<ListRemoteSecretsResult> => {
-    // The toolchain is the target's, not always wrangler's — resolving from the
-    // project keeps a non-default target from shelling out to the wrong CLI.
-    const listCommand = resolveDeployDriver(resolveProjectTarget(inputs.cwd)).toolchain?.secretList({ environment: inputs.env, temporary: inputs.temporary });
+    // The toolchain is the target's, not always wrangler's — resolving it from the
+    // caller's target (not only the project's config) keeps `--target` from
+    // listing through the wrong CLI.
+    const driver = resolveDeployDriver(inputs.target ?? resolveProjectTarget(inputs.cwd));
+    const listCommand = driver.toolchain?.secretList?.({ environment: inputs.env, temporary: inputs.temporary });
 
     if (listCommand === undefined) {
-        return { error: "deploy target has no command-line toolchain", names: [], ok: false };
+        return { error: `deploy target "${driver.id}" has no secret store to list`, names: [], ok: false };
     }
 
     // Run the host tool through the project's package manager (pnpm/npm/yarn/bun),
     // detected from its lock file / `packageManager` field — never hardcoded.
-    const { args, command } = execArgsFor(detectPackageManager(inputs.cwd), listCommand.tool, listCommand.args);
+    const { args, command } = toolchainExecArgs(detectPackageManager(inputs.cwd), listCommand);
     const runner = inputs.runner ?? defaultRunner;
     const result = await runner(command, args, inputs.cwd);
 
@@ -120,5 +124,5 @@ const listRemoteSecrets = async (inputs: ListRemoteSecretsInputs): Promise<ListR
     return { names, ok: true };
 };
 
-export type { ListRemoteSecretsInputs, ListRemoteSecretsResult, SecretListRunner };
+export type { ListRemoteSecretsInputs, ListRemoteSecretsResult };
 export { listRemoteSecrets, parseSecretNames };

@@ -7,9 +7,9 @@
  * handler as a `bigint` or `Date`, and a pure-JSON argument has to be unchanged
  * byte for byte.
  */
+import { decodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import { createQueueWorkpool, httpDispatcher } from "../src/queue-workpool";
 import type { FunctionReference, QueueJob, QueueLike, QueueSendRequestLike } from "../src/types";
 

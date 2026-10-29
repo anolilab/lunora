@@ -42,7 +42,7 @@ pnpm install
 pnpm --filter @lunora-example/feedback-board dev
 ```
 
-Open <http://localhost:5173>.
+Open the URL the dev server prints (<http://localhost:5173> in the main checkout).
 
 Everything works offline in Miniflare **except** the ✨ Summarise button:
 `wrangler dev` proxies the `AI` binding to Cloudflare, so that one path needs an
@@ -66,7 +66,9 @@ votes: defineTable({
 ```ts
 export const generate = action.input({ limit: v.optional(v.number()) }).action(async ({ args: { limit }, ctx }) => {
     const top = (await ctx.runQuery(api.feedback.list, { sortBy: "votes" })).slice(0, limit ?? 10);
-    const { text } = await generateText({ model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"), prompt });
+    // Bounded like the real handler: an `action` is public RPC and generation
+    // bills per output token, so the completion is capped.
+    const { text } = await generateText({ maxOutputTokens: 700, model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"), prompt });
 
     return ctx.runMutation(internal.summaries.store, { feedbackIds: top.map((p) => p._id), summary: text, title: "…" });
 });

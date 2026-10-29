@@ -1,4 +1,5 @@
-import { stableWireKey } from "../../../shared/wire-key";
+import { stableWireKey } from "@lunora/wire";
+
 import type { LocalMirror } from "./local-mirror";
 import type { RowChange } from "./table-diff";
 

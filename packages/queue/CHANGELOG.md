@@ -1,3 +1,906 @@
+## @lunora/queue [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.130...@lunora/queue@1.0.0-alpha.131) (2026-10-28)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.74
+
+## @lunora/queue [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.129...@lunora/queue@1.0.0-alpha.130) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+
+## @lunora/queue [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.128...@lunora/queue@1.0.0-alpha.129) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+
+## @lunora/queue [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.127...@lunora/queue@1.0.0-alpha.128) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+
+## @lunora/queue [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.126...@lunora/queue@1.0.0-alpha.127) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.75
+
+## @lunora/queue [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.125...@lunora/queue@1.0.0-alpha.126) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+
+## @lunora/queue [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.124...@lunora/queue@1.0.0-alpha.125) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+
+## @lunora/queue [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.123...@lunora/queue@1.0.0-alpha.124) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.74
+
+## @lunora/queue [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.122...@lunora/queue@1.0.0-alpha.123) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+
+## @lunora/queue [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.121...@lunora/queue@1.0.0-alpha.122) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.73
+
+## @lunora/queue [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.120...@lunora/queue@1.0.0-alpha.121) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+
+## @lunora/queue [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.119...@lunora/queue@1.0.0-alpha.120) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/platform:** upgraded to 1.0.0-alpha.72
+
+## @lunora/queue [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.118...@lunora/queue@1.0.0-alpha.119) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/platform:** upgraded to 1.0.0-alpha.71
+
+## @lunora/queue [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.117...@lunora/queue@1.0.0-alpha.118) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+
+## @lunora/queue [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.116...@lunora/queue@1.0.0-alpha.117) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+
+## @lunora/queue [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.115...@lunora/queue@1.0.0-alpha.116) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/platform:** upgraded to 1.0.0-alpha.70
+
+## @lunora/queue [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.114...@lunora/queue@1.0.0-alpha.115) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/platform:** upgraded to 1.0.0-alpha.69
+
+## @lunora/queue [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.113...@lunora/queue@1.0.0-alpha.114) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+
+## @lunora/queue [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.112...@lunora/queue@1.0.0-alpha.113) (2026-10-18)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** createNodeHttpServer rejects a non-loopback host without an
+origin option, and no longer caps request bodies at 1 MiB.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **server:** live topic streams over one SSE connection ([#1218](https://github.com/anolilab/lunora/issues/1218)) ([59056ea](https://github.com/anolilab/lunora/commit/59056ea6c5d23de1bd5633a7da3ac680eb622344))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/platform:** upgraded to 1.0.0-alpha.68
+
+## @lunora/queue [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.111...@lunora/queue@1.0.0-alpha.112) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.67
+
+## @lunora/queue [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.110...@lunora/queue@1.0.0-alpha.111) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+
+## @lunora/queue [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.109...@lunora/queue@1.0.0-alpha.110) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+
+## @lunora/queue [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.108...@lunora/queue@1.0.0-alpha.109) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.66
+
+## @lunora/queue [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.107...@lunora/queue@1.0.0-alpha.108) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.57
+* **@lunora/platform:** upgraded to 1.0.0-alpha.65
+
+## @lunora/queue [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.106...@lunora/queue@1.0.0-alpha.107) (2026-10-15)
+
+### Performance Improvements
+
+* **wire:** publish the wire codec once instead of inlining it into every package ([#1198](https://github.com/anolilab/lunora/issues/1198)) ([7020e2c](https://github.com/anolilab/lunora/commit/7020e2cec53c3e5c0f28ab8e569b33ee0ae3a55b))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.56
+* **@lunora/wire:** upgraded to 1.0.0-alpha.1
+
+## @lunora/queue [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.105...@lunora/queue@1.0.0-alpha.106) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+
+## @lunora/queue [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.104...@lunora/queue@1.0.0-alpha.105) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.64
+
+## @lunora/queue [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.103...@lunora/queue@1.0.0-alpha.104) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.63
+
+## @lunora/queue [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.102...@lunora/queue@1.0.0-alpha.103) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.62
+
+## @lunora/queue [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.101...@lunora/queue@1.0.0-alpha.102) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+
+## @lunora/queue [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.100...@lunora/queue@1.0.0-alpha.101) (2026-10-13)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.61
+
+## @lunora/queue [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.99...@lunora/queue@1.0.0-alpha.100) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+
+## @lunora/queue [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.98...@lunora/queue@1.0.0-alpha.99) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+
+## @lunora/queue [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.97...@lunora/queue@1.0.0-alpha.98) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.59
+
+## @lunora/queue [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.96...@lunora/queue@1.0.0-alpha.97) (2026-10-08)
+
+### Bug Fixes
+
+* **queue:** route renamed queues, add maxConcurrency, type ctx.queues ([#1041](https://github.com/anolilab/lunora/issues/1041)) ([57c6a86](https://github.com/anolilab/lunora/commit/57c6a867ca68630d8662fe78196c4afa6cf35517))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.58
+
+## @lunora/queue [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.95...@lunora/queue@1.0.0-alpha.96) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+
+## @lunora/queue [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.94...@lunora/queue@1.0.0-alpha.95) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.51
+
+## @lunora/queue [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.93...@lunora/queue@1.0.0-alpha.94) (2026-10-07)
+
+### Features
+
+* **advisor:** flag topics with more than 10 subscriptions ([#1016](https://github.com/anolilab/lunora/issues/1016)) ([472b256](https://github.com/anolilab/lunora/commit/472b256f7f37bebbd8aee1ec32a02acef8cad8a4))
+* **codegen:** discover queues declared in a module's queues.ts ([#1018](https://github.com/anolilab/lunora/issues/1018)) ([f5dc76c](https://github.com/anolilab/lunora/commit/f5dc76c6acdde00f6bae02e4b56852619feedb16))
+
+## @lunora/queue [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.92...@lunora/queue@1.0.0-alpha.93) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.57
+
+## @lunora/queue [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.91...@lunora/queue@1.0.0-alpha.92) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.56
+
+## @lunora/queue [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.90...@lunora/queue@1.0.0-alpha.91) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.55
+
+## @lunora/queue [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.89...@lunora/queue@1.0.0-alpha.90) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.54
+
+## @lunora/queue [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.88...@lunora/queue@1.0.0-alpha.89) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.53
+
+## @lunora/queue [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.87...@lunora/queue@1.0.0-alpha.88) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+* **@lunora/platform:** upgraded to 1.0.0-alpha.52
+
+## @lunora/queue [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.86...@lunora/queue@1.0.0-alpha.87) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.51
+
+## @lunora/queue [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.85...@lunora/queue@1.0.0-alpha.86) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/platform:** upgraded to 1.0.0-alpha.50
+
+## @lunora/queue [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.84...@lunora/queue@1.0.0-alpha.85) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.49
+
+## @lunora/queue [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.83...@lunora/queue@1.0.0-alpha.84) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.48
+
+## @lunora/queue [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.82...@lunora/queue@1.0.0-alpha.83) (2026-10-01)
+
+### Features
+
+* **codegen:** modules, a call-graph manifest and an architecture view ([#917](https://github.com/anolilab/lunora/issues/917)) ([522a779](https://github.com/anolilab/lunora/commit/522a7799d183c20d1edeb8cbd8b72939eb847fb2))
+
+## @lunora/queue [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.81...@lunora/queue@1.0.0-alpha.82) (2026-10-01)
+
+### Features
+
+* **queue:** add pub/sub topics over cloudflare queues ([#916](https://github.com/anolilab/lunora/issues/916)) ([eba0175](https://github.com/anolilab/lunora/commit/eba0175f586e804555d0e0c485a3a93d73f15d1f))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.47
+
+## @lunora/queue [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.80...@lunora/queue@1.0.0-alpha.81) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/platform:** upgraded to 1.0.0-alpha.46
+
+## @lunora/queue [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.79...@lunora/queue@1.0.0-alpha.80) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.45
+
+## @lunora/queue [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.78...@lunora/queue@1.0.0-alpha.79) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.44
+
+## @lunora/queue [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.77...@lunora/queue@1.0.0-alpha.78) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.43
+
+## @lunora/queue [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.76...@lunora/queue@1.0.0-alpha.77) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.42
+
+## @lunora/queue [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.75...@lunora/queue@1.0.0-alpha.76) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.47
+
+## @lunora/queue [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.74...@lunora/queue@1.0.0-alpha.75) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+
+## @lunora/queue [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.73...@lunora/queue@1.0.0-alpha.74) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+
+## @lunora/queue [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.72...@lunora/queue@1.0.0-alpha.73) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.41
+
+## @lunora/queue [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.71...@lunora/queue@1.0.0-alpha.72) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+* **@lunora/platform:** upgraded to 1.0.0-alpha.40
+
+## @lunora/queue [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.70...@lunora/queue@1.0.0-alpha.71) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+
+## @lunora/queue [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.69...@lunora/queue@1.0.0-alpha.70) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+
+## @lunora/queue [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.68...@lunora/queue@1.0.0-alpha.69) (2026-09-25)
+
+### ⚠ BREAKING CHANGES
+
+* **queue,scheduler,workflow:** retryDeclinedMessage is now async and its message needs
+`ack`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): end a decline wait before the step's timeout
+
+A step's ctx.run waits out a DISPATCH_IN_PROGRESS decline in place for up to
+the claim ceiling (15 minutes). A step whose timeout is shorter than that (the
+engine default is 10 minutes) had the attempt timed out under the wait, and
+the abandoned wait kept re-dispatching next to the retry.
+
+Inside ctx.runStep the wait now reads the timeout from the config the engine
+hands the attempt (Cloudflare's default when it names none), stops two seconds
+before it, and rethrows the decline, so the attempt is charged once, to the
+decline, and the next attempt picks the wait up. A rollback is bounded the
+same way by its own config. A ctx.run in a raw ctx.step.do cannot see its
+step's timeout and stays bounded by the claim alone; the docs say so.
+
+On the real Workflows engine, with a 6s step timeout and eight declines, the
+unfixed wait dispatched from attempt 1 after attempt 2 had begun.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(queue,scheduler): authenticate a re-enqueued copy's claimed id
+
+A push consumer derives each message's replay-dedup ids from its id. The copy
+it re-enqueues on a last-delivery decline carries the replaced message's id,
+and the consumer unwrapped any body with that envelope's shape. A queue body
+is app data, often forwarded from outside (a webhook ingest doing
+send(await request.json())), so whoever controlled a body could choose the id
+its calls ran under: be answered with another live message's cached results,
+pre-fill that message's dedup slots so its calls were skipped, or, through
+failure attribution, get that message acked and dropped in a shared batch.
+The broker-assigned id could not be forged before; the envelope made it
+forgeable. The scheduler's `requeuedFrom` marker had the same hole for a job
+sent to the workpool queue by hand.
+
+A copy is now accepted only with an HMAC-SHA256 over its claimed id and
+payload, keyed by the admin token the consumer already holds to dispatch
+(WebCrypto, so workerd and Node alike; domain-separated per package). Any
+other body, including one that copies the envelope's shape or carries a MAC
+under a different key, is delivered as-is under the broker's id.
+
+- @lunora/queue: the envelope holds the id, the body as the JSON text of its
+  wire encoding (so the MAC covers exact bytes and bigint/Date/bytes survive)
+  and the MAC; it is sent as JSON. A copy that would exceed the 128 KB message
+  limit, or a body with no wire encoding, is not sent: the delayed retry and
+  the log stay. ctx.queues send/sendBatch refuse the reserved key. A
+  dead-lettered copy is readable JSON.
+- @lunora/scheduler: createQueueConsumer takes `requeue: { queue, secret }`
+  in place of `queue`; `requeuedFrom` is honoured only with a valid
+  `requeueMac`, and both fields are stripped before a QueueDispatch sees the
+  job. QueueJob no longer declares `requeuedFrom`.
+- @lunora/dispatch: signRequeue / verifyRequeue; DEFAULT_DISPATCH_TIMEOUT_MS is
+  exported for the workflow wait.
+
+Re-proved on the real workerd broker with the delay patched to 1s: deliveries
+1-3 declined, the signed copy delivered as attempt 1 under the original id,
+body and dedup id. A forged envelope sent straight through the binding is
+delivered as-is under the broker's id.
+* **queue,scheduler,workflow:** createQueueConsumer's `queue` option is now
+`requeue: { queue, secret }`, and QueueJob drops `requeuedFrom`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): bound a rollback's decline wait by its own timeout
+
+The previous commit said a rollback's wait was bounded by its own config. It
+was bounded by `rollbackContext.ctx.config`, and on the local Workflows engine
+that is the FORWARD step's config: a step with `timeout: "1 hour"` and
+`rollbackConfig: { timeout: "7 seconds" }` handed its rollback
+`ctx.config.timeout === "1 hour"`. So a rollback shorter than its step still
+had its wait outlive the attempt, and one longer gave up early and reported a
+compensation failed that would have completed. The rollback now reads
+`step.rollbackConfig` (Cloudflare's 10-minute default when unset), and a
+workerd test pins what the engine hands a rollback.
+
+A re-check can find the claim gone and run the call, which could take the
+runner's whole 30s and overrun the step timeout. Under a deadline each
+re-check now gets no more timeoutMs than is left, and the wait ends while at
+least a second remains.
+
+The "Uncaught (in promise)" lines the timed workerd test prints are the engine
+logging each failed step attempt: a plain throw in a raw step.do with no Lunora
+code on the path prints the same line.
+
+The Node host does not enforce step timeouts; its capability note and the
+workflow docs now say the bound charges an attempt there that the host would
+not have ended.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): give a decline back when a late pause overran its bound
+
+The decline wait bounded each pause by the claim ceiling and the step deadline, but a timer
+can fire late. On resuming past either bound it started another dispatch anyway, with a zero
+or negative timeout, instead of returning the decline. It now re-checks both bounds after the
+pause and rethrows the decline when either has passed.
+
+The Node workflow note said rollbackConfig is ignored; the adapter ignores its retries, but
+@lunora/workflow reads rollbackConfig.timeout to end a rollback's decline wait.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): end a decline wait only on a real overrun, not timer jitter
+
+The previous change rethrew a decline whenever the time left after a pause was under the
+one-dispatch margin. The pause is sized to leave exactly that margin, so ordinary timer jitter
+tripped it: the final re-check before a step's timeout was skipped and the attempt was spent
+early. It now gives the decline back only when the pause actually ran past the claim ceiling
+or the deadline.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **queue,scheduler,workflow:** close the last-delivery and step-timeout decline edges ([#829](https://github.com/anolilab/lunora/issues/829)) ([f3caafc](https://github.com/anolilab/lunora/commit/f3caafcab18a41ad84799a40dfbc197e4fa5f5b2))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.39
+
+## @lunora/queue [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.67...@lunora/queue@1.0.0-alpha.68) (2026-09-25)
+
+### Bug Fixes
+
+* **config:** remove dropped queue tuning and retune --env consumers ([#830](https://github.com/anolilab/lunora/issues/830)) ([753650e](https://github.com/anolilab/lunora/commit/753650e921801a24b4a4f0be2dbba19ea32c553d)), closes [#817](https://github.com/anolilab/lunora/issues/817)
+
+## @lunora/queue [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.66...@lunora/queue@1.0.0-alpha.67) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.38
+
+## @lunora/queue [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.65...@lunora/queue@1.0.0-alpha.66) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.37
+
+## @lunora/queue [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.64...@lunora/queue@1.0.0-alpha.65) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.36
+
+## @lunora/queue [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.63...@lunora/queue@1.0.0-alpha.64) (2026-09-25)
+
+### ⚠ BREAKING CHANGES
+
+* **queue,workflow:** the id formats changed. An instance in flight when this
+deploys re-derives new ids on its next replay: a ctx.run that already applied
+under the old id can apply once more, and a parent that already spawned
+children re-spawns them under the new child ids (the old children still run
+and finish, but the parent now joins the new ones).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(queue,workflow): stop dispatch declines spending retry budgets
+
+A shard answers `409 DISPATCH_IN_PROGRESS` when a dispatch id is already
+running: the caller's own earlier attempt is still executing. The decline is
+retryable, so the queue consumer rethrew the batch and a workflow step threw,
+and both runtimes charged it as a failed attempt. That is reachable with
+defaults: `ctx.run` gives up after 30s with a retryable 503 while the shard
+keeps running the action, and every redelivery during that run meets the
+claim. With the default zero retry_delay a `maxRetries: 3` queue spent its
+whole budget on declines within seconds and dropped the message (no DLQ) while
+the action was still running; on the real broker a message saw attempts 1, 2
+and 3 inside two seconds and was gone. A workflow step at the engine's default
+retries errored the instance for any action over about five and a half
+minutes; on the real engine three declines against `limit: 2` errored it.
+
+Both now bound declines by the shard claim's fifteen-minute ceiling, exported
+from @lunora/dispatch as DISPATCH_CLAIM_CEILING_MS (pinned equal to
+@lunora/do's IN_FLIGHT_CLAIM_CEILING_MS) alongside `isDispatchDecline`:
+
+- Queues have no uncounted retry, so a declined message is retried with
+  `delaySeconds` equal to the ceiling. The claim cannot outlive that delay, so
+  one claim costs at most one attempt; the next delivery is served the
+  finished result or runs the call if the first attempt died. It is never
+  acked. A decline on a message's last delivery cannot be saved by a delay;
+  that case is retried anyway and logged, naming the DLQ-or-drop outcome.
+  The scheduler's queue workpool consumer had the same flaw and gets the
+  same delayed retry.
+- A workflow waits a decline out inside the call: the same id is re-dispatched
+  after 1s doubling to 30s pauses until it is served, for at most the ceiling
+  since the first decline, then the decline is rethrown to the engine's
+  ordinary retry. A step `timeout` shorter than the wait (Cloudflare's default
+  is ten minutes) can still charge one attempt.
+
+The guarantee stays at-least-once in both: a decline is never treated as done.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(platform): state the dispatch gap in the Node queues rating
+
+The Node `queues` note rated the host "emulated" without saying that
+message.run and ctx.run POST to /_lunora/scheduler/dispatch, which
+@lunora/platform-node serves no HTTP for, so a queue handler that calls a
+Lunora function fails at runtime. The `workflows` note already disclosed the
+same gap for ctx.run; the two now agree. The platform-node docs table is
+updated in step (lint:node-capabilities-docs).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(queue,workflow): document dispatch declines and the dedup window
+
+The workflow docs still said two concurrent action dispatches of one id "can
+both miss the cache and both run". The shard's in-flight claim now declines
+the second with 409 DISPATCH_IN_PROGRESS; the section says so, including the
+fifteen-minute ceiling past which a still-running handler can be run over.
+
+Both pages now describe what a decline costs: a workflow waits it out inside
+the call without spending the step's retries, and a queue retries the message
+after the claim ceiling so a slow call costs at most one attempt, with the
+last-delivery case called out. The queue page also gains what it never
+stated: message.run's replay-dedup ids expire with the shard's 24-hour dedup
+window, so a redelivery later than that re-applies its calls. The workflow
+page documents the workflow-scoped id format, and the queue page notes that
+reconcile now keeps an existing consumer's tuning in step with defineQueue.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* chore(api): accept the dispatch and workflow surface changes
+
+@lunora/dispatch exports DISPATCH_CLAIM_CEILING_MS and isDispatchDecline;
+createRunStep's deps take dedupNamespace in place of instanceId.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(config): retune queue consumers in place and report them apart
+
+Retuning an existing consumer rewrote the whole `queues` node through one
+applyModify, which drops every comment inside it, reorders producers and
+consumers and expands one-line entries. Retuning happens on every tuning
+drift, and the consumers that drift are the hand-tuned ones that carry
+comments. Each drifted field is now written at its own path
+(`queues.consumers[i].<key>`); the whole-block write remains only for
+appending a missing producer or consumer.
+
+A retune was also pushed into `added`, so `lunora deploy` logged a
+max_retries change as "provisioned bindings". ReconcileBindingsResult gains
+an `updated` list, and the deploy command and the Vite plugin log it on its
+own line.
+
+The five tuning `if` blocks become a CONSUMER_TUNING_KEYS table, which also
+lets QueueConsumerEntry declare its keys instead of an index signature.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(dispatch): recognise claim declines by a shard-set header
+
+isDispatchDecline trusted the `DISPATCH_IN_PROGRESS` code, which the shard
+echoes from any handler-thrown LunoraError. An action forwarding a nested
+decline therefore made its workflow caller re-run it for fifteen minutes and
+parked its queue message for fifteen. The shard's claim path now sets
+`x-lunora-dispatch-declined: 1` on its decline, a header no handler can set on
+the dispatch response; the runner carries it onto the rebuilt error and
+isDispatchDecline requires it. SchedulerDO's uncharged re-arm keys on the same
+header, so a handler-thrown error with that code is charged as the failure it
+is.
+
+The claim ceiling, the code and the header name live in
+shared/dispatch-claim.ts, inlined into @lunora/do, @lunora/dispatch and
+@lunora/scheduler, replacing two hand-kept 900_000 literals and the
+cross-package equality test that `test:affected` would not have rerun.
+
+One decline policy, owned by @lunora/dispatch: retryDeclinedMessage retries
+past the ceiling (DISPATCH_DECLINE_RETRY_DELAY_SECONDS) and logs a decline on
+a message's last delivery. @lunora/queue and the scheduler's queue workpool
+both call it, so the workpool gains the last-delivery log;
+QueueConsumerOptions takes an optional `maxRetries` to recognise that
+delivery. Also: a declaredMaxRetries helper in the queue consumer and a
+private isDispatchFailure brand check in the runner.
+
+The queue capture record's deadLettered comment now also states that
+reconcile never removes an option taken out of defineQueue and never writes
+`env.<name>` blocks.
+
+Cleanup alongside: wait-out-decline.ts is renamed wait-out-declines.ts after
+its export; the workerd test workers mark their fake declines with the header,
+the queue one passes the decline env and fetch to every batch (smokeQueue
+makes no dispatch), and the workflow one installs its origin routing once at
+module scope.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(queue): state what reconcile leaves alone and what a decline costs
+
+Reconcile keeps declared tuning in step but never removes an option taken
+out of defineQueue and never writes `env.<name>` blocks; the page now says
+both. It also says plainly that a declined message waits the full fifteen
+minutes even when the action behind it finishes seconds later, since the
+consumer cannot see it finish.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* chore(api): accept the decline policy and reconcile surface changes
+
+@lunora/dispatch exports retryDeclinedMessage, DeclinedMessageLike,
+DISPATCH_DECLINE_RETRY_DELAY_SECONDS and DEFAULT_QUEUE_MAX_RETRIES;
+ReconcileBindingsResult gains `updated`; QueueConsumerOptions gains
+`maxRetries`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **queue,workflow:** dispatch declines, workflow-scoped dedup ids, queue tuning deploy ([#817](https://github.com/anolilab/lunora/issues/817)) ([7c90b21](https://github.com/anolilab/lunora/commit/7c90b21d9218452dc8f04be13d39ab23463efebb))
+
+## @lunora/queue [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.62...@lunora/queue@1.0.0-alpha.63) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.34
+
+## @lunora/queue [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.61...@lunora/queue@1.0.0-alpha.62) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+
+## @lunora/queue [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.60...@lunora/queue@1.0.0-alpha.61) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+
+## @lunora/queue [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.59...@lunora/queue@1.0.0-alpha.60) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.33
+
+## @lunora/queue [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.58...@lunora/queue@1.0.0-alpha.59) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/queue [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.57...@lunora/queue@1.0.0-alpha.58) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/queue [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.56...@lunora/queue@1.0.0-alpha.57) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/queue [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.55...@lunora/queue@1.0.0-alpha.56) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.32
+
+## @lunora/queue [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.54...@lunora/queue@1.0.0-alpha.55) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+
+## @lunora/queue [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.53...@lunora/queue@1.0.0-alpha.54) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/platform:** upgraded to 1.0.0-alpha.30
+
+## @lunora/queue [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.52...@lunora/queue@1.0.0-alpha.53) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+
+## @lunora/queue [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.51...@lunora/queue@1.0.0-alpha.52) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+
 ## @lunora/queue [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.50...@lunora/queue@1.0.0-alpha.51) (2026-09-07)
 
 ### Tests

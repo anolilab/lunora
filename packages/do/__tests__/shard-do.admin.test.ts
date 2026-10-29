@@ -15,6 +15,7 @@ import type {
     QueueMetadata,
     RankIndexDefinitionLike,
     RecordQueueMessageInput,
+    RelatedPage,
     SchemaLike,
     ShardRankPageResult,
     SocketAttachment,
@@ -33,6 +34,7 @@ import {
     runDataMigration,
     runShardMigrations,
 } from "@lunora/shard-engine";
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
@@ -41,6 +43,7 @@ import { adminSocketBinding } from "../../../shared/ws-admin-token";
 import type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
+    RunShardFindRelatedArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,
     RunShardRankPageArgs,
@@ -67,6 +70,8 @@ const STUDIO_FEATURE_KEYS = [
     "mail",
     "notifications",
     "payments",
+    "privacy",
+    "platform",
     "queues",
     "scheduler",
     "storage",
@@ -83,9 +88,9 @@ const STUDIO_FEATURES_KEY_GUARD: KeysMatch<keyof StudioFeaturesResult, (typeof S
 /**
  * Canonical key set of `QueueMetadata`, duplicated by `@lunora/studio`'s hand
  * mirror the same way as `StudioFeaturesResult`. Forces both packages' copies of
- * the `listQueues` wire shape to move together. `deadLetterQueue` is optional.
+ * the `listQueues` wire shape to move together. `deadLetterQueue` and `topic` are optional.
  */
-const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name"] as const;
+const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name", "topic"] as const;
 
 const QUEUE_METADATA_KEY_GUARD: KeysMatch<keyof QueueMetadata, (typeof QUEUE_METADATA_KEYS)[number]> = true;
 
@@ -246,17 +251,55 @@ class AdminShard extends ShardDO {
     }
 }
 
+/** Exposes the companions the shard's ctx-db memo holds as verified. */
+class CompanionMemoShard extends AdminShard {
+    public verifiedCompanions(): Set<string> {
+        return this.ctxDbTuning().companionMemo.verified;
+    }
+}
+
 /**
  * Mirrors the codegen subclass that overrides `workflowsMetadata()` with the
  * project's discovered workflow declarations — shared by every test that needs
  * a shard which "sees" the order-pipeline workflow.
  */
+
+/**
+ * Stands in for a `defineWorkflowEvent` validator. It trims while parsing, so a
+ * test can tell the parsed payload from the raw one on the wire.
+ */
+const approvalValidator = {
+    parse: (value: unknown): { approvedBy: string } => {
+        const approvedBy = (value as { approvedBy?: unknown } | undefined)?.approvedBy;
+
+        if (typeof approvedBy !== "string") {
+            throw new TypeError("approvedBy must be a string");
+        }
+
+        return { approvedBy: approvedBy.trim() };
+    },
+};
+
+const DECLARED_EVENTS = new Map([
+    [" approved ", { payload: { parse: (value: unknown) => value } }],
+    ["order-approved", { payload: approvalValidator }],
+]);
+
 class DeclaredWorkflowShard extends AdminShard {
     // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
-    protected override workflowsMetadata(): { workflows: { binding: string; className: string; exportName: string; name: string }[] } {
+    protected override workflowsMetadata(): {
+        eventTypes: string[];
+        workflows: { binding: string; className: string; exportName: string; name: string }[];
+    } {
         return {
-            workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
+            eventTypes: [...DECLARED_EVENTS.keys()],
+            workflows: [{ binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
         };
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+    protected override async workflowEvent(type: string): Promise<{ payload: { parse: (value: unknown) => unknown } } | undefined> {
+        return DECLARED_EVENTS.get(type);
     }
 }
 
@@ -418,7 +461,9 @@ describe("shardDO admin introspection", () => {
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({
-            result: { columns: ["__id__", "text"], rows: [{ __id__: "m1", text: "hello" }], total: 2 },
+            // `sqlColumns` is the physical list, reported alongside the
+            // display list so a SQL surface knows which names it may write.
+            result: { columns: ["__id__", "text"], rows: [{ __id__: "m1", text: "hello" }], sqlColumns: ["__id__", "text"], total: 2 },
         });
     });
 
@@ -600,6 +645,47 @@ describe("shardDO admin introspection", () => {
         await expect(response.json()).resolves.toEqual({ result: { advisories: [finding] } });
     });
 
+    it("serves findings rehydrated from per-rule text and slim rows exactly as the flat list", async () => {
+        expect.assertions(1);
+
+        const flat: AdvisoryFinding[] = ["a", "b", "c"].map((table) => {
+            return {
+                cacheKey: `unindexed_foreign_key:${table}:authorId`,
+                categories: ["PERFORMANCE"],
+                description: "A foreign-key column has no index.",
+                detail: `Table "${table}" has an unindexed FK.`,
+                facing: "EXTERNAL",
+                level: "INFO",
+                metadata: { table },
+                name: "unindexed_foreign_key",
+                remediation: "Add an index leading with the FK column.",
+                title: "Unindexed foreign key",
+            };
+        });
+        const { categories, description, facing, level, remediation, title } = flat[0]!;
+        const rules: Record<string, Partial<AdvisoryFinding>> = { unindexed_foreign_key: { categories, description, facing, level, remediation, title } };
+        const rows = flat.map(({ cacheKey, detail, metadata, name }) => {
+            return { cacheKey, detail, metadata, name };
+        });
+
+        // The shape the generated shard emits: memoised, rehydrated on first read.
+        class RehydratedShard extends AdminShard {
+            private cached: AdvisoryFinding[] | undefined;
+
+            protected override advisories(): AdvisoryFinding[] {
+                this.cached ??= rows.map((row) => ({ ...rules[row.name], ...row }) as AdvisoryFinding);
+
+                return this.cached;
+            }
+        }
+
+        const response = await new RehydratedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN }).fetch(
+            tokenAdminRequest(ADMIN_FUNCTIONS.getAdvisories, {}, ADMIN_TOKEN),
+        );
+
+        await expect(response.json()).resolves.toEqual({ result: { advisories: flat } });
+    });
+
     it("reports every studio feature off from the base hook, and the subclass-declared flags when overridden", async () => {
         expect.assertions(2);
 
@@ -617,6 +703,7 @@ describe("shardDO admin introspection", () => {
                 mail: false,
                 notifications: false,
                 payments: false,
+                privacy: false,
                 queues: false,
                 scheduler: false,
                 storage: false,
@@ -637,6 +724,7 @@ describe("shardDO admin introspection", () => {
                 mail: boolean;
                 notifications: boolean;
                 payments: boolean;
+                privacy: boolean;
                 queues: boolean;
                 scheduler: boolean;
                 storage: boolean;
@@ -652,6 +740,7 @@ describe("shardDO admin introspection", () => {
                     mail: false,
                     notifications: false,
                     payments: true,
+                    privacy: true,
                     queues: true,
                     scheduler: true,
                     storage: false,
@@ -674,6 +763,7 @@ describe("shardDO admin introspection", () => {
                 mail: false,
                 notifications: false,
                 payments: true,
+                privacy: true,
                 queues: true,
                 scheduler: true,
                 storage: false,
@@ -730,6 +820,8 @@ describe("shardDO admin introspection", () => {
             "mail",
             "notifications",
             "payments",
+            "privacy",
+            "platform",
             "queues",
             "scheduler",
             "storage",
@@ -742,7 +834,7 @@ describe("shardDO admin introspection", () => {
         expect.assertions(2);
 
         expect(QUEUE_METADATA_KEY_GUARD).toBe(true);
-        expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name"]);
+        expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name", "topic"]);
     });
 
     it("keeps the getTraces wire shapes in lockstep with the studio's hand-mirror", () => {
@@ -868,7 +960,8 @@ describe("shardDO admin introspection", () => {
 
         await expect(response.json()).resolves.toEqual({
             result: {
-                workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
+                eventTypes: [" approved ", "order-approved"],
+                workflows: [{ binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
             },
         });
     });
@@ -1176,7 +1269,26 @@ describe("shardDO admin introspection", () => {
         expect(read.result.entries).toHaveLength(0);
     });
 
-    it("starts a workflow instance through the declared binding", async () => {
+    it("forgets every companion rebuild marker on rebuildCompanions", async () => {
+        expect.assertions(3);
+
+        // A marker as a migrated shard holds it; the base class never migrates one.
+        database.raw(`CREATE TABLE "__lunora_companion_state" ("companion" TEXT PRIMARY KEY, "signature" TEXT NOT NULL)`);
+        database.raw(`INSERT INTO "__lunora_companion_state" VALUES ('todos__agg_byProject', 'sig')`);
+
+        const shard = new CompanionMemoShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // Verified by an earlier write: left in the memo, the next write would skip the rebuild.
+        shard.verifiedCompanions().add("todos__agg_byProject");
+
+        const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.rebuildCompanions, {}, ADMIN_TOKEN));
+
+        await expect(response.json()).resolves.toEqual({ result: { ok: true } });
+        expect(database.raw(`SELECT * FROM "__lunora_companion_state"`)).toHaveLength(0);
+        expect(shard.verifiedCompanions().size).toBe(0);
+    });
+
+    it("starts a workflow instance through the declared workflow on ctx.exports", async () => {
         expect.assertions(2);
 
         const created: { id?: string; params?: unknown }[] = [];
@@ -1190,9 +1302,9 @@ describe("shardDO admin introspection", () => {
             get: () => Promise.reject(new Error("get must not run for create")),
         };
 
-        // A shard whose env carries a fake `WORKFLOW_*` binding and whose
-        // codegen hook declares the matching workflow.
-        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
+        // A shard whose `ctx.exports` carries the exported workflow (as Cloudflare
+        // exposes it) and whose codegen hook declares the matching workflow.
+        const shard = new DeclaredWorkflowShard({ ...state, exports: { OrderPipelineWorkflow: binding } }, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(
             tokenAdminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "orderPipeline", params: { orderId: "o1" } }, ADMIN_TOKEN),
         );
@@ -1217,13 +1329,13 @@ describe("shardDO admin introspection", () => {
 
         // Admin-token-gated, but rejected for uniformity with every other create
         // surface — a forged marker must never reach `create()`.
-        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
         const response = await shard.fetch(
             tokenAdminRequest(
                 ADMIN_FUNCTIONS.createWorkflowInstance,
                 {
                     exportName: "orderPipeline",
-                    params: { __lunoraBranch: { eventType: "lunora:branch:x", index: 0, parentBinding: "WORKFLOW_X", parentId: "p" }, orderId: "o1" },
+                    params: { __lunoraBranch: { eventType: "lunora:branch:x", index: 0, parentBinding: "XWorkflow", parentId: "p" }, orderId: "o1" },
                 },
                 ADMIN_TOKEN,
             ),
@@ -1246,12 +1358,204 @@ describe("shardDO admin introspection", () => {
             get: (id: string) => Promise.resolve({ id, status: () => Promise.resolve({ output: { total: 42 }, status: "complete" }) }),
         };
 
-        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
         const response = await shard.fetch(
             tokenAdminRequest(ADMIN_FUNCTIONS.getWorkflowInstanceStatus, { exportName: "orderPipeline", id: "wf-1" }, ADMIN_TOKEN),
         );
 
         await expect(response.json()).resolves.toEqual({ result: { id: "wf-1", output: { total: 42 }, status: "complete" } });
+    });
+
+    it("sends the parsed payload of a declared event to a workflow's instance and audits it", async () => {
+        expect.assertions(3);
+
+        const sent: { id: string; payload?: unknown; type: string }[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: { payload?: unknown; type: string }) => {
+                        sent.push({ id, ...event });
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+        const response = await shard.fetch(
+            tokenAdminRequest(
+                ADMIN_FUNCTIONS.sendWorkflowEvent,
+                { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: "  ops  " }, type: "order-approved" },
+                ADMIN_TOKEN,
+            ),
+        );
+
+        await expect(response.json()).resolves.toEqual({ result: { sent: true } });
+        expect(sent).toStrictEqual([{ id: "wf-1", payload: { approvedBy: "ops" }, type: "order-approved" }]);
+
+        const audit = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.getAuditLog, {}, ADMIN_TOKEN));
+
+        const { result } = await audit.json<{ result: { entries: { op: string }[] } }>();
+
+        expect(result.entries.map((entry) => entry.op)).toContain("sendWorkflowEvent");
+    });
+
+    it("starts an instance under the trimmed explicit id, the one status and send-event look up", async () => {
+        expect.assertions(1);
+
+        const created: { id?: string }[] = [];
+        const binding = {
+            create: (options: { id?: string }) => {
+                created.push(options);
+
+                return Promise.resolve({ id: options.id ?? "wf-generated", status: () => Promise.resolve({ status: "queued" }) });
+            },
+            get: () => Promise.reject(new Error("get must not run for create")),
+        };
+
+        const shard = new DeclaredWorkflowShard({ ...state, exports: { OrderPipelineWorkflow: binding } }, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "orderPipeline", id: " wf-1 " }, ADMIN_TOKEN));
+
+        expect(created).toStrictEqual([{ id: "wf-1", params: undefined }]);
+    });
+
+    it("still answers sent when the audit write fails after the event was delivered", async () => {
+        expect.assertions(2);
+
+        const sent: string[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: { type: string }) => {
+                        sent.push(event.type);
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+
+        vi.spyOn(shard as unknown as { recordAudit: () => void }, "recordAudit").mockImplementation(() => {
+            throw new Error("sqlite is read-only");
+        });
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const response = await shard.fetch(
+                tokenAdminRequest(
+                    ADMIN_FUNCTIONS.sendWorkflowEvent,
+                    { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: "ops" }, type: "order-approved" },
+                    ADMIN_TOKEN,
+                ),
+            );
+
+            await expect(response.json()).resolves.toEqual({ result: { sent: true } });
+            expect(sent).toStrictEqual(["order-approved"]);
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+
+    it.each([
+        ["a missing type", { exportName: "orderPipeline", id: "wf-1" }],
+        ["a blank type", { exportName: "orderPipeline", id: "wf-1", type: "  " }],
+        ["a missing id", { exportName: "orderPipeline", type: "order-approved" }],
+        ["a missing exportName", { id: "wf-1", type: "order-approved" }],
+        ["a reserved lunora: type", { exportName: "orderPipeline", id: "wf-1", type: "lunora:branch:x" }],
+        ["an undeclared type", { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: "ops" }, type: "order-shipped" }],
+        ["a payload its declared validator rejects", { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: 7 }, type: "order-approved" }],
+    ])("rejects (400) sendWorkflowEvent with %s, and never sends", async (_label, args) => {
+        expect.assertions(2);
+
+        const sent: unknown[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: unknown) => {
+                        sent.push(event);
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+        const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.sendWorkflowEvent, args, ADMIN_TOKEN));
+
+        expect(response.status).toBe(400);
+        expect(sent).toHaveLength(0);
+    });
+
+    it("delivers the event type untrimmed, so it matches a type the workflow waits for byte for byte", async () => {
+        expect.assertions(1);
+
+        const sentTypes: string[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: { type: string }) => {
+                        sentTypes.push(event.type);
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+
+        await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.sendWorkflowEvent, { exportName: "orderPipeline", id: "wf-1", type: " approved " }, ADMIN_TOKEN));
+
+        expect(sentTypes).toStrictEqual([" approved "]);
+    });
+
+    it.each([
+        [
+            "an undeclared type",
+            { type: "order-shipped" },
+            'no `defineWorkflowEvent` export declares type "order-shipped" (known types: " approved ", "order-approved")',
+        ],
+        [
+            "an invalid payload",
+            { payload: { approvedBy: 7 }, type: "order-approved" },
+            'event "order-approved" payload validation failed: approvedBy must be a string',
+        ],
+    ])("explains why sendWorkflowEvent refused %s", async (_label, event, message) => {
+        expect.assertions(1);
+
+        const binding = { create: () => Promise.reject(new Error("unused")), get: () => Promise.reject(new Error("get must not run")) };
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+        const response = await shard.fetch(
+            tokenAdminRequest(ADMIN_FUNCTIONS.sendWorkflowEvent, { exportName: "orderPipeline", id: "wf-1", ...event }, ADMIN_TOKEN),
+        );
+
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST", message: expect.stringContaining(message) } });
+    });
+
+    it("rejects (400) sendWorkflowEvent when the instance handle has no sendEvent", async () => {
+        expect.assertions(1);
+
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) => Promise.resolve({ id, status: () => Promise.resolve({ status: "waiting" }) }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+        const response = await shard.fetch(
+            tokenAdminRequest(
+                ADMIN_FUNCTIONS.sendWorkflowEvent,
+                { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: "ops" }, type: "order-approved" },
+                ADMIN_TOKEN,
+            ),
+        );
+
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST", message: expect.stringContaining("do not accept events") } });
     });
 
     it("rejects starting an undeclared workflow with a 400", async () => {
@@ -2561,18 +2865,18 @@ class EditableShard extends ShardDO {
         }
 
         if (args.op === "delete") {
-            await writer.delete(args.id ?? "");
+            await writer.delete(args.table, args.id ?? "");
 
             return { id: args.id ?? null, op: "delete" };
         }
 
         if (args.op === "replace") {
-            await writer.replace(args.id ?? "", args.doc ?? {});
+            await writer.replace(args.table, args.id ?? "", args.doc ?? {});
 
             return { id: args.id ?? null, op: "replace" };
         }
 
-        await writer.patch(args.id ?? "", args.doc ?? {});
+        await writer.patch(args.table, args.id ?? "", args.doc ?? {});
 
         return { id: args.id ?? null, op: "patch" };
     }
@@ -2960,7 +3264,7 @@ describe("shardDO admin cdcSync", () => {
         const writer = createShardContextDatabase({ cdc: true, schema: usersSchema, sql: database.sql });
 
         await writer.insert("users", { _id: "u_1", name: "Ada", version: 1 }, { allowExplicitId: true });
-        await writer.patch("u_1", { name: "Ada Lovelace" });
+        await writer.patch("users", "u_1", { name: "Ada Lovelace" });
 
         const shard = new AdminShard(stateFor(database.sql), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(cdcRequest({ sinceSeq: 0 }));
@@ -3055,12 +3359,217 @@ describe("shardDO admin CDC bigint/bytes egress", () => {
 
             expect(replayed.status).toBe(200);
 
-            const row = await createShardContextDatabase({ schema: moneySchema, sql: target.sql }).get("s1", "sessions");
+            const row = await createShardContextDatabase({ schema: moneySchema, sql: target.sql }).get("sessions", "s1");
 
             expect([row?.["amountMinor"], new Uint8Array(row?.["receipt"] as ArrayBuffer)]).toStrictEqual([10n, new Uint8Array([1, 2, 3])]);
         } finally {
             target.close();
         }
+    });
+});
+
+describe("shardDO admin filters — nested paths and array membership", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let shard: AdminShard;
+    // Every statement the shard issues, so a test can prove a request touched no row.
+    let statements: string[];
+
+    beforeEach(() => {
+        database = createSqliteExec();
+        database.raw(`CREATE TABLE "orders" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+        database.raw(
+            `INSERT INTO "orders" VALUES ('o1', 1, '{"address":{"city":"Berlin"},"tags":["red","blue"],"status":"open"}'), ('o2', 2, '{"address":{"city":"Paris"},"tags":["green"],"status":"closed"}')`,
+        );
+
+        statements = [];
+        const recording: SqlExec = {
+            exec: (query, ...params) => {
+                statements.push(query);
+
+                return database.sql.exec(query, ...params);
+            },
+        };
+
+        shard = new AdminShard(stateFor(recording), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        statements = [];
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const pageIds = async (filters: unknown): Promise<unknown[]> => {
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.readTablePage, { filters, table: "orders" }));
+        const { result } = await response.json<{ result: { rows: Record<string, unknown>[] } }>();
+
+        return result.rows.map((row) => row["id"]);
+    };
+
+    it("filters a nested field through the path the browser sends", async () => {
+        expect.assertions(1);
+
+        await expect(pageIds([{ column: "address", operator: "eq", path: ["city"], value: "Berlin" }])).resolves.toStrictEqual(["o1"]);
+    });
+
+    it("filters array membership through has", async () => {
+        expect.assertions(1);
+
+        await expect(pageIds([{ column: "tags", operator: "has", value: "green" }])).resolves.toStrictEqual(["o2"]);
+    });
+
+    it("refuses an explicit null path on a bulk delete before selecting or deleting any row", async () => {
+        expect.assertions(4);
+
+        // `status` is a top-level field on o1 only. Dropping the null path would
+        // test that parent column and delete o1.
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "status", operator: "eq", path: null, value: "open" }], table: "orders" }),
+        );
+
+        expect(response.status).toBe(400);
+        // Only statements that touch the table: the shard's own bookkeeping reads run on every request.
+        expect(statements.filter((query) => query.includes('"orders"'))).toStrictEqual([]);
+        expect(database.raw(`SELECT COUNT(*) AS c FROM "orders"`)[0]?.["c"]).toBe(2);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+    });
+
+    it("answers 400 to a path that is not a list of field names, rather than testing the parent field", async () => {
+        expect.assertions(2);
+
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "address", operator: "eq", path: "city", value: "Berlin" }], table: "orders" }),
+        );
+
+        expect(response.status).toBe(400);
+        expect(database.raw(`SELECT COUNT(*) AS c FROM "orders"`)[0]?.["c"]).toBe(2);
+    });
+});
+
+/**
+ * {@link MoneyApplyShard} with the two other seams the codegen subclass fills: the
+ * schema's column kinds (`tableColumns`) and a real per-row writer for the bulk
+ * ops (`runShardWrite`).
+ */
+class MoneyBulkShard extends MoneyApplyShard {
+    // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+    protected override tableColumns(table: string): { name: string; optional: boolean; type: string }[] {
+        return table === "sessions"
+            ? [
+                  { name: "_id", optional: false, type: "id" },
+                  { name: "amountMinor", optional: false, type: "bigint" },
+                  { name: "receipt", optional: false, type: "bytes" },
+              ]
+            : [];
+    }
+
+    protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+        await createShardContextDatabase({ schema: moneySchema, sql: this.sql as SqlExec }).delete(args.table, args.id ?? "", { hard: true });
+
+        return { id: args.id ?? null, op: args.op };
+    }
+}
+
+describe("shardDO admin filters over a bigint column", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let shard: MoneyBulkShard;
+
+    beforeEach(async () => {
+        database = createSqliteExec();
+        runShardMigrations(database.sql, moneySchema);
+
+        const writer = createShardContextDatabase({ schema: moneySchema, sql: database.sql });
+
+        for (const [id, amount] of [
+            ["s9", 9n],
+            ["s10", 10n],
+            ["s200", 200n],
+        ] as const) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed writes
+            await writer.insert(
+                "sessions",
+                { _id: id, amountMinor: amount, receipt: new Uint8Array([amount === 9n ? 9 : 1]).buffer },
+                { allowExplicitId: true },
+            );
+        }
+
+        shard = new MoneyBulkShard(stateFor(database.sql), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const remainingIds = (): string[] => database.raw(`SELECT "id" FROM "sessions" ORDER BY "id"`).map((row) => String(row["id"]));
+
+    it("deletes exactly the one row a `> 100` filter matches, not the whole table", async () => {
+        expect.assertions(3);
+
+        // The browser sends the typed `100` as a number. Bound raw against the
+        // stored TEXT sort key, `>` held for every row and this deleted all three.
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "amountMinor", operator: "gt", value: 100 }], table: "sessions" }),
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ result: { count: 1, hasMore: false } });
+        expect(remainingIds()).toStrictEqual(["s10", "s9"]);
+    });
+
+    it("previews the same rows the delete removes", async () => {
+        expect.assertions(3);
+
+        const page = async (operator: string, value: unknown): Promise<{ ids: unknown[]; total: unknown }> => {
+            const response = await shard.fetch(
+                adminRequest(ADMIN_FUNCTIONS.readTablePage, { filters: [{ column: "amountMinor", operator, value }], table: "sessions" }),
+            );
+            const { result } = await response.json<{ result: { rows: Record<string, unknown>[]; total: number } }>();
+
+            return { ids: result.rows.map((row) => row["_id"]), total: result.total };
+        };
+
+        await expect(page("eq", 10)).resolves.toStrictEqual({ ids: ["s10"], total: 1 });
+        await expect(page("gt", 100)).resolves.toStrictEqual({ ids: ["s200"], total: 1 });
+        // Past 2^53 the browser sends the exact digits as a string.
+        await expect(page("lte", "9")).resolves.toStrictEqual({ ids: ["s9"], total: 1 });
+    });
+
+    it("facets the decoded values, and a facet value filters back to its rows", async () => {
+        expect.assertions(3);
+
+        const facet = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.facetColumn, { column: "amountMinor", table: "sessions" }));
+        const { result } = decodeWire(await facet.json()) as { result: { values: { count: number; value: unknown }[] } };
+
+        expect(result.values.map((entry) => entry.value).toSorted((a, b) => Number(a) - Number(b))).toStrictEqual([9n, 10n, 200n]);
+
+        // The studio sends a clicked bigint back as its decimal text (a query key
+        // cannot hold a `bigint`); a wire-encoded literal must match as well.
+        const filterBy = async (value: unknown): Promise<unknown> => {
+            const response = await shard.fetch(
+                adminRequest(ADMIN_FUNCTIONS.readTablePage, { filters: encodeWire([{ column: "amountMinor", operator: "eq", value }]), table: "sessions" }),
+            );
+
+            const body = await response.json<{ result: { total: number } }>();
+
+            return body.result.total;
+        };
+
+        await expect(filterBy("200")).resolves.toBe(1);
+        await expect(filterBy(200n)).resolves.toBe(1);
+    });
+
+    it("refuses a filter that cannot compare against a bigint honestly", async () => {
+        expect.assertions(3);
+
+        const contains = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "amountMinor", operator: "contains", value: "100" }], table: "sessions" }),
+        );
+        const fractional = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "amountMinor", operator: "gt", value: 10.5 }], table: "sessions" }),
+        );
+
+        expect(contains.status).toBe(400);
+        expect(fractional.status).toBe(400);
+        expect(remainingIds()).toHaveLength(3);
     });
 });
 
@@ -3163,6 +3672,22 @@ const todosRankByDone: RankIndexDefinitionLike = {
 
 const todosSchema: SchemaLike = {
     tables: {
+        /**
+         * A `.softDelete()` sibling of `todos`, so the bulk ops are exercised on
+         * BOTH delete modes from one harness. Its absence is why the bulk-delete
+         * non-convergence below shipped: every bulk test ran against a table whose
+         * writer-routed delete physically removes the row, so the tombstone branch
+         * — where a scan re-matches the rows it just wrote — was never reached.
+         */
+        notes: {
+            indexes: [],
+            shape: {
+                deletedAt: { kind: "number" },
+                projectId: { kind: "string" },
+                title: { kind: "string" },
+            },
+            softDeleteMode: { field: "deletedAt" },
+        },
         todos: {
             aggregateIndexes: [todosByProject],
             indexes: [],
@@ -3214,9 +3739,12 @@ class BulkOpsShard extends ShardDO {
         });
 
         if (args.op === "delete") {
-            await writer.delete(args.id ?? "", args.table);
+            // Codegen's exact forwarding — the harness has to carry it or the bulk
+            // arm's `hard: true` is invisible here, which is how the non-converging
+            // soft-delete drain shipped.
+            await writer.delete(args.table, args.id ?? "", { hard: args.hard === true });
         } else if (args.op === "patch") {
-            await writer.patch(args.id ?? "", args.doc ?? {}, args.table);
+            await writer.patch(args.table, args.id ?? "", args.doc ?? {});
         } else {
             throw new Error(`unexpected op in the bulk harness: ${args.op}`);
         }
@@ -3296,6 +3824,21 @@ describe("shardDO admin bulk delete", () => {
                 `SELECT COUNT(*) AS c FROM "todos" WHERE json_extract("__doc__", '$.projectId') = '${project}' AND json_extract("__doc__", '$.done') = 1`,
             )[0]?.["c"] ?? 0,
         );
+
+    /** Physical rows in `notes` — tombstones included, because a soft delete keeps the row. */
+    const notesPhysical = (): number => Number(database.raw(`SELECT COUNT(*) AS c FROM "notes"`)[0]?.["c"] ?? 0);
+
+    /** Rows of `notes` carrying a soft-delete marker — what a soft delete would leave behind. */
+    const notesTombstoned = (): number =>
+        Number(database.raw(`SELECT COUNT(*) AS c FROM "notes" WHERE json_extract("__doc__", '$.deletedAt') IS NOT NULL`)[0]?.["c"] ?? 0);
+
+    /** Seed `count` notes in the given project on the `.softDelete()` table. */
+    const seedNotes = async (writer: DatabaseWriterLike, project: string, count: number): Promise<void> => {
+        for (let index = 0; index < count; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed writes
+            await writer.insert("notes", { projectId: project, title: `n${index.toString()}` }); // gitleaks:allow -- a test fixture's shard key, not a credential
+        }
+    };
 
     /** Seed `count` todos in the given project, returning the writer used (its reads hit the shadow tables). */
     const seedProject = async (writer: DatabaseWriterLike, project: string, count: number): Promise<void> => {
@@ -3455,6 +3998,25 @@ describe("shardDO admin bulk delete", () => {
         const remaining = await createShardContextDatabase({ schema: todosSchema, sql: database.sql }).findMany("todos", {});
 
         expect(remaining.page).toHaveLength(3);
+    });
+
+    it("refuses a whitespace-only search, which the reader trims back to no predicate", async () => {
+        expect.assertions(2);
+
+        // The reader normalises `search` with `.trim()`, so a blank-but-not-empty
+        // term compiles to NO search conjunct — a predicate-free scan that empties
+        // the table while the audit log records it as `deleteRows`. The guard has
+        // to normalise the same way the reader does, or the two disagree and the
+        // one that wins is the destructive one.
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedProject(seed, "p1", 3);
+
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { search: "   ", table: "todos" }));
+
+        expect(response.status).toBe(400);
+        expect(rowCount()).toBe(3);
     });
 
     it("maps an unknown table to a 404", async () => {
@@ -3678,12 +4240,20 @@ describe("shardDO admin bulk delete", () => {
             functionPath: string,
             args: Record<string, unknown>,
             openCursor?: string,
-        ): Promise<{ outcome: string; written: number }> => {
+        ): Promise<{ batches: number; outcome: string; written: number }> => {
+            // Round-trips actually issued. A drain that stops asking because it ran
+            // out of batches reports `cap-hit`, but one that keeps re-matching rows
+            // it already wrote reports the SAME outcome as honest work — the batch
+            // count is what separates "converged" from "spun".
+            let batches = 0;
+
             const drained = await drainBulkOp({
                 args,
                 maxBatches: 50,
                 openCursor,
                 query: async (batchArgs) => {
+                    batches += 1;
+
                     const response = await shard.fetch(bulkRequest(functionPath, batchArgs));
 
                     if (!response.ok) {
@@ -3696,7 +4266,7 @@ describe("shardDO admin bulk delete", () => {
                 },
             });
 
-            return { outcome: drained.outcome, written: drained.written };
+            return { batches, outcome: drained.outcome, written: drained.written };
         };
 
         it("patches every matching row when the patch leaves them matching", async () => {
@@ -3746,6 +4316,63 @@ describe("shardDO admin bulk delete", () => {
             expect(written).toBe(12);
             expect(rowCount()).toBe(3);
         });
+
+        /**
+         * The `.softDelete()` half of the same seam. "Clear table" is a PHYSICAL
+         * removal — see the note on the delete arm in `handleBulkRowOp` — so the
+         * drain converges: each batch's writes take their rows out of the match set,
+         * which is the invariant the whole cursorless delete path is built on.
+         *
+         * Left soft, the scan re-matched the tombstones it had just stamped on every
+         * subsequent batch, each `apply` no-opped, `count` kept incrementing and
+         * `hasMore` never dropped — so the drain ran to its batch ceiling, reported
+         * far more rows than the table ever held, and left everything past the first
+         * page live.
+         */
+        it("drains a clear of a .softDelete() table in bounded batches, removing the rows", async () => {
+            expect.assertions(5);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            await seedNotes(seed, "p1", 7);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            const { batches, outcome, written } = await drainThroughShard(shard, ADMIN_FUNCTIONS.clearTable, { limit: 3, table: "notes" });
+
+            expect(outcome).toBe("completed");
+            // 7 rows at 3 per call: three full batches and no more. A non-converging
+            // drain spends all 50.
+            expect(batches).toBe(3);
+            expect(written).toBe(7);
+            expect(notesPhysical()).toBe(0);
+            expect(notesTombstoned()).toBe(0);
+        });
+
+        it("drains a predicated delete on a .softDelete() table, leaving non-matching rows untouched", async () => {
+            expect.assertions(5);
+
+            const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+            await seedNotes(seed, "p1", 5);
+            await seedNotes(seed, "p2", 2);
+
+            const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            const { batches, outcome, written } = await drainThroughShard(shard, ADMIN_FUNCTIONS.deleteRows, {
+                filters: [{ column: "projectId", operator: "eq", value: "p1" }],
+                limit: 2,
+                table: "notes",
+            });
+
+            expect(outcome).toBe("completed");
+            // 5 matching rows at 2 per call: three batches (the third returns 1).
+            expect(batches).toBe(3);
+            expect(written).toBe(5);
+            // p2's two rows survive, and nothing is left tombstoned.
+            expect(notesPhysical()).toBe(2);
+            expect(notesTombstoned()).toBe(0);
+        });
     });
 
     it("withholds a cursor from an unordered scan, so no caller can resume from a meaningless boundary", async () => {
@@ -3772,6 +4399,35 @@ describe("shardDO admin bulk delete", () => {
         const body = await ordered.json<{ result: { cursor?: string } }>();
 
         expect(body.result.cursor).toBeDefined();
+    });
+
+    /**
+     * One call, no drain: the reported `count` must be rows the table actually
+     * lost. A soft delete made this count tombstone stamps — and on a re-run, the
+     * same rows again — so the audit record ("deleted: N") and the operator's
+     * banner both described work that had not happened.
+     */
+    it("reports a clear of a .softDelete() table as rows actually removed", async () => {
+        expect.assertions(4);
+
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedNotes(seed, "p1", 5);
+
+        const shard = new BulkOpsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.clearTable, { limit: 3, table: "notes" }));
+        const body = await response.json<{ result: { count: number; hasMore: boolean } }>();
+
+        expect(body.result).toStrictEqual({ count: 3, hasMore: true });
+        // The three it counted are the three the table lost.
+        expect(notesPhysical()).toBe(2);
+
+        const second = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.clearTable, { limit: 3, table: "notes" }));
+
+        await expect(second.json<{ result: { count: number; hasMore: boolean } }>()).resolves.toStrictEqual({
+            result: { count: 2, hasMore: false },
+        });
+        expect(notesPhysical()).toBe(0);
     });
 });
 
@@ -3927,5 +4583,172 @@ describe("shardDO admin schema-history reads", () => {
 
         expect(response.status).not.toBe(200);
         await expect(response.text()).resolves.not.toContain("[object Object]");
+    });
+});
+
+/**
+ * The schema-derived relation graph behind `__lunora_admin__:findRelated`:
+ * `messages.authorId → users`, so the traversal has one edge to walk in both
+ * directions.
+ */
+const relationGraphSchema: SchemaLike = {
+    tables: {
+        messages: {
+            indexes: [{ fields: ["authorId"], name: "by_author" }],
+            shape: { authorId: { _meta: { tableName: "users" }, kind: "id" }, body: { kind: "string" } },
+        },
+        users: { indexes: [], shape: { name: { kind: "string" } } },
+    },
+};
+
+/** Mirrors the codegen-generated subclass's `runShardFindRelated` override. */
+class RelatedShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
+    public override async handleRpc(): Promise<unknown> {
+        throw new Error("handleRpc must not run for admin RPCs");
+    }
+
+    protected override async runShardFindRelated(args: RunShardFindRelatedArgs): Promise<RelatedPage> {
+        const writer = createShardContextDatabase({ schema: relationGraphSchema, sql: this.sql as SqlExec });
+
+        return writer.related!(
+            { id: args.id, table: args.table },
+            { cursor: args.cursor, depth: args.depth, direction: args.direction, edges: args.edges, limit: args.limit },
+        );
+    }
+}
+
+describe("shardDO admin findRelated", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let state: ShardDOState;
+
+    beforeEach(async () => {
+        database = createSqliteExec();
+        runShardMigrations(database.sql, relationGraphSchema);
+
+        const seed = createShardContextDatabase({ schema: relationGraphSchema, sql: database.sql });
+
+        await seed.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m1", authorId: "u1", body: "hello" }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m2", authorId: "u1", body: "again" }, { allowExplicitId: true });
+
+        state = {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+        };
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const findRelatedRequest = (args: Record<string, unknown>, token = ADMIN_TOKEN): Request =>
+        new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args, functionPath: ADMIN_FUNCTIONS.findRelated }),
+            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+    it("walks the schema's foreign keys out of a row", async () => {
+        expect.assertions(2);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ direction: "in", id: "u1", table: "users" }));
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { nodes: { depth: number; document: { _id: string } }[] } }>();
+
+        expect(body.result.nodes.map((node) => [node.document._id, node.depth])).toStrictEqual([
+            ["m1", 1],
+            ["m2", 1],
+        ]);
+    });
+
+    it("forwards the traversal's own refusal for an out-of-range depth", async () => {
+        expect.assertions(1);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ depth: 99, id: "u1", table: "users" }));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("refuses a payload with no table", async () => {
+        expect.assertions(1);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ id: "u1" }));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("is admin-gated like every other admin op", async () => {
+        expect.assertions(1);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ id: "u1", table: "users" }, "wrong-token"));
+
+        expect(response.status).toBe(403);
+    });
+
+    /**
+     * Every default this op has is its WIDEST setting, so a malformed narrowing
+     * option that was silently dropped ran a BIGGER traversal than the caller
+     * asked for — `direction: "sideways"` became both directions,
+     * `edges: "messages.authorId"` became every edge, `limit: "1"` became the
+     * default page. The caller here is an AI agent composing JSON against an
+     * admin writer with RLS and column masks bypassed, so a wrong shape is a 400.
+     */
+    it.each([
+        ["direction", { direction: "sideways", id: "u1", table: "users" }],
+        ["edges as a bare string", { edges: "messages.authorId", id: "u1", table: "users" }],
+        ["a non-string edge entry", { edges: ["messages.authorId", 7], id: "u1", table: "users" }],
+        ["limit as a string", { id: "u1", limit: "1", table: "users" }],
+        ["depth as a string", { depth: "1", id: "u1", table: "users" }],
+        ["a non-string cursor", { cursor: 7, id: "u1", table: "users" }],
+    ])("refuses a malformed %s rather than widening the traversal", async (_label, args) => {
+        expect.assertions(1);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest(args));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("still accepts the options it always accepted", async () => {
+        expect.assertions(2);
+
+        const shard = new RelatedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        // `cursor: null` is the wire's "first page", not a malformed cursor.
+        const response = await shard.fetch(
+            findRelatedRequest({ cursor: null, depth: 1, direction: "in", edges: ["messages.authorId"], id: "u1", limit: 1, table: "users" }),
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { nodes: { document: { _id: string } }[] } }>();
+
+        expect(body.result.nodes.map((node) => node.document._id)).toStrictEqual(["m1"]);
+    });
+
+    it("base ShardDO rejects findRelated as not implemented (no override)", async () => {
+        expect.assertions(2);
+
+        class BareShard extends ShardDO {
+            // eslint-disable-next-line class-methods-use-this -- override stub; the admin path never dispatches an RPC
+            public override async handleRpc(): Promise<unknown> {
+                return null;
+            }
+        }
+
+        const shard = new BareShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(findRelatedRequest({ id: "u1", table: "users" }));
+
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
     });
 });

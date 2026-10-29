@@ -11,6 +11,8 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
+import { CLOUDFLARE_TOOLCHAIN_VERSIONS, DEFAULT_OBSERVABILITY } from "@lunora/config/cloudflare";
+import { readJsonSync } from "@visulima/fs";
 import { dirname, join } from "@visulima/path";
 
 import type { Logger } from "../../../util/logger";
@@ -31,10 +33,10 @@ const RATELIMIT_SCHEMA = `/**
  * Defines the \`ratelimit_buckets\` table used by \`createDbStore\` for durable,
  * DO-backed rate limiting. Included automatically in every Lunora project.
  */
-import type { Middleware } from "lunorash/server";
-import { defineSchemaExtension, defineTable, definePlugin, v } from "lunorash/server";
-import { createDbStore, RateLimiter } from "lunorash/ratelimit";
 import type { RateLimitConfigMap } from "lunorash/ratelimit";
+import { createDbStore, RateLimiter } from "lunorash/ratelimit";
+import type { Middleware } from "lunorash/server";
+import { definePlugin, defineSchemaExtension, defineTable, v } from "lunorash/server";
 
 /**
  * Named limits this app enforces. This is the one place they live — add your own
@@ -42,18 +44,31 @@ import type { RateLimitConfigMap } from "lunorash/ratelimit";
  * \`lunora/messages.ts\`).
  */
 export const limits = {
-    /** Chat writes: 30 per caller per minute, refilling continuously over 60s. */
-    send: { kind: "token bucket", period: 60_000, rate: 30 },
+    /** Chat writes: 10 per caller per minute, refilling continuously over 60s. */
+    send: { kind: "token bucket", period: 60_000, rate: 10 },
 } as const satisfies RateLimitConfigMap;
 
+/** The limit names you've configured above. */
 export type LimitName = keyof typeof limits;
 
+/**
+ * Build a durable {@link RateLimiter} bound to this request's \`ctx.db\`. State is
+ * persisted in the \`ratelimit_buckets\` table, so limits survive Durable Object
+ * hibernation/eviction and are shared across every call into the same DO. Each
+ * \`get\`→\`set\` runs under the DO input gate, so the read-modify-write is atomic.
+ */
 export const makeRateLimiter = (ctx: { db: unknown }): RateLimiter<LimitName> =>
     new RateLimiter<LimitName>({
         config: limits,
+        // The merged table name carries the plugin prefix.
         store: createDbStore({ db: ctx.db as never, table: "ratelimit_buckets" }),
     });
 
+/**
+ * Middleware that injects \`ctx.api.ratelimit\` — a per-request limiter helper —
+ * for any procedure that opts in with \`.use(ratelimit.middleware)\`. Convention
+ * (see \`definePlugin\`): helpers hang off \`ctx.api.<key>\`.
+ */
 const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { api: Record<string, unknown>; db: unknown }> = ({ ctx, next }) =>
     next({
         ctx: {
@@ -62,9 +77,19 @@ const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { a
         },
     });
 
+/**
+ * The rate-limit plugin: a schema extension (\`ratelimit_buckets\`) + middleware
+ * (\`ctx.api.ratelimit\`). \`lunora/schema.ts\` wires the extension in with
+ * \`.extend(ratelimit.extension)\`; attach the middleware yourself with
+ * \`c.mutation.use(ratelimit.middleware)\`.
+ */
 export const ratelimit = definePlugin("ratelimit", {
     extension: defineSchemaExtension("ratelimit", {
         tables: {
+            // Bare name — auto-prefixes to \`ratelimit_buckets\` at merge time.
+            // \`externallyManaged\`: rows are written by \`createDbStore\` (via
+            // \`makeRateLimiter\`), not a discoverable \`ctx.db.insert(...)\`, so the
+            // \`table_without_insert\` advisor correctly skips it.
             buckets: defineTable({
                 key: v.string(),
                 value: v.number(),
@@ -72,6 +97,7 @@ export const ratelimit = definePlugin("ratelimit", {
                 prev: v.optional(v.number()),
             })
                 .index("by_key", ["key"])
+                .index("by_ts", ["ts"])
                 .externallyManaged(),
         },
     }),
@@ -174,18 +200,27 @@ export const ShardDO = app.ShardDO;
 export default app;
 `;
 
-/** `wrangler.jsonc` — the SHARD Durable Object binding + migration. `__NAME__` is substituted. */
+/** `DEFAULT_OBSERVABILITY` as a one-line JSONC object, spaced like the rest of {@link WRANGLER}. */
+const OBSERVABILITY_JSONC = `{ ${Object.entries(DEFAULT_OBSERVABILITY)
+    .map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)}`)
+    .join(", ")} }`;
+
+/**
+ * `wrangler.jsonc` — the SHARD Durable Object binding + migration, and the
+ * observability block `lunora dev` would otherwise reconcile in. `__NAME__` is
+ * substituted.
+ */
 const WRANGLER = `{
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "__NAME__",
     "main": "src/server.ts",
-    "compatibility_date": "2026-06-10",
+    "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "observability": ${OBSERVABILITY_JSONC},
 }
 `;
 
@@ -221,10 +256,24 @@ const ENV_EXAMPLE = `# Lunora endpoint for the browser client.
 `;
 /* eslint-enable no-secrets/no-secrets */
 
-/** The dev-time deps every overlaid project needs on top of the framework adapter. */
+/**
+ * The dev-time deps every overlaid project needs on top of the framework adapter.
+ * Ranges come from `CLOUDFLARE_TOOLCHAIN_VERSIONS`, the same source the templates
+ * are asserted against.
+ *
+ * Trade-off of workers-types v5 (v4 is dead and wrangler >= 4.146 peers on v5):
+ * its root `index.d.ts` declares `declare const process: any` and
+ * `declare const Buffer: any`, which the monorepo patches out but a scaffolded
+ * app cannot. There, `process.*` / `Buffer.*` are `any` — even with `@types/node`
+ * loaded, since the workers-types declaration wins — rather than
+ * `NodeJS.Process` / `BufferConstructor`. No tsconfig `types` entry avoids it
+ * cleanly: the dated and `latest` entrypoints lack the current runtime types
+ * (AI Search, Artifacts, Analytics SQL), and `/experimental` also types APIs
+ * that only exist behind experimental compatibility flags.
+ */
 const COMMON_DEV_DEPENDENCIES: Record<string, string> = {
-    "@cloudflare/workers-types": "^4.20260611.1",
-    wrangler: "^4.100.0",
+    "@cloudflare/workers-types": CLOUDFLARE_TOOLCHAIN_VERSIONS["@cloudflare/workers-types"],
+    wrangler: CLOUDFLARE_TOOLCHAIN_VERSIONS.wrangler,
 };
 
 const writeFile = (target: string, relativePath: string, contents: string, written: string[]): void => {
@@ -290,7 +339,7 @@ const restampLunora = (map: Record<string, string>, distTag: string, versions: R
  */
 const patchPackageJson = async (target: string, name: string, adapter: FrameworkAdapter, distTag: string): Promise<void> => {
     const path = join(target, "package.json");
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> & {
+    const parsed = readJsonSync(path) as Record<string, unknown> & {
         dependencies?: Record<string, string>;
         devDependencies?: Record<string, string>;
         imports?: Record<string, string>;
@@ -336,7 +385,7 @@ const patchPackageJson = async (target: string, name: string, adapter: Framework
     parsed.imports = { ...parsed.imports, "#lunora/*": "./lunora/*" };
     parsed.dependencies = restampLunora(dependencies, distTag, versions);
     parsed.devDependencies = restampLunora(devDependencies, distTag, versions);
-    parsed.scripts = { ...parsed.scripts, codegen: "lunora codegen", deploy: "vite build && lunora deploy" };
+    parsed.scripts = { ...parsed.scripts, codegen: "lunora codegen", deploy: "lunora deploy" };
 
     writeFileSync(path, `${JSON.stringify(parsed, undefined, 4)}\n`, "utf8");
 };
@@ -405,4 +454,3 @@ const applyLunoraOverlay = async (options: ApplyOverlayOptions): Promise<Readonl
 };
 
 export { applyLunoraOverlay, findExistingViteConfig, isLunoraDep };
-export type { ApplyOverlayOptions };

@@ -6,11 +6,16 @@ import { gzipSync } from "node:zlib";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BuildCommandResult } from "../../src/commands/build/handler";
-import { runBuildCommand } from "../../src/commands/build/handler";
+import { WORKER_SIZE_LIMIT_BYTES } from "../../src/commands/build/bundle-size";
+import type { BuildCommandData, BuildCommandResult } from "../../src/commands/build/handler";
+import { execute, runBuildCommand } from "../../src/commands/build/handler";
+import type { BuildOptions } from "../../src/commands/build/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
+import { setCommandLogger } from "../../src/util/logger";
 import type { Spawner } from "../../src/util/spawn";
 import { createRecordingSpawner } from "../../src/util/spawn";
+import { runExecute } from "../helpers/execute";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
@@ -28,14 +33,16 @@ const VALID_WRANGLER = `{
 }
 `;
 
-const silentLogger = (): { logger: Logger; successes: string[]; warnings: string[] } => {
+const silentLogger = (): { infos: string[]; logger: Logger; successes: string[]; warnings: string[] } => {
+    const infos: string[] = [];
     const successes: string[] = [];
     const warnings: string[] = [];
 
     return {
+        infos,
         logger: {
             error: () => {},
-            info: () => {},
+            info: (message) => infos.push(message),
             success: (message) => successes.push(message),
             warn: (message) => warnings.push(message),
         },
@@ -67,6 +74,15 @@ const bundlingSpawner =
 
         return { code: 0, descriptor, stderr: "", stdout: "" };
     };
+
+// `execute` builds its own spawner, so the document test below would otherwise
+// shell out to a real wrangler. Stubbing the default makes that leg write the
+// same out-dir `bundlingSpawner` does.
+vi.mock(import("../../src/util/spawn"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, defaultSpawner: async (descriptor) => bundlingSpawner("dist-worker")(descriptor) };
+});
 
 describe("lunora build", () => {
     beforeEach(() => {
@@ -176,7 +192,43 @@ describe("lunora build", () => {
         expect(result.bundle?.gzipBytes).toBeGreaterThan(0);
     });
 
-    it("reports the size in the --format json document without failing on it", async () => {
+    it("reports the raw size against the 64 MiB uncompressed limit, gzip only for reference", async () => {
+        expect.assertions(4);
+
+        const { infos, logger, warnings } = silentLogger();
+
+        await runBuildCommand({ cwd: workdir, logger, outDir: "dist-worker", spawner: bundlingSpawner("dist-worker") });
+
+        const summary = infos.join("\n");
+
+        expect(summary).toContain("64 MiB uncompressed Worker size limit");
+        expect(summary).toContain("there is no compressed limit");
+        // The retired per-plan gzip limits must not come back.
+        expect(summary).not.toMatch(/3 MB|10 MB/u);
+        expect(warnings.join("\n")).not.toContain("Cloudflare will reject this upload");
+    });
+
+    it("warns, without failing, when the raw bundle is over the 64 MiB limit", async () => {
+        expect.assertions(3);
+
+        const { logger, warnings } = silentLogger();
+        const oversizedSpawner: Spawner = async (descriptor) => {
+            const directory = join(workdir, "dist-worker");
+
+            mkdirSync(directory, { recursive: true });
+            writeFileSync(join(directory, "server.js"), Buffer.alloc(WORKER_SIZE_LIMIT_BYTES + 1, 0x61));
+
+            return { code: 0, descriptor, stderr: "", stdout: "" };
+        };
+
+        const result = await runBuildCommand({ cwd: workdir, logger, outDir: "dist-worker", spawner: oversizedSpawner });
+
+        expect(result.code).toBe(0);
+        expect(result.bundle?.rawBytes).toBe(WORKER_SIZE_LIMIT_BYTES + 1);
+        expect(warnings.join("\n")).toContain("Cloudflare will reject this upload");
+    });
+
+    it("measures the bundle for the --format json payload without failing on it", async () => {
         expect.assertions(3);
 
         const { logger } = silentLogger();
@@ -203,11 +255,38 @@ describe("lunora build", () => {
 
         // Measuring is reporting: a size never changes the exit code.
         expect(result.code).toBe(0);
+        // The document is `defineHandler`'s; the command writes nothing itself, so
+        // the wrangler leg cannot splice its own output into it.
+        expect(written).toHaveLength(0);
+        expect(result.bundle?.gzipBytes).toBeGreaterThan(0);
+    });
 
-        const document = JSON.parse(written.join("")) as BuildCommandResult;
+    /**
+     * Through `execute`, because the envelope is `defineHandler`'s: the command
+     * body writes nothing, so nothing below this line is covered by asserting on
+     * `runBuildCommand`'s in-process result — which is how the measurement could
+     * move under `data` while `scripts/check-worker-size.js`, the one consumer,
+     * still read it off the top level and saw "no bundle" on every healthy build.
+     */
+    it("carries the bundle measurement in the --format json envelope's data", async () => {
+        expect.assertions(4);
 
-        expect(written).toHaveLength(1);
-        expect(document.bundle?.gzipBytes).toBeGreaterThan(0);
+        setCommandLogger({ error: () => {}, info: () => {}, success: () => {}, warn: () => {} });
+
+        try {
+            const { code, document } = await runExecute<BuildOptions, BuildCommandData>(execute, {
+                commandName: "build",
+                cwd: workdir,
+                options: { format: "json", outDir: "dist-worker" },
+            });
+
+            expect(code).toBe(0);
+            expect(document?.code).toBe(0);
+            expect(document?.data?.bundle?.files).toBe(1);
+            expect(document?.data?.bundle?.gzipBytes).toBe(gzipSync(Buffer.from(SCRIPT)).byteLength);
+        } finally {
+            setCommandLogger(undefined);
+        }
     });
 
     it("says so rather than reporting zero when there is nothing to weigh", async () => {
@@ -238,7 +317,7 @@ describe("lunora build", () => {
 
         const result = await runBuildCommand({ cwd: workdir, emitBindings: "bindings.json", logger, spawner });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(existsSync(join(workdir, "bindings.json"))).toBe(false);
     });
 });

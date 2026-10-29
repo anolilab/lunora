@@ -9,5 +9,11 @@
         "moduleResolution": "bundler",
         "types": ["node"]
     },
-    "include": ["src/**/*", "__tests__/**/*", "__bench__/**/*"]
+    "include": ["src/**/*", "__tests__/**/*", "__bench__/**/*"],
+    // The workerd suites need Cloudflare's ambient globals, and ambient types are
+    // program-wide: listed here they would retype `src/` too (a global `Response`
+    // whose `json<T>()` is generic), letting a Cloudflare-only type slip into
+    // shipped code and still compile. They get their own program instead — see
+    // `__tests__/workerd/tsconfig.json`, checked by `lint:types` as well.
+    "exclude": ["__tests__/workerd/**"]
 }

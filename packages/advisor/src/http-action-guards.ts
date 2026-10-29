@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One discovered `httpAction`/`httpRoute` handler that performs a side effect
  * (`ctx.runMutation` / `ctx.runAction` / a `ctx.db.{insert,patch,replace,delete,
@@ -7,13 +9,13 @@
  * unauthenticated write bypassing identity/RLS (distinct from
  * `admin_route_without_guard`, which covers Studio/admin paths). Only handlers
  * with a statically-resolvable inline body and `ctx` binding are recorded
- * (fail-safe under-report); read-only handlers are never recorded. Produced by
+ * (fail-safe under-report); read-only handlers are never recorded, and neither
+ * are signed-webhook handlers, which authenticate the request by provider
+ * signature rather than by `ctx.auth`. Produced by
  * the codegen feeder; runtime callers don't supply it, so the lint finds nothing
  * there.
  */
 export interface AdvisorHttpActionGuard {
-    /** The exported binding name of the handler (or `"<module>"` when mounted inline / not a named binding). */
-    exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
     /** Which HTTP surface the handler is: a raw `httpAction` or a typed `httpRoute` route. */
@@ -24,6 +26,8 @@ export interface AdvisorHttpActionGuard {
     method?: string;
     /** `true` when the handler reads `ctx.auth` (a direct member access or a `const { auth } = ctx` destructure). */
     readsAuth: boolean;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
     /** The first side effect found, as a stable label: `runMutation`, `runAction`, or `db.<method>`. */
     sideEffect: string;
 }

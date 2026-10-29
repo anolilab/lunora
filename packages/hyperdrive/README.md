@@ -42,7 +42,7 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 >
 > Hyperdrive talks to a database **Lunora does not own**. That breaks two invariants the rest of Lunora relies on:
 >
-> 1. **Non-deterministic (action-only).** A SQL query over Hyperdrive is a network call with an external, mutable result — exactly like `fetch`. It is **forbidden in `query`/`mutation`** (which must be deterministic so the coordinator can re-run them on OCC retry / subscription re-evaluation) and allowed **only in `action`s**. The `hyperdrive_outside_action` advisor lint flags `ctx.sql` used in a query/mutation.
+> 1. **Non-deterministic (action-only).** A SQL query over Hyperdrive is a network call with an external, mutable result — exactly like `fetch`. It is **forbidden in `query`/`mutation`** (which must be deterministic so the coordinator can re-run them on subscription re-evaluation; an OCC conflict surfaces as a `409` to the caller, not an internal retry) and allowed **only in `action`s**. The `hyperdrive_outside_action` advisor lint flags `ctx.sql` used in a query/mutation.
 > 2. **Non-reactive.** External writes do **not** flow through the Durable-Object / SQLite change-feed, so **Lunora live queries and subscriptions will NOT re-run** when an external Postgres/MySQL row changes. There is no honest way to make external writes reactive here.
 >
 > Use Hyperdrive to _read/write your existing DB from an action_. It is the **wrong** tool for "make my Postgres reactive". If you want external data to be reactive, write a **projection** of it into a `defineSchema` DO/D1 table from the action — that write _is_ tracked.
@@ -67,19 +67,25 @@ pnpm add mysql2     # mysql2        → fromMysql2
 
 ## Setup
 
-1. Create the Hyperdrive config and mint its id (Lunora can't fabricate the remote id):
+Importing `@lunora/hyperdrive` (or reading `ctx.sql`) is enough: `lunora dev` and `lunora deploy` add a `HYPERDRIVE` binding to `wrangler.jsonc` for you, with a placeholder `id`.
+
+- **In dev**, `ctx.sql` runs against an embedded Postgres ([PGlite](https://pglite.dev)) with its data in `.wrangler/state/lunora-pglite`, under `lunora dev`, `vite dev` and `vite preview`. It needs two optional packages (`lunora dev` says so when they are missing):
 
     ```sh
-    wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host:5432/db" # gitleaks:allow -- placeholder, not a real secret
+    pnpm add -D @electric-sql/pglite @electric-sql/pglite-socket
     ```
 
-2. Add the binding to `wrangler.jsonc` (use `localConnectionString` for local dev):
+    To use your own database, set `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` (the last part is the binding name) or `localConnectionString` on the binding. The embedded database speaks PostgreSQL: a project whose only SQL driver is `mysql2` gets a warning and must set that variable to a local MySQL of its own. A plain `wrangler dev` that Lunora does not start has no embedded database either: set the variable (or `localConnectionString`) there too.
 
-    ```jsonc
-    {
-        "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<id from step 1>", "localConnectionString": "postgres://user:pass@localhost:5432/db" }], // gitleaks:allow -- placeholder, not a real secret
-    }
+- **On deploy**, set the origin's connection string and a token that may edit Hyperdrive (`CLOUDFLARE_API_TOKEN` with _Hyperdrive: Edit_, plus `CLOUDFLARE_ACCOUNT_ID`):
+
+    ```sh
+    LUNORA_HYPERDRIVE_URL="postgres://user:pass@host:5432/db" lunora deploy # gitleaks:allow -- placeholder, not a real secret
     ```
+
+    The variable is `LUNORA_<BINDING>_URL`. Lunora creates a config named after the deployed Worker (so `--env staging` gets its own) and the binding, or reuses one with that name that reaches the same database, and writes its `id` into `wrangler.jsonc`. A same-named config for another database stops the deploy. The connection string is only sent to Cloudflare, never written to a file or logged.
+
+Prefer to manage it yourself? Run `wrangler hyperdrive create my-db --connection-string=...` and put the `id` in the binding; Lunora then leaves it alone.
 
 ## Usage
 
@@ -95,7 +101,7 @@ import { defineApp } from "../../lunora/_generated/app";
 
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
-    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)))
+    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 })))
     .build();
 
 export const ShardDO = app.ShardDO;
@@ -146,12 +152,13 @@ export default defineSchema({
 export const channelMessages = defineShape({ table: "messages", where: () => ({}) });
 ```
 
-Supply the driver once, when the shard DO is constructed. Lunora memoizes it per binding:
+Supply the driver once, on the app builder — required, or every tick records `no sourceClient resolved for binding "…"` and the table stays empty. Lunora memoizes it per binding:
 
 ```ts
-createShardDO({
-    sourceClient: (env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)),
-});
+export default defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 })))
+    .build();
 ```
 
 Clients subscribe with the shape they would use over any table — external data stops being external once it is materialized.
@@ -169,14 +176,17 @@ Three things to know before you build on it:
 The `@lunora/hyperdrive/global` subpath is the opposite trade-off: Lunora **owns** the schema and a `.global()` table gets a real column-per-field layout on your Postgres/MySQL, with every write routed through the shared store core. Live queries stay reactive — identical to D1 — because the writer drives the same broadcast hook. Build the writer inside the Durable Object that hosts the `.global()` store and inject it as `globalDb`:
 
 ```ts
+import { fromPostgresJs } from "@lunora/hyperdrive";
 import { createPostgresGlobalCtxDb } from "@lunora/hyperdrive/global";
 import postgres from "postgres";
 
-// `sql` is a postgres.js client built from the HYPERDRIVE binding's connection string.
-const globalDb = createPostgresGlobalCtxDb({ query: (text, params) => sql.unsafe(text, params) }, { schema });
+const sql = postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 });
+const globalDb = createPostgresGlobalCtxDb(fromPostgresJs(sql), { schema });
 ```
 
-For MySQL use `createMysqlGlobalCtxDb` with a `mysql2/promise` pool created with `flags: ["FOUND_ROWS"]` — without `CLIENT_FOUND_ROWS` the affected-rows OCC guard sees changed (not matched) rows and raises spurious conflicts. Lower-level building blocks (`buildPgExec`, `buildMysqlExec`, `postgresDialect`, `mysqlDialect`, `createHyperdriveGlobalCtxDb`) are exported for custom wiring.
+For MySQL use `createMysqlGlobalCtxDb` with a `mysql2/promise` pool created with `disableEval: true` (required on Workers) and `flags: ["FOUND_ROWS"]` — without `CLIENT_FOUND_ROWS` the affected-rows OCC guard sees changed (not matched) rows and raises spurious conflicts. Lower-level building blocks (`buildPgExec`, `buildMysqlExec`, `postgresDialect`, `mysqlDialect`, `createHyperdriveGlobalCtxDb`) are exported for custom wiring.
+
+The Hyperdrive config behind `.global()` must have **query caching disabled** (`wrangler hyperdrive create … --caching-disabled`, or `wrangler hyperdrive update <id> --caching-disabled`). Hyperdrive caches reads for up to 75 s by default and writes don't invalidate them, so the store's OCC re-reads, change-log polls and live-query re-runs would see stale rows. `lunora deploy` sets this on the configs it creates when the schema has `.global({ backend: "hyperdrive" })` tables, and warns about an already-bound config that still caches (when Cloudflare API credentials are set).
 
 > This README covers the basics. For the full API and the determinism/realtime rationale, see the **[documentation](https://lunora.sh/docs/packages/hyperdrive)**.
 

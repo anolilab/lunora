@@ -7,7 +7,7 @@
  * idiomatic join pattern
  *
  * ```ts
- * const authors = await Promise.all(ids.map((id) => ctx.db.get(id)));
+ * const authors = await Promise.all(ids.map((id) => ctx.db.get("authors", id)));
  * ```
  *
  * pays N of them serially-ish for what a single `WHERE id IN (…)` could answer.
@@ -139,5 +139,4 @@ const createPointReadBatcher = <Row>(fetchMany: FetchMany<Row>, options: PointRe
     };
 };
 
-export { createPointReadBatcher, DEFAULT_MAX_BATCH };
-export type { FetchMany, PointReadBatcher, PointReadBatcherOptions };
+export default createPointReadBatcher;

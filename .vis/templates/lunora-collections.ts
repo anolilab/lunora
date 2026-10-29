@@ -12,6 +12,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import type { InsertWriteIR } from "@lunora/codegen";
 import { discoverInserts } from "@lunora/codegen";
 import { createTemplate } from "@visulima/vis/generate";
 import { Project } from "ts-morph";
@@ -100,20 +101,72 @@ ${entries}
 `;
 };
 
-/** Resolve each table's write plan: the attributed insert mutation + its args (if api.ts is present). */
-const planInserts = (tables: SchemaTable[], inserts: Map<string, InsertMutationRef>, namespaces: ApiNamespace[]): Map<string, InsertPlan> => {
-    const plans = new Map<string, InsertPlan>();
+/**
+ * The exported functions an insert site runs on behalf of — the ones a
+ * collection can call as its insert mutation: the export the insert sits in, or
+ * every export calling the helper it sits in. An insert at module scope, or in a
+ * helper no export calls, has none: there is no function to wire.
+ */
+const insertCallers = (scope: InsertWriteIR["scope"]): readonly string[] => {
+    switch (scope.kind) {
+        case "export": {
+            return [scope.name];
+        }
+        case "helper": {
+            return scope.callers;
+        }
+        default: {
+            return [];
+        }
+    }
+};
 
-    for (const table of tables) {
-        const ref = inserts.get(table.name);
+/**
+ * Each table's candidate insert mutations, in discovery order: every exported
+ * function that reaches a `ctx.db.insert("<table>", …)`, directly or through a
+ * same-file helper.
+ */
+const insertCandidates = (writes: readonly InsertWriteIR[]): Map<string, InsertMutationRef[]> => {
+    const candidates = new Map<string, InsertMutationRef[]>();
 
-        if (ref === undefined) {
+    for (const write of writes) {
+        if (write.table === "") {
             continue;
         }
 
-        const args = namespaces.find((namespace) => namespace.name === ref.namespace)?.functions.find((function_) => function_.name === ref.name)?.args;
+        const known = candidates.get(write.table) ?? [];
+        const added = insertCallers(write.scope)
+            .filter((name) => !known.some((ref) => ref.name === name && ref.namespace === write.file))
+            .map((name) => {
+                return { name, namespace: write.file };
+            });
 
-        plans.set(table.name, args === undefined ? { kind: "template", ref } : { args, kind: "active", ref });
+        candidates.set(write.table, [...known, ...added]);
+    }
+
+    return candidates;
+};
+
+/**
+ * Resolve each table's write plan. The first candidate `api.ts` lists (so its
+ * args are known) is wired; failing that — no `api.ts`, or a helper's callers
+ * that are not registered mutations — the first candidate is left as a template.
+ */
+const planInserts = (tables: SchemaTable[], inserts: Map<string, InsertMutationRef[]>, namespaces: ApiNamespace[]): Map<string, InsertPlan> => {
+    const plans = new Map<string, InsertPlan>();
+    const argsOf = (ref: InsertMutationRef): string[] | undefined =>
+        namespaces.find((namespace) => namespace.name === ref.namespace)?.functions.find((function_) => function_.name === ref.name)?.args;
+
+    for (const table of tables) {
+        const refs = inserts.get(table.name) ?? [];
+        const active = refs.find((ref) => argsOf(ref) !== undefined);
+        const [first] = refs;
+
+        if (active !== undefined) {
+            plans.set(table.name, { args: argsOf(active) ?? [], kind: "active", ref: active });
+        } else if (first !== undefined) {
+            plans.set(table.name, { kind: "template", ref: first });
+        }
     }
 
     return plans;
@@ -143,15 +196,9 @@ export default createTemplate({
         const namespaces = existsSync(apiPath) ? parseApiNamespaces(readFileSync(apiPath, "utf8")) : [];
 
         // Attribute each table's insert mutation by behavior (which exported
-        // function calls `ctx.db.insert("<table>", …)`) via @lunora/codegen's
-        // first-class discovery; first inserter for a table wins.
-        const inserts = new Map<string, InsertMutationRef>();
-
-        for (const write of discoverInserts(new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false }), lunoraDir)) {
-            if (write.table !== "" && !inserts.has(write.table)) {
-                inserts.set(write.table, { name: write.exportName, namespace: write.file });
-            }
-        }
+        // function reaches `ctx.db.insert("<table>", …)`, directly or through a
+        // same-file helper) via @lunora/codegen's first-class discovery.
+        const inserts = insertCandidates(discoverInserts(new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false }), lunoraDir));
 
         const plans = planInserts(tables, inserts, namespaces);
 

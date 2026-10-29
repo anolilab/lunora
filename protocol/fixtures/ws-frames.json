@@ -1,5 +1,5 @@
 {
-    "$comment": "Golden fixtures for the WebSocket subscription protocol (GET /_lunora/ws). `clientFrames` are frames a client MUST emit; a conforming client's builders produce these (compared as parsed JSON, key order irrelevant). `serverFrames` are frames a client MUST consume; each `expect` describes the observable effect (`valueWire` is the wire form of the value delivered to the callback, so encode(received) == valueWire). `shape` covers the poke-based partial-replication path. `pageDeltaFrames` is a SEPARATE set only an SDK that announced the `pageDelta` capability should run: each case applies its `frame` ON TOP of `baseWire` (merging, not replacing) and asserts the merged `valueWire`. It is deliberately not in `serverFrames`, which SDKs iterate wholesale and apply by replacement. `connect-with-caps` is the OPTIONAL capability-announcing form of the connect frame (protocol README 5.1.1) \u2014 an SDK that implements no capability tokens emits plain `connect` and is fully conforming, so only an SDK that has actually implemented a token should assert against it. Today no non-JS port announces a capability token, so `connect-with-caps` and `pageDeltaFrames` are asserted by `@lunora/client` alone — they are the reference's forward contract, not dead data.",
+    "$comment": "Golden fixtures for the WebSocket subscription protocol (GET /_lunora/ws). `clientFrames` are frames a client MUST emit; a conforming client's builders produce these (compared as parsed JSON, key order irrelevant). `serverFrames` are frames a client MUST consume; each `expect` describes the observable effect (`valueWire` is the wire form of the value delivered to the callback, so encode(received) == valueWire). `shape` covers the poke-based partial-replication path. `pageDeltaFrames` is a SEPARATE set only an SDK that announced the `pageDelta` capability should run: each case applies its `frame` ON TOP of `baseWire` (merging, not replacing) and asserts the merged `valueWire`. It is deliberately not in `serverFrames`, which SDKs iterate wholesale and apply by replacement. `refreshBatchFrames` is likewise separate, for an SDK that announced `refreshBatch`: frames between `batchStart` and `batchEnd` are held and applied together at the end, with one notification per subscription (README 5.5). `connect-with-caps` is the OPTIONAL capability-announcing form of the connect frame (protocol README 5.1.1) \u2014 an SDK that implements no capability tokens emits plain `connect` and is fully conforming, so only an SDK that has actually implemented a token should assert against it. Today no non-JS port announces a capability token, so `connect-with-caps`, `pageDeltaFrames` and `refreshBatchFrames` are asserted by `@lunora/client` alone — they are the reference's forward contract, not dead data.",
     "clientFrames": {
         "connect": {
             "clientId": "client-test",
@@ -7,7 +7,7 @@
             "type": "connect"
         },
         "connect-with-caps": {
-            "caps": ["pageDelta"],
+            "caps": ["pageDelta", "refreshBatch"],
             "clientId": "client-test",
             "id": "connect",
             "type": "connect"
@@ -19,6 +19,21 @@
             "context": {
                 "roomId": "general"
             }
+        },
+        "connect-with-token": {
+            "clientId": "client-test",
+            "id": "connect",
+            "token": "session-token",
+            "type": "connect"
+        },
+        "connect-with-token-and-context": {
+            "clientId": "client-test",
+            "context": {
+                "roomId": "general"
+            },
+            "id": "connect",
+            "token": "session-token",
+            "type": "connect"
         },
         "subscribe-cold": {
             "id": "sub_1",
@@ -47,6 +62,19 @@
         "unsubscribe": {
             "id": "sub_1",
             "type": "unsubscribe"
+        },
+        "whisper-subscribe": {
+            "topic": "room:general",
+            "type": "whisper_subscribe"
+        },
+        "whisper-unsubscribe": {
+            "topic": "room:general",
+            "type": "whisper_unsubscribe"
+        },
+        "whisper-send": {
+            "data": { "text": "hi" },
+            "topic": "room:general",
+            "type": "whisper"
         }
     },
     "stream": {
@@ -58,6 +86,84 @@
             { "id": "sub_1", "type": "data", "data": { "n": 3 }, "cursor": 3 }
         ],
         "yielded": [{ "n": 1 }, { "n": 2 }, { "n": 3 }]
+    },
+    "closeSequences": {
+        "$comment": "Each case is a run of steps, in order: `attach` (the socket opens: the client sends `connect` first, under the session credential in force), `frame` (a server frame the open socket delivered), `close` (a close frame's code and reason), or `credentialChange` (the app sets a new session credential, which supersedes any socket open under the old one). The run registers one subscription, `sub_1`, before its first step. `tokenExpiredNotifications` counts how many times the token-expired listeners fire. This is the reference's rule (`@lunora/client`): a 4001 close always notifies; a TOKEN_EXPIRED error frame always notifies and is NOT routed to its subscription, and a 4001 close that follows it notifies again; a 4003 close notifies once per credential generation, and a `credentialChange` starts a new generation; a 4003 from a socket opened under an earlier generation notifies nothing, because it refused a credential no longer in force; a 4003 whose reason is exactly \"connect deadline\" refuses no credential and notifies nothing; any other close notifies nothing. An UNAUTHENTICATED error frame notifies nothing on its own and reaches its subscription like any other error. Every close leaves the client offline, and the reconnect loop runs as before.",
+        "cases": [
+            { "name": "token_expired_close", "steps": [{ "attach": true }, { "close": { "code": 4001, "reason": "" } }], "tokenExpiredNotifications": 1 },
+            {
+                "name": "refused_credential_notifies_once_per_credential",
+                "steps": [
+                    { "attach": true },
+                    { "close": { "code": 4003, "reason": "refused" } },
+                    { "attach": true },
+                    { "close": { "code": 4003, "reason": "refused" } }
+                ],
+                "tokenExpiredNotifications": 1
+            },
+            {
+                "name": "credential_change_rearms_refusal",
+                "steps": [
+                    { "attach": true },
+                    { "close": { "code": 4003, "reason": "refused" } },
+                    { "attach": true },
+                    { "credentialChange": true },
+                    { "attach": true },
+                    { "close": { "code": 4003, "reason": "refused" } }
+                ],
+                "tokenExpiredNotifications": 2
+            },
+            {
+                "name": "superseded_socket_refusal_is_not_notified",
+                "steps": [{ "attach": true }, { "credentialChange": true }, { "close": { "code": 4003, "reason": "refused" } }],
+                "tokenExpiredNotifications": 0
+            },
+            {
+                "name": "connect_deadline_is_not_a_refusal",
+                "steps": [{ "attach": true }, { "close": { "code": 4003, "reason": "connect deadline" } }],
+                "tokenExpiredNotifications": 0
+            },
+            {
+                "name": "normal_close_notifies_nothing",
+                "steps": [{ "attach": true }, { "close": { "code": 1000, "reason": "" } }],
+                "tokenExpiredNotifications": 0
+            },
+            {
+                "name": "token_expired_frame_is_not_routed",
+                "steps": [{ "attach": true }, { "frame": { "id": "sub_1", "type": "error", "error": { "code": "TOKEN_EXPIRED" } } }],
+                "tokenExpiredNotifications": 1,
+                "subscriptionErrors": 0
+            },
+            {
+                "name": "unauthenticated_frame_reaches_subscription",
+                "steps": [{ "attach": true }, { "frame": { "id": "sub_1", "type": "error", "error": { "code": "UNAUTHENTICATED" } } }],
+                "tokenExpiredNotifications": 0,
+                "subscriptionErrors": 1
+            },
+            {
+                "name": "token_expired_frame_then_close_notifies_twice",
+                "steps": [
+                    { "attach": true },
+                    { "frame": { "id": "sub_1", "type": "error", "error": { "code": "TOKEN_EXPIRED" } } },
+                    { "close": { "code": 4001, "reason": "" } }
+                ],
+                "tokenExpiredNotifications": 2
+            }
+        ]
+    },
+    "whisperFrames": {
+        "$comment": "A topic is joined with `whisper_subscribe` and left with `whisper_unsubscribe`. `whisper` is an ephemeral relay in both directions: a send is `whisper` carrying the topic and the wire-encoded `data`, and a delivered `whisper` frame is decoded and handed to that topic's listeners only. A room is the topic `room:<name>`, and a room topic is never acknowledged, so a port must not wait for an ack before it sends. On every reconnect, a port joins each registered topic again right after the `connect` frame. `whisper_subscribed` is an acknowledgement a port may ignore. A frame whose topic is not a string is dropped without raising out of the frame handler.",
+        "rejoinOnReconnect": ["room:general"],
+        "serverFrames": [
+            {
+                "name": "delivered_to_topic",
+                "frame": { "type": "whisper", "topic": "room:general", "data": { "text": "hi" }, "from": "user-a" },
+                "delivered": [{ "topic": "room:general", "value": { "text": "hi" } }]
+            },
+            { "name": "other_topic_not_delivered", "frame": { "type": "whisper", "topic": "room:other", "data": { "text": "x" } }, "delivered": [] },
+            { "name": "whisper_subscribed_is_ignored", "frame": { "type": "whisper_subscribed", "topic": "room:general" }, "delivered": [] },
+            { "name": "non_string_topic_is_dropped", "frame": { "type": "whisper", "topic": 7, "data": { "text": "x" } }, "delivered": [] }
+        ]
     },
     "serverFrames": [
         {
@@ -149,6 +255,21 @@
                 "id": "sub_1",
                 "cursor": 21,
                 "lastMutationId": 3
+            }
+        },
+        {
+            "name": "complete",
+            "$comment": "A `complete` addressed to a live SUBSCRIPTION cancels it WITHOUT dropping the registration. Removing it takes the state out of the set the reconnect resubscribe loop walks, which froze the query for the life of the process across every future reconnect — silently, because nothing was reported either. So the observable effect is two things at once: a coded error on the subscription's own error callback, and a registration still there for `resendSubscriptions` to put back. A port whose live query is a stream terminates it through that error, not by hanging.",
+            "frame": {
+                "id": "sub_1",
+                "type": "complete"
+            },
+            "expect": {
+                "kind": "complete",
+                "id": "sub_1",
+                "code": "SUBSCRIPTION_CANCELLED",
+                "message": "subscription was cancelled by the server",
+                "resendsAfterReconnect": true
             }
         }
     ],
@@ -271,6 +392,16 @@
             }
         }
     ],
+    "refreshBatchFrames": {
+        "$comment": "refreshBatch only. Nothing is delivered until `batchEnd`; then each subscription's callback runs once, with its last value in the bracket.",
+        "frames": [
+            { "type": "batchStart" },
+            { "data": { "n": 1 }, "id": "sub_1", "type": "data" },
+            { "data": { "n": 2 }, "id": "sub_1", "type": "data" },
+            { "type": "batchEnd" }
+        ],
+        "expect": { "deliveredBeforeEnd": 0, "valuesWire": [{ "n": 2 }] }
+    },
     "shape": {
         "shape-subscribe-cold": {
             "id": "shape_1",
@@ -380,6 +511,219 @@
                 "_id": "m3",
                 "text": "new"
             }
+        ],
+        "$comment-undecodableRow": "A poke is applied WHOLE or not at all, per shape: every row it carries is decoded before the view is touched. Starting from `expectedRows` (checkpoint 5, epoch e1), `undecodableRowPokeSequence` resets the shape and carries one row `decodeWire` refuses. A client that cleared the view for the reset and then threw on the bad row left it half-applied — or empty — with nothing reported, and one that skipped the row and applied the rest advanced the checkpoint past a row it never held, so no resume would ever send it again. The view must stay exactly `expectedRows`, the shape's resume checkpoint must stay 5 (`undecodableRowResendCheckpoint`), and the shape's error callback receives `undecodableRowErrorCode` once — the code the reference raises for a frame it cannot decode.",
+        "undecodableRowPokeSequence": [
+            {
+                "type": "pokeStart",
+                "pokeId": "p3",
+                "epoch": "e1"
+            },
+            {
+                "type": "pokePart",
+                "pokeId": "p3",
+                "shapeId": "shape_1",
+                "reset": true,
+                "rowsPatch": [
+                    {
+                        "op": "insert",
+                        "key": "m3",
+                        "table": "messages",
+                        "value": {
+                            "_id": "m3",
+                            "text": "fine"
+                        }
+                    },
+                    {
+                        "op": "insert",
+                        "key": "m4",
+                        "table": "messages",
+                        "value": {
+                            "_id": "m4",
+                            "text": "bad",
+                            "n": ["$lunora.wire$", "bigint", "not-a-number"]
+                        }
+                    }
+                ]
+            },
+            {
+                "type": "pokeEnd",
+                "pokeId": "p3",
+                "checkpoint": 12,
+                "epoch": "e1"
+            }
+        ],
+        "undecodableRowResendCheckpoint": 5,
+        "undecodableRowErrorCode": "WIRE_DECODE_FAILED",
+        "$comment-gap": "The refused poke's rows are not lost for good: the server believes it delivered them, and stamps the NEXT part's `baseCheckpoint` (or its `pokeStart`'s) with the checkpoint it thinks this view is at. A client MUST compare it with the checkpoint the view is actually at, as the reference's `applyPokePart` does: on a mismatch (or an epoch mismatch) that is not a `reset`, it drops the view, clears the checkpoint and epoch, tells the shape's callbacks `[]`, SKIPS the ops, and re-sends a COLD `shape_subscribe` (no `sinceCheckpoint`, no `sinceEpoch`) so the server re-seeds the membership. Without the check `gapPokeSequence`, applied right after `undecodableRowPokeSequence`, spliced m5 onto the stale view at checkpoint 13 — m3 lost for good, m1 kept though the refused reseed had removed it. `contiguousPokeSequence` is its counterweight: applied to `expectedRows` (checkpoint 5) with a matching base it applies normally, so a port cannot pass by re-seeding on every based poke.",
+        "gapPokeSequence": [
+            { "type": "pokeStart", "pokeId": "p4", "epoch": "e1" },
+            {
+                "type": "pokePart",
+                "pokeId": "p4",
+                "shapeId": "shape_1",
+                "baseCheckpoint": 12,
+                "rowsPatch": [{ "op": "insert", "key": "m5", "table": "messages", "value": { "_id": "m5", "text": "after" } }]
+            },
+            { "type": "pokeEnd", "pokeId": "p4", "checkpoint": 13, "epoch": "e1" }
+        ],
+        "gapExpectedRows": [],
+        "contiguousPokeSequence": [
+            { "type": "pokeStart", "pokeId": "p5", "epoch": "e1" },
+            {
+                "type": "pokePart",
+                "pokeId": "p5",
+                "shapeId": "shape_1",
+                "baseCheckpoint": 5,
+                "rowsPatch": [{ "op": "insert", "key": "m6", "table": "messages", "value": { "_id": "m6", "text": "next" } }]
+            },
+            { "type": "pokeEnd", "pokeId": "p5", "checkpoint": 6, "epoch": "e1" }
+        ],
+        "contiguousExpectedRows": [
+            { "_id": "m1", "text": "hi" },
+            { "_id": "m2", "text": "yo" },
+            { "_id": "m6", "text": "next" }
         ]
+    },
+    "malformedFrames": {
+        "$comment": "Frames that parse as JSON but are not shaped like any server frame. Each is delivered, one at a time, through the entry point the port's socket read loop uses (raw text where the port takes text), after `setup` has subscribed `sub_1` (functionPath `messages:list`, args {}) and delivered `setupFrame`. None may raise, throw or panic — an exception out of the frame handler ends the read loop and with it every subscription on the client — and none may touch `sub_1`: its callback is not invoked, and the resubscribe `resend_subscriptions` builds afterwards still carries `sinceSeq` 5 and `sinceEpoch` \"e1\". A port whose handler returns a descriptor or an error value may report the frame there; that is not pinned. Note the two frames carrying a STRING cursor for a live subscription: a cursor that is not an integer is not a cursor, and resending it verbatim asked the server to resume from `\"9\"`.",
+        "setupFrame": {
+            "id": "sub_1",
+            "type": "data",
+            "data": {
+                "n": 1
+            },
+            "cursor": 5,
+            "epoch": "e1"
+        },
+        "frames": [
+            null,
+            [],
+            "lunora",
+            42,
+            true,
+            {},
+            {
+                "type": 5
+            },
+            {
+                "type": "ack",
+                "id": 5
+            },
+            {
+                "type": "ack",
+                "id": ["sub_1"]
+            },
+            {
+                "type": "data",
+                "id": 5,
+                "data": 1
+            },
+            {
+                "type": "data",
+                "id": ["sub_1"],
+                "data": 1
+            },
+            {
+                "type": "delta",
+                "id": {
+                    "sub": 1
+                },
+                "delta": 1
+            },
+            {
+                "type": "resume",
+                "id": "sub_1",
+                "cursor": "9"
+            },
+            {
+                "type": "settled",
+                "id": "sub_1",
+                "cursor": "9"
+            },
+            {
+                "type": "error",
+                "id": 5,
+                "error": {
+                    "code": "X",
+                    "message": "y"
+                }
+            },
+            {
+                "type": "complete",
+                "id": {}
+            },
+            {
+                "type": "pokeStart"
+            },
+            {
+                "type": "pokeStart",
+                "pokeId": 7
+            },
+            {
+                "type": "pokePart"
+            },
+            {
+                "type": "pokePart",
+                "pokeId": "nope",
+                "shapeId": 3,
+                "rowsPatch": "x"
+            },
+            {
+                "type": "pokeEnd"
+            },
+            {
+                "type": "pokeEnd",
+                "pokeId": {
+                    "x": 1
+                }
+            }
+        ],
+        "resendSinceSeq": 5,
+        "resendSinceEpoch": "e1"
+    },
+    "identityChange": {
+        "$comment": "What a previous identity left live is evicted when the identity changes to a DIFFERENT one after having been set — a sign-out, or another user signing in. The resume cursors of every query and shape subscription were that identity's position in the changelog, and the shape rows were the rows THAT identity could see: resuming from them under the new identity asks the server for a diff against a view this identity never held and splices it onto someone else's rows. So on such a change every subscription drops its cursor and epoch (the next resubscribe is a cold one), and every shape view is emptied and its callbacks told so (`[]`). A first sign-in (from unset) and a re-assertion of the same identity evict nothing. Setup: `sub_1` (functionPath `messages:list`, args {}) has received `queryFrame`; shape `shape_1` has applied `shape.pokeSequence` (checkpoint 5, epoch e1, two rows). Each transition starts from that state with the identity set to `from` (null = unset) and then sets it to `to`; `evicts` says what the resend frames and the shape view must show afterwards. Dart, which derives its identity from `setAuthToken`, sets it there (a subject of `to`).",
+        "queryFrame": {
+            "id": "sub_1",
+            "type": "data",
+            "data": {
+                "n": 1
+            },
+            "cursor": 5,
+            "epoch": "e1"
+        },
+        "transitions": [
+            {
+                "from": null,
+                "to": "user-a",
+                "evicts": false
+            },
+            {
+                "from": "user-a",
+                "to": "user-a",
+                "evicts": false
+            },
+            {
+                "from": "user-a",
+                "to": "user-b",
+                "evicts": true
+            },
+            {
+                "from": "user-a",
+                "to": null,
+                "evicts": true
+            }
+        ],
+        "retained": {
+            "sinceSeq": 5,
+            "sinceEpoch": "e1",
+            "sinceCheckpoint": 5,
+            "shapeRowCount": 2
+        },
+        "evicted": {
+            "shapeRows": [],
+            "shapeCallbackRows": []
+        }
     }
 }

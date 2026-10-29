@@ -14,6 +14,7 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 ```ts
 interface ActionCallOptions {
     shardKey?: string;
+    signal?: AbortSignal;
 }
 ```
 
@@ -72,6 +73,20 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `AuthTokenFetcher` (type)
+
+```ts
+type AuthTokenFetcher = () => Promise<string | null>;
+```
+
+### `AuthTokenProviderOptions` (interface)
+
+```ts
+interface AuthTokenProviderOptions {
+    subject?: string | null;
+}
+```
+
 ### `AuthUser` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -84,7 +99,7 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ```ts
 type BatchSlot = {
-    error: LunoraClientError;
+    error: LunoraClientError | LunoraError;
     ok: false;
 } | {
     ok: true;
@@ -178,24 +193,6 @@ interface ClientQueryRef<T = unknown> {
 }
 ```
 
-### `ClientServiceWorker` (class)
-
-```ts
-class ClientServiceWorker {
-    #private;
-    readonly swUrl: string;
-    readonly scope: string;
-    constructor(options: ClientSwOptions);
-    get status(): ServiceWorkerStatus;
-    get registration(): ServiceWorkerRegistration | undefined;
-    get active(): boolean;
-    register(): Promise<boolean>;
-    unregister(): Promise<boolean>;
-    postMessage(message: unknown): void;
-    onMessage(handler: (event: MessageEvent) => void): () => void;
-}
-```
-
 ### `ClientShapeSubscribeMessage` (interface)
 
 ```ts
@@ -220,30 +217,23 @@ interface ClientShapeUnsubscribeMessage {
 }
 ```
 
-### `ClientSwOptions` (interface)
+### `ConnectLiveStreamOptions` (interface)
 
 ```ts
-interface ClientSwOptions {
-    onStatusChange?: (status: ServiceWorkerStatus) => void;
-    scope?: string;
-    swUrl: string;
-}
-```
-
-### `ClientToSwMessage` (interface)
-
-```ts
-interface ClientToSwMessage {
-    correlationId?: string;
-    payload?: unknown;
-    type: string;
+interface ConnectLiveStreamOptions {
+    fetch?: typeof fetch;
+    headers?: Record<string, string>;
+    idleTimeoutMs?: number;
+    maxDelayMs?: number;
+    retryDelay?: number;
+    withCredentials?: boolean;
 }
 ```
 
 ### `ConnectionStatus` (type)
 
 ```ts
-type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
+type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polling";
 ```
 
 ### `CronJobInfo` (interface)
@@ -264,6 +254,7 @@ interface FunctionArgumentDescriptor {
     kind: string;
     name: string;
     optional: boolean;
+    sensitive?: true;
     table?: string;
 }
 ```
@@ -314,6 +305,8 @@ interface GlobalFacetValue {
 ```ts
 interface GlobalFilterClause {
     column: string;
+    operator?: string;
+    path?: string[];
     value: unknown;
 }
 ```
@@ -340,23 +333,55 @@ interface GlobalTablePage {
 
 ### `HttpStreamArgsOf` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type HttpStreamArgsOf<R> = R extends HttpStreamRef<infer _C, infer S, infer P> ? HttpStreamCallArgs<S, P> : never;
+```
 
 ### `HttpStreamCallArgs` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface HttpStreamCallArgs<SearchParams = unknown, Params = unknown> {
+    params?: Params;
+    searchParams?: SearchParams;
+}
+```
 
 ### `HttpStreamChunkOf` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type HttpStreamChunkOf<R> = R extends HttpStreamRef<infer Chunk, infer _S, infer _P> ? Chunk : never;
+```
 
 ### `HttpStreamOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface HttpStreamOptions {
+    baseUrl?: string;
+    fetch?: typeof fetch;
+    headers?: Record<string, string>;
+    idleTimeoutMs?: number;
+    lastEventId?: string;
+    maxBuffer?: number;
+    onEventId?: (id: string) => void;
+    onRetry?: (ms: number) => void;
+    reconnect?: boolean;
+    signal?: AbortSignal;
+}
+```
 
 ### `HttpStreamRef` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface HttpStreamRef<Chunk = unknown, SearchParams = unknown, Params = unknown> {
+    readonly __lunoraHttpStream?: {
+        chunk: Chunk;
+        params: Params;
+        searchParams: SearchParams;
+    };
+    readonly method: string;
+    readonly path: string;
+}
+```
 
 ### `IndexedDbPersistenceOptions` (interface)
 
@@ -395,6 +420,67 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `LiveStream` (interface)
+
+```ts
+interface LiveStream {
+    close: () => void;
+    readonly connectionId: string | undefined;
+    onEvent: (handler: (event: LiveStreamEvent) => void) => () => void;
+    readonly ready: Promise<void>;
+    subscribe: (options: LiveStreamSubscribeOptions) => () => void;
+}
+```
+
+### `LiveStreamEvent` (interface)
+
+```ts
+interface LiveStreamEvent {
+    payload: unknown;
+    topic: string;
+}
+```
+
+### `LiveStreamSubscribeError` (interface)
+
+```ts
+interface LiveStreamSubscribeError {
+    status: number;
+    subscriptionId: string;
+    topic: string;
+}
+```
+
+### `LiveStreamSubscribeOptions` (interface)
+
+```ts
+interface LiveStreamSubscribeOptions {
+    id?: string;
+    onError?: (error: LiveStreamSubscribeError) => void;
+    onEvent?: (payload: unknown) => void;
+    topic: string;
+}
+```
+
+### `LiveTopicOptions` (interface)
+
+```ts
+interface LiveTopicOptions<Payload = unknown> extends Omit<SubscribeLiveTopicOptions, "onEvent" | "topic" | "url"> {
+    onEvent?: (payload: Payload) => void;
+    shardKey?: string;
+}
+```
+
+### `LiveTopicRef` (interface)
+
+```ts
+interface LiveTopicRef<Payload = unknown> {
+    readonly __payload?: Payload;
+    readonly __lunoraLive: string;
+    readonly topic: string;
+}
+```
+
 ### `LunoraClient` (class)
 
 ```ts
@@ -402,11 +488,14 @@ class LunoraClient {
     static createClientQuery<T>(key: string, defaultValue: T): ClientQueryRef<T>;
     readonly url: string;
     readonly wsUrl: string;
+    protected readonly adminHost: AdminHost;
     constructor(options: LunoraClientOptions);
     setAuthToken(token: string | null, subject?: string | null): void;
     getAuthToken(): string | null;
     currentIdentity(): string | null;
-    replayIdentityVerdict(stamped: null | string | undefined): "match" | "mismatch" | "unknown";
+    expectIdentityResolution(): void;
+    currentBaseline(shardKey?: string): number | undefined;
+    replayIdentityVerdict(stamped: null | string | undefined): ReplayIdentityVerdict;
     clientIdentifier(): string;
     confirmedMutationWatermark(shardKey?: string): number;
     callMutator(functionPath: string, args: Record<string, unknown>, options?: {
@@ -417,8 +506,11 @@ class LunoraClient {
         result: unknown;
     }>;
     onAuthTokenChange(listener: (token: string | null) => void): Unsubscribe;
+    onIdentityChange(listener: () => void): Unsubscribe;
+    identityEpoch(): number;
     getCurrentUser(): Promise<User | null>;
     setWsToken(token: string | undefined | WsTokenProvider): void;
+    setWsTicket(ticket: string | undefined | WsTokenProvider): void;
     setConnectionContext(context: Record<string, unknown> | undefined, options?: {
         shardKey?: string;
     }): void;
@@ -428,38 +520,78 @@ class LunoraClient {
     whisperSubscribe(topic: string, handler: (data: unknown, from?: string) => void, options?: {
         shardKey?: string;
     }): Unsubscribe;
+    subscribeLiveTopic(options: {
+        onError?: (error: {
+            status: number;
+            topic: string;
+        }) => void;
+        onEvent: (payload: unknown) => void;
+        shardKey?: string;
+        stream: string;
+        topic: string;
+    }): Unsubscribe;
     whisper(topic: string, data?: unknown, options?: {
         shardKey?: string;
-    }): void;
+    }): boolean;
+    connectRoom<Message>(room: RoomRef<Message>, handlers: {
+        onMessage: (message: Message) => void;
+    }, options?: {
+        shardKey?: string;
+    }): {
+        close: () => void;
+        send: (message: Message) => boolean;
+    };
+    connectWebSocket<Message>(path: string, handlers: {
+        onClose?: () => void;
+        onMessage: (message: Message) => void;
+        onOpen?: () => void;
+    }, options?: {
+        shardKey?: string;
+    }): {
+        close: () => void;
+        send: (message: Message) => void;
+    };
     onTokenExpired(listener: () => void): Unsubscribe;
     connectionStatus(): ConnectionStatus;
     onConnectionStatus(listener: (status: ConnectionStatus) => void): Unsubscribe;
+    syncStatus(): SyncStatus;
+    onSyncStatus(listener: (status: SyncStatus) => void): Unsubscribe;
     pendingCount(): number;
     debug(): ClientDebugSnapshot;
     onPendingChange(listener: (pending: number) => void): Unsubscribe;
     onMutationSettled(listener: (event: MutationSettledEvent) => void): Unsubscribe;
     getWebSocketImpl(): typeof WebSocket | undefined;
+    isCrossTabFollower(): boolean;
+    expectsPush(options?: {
+        shardKey?: string;
+    }): boolean;
     getClientQuery<T>(ref: ClientQueryRef<T>): T;
     setClientQuery<T>(ref: ClientQueryRef<T>, value: T): void;
     subscribeClientQuery(ref: ClientQueryRef, callback: (value: unknown) => void): Unsubscribe;
     resetClientQuery(ref: ClientQueryRef): void;
     snapshotPrecondition(functionRef: FunctionReference, args: Record<string, unknown>, shardKey?: string): () => boolean;
-    whenReady(): Promise<void>;
+    whenReady(options?: {
+        signal?: AbortSignal;
+    }): Promise<void>;
     get isReady(): boolean;
     peekHydratedQuery(functionPath: string, args: Record<string, unknown>, shardKey?: string): unknown;
+    peekHydratedQueryByKey(functionPath: string, argsKey: string, shardKey?: string): unknown;
     peekActiveQuerySnapshot(functionPath: string, args: Record<string, unknown>, shardKey?: string): {
+        answered: boolean;
         present: boolean;
         value: unknown;
     };
     query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: {
         shardKey?: string;
+        signal?: AbortSignal;
     }): Promise<ReturnOf<F>>;
     batch(calls: ReadonlyArray<{
         args?: Record<string, unknown>;
         fn: FunctionReference;
         shardKey?: string;
     }>): Promise<BatchSlot[]>;
-    mutation<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>): Promise<ReturnOf<F>>;
+    mutation<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>): Promise<ReturnOf<F>>;
+    canQueueOffline(shardKey?: string): boolean;
     action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: ActionCallOptions): Promise<ReturnOf<F>>;
     importRows(function_: FunctionReference, rows: ReadonlyArray<unknown>, options?: {
         chunkSize?: number;
@@ -473,7 +605,1072 @@ class LunoraClient {
     }): Promise<{
         chunks: number;
         imported: number;
+        queued: number;
     }>;
+    subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe;
+    subscribe<F extends FunctionReference>(function_: F, args: ArgsOf<F>, callback: (data: ReturnOf<F>) => void, options?: {
+        onCheckpoint?: (watermark: SyncWatermark) => void;
+        onError?: SubscriptionErrorCallback;
+        shardKey?: string;
+        signal?: AbortSignal;
+    }): Unsubscribe;
+    subscribeShape(shape: {
+        args?: Record<string, unknown>;
+        name: string;
+    }, callback: ShapeCallback, options?: {
+        onCheckpoint?: (watermark: SyncWatermark) => void;
+        onError?: SubscriptionErrorCallback;
+        shardKey?: string;
+    }): Unsubscribe;
+    stream<F extends FunctionReference<"stream">>(function_: F, args: ArgsOf<F>, options?: {
+        durable?: boolean;
+        maxBuffer?: number;
+        shardKey?: string;
+    }): StreamIterable<ReturnOf<F>>;
+    httpStream<Ref extends HttpStreamRef>(route: Ref, args?: HttpStreamArgsOf<Ref>, options?: {
+        headers?: Record<string, string>;
+        maxBuffer?: number;
+        signal?: AbortSignal;
+    }): StreamIterable<HttpStreamChunkOf<Ref>>;
+    close(): void;
+}
+```
+
+### `LunoraClientError` (type)
+
+```ts
+type LunoraClientError = Error & {
+    code?: LunoraErrorCode | (string & {});
+    data?: unknown;
+    docsUrl?: string;
+    headers?: Readonly<Record<string, string>>;
+    hint?: string | string[];
+    why?: string;
+};
+```
+
+### `LunoraClientOptions` (interface)
+
+```ts
+interface LunoraClientOptions {
+    authBasePath?: string;
+    authTokenOnUpgrade?: boolean;
+    bookmarkStorage?: BookmarkStorage;
+    clientId?: string;
+    connectionContext?: Record<string, unknown>;
+    connectTimeoutMs?: number;
+    crossTabSync?: boolean;
+    fetch?: typeof fetch;
+    heartbeatIntervalMs?: number;
+    hydrateOnStart?: boolean;
+    offlineQueue?: OfflineQueueOptions;
+    outbox?: OutboxSink;
+    persistence?: false | PersistenceAdapter;
+    persistenceVersion?: string;
+    pollingFallback?: {
+        afterFailedAttempts?: number;
+        intervalMs?: number;
+    };
+    queryCache?: QueryCacheAdapter | false;
+    reconnect?: ReconnectOptions;
+    rpcTimeoutMs?: number;
+    url: string;
+    WebSocket?: typeof WebSocket;
+    wsTicket?: string | WsTokenProvider;
+    wsToken?: string | WsTokenProvider;
+    wsUrl?: string;
+}
+```
+
+### `LunoraErrorCode` (type)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `MutationCallOptions` (interface)
+
+```ts
+interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
+    mutationId?: string;
+    onlineOnly?: boolean;
+    optimistic?: (current: TCurrent | undefined) => TValue;
+    optimisticUpdate?: OptimisticUpdate<TArgs>;
+    precondition?: () => boolean;
+    replayBaseline?: null | number;
+    replayCredential?: ReplayCredential;
+    shardKey?: string;
+    signal?: AbortSignal;
+}
+```
+
+### `MutationDelta` (interface)
+
+```ts
+interface MutationDelta {
+    key: string;
+    op: "delete" | "insert" | "update";
+    row?: Record<string, unknown>;
+    table: string;
+}
+```
+
+### `MutationSettledEvent` (interface)
+
+```ts
+interface MutationSettledEvent {
+    readonly args: Record<string, unknown>;
+    readonly code?: string;
+    readonly error?: unknown;
+    readonly functionPath: string;
+    readonly hadAwaiter: boolean;
+    readonly id: string;
+    readonly shardKey?: string;
+    readonly status: "committed" | "rejected";
+}
+```
+
+### `MutatorHandle` (type)
+
+```ts
+type MutatorHandle<TArgs> = (args: TArgs) => MutatorTransaction;
+```
+
+### `MutatorRunnerSinks` (interface)
+
+```ts
+interface MutatorRunnerSinks {
+    setError: (error: Error | undefined) => void;
+    setPending: (pending: boolean) => void;
+}
+```
+
+### `MutatorTransaction` (interface)
+
+```ts
+interface MutatorTransaction {
+    isPersisted: {
+        promise: Promise<unknown>;
+    };
+}
+```
+
+### `OfflineQueue` (class)
+
+```ts
+class OfflineQueue {
+    readonly queueBeforeFirstConnect: boolean;
+    constructor(options?: OfflineQueueOptions, deps?: OfflineQueueDeps);
+    get size(): number;
+    get replaying(): number;
+    enqueue<T>(entry: QueuedMutation<T>): void;
+    discard(id: string): void;
+    flushUnpersisted(): void;
+    hydrate(): Promise<(string | undefined)[]>;
+    restampIdentity(from: string | null, to: string | null): void;
+    hasPending(predicate: (item: QueuedMutation) => boolean): boolean;
+    drain(predicate?: (item: QueuedMutation) => boolean): QueuedMutation[];
+    requeue(items: QueuedMutation[]): void;
+    drainConflict(): QueuedMutation[];
+    clear(): void;
+}
+```
+
+### `OfflineQueueOptions` (interface)
+
+```ts
+interface OfflineQueueOptions {
+    maxItems?: number;
+    onPersistenceError?: (context: PersistenceErrorContext) => void;
+    queueBeforeFirstConnect?: boolean;
+}
+```
+
+### `OnlineOnlyOption` (type)
+
+```ts
+type OnlineOnlyOption<F> = F extends {
+    readonly sensitive: true;
+} ? {
+    onlineOnly?: true;
+} : unknown;
+```
+
+### `OptimisticLocalStore` (interface)
+
+```ts
+interface OptimisticLocalStore {
+    getAllQueries: <F extends FunctionReference>(function_: F) => {
+        args: ArgsOf<F>;
+        value: ReturnOf<F> | undefined;
+    }[];
+    getQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>) => ReturnOf<F> | undefined;
+    setQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, value: ReturnOf<F> | undefined) => void;
+}
+```
+
+### `OptimisticMessage` (interface)
+
+```ts
+interface OptimisticMessage {
+    content: string;
+    id: number;
+    maxDurableSeqAtSend: number;
+}
+```
+
+### `OptimisticUpdate` (type)
+
+```ts
+type OptimisticUpdate<Args> = (localStore: OptimisticLocalStore, args: Args) => void;
+```
+
+### `OutboxMutation` (interface)
+
+```ts
+interface OutboxMutation {
+    args: Record<string, unknown>;
+    baselineSeq?: number;
+    clientId: string;
+    functionPath: string;
+    idempotencyKey: string;
+    identity: string | null;
+    mutationId: number;
+    onRejected?: () => void;
+    shardKey?: string;
+}
+```
+
+### `OutboxSink` (interface)
+
+```ts
+interface OutboxSink {
+    enqueue: (mutation: OutboxMutation) => Promise<void>;
+    pending?: () => boolean;
+}
+```
+
+### `PersistedMutation` (interface)
+
+```ts
+interface PersistedMutation {
+    args: Record<string, unknown>;
+    baselineSeq?: number;
+    clientId?: string;
+    functionPath: string;
+    id: string;
+    identity?: string | null;
+    shardKey?: string;
+    version?: string;
+}
+```
+
+### `PersistenceAdapter` (interface)
+
+```ts
+interface PersistenceAdapter {
+    append: (mutation: PersistedMutation) => Promise<void>;
+    clear: () => Promise<void>;
+    load: () => Promise<PersistedMutation[]>;
+    remove: (id: string) => Promise<void>;
+    replace: (mutation: PersistedMutation) => Promise<void>;
+}
+```
+
+### `PipelineLogColumnMap` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogCursor` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogField` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogPage` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogQuery` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `PipelineLogRow` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `Preloaded` (interface)
+
+```ts
+interface Preloaded<T = unknown> {
+    readonly __lunoraPreloaded: true;
+    readonly args: Record<string, unknown>;
+    readonly functionPath: string;
+    readonly shardKey?: string;
+    readonly value: T;
+}
+```
+
+### `QueryCacheAdapter` (interface)
+
+```ts
+interface QueryCacheAdapter {
+    clear: () => Promise<void>;
+    load: () => Promise<StoredQuery[]>;
+    put: (key: string, entry: CachedQuery) => Promise<void>;
+    remove: (key: string) => Promise<void>;
+}
+```
+
+### `QueuedMutation` (interface)
+
+```ts
+interface QueuedMutation<T = unknown> {
+    readonly ambiguousSend?: boolean;
+    readonly args: Record<string, unknown>;
+    readonly baselineSeq?: number;
+    clientId?: string;
+    readonly functionPath: string;
+    id?: string;
+    identity?: string | null;
+    readonly issueSeq?: number;
+    liveAwaiter?: boolean;
+    readonly onCommit?: (commitCursor: number | undefined) => void;
+    readonly precondition?: () => boolean;
+    readonly reject: (error: unknown) => void;
+    readonly resolve: (value: T) => void;
+    readonly shardKey?: string;
+}
+```
+
+### `RETIRE_AFTER_DURABLE_SEQ_ADVANCE` (const)
+
+```ts
+const RETIRE_AFTER_DURABLE_SEQ_ADVANCE = 2;
+```
+
+### `ReconcileDurableMessage` (interface)
+
+```ts
+interface ReconcileDurableMessage {
+    content: string;
+    role: "assistant" | "system" | "tool" | "user";
+    seq: number;
+}
+```
+
+### `ReconnectCalculator` (interface)
+
+```ts
+interface ReconnectCalculator {
+    next: () => number;
+    reset: () => void;
+}
+```
+
+### `ReconnectOptions` (interface)
+
+```ts
+interface ReconnectOptions {
+    initialDelayMs?: number;
+    jitter?: boolean;
+    maxDelayMs?: number;
+}
+```
+
+### `ReplayCredential` (interface)
+
+```ts
+interface ReplayCredential {
+    readonly [replayCredentialBrand]: true;
+}
+```
+
+### `ReplayIdentityVerdict` (type)
+
+```ts
+type ReplayIdentityVerdict = {
+    credential: ReplayCredential;
+    verdict: "match";
+} | {
+    verdict: "mismatch";
+} | {
+    verdict: "unknown";
+};
+```
+
+### `ReturnOf` (type)
+
+```ts
+type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer R> ? R : never;
+```
+
+### `RoomRef` (interface)
+
+```ts
+interface RoomRef<Message = unknown> {
+    readonly __lunoraRoomMessage?: Message;
+    readonly name: string;
+}
+```
+
+### `RowOp` (interface)
+
+```ts
+interface RowOp {
+    key: string;
+    op: "delete" | "insert" | "update";
+    table: string;
+    value?: Record<string, unknown>;
+}
+```
+
+### `RpcEnvelope` (interface)
+
+```ts
+interface RpcEnvelope {
+    args?: Record<string, unknown>;
+    clientId?: string;
+    functionPath: string;
+    idempotencyKey?: string;
+    mutationId?: number;
+    shardKey?: string;
+}
+```
+
+### `RpcResponseBody` (type)
+
+```ts
+type RpcResponseBody = {
+    error: {
+        code: string;
+        data?: unknown;
+        message: string;
+    };
+} | {
+    commitCursor?: number;
+    lastMutationId?: number;
+    result: unknown;
+};
+```
+
+### `ScheduleRecord` (interface)
+
+```ts
+interface ScheduleRecord {
+    args: Record<string, unknown>;
+    attempts?: number;
+    enqueuedAt: number;
+    functionPath?: string;
+    id: string;
+    instanceName?: string;
+    pool?: string;
+    retry?: ScheduleRetryPolicy;
+    scheduledFor: number;
+    shardKey?: string;
+    workflow?: string;
+}
+```
+
+### `ScheduleRetryPolicy` (interface)
+
+```ts
+interface ScheduleRetryPolicy {
+    backoff?: "exponential" | "linear";
+    baseMs?: number;
+    maxAttempts?: number;
+    maxMs?: number;
+}
+```
+
+### `SchedulerPoolStatus` (interface)
+
+```ts
+interface SchedulerPoolStatus {
+    inFlight: number;
+    maxConcurrency: number;
+    name: string;
+    queued: number;
+}
+```
+
+### `SchedulerStatus` (interface)
+
+```ts
+interface SchedulerStatus {
+    backlog: number;
+    inFlight: number;
+    pools: SchedulerPoolStatus[];
+}
+```
+
+### `ServerMessage` (type)
+
+```ts
+type ServerMessage = ServerAckMessage | ServerBatchMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerIdentityMessage | ServerLiveMessage | ServerPokeEndMessage | ServerPokePartMessage | ServerPokeStartMessage | ServerResumeMessage | ServerSettledMessage | ServerWhisperMessage | ServerWhisperSubscribedMessage;
+```
+
+### `ServerPokeEndMessage` (interface)
+
+```ts
+interface ServerPokeEndMessage {
+    checkpoint?: number;
+    epoch?: string;
+    pokeId: string;
+    type: "pokeEnd";
+}
+```
+
+### `ServerPokePartMessage` (interface)
+
+```ts
+interface ServerPokePartMessage {
+    baseCheckpoint?: number;
+    lastMutationId?: number;
+    pokeId: string;
+    reset?: boolean;
+    rowsPatch: RowOp[];
+    shapeId: string;
+    type: "pokePart";
+}
+```
+
+### `ServerPokeStartMessage` (interface)
+
+```ts
+interface ServerPokeStartMessage {
+    baseCheckpoint?: number;
+    epoch?: string;
+    pokeId: string;
+    type: "pokeStart";
+}
+```
+
+### `ShardTrafficEntry` (interface)
+
+```ts
+interface ShardTrafficEntry {
+    requests: number;
+    shardKey: string;
+}
+```
+
+### `ShardTrafficResult` (interface)
+
+```ts
+interface ShardTrafficResult {
+    failed: number;
+    ok: number;
+    shards: ShardTrafficEntry[];
+}
+```
+
+### `StorageListPage` (interface)
+
+```ts
+interface StorageListPage {
+    cursor?: string;
+    objects: StorageObject[];
+}
+```
+
+### `StorageObject` (interface)
+
+```ts
+interface StorageObject {
+    customMetadata?: Record<string, string>;
+    etag: string;
+    httpMetadata?: {
+        contentType?: string;
+    };
+    key: string;
+    size: number;
+    uploaded?: number | string;
+}
+```
+
+### `StoredQuery` (interface)
+
+```ts
+interface StoredQuery extends CachedQuery {
+    key: string;
+}
+```
+
+### `StreamHandle` (interface)
+
+```ts
+interface StreamHandle<T = unknown> {
+    readonly complete: () => void;
+    readonly fail: (error: Error) => void;
+    readonly push: (value: T) => void;
+}
+```
+
+### `StreamIterable` (interface)
+
+```ts
+interface StreamIterable<T> extends AsyncIterable<T> {
+    cancel: () => void;
+}
+```
+
+### `SubscribeLiveTopicOptions` (interface)
+
+```ts
+interface SubscribeLiveTopicOptions extends Omit<ConnectLiveStreamOptions, "fetch"> {
+    onError?: (error: LiveStreamSubscribeError) => void;
+    onEvent?: (payload: unknown) => void;
+    sessionKey?: string;
+    topic: string;
+    url: string;
+}
+```
+
+### `SubscriptionCallback` (type)
+
+```ts
+type SubscriptionCallback = (data: unknown) => void;
+```
+
+### `SubscriptionError` (interface)
+
+```ts
+interface SubscriptionError {
+    code?: LunoraErrorCodeInput;
+    hint?: string | string[];
+    message: string;
+    why?: string;
+}
+```
+
+### `SubscriptionErrorCallback` (type)
+
+```ts
+type SubscriptionErrorCallback = (error: SubscriptionError) => void;
+```
+
+### `SubscriptionRegistry` (class)
+
+```ts
+class SubscriptionRegistry {
+    static key(functionPath: string, args: Record<string, unknown>, shardKey?: string): string;
+    static keyOf(state: SubscriptionState): string;
+    get(key: string): SubscriptionState | undefined;
+    getById(id: string): SubscriptionState | undefined;
+    add(state: SubscriptionState): void;
+    remove(state: SubscriptionState): void;
+    all(): SubscriptionState[];
+    clear(): void;
+}
+```
+
+### `SubscriptionState` (interface)
+
+```ts
+interface SubscriptionState {
+    ack: "acked" | "idle" | "inflight";
+    readonly args: Record<string, unknown>;
+    readonly argsKey: string;
+    readonly callbacks: Set<SubscriptionCallback>;
+    readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
+    readonly errorCallbacks: Set<SubscriptionErrorCallback>;
+    readonly fn: FunctionReference;
+    readonly id: string;
+    lastMutationId?: number;
+    lastValue: unknown;
+    optimisticLayers: OptimisticLayer[];
+    pendingDeltaRun?: {
+        payload: unknown;
+    };
+    serverBase: unknown;
+    serverCursor?: number;
+    serverEpoch?: string;
+    readonly shardKey?: string;
+    valueReceived: boolean;
+    readonly wireArgs: Record<string, unknown>;
+}
+```
+
+### `SyncStatus` (interface)
+
+```ts
+interface SyncStatus {
+    connection: ConnectionStatus;
+    pendingSubscriptions: number;
+    pendingWrites: number;
+    synced: boolean;
+}
+```
+
+### `SyncWatermark` (interface)
+
+```ts
+interface SyncWatermark {
+    checkpoint?: number;
+    mutationId?: number;
+    rowsFollow?: boolean;
+}
+```
+
+### `TabCoordinator` (class)
+
+```ts
+class TabCoordinator {
+    constructor(options?: TabCoordinatorOptions);
+    start(): void;
+    stop(): void;
+    isLeader(): boolean;
+    promoteImmediately(): void;
+    get leaderTabId(): string | undefined;
+    get id(): string;
+    get isRunning(): boolean;
+    broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null): void;
+    broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null): void;
+    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null): void;
+    broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void;
+}
+```
+
+### `TransportError` (class)
+
+```ts
+class TransportError extends LunoraError {
+    constructor(message: string, data?: unknown);
+}
+```
+
+### `Unsubscribe` (type)
+
+```ts
+type Unsubscribe = () => void;
+```
+
+### `User` (interface)
+
+```ts
+interface User {
+    readonly createdAt?: NullableTimestamp;
+    readonly email?: null | string;
+    readonly emailVerified?: boolean | null;
+    readonly id: string;
+    readonly image?: null | string;
+    readonly name?: null | string;
+    readonly [key: string]: unknown;
+    readonly updatedAt?: NullableTimestamp;
+}
+```
+
+### `VectorIndexSummary` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `VectorQueryMatch` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `WorkflowInstanceAction` (type)
+
+```ts
+type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
+```
+
+### `WorkflowInstanceDetail` (interface)
+
+```ts
+interface WorkflowInstanceDetail extends WorkflowInstanceSummary {
+    error?: unknown;
+    output?: unknown;
+    params?: unknown;
+    steps: WorkflowStepDetail[];
+}
+```
+
+### `WorkflowInstancePage` (interface)
+
+```ts
+interface WorkflowInstancePage {
+    configured?: boolean;
+    instances: WorkflowInstanceSummary[];
+    page: number;
+    perPage: number;
+    totalCount?: number;
+}
+```
+
+### `WorkflowInstanceStatus` (type)
+
+```ts
+type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+```
+
+### `WorkflowInstanceSummary` (interface)
+
+```ts
+interface WorkflowInstanceSummary {
+    createdOn?: string;
+    endedOn?: string;
+    id: string;
+    startedOn?: string;
+    status: WorkflowInstanceStatus;
+}
+```
+
+### `WorkflowStepDetail` (interface)
+
+```ts
+interface WorkflowStepDetail {
+    attempts?: number;
+    end?: string;
+    error?: unknown;
+    name: string;
+    output?: unknown;
+    start?: string;
+    success?: boolean;
+    type?: string;
+}
+```
+
+### `WsTokenProvider` (type)
+
+```ts
+type WsTokenProvider = () => Promise<string | undefined> | string | undefined;
+```
+
+### `applyDelta` (const)
+
+```ts
+const applyDelta: (current: unknown, delta: MutationDelta) => Record<string, unknown> | undefined | unknown[];
+```
+
+### `connectLiveStream` (const)
+
+```ts
+const connectLiveStream: (url: string, options?: ConnectLiveStreamOptions) => LiveStream;
+```
+
+### `createAsyncStoragePersistence` (const)
+
+```ts
+const createAsyncStoragePersistence: (options: AsyncStoragePersistenceOptions) => PersistenceAdapter;
+```
+
+### `createAsyncStorageQueryCache` (const)
+
+```ts
+const createAsyncStorageQueryCache: (options: AsyncStorageQueryCacheOptions) => QueryCacheAdapter;
+```
+
+### `createCallRunner` (const)
+
+```ts
+const createCallRunner: <A, O, R>(invoke: (args: A, options?: O) => Promise<R>, sinks: CallRunnerSinks<R>) => ((args: A, options?: O) => Promise<R>);
+```
+
+### `createClientQuery` (const)
+
+```ts
+const createClientQuery: <T>(key: string, defaultValue: T) => ClientQueryRef<T>;
+```
+
+### `createInMemoryBookmarkStorage` (const)
+
+```ts
+const createInMemoryBookmarkStorage: () => BookmarkStorage;
+```
+
+### `createInMemoryPersistence` (const)
+
+```ts
+const createInMemoryPersistence: () => PersistenceAdapter;
+```
+
+### `createInMemoryQueryCache` (const)
+
+```ts
+const createInMemoryQueryCache: (options?: {
+    maxEntries?: number;
+}) => QueryCacheAdapter;
+```
+
+### `createIndexedDbPersistence` (const)
+
+```ts
+const createIndexedDbPersistence: (options?: IndexedDbPersistenceOptions) => PersistenceAdapter;
+```
+
+### `createIndexedDbQueryCache` (const)
+
+```ts
+const createIndexedDbQueryCache: (options?: IndexedDbQueryCacheOptions) => QueryCacheAdapter;
+```
+
+### `createLocalStore` (const)
+
+```ts
+const createLocalStore: (subscriptions: SubscriptionRegistry, shardKey: string | undefined) => {
+    confirms: ((commitCursor: number | undefined) => void)[];
+    rollbacks: (() => void)[];
+    store: OptimisticLocalStore;
+};
+```
+
+### `createMutatorRunner` (const)
+
+```ts
+const createMutatorRunner: <TArgs>(handle: MutatorHandle<TArgs>, sinks: MutatorRunnerSinks) => {
+    mutate: (args: TArgs) => Promise<void>;
+    reset: () => void;
+};
+```
+
+### `createReconnect` (const)
+
+```ts
+const createReconnect: (options?: ReconnectOptions, random?: () => number) => ReconnectCalculator;
+```
+
+### `createSnapshotPrecondition` (const)
+
+```ts
+const createSnapshotPrecondition: (client: LunoraClient, functionRef: FunctionReference, args: Record<string, unknown>, shardKey?: string) => (() => boolean);
+```
+
+### `createStream` (const)
+
+```ts
+const createStream: <T>(options: {
+    maxBuffer?: number;
+    onCancel: () => void;
+    onFail?: () => void;
+}) => {
+    handle: StreamHandle<T>;
+    iterable: StreamIterable<T>;
+};
+```
+
+### `getErrorCode` (const)
+
+```ts
+const getErrorCode: (error: unknown) => LunoraErrorCode | undefined;
+```
+
+### `getRetryAfterMs` (const)
+
+```ts
+const getRetryAfterMs: (error: unknown) => number | undefined;
+```
+
+### `httpStream` (const)
+
+```ts
+const httpStream: <Ref extends HttpStreamRef>(route: Ref, args?: HttpStreamArgsOf<Ref>, options?: HttpStreamOptions) => StreamIterable<HttpStreamChunkOf<Ref>>;
+```
+
+### `isAuthReplayFailure` (const)
+
+```ts
+const isAuthReplayFailure: (error: unknown) => boolean;
+```
+
+### `isConflictError` (const)
+
+```ts
+const isConflictError: (error: unknown) => error is Error & {
+    code: "CONFLICT";
+};
+```
+
+### `isForbiddenError` (const)
+
+```ts
+const isForbiddenError: (error: unknown) => error is Error & {
+    code: "FORBIDDEN";
+};
+```
+
+### `isMutationDelta` (const)
+
+```ts
+const isMutationDelta: (value: unknown) => value is MutationDelta;
+```
+
+### `isRateLimitedError` (const)
+
+```ts
+const isRateLimitedError: (error: unknown) => error is Error & {
+    code: "TOO_MANY_REQUESTS";
+};
+```
+
+### `isUnauthorizedError` (const)
+
+```ts
+const isUnauthorizedError: (error: unknown) => error is Error & {
+    code: "UNAUTHORIZED";
+};
+```
+
+### `liveTopicSubscription` (const)
+
+```ts
+const liveTopicSubscription: <Payload>(client: {
+    readonly url: string;
+}, ref: LiveTopicRef<Payload>, options?: LiveTopicOptions<Payload>) => SubscribeLiveTopicOptions;
+```
+
+### `maxSeq` (const)
+
+```ts
+const maxSeq: (messages: ReadonlyArray<{
+    seq: number;
+}>) => number;
+```
+
+### `preloadQuery` (const)
+
+```ts
+const preloadQuery: <F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: {
+    shardKey?: string;
+}) => Promise<Preloaded<ReturnOf<F>>>;
+```
+
+### `preloadedQueryResult` (const)
+
+```ts
+const preloadedQueryResult: <T>(preloaded: Preloaded<T>) => T;
+```
+
+### `queryCacheKey` (const)
+
+```ts
+const queryCacheKey: (functionPath: string, argsKey: string, shardKey?: string) => string;
+```
+
+### `reconcileOptimistic` (const)
+
+```ts
+const reconcileOptimistic: (optimistic: ReadonlyArray<OptimisticMessage>, durable: ReadonlyArray<ReconcileDurableMessage>) => OptimisticMessage[];
+```
+
+### `setAuthTokenProvider` (const)
+
+```ts
+const setAuthTokenProvider: (client: LunoraClient, fetchToken: AuthTokenFetcher, options?: AuthTokenProviderOptions) => Unsubscribe;
+```
+
+### `subscribeLiveTopic` (const)
+
+```ts
+const subscribeLiveTopic: (options: SubscribeLiveTopicOptions) => (() => void);
+```
+
+## `@lunora/client/admin`
+
+### `LunoraAdminClient` (class)
+
+```ts
+class LunoraAdminClient extends LunoraClient {
     shardTraffic(table: string): Promise<ShardTrafficResult>;
     listScheduledJobs(): Promise<ScheduleRecord[]>;
     schedulerStatus(): Promise<SchedulerStatus>;
@@ -504,7 +1701,6 @@ class LunoraClient {
     }): Promise<{
         status: WorkflowInstanceStatus;
     }>;
-    subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe;
     listFunctions(): Promise<FunctionDescriptor[]>;
     getCronJobs(): Promise<CronJobInfo[]>;
     runCronJob(name: string): Promise<{
@@ -512,6 +1708,7 @@ class LunoraClient {
         ran: boolean;
     }>;
     fetchOpenApi(): Promise<Record<string, unknown>>;
+    fetchArchitecture(): Promise<Record<string, unknown>>;
     fetchOpenRpc(): Promise<Record<string, unknown>>;
     listStorageObjects(options?: {
         bucket?: string;
@@ -763,983 +1960,132 @@ class LunoraClient {
         offset?: number;
         userId?: string;
     }): Promise<AuthPage<AuthSession>>;
-    subscribe<F extends FunctionReference>(function_: F, args: ArgsOf<F>, callback: (data: ReturnOf<F>) => void, options?: {
-        onCheckpoint?: (watermark: SyncWatermark) => void;
-        onError?: SubscriptionErrorCallback;
-        shardKey?: string;
-    }): Unsubscribe;
-    subscribeShape(shape: {
-        args?: Record<string, unknown>;
-        name: string;
-    }, callback: ShapeCallback, options?: {
-        onCheckpoint?: (watermark: SyncWatermark) => void;
-        onError?: SubscriptionErrorCallback;
-        shardKey?: string;
-    }): Unsubscribe;
-    stream<F extends FunctionReference<"stream">>(function_: F, args: ArgsOf<F>, options?: {
-        durable?: boolean;
-        maxBuffer?: number;
-        shardKey?: string;
-    }): StreamIterable<ReturnOf<F>>;
-    httpStream<Ref extends HttpStreamRef>(route: Ref, args?: HttpStreamArgsOf<Ref>, options?: {
-        headers?: Record<string, string>;
-        maxBuffer?: number;
-        signal?: AbortSignal;
-    }): StreamIterable<HttpStreamChunkOf<Ref>>;
-    close(): void;
 }
 ```
 
-### `LunoraClientError` (type)
+### `isLunoraAdminClient` (const)
 
 ```ts
-type LunoraClientError = Error & {
-    code?: LunoraErrorCode | (string & {});
-    data?: unknown;
-    docsUrl?: string;
-    hint?: string | string[];
-};
-```
-
-### `LunoraClientOptions` (interface)
-
-```ts
-interface LunoraClientOptions {
-    authBasePath?: string;
-    bookmarkStorage?: BookmarkStorage;
-    clientId?: string;
-    connectionContext?: Record<string, unknown>;
-    connectTimeoutMs?: number;
-    crossTabSync?: boolean;
-    fetch?: typeof fetch;
-    heartbeatIntervalMs?: number;
-    hydrateOnStart?: boolean;
-    offlineQueue?: OfflineQueueOptions;
-    outbox?: OutboxSink;
-    persistence?: false | PersistenceAdapter;
-    persistenceVersion?: string;
-    queryCache?: QueryCacheAdapter | false;
-    reconnect?: ReconnectOptions;
-    url: string;
-    WebSocket?: typeof WebSocket;
-    wsToken?: string | WsTokenProvider;
-    wsUrl?: string;
-}
-```
-
-### `LunoraErrorCode` (type)
-
-Re-exported from `@lunora/errors` — signature tracked at its source.
-
-### `MutationCallOptions` (interface)
-
-```ts
-interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
-    mutationId?: string;
-    optimistic?: (current: TCurrent | undefined) => TValue;
-    optimisticUpdate?: OptimisticUpdate<TArgs>;
-    precondition?: () => boolean;
-    shardKey?: string;
-}
-```
-
-### `MutationDelta` (interface)
-
-```ts
-interface MutationDelta {
-    key: string;
-    op: "delete" | "insert" | "update";
-    row?: Record<string, unknown>;
-    table: string;
-}
-```
-
-### `MutationSettledEvent` (interface)
-
-```ts
-interface MutationSettledEvent {
-    readonly args: Record<string, unknown>;
-    readonly code?: string;
-    readonly error?: unknown;
-    readonly functionPath: string;
-    readonly hadAwaiter: boolean;
-    readonly id: string;
-    readonly shardKey?: string;
-    readonly status: "committed" | "rejected";
-}
-```
-
-### `MutatorHandle` (type)
-
-```ts
-type MutatorHandle<TArgs> = (args: TArgs) => MutatorTransaction;
-```
-
-### `MutatorRunnerSinks` (interface)
-
-```ts
-interface MutatorRunnerSinks {
-    setError: (error: Error | undefined) => void;
-    setPending: (pending: boolean) => void;
-}
-```
-
-### `MutatorTransaction` (interface)
-
-```ts
-interface MutatorTransaction {
-    isPersisted: {
-        promise: Promise<unknown>;
-    };
-}
-```
-
-### `OfflineQueue` (class)
-
-```ts
-class OfflineQueue {
-    readonly queueBeforeFirstConnect: boolean;
-    constructor(options?: OfflineQueueOptions, deps?: OfflineQueueDeps);
-    get size(): number;
-    enqueue<T>(entry: QueuedMutation<T>): void;
-    hydrate(): Promise<(string | undefined)[]>;
-    restampIdentity(from: string | null, to: string | null): void;
-    drain(predicate?: (item: QueuedMutation) => boolean): QueuedMutation[];
-    requeue(items: QueuedMutation[]): void;
-    drainConflict(): QueuedMutation[];
-    clear(): void;
-}
-```
-
-### `OfflineQueueOptions` (interface)
-
-```ts
-interface OfflineQueueOptions {
-    maxItems?: number;
-    onPersistenceError?: (context: PersistenceErrorContext) => void;
-    queueBeforeFirstConnect?: boolean;
-}
-```
-
-### `OptimisticLocalStore` (interface)
-
-```ts
-interface OptimisticLocalStore {
-    getAllQueries: <F extends FunctionReference>(function_: F) => {
-        args: ArgsOf<F>;
-        value: ReturnOf<F> | undefined;
-    }[];
-    getQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>) => ReturnOf<F> | undefined;
-    setQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, value: ReturnOf<F> | undefined) => void;
-}
-```
-
-### `OptimisticMessage` (interface)
-
-```ts
-interface OptimisticMessage {
-    content: string;
-    id: number;
-    maxDurableSeqAtSend: number;
-}
-```
-
-### `OptimisticUpdate` (type)
-
-```ts
-type OptimisticUpdate<Args> = (localStore: OptimisticLocalStore, args: Args) => void;
-```
-
-### `OutboxMutation` (interface)
-
-```ts
-interface OutboxMutation {
-    args: Record<string, unknown>;
-    clientId: string;
-    functionPath: string;
-    idempotencyKey: string;
-    identity: string | null;
-    mutationId: number;
-    shardKey?: string;
-}
-```
-
-### `OutboxSink` (interface)
-
-```ts
-interface OutboxSink {
-    enqueue: (mutation: OutboxMutation) => Promise<void>;
-}
-```
-
-### `PersistedMutation` (interface)
-
-```ts
-interface PersistedMutation {
-    args: Record<string, unknown>;
-    clientId?: string;
-    functionPath: string;
-    id: string;
-    identity?: string | null;
-    shardKey?: string;
-    version?: string;
-}
-```
-
-### `PersistenceAdapter` (interface)
-
-```ts
-interface PersistenceAdapter {
-    append: (mutation: PersistedMutation) => Promise<void>;
-    clear: () => Promise<void>;
-    load: () => Promise<PersistedMutation[]>;
-    remove: (id: string) => Promise<void>;
-    replace: (mutation: PersistedMutation) => Promise<void>;
-}
-```
-
-### `PipelineLogColumnMap` (type)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `PipelineLogCursor` (interface)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `PipelineLogField` (type)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `PipelineLogPage` (interface)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `PipelineLogQuery` (interface)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `PipelineLogRow` (interface)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `Preloaded` (interface)
-
-```ts
-interface Preloaded<T = unknown> {
-    readonly __lunoraPreloaded: true;
-    readonly args: Record<string, unknown>;
-    readonly functionPath: string;
-    readonly shardKey?: string;
-    readonly value: T;
-}
-```
-
-### `QueryCacheAdapter` (interface)
-
-```ts
-interface QueryCacheAdapter {
-    clear: () => Promise<void>;
-    load: () => Promise<StoredQuery[]>;
-    put: (key: string, entry: CachedQuery) => Promise<void>;
-    remove: (key: string) => Promise<void>;
-}
-```
-
-### `QueuedMutation` (interface)
-
-```ts
-interface QueuedMutation<T = unknown> {
-    readonly args: Record<string, unknown>;
-    clientId?: string;
-    readonly functionPath: string;
-    id?: string;
-    identity?: string | null;
-    liveAwaiter?: boolean;
-    readonly onCommit?: (commitCursor: number | undefined) => void;
-    readonly precondition?: () => boolean;
-    readonly reject: (error: unknown) => void;
-    readonly resolve: (value: T) => void;
-    readonly shardKey?: string;
-}
-```
-
-### `RETIRE_AFTER_DURABLE_SEQ_ADVANCE` (const)
-
-```ts
-const RETIRE_AFTER_DURABLE_SEQ_ADVANCE = 2;
-```
-
-### `ReconcileDurableMessage` (interface)
-
-```ts
-interface ReconcileDurableMessage {
-    content: string;
-    role: "assistant" | "system" | "tool" | "user";
-    seq: number;
-}
-```
-
-### `ReconnectCalculator` (interface)
-
-```ts
-interface ReconnectCalculator {
-    next: () => number;
-    reset: () => void;
-}
-```
-
-### `ReconnectOptions` (interface)
-
-```ts
-interface ReconnectOptions {
-    initialDelayMs?: number;
-    jitter?: boolean;
-    maxDelayMs?: number;
-}
-```
-
-### `ReturnOf` (type)
-
-```ts
-type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer R> ? R : never;
-```
-
-### `RowOp` (interface)
-
-```ts
-interface RowOp {
-    key: string;
-    op: "delete" | "insert" | "update";
-    table: string;
-    value?: Record<string, unknown>;
-}
-```
-
-### `RpcEnvelope` (interface)
-
-```ts
-interface RpcEnvelope {
-    args?: Record<string, unknown>;
-    clientId?: string;
-    functionPath: string;
-    idempotencyKey?: string;
-    mutationId?: number;
-    shardKey?: string;
-}
-```
-
-### `RpcResponseBody` (type)
-
-```ts
-type RpcResponseBody = {
-    error: {
-        code: string;
-        data?: unknown;
-        message: string;
-    };
-} | {
-    commitCursor?: number;
-    lastMutationId?: number;
-    result: unknown;
-};
-```
-
-### `ScheduleRecord` (interface)
-
-```ts
-interface ScheduleRecord {
-    args: Record<string, unknown>;
-    attempts?: number;
-    enqueuedAt: number;
-    functionPath?: string;
-    id: string;
-    instanceName?: string;
-    pool?: string;
-    retry?: ScheduleRetryPolicy;
-    scheduledFor: number;
-    shardKey?: string;
-    workflow?: string;
-}
-```
-
-### `ScheduleRetryPolicy` (interface)
-
-```ts
-interface ScheduleRetryPolicy {
-    backoff?: "exponential" | "linear";
-    baseMs?: number;
-    maxAttempts?: number;
-    maxMs?: number;
-}
-```
-
-### `SchedulerPoolStatus` (interface)
-
-```ts
-interface SchedulerPoolStatus {
-    inFlight: number;
-    maxConcurrency: number;
-    name: string;
-    queued: number;
-}
-```
-
-### `SchedulerStatus` (interface)
-
-```ts
-interface SchedulerStatus {
-    backlog: number;
-    inFlight: number;
-    pools: SchedulerPoolStatus[];
-}
-```
-
-### `ServerMessage` (type)
-
-```ts
-type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerPokeEndMessage | ServerPokePartMessage | ServerPokeStartMessage | ServerResumeMessage | ServerSettledMessage | ServerWhisperMessage;
-```
-
-### `ServerPokeEndMessage` (interface)
-
-```ts
-interface ServerPokeEndMessage {
-    checkpoint?: number;
-    epoch?: string;
-    pokeId: string;
-    type: "pokeEnd";
-}
-```
-
-### `ServerPokePartMessage` (interface)
-
-```ts
-interface ServerPokePartMessage {
-    baseCheckpoint?: number;
-    lastMutationId?: number;
-    pokeId: string;
-    reset?: boolean;
-    rowsPatch: RowOp[];
-    shapeId: string;
-    type: "pokePart";
-}
-```
-
-### `ServerPokeStartMessage` (interface)
-
-```ts
-interface ServerPokeStartMessage {
-    baseCheckpoint?: number;
-    epoch?: string;
-    pokeId: string;
-    type: "pokeStart";
-}
-```
-
-### `ServiceWorkerStatus` (type)
-
-```ts
-type ServiceWorkerStatus = "unsupported" | "unregistered" | "registering" | "active" | "error";
-```
-
-### `ShardTrafficEntry` (interface)
-
-```ts
-interface ShardTrafficEntry {
-    requests: number;
-    shardKey: string;
-}
-```
-
-### `ShardTrafficResult` (interface)
-
-```ts
-interface ShardTrafficResult {
-    failed: number;
-    ok: number;
-    shards: ShardTrafficEntry[];
-}
-```
-
-### `StorageListPage` (interface)
-
-```ts
-interface StorageListPage {
-    cursor?: string;
-    objects: StorageObject[];
-}
-```
-
-### `StorageObject` (interface)
-
-```ts
-interface StorageObject {
-    customMetadata?: Record<string, string>;
-    etag: string;
-    httpMetadata?: {
-        contentType?: string;
-    };
-    key: string;
-    size: number;
-    uploaded?: number | string;
-}
-```
-
-### `StoredQuery` (interface)
-
-```ts
-interface StoredQuery extends CachedQuery {
-    key: string;
-}
-```
-
-### `StreamHandle` (interface)
-
-```ts
-interface StreamHandle<T = unknown> {
-    readonly complete: () => void;
-    readonly fail: (error: Error) => void;
-    readonly push: (value: T) => void;
-}
-```
-
-### `StreamIterable` (interface)
-
-```ts
-interface StreamIterable<T> extends AsyncIterable<T> {
-    cancel: () => void;
-}
-```
-
-### `SubscriptionCallback` (type)
-
-```ts
-type SubscriptionCallback = (data: unknown) => void;
-```
-
-### `SubscriptionError` (interface)
-
-```ts
-interface SubscriptionError {
-    code?: LunoraErrorCodeInput;
-    message: string;
-}
-```
-
-### `SubscriptionErrorCallback` (type)
-
-```ts
-type SubscriptionErrorCallback = (error: SubscriptionError) => void;
-```
-
-### `SubscriptionRegistry` (class)
-
-```ts
-class SubscriptionRegistry {
-    static key(functionPath: string, args: Record<string, unknown>, shardKey?: string): string;
-    static keyOf(state: SubscriptionState): string;
-    get(key: string): SubscriptionState | undefined;
-    getById(id: string): SubscriptionState | undefined;
-    add(state: SubscriptionState): void;
-    remove(state: SubscriptionState): void;
-    all(): SubscriptionState[];
-    clear(): void;
-}
-```
-
-### `SubscriptionState` (interface)
-
-```ts
-interface SubscriptionState {
-    acked: boolean;
-    readonly args: Record<string, unknown>;
-    readonly argsKey: string;
-    readonly callbacks: Set<SubscriptionCallback>;
-    readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
-    readonly errorCallbacks: Set<SubscriptionErrorCallback>;
-    readonly fn: FunctionReference;
-    readonly id: string;
-    lastMutationId?: number;
-    lastValue: unknown;
-    optimisticLayers: OptimisticLayer[];
-    serverBase: unknown;
-    serverCursor?: number;
-    serverEpoch?: string;
-    readonly shardKey?: string;
-    readonly wireArgs: Record<string, unknown>;
-}
-```
-
-### `SwToClientMessage` (interface)
-
-```ts
-interface SwToClientMessage {
-    correlationId?: string;
-    payload?: unknown;
-    type: string;
-}
-```
-
-### `SyncWatermark` (interface)
-
-```ts
-interface SyncWatermark {
-    checkpoint?: number;
-    mutationId?: number;
-    rowsFollow?: boolean;
-}
-```
-
-### `TabCoordinator` (class)
-
-```ts
-class TabCoordinator {
-    constructor(options?: TabCoordinatorOptions);
-    start(): void;
-    stop(): void;
-    isLeader(): boolean;
-    promoteImmediately(): void;
-    get leaderTabId(): string | undefined;
-    get id(): string;
-    get isRunning(): boolean;
-    broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null): void;
-    broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null): void;
-    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null): void;
-    broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void;
-}
-```
-
-### `TransportError` (class)
-
-```ts
-class TransportError extends LunoraError {
-    constructor(message: string, data?: unknown);
-}
-```
-
-### `Unsubscribe` (type)
-
-```ts
-type Unsubscribe = () => void;
-```
-
-### `User` (interface)
-
-```ts
-interface User {
-    readonly createdAt?: NullableTimestamp;
-    readonly email?: null | string;
-    readonly emailVerified?: boolean | null;
-    readonly id: string;
-    readonly image?: null | string;
-    readonly name?: null | string;
-    readonly [key: string]: unknown;
-    readonly updatedAt?: NullableTimestamp;
-}
-```
-
-### `VectorIndexSummary` (interface)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `VectorQueryMatch` (interface)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `WorkflowInstanceAction` (type)
-
-```ts
-type WorkflowInstanceAction = "pause" | "resume" | "terminate";
-```
-
-### `WorkflowInstanceDetail` (interface)
-
-```ts
-interface WorkflowInstanceDetail extends WorkflowInstanceSummary {
-    error?: unknown;
-    output?: unknown;
-    params?: unknown;
-    steps: WorkflowStepDetail[];
-}
-```
-
-### `WorkflowInstancePage` (interface)
-
-```ts
-interface WorkflowInstancePage {
-    configured?: boolean;
-    instances: WorkflowInstanceSummary[];
-    page: number;
-    perPage: number;
-    totalCount?: number;
-}
-```
-
-### `WorkflowInstanceStatus` (type)
-
-```ts
-type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
-```
-
-### `WorkflowInstanceSummary` (interface)
-
-```ts
-interface WorkflowInstanceSummary {
-    createdOn?: string;
-    endedOn?: string;
-    id: string;
-    startedOn?: string;
-    status: WorkflowInstanceStatus;
-}
-```
-
-### `WorkflowStepDetail` (interface)
-
-```ts
-interface WorkflowStepDetail {
-    attempts?: number;
-    end?: string;
-    error?: unknown;
-    name: string;
-    output?: unknown;
-    start?: string;
-    success?: boolean;
-    type?: string;
-}
-```
-
-### `WsTokenProvider` (type)
-
-```ts
-type WsTokenProvider = () => Promise<string | undefined> | string | undefined;
-```
-
-### `anyApi` (const)
-
-```ts
-const anyApi: Record<string, Record<string, unknown>>;
-```
-
-### `applyDelta` (const)
-
-```ts
-const applyDelta: (current: unknown, delta: MutationDelta) => Record<string, unknown> | undefined | unknown[];
-```
-
-### `createAsyncStoragePersistence` (const)
-
-```ts
-const createAsyncStoragePersistence: (options: AsyncStoragePersistenceOptions) => PersistenceAdapter;
-```
-
-### `createAsyncStorageQueryCache` (const)
-
-```ts
-const createAsyncStorageQueryCache: (options: AsyncStorageQueryCacheOptions) => QueryCacheAdapter;
-```
-
-### `createCallRunner` (const)
-
-```ts
-const createCallRunner: <A, O, R>(invoke: (args: A, options?: O) => Promise<R>, sinks: CallRunnerSinks<R>) => ((args: A, options?: O) => Promise<R>);
-```
-
-### `createClientQuery` (const)
-
-```ts
-const createClientQuery: <T>(key: string, defaultValue: T) => ClientQueryRef<T>;
-```
-
-### `createInMemoryBookmarkStorage` (const)
-
-```ts
-const createInMemoryBookmarkStorage: () => BookmarkStorage;
-```
-
-### `createInMemoryPersistence` (const)
-
-```ts
-const createInMemoryPersistence: () => PersistenceAdapter;
-```
-
-### `createInMemoryQueryCache` (const)
-
-```ts
-const createInMemoryQueryCache: (options?: {
-    maxEntries?: number;
-}) => QueryCacheAdapter;
-```
-
-### `createIndexedDbPersistence` (const)
-
-```ts
-const createIndexedDbPersistence: (options?: IndexedDbPersistenceOptions) => PersistenceAdapter;
-```
-
-### `createIndexedDbQueryCache` (const)
-
-```ts
-const createIndexedDbQueryCache: (options?: IndexedDbQueryCacheOptions) => QueryCacheAdapter;
-```
-
-### `createLocalStore` (const)
-
-```ts
-const createLocalStore: (subscriptions: SubscriptionRegistry, shardKey: string | undefined) => {
-    confirms: ((commitCursor: number | undefined) => void)[];
-    rollbacks: (() => void)[];
-    store: OptimisticLocalStore;
-};
-```
-
-### `createMutatorRunner` (const)
-
-```ts
-const createMutatorRunner: <TArgs>(handle: MutatorHandle<TArgs>, sinks: MutatorRunnerSinks) => {
-    mutate: (args: TArgs) => Promise<void>;
-    reset: () => void;
-};
-```
-
-### `createReconnect` (const)
-
-```ts
-const createReconnect: (options?: ReconnectOptions, random?: () => number) => ReconnectCalculator;
-```
-
-### `createReply` (const)
-
-```ts
-const createReply: (original: ClientToSwMessage, payload?: unknown) => SwToClientMessage;
-```
-
-### `createSnapshotPrecondition` (const)
-
-```ts
-const createSnapshotPrecondition: (client: LunoraClient, functionRef: FunctionReference, args: Record<string, unknown>, shardKey?: string) => (() => boolean);
-```
-
-### `createStream` (const)
-
-```ts
-const createStream: <T>(options: {
-    maxBuffer?: number;
-    onCancel: () => void;
-}) => {
-    handle: StreamHandle<T>;
-    iterable: StreamIterable<T>;
-};
-```
-
-### `getErrorCode` (const)
-
-```ts
-const getErrorCode: (error: unknown) => LunoraErrorCode | undefined;
-```
-
-### `getRetryAfterMs` (const)
-
-```ts
-const getRetryAfterMs: (error: unknown) => number | undefined;
-```
-
-### `httpStream` (const)
-
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
-
-### `isConflictError` (const)
-
-```ts
-const isConflictError: (error: unknown) => error is Error & {
-    code: "CONFLICT";
-};
-```
-
-### `isForbiddenError` (const)
-
-```ts
-const isForbiddenError: (error: unknown) => error is Error & {
-    code: "FORBIDDEN";
-};
-```
-
-### `isMutationDelta` (const)
-
-```ts
-const isMutationDelta: (value: unknown) => value is MutationDelta;
-```
-
-### `isRateLimitedError` (const)
-
-```ts
-const isRateLimitedError: (error: unknown) => error is Error & {
-    code: "TOO_MANY_REQUESTS";
-};
-```
-
-### `isUnauthorizedError` (const)
-
-```ts
-const isUnauthorizedError: (error: unknown) => error is Error & {
-    code: "UNAUTHORIZED";
-};
-```
-
-### `maxSeq` (const)
-
-```ts
-const maxSeq: (messages: ReadonlyArray<{
-    seq: number;
-}>) => number;
-```
-
-### `preloadQuery` (const)
-
-```ts
-const preloadQuery: <F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: {
-    shardKey?: string;
-}) => Promise<Preloaded<ReturnOf<F>>>;
-```
-
-### `preloadedQueryResult` (const)
-
-```ts
-const preloadedQueryResult: <T>(preloaded: Preloaded<T>) => T;
-```
-
-### `queryCacheKey` (const)
-
-```ts
-const queryCacheKey: (functionPath: string, argsKey: string, shardKey?: string) => string;
-```
-
-### `reconcileOptimistic` (const)
-
-```ts
-const reconcileOptimistic: (optimistic: ReadonlyArray<OptimisticMessage>, durable: ReadonlyArray<ReconcileDurableMessage>) => OptimisticMessage[];
-```
-
-### `sendToSw` (const)
-
-```ts
-const sendToSw: (sw: ServiceWorker | null, message: ClientToSwMessage, expectResponse?: boolean) => Promise<unknown>;
+const isLunoraAdminClient: (client: LunoraClient) => client is LunoraAdminClient;
 ```
 
 ## `@lunora/client/auth`
+
+### `ADMIN_AUTH_DEFAULT_PAGE_SIZE` (const)
+
+```ts
+const ADMIN_AUTH_DEFAULT_PAGE_SIZE = 50;
+```
+
+### `AUTH_STATUSES` (const)
+
+```ts
+const AUTH_STATUSES: readonly [
+    "authenticated",
+    "loading",
+    "unauthenticated",
+    "unreachable"
+];
+```
+
+### `AdminAuthList` (interface)
+
+```ts
+interface AdminAuthList<T> {
+    readonly fetchPage: (limit: number) => Promise<AuthPage<T>>;
+    readonly key: ReadonlyArray<unknown>;
+}
+```
+
+### `AuthStatus` (type)
+
+```ts
+type AuthStatus = (typeof AUTH_STATUSES)[number];
+```
+
+### `AuthUsersListFilter` (interface)
+
+```ts
+interface AuthUsersListFilter {
+    filterField?: string;
+    filterValue?: string;
+    search?: string;
+    searchField?: string;
+    sortBy?: string;
+    sortDirection?: "asc" | "desc";
+}
+```
 
 ### `IdentityStore` (interface)
 
 ```ts
 interface IdentityStore {
+    getStatus: () => AuthStatus;
     getUser: () => User | null;
     subscribe: (onChange: () => void) => () => void;
 }
+```
+
+### `adminAuthListHasMore` (const)
+
+```ts
+const adminAuthListHasMore: (page: AuthPage<unknown> | undefined) => boolean;
+```
+
+### `adminAuthListQueryKey` (const)
+
+```ts
+const adminAuthListQueryKey: (identity: string | null, list: AdminAuthList<unknown>, limit: number) => ReadonlyArray<unknown>;
+```
+
+### `authOrganizationsList` (const)
+
+```ts
+const authOrganizationsList: (client: LunoraAdminClient) => AdminAuthList<Record<string, unknown>>;
+```
+
+### `authSessionsList` (const)
+
+```ts
+const authSessionsList: (client: LunoraAdminClient, options?: {
+    userId?: string;
+}) => AdminAuthList<AuthSession>;
+```
+
+### `authSignUpInvitationsList` (const)
+
+```ts
+const authSignUpInvitationsList: (client: LunoraAdminClient) => AdminAuthList<Record<string, unknown>>;
+```
+
+### `authUsersList` (const)
+
+```ts
+const authUsersList: (client: LunoraAdminClient, filter?: AuthUsersListFilter) => AdminAuthList<AuthUser>;
 ```
 
 ### `getIdentityStore` (const)
 
 ```ts
 const getIdentityStore: (client: LunoraClient) => IdentityStore;
+```
+
+### `isAuthenticatedStatus` (const)
+
+```ts
+const isAuthenticatedStatus: (status: AuthStatus) => boolean;
+```
+
+### `isLoadingStatus` (const)
+
+```ts
+const isLoadingStatus: (status: AuthStatus) => boolean;
+```
+
+### `subscribeAdminAuthIdentity` (const)
+
+```ts
+const subscribeAdminAuthIdentity: (client: LunoraClient, onChange: () => void) => (() => void);
 ```
 
 ## `@lunora/client/pagination`
@@ -1830,6 +2176,22 @@ Re-exported from `@lunora/client` — signature tracked in that section.
 
 Re-exported from `@lunora/client` — signature tracked in that section.
 
+### `LunoraQueryKey` (type)
+
+```ts
+type LunoraQueryKey = ReadonlyArray<unknown>;
+```
+
+### `LunoraQueryOptions` (interface)
+
+```ts
+interface LunoraQueryOptions<F extends FunctionReference> {
+    queryFn: () => Promise<ReturnOf<F>>;
+    queryKey: LunoraQueryKey;
+    staleTime: number;
+}
+```
+
 ### `QuerySubscriptionOptions` (interface)
 
 ```ts
@@ -1880,6 +2242,26 @@ Re-exported from `@lunora/client` — signature tracked in that section.
 
 ```ts
 const createQuerySubscription: <F extends FunctionReference, T = ReturnOf<F>>(client: LunoraClient, function_: F, args: ResolvedArgs<F>, sinks: QuerySubscriptionSinks<T>, options?: QuerySubscriptionOptions) => Unsubscribe;
+```
+
+### `lunoraQueryKey` (const)
+
+```ts
+const lunoraQueryKey: (function_: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined) => LunoraQueryKey;
+```
+
+### `lunoraQueryKeyFromArgsKey` (const)
+
+```ts
+const lunoraQueryKeyFromArgsKey: (ref: string, argsKey: string, shardKey: string | undefined) => LunoraQueryKey;
+```
+
+### `lunoraQueryOptions` (const)
+
+```ts
+const lunoraQueryOptions: <F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: {
+    shardKey?: string;
+}) => LunoraQueryOptions<F>;
 ```
 
 ### `toSubscriptionError` (const)
@@ -2163,6 +2545,15 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
+### `AdminHost` (interface)
+
+```ts
+interface AdminHost {
+    adminFetch: (path: string, method: "DELETE" | "GET" | "POST" | "PUT", payload?: ArrayBuffer | Blob | Record<string, unknown>, contentType?: string) => Promise<unknown>;
+    assertOpen: () => void;
+}
+```
+
 ### `CallRunnerSinks` (interface)
 
 ```ts
@@ -2190,6 +2581,7 @@ interface ClientConnectMessage {
     clientId?: string;
     context?: Record<string, unknown>;
     id: string;
+    token?: string;
     type: "connect";
 }
 ```
@@ -2279,6 +2671,7 @@ type NullableTimestamp = null | number | string;
 ```ts
 interface OfflineQueueDeps {
     onEvict?: EvictHandler;
+    onReplayingChange?: () => void;
     onSizeChange?: (size: number) => void;
     persistence?: PersistenceAdapter;
     version?: string;
@@ -2289,6 +2682,7 @@ interface OfflineQueueDeps {
 
 ```ts
 interface OptimisticLayer {
+    acknowledgedAt?: number;
     commitCursor?: number;
     readonly id: symbol;
     readonly transform: (current: unknown) => unknown;
@@ -2317,6 +2711,14 @@ type PersistenceOperation = "append" | "clear" | "load" | "remove" | "replace";
 interface ServerAckMessage {
     id: string;
     type: "ack";
+}
+```
+
+### `ServerBatchMessage` (interface)
+
+```ts
+interface ServerBatchMessage {
+    type: "batchEnd" | "batchStart";
 }
 ```
 
@@ -2351,6 +2753,7 @@ interface ServerDataMessage {
     epoch?: string;
     id: string;
     lastMutationId?: number;
+    more?: boolean;
     type: "data" | "delta";
 }
 ```
@@ -2363,6 +2766,28 @@ interface ServerErrorMessage {
     id?: string;
     message?: string;
     type: "error";
+}
+```
+
+### `ServerIdentityMessage` (interface)
+
+```ts
+interface ServerIdentityMessage {
+    connectionId?: string;
+    subject: null | string;
+    type: "identity";
+    whisperAck?: boolean;
+}
+```
+
+### `ServerLiveMessage` (interface)
+
+```ts
+interface ServerLiveMessage {
+    data: unknown;
+    stream: string;
+    topic: string;
+    type: "live";
 }
 ```
 
@@ -2398,6 +2823,15 @@ interface ServerWhisperMessage {
     from?: string;
     topic: string;
     type: "whisper";
+}
+```
+
+### `ServerWhisperSubscribedMessage` (interface)
+
+```ts
+interface ServerWhisperSubscribedMessage {
+    topic: string;
+    type: "whisper_subscribed";
 }
 ```
 

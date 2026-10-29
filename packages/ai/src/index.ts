@@ -5,13 +5,44 @@ export {
     AI_DEFAULT_MODEL_ENV,
     AI_GATEWAY_ACCOUNT_ID_ENV,
     AI_GATEWAY_ID_ENV,
+    AI_GATEWAY_METADATA_MAX_KEYS,
+    AI_GATEWAY_TAGS_ENV,
     AI_GATEWAY_TOKEN_ENV,
+    AI_PROXY_TOKEN_ENV,
+    AI_PROXY_URL_ENV,
     buildAiGatewayMetadataFields,
+    readAiGatewayEnvTags,
     resolveAiGateway,
 } from "./gateway";
 export type { ModelPrice, ModelUsage } from "./pricing";
-export { DEFAULT_MODEL_PRICES, estimateModelCost, lookupModelPrice } from "./pricing";
-export type { AiBindingLike, AiGatewayOptions, EmbeddingModelInput, LunoraAi, LunoraAiOptions, ModelInput, WorkersAiProviderLike } from "./types";
+export { DEFAULT_MODEL_PRICES, estimateImageCost, estimateModelCost, lookupModelPrice } from "./pricing";
+export type {
+    AiBindingLike,
+    AiGatewayOptions,
+    AiImage,
+    AiImageGenerateInput,
+    AiImageGenerateResult,
+    AiMarkdownConversionResult,
+    AiMarkdownDocument,
+    AiMetrics,
+    AiModelOptions,
+    AiRunOptions,
+    AiSpan,
+    AiTelemetry,
+    AiToMarkdownInput,
+    AiToMarkdownOptions,
+    AiToMarkdownResult,
+    AiTracer,
+    AiWebSearchItem,
+    AiWebSearchOptions,
+    AiWebSearchProvider,
+    AiWebSearchResult,
+    EmbeddingModelInput,
+    LunoraAi,
+    LunoraAiOptions,
+    ModelInput,
+    WorkersAiProviderLike,
+} from "./types";
 
 // Re-export the AI SDK primitives apps reach for, so `@lunora/ai` is a single
 // import for the whole inference surface. These are provider-agnostic — pass

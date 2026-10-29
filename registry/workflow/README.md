@@ -60,7 +60,7 @@ const instance = await ctx.workflows.get("orderPipeline").create({ params: { ord
 const status = await instance.status();
 ```
 
-`createBatch([...])` starts many in one RPC, `get(id)` returns a handle to a running instance, and `sendEvent(id, event, payload)` delivers a `defineWorkflowEvent` the body is waiting on.
+`createBatch({ instances })` starts many in one RPC and returns `{ created, errors }`, `get(id)` returns a handle to a running instance, and `sendEvent(id, event, payload)` delivers a `defineWorkflowEvent` the body is waiting on.
 
 ### Fan-out with `branch()`
 

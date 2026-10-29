@@ -333,5 +333,4 @@ const maybeNotifyUpdate = async (deps: NotifyUpdateDeps): Promise<void> => {
     }
 };
 
-export type { NotifyUpdateDeps, UpdateCache };
 export { compareVersions, distTagFor, formatUpdateNotice, isCacheFresh, isNewer, maybeNotifyUpdate };

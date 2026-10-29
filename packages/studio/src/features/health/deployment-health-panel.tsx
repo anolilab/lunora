@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 // Reuse the runtime's health response contract (type-only, so no runtime code is
 // pulled into the browser bundle) — the panel must never redefine the wire shape.
 import type { HealthBody } from "@lunora/runtime";
@@ -9,6 +8,7 @@ import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Skeleton } from "../../components/ui/skeleton";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { formatTimestamp } from "../../lib/internal";
 import { cn } from "../../lib/utils";
@@ -59,7 +59,7 @@ const joinHealthUrl = (base: string, path: string): string => (base.endsWith("/"
  * `body: null` with an `error`, never a throw.
  */
 const useDefaultProbe = (): DeploymentHealthProbe => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     // A plain closure — React Compiler memoizes it on `client`, so no useCallback.
     return async (kind) => {
@@ -130,7 +130,7 @@ const ProbeTile = ({ label, level, testId, value }: { label: string; level: Leve
  */
 export const DeploymentHealthPanel = ({ probe }: DeploymentHealthPanelProps): ReactElement => {
     const t = useT();
-    const client = useLunora();
+    const client = useStudioClient();
     const defaultProbe = useDefaultProbe();
     const runProbe = probe ?? defaultProbe;
 

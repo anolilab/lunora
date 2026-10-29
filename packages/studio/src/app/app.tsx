@@ -1,4 +1,4 @@
-import { LunoraClient } from "@lunora/client";
+import { LunoraAdminClient } from "@lunora/client/admin";
 import { LunoraProvider } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useMemo, useState } from "react";
@@ -47,7 +47,7 @@ interface StudioAppProps {
      * the client) so the chrome renders against a supplied client; when set,
      * `baseUrl`/`adminToken` are ignored and this client is never closed here.
      */
-    readonly client?: LunoraClient;
+    readonly client?: LunoraAdminClient;
 
     /** UI language for the studio's own strings. Defaults to `en`. */
     readonly locale?: string;
@@ -90,7 +90,7 @@ const StudioAppBody = ({ basePath, chrome, studio }: StudioAppBodyProps): ReactE
 interface StudioShellProps {
     readonly basePath?: string;
     readonly clearToken: () => void;
-    readonly client: LunoraClient;
+    readonly client: LunoraAdminClient;
     readonly i18n: ReturnType<typeof createStudioI18n>;
     readonly onTokenChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
     readonly rulesInstalled?: boolean;
@@ -130,7 +130,7 @@ const StudioShell = ({ basePath, clearToken, client, i18n, onTokenChange, rulesI
 };
 
 /**
- * A fully self-contained studio page: it constructs a {@link LunoraClient}
+ * A fully self-contained studio page: it constructs a {@link LunoraAdminClient}
  * pointed at the worker, wires it through a `<LunoraProvider>`, manages the
  * admin token + theme, and renders the composed {@link Studio} — handing it the
  * top-bar/sidebar {@link StudioChrome} (theme toggle, admin-token popover, rules
@@ -174,16 +174,17 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
         }
 
         // The admin token authorizes the WS upgrade too, but never rides the URL
-        // itself: the client's `wsToken` is a provider that mints a short-lived
+        // itself: the client's `wsTicket` is a provider that mints a short-lived
         // HMAC-signed sub-token from the worker (master token in the
         // Authorization HEADER) fresh on every (re)connect, so only the ephemeral
         // token appears in `?token=`. Against a worker without the mint endpoint
-        // (404s) the provider falls back to the master token. A 4001
-        // token-expired drop invalidates the provider's cache so the reconnect
-        // re-mints even when the cached token still looks fresh.
+        // (404s) the provider fails the connection instead; the master token is
+        // never sent as a WS credential. A 4001 token-expired drop invalidates the
+        // provider's cache so the reconnect re-mints even when the cached token
+        // still looks fresh.
         const origin = resolveOrigin(baseUrl);
         const provider = debouncedToken === "" ? undefined : createAdminWsTokenProvider({ adminToken: debouncedToken, baseUrl: origin });
-        const created = new LunoraClient({ url: origin, ...(provider === undefined ? {} : { wsToken: provider.getToken }) });
+        const created = new LunoraAdminClient({ url: origin, ...(provider === undefined ? {} : { wsTicket: provider.getToken }) });
 
         if (provider !== undefined) {
             created.setAuthToken(debouncedToken);

@@ -246,6 +246,26 @@ describe("redactSecrets", () => {
         expect(redactSecrets(`value "${fakeSlackToken}"`)).toContain("[redacted]");
     });
 
+    it("masks a quoted secret that contains escaped quotes, and one closed only by an escaped quote", () => {
+        expect.assertions(2);
+
+        expect(redactSecrets(String.raw`value "${fakeStripeKey}\"x"`)).toBe("value [redacted]");
+        // No unescaped closing quote: the value closes at the last escaped one.
+        expect(redactSecrets(String.raw`value "${fakeStripeKey}\" and more`)).toBe("value [redacted] and more");
+    });
+
+    // The quoted-value pattern could read each backslash as an escape or as a character, so an
+    // unclosed quote followed by backslashes backtracked exponentially (CodeQL js/polynomial-redos).
+    it("scans an unclosed quote followed by a long run of backslashes in linear time", () => {
+        expect.assertions(1);
+
+        const started = performance.now();
+
+        redactSecrets(`value "${"\\".repeat(200_000)}x`);
+
+        expect(performance.now() - started).toBeLessThan(1000);
+    });
+
     it("masks the value following a secret-named key", () => {
         expect.assertions(2);
 

@@ -87,5 +87,5 @@ const recordFile = (lock: RegistryLock, itemKey: string, destinationRelative: st
 /** The hash `add` last recorded for a destination, or `undefined` if it was never tracked. */
 const recordedHash = (lock: RegistryLock, itemKey: string, destinationRelative: string): string | undefined => lock.items[itemKey]?.files[destinationRelative];
 
-export type { LockItem, RegistryLock };
+export type { RegistryLock };
 export { hashContent, readLock, recordedHash, recordFile, writeLock };

@@ -1,12 +1,12 @@
 /**
  * One-shot index backfill for the DO store, extracted from `ctx-db.ts`.
  *
- * `backfillAggregateIndexes` / `backfillRankIndexes` populate the aggregate
- * counter and rank companion tables up-front by scanning each source table
- * once — the explicit twins of the reader's lazy `ensureBackfilled` /
- * `ensureRankBackfilled` paths, for tests and production hosts that prefer to
- * pay the backfill cost eagerly. Both are idempotent: a companion that already
- * carries rows is left untouched, so they are safe to call twice.
+ * `backfillAggregateIndexes` / `backfillRankIndexes` build the aggregate
+ * counter and rank companion tables up-front, for hosts that prefer to pay the
+ * rebuild eagerly rather than on a request's first touch. They run the same
+ * marker-aware ensure as the lazy path (`ctx-db-companions`), so a companion
+ * already built from its current definition is left alone, one built from
+ * another definition is rebuilt, and the lazy path trusts what they built.
  *
  * These touch the store only through `SqlExec`; `ctx-db.ts` re-exports the two
  * public entry points so existing import sites (the index barrel, tests) are
@@ -16,22 +16,19 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-backfill" mirrors its parent "ctx-db.ts" (the established public module name). */
 
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, planSearchBackfillPass, searchIndexProfile } from "@lunora/search-core";
+import { analyzedSearchText, ftsTableName, planBackfillPass, searchIndexProfile } from "@lunora/search-core";
+import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
-import { matchesStaticWhere } from "./aggregate-sql";
-import type { AggregateTally } from "./aggregate-tally";
-import { aggregateTableName, encodeAggregateKey, foldAggregateTally } from "./aggregate-tally";
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SearchIndexDefinitionLike, SqlExec } from "./ctx-db";
-import { insertRankRow, rankColumnsSql } from "./ctx-db-companions";
+import { ensureAggregateCompanion, ensureRankCompanion } from "./ctx-db-companions";
 import { migrateSearchState, readSearchBackfillState, readSearchIndexCoverage, writeSearchBackfillState } from "./ctx-db-search-state";
-import { runDrizzle } from "./do-exec";
-import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, tryRowToDocument } from "./do-sql";
-import { isLiveForCompanion } from "./query-args";
-import { matchesRankStaticWhere, rankTableName } from "./rank";
-import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./schema-types";
+import { runAll, runDrizzle } from "./do-exec";
+import { DOC_COLUMN, isFtsAvailable, tryRowToDocument } from "./do-sql";
+import { sqliteInList } from "./drizzle";
+import { ftsPurgeDocument, ftsUnmappedPage, ftsWriteDocument, groupUnmappedRows } from "./fts-companion";
 
 /** One page's outcome: whether the index is now complete, and how many rows it walked. */
 interface SearchBackfillPass {
@@ -47,123 +44,55 @@ interface SearchBackfillProgress {
     pages: number;
 }
 
-/** True when `table` already carries rows — the backfills' idempotence check. */
-const hasRows = (sql: SqlExec, table: string): boolean =>
-    runDrizzle<{ count: number }>(sql, dsql`SELECT COUNT(*) AS count FROM ${dsql.identifier(table)}`).one().count > 0;
-
 /**
- * Does `tableName` hold anything at all? `LIMIT 1`, not the `COUNT(*)` above:
- * this one runs on the search read path, where counting a large table per read
- * is the cost `staged` exists to avoid in the first place.
+ * Does `tableName` hold anything at all? `LIMIT 1`, not a `COUNT(*)`: this
+ * runs on the search read path, where counting a large table per read is the
+ * cost `staged` exists to avoid in the first place.
  */
 const tableHasRows = (sql: SqlExec, table: string): boolean => runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(table)} LIMIT 1`).toArray().length > 0;
 
-/** One full scan of `tableName`'s stored rows, decoded per row by the caller. */
-const scanRows = (sql: SqlExec, tableName: string): Record<string, unknown>[] =>
-    runDrizzle(sql, dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`).toArray();
-
 /**
- * Backfill one aggregate counter table by scanning the source rows once and
- * tallying per canonical `by`-key. No-op when the counter already has rows.
- *
- * `softField` is the table's soft-delete marker column when it has one:
- * companions tally LIVE rows only, matching the incremental maintenance in
- * `ctx-db-companions`, so the two seeds agree.
- */
-const backfillAggregateIndex = (sql: SqlExec, tableName: string, index: AggregateIndexDefinitionLike, softField: string | undefined): void => {
-    const aggTable = aggregateTableName(tableName, index.name);
-
-    if (hasRows(sql, aggTable)) {
-        return;
-    }
-
-    const by = index.by ?? [];
-    const tallies = new Map<string, AggregateTally>();
-    const rows = scanRows(sql, tableName);
-
-    for (const row of rows) {
-        const record = rowToDocument(row);
-
-        if (!record || !isLiveForCompanion(record, softField) || (index.where && !matchesStaticWhere(record, index.where))) {
-            continue;
-        }
-
-        const encoded = encodeAggregateKey(by, record);
-
-        foldAggregateTally(tallies, encoded, index, record);
-    }
-
-    for (const [encoded, tally] of tallies) {
-        runDrizzle(
-            sql,
-            dsql`INSERT INTO ${dsql.identifier(aggTable)} (${AGG_KEY}, ${AGG_VALUE}, ${AGG_COUNT}) VALUES (${encoded}, ${tally.value}, ${tally.count})`,
-        );
-    }
-};
-
-/**
- * One-shot backfill of every declared aggregate index. Used by tests and
- * production hosts that want to populate counters up-front instead of on first
- * read. Idempotent: counter rows that already exist are left alone, so it's
- * safe to call twice.
- *
- * The reader uses `ensureBackfilled` internally for the lazy path; this
- * helper is the explicit twin so callers can opt out of the lazy cost.
+ * Build every declared aggregate companion up-front: each one whose durable
+ * marker does not record its current definition is rebuilt, and the rest cost
+ * one primary-key lookup. Safe to call any number of times.
  */
 const backfillAggregateIndexes = (sql: SqlExec, schema: SchemaLike): void => {
     for (const [tableName, definition] of Object.entries(schema.tables)) {
-        if (definition.shardMode?.kind === "global" || !definition.aggregateIndexes) {
+        if (definition.shardMode?.kind === "global") {
             continue;
         }
 
-        for (const index of definition.aggregateIndexes) {
-            backfillAggregateIndex(sql, tableName, index, definition.softDeleteMode?.field);
+        for (const index of definition.aggregateIndexes ?? []) {
+            ensureAggregateCompanion(sql, tableName, index, definition.softDeleteMode?.field);
         }
     }
 };
 
-/**
- * Backfill one rank companion table by scanning the source rows once. No-op
- * when the companion already carries rows.
- */
-const backfillRankIndex = (sql: SqlExec, tableName: string, index: RankIndexDefinitionLike): void => {
-    const rankTable = rankTableName(tableName, index.name);
-
-    if (hasRows(sql, rankTable)) {
-        return;
-    }
-
-    const columnsSql = rankColumnsSql(index);
-    const rows = scanRows(sql, tableName);
-
-    for (const row of rows) {
-        const record = rowToDocument(row);
-
-        if (!record || (index.where && !matchesRankStaticWhere(record, index.where))) {
-            continue;
-        }
-
-        insertRankRow(sql, rankTable, index, columnsSql, record["_id"] as string, record);
-    }
-};
-
-/**
- * One-shot backfill of every declared rank index. The runtime path uses
- * `ensureRankBackfilled` lazily; this is the explicit twin for production
- * hosts that prefer to populate companions up-front. Idempotent: skips
- * rank companions that already carry rows.
- */
+/** The rank twin of {@link backfillAggregateIndexes}. */
 const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
     for (const [tableName, definition] of Object.entries(schema.tables)) {
-        if (definition.shardMode?.kind === "global" || !definition.rankIndexes) {
+        if (definition.shardMode?.kind === "global") {
             continue;
         }
 
-        for (const index of definition.rankIndexes) {
-            backfillRankIndex(sql, tableName, index);
+        for (const index of definition.rankIndexes ?? []) {
+            ensureRankCompanion(sql, tableName, index, definition.softDeleteMode?.field);
         }
     }
 };
+
+/**
+ * Up to `limit` stored rows of `tableName` past `cursor`, in `id` order — the
+ * keyset page every backfill walks (search here, vectors in `vector-backfill`).
+ * `undefined` starts at the top of the table.
+ */
+const readKeysetPage = (sql: SqlExec, tableName: string, cursor: string | undefined, limit: number): Record<string, unknown>[] =>
+    runDrizzle(
+        sql,
+        cursor === undefined
+            ? dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} ORDER BY id ASC LIMIT ${dsql.raw(String(limit))}`
+            : dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE id > ${cursor} ORDER BY id ASC LIMIT ${dsql.raw(String(limit))}`,
+    ).toArray();
 
 /**
  * One page of a search backfill: `SEARCH_BACKFILL_BATCH_ROWS` documents in `id`
@@ -184,8 +113,8 @@ const SEARCH_BACKFILL_BATCH_ROWS = 500;
  * number of rows this pass walked — `0` marks the "already complete" no-op, the
  * one outcome a page-budgeted caller must not charge for.
  *
- * Each document is written DELETE-then-INSERT, so re-running a page (a retry
- * after a crash, two cold starts racing) converges instead of duplicating —
+ * Each document's entry is replaced at its mapped rowid, so re-running a page
+ * (a retry after a crash, two cold starts racing) converges instead of duplicating —
  * which on the FTS5 path would otherwise surface as the *same document twice*
  * in a result set, since that query has no `GROUP BY` to collapse it.
  */
@@ -198,7 +127,7 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
     // still matched. Shared with the sql-store plane so the two cannot disagree
     // about when a rebuild is owed.
     const profile = searchIndexProfile(index);
-    const pass = planSearchBackfillPass(readSearchBackfillState(sql, ftName), profile);
+    const pass = planBackfillPass(readSearchBackfillState(sql, ftName), profile);
 
     if (pass.finished) {
         return { done: true, rows: 0 };
@@ -211,17 +140,12 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
     // took a COMPLETE index down to nothing and then rebuilt it 500 rows a
     // pass — on a 1M-row table, thousands of requests served from an index
     // covering a fraction of the rows, with the read path querying it either
-    // way. Each row below is written DELETE-then-INSERT, so the re-walk
+    // way. Each row below is replaced at its mapped rowid, so the re-walk
     // converges on the new analysis in place while every row keeps serving the
     // old one until its turn: stale analysis on a shrinking suffix, rather than
     // no row at all.
     const { cursor } = pass;
-    const rows = runDrizzle(
-        sql,
-        cursor === undefined
-            ? dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} ORDER BY id ASC LIMIT ${dsql.raw(String(SEARCH_BACKFILL_BATCH_ROWS))}`
-            : dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE id > ${cursor} ORDER BY id ASC LIMIT ${dsql.raw(String(SEARCH_BACKFILL_BATCH_ROWS))}`,
-    ).toArray();
+    const rows = readKeysetPage(sql, tableName, cursor, SEARCH_BACKFILL_BATCH_ROWS);
 
     // Seeded from the resume point, never from nothing: a page whose rows all
     // fail the id check would otherwise write back an empty cursor and send the
@@ -238,26 +162,14 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
 
         lastId = id;
 
-        // Drop whatever the companion still holds for this id first: the
-        // DELETE-then-INSERT makes re-running a page converge, and on an
-        // unparseable document it clears a stale row serving text the
-        // document no longer has — worse than the row being unsearchable.
-        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier(FTS_ID_COLUMN)} = ${id}`);
-
         // Safe-parsing, not `rowToDocument`: this runs inside
         // `runShardMigrations`, so an unparseable document would brick the
         // whole shard's cold start. The cursor still advances past it, so the
-        // pass makes progress.
+        // pass makes progress. An unparseable document has its entry purged
+        // rather than kept: a stale row serving text the document no longer
+        // has is worse than the row being unsearchable.
         const record = tryRowToDocument(row);
-
-        if (!record) {
-            continue;
-        }
-
-        runDrizzle(
-            sql,
-            dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)}) VALUES (${analyzedSearchText(record, index)}, ${id})`,
-        );
+        runAll(sql, record ? ftsWriteDocument(ftName, id, analyzedSearchText(record, index)) : ftsPurgeDocument(ftName, id));
     }
 
     const done = rows.length < SEARCH_BACKFILL_BATCH_ROWS;
@@ -265,6 +177,63 @@ const backfillSearchIndexPage = (sql: SqlExec, tableName: string, index: SearchI
     writeSearchBackfillState(sql, ftName, lastId, done, profile);
 
     return { done, rows: rows.length };
+};
+
+/** `"<table>"."<column>"`, so a name that resolves to nothing errors instead of reading as a string. */
+const qualified = (table: string, column: string): SQL => dsql`${dsql.identifier(table)}.${dsql.identifier(column)}`;
+
+/** Unmapped companion rows rewritten per cold start — the bound on one migration pass. */
+const FTS_UNMAPPED_PAGE_ROWS = 500;
+
+/**
+ * Rewrite one bounded page of the companion rows the rowid map does not know
+ * about — the ones a previous build wrote — from the document table, so each
+ * document ends with exactly the entry its current text produces. A document
+ * indexed twice is repaired from its source row rather than by guessing which
+ * copy is fresh; a document that no longer parses, or no longer exists, loses
+ * its entry. Once none are left this is one empty rowid-range read.
+ */
+const drainUnmappedFtsRows = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike): boolean => {
+    const ftName = ftsTableName(tableName, index.name);
+    const page = runDrizzle(sql, ftsUnmappedPage(ftName, FTS_UNMAPPED_PAGE_ROWS)).toArray();
+    const byId = groupUnmappedRows(page);
+
+    if (byId.size === 0) {
+        return true;
+    }
+
+    const sources = new Map<string, Record<string, unknown>>();
+
+    for (const row of runDrizzle(
+        sql,
+        dsql`SELECT ${qualified(tableName, "id")}, ${qualified(tableName, "_creationTime")}, ${qualified(tableName, DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE ${sqliteInList(qualified(tableName, "id"), [...byId.keys()], false)}`,
+    )) {
+        // Keyed as text, like the page's ids: a mismatched key reads as "deleted".
+        sources.set(String(row["id"]), row);
+    }
+
+    for (const [id, unmappedRowids] of byId) {
+        const source = sources.get(id);
+        const record = source ? tryRowToDocument(source) : undefined;
+
+        runAll(
+            sql,
+            record ? ftsWriteDocument(ftName, id, analyzedSearchText(record, index), { unmappedRowids }) : ftsPurgeDocument(ftName, id, { unmappedRowids }),
+        );
+    }
+
+    return page.length < FTS_UNMAPPED_PAGE_ROWS;
+};
+
+/** Drain a previous build's rows until none are left or `budget` pages are spent; returns the pages spent. */
+const drainUnmappedFtsPages = (sql: SqlExec, tableName: string, index: SearchIndexDefinitionLike, budget: number): number => {
+    let pages = 0;
+
+    while (pages < budget && !drainUnmappedFtsRows(sql, tableName, index)) {
+        pages += 1;
+    }
+
+    return pages;
 };
 
 /**
@@ -305,7 +274,7 @@ const searchIndexCoversTable = (sql: SqlExec, tableName: string, index: SearchIn
     // The finished case first, and on its own: it is every read of a healthy
     // index, and it answers from the same single primary-key lookup the backfill
     // page above already makes.
-    if (planSearchBackfillPass(readSearchBackfillState(sql, companion), profile).finished) {
+    if (planBackfillPass(readSearchBackfillState(sql, companion), profile).finished) {
         return true;
     }
 
@@ -332,6 +301,11 @@ const backfillSearchIndexesForTable = (sql: SqlExec, tableName: string, definiti
     }
 
     for (const index of definition.searchIndexes ?? []) {
+        // A previous build's rows, a bounded page at a time — on cold start and
+        // on every search read, so a long-lived Durable Object keeps draining
+        // them. Once none are left this is one empty rowid-range read.
+        drainUnmappedFtsRows(sql, tableName, index);
+
         // `staged` keeps the row walk out of the cold start, for tables too large
         // to walk there. A table with no rows is not one of those, and skipping it
         // records nothing — so the index would report no coverage and refuse every
@@ -430,6 +404,13 @@ const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike, options: { maxP
         }
 
         for (const index of definition.searchIndexes) {
+            // A previous build's rows first, each drain page spending the same budget.
+            pages += drainUnmappedFtsPages(sql, tableName, index, maxPages - pages);
+
+            if (pages >= maxPages) {
+                return { done: false, pages };
+            }
+
             const progress = backfillSearchIndexPages(sql, tableName, index, maxPages - pages);
 
             pages += progress.pages;
@@ -444,4 +425,4 @@ const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike, options: { maxP
 };
 
 export type { SearchBackfillProgress };
-export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable, searchIndexCoversTable };
+export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes, backfillSearchIndexesForTable, readKeysetPage, searchIndexCoversTable };

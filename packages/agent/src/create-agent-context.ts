@@ -3,14 +3,16 @@ import { createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import type { AgentBindingSpec, AgentHandle, AgentRunFunction, AgentRunInput, AgentWorkflowBindingLike } from "./types";
 
 /**
  * Build the `ctx.agents` producer surface from the codegen-emitted spec list
  * (`LUNORA_AGENTS`), mirroring the `ctx.queues` property-access pattern: each
- * declared agent resolves its `AGENT_*` Workflow binding off `env` lazily, so
- * a missing binding only errors when that agent is actually started.
+ * declared agent resolves by its export key (the generated class name) off the
+ * invoking context's `exports` — or `env`, on a host without workflow exports —
+ * lazily, so a missing agent only errors when it is actually started.
  *
  * `cancel` also needs to write the thread's status, so it dispatches the agent
  * runtime's `agentPatchThread` mutation. Production leaves `dispatch` undefined
@@ -19,19 +21,24 @@ import type { AgentBindingSpec, AgentHandle, AgentRunFunction, AgentRunInput, Ag
  * inject a `dispatch` double.
  * @experimental
  */
-const createAgentContext = (env: Record<string, unknown>, specs: ReadonlyArray<AgentBindingSpec>, dispatch?: AgentRunFunction): Record<string, AgentHandle> => {
+const createAgentContext = (
+    env: Record<string, unknown>,
+    specs: ReadonlyArray<AgentBindingSpec>,
+    context: { dispatch?: AgentRunFunction; exports?: unknown } = {},
+): Record<string, AgentHandle> => {
+    const { dispatch, exports } = context;
     const agents: Record<string, AgentHandle> = {};
     const patchThread = toFunctionReference(DEFAULT_AGENT_FUNCTION_PATHS.patchThread);
     const resolveDispatch = (): AgentRunFunction => dispatch ?? createDispatchRunner({ env, label: "@lunora/agent" });
 
     for (const spec of specs) {
         const resolve = (): AgentWorkflowBindingLike => {
-            const binding = env[spec.binding] as AgentWorkflowBindingLike | undefined;
+            const binding = resolveWorkflowHandle<AgentWorkflowBindingLike>(env, exports, spec.className, ["create", "get"]);
 
-            if (!binding || typeof binding.create !== "function" || typeof binding.get !== "function") {
+            if (binding === undefined) {
                 throw new LunoraError(
                     "INTERNAL",
-                    `@lunora/agent: no Workflow binding "${spec.binding}" on env for agent "${spec.exportName}" — run codegen/dev so wrangler.jsonc declares it`,
+                    `@lunora/agent: no "${spec.className}" on ctx.exports or env for agent "${spec.exportName}" — run codegen/dev so wrangler.jsonc declares it`,
                 );
             }
 

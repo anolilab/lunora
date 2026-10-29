@@ -14,16 +14,14 @@
  * `sweepUnreportedUsage`) — the out-of-band retry `track`'s swallowed forward failure relies on.
  */
 import type { PaymentAdapter } from "./adapter";
+import { usageForwardIsIdempotent } from "./idempotency";
 import { compareMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
-import type { PaymentSession, PaymentState, Subscription } from "./types";
+import { overlayProviderSubscription, ownerOf } from "./store";
+import type { Customer, PaymentSession, PaymentState, Subscription } from "./types";
 
-/**
- * `ReconcileInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 interface ReconcileInput {
     readonly adapter: PaymentAdapter;
     /** Optional telemetry sink — fired per drifted row and once on completion. */
@@ -40,10 +38,6 @@ interface ReconcileInput {
     readonly usageReportLimit?: number;
 }
 
-/**
- * `ReconcileResult` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 interface ReconcileResult {
     readonly checkedPayments: number;
     readonly checkedSubscriptions: number;
@@ -63,11 +57,28 @@ const DEFAULT_USAGE_REPORT_LIMIT = 100;
 
 const sameCurrencyAmount = (a: PaymentSession["amount"], b: PaymentSession["amount"]): boolean => a.currency === b.currency && compareMoney(a, b) === 0;
 
+/**
+ * The price SET is compared, not just the primary `priceId`: a removed add-on leaves the primary
+ * standing, and without this a missed removal kept the add-on's entitlement forever. Only when the
+ * provider reported a complete set — `undefined` is "unknown", the same rule `sync.ts` applies.
+ */
+const priceIdsDrifted = (existing: Subscription, current: Subscription): boolean => {
+    if (current.priceIds === undefined) {
+        return false;
+    }
+
+    const stored = new Set(existing.priceIds ?? [existing.priceId]);
+
+    return stored.size !== new Set(current.priceIds).size || current.priceIds.some((id) => !stored.has(id));
+};
+
 const subscriptionDrifted = (existing: Subscription | undefined, current: Subscription): boolean =>
     existing?.state !== current.state ||
     existing.cancelAtPeriodEnd !== current.cancelAtPeriodEnd ||
     existing.currentPeriodEnd !== current.currentPeriodEnd ||
+    existing.currentPeriodStart !== current.currentPeriodStart ||
     existing.priceId !== current.priceId ||
+    priceIdsDrifted(existing, current) ||
     existing.quantity !== current.quantity;
 
 const paymentDrifted = (existing: PaymentSession | undefined, current: PaymentSession): boolean =>
@@ -75,7 +86,13 @@ const paymentDrifted = (existing: PaymentSession | undefined, current: PaymentSe
     !sameCurrencyAmount(existing.capturedAmount, current.capturedAmount) ||
     !sameCurrencyAmount(existing.refundedAmount, current.refundedAmount);
 
-const REFUND_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["partially_refunded", "refunded"]);
+/**
+ * How far a payment has progressed through being refunded. The refunded total only ever moves
+ * forward on a merge, so the state that labels it must not move backward either — states outside
+ * this ladder (`initiated`, `authorized`, `failed`, `canceled`) are not refund progress and are
+ * left entirely to provider truth.
+ */
+const REFUND_RANK: Partial<Record<PaymentState, number>> = { captured: 0, partially_refunded: 1, refunded: 2 };
 
 /**
  * Merge the provider's payment snapshot over the stored row without regressing owner attribution or a
@@ -85,7 +102,16 @@ const REFUND_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["partial
  * order snapshot carries no `referenceId`. A naive overwrite would then erase a `charge.refunded`
  * webhook (re-entitling a refunded/charged-back customer) or blank a webhook-set reference (orphaning
  * the row from the `by_reference` index and the default authorizer). So never move the refunded total
- * backward, never regress a refund state back to `captured`, and never blank a non-empty reference.
+ * backward, never regress a refund state, and never move a stored owner (see {@link ownerOf}).
+ *
+ * The state guard is a LADDER, not a single `captured` special case. A status read can report a
+ * refund state that lags the row rather than only a pre-refund one: `orderToSession` (Polar) and
+ * `checkoutToSession` (Creem) both map a `partially_refunded` status while filling `refundedAmount`
+ * only for a fully `refunded` one — so a locally `refunded` row reconciles against
+ * `{ state: "partially_refunded", refundedAmount: 0 }`. The total is `max`-ed and stays full while
+ * the state slid back a rung, leaving a row whose refunded total equals its captured total under a
+ * "partially refunded" label. `check` and every remainder calculation read that row, and
+ * `partially_refunded` is not terminal where `refunded` is.
  */
 const mergePaymentTruth = (existing: PaymentSession | undefined, current: PaymentSession): PaymentSession => {
     if (!existing) {
@@ -95,38 +121,84 @@ const mergePaymentTruth = (existing: PaymentSession | undefined, current: Paymen
     const sameRefundCurrency = existing.refundedAmount.currency === current.refundedAmount.currency;
     const refundedAmount =
         sameRefundCurrency && compareMoney(existing.refundedAmount, current.refundedAmount) > 0 ? existing.refundedAmount : current.refundedAmount;
-    const state = current.state === "captured" && REFUND_STATES.has(existing.state) ? existing.state : current.state;
-    const referenceId = current.referenceId === "" ? existing.referenceId : current.referenceId;
+    const existingRank = REFUND_RANK[existing.state];
+    const currentRank = REFUND_RANK[current.state];
+    const state = existingRank !== undefined && currentRank !== undefined && currentRank < existingRank ? existing.state : current.state;
 
-    return { ...current, referenceId, refundedAmount, state };
+    return {
+        ...current,
+        referenceId: ownerOf(existing.referenceId, current.referenceId),
+        refundedAmount,
+        state,
+        subscriptionId: current.subscriptionId ?? existing.subscriptionId,
+    };
 };
 
-// Re-sync one subscription against the provider's truth. Returns whether the store changed.
-const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
-    const current = await adapter.getSubscriptionStatus(id);
-    const existing = await store.getSubscription(adapter.identifier, id);
+// Amounts are bigints, which `JSON.stringify` refuses without a replacer.
+const bigintAsString = (_key: string, value: unknown): unknown => (typeof value === "bigint" ? value.toString() : value);
 
-    if (!subscriptionDrifted(existing, current)) {
+/**
+ * Whether a store row changed between two reads. The whole row is compared, not
+ * `updatedAt`/`lastEventAt`: those are milliseconds (a write in the same one would
+ * pass) and `lastEventAt` is optional, so a webhook could change a row and leave
+ * both standing.
+ */
+const rowChanged = (before: unknown, after: unknown): boolean => JSON.stringify(after, bigintAsString) !== JSON.stringify(before, bigintAsString);
+
+// Re-sync one subscription against the provider's truth. Returns whether the store changed.
+//
+// The row is read on both sides of the provider call: a webhook that lands while the adapter call
+// is in flight is newer than the provider snapshot, and only a `before` read taken ahead of that
+// call can see it change. The write is then guarded on the revision read at `after`, so a webhook
+// that lands after that read makes the write a no-op rather than an overwrite.
+const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
+    const before = await store.getSubscription(adapter.identifier, id);
+    const current = await adapter.getSubscriptionStatus(id);
+    const after = await store.getSubscription(adapter.identifier, id);
+
+    if (rowChanged(before, after)) {
         return false;
     }
 
-    // Preserve the original createdAt when we already had the row.
-    await store.upsertSubscription({ ...current, createdAt: existing?.createdAt ?? current.createdAt });
+    if (!subscriptionDrifted(after, current)) {
+        return false;
+    }
+
+    // Provider truth for the lifecycle; the store keeps the owner (a read may not echo checkout
+    // metadata, or report Dodo's customer id), `createdAt` and `lastEventAt`.
+    const written = await store.upsertSubscription(overlayProviderSubscription(after, current), { ifRevision: after?.revision });
+
+    if (!written) {
+        return false;
+    }
+
     notifyObserver(observer, { id, kind: "subscription", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;
 };
 
+// Same before/after guard as `reconcileSubscription`.
 const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
+    const before = await store.getPaymentSession(adapter.identifier, id);
     const providerTruth = await adapter.getPaymentStatus(id);
-    const existing = await store.getPaymentSession(adapter.identifier, id);
-    const current = mergePaymentTruth(existing, providerTruth);
+    const after = await store.getPaymentSession(adapter.identifier, id);
 
-    if (!paymentDrifted(existing, current)) {
+    if (rowChanged(before, after)) {
         return false;
     }
 
-    await store.upsertPaymentSession({ ...current, createdAt: existing?.createdAt ?? current.createdAt });
+    const current = mergePaymentTruth(after, providerTruth);
+
+    if (!paymentDrifted(after, current)) {
+        return false;
+    }
+
+    const written = await store.upsertPaymentSession({ ...current, createdAt: after?.createdAt ?? current.createdAt }, { ifRevision: after?.revision });
+
+    if (!written) {
+        return false;
+    }
+
     notifyObserver(observer, { id, kind: "payment", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;
@@ -140,10 +212,15 @@ const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id
  * customer is under-billed and over-entitled, and nothing else in the system ever
  * reads `reportedToProvider`.
  *
- * Forwarding is idempotent on the event's `idempotencyKey`, so a retry that the
- * provider had actually applied (a response we never saw) does not double-count.
  * Only rows the store reports as still owing a forward are seen here — see
  * {@link PaymentStore.listUnreportedUsage}.
+ *
+ * Retrying is safe ONLY where the event's `idempotencyKey` reaches the provider's
+ * ingestion body, because a row is unreported whether the request failed or merely
+ * its response was lost, and nothing here can tell those apart. Stripe, Polar and
+ * Dodo all carry the key, so the second case collapses to one debit. Autumn carries
+ * nothing (`idempotency.ts`), so it would be a second debit — and the customer's
+ * allowance is spent twice over. {@link usageForwardIsIdempotent} gates that out.
  */
 const sweepUnreportedUsage = async (
     adapter: PaymentAdapter,
@@ -155,18 +232,31 @@ const sweepUnreportedUsage = async (
 
     // `reportUsage` first: an adapter without it can't meter at all, and the check
     // is total even for a partial test double that omits `capabilities`.
-    if (limit <= 0 || reportUsage === undefined || !adapter.capabilities.usageMetering) {
+    if (limit <= 0 || reportUsage === undefined || !adapter.capabilities.usageMetering || !usageForwardIsIdempotent(adapter.identifier)) {
         return { checked: 0, failed: 0, updated: 0 };
     }
 
     const pending = await store.listUnreportedUsage(adapter.identifier, limit);
+    // Scoped to this tick: a batch often carries several events for one reference,
+    // and each would repeat the same lookup. Only a found customer is memoised: a miss
+    // (or a failed lookup, which throws before it is stored) is re-read by the next
+    // event in this tick, so a customer created mid-tick is picked up.
+    const customers = new Map<string, Customer>();
     let updated = 0;
     let failed = 0;
 
     for (const event of pending) {
         try {
-            // eslint-disable-next-line no-await-in-loop -- a retry sweep against a provider that just failed: serial, not a stampede
-            const customer = await store.getCustomerByReference(adapter.identifier, event.referenceId);
+            let customer = customers.get(event.referenceId);
+
+            if (customer === undefined) {
+                // eslint-disable-next-line no-await-in-loop -- a retry sweep against a provider that just failed: serial, not a stampede
+                customer = await store.getCustomerByReference(adapter.identifier, event.referenceId);
+
+                if (customer !== undefined) {
+                    customers.set(event.referenceId, customer);
+                }
+            }
 
             // eslint-disable-next-line no-await-in-loop -- see above
             await reportUsage({
@@ -198,6 +288,9 @@ interface SweepCounts {
     readonly updated: number;
 }
 
+// ponytail: fixed guess under Stripe's rate limit; make it an option when a provider needs another value.
+const RECONCILE_CONCURRENCY = 8;
+
 // Fan out over a batch with per-id fault isolation: a single failing id (a 404'd/deleted row, a
 // transient 5xx, a 429) must never abort the whole sweep, or drift for every other id would never
 // self-heal. Each rejection is surfaced as a `reconcile.error` signal rather than thrown.
@@ -208,7 +301,26 @@ const sweep = async (
     adapter: PaymentAdapter,
     observer?: PaymentObserver,
 ): Promise<SweepCounts> => {
-    const settled = await Promise.allSettled(ids.map((id) => reconcileOne(id)));
+    // Bounded: one provider read per id, so an unbounded fan-out over a large batch trips the
+    // provider's rate limit. Workers pull the next id off a shared cursor.
+    const settled: PromiseSettledResult<boolean>[] = Array.from({ length: ids.length });
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+        while (cursor < ids.length) {
+            const index = cursor;
+
+            cursor += 1;
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- each worker reconciles serially; the pool is the concurrency
+                settled[index] = { status: "fulfilled", value: await reconcileOne(ids[index] ?? "") };
+            } catch (error) {
+                settled[index] = { reason: error, status: "rejected" };
+            }
+        }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(RECONCILE_CONCURRENCY, ids.length) }, () => worker()));
 
     let updated = 0;
     let failed = 0;
@@ -227,10 +339,6 @@ const sweep = async (
     return { failed, updated };
 };
 
-/**
- * `reconcile` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 const reconcile = async (input: ReconcileInput): Promise<ReconcileResult> => {
     const { adapter, observability, store } = input;
     const subscriptionIds = input.subscriptionIds ?? [];

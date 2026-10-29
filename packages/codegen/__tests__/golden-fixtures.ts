@@ -46,11 +46,18 @@ const makeFixtureWorkdir = (fixtureRoot: string): string => {
  * `simple` is the broad one (most tables, most add-ons); its golden sits under
  * `expected/` because nothing compiles it.
  *
- * `delta-sync` keeps its golden where a real project keeps it — `lunora/_generated`
- * — because it IS compiled: emitted code says `import schema from "../schema.js"`,
- * which only resolves from inside the app tree it was written for. Discovery
- * skips `_generated/`, so the committed output never feeds back into the run
- * that regenerates it.
+ * `delta-sync` and `hyperdrive-shape` keep their goldens where a real project
+ * keeps them — `lunora/_generated` — because they ARE compiled: emitted code says
+ * `import schema from "../schema.js"`, which only resolves from inside the app
+ * tree it was written for. Discovery skips `_generated/`, so the committed output
+ * never feeds back into the run that regenerates it.
+ *
+ * `hyperdrive-shape` is `delta-sync` with the `.global()` table moved to the
+ * Hyperdrive backend. The two backends emit different code in exactly the places
+ * the shape overrides live, and only the D1 spelling was ever compiled — which is
+ * how `readGlobalChangedTables` came to hand the narrower Hyperdrive thunk an
+ * inline object literal carrying a `bookmark` it does not declare, emitting a
+ * `shard.ts` that fails `tsc` for every Hyperdrive-global app with a shape.
  *
  * It exists because feature coverage here is per-emission-gate, not per-line:
  * the local-first sync overrides (`resolveShape`, `readGlobalShapeRows`,
@@ -61,18 +68,49 @@ const makeFixtureWorkdir = (fixtureRoot: string): string => {
  * `cdc` flag: the substring tests construct the writers directly with CDC on, so
  * the one thing nobody asserted was what codegen actually wires.
  *
+ * `sdk-surface` commits ONLY `openrpc.json`: it is the second spec
+ * `sdks/generated-check.sh` generates every SDK target from, one function per
+ * result shape and argument form a model backend handles differently. It is the
+ * real emitter's output rather than a hand-written document on purpose — a
+ * hand-written schema for `v.bigint()` went stale when the emitter changed its
+ * spelling, and every SDK kept passing against the stale one.
+ *
+ * `artifacts` commits the three files the `ctx.artifacts` capability touches
+ * (`app.ts`, `server.ts`, `shard.ts`): an app that reads it, so the ActionCtx-only
+ * wiring and the `.artifacts()` builder method are pinned byte-for-byte.
+ *
+ * `ai-search` is a one-action app reading `ctx.aiSearch` (plan 459). It is
+ * compiled like `delta-sync`, which is the point: `ctx.aiSearch` is the raw
+ * binding cast to a types-only `@lunora/bindings` subpath's `AiSearch`, with an
+ * annotated (never cast) throwing stub, and only a compiled tree proves both
+ * type-check for a consumer.
+ *
+ * `analytics-sql` is a one-action app reading `ctx.analyticsSql`, compiled the
+ * same way: the binding goes through the `createAnalyticsSql` factory, and the
+ * compiled tree proves the annotated stub and the ActionCtx-only field
+ * type-check for a consumer.
+ *
  * Shared by `capture-expected.ts` (which writes the goldens) and the tests that
- * assert them, so a new fixture is registered once.
+ * assert them, so a new fixture is registered once. The optional third element
+ * limits a fixture to those golden files.
  */
-const GOLDEN_FIXTURES: ReadonlyArray<readonly [string, string]> = [
+const GOLDEN_FIXTURES: ReadonlyArray<readonly [string, string, ReadonlyArray<string>?]> = [
     ["simple", "expected/_generated"],
     ["delta-sync", "lunora/_generated"],
+    ["hyperdrive-shape", "lunora/_generated"],
+    ["sdk-surface", "expected/_generated", ["openrpc.json"]],
+    ["artifacts", "expected/_generated", ["app.ts", "server.ts", "shard.ts"]],
+    ["ai-search", "lunora/_generated"],
+    ["analytics-sql", "lunora/_generated"],
+    ["live-stream", "lunora/_generated"],
+    ["random-replay", "lunora/_generated"],
 ];
 
 /** Every emitted artifact captured into a golden directory, as `[filename, CodegenResult key]`. */
 const GOLDEN_OUTPUTS: ReadonlyArray<readonly [string, keyof CodegenResult["generated"]]> = [
     ["app.ts", "app"],
     ["api.ts", "api"],
+    ["internal.ts", "internal"],
     ["server.ts", "server"],
     ["dataModel.ts", "dataModel"],
     ["drizzle.global.ts", "drizzleGlobal"],

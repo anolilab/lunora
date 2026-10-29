@@ -100,3 +100,44 @@ scans shows up as a latency outlier long before it shows up as an outage.
 terminal (`.collect()`, `.first()`, `.take(n)`, `.unique()`, `.paginate()`).
 Applying `.take(n)` after a filter still reads whatever the index range
 produced, because the predicate has to run before the limit can be counted.
+
+## Inside an object column
+
+A key with dots reaches into an object column: `"profile.address.city"` is `city` inside `address` inside
+`profile`. It works anywhere a column name does in a `where`:
+
+```ts
+await ctx.db.users.findMany({
+    where: { "profile.plan": "pro", "profile.address.city": { in: ["Berlin", "Paris"] } },
+});
+```
+
+The keys are typed from the nested object types, so a misspelt path is a compile error. Only paths that end
+at a string, number or boolean are offered; an array, date, bigint, bytes or whole object has no single
+comparison. A path has at most four segments, the column included.
+
+- A missing key, or a step through something that is not an object, reads as `null`, so
+  `{ "profile.address.city": null }` matches a row with no `address` at all.
+- `30` and `"30"` are different values: a number does not equal the same digits stored as text.
+- `orderBy` takes a path too (`orderBy: [{ "profile.plan": "asc" }]`), and paging with a cursor works across it.
+- It is not indexed. A declared index covers top-level columns, so a path filter reads the rows the rest of
+  the `where` selects; pair it with an indexed column.
+- On a `.global()` table the path works on every backend. SQLite, D1 and the Node host read it with
+  `json_extract`. Postgres reads it with `->` steps and a `jsonb` `null` check, and MySQL with `JSON_EXTRACT`. Both
+  use a guard so text that is not JSON reads as `null` instead of raising. The Postgres path needs Postgres 16 or
+  later, for `pg_input_is_valid`. These were run against PGlite (Postgres 18) and MySQL 8.0, including the null, array,
+  wire-encoded and non-JSON cases, in the test suite. `contains` works on a path too: it searches the leaf's own text,
+  with the same case rule as a column on that engine (SQLite ignores ASCII case; Postgres and MySQL do not). A number
+  leaf is searched by its digits. A boolean leaf is `1` or `0` on SQLite and `true` or `false` on Postgres and MySQL,
+  and an object or array leaf by its JSON text, which is spaced differently on SQLite and Postgres.
+  A range (`gt`, `gte`, `lt`, `lte`) over a path matches only the leaves of the operand's own type, the same on every
+  backend and in a row-level-security `where` evaluated in memory. `gt: 5` finds the numbers above 5 and neither the
+  text `"7"`, a boolean nor an array; `gt: "7"` finds the text leaves after it. An operand that is none of number,
+  string or boolean (a `Date`, a `bigint`) matches nothing. Ordering by a path still sorts every type together, in an
+  order that differs per engine, so keep an ordered path to one type; paging through it reaches every row either way.
+  Two text leaves compare by the engine's own string order, as a text column does.
+- A path into a [masked](/docs/concepts/masking) column is refused like the column itself, whichever path.
+
+To change one nested key without rewriting the object, patch the path:
+`ctx.db.users.patch(id, { "profile.plan": "team" })` keeps the object's other keys. See
+[Atomic updates](/docs/concepts/queries-mutations#atomic-updates).

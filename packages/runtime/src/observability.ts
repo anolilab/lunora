@@ -13,11 +13,51 @@
  */
 
 /* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
+import { redactCredentials } from "@lunora/observability";
+
+import { toPlainOperatorContext } from "../../../shared/error-detail";
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
+import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
 import type { TraceSamplingConfig, TraceSamplingDecision } from "../../../shared/sampling";
 import { resolveTraceSampling, shouldExportTrace } from "../../../shared/sampling";
 import type { SpanEvent } from "../../../shared/span-event";
+
+/**
+ * The operator context a sink receives: a plain copy with credentials masked, nested
+ * `Error`s included. `undefined` when it cannot be encoded, so a throwing getter drops only
+ * this context and the event still reaches the sink.
+ */
+const operatorContextFor = (internal: Record<string, unknown>): Record<string, unknown> | undefined => {
+    const plain = toPlainOperatorContext(internal);
+
+    return plain === undefined ? undefined : (redactCredentials(plain) as Record<string, unknown>);
+};
+
+/**
+ * The RPC event a sink receives, with its operator context masked. Reading `internal` can
+ * throw (an accessor), and then only that context is dropped: the sink still gets the event.
+ */
+const rpcEventForSink = (event: ObservabilityEvent): ObservabilityEvent => {
+    if (event.error === undefined) {
+        return event;
+    }
+
+    let internal: Record<string, unknown> | undefined;
+
+    try {
+        internal = event.error.internal;
+    } catch {
+        // Copy the descriptors, not the values: a spread would read the throwing accessor again.
+        const descriptors = Object.getOwnPropertyDescriptors(event.error);
+
+        delete descriptors.internal;
+
+        return { ...event, error: Object.create(Object.getPrototypeOf(event.error) as object | null, descriptors) as ObservabilityEvent["error"] };
+    }
+
+    return internal === undefined ? event : { ...event, error: { ...event.error, internal: operatorContextFor(internal) } };
+};
 
 /**
  * Per-RPC dispatch event. Single-shard calls set `shardKey`; cross-shard
@@ -25,17 +65,36 @@ import type { SpanEvent } from "../../../shared/span-event";
  * per-shard failure count.
  */
 export interface ObservabilityEvent {
+    /**
+     * Extra attributes for this dispatch, e.g. derived by an `enrichSink` enricher.
+     * `otlpSink` exports them as span attributes. A reserved attribute of the same name
+     * wins: a key here never replaces a built-in field such as `http.route` or
+     * `lunora.shard_key`, and the colliding key is dropped.
+     */
+    attributes?: LogFields;
+
     /** Wall-clock duration of the dispatch, in milliseconds. */
     durationMs: number;
 
     /**
      * Populated on `ok === false`. `code`/`status` mirror the LunoraError
      * taxonomy; `message` is the human-readable string (may include user
-     * input — sinks that ship to third parties should scrub it).
+     * input — sinks that ship to third parties should scrub it). `name` and
+     * `stack` are the thrown `Error`'s, captured where it was thrown — inside
+     * the shard for a handler error — and are never sent to the client.
      */
     error?: {
         code: string;
+
+        /**
+         * Operator-only context from the thrown `LunoraError`'s `internal`. Sinks only:
+         * it is never sent to a client. {@link emitRpcEvent} runs it through `redactCredentials`
+         * before a sink sees it: credential-named fields only, so ids and URLs survive.
+         */
+        internal?: Record<string, unknown>;
         message: string;
+        name?: string;
+        stack?: string;
         status: number;
     };
 
@@ -69,6 +128,17 @@ export interface ObservabilityEvent {
     path?: string;
     /** Port of the inbound request, when available. */
     port?: number;
+
+    /**
+     * Cloudflare Ray ID of the inbound request — its `cf-ray` header with the
+     * data-center suffix dropped (`8f2a1b3c4d5e6f70`). The key Cloudflare Traces
+     * and Workers Logs are searched by, so a Lunora event can be followed to the
+     * platform's view of the same request. Exported on the SERVER span as
+     * `cloudflare.ray_id`, the attribute Cloudflare's own Workers traces use.
+     * Absent off the edge. Informational only, as `parseRayId` in
+     * `shared/ray-id.ts` defines it.
+     */
+    rayId?: string;
     /** URL scheme of the inbound request (e.g. `"https"`). */
     scheme?: string;
 
@@ -136,7 +206,11 @@ export interface ObservabilitySink {
      * span the Durable Object records is ALSO emitted as a Cloudflare **custom
      * span** (`tracing.enterSpan` from `cloudflare:workers`, GA 2026-06-16) so it
      * nests inside CF's native binding/fetch/handler trace tree on the hosted
-     * path — a deeper waterfall in Cloudflare's own trace viewer.
+     * path — a deeper waterfall in Cloudflare's own trace viewer. On runtimes
+     * with the 2026-09-25 span APIs, a failed span also gets a native
+     * `recordException` event (the redacted message, never the raw error), and
+     * the dispatch's `ctx.span` wide-event attributes land on the invocation's
+     * root span via `tracing.getActiveSpan()`.
      *
      * Capability-probed: a safe no-op off-Cloudflare, on a compat date predating
      * custom spans, or when the trace is unsampled. This ONLY ADDS a CF-side span;
@@ -163,12 +237,19 @@ export interface ObservabilitySink {
     fuseCloudflareTraces?: boolean;
 
     /**
-     * How much detail automatic `ctx.db` instrumentation produces.
+     * How much detail automatic `ctx.db` (and `ctx.sql`) instrumentation produces.
      *
      * `"summary"` (**default**) — aggregate counters (`db.calls`, `db.duration_ms`,
-     * per-operation counts) folded onto the dispatch's wide event. No extra spans
+     * per-operation counts) folded onto the dispatch's own root span, and onto the
+     * wide event when the handler opened one through `ctx.span`. No span per query
      * and no extra log records, so the cost is flat no matter how many queries a
      * handler makes.
+     *
+     * A dispatch that ran at least one query records that root span even when the
+     * handler touched neither `ctx.trace` nor `ctx.span` — answering "was this
+     * request database-bound" is what the mode is for, and the common handler
+     * reads `ctx.db` and nothing else. A dispatch that ran none still records
+     * nothing.
      *
      * `"spans"` — one span per database call: the full waterfall, for when you are
      * chasing a specific slow query. Capped per dispatch so a query loop cannot
@@ -176,7 +257,14 @@ export interface ObservabilitySink {
      *
      * `"off"` — no database telemetry.
      *
-     * Applies only when a sink is configured; with none, `ctx.db` is untouched.
+     * The same level applies to the action-only `ctx.sql` (Hyperdrive), which
+     * keeps its own tally under `sql.*` keys (`sql.calls`, `sql.duration_ms`,
+     * `sql.op.SELECT`, `sql.spans_truncated`, …) so external-database time stays
+     * distinguishable from the shard's own SQLite. Its spans carry the leading
+     * SQL keyword and the system, never the statement text or parameters.
+     *
+     * Applies only when a sink is configured; with none, `ctx.db` and `ctx.sql`
+     * are untouched.
      */
     instrumentDatabase?: "off" | "spans" | "summary";
 
@@ -259,6 +347,7 @@ export interface ObservabilitySink {
  * `decision` and an absent `sampling` keep everything, so all are
  * backward-compatible.
  */
+
 export const emitRpcEvent = (
     sink: ObservabilitySink | undefined,
     event: ObservabilityEvent,
@@ -279,7 +368,9 @@ export const emitRpcEvent = (
     }
 
     try {
-        sink.onRpc(event, context);
+        // The one place `error.internal` is redacted on its way to a sink: every RPC event
+        // (single-shard, batch, fan-out, worker-side) passes through here.
+        sink.onRpc(rpcEventForSink(event), context);
     } catch {
         // Swallow — a buggy sink must not break user-facing dispatch. We
         // deliberately do not console.error here either: in a Workers runtime
@@ -328,6 +419,7 @@ export const flushSink = (sink: ObservabilitySink | undefined, context?: Observa
 // itself never emits them — so such helpers would have no possible caller. The
 // DO applies the identical swallow inline in its own `recordSpan`/`recordMetric`.
 
+export { type ErrorDetail } from "../../../shared/error-detail";
 export { type LogEvent } from "../../../shared/log-event";
 export { type LogFields } from "../../../shared/log-fields";
 export { type MetricEvent, type MetricKind } from "../../../shared/metric-event";

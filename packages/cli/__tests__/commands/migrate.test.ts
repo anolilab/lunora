@@ -2,18 +2,45 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
-import {
-    execute as migrateExecute,
-    runMigrateCreateCommand,
-    runMigrateDataCommand,
-    runMigrateGenerateCommand,
-    runMigrateToHyperdriveCommand,
-} from "../../src/commands/migrate/handler";
+import { execute as migrateExecute } from "../../src/commands/migrate/dispatch";
+import { runMigrateBackendCommand, runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand } from "../../src/commands/migrate/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
+
+/** Run `body` with `process.stdout.write` captured, and return what it wrote. */
+const captureStdout = async (body: () => Promise<void>): Promise<string> => {
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
+        chunks.push(String(chunk));
+
+        return true;
+    });
+
+    try {
+        await body();
+    } finally {
+        spy.mockRestore();
+    }
+
+    return chunks.join("");
+};
+
+/** The answer to the `dryRun` POST that precedes an import: a worker that honours the flag writes nothing and echoes it. */
+const checkResponse = (): Awaited<ReturnType<StreamingFetchLike>> => {
+    return {
+        body: null,
+        json: async () => {
+            return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
+        },
+        ok: true,
+        status: 200,
+        text: async () => "",
+    };
+};
 
 const silentLogger = (): Logger => {
     return {
@@ -44,6 +71,112 @@ describe("lunora migrate", () => {
 
     const fixedNow = (): Date => new Date("2024-04-01T12:34:56.000Z");
 
+    /**
+     * `--format json` across the subcommand dispatch.
+     *
+     * This is the branch's largest single refactor — the if-chain became a
+     * `switch` over four `dispatch*` shells, each owning its own document — and
+     * it landed with no `--format` coverage at all. Two independent signals said
+     * so: the code-quality review, and Codecov reporting 54% patch coverage on
+     * this file. The documents are a contract an agent parses, so they are
+     * pinned here rather than left to the first caller to discover.
+     */
+    describe("--format json", () => {
+        it("generate emits its document on stdout and keeps prose off it", async () => {
+            expect.assertions(4);
+
+            writeSchema(
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    users: defineTable({
+        email: v.string(),
+    }).global(),
+});
+`,
+            );
+
+            const stdout = await captureStdout(async () => {
+                await migrateExecute({
+                    argument: ["generate", "init"],
+                    options: { format: "json" },
+                    process: { cwd: workdir, exit: () => {} },
+                } as unknown as Parameters<typeof migrateExecute>[0]);
+            });
+
+            const document = JSON.parse(stdout) as { data: { empty: boolean; migrationFile?: string; subcommand: string } };
+
+            expect(document.data.subcommand).toBe("generate");
+            expect(document.data.empty).toBe(false);
+            expect(document.data.migrationFile).toMatch(/init/u);
+            // Exactly one document — stdout stays pipeable, the human lines go to stderr.
+            expect(
+                stdout
+                    .trimEnd()
+                    .split("\n")
+                    .filter((line) => line === "}"),
+            ).toHaveLength(1);
+        });
+
+        it("create carries the name and the scaffolded file", async () => {
+            expect.assertions(2);
+
+            const stdout = await captureStdout(async () => {
+                await migrateExecute({
+                    argument: ["create", "backfill_emails"],
+                    options: { format: "json" },
+                    process: { cwd: workdir, exit: () => {} },
+                } as unknown as Parameters<typeof migrateExecute>[0]);
+            });
+
+            const document = JSON.parse(stdout) as { data: { file?: string; name: string; subcommand: string } };
+
+            expect(document.data.subcommand).toBe("create");
+            expect(document.data.name).toBe("backfill_emails");
+        });
+
+        it("refuses an unknown --format with the usage exit code, before dispatching", async () => {
+            expect.assertions(2);
+
+            let exitCode: number | undefined;
+            const stdout = await captureStdout(async () => {
+                await migrateExecute({
+                    argument: ["generate"],
+                    options: { format: "yaml" },
+                    process: {
+                        cwd: workdir,
+                        exit: (code: number) => {
+                            exitCode = code;
+                        },
+                    },
+                } as unknown as Parameters<typeof migrateExecute>[0]);
+            });
+
+            expect(exitCode).toBe(EXIT_CODE.USAGE);
+            // Refused before anything ran, so no document was written.
+            expect(stdout).toBe("");
+        });
+
+        it("exits USAGE on an unknown subcommand", async () => {
+            expect.assertions(1);
+
+            let exitCode: number | undefined;
+
+            await migrateExecute({
+                argument: ["nope"],
+                options: {},
+                process: {
+                    cwd: workdir,
+                    exit: (code: number) => {
+                        exitCode = code;
+                    },
+                },
+            } as unknown as Parameters<typeof migrateExecute>[0]);
+
+            expect(exitCode).toBe(EXIT_CODE.USAGE);
+        });
+    });
+
     describe("lunora migrate generate", () => {
         it("errors when schema.ts is missing", () => {
             expect.assertions(3);
@@ -54,7 +187,7 @@ describe("lunora migrate", () => {
                 logger: { ...silentLogger(), error: (m) => errors.push(m) },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
 
             const message = errors.join("\n");
 
@@ -444,7 +577,7 @@ export const schema = defineSchema({
                 table: "a",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.CONFLICT);
             expect(errors.join("\n")).toContain("already exists");
         });
 
@@ -454,7 +587,7 @@ export const schema = defineSchema({
             const errors: string[] = [];
             const result = await runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, name: "---" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("invalid migration name");
         });
 
@@ -469,7 +602,7 @@ export const schema = defineSchema({
                 table: "messages",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("invalid migration name");
         });
 
@@ -490,7 +623,7 @@ export const schema = defineSchema({
                     name: "needs_table",
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.USAGE);
             } finally {
                 Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: originalIsTty });
             }
@@ -541,7 +674,7 @@ export const schema = defineSchema({
                 promptTable: async () => undefined,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("no table selected");
             expect(existsSync(migrationsFile())).toBe(false);
         });
@@ -557,7 +690,7 @@ export const schema = defineSchema({
                 promptTable: async () => 'x", evil: "y',
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain("invalid table");
         });
     });
@@ -758,7 +891,7 @@ export const backfillReadBy = defineMigration({
                 },
             } as unknown as Parameters<typeof migrateExecute>[0]);
 
-            expect(exitCode).toBe(1);
+            expect(exitCode).toBe(EXIT_CODE.USAGE);
         });
 
         it("errors when no admin token is available", async () => {
@@ -778,7 +911,7 @@ export const backfillReadBy = defineMigration({
                     subcommand: "up",
                 });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.AUTH);
             } finally {
                 if (previous !== undefined) {
                     process.env.LUNORA_ADMIN_TOKEN = previous;
@@ -802,7 +935,7 @@ export const backfillReadBy = defineMigration({
                 token: "s3cret",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.join("\n")).toContain('"ghost" not found');
         });
 
@@ -822,7 +955,7 @@ export const backfillReadBy = defineMigration({
                 token: "s3cret",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join("\n")).toContain("--prod requires an explicit --url");
         });
@@ -843,7 +976,7 @@ export const backfillReadBy = defineMigration({
                 url: "https://prod.example.invalid",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join("\n")).toContain("--yes");
         });
@@ -954,7 +1087,7 @@ export const backfillReadBy = defineMigration({
                 token: "s3cret",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.PERMISSION);
         });
     });
 });
@@ -979,7 +1112,7 @@ const recordingFetch =
         };
     };
 
-describe("lunora migrate d1-to-hyperdrive", () => {
+describe("lunora migrate d1-to-hyperdrive | hyperdrive-to-d1", () => {
     let dir: string;
 
     beforeEach(() => {
@@ -1001,6 +1134,11 @@ describe("lunora migrate d1-to-hyperdrive", () => {
 
         const fetchImpl: StreamingFetchLike = async (input: string) => {
             calls.push(input);
+
+            // The check before the import writes nothing and reports no rows inserted.
+            if (new URL(input).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
 
             if (input.includes("/_lunora/admin/export")) {
                 return {
@@ -1030,7 +1168,8 @@ describe("lunora migrate d1-to-hyperdrive", () => {
             };
         };
 
-        const result = await runMigrateToHyperdriveCommand({
+        const result = await runMigrateBackendCommand({
+            direction: "d1-to-hyperdrive",
             fetchImpl,
             fromToken: "source-token",
             fromUrl: "https://old.example.com",
@@ -1046,6 +1185,247 @@ describe("lunora migrate d1-to-hyperdrive", () => {
         expect(calls.some((url) => new URL(url).origin === "https://old.example.com" && new URL(url).pathname.includes("/_lunora/admin/export"))).toBe(true);
         expect(calls.some((url) => new URL(url).origin === "https://new.example.com" && new URL(url).pathname.includes("/_lunora/admin/import"))).toBe(true);
         expect(infos.some((line) => line.includes("counts match"))).toBe(true);
+    });
+
+    it("rolls back the other way, naming Hyperdrive as the source and D1 as the target", async () => {
+        expect.assertions(3);
+
+        const ndjson = '{"table":"settings","doc":{"_creationTime":1,"_id":"a","key":"x"}}\n';
+        const infos: string[] = [];
+        const logger: Logger = { error: () => {}, info: (message: string) => infos.push(message), success: () => {}, warn: () => {} };
+        const fetchImpl: StreamingFetchLike = async (input: string) => {
+            if (new URL(input).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
+
+            if (input.includes("/_lunora/admin/export")) {
+                return {
+                    body: new ReadableStream<Uint8Array>({
+                        start(controller) {
+                            controller.enqueue(new TextEncoder().encode(ndjson));
+                            controller.close();
+                        },
+                    }),
+                    json: async () => {
+                        return {};
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => ndjson,
+                };
+            }
+
+            return {
+                body: null,
+                json: async () => {
+                    return { inserted: { settings: 1 } };
+                },
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
+        };
+
+        const result = await runMigrateBackendCommand({
+            direction: "hyperdrive-to-d1",
+            fetchImpl,
+            fromToken: "source-token",
+            fromUrl: "https://new.example.com",
+            logger,
+            out: join(dir, "dump.ndjson"),
+            toToken: "target-token",
+            toUrl: "https://old.example.com",
+            yes: true,
+        });
+
+        expect(result.code).toBe(0);
+        expect(infos.some((line) => line.includes("from the Hyperdrive source (https://new.example.com)"))).toBe(true);
+        expect(infos.some((line) => line.includes("Verify your app reads from D1, then decommission the Hyperdrive binding"))).toBe(true);
+    });
+
+    describe("rolling back rows edited since cutover", () => {
+        /**
+         * Two deployments over in-memory tables: the source exports its rows, the target's
+         * import endpoint behaves as the runtime does — insert-only by default, overwriting an
+         * existing `_id` only under `?onConflict=replace`, which it echoes.
+         */
+        const deployments =
+            (source: Map<string, string>, target: Map<string, string>, checks: string[] = []): StreamingFetchLike =>
+            async (input: string, init?: { body?: unknown }) => {
+                const url = new URL(input);
+
+                if (url.searchParams.get("dryRun") === "true" && typeof init?.body === "string" && init.body.trim() !== "") {
+                    checks.push(input);
+                }
+
+                if (url.pathname.includes("/_lunora/admin/export")) {
+                    const ndjson = [...source].map(([id, key]) => JSON.stringify({ doc: { _creationTime: 1, _id: id, key }, table: "settings" })).join("\n");
+
+                    return {
+                        body: new ReadableStream<Uint8Array>({
+                            start(controller) {
+                                controller.enqueue(new TextEncoder().encode(`${ndjson}\n`));
+                                controller.close();
+                            },
+                        }),
+                        json: async () => {
+                            return {};
+                        },
+                        ok: true,
+                        status: 200,
+                        text: async () => ndjson,
+                    };
+                }
+
+                const replace = url.searchParams.get("onConflict") === "replace";
+                const echo = replace ? { onConflict: "replace" } : {};
+
+                if (url.searchParams.get("dryRun") === "true") {
+                    return {
+                        ...checkResponse(),
+                        json: async () => {
+                            return { conflicts: 0, dryRun: true, errors: [], inserted: {}, ...echo };
+                        },
+                    };
+                }
+
+                const rows = (typeof init?.body === "string" ? init.body : "")
+                    .split("\n")
+                    .filter((line) => line.trim() !== "")
+                    .map((line) => JSON.parse(line) as { doc: { _id: string; key: string } });
+                let conflicts = 0;
+                let inserted = 0;
+                let replaced = 0;
+
+                for (const { doc } of rows) {
+                    if (!target.has(doc._id)) {
+                        inserted += 1;
+                    } else if (replace) {
+                        replaced += 1;
+                    } else {
+                        conflicts += 1;
+                        continue;
+                    }
+
+                    target.set(doc._id, doc.key);
+                }
+
+                return {
+                    body: null,
+                    json: async () => {
+                        return {
+                            conflicts,
+                            errors: [],
+                            inserted: inserted > 0 ? { settings: inserted } : {},
+                            received: rows.length,
+                            replaced,
+                            ...echo,
+                        };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            };
+
+        const rollBack = async (
+            target: Map<string, string>,
+            replace: boolean,
+        ): Promise<{ checks: string[]; result: Awaited<ReturnType<typeof runMigrateBackendCommand>>; warnings: string[] }> => {
+            const checks: string[] = [];
+            const warnings: string[] = [];
+            const logger: Logger = { error: () => {}, info: () => {}, success: () => {}, warn: (message: string) => warnings.push(message) };
+            // Copied to Hyperdrive at cutover as "old", then edited there.
+            const hyperdrive = new Map([["a", "edited on hyperdrive"]]);
+            const result = await runMigrateBackendCommand({
+                direction: "hyperdrive-to-d1",
+                fetchImpl: deployments(hyperdrive, target, checks),
+                fromToken: "source-token",
+                fromUrl: "https://new.example.com",
+                logger,
+                out: join(dir, "dump.ndjson"),
+                replace,
+                tables: "settings",
+                toToken: "target-token",
+                toUrl: "https://old.example.com",
+                yes: true,
+            });
+
+            return { checks, result, warnings };
+        };
+
+        it("leaves a row D1 already holds unchanged without --replace, and says so", async () => {
+            expect.assertions(3);
+
+            const d1 = new Map([["a", "old"]]);
+            const { result, warnings } = await rollBack(d1, false);
+
+            expect(d1.get("a")).toBe("old");
+            expect(result).toMatchObject({ code: 0, imported: 0, replaced: 0 });
+            expect(warnings.join("\n")).toContain("left unchanged (reported as conflicts above), so this copied rows missing from D1, not later edits");
+        });
+
+        it("restores the edited value with --replace", async () => {
+            expect.assertions(3);
+
+            const d1 = new Map([["a", "old"]]);
+            const { checks, result } = await rollBack(d1, true);
+
+            expect(d1.get("a")).toBe("edited on hyperdrive");
+            expect(result).toMatchObject({ code: 0, imported: 0, replaced: 1 });
+            // The pre-write check runs in the same mode, so a target that cannot replace refuses before anything is written.
+            expect(checks.map((url) => new URL(url).searchParams.get("onConflict"))).toStrictEqual(["replace"]);
+        });
+
+        it("refuses --replace without --tables, before exporting anything", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<StreamingFetchLike>();
+            const result = await runMigrateBackendCommand({
+                direction: "hyperdrive-to-d1",
+                fetchImpl,
+                fromUrl: "https://new.example.com",
+                logger: silentLogger(),
+                replace: true,
+                toUrl: "https://old.example.com",
+                yes: true,
+            });
+
+            expect(result.error).toContain("--replace needs --tables");
+            expect(fetchImpl).not.toHaveBeenCalled();
+        });
+
+        it("refuses --replace against a worker that would ignore it, before writing anything", async () => {
+            expect.assertions(3);
+
+            const d1 = new Map([["a", "old"]]);
+            const legacy = deployments(new Map([["a", "edited on hyperdrive"]]), d1);
+            // A worker predating the mode: it never echoes `onConflict`, and treats every existing row as a conflict.
+            const fetchImpl: StreamingFetchLike = async (input, init) => {
+                const url = new URL(input);
+
+                url.searchParams.delete("onConflict");
+
+                return legacy(url.toString(), init);
+            };
+            const result = await runMigrateBackendCommand({
+                direction: "hyperdrive-to-d1",
+                fetchImpl,
+                fromToken: "source-token",
+                fromUrl: "https://new.example.com",
+                logger: silentLogger(),
+                out: join(dir, "dump.ndjson"),
+                replace: true,
+                tables: "settings",
+                toToken: "target-token",
+                toUrl: "https://old.example.com",
+                yes: true,
+            });
+
+            expect(result.code).not.toBe(0);
+            expect(result.error).toContain("predates ?onConflict=replace");
+            expect(d1.get("a")).toBe("old");
+        });
     });
 
     it("refuses the import leg against a remote target when --yes was not passed", async () => {
@@ -1071,7 +1451,8 @@ describe("lunora migrate d1-to-hyperdrive", () => {
             };
         };
 
-        const result = await runMigrateToHyperdriveCommand({
+        const result = await runMigrateBackendCommand({
+            direction: "d1-to-hyperdrive",
             fetchImpl,
             fromToken: "source-token",
             fromUrl: "https://old.example.com",
@@ -1082,7 +1463,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
             toUrl: "https://new.example.com",
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(errors.join("\n")).toContain("--yes");
     });
 
@@ -1094,9 +1475,9 @@ describe("lunora migrate d1-to-hyperdrive", () => {
         const calls: string[] = [];
         const fetchImpl = recordingFetch(calls);
 
-        const result = await runMigrateToHyperdriveCommand({ fetchImpl, logger, out: join(dir, "dump.ndjson"), yes: true });
+        const result = await runMigrateBackendCommand({ direction: "d1-to-hyperdrive", fetchImpl, logger, out: join(dir, "dump.ndjson"), yes: true });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
         expect(errors.join("\n")).toContain("same deployment");
     });
@@ -1112,7 +1493,8 @@ describe("lunora migrate d1-to-hyperdrive", () => {
         const calls: string[] = [];
         const fetchImpl = recordingFetch(calls);
 
-        const result = await runMigrateToHyperdriveCommand({
+        const result = await runMigrateBackendCommand({
+            direction: "d1-to-hyperdrive",
             fetchImpl,
             fromUrl: "https://worker.example.com/",
             logger,
@@ -1121,7 +1503,7 @@ describe("lunora migrate d1-to-hyperdrive", () => {
             yes: true,
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(calls).toHaveLength(0);
         expect(errors.join("\n")).toContain("same deployment");
     });
@@ -1135,7 +1517,12 @@ describe("lunora migrate d1-to-hyperdrive", () => {
 
         // Export streams rows, but the import batch POST returns a hard failure,
         // which makes runImportCommand throw — the temp dir must still be removed.
+        // The dry-run check and its probe are answered by a worker that honours the flag, so the failure lands on the real batch.
         const fetchImpl: StreamingFetchLike = async (input: string) => {
+            if (new URL(input).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
+
             if (input.includes("/_lunora/admin/export")) {
                 return {
                     body: new ReadableStream<Uint8Array>({
@@ -1170,7 +1557,8 @@ describe("lunora migrate d1-to-hyperdrive", () => {
         // The failing batch surfaces as a non-zero code with the reason logged,
         // rather than as a throw: a bulk import that dies part-way has usually
         // already written rows, and the operator needs that tally.
-        const failed = await runMigrateToHyperdriveCommand({
+        const failed = await runMigrateBackendCommand({
+            direction: "d1-to-hyperdrive",
             fetchImpl,
             fromToken: "source-token",
             fromUrl: "https://old.example.com",

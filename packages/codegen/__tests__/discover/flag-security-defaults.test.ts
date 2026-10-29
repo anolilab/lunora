@@ -38,7 +38,7 @@ describe("discoverFlagSecurityDefaults", () => {
         const found = discoverFlagSecurityDefaults(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ defaultValue: false, exportName: "list", key: "enforceRls" });
+        expect(found[0]).toMatchObject({ defaultValue: false, scope: { kind: "export", name: "list" }, key: "enforceRls" });
     });
 
     it("captures a true default", () => {

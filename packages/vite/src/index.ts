@@ -1,21 +1,36 @@
 import { createRequire } from "node:module";
+import { resolve as resolvePath } from "node:path";
 
 import { cloudflare } from "@cloudflare/vite-plugin";
-import { isRunnableTarget, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
+import {
+    assertBuildTargetMatches,
+    createDiscoveryCache,
+    isRunnableTarget,
+    resolveLazyFunctions,
+    resolveTargetOrThrow,
+    runnableTargetIds,
+    targetRunsOwnDevServer,
+} from "@lunora/config";
 import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
 import bindingsProvisionPlugin from "./bindings-provision-plugin";
+import bundleMetaPlugin from "./bundle-meta-plugin";
+import { celldDevPlugin, celldDevSupport, withoutDevWhen } from "./celld-dev-plugin";
+import cloudflareCliConfigPlugin from "./cloudflare-cli-config-plugin";
 import codegenPlugin from "./codegen-plugin";
 import containerLogsPlugin from "./container-logs-plugin";
 import devStatePlugin from "./dev-state-plugin";
 import devVariablesPlugin from "./dev-variables-plugin";
 import { frameworkComposePlugin } from "./framework-compose-plugin";
 import { createPluginContext, frameworkDetectPlugin } from "./framework-detect-plugin";
+import localAiBinding from "./local-ai-binding";
+import localHyperdrive from "./local-hyperdrive";
 import logStreamPlugin from "./log-stream-plugin";
 import { proxyCheckPlugin } from "./proxy-check-plugin";
 import { remoteBindingsPlugin } from "./remote-bindings-plugin";
+import serviceWorkersPlugin from "./service-workers";
 import { lunoraSolutionFinders } from "./solution-finders";
 import { studioPlugin } from "./studio-plugin";
 import type { CloudflarePluginOptions, LunoraPluginOptions, LunoraPlugins, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
@@ -70,6 +85,8 @@ const resolveRunnableTargetOrThrow = (projectRoot: string, explicit?: string): s
         );
     }
 
+    assertBuildTargetMatches(target, projectRoot);
+
     return target;
 };
 
@@ -90,10 +107,12 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
     }
 
     const projectRoot = input.projectRoot ?? process.cwd();
+    const target = resolveRunnableTargetOrThrow(projectRoot, input.target);
 
     return {
         allowUnauthenticatedShardAccess: input.allowUnauthenticatedShardAccess ?? false,
         apiSpec: input.apiSpec ?? "openapi",
+        lazyFunctions: resolveLazyFunctions(input.lazyFunctions),
         cloudflare: cloudflareOption,
         studio: input.studio ?? true,
         // Derived, never taken from `input`: codegen always writes
@@ -108,10 +127,10 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
         // worker entry of its own to pass one from. See `LunoraShardConfig`.
         shard: input.shard ?? {},
         // Same resolution AND validation as the CLI — explicit option, then
-        // `lunora.json`, then the default — so a project that sets `target`
+        // `lunora.config.*`, then the default — so a project that sets `target`
         // once gets it in `vite build` and `lunora deploy` alike, and a typo
         // fails here rather than emitting the default surface silently.
-        target: resolveRunnableTargetOrThrow(projectRoot, input.target),
+        target,
         validateWrangler: input.validateWrangler ?? true,
     };
 };
@@ -128,11 +147,22 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
  * so they're imported statically — opt out per-feature via the options rather
  * than relying on whether they're installed.
  */
+/** The Cloudflare plugin's `configPath`, made absolute against the project, or `undefined` for the project's own wrangler config. */
+const cloudflareConfigPath = (options: object, projectRoot: string): string | undefined => {
+    const { configPath } = options as { configPath?: unknown };
+
+    return typeof configPath === "string" && configPath !== "" ? resolvePath(projectRoot, configPath) : undefined;
+};
+
 const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     const resolved = resolveOptions(options);
     // Shared, mutable context threaded through every Lunora sub-plugin so the
     // detected meta-framework is computed once and readable downstream.
     const context = createPluginContext();
+    // One startup's source scans (schema, capabilities, containers), shared by
+    // binding provisioning, the wrangler validator, container logs and
+    // `buildStart`'s reconcile instead of each parsing the project again.
+    const discovery = createDiscoveryCache();
     // `devVariablesPlugin` is `enforce: "pre"` + `apply: "serve"`: it offers to
     // scaffold `.dev.vars` before `@cloudflare/vite-plugin` boots the worker.
     // The framework-detect plugin runs early (its `config` hook) so the
@@ -155,13 +185,19 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // before `remoteBindingsPlugin` copies it. Unconditional: provisioning is
         // not validation, and gating it on `validateWrangler` took the write back
         // out of `config` for anyone who turned the CHECKS off.
-        bindingsProvisionPlugin(resolved),
-        codegenPlugin(resolved),
+        bindingsProvisionPlugin(resolved, discovery),
+        codegenPlugin(resolved, discovery),
+        // Build-only: writes the server bundle's metafile for `lunora build`, which
+        // cannot otherwise see what a Vite-built worker contains.
+        bundleMetaPlugin(resolved.projectRoot),
         logStreamPlugin(),
         // Registers the running dev server in `.lunora/dev.json` so
         // `lunora dev --background|stop|status|logs` manage Vite projects too.
         devStatePlugin(resolved),
         agentRulesHintPlugin(resolved),
+        // Unconditional, and on build as well as serve: a `cloudflare.config.ts`
+        // beside the wrangler config goes stale whatever the checks are set to.
+        cloudflareCliConfigPlugin(resolved),
         // Catches the two silent dev-proxy misconfigurations (missing `ws: true`,
         // origin-rewriting `changeOrigin`) that leave live queries permanently
         // unconnected while HTTP RPC still answers.
@@ -173,7 +209,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     }
 
     if (resolved.validateWrangler) {
-        plugins.push(wranglerValidatorPlugin(resolved));
+        plugins.push(wranglerValidatorPlugin(resolved, discovery));
     }
 
     if (resolved.overlay !== false) {
@@ -185,13 +221,13 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // `cloudflare: false` the project adds it itself and still runs containers —
     // gating this on the option left that path with silent containers. A project
     // that declares none never imports `dockerode` either way.
-    plugins.push(containerLogsPlugin(resolved));
+    plugins.push(containerLogsPlugin(resolved, discovery));
 
     // The Cloudflare plugin Lunora adds, or `undefined` on the BYO path — where
     // the remote plugin reports the materialized config instead of injecting it.
     const cloudflareOptions = resolved.cloudflare === false ? undefined : { ...resolved.cloudflare };
 
-    // Honor remote-binding dev (`LUNORA_REMOTE` / `lunora.json` `remote`) on the
+    // Honor remote-binding dev (`LUNORA_REMOTE` / `lunora.config.*` `remote`) on the
     // `vite dev` path too, exactly like `lunora dev`: materialize a temp wrangler
     // config with `"remote": true` on each eligible binding (DO shards stay local)
     // and inject it as the cloudflare plugin's `configPath`.
@@ -204,11 +240,49 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     // `validateWrangler`: this copy would go a binding short whenever it was off.
     plugins.push(remoteBindingsPlugin(cloudflareOptions, { projectRoot: resolved.projectRoot }));
 
+    // A project that brings its own `cloudflare()` plugin (`cloudflare: false`) still needs the local Hyperdrive
+    // database before that plugin resolves its bindings; Lunora's own branch below registers it with its plugin.
+    if (cloudflareOptions === undefined) {
+        plugins.push(localHyperdrive({ projectRoot: resolved.projectRoot }));
+    }
+
     if (cloudflareOptions !== undefined) {
+        plugins.push(serviceWorkersPlugin(cloudflareOptions, resolved.projectRoot));
+
+        // A host with its own dev server (celld): `vite dev` runs the Worker on
+        // it when it can — the Cloudflare plugin then builds only — and falls back
+        // to workerd, saying why, when it can't (a Vite virtual `main`).
+        const ownDevServer = targetRunsOwnDevServer(resolved.target);
+        const celld = celldDevSupport(resolved.projectRoot, resolved.target);
+        const onCelld = (): boolean => ownDevServer && celld().runs;
+
+        // Without a Cloudflare login, drop the `ai` binding from the dev worker so
+        // its remote proxy session can't stop the dev server from booting.
         // Wrap the Cloudflare plugins' startup hooks so a Worker-entry evaluation
         // failure (e.g. a circular import in `lunora/`) surfaces an actionable
         // hint instead of a bare, file-less `runner-worker` TypeError.
-        plugins.push(...withWorkerStartupHint(cloudflare(cloudflareOptions)));
+        plugins.push(
+            ...withoutDevWhen(
+                [
+                    localHyperdrive({ projectRoot: resolved.projectRoot, wranglerConfigPath: cloudflareConfigPath(cloudflareOptions, resolved.projectRoot) }),
+                    localAiBinding(cloudflareOptions, { projectRoot: resolved.projectRoot }),
+                    ...withWorkerStartupHint(cloudflare(cloudflareOptions)),
+                ],
+                onCelld,
+            ),
+        );
+
+        if (ownDevServer) {
+            plugins.push(celldDevPlugin(resolved.projectRoot, onCelld), {
+                apply: (_config, env) => env.command === "serve" && env.isPreview !== true && !onCelld(),
+                configureServer(server) {
+                    server.config.logger.warn(
+                        `[lunora] target "${resolved.target}": vite dev serves the worker in workerd, not on ${resolved.target} — ${celld().reason ?? "it cannot run this project"}. \`vite build\` then \`lunora deploy\` ships it to ${resolved.target}.`,
+                    );
+                },
+                name: "lunora:target-runtime-notice",
+            });
+        }
     }
 
     return plugins;
@@ -228,20 +302,8 @@ export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./de
 export { detectFramework } from "./detect-framework";
 export { default as devStatePlugin } from "./dev-state-plugin";
 export { default as devVariablesPlugin } from "./dev-variables-plugin";
-// Class-A composition surface. `LUNORA_WORKER_VIRTUAL_ID` is the virtual entry a
-// class-A template points its wrangler `main` at (or re-exports) so the worker
-// composing the framework SSR handler under `composeWorker`'s `httpRouter` seam
-// is emitted by the plugin, not hand-wired. `buildWorkerEntrySource` /
-// `isAutoComposable` / `CLASS_A_WIRING` are exported for the CLI + tests.
-export type { ClassAWiring, GeneratedClassModule } from "./framework-compose-plugin";
-export {
-    buildWorkerEntrySource,
-    CLASS_A_WIRING,
-    frameworkComposePlugin,
-    GENERATED_CLASS_MODULES,
-    isAutoComposable,
-    LUNORA_WORKER_VIRTUAL_ID,
-} from "./framework-compose-plugin";
+export type { ClassAWiring, WorkerEntryComposition } from "./framework-compose-plugin";
+export { buildWorkerEntrySource, CLASS_A_WIRING, frameworkComposePlugin, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID } from "./framework-compose-plugin";
 // The custom HMR event the codegen plugin sends on the client environment's hot
 // channel after a successful codegen run (in place of a blanket browser reload).
 export { default as LUNORA_API_UPDATED_EVENT } from "./hmr-events";
@@ -269,4 +331,14 @@ export type {
 } from "./types";
 export { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "./worker-startup-hint";
 export { wranglerValidatorPlugin } from "./wrangler-validator-plugin";
+// Class-A composition surface. `LUNORA_WORKER_VIRTUAL_ID` is the virtual entry a
+// class-A template points its wrangler `main` at (or re-exports) so the worker
+// composing the framework SSR handler under `composeWorker`'s `httpRouter` seam
+// is emitted by the plugin, not hand-wired. `buildWorkerEntrySource` /
+// `isAutoComposable` / `CLASS_A_WIRING` are exported for the CLI + tests.
+// `GeneratedClassModule` / `GENERATED_CLASS_MODULES` are owned by `@lunora/config`
+// (the wrangler validator decides the composed entry's exports from the same
+// list); re-exported here so this package's surface is unchanged.
+export type { GeneratedClassModule } from "@lunora/config";
+export { GENERATED_CLASS_MODULES } from "@lunora/config";
 export { lunora, resolveOverlayOption, VERSION };

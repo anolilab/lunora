@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
+import { resolveLazyFunctions } from "@lunora/config";
+import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
@@ -10,12 +12,13 @@ import { parseApiSpec } from "../../util/api-spec";
 import { renderCodegenHint } from "../../util/codegen-error";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { resolveTargetOrError } from "../../util/deploy-target";
+import { resolveTargetOrError } from "../../util/deploy-target-resolve";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { HealthFetch } from "../../util/health-probe";
 import { probeHealth } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { Spawner } from "../../util/spawn";
@@ -29,8 +32,16 @@ interface VerifyCommandOptions {
     /** Which API spec(s) codegen would emit. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
     cwd?: string;
+
+    /**
+     * Cloudflare environment name. Validates the `env.<name>` view of
+     * `wrangler.jsonc`, the way `lunora deploy --env` does — omitted, the top
+     * level is validated, which is the wrong surface for an env-scoped project.
+     */
+    env?: string;
+
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
     /** Injectable fetch for the health probe; defaults to the global `fetch`. */
     healthFetch?: HealthFetch;
 
@@ -40,6 +51,8 @@ interface VerifyCommandOptions {
      */
     healthUrl?: string;
 
+    /** Opt into per-module lazy function imports. */
+    lazyFunctions?: boolean;
     logger: Logger;
     /** Injectable subprocess runner for the tsc step; defaults to the real spawner. */
     spawner?: Spawner;
@@ -53,7 +66,7 @@ interface VerifyCommandOptions {
 
     /**
      * Deploy target the drift gate's snapshot is emitted for. Defaults to
-     * `"target"` in `lunora.json`, then `"cloudflare"`. Verify never writes, but
+     * `"target"` in `lunora.config.*`, then `"cloudflare"`. Verify never writes, but
      * a snapshot emitted for the wrong target compares against the wrong
      * baseline.
      */
@@ -62,13 +75,17 @@ interface VerifyCommandOptions {
     typecheck?: boolean;
 }
 
-interface VerifyCommandResult {
-    code: number;
-    /** Set when the run aborted before validation ran: an invalid `--format`, or an unregistered deploy target. */
-    error?: string;
+/** The `--format json` payload: everything the gate found, and where it looked. */
+interface VerifyCommandData {
     errors: ReadonlyArray<string>;
     warnings: ReadonlyArray<string>;
     wranglerPath: string | undefined;
+}
+
+interface VerifyCommandResult extends VerifyCommandData {
+    code: number;
+    /** Set when the run aborted before validation ran — an unregistered deploy target. */
+    error?: string;
 }
 
 /**
@@ -76,13 +93,15 @@ interface VerifyCommandResult {
  * `{ error }` when type-checking failed, `{ warning }` when it was skipped (no
  * tsconfig), or an empty object on success.
  */
-const runTypecheckStep = async (cwd: string, spawner: Spawner): Promise<{ error?: string; warning?: string }> => {
+const runTypecheckStep = async (cwd: string, spawner: Spawner, format: OutputFormat): Promise<{ error?: string; warning?: string }> => {
     if (!existsSync(join(cwd, "tsconfig.json"))) {
         return { warning: "no tsconfig.json found — skipping TypeScript type-check" };
     }
 
     const exec = execArgsFor(detectPackageManager(cwd), "tsc", ["--noEmit", "-p", "tsconfig.json"]);
-    const result = await spawner({ args: exec.args, command: exec.command, cwd });
+    // tsc writes its diagnostics to stdout, which in json mode belongs to the
+    // result document alone — the type errors would otherwise be spliced into it.
+    const result = await spawner({ args: exec.args, command: exec.command, cwd, stdoutToStderr: format === "json" });
 
     return result.code === 0 ? {} : { error: `type errors: tsc --noEmit exited ${String(result.code)}` };
 };
@@ -171,7 +190,9 @@ const reportVerifyResult = (logger: Logger, errors: string[], warnings: string[]
             }
         }
 
-        return { code: 1, errors, warnings, wranglerPath };
+        // The first error is the reason the envelope carries; the rest are in
+        // `data.errors`, so a consumer never has to scrape the prose above.
+        return { code: 1, error: errors[0], errors, warnings, wranglerPath };
     }
 
     logger.success("verify: project is valid (with warnings)");
@@ -190,17 +211,9 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
     const cwd = options.cwd ?? process.cwd();
     // In `--format json` mode every human/progress line goes to stderr so
     // stdout carries only the serialized structured result.
-    const logger = loggerForFormat(options.format, options.logger);
+    const { logger } = options;
 
-    const formatError = validateOutputFormat("verify", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: 1, error: formatError, errors: [], warnings: [], wranglerPath: undefined };
-    }
-
-    const validation = validateWrangler({ projectRoot: cwd });
+    const validation = validateWrangler({ environment: options.env, projectRoot: cwd });
     const errors: string[] = [...validation.report.errors];
     const warnings: string[] = [...validation.report.warnings];
 
@@ -218,10 +231,20 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
 
             logger.error(message);
 
-            return { code: 1, error: message, errors: [message], warnings: [], wranglerPath: undefined };
+            // Exit 2, the same bucket the `--format` guard above uses: an
+            // unresolved `--target` is a flag naming a driver that does not
+            // exist, not a verification that found a problem.
+            return { code: EXIT_CODE.USAGE, error: message, errors: [message], warnings: [], wranglerPath: undefined };
         }
 
-        const codegen = runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd, target: resolvedTarget.target });
+        const codegen = runCodegen({
+            apiSpec: options.apiSpec,
+            lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+            dryRun: true,
+            projectRoot: cwd,
+            target: resolvedTarget.target,
+            ...wranglerCodegenInputs(cwd),
+        });
 
         // The target is resolved and validated immediately above precisely so
         // the surface is gated against it — reporting everything else this run
@@ -251,7 +274,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
     }
 
     if (options.typecheck !== false) {
-        const typecheck = await runTypecheckStep(cwd, options.spawner ?? defaultSpawner);
+        const typecheck = await runTypecheckStep(cwd, options.spawner ?? defaultSpawner, options.format ?? "pretty");
 
         if (typecheck.error !== undefined) {
             errors.push(typecheck.error);
@@ -270,22 +293,18 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
         errors.push(healthError);
     }
 
-    const result = reportVerifyResult(logger, errors, warnings, validation.wranglerPath);
-
-    if (isJsonFormat(options.format)) {
-        printJson(result);
-    }
-
-    return result;
+    return reportVerifyResult(logger, errors, warnings, validation.wranglerPath);
 };
 
 /** `lunora verify` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions, VerifyCommandData>(async ({ cwd, format, logger, options }) => {
     const result = await runVerifyCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         cwd,
-        format: options.format,
+        env: options.env,
+        format,
         healthUrl: options.healthUrl,
         logger,
         strictAdvisories: options.strictAdvisories,
@@ -295,9 +314,13 @@ const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(asyn
         typecheck: options.typecheck === false ? false : undefined,
     });
 
-    return { code: result.code };
+    return {
+        code: result.code,
+        data: { errors: result.errors, warnings: result.warnings, wranglerPath: result.wranglerPath },
+        error: result.error,
+    };
 });
 
 export { execute };
-export type { VerifyCommandOptions, VerifyCommandResult };
+export type { VerifyCommandData, VerifyCommandOptions, VerifyCommandResult };
 export { runVerifyCommand };

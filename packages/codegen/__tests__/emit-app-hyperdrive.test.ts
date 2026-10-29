@@ -2,35 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { emitApp } from "../src/emit-app";
-
-/** Minimal `EmitAppOptions` with every capability off; tests flip one flag at a time. */
-const baseOptions = {
-    hasAccess: false,
-    hasAi: false,
-    hasAnalytics: false,
-    hasAuth: false,
-    hasBrowser: false,
-    hasFramework: false,
-    hasGlobal: false,
-    hasHyperdrive: false,
-    hasImages: false,
-    hasKv: false,
-    hasKvIntrospector: false,
-    hasNotify: false,
-    hasPayments: false,
-    hasQueue: false,
-    hasR2sql: false,
-    hasHyperdriveGlobal: false,
-    hasScheduler: false,
-    hasStorage: false,
-    hasVectors: false,
-    hasWorkflow: false,
-    hasX402: false,
-    tableNames: [],
-    useUmbrella: false,
-    wantsOpenApi: false,
-    wantsOpenRpc: false,
-};
+import baseOptions from "./emit-app-options";
 
 describe("emitApp — Hyperdrive global backend", () => {
     it("emits the .hyperdriveGlobal() builder method, declaration and config wiring", () => {
@@ -40,7 +12,9 @@ describe("emitApp — Hyperdrive global backend", () => {
 
         expect(output).toContain("public hyperdriveGlobal(declaration: HyperdriveGlobalDeclaration<Env>): this");
         expect(output).toContain("interface HyperdriveGlobalDeclaration<Env>");
-        expect(output).toContain('import { createHyperdriveGlobalCtxDb } from "@lunora/hyperdrive/global";');
+        expect(output).toContain(
+            'import { applyHyperdriveGlobalCdc, createHyperdriveGlobalCtxDb, createHyperdriveGlobalIntrospector, exportHyperdriveGlobalRows, importHyperdriveGlobalRows, readHyperdriveGlobalCdc } from "@lunora/hyperdrive/global";',
+        );
         expect(output).toContain("createHyperdriveGlobalCtxDb({");
         // It must NOT pull in the D1 `.global()` wiring when only Hyperdrive is used.
         expect(output).not.toContain("public global(declaration: GlobalDeclaration<Env>): this");
@@ -53,6 +27,32 @@ describe("emitApp — Hyperdrive global backend", () => {
 
         expect(output).toContain("public global(declaration: GlobalDeclaration<Env>): this");
         expect(output).not.toContain("createHyperdriveGlobalCtxDb");
+    });
+
+    it("wires the whole admin global plane for a Hyperdrive-only worker", () => {
+        expect.assertions(8);
+
+        const output = emitApp({ ...baseOptions, hasHyperdriveGlobal: true });
+
+        // Without these the admin import refuses every global row (GLOBAL_NOT_CONFIGURED),
+        // export and backups silently drop them, and CDC sync / PITR apply see no global plane.
+        expect(output).toContain("options.importGlobals = (request) =>");
+        expect(output).toContain("importHyperdriveGlobalRows({");
+        expect(output).toContain("options.importGlobalsSupportsDryRun = true;");
+        expect(output).toContain("options.importGlobalsSupportsReplace = true;");
+        expect(output).toContain("options.exportGlobals = (request) => exportHyperdriveGlobalRows(");
+        expect(output).toContain("options.globalIntrospector = {");
+        expect(output).toContain("options.syncGlobals = async (request) =>");
+        expect(output).toContain("options.applyGlobals = (request) =>");
+    });
+
+    it("builds the Hyperdrive exec inside each admin request, never once per options build", () => {
+        expect.assertions(1);
+
+        const output = emitApp({ ...baseOptions, hasHyperdriveGlobal: true });
+
+        // A pg/MySQL socket opened while serving one request cannot do I/O for another on Workers.
+        expect(output).toContain("const exec = (): SqlExec => hyperdriveDeclaration.exec(env);");
     });
 
     it("imports the schema when only Hyperdrive globals are present", () => {

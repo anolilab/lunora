@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_MODEL_PRICES, estimateModelCost, lookupModelPrice } from "../src/pricing";
+import { DEFAULT_MODEL_PRICES, estimateImageCost, estimateModelCost, lookupModelPrice } from "../src/pricing";
 
 describe("lookupModelPrice", () => {
     it("finds a Workers AI model by its exact id", () => {
@@ -26,6 +26,14 @@ describe("lookupModelPrice", () => {
 
         // Reducing "@cf/baai/bge-m3" to "bge-m3" would miss its entry.
         expect(lookupModelPrice("@cf/baai/bge-m3")).toStrictEqual({ input: 0.012 });
+    });
+
+    it("strips a provider prefix from a Workers AI id without eating its own slashes", () => {
+        expect.assertions(2);
+
+        // The AI Gateway's unified form prefixes the provider onto the `@cf/...` id.
+        expect(lookupModelPrice("workers-ai/@cf/baai/bge-m3")).toStrictEqual({ input: 0.012 });
+        expect(lookupModelPrice("workers-ai/@cf/meta/llama-3.1-8b-instruct")).toStrictEqual(lookupModelPrice("@cf/meta/llama-3.1-8b-instruct"));
     });
 
     it("prices the generation models the docs' examples use, with an output price", () => {
@@ -95,11 +103,47 @@ describe("estimateModelCost", () => {
         expect(estimateModelCost("text-embedding-3-small", { inputTokens: Number.NaN })).toBeUndefined();
     });
 
+    it("returns undefined rather than 0 for an image-only price with token usage", () => {
+        expect.assertions(1);
+
+        expect(estimateModelCost("dall-e-3", { inputTokens: 1000, outputTokens: 1000 })).toBeUndefined();
+    });
+
     it("returns undefined for an absent model id", () => {
         expect.assertions(2);
 
         expect(estimateModelCost(undefined, { inputTokens: 1000 })).toBeUndefined();
         expect(estimateModelCost("", { inputTokens: 1000 })).toBeUndefined();
+    });
+
+    it("bills cache reads at the cache rate when the price lists one", () => {
+        expect.assertions(1);
+
+        // 1000 input tokens, 400 of them cache reads: 600 at $1/M, 400 at $0.1/M.
+        const cost = estimateModelCost("chat", { cacheReadTokens: 400, inputTokens: 1000 }, { chat: { cacheRead: 0.1, input: 1 } });
+
+        expect(cost).toBeCloseTo((600 * 1 + 400 * 0.1) / 1_000_000, 12);
+    });
+
+    it("bills cache writes at the input rate when the price lists no write rate", () => {
+        expect.assertions(1);
+
+        const cost = estimateModelCost("chat", { cacheWriteTokens: 200, inputTokens: 1000 }, { chat: { cacheRead: 0.1, input: 1 } });
+
+        expect(cost).toBeCloseTo(1000 / 1_000_000, 12);
+    });
+
+    it("never prices cache tokens on top of the input total", () => {
+        expect.assertions(2);
+
+        // 400 of the 1000 input tokens are cached. With no cache rate listed the
+        // cost is the plain 1000-token input cost, not 1400.
+        // gpt-4o-mini is $0.15 per million input tokens.
+        const plain = (1000 * 0.15) / 1_000_000;
+
+        expect(estimateModelCost("gpt-4o-mini", { cacheReadTokens: 400, inputTokens: 1000 })).toBeCloseTo(plain, 12);
+        // Cache counts beyond the total are clamped to it rather than billed twice.
+        expect(estimateModelCost("gpt-4o-mini", { cacheReadTokens: 5000, inputTokens: 1000 })).toBeCloseTo(plain, 12);
     });
 
     it("ships a table that is small on purpose", () => {
@@ -108,5 +152,41 @@ describe("estimateModelCost", () => {
         // A table covering every model is a table that is wrong about most of
         // them; anything absent returns undefined rather than a guess.
         expect(Object.keys(DEFAULT_MODEL_PRICES).length).toBeLessThan(20);
+    });
+});
+
+describe("estimateImageCost", () => {
+    it("prices an image model per generated image", () => {
+        expect.assertions(1);
+
+        expect(estimateImageCost("@cf/black-forest-labs/flux-1-schnell")).toBeCloseTo(0.000_633_6, 10);
+    });
+
+    it("multiplies by the image count", () => {
+        expect.assertions(1);
+
+        expect(estimateImageCost("gpt-image-1", 3)).toBeCloseTo(0.12, 10);
+    });
+
+    it("strips a provider prefix, like the token estimator", () => {
+        expect.assertions(1);
+
+        expect(estimateImageCost("openai/dall-e-3")).toBeCloseTo(0.04, 10);
+    });
+
+    it("returns undefined for a token-priced model", () => {
+        expect.assertions(1);
+
+        // A chat model carries no `perImage` price, so an image estimate over it
+        // is absent rather than a false zero.
+        expect(estimateImageCost("gpt-5")).toBeUndefined();
+    });
+
+    it("returns undefined for an unpriced model or a non-positive count", () => {
+        expect.assertions(3);
+
+        expect(estimateImageCost("some-image-model-nobody-priced")).toBeUndefined();
+        expect(estimateImageCost("@cf/black-forest-labs/flux-1-schnell", 0)).toBeUndefined();
+        expect(estimateImageCost(undefined)).toBeUndefined();
     });
 });

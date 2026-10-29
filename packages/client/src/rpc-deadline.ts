@@ -1,0 +1,116 @@
+import { TransportError } from "./errors";
+
+/**
+ * The rejection a caller's `AbortSignal` produces: its own `reason`, or the
+ * platform's `AbortError` when it carries none. Never a {@link TransportError} —
+ * the caller walked away, so nothing about it is retryable.
+ */
+const abortReason = (signal: AbortSignal): Error =>
+    // No `DOMException` / `signal.reason` to lean on: React Native lacks both.
+    (signal.reason as Error | undefined) ?? Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+
+/**
+ * Run one HTTP exchange under a deadline and an optional caller signal.
+ *
+ * `run` receives a signal that is aborted when either fires, and should cover the
+ * WHOLE exchange (the `fetch` and the body read): a body that stalls after the
+ * headers arrive holds a request open just as long as a connection that never
+ * answers. The race is explicit, not left to the signal, so a `fetch` double that
+ * ignores `abort` still lets go.
+ *
+ * A deadline that fires rejects with a {@link TransportError}. Its fate on the
+ * server is unknown — the write may well have committed — so it is the same
+ * "retry under the same idempotency key" failure an unreadable edge page is,
+ * where a bare `AbortError` would read as a verdict. `timeoutMs <= 0` disables
+ * the deadline. A caller whose deadline means something else (a poll, an idle
+ * stream, a token mint) names its own error with `timeoutError`.
+ */
+const withinRpcDeadline = async <T>(
+    timeoutMs: number,
+    signal: AbortSignal | undefined,
+    run: (signal: AbortSignal) => Promise<T>,
+    timeoutError: () => Error = () => new TransportError(`LunoraClient: request timed out after ${timeoutMs.toString()}ms`),
+): Promise<T> => {
+    if (signal?.aborted) {
+        throw abortReason(signal);
+    }
+
+    const controller = new AbortController();
+    const cleanup: (() => void)[] = [];
+    const interruption = new Promise<never>((_resolve, reject) => {
+        if (timeoutMs > 0) {
+            const timer = setTimeout(() => {
+                // Reject before aborting: a `run` that fails synchronously on abort must not beat the deadline's own error.
+                reject(timeoutError());
+                controller.abort();
+            }, timeoutMs);
+
+            cleanup.push(() => {
+                clearTimeout(timer);
+            });
+        }
+
+        if (signal) {
+            const onAbort = (): void => {
+                controller.abort();
+                reject(abortReason(signal));
+            };
+
+            signal.addEventListener("abort", onAbort, { once: true });
+            cleanup.push(() => {
+                signal.removeEventListener("abort", onAbort);
+            });
+        }
+    });
+
+    // `run` may lose the race and reject later (its fetch aborted): that rejection is not ours to surface.
+    const exchange = run(controller.signal);
+
+    exchange.catch(() => undefined);
+
+    try {
+        return await Promise.race([exchange, interruption]);
+    } finally {
+        for (const undo of cleanup) {
+            undo();
+        }
+    }
+};
+
+/**
+ * Settle with `promise`, or reject with the signal's reason the moment `signal`
+ * aborts — whichever comes first. This releases a CALLER, not the work: whatever
+ * `promise` stands for keeps running and settles on its own. That is the
+ * contract for a write, which may already be on the wire or in the queue and is
+ * never retracted by an abort.
+ */
+const raceAbort = async <T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> => {
+    if (signal === undefined) {
+        return promise;
+    }
+
+    if (signal.aborted) {
+        // The work was already started by the caller; its eventual rejection is not ours to surface.
+        promise.catch(() => undefined);
+
+        throw abortReason(signal);
+    }
+
+    let onAbort: () => void = () => undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = (): void => {
+            reject(abortReason(signal));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+    });
+
+    promise.catch(() => undefined);
+
+    try {
+        return await Promise.race([promise, aborted]);
+    } finally {
+        signal.removeEventListener("abort", onAbort);
+    }
+};
+
+export { abortReason, raceAbort, withinRpcDeadline };

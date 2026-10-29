@@ -24,7 +24,7 @@ interface DiffTable {
     /** Per-field status, keyed by field name — drives the row glyphs. */
     readonly fieldStatus: Readonly<Record<string, FieldStatus>>;
     readonly name: string;
-    /** `"global"` tables live in D1, everything else in the shard's SQLite. */
+    /** `"global:<backend>"` (or a pre-backend bare `"global"`) tables live outside the shard; everything else in the shard's SQLite. */
     readonly shardMode: string;
     readonly status: TableStatus;
 }

@@ -94,6 +94,16 @@ class SubmitOptions(val functionPath: String, val args: WireValue? = null) {
      */
     var precondition: (() -> Boolean)? = null
 
+    /**
+     * Never queued, persisted or replayed. Where a normal write would be queued, submit throws an
+     * [OfflineException] coded [OFFLINE_NOT_QUEUED] before any optimistic layer is installed, so
+     * the arguments never reach the queue or the persistence adapter. It does not wait for a queue
+     * flush or queue behind pending writes, so it may overtake them. A transport failure sent
+     * directly while the connection is down is refused the same way, with the transport error as
+     * the cause. For a credential or a one-time token.
+     */
+    var onlineOnly: Boolean = false
+
     /** Reports the eventual verdict on a queued write. */
     var onSettled: ((MutationSettled) -> Unit)? = null
 }
@@ -129,17 +139,25 @@ fun Client.submit(options: SubmitOptions): MutationOutcome {
         // enqueued onto a queue that was just cleared settles to nobody.
         if (closed) throw OfflineException(CLIENT_CLOSED, "client is closed")
 
+        val queueIt = send == null && (wasEverConnected || offlineQueue.queueBeforeFirstConnect)
+
+        // Refused before any layer is installed, so no overlay outlives the call.
+        if (queueIt && options.onlineOnly) throw notQueued(options.functionPath)
+
         val installed = recorded.map { Optimistic.install(it, deferred) }
 
         handles = installed
-        evicted = if (send != null || !(wasEverConnected || offlineQueue.queueBeforeFirstConnect)) {
-            null
-        } else {
-            offlineQueue.enqueue(queuedWrite(options, writeId, installed))
-        }
+        evicted = if (queueIt) offlineQueue.enqueue(queuedWrite(options, writeId, installed)) else null
     }
 
     for (call in deferred) call()
+
+    // The callbacks above are consumer code, and one may have dropped the socket. An online-only write that would
+    // now queue is refused here, with its overlays rolled back, rather than sent while the shard is down.
+    if (options.onlineOnly && synchronized(lock) { send == null && (wasEverConnected || offlineQueue.queueBeforeFirstConnect) }) {
+        rollbackLayers(handles)
+        throw notQueued(options.functionPath)
+    }
 
     if (evicted != null) {
         // Settled with the monitor released: the cap's discard rolls optimistic
@@ -154,16 +172,30 @@ fun Client.submit(options: SubmitOptions): MutationOutcome {
     } catch (error: Exception) {
         rollbackLayers(handles)
 
+        // An online-only write is never queued, so a transport failure while the shard has no
+        // open connection is refused as the queued path refuses it. A coded reply is the
+        // server's verdict, and an ApiException is the only error carrying one.
+        val wireFailure = error !is ApiException && Client.isTransient(error)
+
+        if (options.onlineOnly && wireFailure && synchronized(lock) { send == null }) {
+            throw notQueued(options.functionPath, error)
+        }
+
         throw error
     }
 
     // Confirmed against the write's COMMITTED cursor, so the overlay drops when
     // (or once) a frame at that cursor lands — never on this call's return,
-    // which races the socket broadcast.
+    // which races the socket broadcast. Confirmed even when the result does not
+    // decode: the write committed, and `value()` then throws that error.
     confirmLayers(handles, reply.commitCursor)
 
-    return MutationOutcome(MutationStatus.COMMITTED, writeId, reply.result, reply.commitCursor)
+    return MutationOutcome(MutationStatus.COMMITTED, writeId, reply.value(), reply.commitCursor)
 }
+
+/** The refusal an online-only write gets when it cannot go out over a live connection. */
+private fun notQueued(functionPath: String, cause: Throwable? = null): OfflineException =
+    OfflineException(OFFLINE_NOT_QUEUED, "'$functionPath' is online-only and the connection is not live, so it was not queued", cause)
 
 /**
  * Replays one shard's queued writes, in order, over HTTP. Call it when that
@@ -189,7 +221,8 @@ fun Client.submit(options: SubmitOptions): MutationOutcome {
 fun Client.flushOfflineQueue(shardKey: String? = null): FlushReport {
     val report = FlushReport()
     val queue: OfflineQueue
-    val current: String?
+    val current: Identity
+    val token: String?
 
     synchronized(lock) {
         // A server that answered "not now" gets waited out. Without this the
@@ -204,7 +237,8 @@ fun Client.flushOfflineQueue(shardKey: String? = null): FlushReport {
         }
 
         queue = offlineQueue
-        current = identity
+        current = effectiveIdentity()
+        token = authToken
     }
 
     val stale = staleWrites(queue)
@@ -228,11 +262,22 @@ fun Client.flushOfflineQueue(shardKey: String? = null): FlushReport {
     if (drained.isEmpty()) return report
 
     // Gated against ONE identity snapshot: a flush is a single authenticated
-    // burst, so every write in it necessarily runs under one identity.
+    // burst, so every write in it runs under one identity — and is SENT with the
+    // token snapshotted beside it, never the one held when its request goes out,
+    // or a token swapped mid-flush would carry the rest of the pass. A write whose
+    // owner cannot be told (nobody signed in) is HELD: back on the queue, still
+    // persisted, unsettled.
     val stamped = mutableListOf<QueuedMutation>()
     val foreign = mutableListOf<QueuedMutation>()
+    val held = mutableListOf<QueuedMutation>()
 
-    for (item in drained) (if (identityAllowsReplay(item.identity, current)) stamped else foreign).add(item)
+    for (item in drained) {
+        when (replayIdentityVerdict(item.identity, current, token)) {
+            Verdict.MATCH -> stamped
+            Verdict.UNKNOWN -> held
+            Verdict.MISMATCH -> foreign
+        }.add(item)
+    }
 
     settleTerminal(queue, foreign, report, OFFLINE_IDENTITY_CHANGED, "offline mutation skipped: auth identity changed before replay")
 
@@ -253,7 +298,24 @@ fun Client.flushOfflineQueue(shardKey: String? = null): FlushReport {
         settleTerminal(queue, listOf(item), report, OFFLINE_WRITE_UNENCODABLE, "offline mutation dropped: its arguments cannot be wire-encoded: $failure")
     }
 
-    replay(queue, sendable, report)
+    try {
+        replay(queue, sendable, report, token)
+    } finally {
+        // Held writes keep their place in line: the ones the replay put back are
+        // pulled out again and returned beside them in the order they drained.
+        if (held.isNotEmpty()) {
+            val position = drained.withIndex().associate { (index, item) -> item.id to index }
+
+            synchronized(lock) {
+                val requeued = report.requeued.toSet()
+                val back = queue.drain { it.id in requeued }
+
+                queue.requeue((back + held).sortedBy { position[it.id] ?: -1 })
+            }
+
+            held.mapTo(report.requeued) { it.id }
+        }
+    }
 
     return report
 }
@@ -299,12 +361,36 @@ private fun Client.settleTerminal(queue: OfflineQueue, entries: List<QueuedMutat
     }
 }
 
-private fun Client.replay(queue: OfflineQueue, sendable: List<QueuedMutation>, report: FlushReport) {
+/**
+ * Replays [sendable], and whatever happens, leaves none of them lost.
+ *
+ * Every write here has already been DRAINED, so one that is neither settled nor
+ * requeued when control leaves by an unexpected exception — an `Error` from a
+ * consumer's callback, a bug — would exist nowhere but its durable record. The
+ * `finally` puts every such write back at the front, in order, before the
+ * exception propagates. The report is the ledger: each write is entered in it
+ * before any consumer code runs for it.
+ */
+private fun Client.replay(queue: OfflineQueue, sendable: List<QueuedMutation>, report: FlushReport, token: String?) {
+    try {
+        replayAll(queue, sendable, report, token)
+    } finally {
+        val accounted = (report.committed + report.rejected + report.requeued).toSet()
+        val lost = sendable.filter { it.id !in accounted }
+
+        if (lost.isNotEmpty()) {
+            synchronized(lock) { queue.requeue(lost) }
+            lost.mapTo(report.requeued) { it.id }
+        }
+    }
+}
+
+private fun Client.replayAll(queue: OfflineQueue, sendable: List<QueuedMutation>, report: FlushReport, token: String?) {
     // A lone write rides the single-call path, which is the proven one. Two or
     // more coalesce into batch round trips — the flaky-reconnect win, where N
     // queued writes cost a handful of hops instead of N.
     if (sendable.size < 2) {
-        replaySequential(queue, sendable, report)
+        replaySequential(queue, sendable, report, token)
 
         return
     }
@@ -315,7 +401,7 @@ private fun Client.replay(queue: OfflineQueue, sendable: List<QueuedMutation>, r
     for ((index, chunk) in chunks.withIndex()) {
         // Chunks replay sequentially, which is what preserves FIFO across a flush
         // longer than one batch.
-        val (requeue, stop) = replayBatched(queue, chunk, report)
+        val (requeue, stop) = replayBatched(queue, chunk, report, token)
 
         toRequeue.addAll(requeue)
 
@@ -406,10 +492,10 @@ private fun Client.noteRetryAfter(report: FlushReport, error: Exception) {
 }
 
 /** Replays writes one at a time. FIFO is preserved by the loop itself. */
-private fun Client.replaySequential(queue: OfflineQueue, sendable: List<QueuedMutation>, report: FlushReport) {
+private fun Client.replaySequential(queue: OfflineQueue, sendable: List<QueuedMutation>, report: FlushReport, token: String?) {
     for ((index, item) in sendable.withIndex()) {
         val reply = try {
-            rpcFull(item.functionPath, item.args, item.shardKey, item.id, item.clientId)
+            rpcFull(item.functionPath, item.args, item.shardKey, item.id, item.clientId, token)
         } catch (error: Exception) {
             if (!Client.isTransient(error)) {
                 synchronized(lock) { queue.unpersist(item.id) }
@@ -431,12 +517,15 @@ private fun Client.replaySequential(queue: OfflineQueue, sendable: List<QueuedMu
             return
         }
 
+        // Committed even when the result does not decode (`decodeError`): replaying
+        // it could only return the same result, so the error rides the settled
+        // event instead.
         synchronized(lock) { queue.unpersist(item.id) }
+        report.committed.add(item.id)
         // The overlay is confirmed BEFORE the caller is told, so the gapless
         // drop is already in place when the confirming frame lands.
         item.onCommit?.invoke(reply.commitCursor)
-        settleWrite(item, MutationStatus.COMMITTED, reply.result, null)
-        report.committed.add(item.id)
+        settleWrite(item, MutationStatus.COMMITTED, reply.result, reply.decodeError)
     }
 }
 
@@ -452,7 +541,7 @@ private fun Client.replaySequential(queue: OfflineQueue, sendable: List<QueuedMu
  * whole chunk failed at the transport level. Re-queuing is the caller's, once and
  * in order, so a write cannot land twice in the queue.
  */
-private fun Client.replayBatched(queue: OfflineQueue, items: List<QueuedMutation>, report: FlushReport): Pair<List<QueuedMutation>, Boolean> {
+private fun Client.replayBatched(queue: OfflineQueue, items: List<QueuedMutation>, report: FlushReport, token: String?): Pair<List<QueuedMutation>, Boolean> {
     val calls = items.mapIndexed { index, item ->
         buildMap<String, Any?> {
             put("args", Wire.encode(item.args))
@@ -470,31 +559,40 @@ private fun Client.replayBatched(queue: OfflineQueue, items: List<QueuedMutation
         }
     }
 
-    val body = try {
-        rpcBatch(calls)
+    val (status, body) = try {
+        rpcBatch(calls, token)
     } catch (error: Exception) {
         // Transport failure — nothing committed, so retry everything.
         return items to true
     }
 
-    (body["results"] as? List<*>)?.let { return settleBatchSlots(queue, items, it, report) to false }
+    (body?.get("results") as? List<*>)?.let { return settleBatchSlots(queue, items, it, report) to false }
 
     // No per-slot results. A coded envelope is a verdict on the WHOLE batch — a
-    // bad request, an authorization denial — and therefore terminal for every
-    // entry; anything else is transport, and transient.
-    val envelope = body["error"] as? Map<*, *> ?: return items to true
-    val error = batchSlotError(envelope, "batch rejected")
+    // bad request, an authorization denial — classified by its code alone, by the
+    // same predicate as a single call. With no envelope a 413 is still
+    // PAYLOAD_TOO_LARGE (an edge's own HTML refusal); anything else is transport,
+    // and transient.
+    val envelope = body?.get("error") as? Map<*, *>
+    val error = when {
+        envelope != null -> Client.envelopeError(envelope, "batch rejected")
+        status == 413 -> Client.envelopeless(status)
+        else -> return items to true
+    }
 
     // The body was too big, not wrong — every entry in it would have committed
     // alone. Halve and retry: the estimate the chunker used cannot see the framing
-    // the worker actually measured, and only the answer can.
+    // the worker actually measured, and only the answer can. A chunk halved down
+    // to one write that is STILL refused settles terminally below: splitting
+    // cannot help it, and re-queueing sends the identical body into the identical
+    // refusal forever.
     if (error.code == PAYLOAD_TOO_LARGE && items.size > 1) {
         val middle = items.size / 2
-        val (left, leftStop) = replayBatched(queue, items.subList(0, middle), report)
+        val (left, leftStop) = replayBatched(queue, items.subList(0, middle), report, token)
 
         if (leftStop) return left + items.subList(middle, items.size) to true
 
-        val (right, stop) = replayBatched(queue, items.subList(middle, items.size), report)
+        val (right, stop) = replayBatched(queue, items.subList(middle, items.size), report, token)
 
         return left + right to stop
     }
@@ -544,10 +642,22 @@ private fun Client.settleBatchSlots(queue: OfflineQueue, items: List<QueuedMutat
             null
         } ?: continue
 
+        // An `error` key holding a string, a null, an array or a number is no
+        // envelope (§4.2), and a slot carries no HTTP status of its own to
+        // classify it by — so nothing readable came back about this entry, which
+        // is exactly the position of a slot the server never returned. §4.3
+        // retries that one. Falling through to the commit branch below settled a
+        // durable write COMMITTED with a null result and un-persisted it.
+        if (slot.containsKey("error") && slot["error"] !is Map<*, *>) {
+            requeue.add(item)
+
+            continue
+        }
+
         val envelope = slot["error"] as? Map<*, *>
 
         if (envelope != null) {
-            val error = batchSlotError(envelope, "request failed")
+            val error = Client.envelopeError(envelope, "request failed")
 
             // Classified by the SAME predicate as a whole batch and a single call,
             // never a second code set beside it: a slot's body is exactly a §4.2
@@ -569,26 +679,27 @@ private fun Client.settleBatchSlots(queue: OfflineQueue, items: List<QueuedMutat
             continue
         }
 
+        // The outcome is decided FIRST — decoded inside a guard — then the record
+        // removed, then the write settled. Decoding after the removal threw out
+        // of this loop with the record already gone: the write, committed
+        // server-side, was never settled, and every later slot was lost with it.
+        // An undecodable result is still a commit; its error rides the event.
+        val (value, decodeError) = try {
+            Client.decodeResult(slot["result"]) to null
+        } catch (error: ApiException) {
+            null to error
+        }
+
         synchronized(lock) { queue.unpersist(item.id) }
+        report.committed.add(item.id)
         // The overlay is confirmed BEFORE the caller is told, so the gapless drop
         // is already in place when the confirming frame lands.
         item.onCommit?.invoke((slot["commitCursor"] as? Number)?.toLong())
-        settleWrite(item, MutationStatus.COMMITTED, Wire.decode(slot["result"]), null)
-        report.committed.add(item.id)
+        settleWrite(item, MutationStatus.COMMITTED, value, decodeError)
     }
 
     return requeue
 }
-
-/**
- * Rebuilds an [ApiException] from a slot's or a batch's error envelope,
- * defaulting the way `parseRpcResponse` does.
- */
-private fun batchSlotError(envelope: Map<*, *>, fallback: String): ApiException = ApiException(
-    envelope["code"] as? String ?: "INTERNAL",
-    envelope["message"] as? String ?: fallback,
-    envelope["data"]?.let { Wire.decode(it) },
-)
 
 /**
  * Every live subscription as a snapshot slot, read under the monitor.
@@ -659,7 +770,7 @@ private fun Client.queuedWrite(options: SubmitOptions, writeId: String, handles:
 
     entry.clientId = clientId
     // Bound at enqueue time, so the write can only ever replay as whoever made it.
-    entry.identity = Identity.stamp(identity)
+    entry.identity = effectiveIdentity()
     entry.liveAwaiter = true
     entry.precondition = options.precondition
     entry.onCommit = { cursor -> confirmLayers(handles, cursor) }

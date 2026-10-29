@@ -92,7 +92,7 @@ When a write commits, the DO reads the new `__cdc_log` page once and sends the m
 
 The important inversion: the Durable Object never runs a dataflow pipeline. It ships facts. The client runs the incremental dataflow, via TanStack DB, and derives your live views on-device. That is what keeps the server side cheap. A write is "read one page of the log, send the diff," not "re-execute every subscribed query and compare."
 
-One honest limit to state plainly, because it matters if you are evaluating this: pokes ship whole-row post-images today, not per-column deltas. So do not expect column-delta bandwidth savings yet. Concurrent edits to different columns of the same row still converge, as long as your server impl patches only the fields it changes with `ctx.db.patch(id, { field })` rather than replacing the whole row (an advisor lint nags you toward the patch). The optimistic overlay rebases over the synced base each tick, and two offline edits to different fields of the same row both survive. Per-column convergence without a CRDT, but the wire format is still a full row for now.
+One honest limit to state plainly, because it matters if you are evaluating this: pokes ship whole-row post-images today, not per-column deltas. So do not expect column-delta bandwidth savings yet. Concurrent edits to different columns of the same row still converge, as long as your server impl patches only the fields it changes with `ctx.db.patch(table, id, { field })` rather than replacing the whole row (an advisor lint nags you toward the patch). The optimistic overlay rebases over the synced base each tick, and two offline edits to different fields of the same row both survive. Per-column convergence without a CRDT, but the wire format is still a full row for now.
 
 ## the client: a collection, a binder, a hook
 
@@ -103,8 +103,10 @@ import { bindMutators } from "@lunora/db/mutators";
 import { useMutator } from "@lunora/react";
 import { useLiveQuery } from "@tanstack/react-db";
 
-// wire once: bindMutators owns the optimistic transaction and the watermarked push
-const send = bindMutators(client, { collections, checkpoints }, mutators);
+// wire once: bindMutators owns the optimistic transaction and the watermarked push.
+// `scopeBy` routes each push to the shard its own `channelId` names — the same
+// shard the scoped `messages` collection syncs from, so its checkpoints line up.
+const send = bindMutators(client, { checkpoints, collections, scopeBy: "channelId" }, mutators);
 
 // in a component:
 const { data: messages } = useLiveQuery((q) => q.from({ m: collections.messages }));

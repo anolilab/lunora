@@ -4,6 +4,7 @@ import type { Readable } from "svelte/store";
 import { readable, writable } from "svelte/store";
 
 import { isBrowser } from "../../../shared/is-browser";
+import { assertPresenceInterval } from "../../../shared/presence-interval";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { getLunoraClient } from "./context";
 
@@ -77,9 +78,14 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     options: PresenceOptions<H, L>,
 ): PresenceHandle<L> => {
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
+
+    assertPresenceInterval(intervalMs);
+
     const sessionId = options.sessionId ?? randomSessionId();
 
     let latestData: Record<string, unknown> | undefined = options.data;
+    // True only between the client-side mount and teardown; `setData` must not heartbeat before then.
+    let mounted = false;
 
     const sendHeartbeat = (): void => {
         const args = {
@@ -93,7 +99,10 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
 
     const setData = (next: Record<string, unknown> | undefined): void => {
         latestData = next;
-        sendHeartbeat();
+
+        if (mounted) {
+            sendHeartbeat();
+        }
     };
 
     const onVisible = (): void => {
@@ -116,6 +125,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
     // `@lunora/vue`'s `use-presence.ts` guard; the returned store stays inert
     // until the component hydrates.
     if (isBrowser()) {
+        mounted = true;
         sendHeartbeat();
         intervalHandle = setInterval(sendHeartbeat, intervalMs);
 
@@ -170,6 +180,7 @@ const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresen
         }
 
         torndown = true;
+        mounted = false;
 
         if (intervalHandle !== undefined) {
             clearInterval(intervalHandle);

@@ -1,5 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
+import { MAX_SCHEDULED_FOR_MS } from "./scheduler-do";
+
 /**
  * Reject a `delayMs` a scheduler cannot act on, before it reaches the
  * SchedulerDO.
@@ -24,6 +26,13 @@ import { LunoraError } from "@lunora/errors";
 const assertScheduleDelay = (delayMs: number, surface: string, argument = "delayMs"): void => {
     if (!Number.isFinite(delayMs) || delayMs < 0) {
         throw new LunoraError("INVALID_INPUT", `${surface}: \`${argument}\` must be a non-negative finite number`);
+    }
+
+    // The SchedulerDO refuses an instant its time index cannot hold. Checked
+    // here too so the deferred facade refuses before it hands out a job id,
+    // not at the flush after the commit.
+    if (Date.now() + delayMs > MAX_SCHEDULED_FOR_MS) {
+        throw new LunoraError("INVALID_INPUT", `${surface}: \`${argument}\` is later than the latest schedulable instant (${String(MAX_SCHEDULED_FOR_MS)} ms)`);
     }
 };
 

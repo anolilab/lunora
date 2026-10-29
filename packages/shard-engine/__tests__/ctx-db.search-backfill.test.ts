@@ -107,7 +107,13 @@ const writerFor = (schema: SchemaLike): DatabaseWriterLike => {
 };
 
 /** How many rows the `by_body` companion currently holds — the index's coverage, independent of any analyzer. */
-const indexedRows = (): number => Number(harness.raw(`SELECT COUNT(*) AS count FROM "${ftsTableName("docs", "by_body")}"`)[0]?.["count"]);
+/** Indexed documents — the companion also holds a text-less sentinel row with an empty id. */
+const indexedRows = (): number =>
+    Number(
+        harness.raw(`SELECT COUNT(*) AS count FROM "${ftsTableName("docs", "by_body")}" WHERE "${ftsTableName("docs", "by_body")}"."__id__" <> ''`)[0]?.[
+            "count"
+        ],
+    );
 
 /** Titles matching `term` through the staged index, read the way an app would, under `schema`'s analysis. */
 const searchTitles = async (term: string, schema: SchemaLike = stagedSchema): Promise<unknown[]> => {

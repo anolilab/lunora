@@ -22,13 +22,20 @@ use serde_json::{json, Value};
 // with no `#[test]` in it — the manifest must stay the only entry point.
 mod offline_cases;
 
+// The socket session and whisper cases. Same arrangement: plain functions, dispatched
+// from the manifest arms below and wrapped in `#[test]`s at the foot of this file.
+mod socket_cases;
+
 use offline_cases::{
-    batch_entry_cap_matches_protocol, offline_flush_batch_splits_on_payload_too_large, offline_flush_batches_multiple_writes,
-    offline_flush_replays_and_confirms_optimistic, offline_flush_unencodable_write_settles_terminal, offline_queue_drains_only_the_named_shard,
-    offline_queue_fifo_replay_order, offline_queue_hydrate_overflow_settles_discarded, offline_queue_hydrates_persisted_writes,
-    offline_queue_identity_gate_rejects_replay, offline_queue_overflow_evicts_oldest, offline_queue_precondition_drops_stale_write,
-    optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor, optimistic_layer_drops_on_settled_frame,
-    optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
+    batch_entry_cap_matches_protocol, offline_flush_batch_splits_on_envelopeless_413, offline_flush_batch_splits_on_payload_too_large,
+    offline_flush_batches_multiple_writes, offline_flush_classifies_single_and_batch_alike, offline_flush_empty_shard_key_routes_to_default,
+    offline_flush_replays_and_confirms_optimistic, offline_flush_undecodable_result_settles_committed, offline_flush_unencodable_write_settles_terminal,
+    offline_online_only_leaves_normal_writes_queued, offline_online_only_refused_when_disconnected, offline_online_only_sends_when_connected,
+    offline_online_only_transport_failure_refused, offline_queue_drains_only_the_named_shard, offline_queue_fifo_replay_order,
+    offline_queue_hydrate_overflow_settles_discarded, offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay,
+    offline_queue_overflow_evicts_oldest, offline_queue_precondition_drops_stale_write, offline_unset_identity_stamps_token_digest,
+    offline_write_held_for_credential_replays_after_token_refresh, optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor,
+    optimistic_layer_drops_on_settled_frame, optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
 };
 
 /// Walks up from the crate directory to the repo's `protocol/fixtures`.
@@ -111,6 +118,10 @@ fn conformance_manifest_is_covered() {
             "non_2xx_without_error_envelope_fails" => non_2xx_without_error_envelope_fails(),
             "client_frame_builders" => client_frame_builders(),
             "server_frame_consumer" => server_frame_consumer(),
+            // The `complete` case lives inside the `serverFrames` loop, which is
+            // where every other frame's expectations already are. Two manifest
+            // names, one dispatch: the loop asserts both.
+            "complete_frame_cancels_without_dropping_the_subscription" => server_frame_consumer(),
             "subscription_stream_yields_frame_values_in_order" => subscription_stream_yields_frame_values_in_order(),
             "shape_subscribe_frame" => shape_subscribe_frame(),
             "shape_subscriptions_resend_after_reconnect" => shape_subscriptions_resend_after_reconnect(),
@@ -126,15 +137,38 @@ fn conformance_manifest_is_covered() {
             "offline_queue_drains_only_the_named_shard" => offline_queue_drains_only_the_named_shard(),
             "offline_queue_overflow_evicts_oldest" => offline_queue_overflow_evicts_oldest(),
             "offline_queue_precondition_drops_stale_write" => offline_queue_precondition_drops_stale_write(),
+            "offline_online_only_refused_when_disconnected" => offline_online_only_refused_when_disconnected(),
+            "offline_online_only_sends_when_connected" => offline_online_only_sends_when_connected(),
+            "offline_online_only_transport_failure_refused" => offline_online_only_transport_failure_refused(),
+            "offline_online_only_leaves_normal_writes_queued" => offline_online_only_leaves_normal_writes_queued(),
             "offline_queue_hydrates_persisted_writes" => offline_queue_hydrates_persisted_writes(),
             "offline_queue_identity_gate_rejects_replay" => offline_queue_identity_gate_rejects_replay(),
             "offline_flush_replays_and_confirms_optimistic" => offline_flush_replays_and_confirms_optimistic(),
             "offline_flush_batches_multiple_writes" => offline_flush_batches_multiple_writes(),
+            "offline_flush_unreadable_slot_is_retried" => offline_flush_batches_multiple_writes(),
             "offline_flush_batch_splits_on_payload_too_large" => offline_flush_batch_splits_on_payload_too_large(),
             "optimistic_cursorless_frame_preserves_cursor" => optimistic_cursorless_frame_preserves_cursor(),
             "offline_queue_hydrate_overflow_settles_discarded" => offline_queue_hydrate_overflow_settles_discarded(),
             "offline_flush_unencodable_write_settles_terminal" => offline_flush_unencodable_write_settles_terminal(),
             "batch_entry_cap_matches_protocol" => batch_entry_cap_matches_protocol(),
+            "offline_flush_empty_shard_key_routes_to_default" => offline_flush_empty_shard_key_routes_to_default(),
+            "offline_flush_undecodable_result_settles_committed" => offline_flush_undecodable_result_settles_committed(),
+            "offline_flush_classifies_single_and_batch_alike" => offline_flush_classifies_single_and_batch_alike(),
+            "offline_flush_batch_splits_on_envelopeless_413" => offline_flush_batch_splits_on_envelopeless_413(),
+            "offline_write_held_for_credential_replays_after_token_refresh" => offline_write_held_for_credential_replays_after_token_refresh(),
+            "shape_poke_with_undecodable_row_is_refused_whole" => shape_poke_with_undecodable_row_is_refused_whole(),
+            "malformed_frames_are_ignored_without_raising" => malformed_frames_are_ignored_without_raising(),
+            "rpc_unreadable_success_body_raises_sdk_error" => rpc_unreadable_success_body_raises_sdk_error(),
+            "subscription_stream_ends_on_close" => subscription_stream_ends_on_close(),
+            "identity_change_evicts_previous_session" => identity_change_evicts_previous_session(),
+            "auth_token_redacted_when_printed" => auth_token_redacted_when_printed(),
+            "offline_unset_identity_stamps_token_digest" => offline_unset_identity_stamps_token_digest(),
+            "connect_frame_first_and_carries_session_token" => socket_cases::connect_frame_first_and_carries_session_token(),
+            "ws_url_carries_only_the_admin_ticket" => socket_cases::ws_url_carries_only_the_admin_ticket(),
+            "attach_socket_carries_connection_context" => socket_cases::attach_socket_carries_connection_context(),
+            "close_codes_drive_token_expiry" => socket_cases::close_codes_drive_token_expiry(),
+            "whisper_frames_join_send_and_deliver" => socket_cases::whisper_frames_join_send_and_deliver(),
+            "whisper_topics_rejoin_after_reconnect" => socket_cases::whisper_topics_rejoin_after_reconnect(),
             other => panic!("protocol/conformance-cases.json requires case {other:?}, which this suite does not implement"),
         }
     }
@@ -319,6 +353,12 @@ fn format_number_matches_ecmascript() {
         (1.152_921_504_606_847e18, "1152921504606847000"),
         // Negative zero keeps its sign in a key.
         (-0.0, "-0"),
+        // Exactly halfway between two shortest candidates (…719.25, …467.625):
+        // ECMAScript takes the EVEN digit, where Rust's shortest formatter
+        // rounds the tie up and spelled these …719.3 and …467.63.
+        (-1_447_690_133_445_719.2, "-1447690133445719.2"),
+        (180_078_061_673_467.62, "180078061673467.62"),
+        (-132_405_809_496.453_12, "-132405809496.45312"),
     ] {
         assert_eq!(stable_stringify(&json!(value)), want, "formatting {value}");
     }
@@ -416,6 +456,10 @@ fn rpc_responses() {
             Err(ClientError::Api(error)) => {
                 assert_eq!(error.code, case["code"].as_str().unwrap(), "{name}");
                 assert_eq!(error.message, case["message"].as_str().unwrap(), "{name}");
+
+                if case["dataDropped"] == json!(true) {
+                    assert_eq!(error.data, None, "{name}: undecodable data is dropped");
+                }
             }
             other => panic!("expected an ApiError for {name}, got {other:?}"),
         }
@@ -424,26 +468,38 @@ fn rpc_responses() {
 
 fn non_2xx_without_error_envelope_fails() {
     // protocol/README.md §4.2. Without the status check this returned a null
-    // result and no error — the caller believes its mutation committed.
-    let Err(ClientError::Api(error)) = parse_rpc_response(&json!({ "message": "bad gateway" }), 502) else {
-        panic!("a non-2xx with no error envelope must fail");
-    };
+    // result and no error — the caller believes its mutation committed. The
+    // fixture's non-object `error` slots are the other half: a slot holding a
+    // string, a null or an array is not an envelope either, and a port reading
+    // one without a type check raises its LANGUAGE's error rather than the
+    // SDK's, escaping every handler the caller wrote.
+    let document = fixture("rpc.json");
 
-    // The CODE is unchanged, per §4.2. What is new is the flag beside it: this
-    // body never came from a Lunora function, so nothing reached the shard and a
-    // lone queued write must not be dropped for being alone.
-    assert_eq!(error.code, "INTERNAL");
-    assert!(error.transient, "an envelope-less non-2xx reached no verdict");
-    assert!(is_transient(&ClientError::Api(error)));
+    for case in document["responseTransportError"].as_array().expect("responseTransportError") {
+        let name = case["name"].as_str().unwrap_or("?");
+        let status = case["status"].as_u64().expect("status") as u16;
 
-    // A coded 5xx is likewise the shard failing UNDER the call, while the same
-    // envelope at 4xx is the function's own answer and terminal.
+        let Err(ClientError::Api(error)) = parse_rpc_response(&case["response"], status) else {
+            panic!("{name}: a non-2xx with no error envelope must fail");
+        };
+
+        // The CODE is unchanged, per §4.2. What is new is the flag beside it: this
+        // body never came from a Lunora function, so nothing reached the shard and a
+        // lone queued write must not be dropped for being alone.
+        assert_eq!(error.code, case["code"].as_str().unwrap(), "{name}");
+        assert!(error.transient, "{name}: an envelope-less non-2xx reached no verdict");
+        assert!(is_transient(&ClientError::Api(error)));
+    }
+
+    // A CODED envelope is a verdict whatever its status: the code alone decides
+    // a replay, so a coded 5xx is exactly as terminal as a coded 4xx
+    // (`offline_flush_classifies_single_and_batch_alike`).
     let coded = |status| match parse_rpc_response(&json!({ "error": { "code": "BAD_REQUEST", "message": "no" } }), status) {
-        Err(ClientError::Api(error)) => error.transient,
+        Err(ClientError::Api(error)) => is_transient(&ClientError::Api(error)),
         other => panic!("expected an ApiError, got {other:?}"),
     };
 
-    assert!(coded(503));
+    assert!(!coded(503));
     assert!(!coded(400));
 }
 
@@ -452,9 +508,9 @@ fn client_frame_builders() {
     let frames = &document["clientFrames"];
     let args = WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]);
 
-    assert_eq!(canonical(&build_connect_frame(Some("client-test"), None)), canonical(&frames["connect"]));
+    assert_eq!(canonical(&build_connect_frame(Some("client-test"), None, None)), canonical(&frames["connect"]));
     assert_eq!(
-        canonical(&build_connect_frame(Some("client-test"), Some(&json!({ "roomId": "general" })))),
+        canonical(&build_connect_frame(Some("client-test"), Some(&json!({ "roomId": "general" })), None)),
         canonical(&frames["connect-with-context"])
     );
     assert_eq!(
@@ -470,12 +526,20 @@ fn client_frame_builders() {
 
 fn server_frame_consumer() {
     let document = fixture("ws-frames.json");
+    let mut cancellations = 0;
 
     for case in document["serverFrames"].as_array().expect("serverFrames") {
         let name = case["name"].as_str().unwrap_or("?");
         let mut client = Client::new("https://app.example", None);
+        let sent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let outbound = Arc::clone(&sent);
 
-        client.attach_socket(Box::new(|_frame| {}));
+        client.attach_socket(
+            Box::new(move |frame| {
+                outbound.lock().expect("sent").push(frame.clone());
+            }),
+            None,
+        );
 
         // `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>`: the handler aliases are
         // `Send`, which is what makes `Client` itself `Send` and shareable — see
@@ -491,6 +555,8 @@ fn server_frame_consumer() {
             Some(Box::new(move |value| seen_handle.lock().expect("seen").push(value.clone()))),
             Some(Box::new(move |error| errors_handle.lock().expect("errors").push(error.clone()))),
         );
+
+        sent.lock().expect("sent").clear();
 
         let kind = client.handle_frame(&case["frame"].to_string()).expect("handle");
         let expect = &case["expect"];
@@ -510,7 +576,38 @@ fn server_frame_consumer() {
             assert_eq!(errors.len(), 1, "{name}");
             assert_eq!(errors[0].code.as_deref(), expect["code"].as_str(), "{name}");
         }
+
+        // Cancelled AND kept. Removing the entry takes it out of the map
+        // `resend_subscriptions` walks, which froze the query across every
+        // future reconnect — and dropped the stream's `Sender` with it, so the
+        // consumer saw a bare `RecvError` instead of a coded cancellation.
+        if expect["resendsAfterReconnect"] == json!(true) {
+            cancellations += 1;
+
+            {
+                let errors = errors.lock().expect("errors");
+
+                assert_eq!(errors.len(), 1, "{name}");
+                assert_eq!(errors[0].code.as_deref(), expect["code"].as_str(), "{name}");
+                assert_eq!(errors[0].message.as_str(), expect["message"].as_str().expect("message"), "{name}");
+            }
+
+            client.resend_subscriptions().expect("resend");
+
+            let outbound = sent.lock().expect("sent");
+            let resubscribed: Vec<&str> = outbound
+                .iter()
+                .filter(|frame| frame["type"] == json!("subscribe"))
+                .map(|frame| frame["id"].as_str().unwrap_or("?"))
+                .collect();
+
+            assert_eq!(resubscribed, vec![expect["id"].as_str().expect("id")], "{name}");
+        }
     }
+
+    // A conditional assertion that never runs is worse than none: without this,
+    // renaming the fixture key would leave every suite green.
+    assert_eq!(cancellations, 1, "serverFrames must carry one cancelling case");
 
     a_refused_payload_stays_on_its_own_subscription();
 }
@@ -523,7 +620,7 @@ fn server_frame_consumer() {
 fn a_refused_payload_stays_on_its_own_subscription() {
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let errors: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
     let recorder = Arc::clone(&errors);
@@ -570,7 +667,7 @@ fn subscription_stream_yields_frame_values_in_order() {
     let case = &document["stream"];
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let (events, id) = client.stream(
         "messages:list",
@@ -612,7 +709,7 @@ fn shape_subscribe_frame() {
 fn shape_subscriptions_resend_after_reconnect() {
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
     client.subscribe(
         "messages:list",
         WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
@@ -644,7 +741,10 @@ fn shape_subscriptions_resend_after_reconnect() {
     let resent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let recorder = Arc::clone(&resent);
 
-    client.attach_socket(Box::new(move |frame| recorder.lock().expect("resent").push(frame.clone())));
+    client.attach_socket(Box::new(move |frame| recorder.lock().expect("resent").push(frame.clone())), None);
+
+    // The attach wrote `connect`; this case is about what the resend adds after it.
+    resent.lock().expect("resent").clear();
     client.resend_subscriptions().expect("resend");
 
     let frames = resent.lock().expect("resent");
@@ -665,7 +765,7 @@ fn poke_sequence_materialises_rows() {
 
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
     let handle = Arc::clone(&delivered);
@@ -696,7 +796,7 @@ fn poke_parts_do_not_apply_before_poke_end() {
 
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let fired = Arc::new(Mutex::new(0));
     let handle = Arc::clone(&fired);
@@ -726,7 +826,7 @@ fn reset_poke_replaces_the_view() {
 
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
     let handle = Arc::clone(&delivered);
@@ -766,7 +866,7 @@ fn reset_poke_replaces_the_view() {
 fn pending_poke_buffers_are_bounded() {
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
     let handle = Arc::clone(&delivered);
@@ -834,6 +934,368 @@ fn pending_poke_buffers_are_bounded() {
     assert_eq!(delivered[0], vec![WireValue::String("kept".into())]);
 }
 
+/// Records every `on_rows` delivery and every `on_error` code of one shape.
+type ShapeRecorders = (Arc<Mutex<Vec<Vec<WireValue>>>>, Arc<Mutex<Vec<Option<String>>>>);
+
+/// A client subscribed to `roomMessages` (the fixtures' `shape_1`), with the
+/// frames it sends and the shape's callbacks recorded.
+fn shape_client() -> (Client, Arc<Mutex<Vec<Value>>>, ShapeRecorders) {
+    let mut client = Client::new("https://app.example", None);
+    let sent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let outbound = Arc::clone(&sent);
+    let rows: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
+    let errors: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+    let (rows_handle, errors_handle) = (Arc::clone(&rows), Arc::clone(&errors));
+
+    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())), None);
+    client.subscribe_shape(
+        "roomMessages",
+        Some(WireValue::Object(vec![("room".into(), WireValue::String("general".into()))])),
+        Some(Box::new(move |delivered| rows_handle.lock().expect("rows").push(delivered.to_vec()))),
+        Some(Box::new(move |error| errors_handle.lock().expect("errors").push(error.code.clone()))),
+    );
+
+    (client, sent, (rows, errors))
+}
+
+fn deliver(client: &mut Client, frames: &Value) {
+    for frame in frames.as_array().expect("frames") {
+        client.handle_frame(&frame.to_string()).expect("a frame must never fail handle_frame");
+    }
+}
+
+/// The frames `resend_subscriptions` sends now, keyed by type.
+fn resent(client: &Client, sent: &Arc<Mutex<Vec<Value>>>, kind: &str) -> Value {
+    sent.lock().expect("sent").clear();
+    client.resend_subscriptions().expect("resend");
+
+    let frames = sent.lock().expect("sent");
+
+    frames.iter().find(|frame| frame["type"] == json!(kind)).cloned().expect("a resent frame")
+}
+
+/// What the shape view holds, observed the only way a consumer can: an empty
+/// follow-up poke re-delivers the whole view.
+fn shape_view(client: &mut Client, rows: &Arc<Mutex<Vec<Vec<WireValue>>>>) -> Value {
+    deliver(
+        client,
+        &json!([
+            { "type": "pokeStart", "pokeId": "probe" },
+            { "type": "pokePart", "pokeId": "probe", "shapeId": "shape_1", "rowsPatch": [] },
+            { "type": "pokeEnd", "pokeId": "probe" },
+        ]),
+    );
+
+    let delivered = rows.lock().expect("rows").last().cloned().expect("the probe delivers the view");
+
+    encode_wire(&WireValue::Array(delivered)).expect("encode")
+}
+
+/// A poke is applied WHOLE or not at all, per shape: a row the codec refuses
+/// leaves the view, its checkpoint and its epoch untouched and reaches the
+/// shape's error callback — never `handle_frame`'s caller, whose read loop it
+/// would end.
+fn shape_poke_with_undecodable_row_is_refused_whole() {
+    let document = fixture("ws-frames.json");
+    let shape = &document["shape"];
+    let (mut client, sent, (rows, errors)) = shape_client();
+
+    deliver(&mut client, &shape["pokeSequence"]);
+    rows.lock().expect("rows").clear();
+    deliver(&mut client, &shape["undecodableRowPokeSequence"]);
+
+    assert!(rows.lock().expect("rows").is_empty(), "no rows callback fires for the refused poke");
+    assert_eq!(
+        *errors.lock().expect("errors"),
+        vec![shape["undecodableRowErrorCode"].as_str().map(str::to_string)],
+        "the shape's error callback hears it once"
+    );
+
+    let frame = resent(&client, &sent, "shape_subscribe");
+
+    assert_eq!(
+        frame["sinceCheckpoint"], shape["undecodableRowResendCheckpoint"],
+        "the checkpoint did not advance"
+    );
+    assert_eq!(frame["sinceEpoch"], json!("e1"));
+    assert_eq!(
+        canonical(&shape_view(&mut client, &rows)),
+        canonical(&shape["expectedRows"]),
+        "the view is untouched"
+    );
+
+    // The server believes it delivered the refused rows, so the next poke is
+    // based on checkpoint 12 while the view is at 5: a gap. The view is dropped,
+    // its callbacks told `[]`, the ops skipped, and a COLD re-subscribe sent.
+    rows.lock().expect("rows").clear();
+    sent.lock().expect("sent").clear();
+    deliver(&mut client, &shape["gapPokeSequence"]);
+
+    let told: Vec<Value> = rows
+        .lock()
+        .expect("rows")
+        .iter()
+        .map(|delivered| encode_wire(&WireValue::Array(delivered.clone())).expect("encode"))
+        .collect();
+
+    assert_eq!(told, vec![shape["gapExpectedRows"].clone()], "the callbacks are told the view emptied");
+
+    let resubscribes: Vec<Value> = sent
+        .lock()
+        .expect("sent")
+        .iter()
+        .filter(|frame| frame["type"] == json!("shape_subscribe"))
+        .cloned()
+        .collect();
+
+    assert_eq!(resubscribes.len(), 1, "a re-seed is requested at once");
+    assert_eq!(resubscribes[0]["id"], json!("shape_1"));
+    assert!(
+        resubscribes[0].get("sinceCheckpoint").is_none() && resubscribes[0].get("sinceEpoch").is_none(),
+        "cold"
+    );
+
+    let frame = resent(&client, &sent, "shape_subscribe");
+
+    assert!(
+        frame.get("sinceCheckpoint").is_none() && frame.get("sinceEpoch").is_none(),
+        "a later resume is cold too"
+    );
+    assert_eq!(shape_view(&mut client, &rows), shape["gapExpectedRows"], "the gap's ops were skipped");
+
+    // The counterweight: a poke based on the checkpoint the view IS at applies.
+    let (mut client, sent, (rows, _errors)) = shape_client();
+
+    deliver(&mut client, &shape["pokeSequence"]);
+    sent.lock().expect("sent").clear();
+    deliver(&mut client, &shape["contiguousPokeSequence"]);
+
+    let delivered = rows.lock().expect("rows").last().cloned().expect("delivered");
+
+    assert_eq!(
+        canonical(&encode_wire(&WireValue::Array(delivered)).expect("encode")),
+        canonical(&shape["contiguousExpectedRows"]),
+        "a contiguous poke applies"
+    );
+    assert!(sent.lock().expect("sent").is_empty(), "and re-seeds nothing");
+}
+
+/// Frames shaped like no server frame are ignored: none may fail
+/// `handle_frame` or panic, and none may touch the live subscription.
+fn malformed_frames_are_ignored_without_raising() {
+    let document = fixture("ws-frames.json");
+    let case = &document["malformedFrames"];
+    let mut client = Client::new("https://app.example", None);
+    let sent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let outbound = Arc::clone(&sent);
+    let touched = Arc::new(Mutex::new(0_usize));
+    let (on_data, on_error) = (Arc::clone(&touched), Arc::clone(&touched));
+
+    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())), None);
+    client.subscribe(
+        "messages:list",
+        WireValue::Object(Vec::new()),
+        Some(Box::new(move |_value| *on_data.lock().expect("touched") += 1)),
+        Some(Box::new(move |_error| *on_error.lock().expect("touched") += 1)),
+    );
+    client.handle_frame(&case["setupFrame"].to_string()).expect("setup frame");
+    *touched.lock().expect("touched") = 0;
+
+    for frame in case["frames"].as_array().expect("frames") {
+        if let Err(error) = client.handle_frame(&frame.to_string()) {
+            panic!("{frame} must be ignored, not fail handle_frame: {error}");
+        }
+    }
+
+    assert_eq!(*touched.lock().expect("touched"), 0, "no malformed frame reaches sub_1's callbacks");
+
+    let frame = resent(&client, &sent, "subscribe");
+
+    assert_eq!(
+        frame["query"]["sinceSeq"], case["resendSinceSeq"],
+        "a non-integer cursor never replaces the tracked one"
+    );
+    assert_eq!(frame["query"]["sinceEpoch"], case["resendSinceEpoch"]);
+}
+
+/// A response the call cannot read a result or an error envelope out of fails
+/// with this SDK's own coded error, never a bare transport string or a silent
+/// null result.
+fn rpc_unreadable_success_body_raises_sdk_error() {
+    let document = fixture("rpc.json");
+    let answering = |status: u16, body: &str| {
+        let body = body.as_bytes().to_vec();
+
+        Client::new("https://app.example", Some(Box::new(move |_url, _headers, _body| Ok((status, body.clone())))))
+    };
+
+    for case in document["unreadableSuccessBody"].as_array().expect("unreadableSuccessBody") {
+        let name = case["name"].as_str().unwrap_or("?");
+        let client = answering(case["status"].as_u64().expect("status") as u16, case["rawBody"].as_str().expect("rawBody"));
+        let args = WireValue::Object(Vec::new());
+
+        for (verb, outcome) in [
+            ("query", client.query("messages:list", &args, None)),
+            ("mutation", client.mutation("messages:send", &args, None, None)),
+            ("action", client.action("messages:notify", &args, None)),
+        ] {
+            match outcome {
+                Err(ClientError::Api(error)) => assert_eq!(error.code, case["code"].as_str().expect("code"), "{name} ({verb})"),
+                other => panic!("{name} ({verb}): expected the SDK's coded error, got {other:?}"),
+            }
+        }
+    }
+
+    // `{}` is how a function returning nothing is answered.
+    assert_eq!(
+        answering(200, "{}").query("messages:list", &WireValue::Object(Vec::new()), None).expect("void"),
+        WireValue::Null
+    );
+}
+
+/// `close()` ends every stream: the consumer iterating one drains what was
+/// delivered and then sees the channel close, rather than blocking forever.
+fn subscription_stream_ends_on_close() {
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::Duration;
+
+    let mut client = Client::new("https://app.example", None);
+
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let (events, id) = client.stream("messages:list", WireValue::Object(Vec::new()), None);
+
+    client
+        .handle_frame(&json!({ "type": "data", "id": id, "data": 1, "cursor": 1 }).to_string())
+        .expect("data frame");
+    client.close();
+
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(2)).expect("the delivered value"),
+        StreamEvent::Value(WireValue::Number(1.0))
+    );
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(2)),
+        Err(RecvTimeoutError::Disconnected),
+        "the stream ENDS on close instead of hanging"
+    );
+}
+
+/// A change FROM a set identity evicts that identity's session: resume cursors
+/// and epochs dropped, shape views emptied and told so. A first sign-in and a
+/// re-assertion of the same identity evict nothing.
+fn identity_change_evicts_previous_session() {
+    let document = fixture("ws-frames.json");
+    let case = &document["identityChange"];
+    let identity = |value: &Value| value.as_str().map(str::to_string);
+
+    for transition in case["transitions"].as_array().expect("transitions") {
+        let label = format!("{} -> {}", transition["from"], transition["to"]);
+        let (mut client, sent, (rows, _errors)) = shape_client();
+
+        client.set_identity(identity(&transition["from"]));
+        client.subscribe("messages:list", WireValue::Object(Vec::new()), None, None);
+        client.handle_frame(&case["queryFrame"].to_string()).expect("query frame");
+        deliver(&mut client, &document["shape"]["pokeSequence"]);
+        rows.lock().expect("rows").clear();
+
+        client.set_identity(identity(&transition["to"]));
+
+        let query = resent(&client, &sent, "subscribe");
+        let shape = resent(&client, &sent, "shape_subscribe");
+
+        if transition["evicts"] == json!(true) {
+            let evicted = &case["evicted"];
+
+            assert!(query["query"].get("sinceSeq").is_none(), "{label}: the query resubscribes cold");
+            assert!(query["query"].get("sinceEpoch").is_none(), "{label}");
+            assert!(shape.get("sinceCheckpoint").is_none(), "{label}: the shape resubscribes cold");
+            assert!(shape.get("sinceEpoch").is_none(), "{label}");
+
+            let told: Vec<Value> = rows
+                .lock()
+                .expect("rows")
+                .iter()
+                .map(|delivered| encode_wire(&WireValue::Array(delivered.clone())).expect("encode"))
+                .collect();
+
+            assert_eq!(
+                told,
+                vec![evicted["shapeCallbackRows"].clone()],
+                "{label}: the callbacks are told the view emptied"
+            );
+            assert_eq!(shape_view(&mut client, &rows), evicted["shapeRows"], "{label}: the view is empty");
+        } else {
+            let retained = &case["retained"];
+
+            assert_eq!(query["query"]["sinceSeq"], retained["sinceSeq"], "{label}");
+            assert_eq!(query["query"]["sinceEpoch"], retained["sinceEpoch"], "{label}");
+            assert_eq!(shape["sinceCheckpoint"], retained["sinceCheckpoint"], "{label}");
+            assert!(rows.lock().expect("rows").is_empty(), "{label}: nothing was evicted, so nobody is told");
+            assert_eq!(
+                shape_view(&mut client, &rows).as_array().expect("rows").len() as u64,
+                retained["shapeRowCount"].as_u64().expect("count"),
+                "{label}"
+            );
+        }
+    }
+
+    token_change_without_identity_evicts_previous_session(&document);
+}
+
+/// With no identity the token's digest IS the identity, so a new token is a
+/// change of user for the session as it is for the queue. Only a change FROM a
+/// token evicts, as only a change from a set identity does.
+fn token_change_without_identity_evicts_previous_session(document: &Value) {
+    let case = &document["identityChange"];
+    let transitions = [
+        (Some("token-a"), Some("token-b"), None, true),
+        (Some("token-a"), None, None, true),
+        (Some("token-a"), Some("token-a"), None, false),
+        (None, Some("token-a"), None, false),
+        (Some("token-a"), Some("token-b"), Some("user-a"), false),
+    ];
+
+    for (before, after, identity, evicts) in transitions {
+        let label = format!("{before:?} -> {after:?} (identity {identity:?})");
+        let (mut client, sent, (_rows, _errors)) = shape_client();
+
+        set_token(&mut client, before);
+        client.set_identity(identity.map(str::to_string));
+        client.subscribe("messages:list", WireValue::Object(Vec::new()), None, None);
+        client.handle_frame(&case["queryFrame"].to_string()).expect("query frame");
+        deliver(&mut client, &document["shape"]["pokeSequence"]);
+
+        set_token(&mut client, after);
+
+        let query = resent(&client, &sent, "subscribe");
+        let shape = resent(&client, &sent, "shape_subscribe");
+
+        assert_eq!(query["query"].get("sinceSeq").is_none(), evicts, "{label}: query");
+        assert_eq!(shape.get("sinceCheckpoint").is_none(), evicts, "{label}: shape");
+    }
+}
+
+fn set_token(client: &mut Client, token: Option<&str>) {
+    client.set_auth_token(token.map(str::to_string));
+}
+
+/// The bearer token never reaches a printed value. `Debug` is Rust's one
+/// standard "print this value" facility (`Client` has no `Display`), in both
+/// its compact and its pretty form.
+fn auth_token_redacted_when_printed() {
+    const TOKEN: &str = "lunora-secret-7f3a9c";
+
+    let mut client = Client::new("https://app.example", None);
+
+    client.set_auth_token(Some(TOKEN.to_string()));
+
+    for printed in [format!("{client:?}"), format!("{client:#?}")] {
+        assert!(!printed.contains(TOKEN), "the token leaked: {printed}");
+        assert!(printed.contains("https://app.example"), "and the rest still prints: {printed}");
+    }
+}
+
 /// The topology every real consumer has: a socket read loop on one thread and
 /// application code subscribing on others.
 ///
@@ -856,7 +1318,7 @@ fn concurrent_subscribe_and_handle_frame() {
 
     let client = Arc::new(Mutex::new(Client::new("https://app.example", None)));
 
-    client.lock().expect("client").attach_socket(Box::new(|_frame| {}));
+    client.lock().expect("client").attach_socket(Box::new(|_frame| {}), None);
 
     let workers: Vec<_> = (0..THREADS)
         .map(|_| {
@@ -896,7 +1358,14 @@ fn concurrent_subscribe_and_handle_frame() {
     let counter = Arc::clone(&resent);
     let mut guard = client.lock().expect("client");
 
-    guard.attach_socket(Box::new(move |_frame| *counter.lock().expect("resent") += 1));
+    guard.attach_socket(
+        Box::new(move |frame| {
+            if frame["type"] == json!("subscribe") {
+                *counter.lock().expect("resent") += 1;
+            }
+        }),
+        None,
+    );
     guard.resend_subscriptions().expect("resend");
 
     assert_eq!(
@@ -958,4 +1427,79 @@ fn from_model_json_matches_whole_paths() {
 
     assert!(encoded.get("limit").is_none(), "the top-level path prunes");
     assert_eq!(encoded["outer"]["limit"], Value::Null, "the same key one level down is a different path");
+}
+
+// The session credential must never ride the socket URL: not on the first open,
+// not on a reconnect, and not when the value comes from a provider re-resolved
+// on every open. The URL is built from the ticket alone; the session is read only
+// into the connect frame.
+#[test]
+fn session_credential_never_rides_the_url() {
+    const SESSION: &str = "sess-secret-123";
+    // The URL percent-encodes the hyphens, so a leak can show up in either form.
+    const SESSION_ENCODED: &str = "sess%2Dsecret%2D123";
+
+    let client = Client::new("https://app.example", None);
+    let leaks = |url: &str| url.contains(SESSION) || url.contains(SESSION_ENCODED);
+    let mut resolved = 0;
+    // `provider` stands in for an app-supplied resolver, called fresh on every open.
+    let mut provider = || {
+        resolved += 1;
+        SESSION
+    };
+
+    for open in 0..3 {
+        let session = provider();
+
+        assert!(
+            !leaks(&client.ws_url(Some("tenant_a"), Some("ticket-abc"))),
+            "open {open}: the URL carries the session credential"
+        );
+        assert!(!leaks(&client.ws_url(None, None)), "open {open}: the bare URL carries the session credential");
+        assert_eq!(
+            build_connect_frame(Some("client-test"), None, Some(session))["token"],
+            json!(SESSION),
+            "open {open}: connect token"
+        );
+    }
+
+    assert_eq!(resolved, 3, "the provider resolves once per open");
+}
+
+// The six socket cases run as ordinary tests too, so a failure names its test
+// without the manifest. The manifest arms above dispatch the same functions once
+// the manifest requires them.
+#[test]
+fn connect_frame_first_and_carries_session_token() {
+    socket_cases::connect_frame_first_and_carries_session_token();
+}
+
+#[test]
+fn ws_url_carries_only_the_admin_ticket() {
+    socket_cases::ws_url_carries_only_the_admin_ticket();
+}
+
+#[test]
+fn attach_socket_carries_connection_context() {
+    socket_cases::attach_socket_carries_connection_context();
+}
+
+#[test]
+fn close_codes_drive_token_expiry() {
+    socket_cases::close_codes_drive_token_expiry();
+}
+
+#[test]
+fn whisper_frames_join_send_and_deliver() {
+    socket_cases::whisper_frames_join_send_and_deliver();
+}
+
+#[test]
+fn whisper_topics_rejoin_after_reconnect() {
+    socket_cases::whisper_topics_rejoin_after_reconnect();
+}
+
+#[test]
+fn closed_client_does_not_rejoin_rooms() {
+    socket_cases::closed_client_does_not_rejoin_rooms();
 }

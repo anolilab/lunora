@@ -1,7 +1,6 @@
 import { isLunoraError, LunoraError } from "@lunora/errors";
+import { decodeWire, encodeWire, WIRE_TAG } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
-
-import { decodeWire, encodeWire, WIRE_TAG } from "../../../shared/wire-codec";
 
 /** JSON round-trip of the encoded form, mirroring what the transport actually does. */
 // eslint-disable-next-line unicorn/prefer-structured-clone -- must exercise the real JSON transport (structuredClone wouldn't serialize, nor throw on bigint), which is exactly what the codec exists to survive
@@ -321,6 +320,35 @@ describe("wireCodec round-trips", () => {
         expect(() => decodeWire([tag, "bigint", 123])).toThrow(RangeError);
         // A normal bigint still round-trips.
         expect(wire(-42n)).toBe(-42n);
+    });
+
+    it("refuses on encode the over-long bigint decode would refuse", () => {
+        expect.assertions(2);
+
+        // 1024 characters (sign included) is decode's bound; one past it must not
+        // encode, or a stored blob holding it fails every later read.
+        expect(wire(-(10n ** 1022n))).toBe(-(10n ** 1022n));
+        expect(() => encodeWire(10n ** 1024n)).toThrow(RangeError);
+    });
+
+    it("counts an Error's props at the depth decode reads them, so encode refuses what decode would", () => {
+        expect.assertions(2);
+
+        // Decode reads the props object at depth+1 and each field at depth+2.
+        // 62 array levels under a prop put the leaf at 64 (the cap); 63 put it
+        // at 65 — which the encoder used to accept at 64 and decode then refused.
+        const nested = (levels: number): unknown => {
+            let value: unknown = 1;
+
+            for (let index = 0; index < levels; index += 1) {
+                value = [value];
+            }
+
+            return value;
+        };
+
+        expect((wire(Object.assign(new Error("ok"), { data: nested(62) })) as Error & { data: unknown }).data).toStrictEqual(nested(62));
+        expect(() => encodeWire(Object.assign(new Error("deep"), { data: nested(63) }))).toThrow(RangeError);
     });
 
     // The decode side has always preserved a literal `__proto__` field (as an own

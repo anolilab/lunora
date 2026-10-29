@@ -48,21 +48,19 @@ export default defineApp<Env>()
 
 </Callout>
 
-`ctx.storage` is a narrower projection of the API below: `query` and `mutation`
-handlers are typed with a read-only surface (`download`, `head`, `getMetadata`,
-`getSignedUrl`, `getUrl`; a mutation also gets `deleteAfterCommit`), and only
-`action` handlers are typed with the full read/write surface (`store`, `delete`,
-`generateUploadUrl`, `getPresignedUrl`). Multipart (`createMultipartUpload` /
-`resumeMultipartUpload`), `upload`, and `list` are on **no** `ctx.storage`
-surface — call them on a `createStorage` instance (below). `download(key)`
-resolves to the R2 object (its metadata plus a `body` stream), not to a bare
-`ReadableStream`.
+`ctx.storage` is typed by context: `query` and `mutation` handlers get a
+read-only surface (`download`, `head`, `getMetadata`, `getSignedUrl`, `getUrl`;
+a mutation also gets `deleteAfterCommit`), and `action` handlers get the whole
+API below plus `bucket(name)` — `store` / `upload`, `delete`,
+`generateUploadUrl`, `getPresignedUrl`, multipart (`createMultipartUpload` /
+`resumeMultipartUpload`) and `list`. `download(key)` resolves to the R2 object
+(its metadata plus a `body` stream), not to a bare `ReadableStream`.
 
 <Callout>
     **The read-only / action-only split is a type-level one.** The object behind `ctx.storage` is the same in every context, so a `mutation` that casts past its
     type — or plain JavaScript — can still reach `delete`. TypeScript is the guardrail; it is not a sandbox. The runtime allowlist is `storageRules(...)`, which
-    rebuilds `ctx.storage` as exactly the gated surface and drops every ungated sibling (`upload`, multipart, `getPresignedUrl`, `list`) so nothing can route
-    around a rule. Reach for it whenever the split has to hold against more than a compiler.
+    rebuilds `ctx.storage` as exactly the gated surface — `upload` and multipart are checked as `write`, and `getPresignedUrl` and `list`, which no rule can
+    gate, reject with `FORBIDDEN` — so nothing can route around a rule. Reach for it whenever the split has to hold against more than a compiler.
 </Callout>
 
 ## Deleting an object with the row that owns it
@@ -98,13 +96,17 @@ reads an object without its row, so the window itself is invisible.
 `ctx.storage.bucket("avatars").deleteAfterCommit(key)` queues against that bucket.
 An action needs none of this for its own deletes — it is not transactional, so it
 calls `delete` directly — but a mutation it reaches through `ctx.runMutation`
-still queues, and those deletes are flushed when the action **returns**.
+still queues, and those deletes are flushed when **that mutation's** transaction
+commits, not when the action returns. The pairing therefore survives composition:
+the submutation opens its own transaction, so its queued deletes go with its
+commit and are dropped when it rolls back — even where the action swallows the
+failure and returns normally.
 
 <Callout type="warn">
-    **An action that throws drops its queued deletes.** The submutation's rows are already committed (`ctx.runMutation` does not put the action in a
-    transaction), so the row is gone and the object stays — and because the flush never ran, nothing is logged either. It is still the safe direction, an
-    orphaned object rather than a dangling row, but it is not the "the row and the bytes cannot disagree" guarantee a top-level mutation gives. If a delete has
-    to be observable, do the delete-and-row work in one top-level mutation rather than composing it from an action.
+    **A mutation composed from another mutation can orphan an object.** SQLite-in-DO has no savepoints, so a `ctx.runMutation` issued from inside a mutation
+    rides the enclosing transaction: if it throws and the outer handler swallows that, its ROWS stay (nothing rolled back) while its queued deletes are dropped
+    with it. The result is an orphaned object rather than a dangling row — the safe direction, but not the "the row and the bytes cannot disagree" guarantee. If
+    a delete has to be exact, do the delete-and-row work in one mutation rather than composing it from another.
 </Callout>
 
 Build the full `Storage` outside a handler (or to use the object-level reads,
@@ -151,7 +153,9 @@ const object = await storage.download("avatars/abc.png");
 
 if (object) {
     const bytes = await object.arrayBuffer();
-    // or: return new Response(object.body, { headers: { "content-type": object.httpMetadata?.contentType ?? "" } });
+    // To serve it over HTTP, use `serveStorageObject` from `@lunora/server` rather than
+    // echoing the stored content type: it adds `nosniff` and turns any non-image/media
+    // type into a download, so an uploaded `text/html` never renders on your origin.
 }
 ```
 
@@ -182,6 +186,54 @@ do {
     cursor = page.truncated ? page.cursor : undefined;
 } while (cursor);
 ```
+
+## Cache headers and read cost
+
+Each R2 read is a billed operation, so a cache that answers a request before it
+reaches the bucket saves money. Which cache can do that depends on how the object
+is served.
+
+- **Through the Worker** (`serveStorageObject` from `@lunora/server`). The
+  `Cache-Control` header comes from its `cacheControl` argument, which defaults to
+  `no-store`. That default is deliberate: the `authorize` gate decides per request
+  who may read the bytes, and a shared cache would replay one caller's object to
+  the next caller without running the gate again. A browser or CDN that stores the
+  response can answer repeat requests without an R2 read. Whether Cloudflare's
+  edge stores a Worker's response depends on zone cache rules, so the header alone
+  does not cut R2 reads across many clients. For that, cache the response in the
+  route with the Cache API, or serve the bucket from a custom domain.
+- **Direct from R2** (presigned URLs, or a public or custom-domain bucket). R2
+  returns the `cacheControl` stored in the object's `httpMetadata`, and zone cache
+  rules can add an edge TTL. `@lunora/storage` does not write that field, so set
+  it with the raw binding or manage it in zone rules.
+
+Pass a `public` value only when every caller that can reach the URL may read the
+object, because a cache hit skips `authorize`:
+
+```ts
+// Content-addressed key (the name changes whenever the bytes do): cache for a year.
+serveStorageObject(ctx, key, request, authorize, "public, max-age=31536000, immutable");
+
+// Mutable key: a short shared TTL.
+serveStorageObject(ctx, key, request, authorize, "public, max-age=300");
+```
+
+When `max-age` expires, a cache revalidates with `If-None-Match`.
+`serveStorageObject` answers `304 Not Modified` with no body when the ETag still
+matches, after the `authorize` gate, so a refused caller gets the same 403 as
+before. The check is a `head()`. A 304 costs one R2 HEAD and no body transfer. A
+changed object costs that HEAD plus the full read, which is one extra R2 operation
+compared with a request that sent no validator. R2 bills HeadObject and GetObject
+in the same class. Pick the longest TTL the content can tolerate, since each
+expiry costs one R2 HEAD, plus a full read when the object changed.
+
+R2 also has an Infrequent Access storage class, set per object with
+`storageClass` on the binding's put options. `@lunora/storage` does not expose
+it: its upload options carry no storage class, so the objects it writes are
+Standard. Do not move a frequently read bucket to Infrequent Access to cut
+storage cost. It has no free tier, its operations are billed on top of storage,
+and operations are charged per million, rounded up. Compare the R2 pricing page
+against your read rate before choosing it.
 
 ## Signed URLs
 
@@ -251,7 +303,9 @@ when the app's `.storage()` declaration does not carry `s3`.
 
 For very large objects use R2's native multipart upload: `createMultipartUpload`
 returns a handle whose `uploadPart` / `complete` / `abort` you drive yourself.
-Persist `uploadId` to resume across requests with `resumeMultipartUpload`.
+Persist `uploadId` to resume across requests with `resumeMultipartUpload`. Both
+are on `ctx.storage` inside an action, as is `list` — the way to sweep abandoned
+staging objects.
 
 ```ts
 const multipart = await storage.createMultipartUpload("videos/clip.mp4", { contentType: "video/mp4" });
@@ -271,46 +325,348 @@ resumable upload handlers (TUS / chunked-REST / multipart) behind an app-supplie
 (or `@lunora/vue` / `@lunora/solid` / `@lunora/svelte`, or the framework-agnostic
 `@lunora/client/upload`). Lunora does not hand-roll the uploader.
 
-`createUploadHandler` returns a `fetch(request)` you mount on the route your
-client uploads to. The `authorize` callback is the RLS decision: it runs before
-every request (create, chunk PATCH, resume HEAD, delete) and **denies
-fail-closed**: returning `false` or throwing yields a `403`, never a `500`.
+[File storage](/docs/concepts/file-storage#resumable-uploads-from-the-browser)
+walks through mounting it as an HTTP action, checking upload ownership, the
+client side, and the request-size limits. This is the reference.
+
+The subpath statically imports `node:async_hooks` (the grant scope is an
+`AsyncLocalStorage`) and, through the R2 providers, `node:stream`, so it needs
+Workers Node.js compatibility to load at all: a `compatibility_date` of
+`2026-08-04` or later enables `nodejs_compat` by default, and earlier ones need
+`nodejs_compat` in `compatibility_flags` (`nodejs_als` alone covers the
+`AsyncLocalStorage` import, but not `node:stream`). Without it the import fails
+when the module loads, so the subpath fails before `createUploadHandler` or
+`createUploadContext` is called — making the `AsyncLocalStorage` lazy would not
+change that.
+
+`createUploadHandler(options)` returns `{ fetch(request), protocol }`. Mount
+`fetch` on the route your client uploads to; one handler speaks one protocol, so
+each protocol needs its own route.
+
+| Option           | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `storage`        | The `@visulima/storage` provider the bytes land in: `createR2BindingUploadStorage(env.BUCKET)` (the Worker's R2 binding), `createR2UploadStorage(...)` (R2's S3 API, see below), or `@visulima/storage/provider/memory` in tests.                                                                                                                                                                                                                                                   |
+| `authorize`      | `({ method, protocol, request, url }) => boolean \| Response \| UploadGrant` (or a promise of one). Runs on every request (`POST` create, `PATCH` chunk, `HEAD` resume, `DELETE` cancel on TUS). `true` allows it, and so does a grant from `createUploadContext().grant(…)`, which the storage callbacks read back. A `Response` refuses with it (a `429` with `Retry-After`, say), passed through as it is plus `Tus-Resumable` on TUS. Anything else, or a throw, answers `403`. |
+| `protocol`       | `"tus"` (default, resumable), `"chunked-rest"` (resumable), or `"multipart"` (one request per file).                                                                                                                                                                                                                                                                                                                                                                                |
+| `maxFileSize`    | Bytes. Default 100 MiB, no unlimited setting; a value that is not a finite, non-negative number throws at construction.                                                                                                                                                                                                                                                                                                                                                             |
+| `maxFileSizeFor` | `({ contentType, metadata, declaredSize, granted, method, request, … }) => number \| undefined`. A per-upload cap below `maxFileSize`, from what the create request declares (TUS `Upload-Metadata`, chunked-REST `X-File-Metadata`). See below.                                                                                                                                                                                                                                    |
+| `public`         | Confirms that omitting `authorize` is intentional (an open bucket) and silences the warning it logs. `silent` is an alias.                                                                                                                                                                                                                                                                                                                                                          |
+
+An upload route is **write-only**. It answers only the methods its protocol
+needs to upload, and anything else gets a `405` before `authorize` runs:
+
+| Protocol       | Allowed                                      |
+| -------------- | -------------------------------------------- |
+| `tus`          | `POST`, `PATCH`, `HEAD`, `DELETE`, `OPTIONS` |
+| `chunked-rest` | `POST`, `PUT`, `PATCH`, `HEAD`, `OPTIONS`    |
+| `multipart`    | `POST`, `OPTIONS`                            |
+
+In particular `GET` is refused on every protocol, including `/:id/metadata` and
+the collection path. `@visulima/storage` serves stored files over `GET` (the
+bytes, byte ranges, the file record), and behind the upload gate that would let
+anyone allowed to upload, or anyone at all on a `public` route, read any file by
+id. Serve files with `ctx.storage.download()` or a
+[signed URL](#signed-urls), which have their own read-side check.
+
+The `Allow` header on a `405` lists exactly these methods. The CORS preflight
+(`OPTIONS`) still answers `@visulima/storage`'s full method list in
+`Access-Control-Allow-Methods`; that is cosmetic, since the route refuses the
+rest whatever the preflight says. On TUS it drops `Tus-Checksum-Algorithm` when
+the provider verifies no checksum (see below).
+
+A finished upload cannot be deleted through the handler either. On TUS, `DELETE`
+only cancels an upload in progress. The chunked-REST and multipart handlers would
+delete any stored file by id, so they do not take `DELETE` at all.
+
+A request carrying a method-override header (`X-HTTP-Method-Override`,
+`X-HTTP-Method` or `X-Method-Override`) is refused with the same `405`, before
+`authorize` runs. `@visulima/storage`'s TUS handler honors
+`X-HTTP-Method-Override` and would swap the method after the check above, so a
+`POST` overridden to `GET` would pass the write gate and be served as a read.
+The handler is also built with `allowMethodOverride: false`. Send each request
+with its real method; the bundled client does.
+
+A `HEAD`, `PATCH` or TUS `DELETE` answers only for an upload the route
+created: an id without upload state is a `404`, whatever object the bucket
+holds under that key
+([visulima/visulima#918](https://github.com/visulima/visulima/issues/918)).
+
+A chunked-REST `PUT` (`putFile` on the client) creates `<name>` and refuses
+(`409`) if a file already exists under that name: an earlier upload, or any
+object in the bucket at that key
+([visulima/visulima#919](https://github.com/visulima/visulima/issues/919)).
+`@visulima/storage` alone would replace an earlier upload. The check runs
+after `authorize` and the size caps, so a request that would be refused anyway
+gets that refusal, not a hint that the name is taken. A caller who may upload
+can still learn whether a name is taken. A lookup that fails (other than a 404) refuses the `PUT` rather than letting it replace a file.
+Over `createR2BindingUploadStorage` the final write is conditional too, so two
+`PUT`s racing for one new name store exactly one file (atomically for a file
+under 5 MiB, whose object is a single `put`; a larger one is checked again just
+before R2 completes it, as `complete()` takes no precondition). Over
+`createR2UploadStorage` it is a check before the write, so two `PUT`s racing
+for one new name can both write.
+
+On TUS every successful `PATCH` answers `204` with no body, the one that
+completes the upload included; read the new offset from `Upload-Offset`.
+
+How `maxFileSize` is enforced depends on the protocol. For TUS and chunked REST
+the handler reads the largest size the request declares across `Upload-Length`
+(TUS create), `X-Total-Size` (chunked-REST create) and `Content-Length`, and
+answers `413` above the cap, before `authorize` runs. A TUS upload created with
+`Upload-Defer-Length` declares no total, so this check does not cover it. For
+multipart the handler does not read `Content-Length`, which covers the whole form
+body including boundaries and would reject a file within the cap; the multipart
+parser enforces the cap on the file itself.
+
+`maxFileSizeFor` lowers the cap per upload, say 10 MiB for images and 2 GiB for
+video. It runs after `authorize`, on the requests that create an upload (`POST`,
+and the chunked-REST `PUT`) of TUS and chunked REST, and gets the decoded
+metadata, the declared MIME type and the declared size. The type is resolved
+the way the stored file's type is: on chunked REST the request's
+`Content-Type`; on TUS the metadata's `mimeType`, else `type`, else `filetype`;
+else `application/octet-stream`. Return a byte count, or `undefined` to leave
+`maxFileSize` as the only cap; the result never raises the cap past
+`maxFileSize`. TUS `Upload-Metadata` is parsed the way `@visulima/storage`
+parses it (pairs split on `,` and trimmed, then split on one space), and
+a header it would refuse (a pair of more than two parts, a duplicate key, a
+reserved key such as `uploadConcat`, a value that is not base64) gets the same
+`400` from the route, before `authorize` and `maxFileSizeFor` run, so the type a
+cap is decided on is always the type that is stored. A create that declares no
+size is answered `413` once a cap applies, and so is one whose declared size is
+not a non-negative integer (with or without a cap). A throw, or anything that is
+not a finite, non-negative number, is a `403`. The type is what the client says
+the file is: check it with the provider's `allowMIME` too. Multipart forms are
+not covered, since their size is only known once the form is parsed.
 
 ```ts
-import { createR2UploadStorage, createUploadHandler } from "@lunora/storage/upload";
-
-// Back the handler with R2 via the dependency-light `aws-light` provider
-// (aws4fetch, no AWS SDK). Needs `nodejs_compat` in wrangler.jsonc.
-const uploads = createUploadHandler({
-    storage: createR2UploadStorage({
-        accountId: env.CF_ACCOUNT_ID,
-        bucket: "user-uploads",
-        accessKeyId: env.R2_ACCESS_KEY_ID,
-        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-        path: "/upload",
-    }),
-    // RLS: resolve the caller from the request and allow only their own prefix.
-    authorize: async ({ request }) => {
-        const user = await resolveUser(request); // your session/JWT check
-
-        return user !== null;
-    },
+const handler = createUploadHandler({
+    storage: createR2BindingUploadStorage(env.UPLOADS),
+    authorize,
+    maxFileSize: 2 * 1024 * 1024 * 1024,
+    maxFileSizeFor: ({ contentType }) => (contentType.startsWith("image/") ? 10 * 1024 * 1024 : undefined),
 });
-
-export default {
-    async fetch(request: Request): Promise<Response> {
-        const url = new URL(request.url);
-
-        if (url.pathname.startsWith("/upload")) {
-            return uploads.fetch(request);
-        }
-
-        return handleRest(request);
-    },
-};
 ```
 
-`protocol` defaults to `"tus"` (the resumable, pause/resume-capable path); pass
-`"chunked-rest"` or `"multipart"` to mount a different one. Use a memory provider
-(`@visulima/storage/provider/memory`) in tests to exercise the whole flow
-(progress, pause/resume, resume-after-drop) without a live bucket.
+`createR2BindingUploadStorage(bucket, { statePrefix?, ...options })` writes
+uploads through the Worker's R2 binding, so it needs no S3 credentials and works
+the same under `wrangler dev` / miniflare, in tests and in production. The
+remaining options are `@visulima/storage`'s (`allowMIME`, `maxUploadSize`,
+`filename`, `onComplete`, …).
+
+Those callbacks get only the file. To name uploads per caller, create an upload
+context, have `authorize` answer its `grant(…)`, and read the value back with
+`get()` inside the callback. It holds the value of the request being handled, so
+one handler and one provider serve every caller:
+
+```ts
+import { createR2BindingUploadStorage, createUploadContext, createUploadHandler } from "@lunora/storage/upload";
+
+const caller = createUploadContext<{ userId: string }>();
+
+const handler = createUploadHandler({
+    storage: createR2BindingUploadStorage(env.UPLOADS, {
+        filename: (file) => `uploads/${caller.get().userId}/${file.id}`,
+    }),
+    authorize: async ({ request }) => {
+        const userId = await userIdFrom(request);
+
+        if (userId === undefined) {
+            return false;
+        }
+
+        if (await overLimit(userId)) {
+            return new Response(null, { headers: { "Retry-After": "30" }, status: 429 });
+        }
+
+        return caller.grant({ userId });
+    },
+});
+```
+
+A grant only comes from `grant(…)`: an object the gate builds itself, such as
+`{ context: … }`, is denied (`403`). `caller.get()` throws when the request was
+not admitted with one of its grants: outside an upload request, or when
+`authorize` answered `true`. `maxFileSizeFor` gets the same value as `granted`
+(`undefined` for `true`).
+
+- **Parts.** R2 requires every multipart part but the last to be at least 5 MiB
+  and all of them the same size. Chunks of any size are coalesced into parts of
+  exactly 5 MiB (`R2_PART_SIZE`); what does not fill a part waits in the bucket
+  as a small segment object until a later chunk completes it. A request holds at
+  most about two parts in memory. A file under 5 MiB never starts a multipart
+  upload and is written with one `put`.
+- **Sizes.** An upload must declare its size up front, as a non-negative
+  integer; a create without one is refused (`400`).
+- **State.** Each upload's offset, metadata, multipart upload id, stored parts
+  and waiting segments are a JSON object under `statePrefix` (default
+  `"_lunora/uploads/"`) in the same bucket, so a request can land on any
+  isolate. Progress is recorded after every stored part, so a request that is
+  killed loses at most the part it was working on. No uploaded object may be
+  named under the prefix (`400`). The state of a finished upload is kept,
+  shrunk to its file record, so `HEAD` still reports it complete; it and the
+  state of abandoned uploads accumulate, and they appear in listings of the
+  bucket. Add an R2 object lifecycle rule that deletes objects under the prefix
+  after a few days, longer than any upload should take.
+- **Per-caller state.** To keep one caller's uploads out of another's reach,
+  pass `stateScope`: a function returning the scope to read each request's
+  state under, ending in `/` (for example `` () => `${caller.get().userId}/` ``).
+  State then lives under `statePrefix` plus the scope, so a PATCH, HEAD or
+  DELETE from another scope finds nothing. `list()` reads only the unscoped
+  root, so scoped uploads do not appear in it.
+- **Removing uploads.** `DELETE` (TUS) or `expiration` aborts an upload in
+  progress, with its parts and segments. For a finished upload they drop only
+  the state, never the stored file: removing a file is `ctx.storage.delete`.
+- **Concurrency.** A chunk at an offset other than the stored one is a `409`. A
+  chunk also takes a lease on the upload with a conditional put, so a second
+  request for the same upload while one is streaming normally gets a `409`, and
+  the client re-reads the offset with `HEAD` and continues. Only when one
+  handler instance serves both requests (built once per isolate rather than per
+  request) does `@visulima/storage` answer the second TUS `PATCH` with a `423`
+  first, which the TUS client retries. The writer confirms the
+  lease before storing each part and before finishing, so one whose lease
+  lapsed stops (`409`) instead of writing on. A lease left behind by a request
+  that died expires after a minute. Tiny chunks cannot pile up waiting
+  segments: past eight, they are joined into one.
+- **Interrupted chunks.** When the client drops mid-chunk, the bytes that
+  arrived are kept and `HEAD` reports them, as TUS expects.
+- **Not supported:** the TUS `concatenation` and `creation-defer-length`
+  extensions (not advertised; a request using one gets a `501`), and
+  chunked-REST chunks sent out of order (`409`, see [below](#chunked-rest)).
+  `copy`/`move` on the provider are refused.
+- **Checksums.** The provider verifies no checksum itself, so the TUS
+  `checksum` extension is not advertised, `OPTIONS` carries no
+  `Tus-Checksum-Algorithm`, and a `PATCH` or `POST` that sends
+  `Upload-Checksum` anyway gets a `400` (`UnsupportedChecksumAlgorithm`) before `authorize` runs, without
+  its body being read. `@visulima/storage` would otherwise buffer the chunk in
+  memory to verify it, at about twice the chunk's size, which a few concurrent
+  requests could use to exhaust the isolate.
+
+The same refusal applies to any provider whose `checksumTypes` is empty
+(`@visulima/storage`'s memory provider among them), and `OPTIONS` there drops
+`checksum` from `Tus-Extension` too. On a provider that verifies
+some algorithms itself, `@visulima/storage` verifies the others by buffering the
+chunk: it needs a `Content-Length` (`411`), a mismatch is a `460`, and
+`createUploadHandler` caps the chunk at 16 MiB (`413`, refused before any byte
+is read), where upstream's default is 64 MiB.
+
+`createR2UploadStorage({ accountId, bucket, accessKeyId, secretAccessKey, endpoint?, partSize?, path? })`
+builds an R2 provider over the S3 API (`aws4fetch`, no AWS SDK; needs
+`nodejs_compat`). `path` must match the route the handler is mounted on, and
+`endpoint` is the account endpoint, an absolute `https://` URL such as
+`https://<accountId>.eu.r2.cloudflarestorage.com`; pass it to pin a
+jurisdiction. Plain `http://` is accepted only to `localhost`, `127.0.0.1` or
+`[::1]` (a local S3 such as MinIO). Anything else throws `VALIDATION_ERROR`
+when the storage is built. Requests go to `<endpoint>/<bucket>/<key>`, unless the `endpoint` already
+names the bucket, as its last path segment or as a virtual-hosted
+`https://<bucket>.<accountId>.r2.cloudflarestorage.com`. Each upload chunk
+becomes one part of an R2 multipart upload, and R2 rejects parts under 5 MiB
+except the last (and parts of unequal size), so a TUS client must send equal
+chunks of at least 5 MiB (the TUS client's default `chunkSize` is 5 MiB). The
+constructor throws on a missing credential: build it on first use rather than
+at module scope. It takes no upload limits of its own, so the handler's
+`maxFileSize` and `maxFileSizeFor` are the caps that apply.
+
+**Prefer `createR2BindingUploadStorage`.** It needs no S3 credentials, runs
+under `wrangler dev`, and has neither part-size restriction.
+
+### Chunked REST
+
+**For resumable uploads, use TUS** (the default protocol, and `useTusUpload` on
+the client). Over the R2 providers chunked REST takes one chunk at a time, so
+the bundled client can only use it for a single chunk.
+
+A client creates the upload with a `POST` carrying `X-Chunked-Upload: true` and
+`X-Total-Size`, then sends each chunk as a `PATCH` with `X-Chunk-Offset` and
+`Content-Length`. A chunk answers `202` with `X-Upload-Offset` until the one
+that completes the file, which answers `200` with `X-Upload-Complete: true` and
+the file record. `HEAD` reports `X-Upload-Offset`, `X-Upload-Complete` and
+`X-Received-Chunks`, so a client resumes from `X-Upload-Offset`.
+
+Over both R2 providers the chunks have to arrive **one at a time, in order**.
+They store bytes as they arrive (`createR2BindingUploadStorage` into equal
+5 MiB R2 parts, `createR2UploadStorage` as one part per chunk), so neither can
+hold a chunk for a gap that is still open:
+
+- A chunk at any offset other than the upload's current one, ahead of it or
+  overlapping bytes already stored, is a `409` (`FileConflict`) and nothing of
+  it is stored. Over the binding provider so is a second chunk while one is
+  still streaming (the provider's lease); `createR2UploadStorage` has no such
+  lease, so send one chunk at a time there.
+- A refused chunk never counts towards completion. `X-Upload-Offset` and
+  `X-Upload-Complete` come from the bytes the provider has stored, on `PATCH`
+  and on `HEAD` alike.
+- When a chunk is cut off mid-request over the binding provider, the bytes that
+  arrived are kept, and `HEAD` reports them. A raw protocol client re-reads the
+  offset with `HEAD` and continues from there.
+- `X-Received-Chunks` lists the byte ranges stored, contiguous chunks merged
+  into one, so the bundled client resuming an upload that is already complete
+  sends no chunk.
+- A finished upload keeps its state on both providers, so a `HEAD` answers it
+  complete.
+
+The bundled client (`useChunkedRestUpload`, `createChunkedRestAdapter`, and
+`useUpload` when it picks chunked REST) sends **one chunk at a time** since
+`@visulima/storage-client` 1.0.8, so multi-chunk uploads complete over both R2
+providers, and an interrupted one resumes from `X-Upload-Offset`. Each chunk has
+to fit Cloudflare's request body limit, and `@visulima/storage` caps a chunk at
+100 MiB.
+
+### Upgrading
+
+This release moves `@visulima/storage` to 2.0.33 and `@visulima/storage-client`
+to 1.0.8. What changes for an upload route:
+
+- **`GET` is refused** (`405`) on every protocol, before `authorize` runs, as
+  described above. Nothing that uploads needs it. Code that read files back
+  through the upload route, or that listed it with `@visulima/storage-client`'s
+  `useGetFileList` / `createGetFileList`, has to read through
+  `ctx.storage.download()` or a signed URL instead.
+- **A `PUT` that creates a file** (chunked REST) needs an id of letters, digits,
+  `_` and `-`, at most 255 characters, after its extension is stripped:
+  `PUT /upload/report-v2.pdf` creates `report-v2`, `PUT /upload/report.v2.pdf`
+  is a `400`.
+- **A `PUT` no longer replaces anything.** `PUT /upload/<name>` creates
+  `<name>` and refuses (`409`) if it already exists, see above. Replace a file
+  with `ctx.storage` instead.
+- **`Location`** on a chunked-REST `PUT` or `PATCH` is now
+  `<collection>/<id>.<ext>`. It used to repeat the id
+  (`<collection>/<id>/<id>.<ext>`).
+- **Chunked REST works** (it answered `400` to every chunk before) over both R2
+  providers, within the limits above.
+- **Method-override headers are refused** (`405`) on every protocol, before
+  `authorize` runs.
+- **TUS `Upload-Checksum` is refused** (`400`) on a provider that verifies no
+  checksum itself, `createR2BindingUploadStorage` included, and an invalid
+  `Upload-Metadata` is a `400` before `authorize` runs.
+- **TUS follows tus 1.0 more strictly.** The `PATCH` that completes an upload
+  answers `204` with no body (it was `200` with the file record), so the
+  client's progress now reaches 100%. A `PATCH` at the wrong offset is a `409`,
+  a second one for the same upload while one is streaming is a `423`, and a
+  malformed `Upload-Length`, `Upload-Offset` or `Upload-Metadata` is a `400`.
+- **The TUS client's default `chunkSize` is 5 MiB** (it was 1 MiB), and it
+  retries a `423`.
+- **The chunked-REST client sends one chunk at a time.** It sent four in
+  parallel, which the handlers refuse (`423`, or the R2 lease's `409`), so a
+  multi-chunk upload failed. It now completes, over both R2 providers too.
+- **`X-Received-Chunks` lists merged byte ranges** instead of one entry per
+  chunk, so the record stays small. A client checking whether a chunk arrived
+  tests whether a range covers it; the bundled client does.
+- **Empty files are valid uploads** on every protocol and over both R2 providers:
+  TUS `Upload-Length: 0`, a chunked-REST create with `X-Total-Size: 0`, and a
+  `PUT` with `Content-Length: 0`. An empty `PUT` is create-only like any other,
+  so it gets a `409` on a taken name.
+- **`createR2UploadStorage` puts the bucket in the request path.** It sent every
+  request to `<endpoint>/<key>`, which R2 read as a bucket named after the
+  file. It now goes to `<endpoint>/<bucket>/<key>`; an `endpoint` that already
+  names the bucket (in its path, or virtual-hosted) is not given it twice, and
+  one that is not an absolute `https://` URL (or `http://` to a loopback host)
+  throws `VALIDATION_ERROR`.
+- **Every upload gets a random id**
+  ([visulima/visulima#921](https://github.com/visulima/visulima/issues/921)).
+  The id was derived from the file's name, size and `lastModified`, so a second
+  client with the same file could take over the upload. A create that is sent
+  again now starts a new upload; the bundled clients resume from the `Location`
+  they kept, which is unaffected.
+- **A finished upload keeps its state on `createR2UploadStorage`**, as it
+  already did on `createR2BindingUploadStorage`: a small `<id>.META` object
+  beside the file, so a `HEAD` reports it complete.

@@ -70,7 +70,7 @@ export default defineConfig({
 ```
 
 ```ts
-// src/worker.ts — the composed worker's `export default`.
+// src/server.ts — the composed worker's `export default`.
 import { handle } from "@astrojs/cloudflare/handler";
 import { withLunora } from "@lunora/astro";
 
@@ -81,7 +81,7 @@ export default withLunora(
 );
 ```
 
-Set `"main": "src/worker.ts"` in `wrangler.jsonc` so wrangler bundles this entry. `withLunora` reserves `/_lunora/rpc`, `/_lunora/ws`, and `/_lunora/admin/*` for the realtime plane; every other request falls through to Astro's SSR handler. An Astro render that throws is contained at the seam as a plain 500 — it can't take down realtime.
+Set `"main": "src/server.ts"` in `wrangler.jsonc` so wrangler bundles this entry. `withLunora` reserves `/_lunora/rpc`, `/_lunora/ws`, and `/_lunora/admin/*` for the realtime plane; every other request falls through to Astro's SSR handler. An Astro render that throws is contained at the seam as a plain 500 — it can't take down realtime.
 
 Reactivity comes from the island adapter you hydrate with, not from this package. Preload a query in `.astro` frontmatter or a server endpoint with `@lunora/astro/server`, then hand the token to that adapter's `hydratePreloaded`:
 

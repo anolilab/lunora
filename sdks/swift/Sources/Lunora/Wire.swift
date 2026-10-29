@@ -142,6 +142,30 @@ public struct WireSet {
     public init(_ items: [Any]) { self.items = items }
 }
 
+/// A JSON object key compared by UTF-16 code unit, as JavaScript compares one.
+///
+/// Swift compares a lone surrogate as U+FFFD, so `"\ud800"`, `"\ud801"` and `"�"`
+/// are ONE `String` key and three JavaScript ones. An object whose keys differ
+/// only that way decodes to `[WireKey: Any]` rather than `[String: Any]`, keeping
+/// every member; every other object is still a `[String: Any]`. `encode`,
+/// `decode` and `stableStringify` accept both, so a value relayed through this
+/// client keeps its bytes and its stable key.
+///
+/// A string literal is a key (`object["id"]`); a key no literal can spell — a
+/// lone surrogate — is `WireKey(utf16: [0xD800])`.
+public struct WireKey: Hashable, Sendable, ExpressibleByStringLiteral, CustomStringConvertible {
+    public let utf16: [UInt16]
+
+    public init(_ string: String) { utf16 = Wire.utf16Units(string) }
+    public init(utf16: [UInt16]) { self.utf16 = utf16 }
+    public init(stringLiteral value: String) { self.init(value) }
+
+    /// The key as a `String`. Backed by an `NSString`, which keeps a lone
+    /// surrogate the Swift views would repair.
+    public var string: String { NSString(characters: utf16, length: utf16.count) as String }
+    public var description: String { string }
+}
+
 /// A typed-array view that is NOT a plain `Uint8Array`, carrying its constructor
 /// name so the exact view type survives. Plain `Uint8Array` bytes use `Data` and
 /// the 2-element wire form.
@@ -175,6 +199,7 @@ public enum WireFormatError: Error, CustomStringConvertible {
     case unsupported(String)
     case malformed(String)
     case outOfExactRange(String)
+    case invalidJSON(Int)
 
     public var description: String {
         switch self {
@@ -188,6 +213,8 @@ public enum WireFormatError: Error, CustomStringConvertible {
             return "wire-codec: malformed \(tag) tag"
         case .outOfExactRange(let value):
             return "wire-codec: integer \(value) exceeds the exact Double range — wrap it in WireBigInt so it crosses the wire as a bigint tag"
+        case .invalidJSON(let offset):
+            return "wire-codec: invalid JSON at byte \(offset)"
         }
     }
 }
@@ -238,6 +265,7 @@ extension Wire {
         if let string = value as? String { return string }
         if let array = value as? [Any] { return try encodeArray(array, depth: depth) }
         if let dictionary = value as? [String: Any] { return try encodeDictionary(dictionary, depth: depth) }
+        if let object = value as? [WireKey: Any] { return try encodeDictionary(object, depth: depth) }
 
         throw WireFormatError.unsupported(String(describing: type(of: value as Any)))
     }
@@ -267,8 +295,8 @@ extension Wire {
         return encoded
     }
 
-    private static func encodeDictionary(_ value: [String: Any], depth: Int) throws -> Any {
-        var result: [String: Any] = [:]
+    private static func encodeDictionary<Key: Hashable>(_ value: [Key: Any], depth: Int) throws -> Any {
+        var result: [Key: Any] = [:]
         for (key, field) in value {
             // Drop undefined fields, matching JSON.stringify, so a pure-JSON
             // object stays byte-identical across the codec.
@@ -302,13 +330,29 @@ extension Wire {
             return try array.map { try decode($0, depth: depth + 1) }
         }
 
-        if let dictionary = value as? [String: Any] {
-            var result: [String: Any] = [:]
-            for (key, item) in dictionary { result[key] = try decode(item, depth: depth + 1) }
-            return result
+        if let dictionary = value as? [String: Any] { return try decodeDictionary(dictionary, depth: depth) }
+        if let object = value as? [WireKey: Any] { return try decodeDictionary(object, depth: depth) }
+
+        // A number off the wire is a float64 whatever its spelling, and
+        // `JSON.stringify` writes every double in [2^53, 1e21) as an integer
+        // literal. A reader that types it as an integer handed ``encode`` a value
+        // it must refuse, so a frame carrying one could not be re-encoded or
+        // keyed. Yield the double `JSON.parse` does (9007199254740993 reads as
+        // 9007199254740992). A NATIVE integer that large is still refused by
+        // ``encode`` — only the decode side is a float64.
+        if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(), isIntegral(number),
+            abs(number.doubleValue) > maxExactInteger
+        {
+            return NSNumber(value: number.doubleValue)
         }
 
         return value ?? NSNull()
+    }
+
+    private static func decodeDictionary<Key: Hashable>(_ value: [Key: Any], depth: Int) throws -> Any {
+        var result: [Key: Any] = [:]
+        for (key, item) in value { result[key] = try decode(item, depth: depth + 1) }
+        return result
     }
 
     private static func decodeTagged(_ value: [Any], depth: Int) throws -> Any {
@@ -376,7 +420,7 @@ extension Wire {
         var seen: Set<String> = []
 
         for entry in raw {
-            let item = try decode(entry, depth: depth + 1)
+            let item = positiveZero(try decode(entry, depth: depth + 1))
 
             if let identity = mapKeyIdentity(item) {
                 if seen.contains(identity) { continue }
@@ -397,7 +441,7 @@ extension Wire {
         for item in raw {
             guard let pair = item as? [Any], pair.count == 2 else { throw WireFormatError.malformed("map entry") }
 
-            let key = try decode(pair[0], depth: depth + 1)
+            let key = positiveZero(try decode(pair[0], depth: depth + 1))
             let entry = (key: key, value: try decode(pair[1], depth: depth + 1))
 
             // Last write wins, at the FIRST occurrence's position — the reference
@@ -422,6 +466,16 @@ extension Wire {
         return WireMap(entries)
     }
 
+    /// Store a signed zero as `+0`, as `Set.prototype.add` and `Map.prototype.set`
+    /// do on INSERT — so a lone `-0` member or key re-encodes (and keys, per §3's
+    /// bare `-0` token) as `0` in the reference, not only when it collides.
+    private static func positiveZero(_ value: Any) -> Any {
+        // `as? Double` reads a bridged NSNumber too; a Bool is never a -0.
+        if let double = value as? Double, double == 0, double.sign == .minus { return 0.0 }
+
+        return value
+    }
+
     /// A map key's collapse identity, or `nil` when it never collapses.
     ///
     /// The reference's `Map` compares keys by SameValueZero: primitives by value
@@ -432,7 +486,10 @@ extension Wire {
         if key is NSNull { return "null" }
         if key is WireUndefined { return "undefined" }
         if let bigInt = key as? WireBigInt { return "big:\(normaliseBigInt(bigInt.digits))" }
-        if let text = key as? String { return "str:\(text)" }
+        // By UTF-16 unit, as JavaScript compares: interpolating the String would
+        // repair a lone surrogate to U+FFFD and collapse `"\ud800"`, `"\ud801"`
+        // and `"�"` into one key.
+        if let text = key as? String { return "str:" + utf16Units(text).map { String($0, radix: 16) }.joined(separator: ",") }
 
         // NSNumber bridges Bool, Int and Double indistinguishably under `as?`, so
         // booleans are identified by their CoreFoundation type first — `as? Bool`

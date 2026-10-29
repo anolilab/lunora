@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import discoverFunctions from "../../src/discover/functions";
 import discoverKvKeyAccesses from "../../src/discover/kv-key-accesses";
 import type { FunctionIR } from "../../src/ir";
 
@@ -38,7 +39,7 @@ describe("discoverKvKeyAccesses", () => {
         const found = discoverKvKeyAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "read", file: "read", line: 1, method: "get" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "read" }, file: "read", line: 1, method: "get" });
     });
 
     it("flags a put with an args-derived key", () => {
@@ -49,7 +50,7 @@ describe("discoverKvKeyAccesses", () => {
         const found = discoverKvKeyAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "save", method: "put" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "save" }, method: "put" });
     });
 
     it("flags a delete with an args-derived key", () => {
@@ -60,7 +61,7 @@ describe("discoverKvKeyAccesses", () => {
         const found = discoverKvKeyAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "remove", method: "delete" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "remove" }, method: "delete" });
     });
 
     it("flags an args value reached through one local const hop", () => {
@@ -130,6 +131,26 @@ describe("discoverKvKeyAccesses", () => {
         expect(found[0]).toMatchObject({ visibility: "internal" });
     });
 
+    it("stamps the visibility of a procedure exported under another name", () => {
+        expect.assertions(2);
+
+        // `export { warm as warmCache }`: attribution names the site `warmCache`,
+        // and discovery now registers the function under that same name, so the
+        // internal stamp applies instead of the site reading as unattributed.
+        write(
+            "cache.ts",
+            `import { internalMutation } from "@lunora/server";
+const warm = internalMutation(async ({ ctx, args }) => { await ctx.kv.put(args.cacheKey, args.blob); });
+export { warm as warmCache };`,
+        );
+
+        const functions = discoverFunctions(project, join(workdir, "lunora"));
+        const found = discoverKvKeyAccesses(project, join(workdir, "lunora"), functions);
+
+        expect(functions.map((entry) => [entry.exportName, entry.visibility])).toEqual([["warmCache", "internal"]]);
+        expect(found).toMatchObject([{ scope: { kind: "export", name: "warmCache" }, visibility: "internal" }]);
+    });
+
     it("leaves visibility undefined when the access can't be attributed to a supplied function", () => {
         expect.assertions(2);
 
@@ -147,5 +168,24 @@ describe("discoverKvKeyAccesses", () => {
         write("list.ts", `export const all = query(async ({ ctx, args }) => { return ctx.kv.list({ prefix: args.prefix }); });`);
 
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    // `keys.d.v2.ts` is a file TypeScript 5 classes as a declaration file, yet
+    // codegen discovers it and it holds real code. A shortcut keyed on
+    // `isDeclarationFile()` treated its `let owner` as never reassigned, so the
+    // ctx-scoped initializer hid the args-derived reassignment.
+    it.each(["keys.ts", "keys.d.v2.ts"])("flags a ctx-scoped `let` later reassigned from args, in %s", (name) => {
+        expect.assertions(1);
+
+        write(
+            name,
+            `export const leak = query(async ({ ctx, args }) => {
+  let owner = ctx.auth.userId;
+  owner = args.victim;
+  return ctx.kv.get(\`\${owner}/\${args.name}\`);
+});`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 });

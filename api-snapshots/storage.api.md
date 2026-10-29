@@ -149,12 +149,12 @@ interface Storage {
         truncated?: boolean;
     }>;
     resumeMultipartUpload: (key: string, uploadId: string) => R2MultipartUploadLike;
-    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{
+    store: (key: string, body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string, options?: UploadOptions) => Promise<{
         etag: string;
         httpEtag: string;
         key: string;
     }>;
-    upload: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{
+    upload: (key: string, body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string, options?: UploadOptions) => Promise<{
         etag: string;
         httpEtag: string;
         key: string;
@@ -237,9 +237,10 @@ const verifySignedUrl: (input: string | URL, secret: string, options?: {
 ### `CreateUploadHandlerOptions` (interface)
 
 ```ts
-interface CreateUploadHandlerOptions {
-    authorize?: (context: UploadAuthzContext) => boolean | Promise<boolean>;
+interface CreateUploadHandlerOptions<Context = unknown> {
+    authorize?: (context: UploadAuthzContext) => UploadAuthorizeResult<Context> | Promise<UploadAuthorizeResult<Context>>;
     maxFileSize?: number;
+    maxFileSizeFor?: (context: UploadSizeContext<Context>) => number | undefined | Promise<number | undefined>;
     protocol?: UploadProtocol;
     public?: boolean;
     silent?: boolean;
@@ -251,6 +252,21 @@ interface CreateUploadHandlerOptions {
 
 ```ts
 const DEFAULT_MAX_UPLOAD_BYTES: number;
+```
+
+### `R2BindingUploadStorageOptions` (type)
+
+```ts
+type R2BindingUploadStorageOptions = Omit<DeclaredKeys<BaseStorageOptions>, "metaStorage"> & {
+    statePrefix?: string;
+    stateScope?: () => string;
+};
+```
+
+### `R2UploadBucket` (type)
+
+```ts
+type R2UploadBucket = R2BucketLike & Required<Pick<R2BucketLike, "createMultipartUpload" | "resumeMultipartUpload">>;
 ```
 
 ### `R2UploadStorageOptions` (interface)
@@ -266,6 +282,18 @@ interface R2UploadStorageOptions {
 }
 ```
 
+### `R2_PART_SIZE` (const)
+
+```ts
+const R2_PART_SIZE: number;
+```
+
+### `UploadAuthorizeResult` (type)
+
+```ts
+type UploadAuthorizeResult<Context = unknown> = boolean | Response | UploadGrant<Context>;
+```
+
 ### `UploadAuthzContext` (interface)
 
 ```ts
@@ -274,6 +302,23 @@ interface UploadAuthzContext {
     protocol: UploadProtocol;
     request: Request;
     url: URL;
+}
+```
+
+### `UploadContext` (interface)
+
+```ts
+interface UploadContext<Context> {
+    get: () => Context;
+    grant: (context: Context) => UploadGrant<Context>;
+}
+```
+
+### `UploadGrant` (interface)
+
+```ts
+interface UploadGrant<Context = unknown> {
+    readonly [GRANTED]: Context;
 }
 ```
 
@@ -292,10 +337,27 @@ interface UploadHandler {
 type UploadProtocol = "chunked-rest" | "multipart" | "tus";
 ```
 
+### `UploadSizeContext` (interface)
+
+```ts
+interface UploadSizeContext<Context = unknown> extends UploadAuthzContext {
+    contentType: string;
+    declaredSize: number | undefined;
+    granted: Context | undefined;
+    metadata: Record<string, string>;
+}
+```
+
 ### `UploadStorage` (type)
 
 ```ts
 type UploadStorage = UploadHandlerOptions["storage"];
+```
+
+### `createR2BindingUploadStorage` (const)
+
+```ts
+const createR2BindingUploadStorage: (bucket: R2UploadBucket, options?: R2BindingUploadStorageOptions) => UploadStorage;
 ```
 
 ### `createR2UploadStorage` (const)
@@ -306,10 +368,16 @@ const createR2UploadStorage: (options: R2UploadStorageOptions & {
 }) => AwsLightStorage;
 ```
 
+### `createUploadContext` (const)
+
+```ts
+const createUploadContext: <Context>() => UploadContext<Context>;
+```
+
 ### `createUploadHandler` (const)
 
 ```ts
-const createUploadHandler: (options: CreateUploadHandlerOptions) => UploadHandler;
+const createUploadHandler: <Context = unknown>(options: CreateUploadHandlerOptions<Context>) => UploadHandler;
 ```
 
 ## Referenced internal declarations
@@ -317,6 +385,14 @@ const createUploadHandler: (options: CreateUploadHandlerOptions) => UploadHandle
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `DeclaredKeys` (type)
+
+```ts
+type DeclaredKeys<T> = {
+    [K in keyof T as string extends K ? never : number extends K ? never : K]: T[K];
+};
+```
 
 ### `UploadHandlerOptions` (type)
 

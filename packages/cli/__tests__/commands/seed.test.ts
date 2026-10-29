@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { runSeedCommand } from "../../src/commands/seed/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -36,6 +37,19 @@ export default defineSchema({
 });
 `;
 
+/** The answer to the `dryRun` POST that precedes an import: a worker that honours the flag writes nothing and echoes it. */
+const checkResponse = (): Awaited<ReturnType<StreamingFetchLike>> => {
+    return {
+        body: null,
+        json: async () => {
+            return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
+        },
+        ok: true,
+        status: 200,
+        text: async () => "",
+    };
+};
+
 let workDir: string;
 
 const writeSchema = (): void => {
@@ -58,7 +72,7 @@ describe("lunora seed", () => {
 
         const result = await runSeedCommand({ cwd: workDir, dryRun: true, logger: silentLogger() });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
     });
 
     it("generates deterministic NDJSON with valid foreign keys on --dry-run", async () => {
@@ -71,9 +85,9 @@ describe("lunora seed", () => {
         const b = await runSeedCommand({ count: 4, cwd: workDir, dryRun: true, logger: silentLogger(), seed: 1 });
 
         expect(a.code).toBe(0);
-        expect(a.inserted).toBe(0);
+        expect(a.data?.inserted).toBe(0);
         // 4 users + 4 posts.
-        expect(a.generated).toBe(8);
+        expect(a.data?.generated).toBe(8);
         // Same seed ⇒ byte-identical output.
         expect(a.ndjson).toBe(b.ndjson);
 
@@ -106,8 +120,45 @@ describe("lunora seed", () => {
                 .map((line) => (JSON.parse(line) as { table: string }).table),
         );
 
-        expect(result.generated).toBe(3);
+        expect(result.data?.generated).toBe(3);
         expect([...tables]).toEqual(["users"]);
+    });
+
+    it("deals a table-level unique index read from the schema, so a through table repeats no pair", async () => {
+        expect.assertions(4);
+
+        mkdirSync(join(workDir, "lunora"), { recursive: true });
+        writeFileSync(
+            join(workDir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable } from "@lunora/server";
+import { v } from "@lunora/values";
+
+export default defineSchema({
+    authors: defineTable({ name: v.string() }),
+    books: defineTable({ title: v.string() }),
+    authorBooks: defineTable({ authorId: v.id("authors"), bookId: v.id("books") }).index("by_pair", ["authorId", "bookId"], { unique: true }),
+});
+`,
+            "utf8",
+        );
+        vi.spyOn(process.stdout, "write").mockReturnValue(true);
+
+        const result = await runSeedCommand({ count: 4, cwd: workDir, dryRun: true, logger: silentLogger(), table: "authorBooks" });
+        const rows = result.ndjson
+            .split("\n")
+            .filter((line) => line.trim().length > 0)
+            .map((line) => JSON.parse(line) as { doc: Record<string, unknown>; table: string });
+        const links = rows.filter((row) => row.table === "authorBooks");
+        const sorted = (values: string[]): string[] => values.toSorted((left, right) => left.localeCompare(right));
+        const linked = (column: string): string[] => sorted(links.map((row) => String(row.doc[column])));
+        const parents = (table: string): string[] => sorted(rows.filter((row) => row.table === table).map((row) => String(row.doc._id)));
+
+        expect(links).toHaveLength(4);
+        expect(new Set(links.map((row) => `${String(row.doc.authorId)}|${String(row.doc.bookId)}`)).size).toBe(4);
+        // Four authors and four books are seeded alongside, and four links take each parent once. A random
+        // draw repeats a parent in most runs, and a repeat fails both checks whichever pair the planner picks.
+        expect(linked("authorId")).toStrictEqual(parents("authors"));
+        expect(linked("bookId")).toStrictEqual(parents("books"));
     });
 
     it("rejects an unknown --table", async () => {
@@ -117,7 +168,7 @@ describe("lunora seed", () => {
 
         const result = await runSeedCommand({ cwd: workDir, dryRun: true, logger: silentLogger(), table: "nope" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
     });
 
     it("streams the generated NDJSON through the import pipeline", async () => {
@@ -127,6 +178,11 @@ describe("lunora seed", () => {
 
         const calls: { body: string; url: string }[] = [];
         const fetchImpl: StreamingFetchLike = async (url, init) => {
+            // A `dryRun` POST is the check before the import: it writes nothing and is not one of the batches.
+            if (new URL(url).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
+
             const body = typeof init?.body === "string" ? init.body : new TextDecoder().decode(init?.body);
 
             calls.push({ body, url });
@@ -161,8 +217,8 @@ describe("lunora seed", () => {
         });
 
         expect(result.code).toBe(0);
-        expect(result.generated).toBe(4);
-        expect(result.inserted).toBe(4);
+        expect(result.data?.generated).toBe(4);
+        expect(result.data?.inserted).toBe(4);
         expect(calls[0]!.url).toBe("http://localhost:8787/_lunora/admin/import");
     });
 
@@ -173,7 +229,11 @@ describe("lunora seed", () => {
 
         const logger = silentLogger();
         const warnSpy = vi.spyOn(logger, "warn");
-        const fetchImpl: StreamingFetchLike = async () => {
+        const fetchImpl: StreamingFetchLike = async (url) => {
+            if (new URL(url).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
+
             return {
                 body: null,
                 // The import path reports every row as an already-existing-id conflict.
@@ -188,7 +248,7 @@ describe("lunora seed", () => {
 
         const result = await runSeedCommand({ count: 2, cwd: workDir, fetchImpl, logger, token: "t", url: "http://localhost:8787" });
 
-        expect(result.conflicts).toBe(4);
+        expect(result.data?.conflicts).toBe(4);
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("4 row(s) skipped"));
     });
 
@@ -200,8 +260,8 @@ describe("lunora seed", () => {
         const prodResult = await runSeedCommand({ cwd: workDir, logger: silentLogger(), prod: true, reset: true, url: "https://app.example.com" });
         const remoteResult = await runSeedCommand({ cwd: workDir, logger: silentLogger(), reset: true, url: "https://app.example.com" });
 
-        expect(prodResult.code).toBe(1);
-        expect(remoteResult.code).toBe(1);
+        expect(prodResult.code).toBe(EXIT_CODE.USAGE);
+        expect(remoteResult.code).toBe(EXIT_CODE.USAGE);
     });
 
     it("--reset does not wipe when there is nothing to seed", async () => {
@@ -216,7 +276,7 @@ describe("lunora seed", () => {
 
         const result = await runSeedCommand({ count: 0, cwd: workDir, logger: silentLogger(), reset: true, yes: true });
 
-        expect(result.generated).toBe(0);
+        expect(result.data?.generated).toBe(0);
         // The wipe used to run first, so `--count 0` destroyed the dev database
         // and then warned there was nothing to insert.
         expect(existsSync(join(statePath, "live.sqlite"))).toBe(true);
@@ -236,7 +296,7 @@ describe("lunora seed", () => {
         // Non-TTY and no --yes: `reset` refuses rather than deleting.
         const result = await runSeedCommand({ count: 2, cwd: workDir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, reset: true });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(existsSync(join(statePath, "live.sqlite"))).toBe(true);
         expect(errors.join("\n")).toContain("--yes");
     });
@@ -249,7 +309,11 @@ describe("lunora seed", () => {
         mkdirSync(statePath, { recursive: true });
         writeFileSync(join(statePath, "stale.sqlite"), "old", "utf8");
 
-        const fetchImpl: StreamingFetchLike = async () => {
+        const fetchImpl: StreamingFetchLike = async (url) => {
+            if (new URL(url).searchParams.get("dryRun") === "true") {
+                return checkResponse();
+            }
+
             return {
                 body: null,
                 json: async () => {

@@ -77,6 +77,28 @@ const toHttpEtag = (etag: string): string => {
     return `"${etag}"`;
 };
 
+/** One entity-tag in an `If-None-Match` list, weak (`W/`-prefixed) or strong (RFC 9110 §8.8.3). */
+const ENTITY_TAG_RE = /(?:W\/)?"[^"]*"/g;
+
+/** The opaque part of an entity-tag, with any `W/` weakness marker dropped. */
+const weakOpaqueTag = (tag: string): string => (tag.startsWith("W/") ? tag.slice(2) : tag);
+
+/**
+ * Whether an `If-None-Match` header names the object's current representation.
+ * `*` names any current representation. Otherwise the comparison is weak
+ * (RFC 9110 §13.1.2): a `W/` prefix is ignored on both sides and the opaque tags
+ * must be equal. An unquoted token is not an entity-tag, so it matches nothing.
+ */
+const ifNoneMatchNames = (header: string, etag: string): boolean => {
+    if (header.trim() === "*") {
+        return true;
+    }
+
+    const current = weakOpaqueTag(toHttpEtag(etag));
+
+    return (header.match(ENTITY_TAG_RE) ?? []).some((tag) => weakOpaqueTag(tag) === current);
+};
+
 /**
  * Outcome of parsing a `Range` header. `kind: "full"` → no/ignorable range
  * (serve the whole object as 200); `kind: "partial"` → a resolved inclusive
@@ -309,8 +331,15 @@ const isServeAuthorized = async (authorize: StorageServeAuthorizer, key: string,
  * derived from `authorize` because a stub returning `true` during development
  * would then silently publish a cache. An app fronting a genuinely public
  * bucket passes its own value; `content-disposition` and `nosniff` stay
- * unconditional either way. Note the default also defeats conditional
- * revalidation, so the `etag` computed here can never answer a 304.
+ * unconditional either way.
+ *
+ * A request whose `If-None-Match` names the current `etag` (or `*`, or any
+ * weak form of it in a list) is answered `304 Not Modified` with no body, after
+ * `authorize` has run and a body-free `head()`. A 304 costs one R2 HEAD and no
+ * body transfer. A changed object costs that HEAD plus the full read, one extra
+ * Class B operation on top of a request that sent no validator. `head()` is used
+ * rather than an `onlyIf` precondition on `get()`, because `get()` takes only a
+ * range here. `If-Modified-Since` is ignored.
  */
 const serveStorageObject = async (
     context: ContextWithStorage,
@@ -323,6 +352,33 @@ const serveStorageObject = async (
         // No reason, no distinction from a missing object's 404 shape beyond the
         // status: a precise answer here is a signing / existence oracle.
         return new Response("Forbidden", { status: 403 });
+    }
+
+    // Conditional revalidation runs AFTER the gate, so a 304 is never an
+    // existence oracle for a caller `authorize` refused. It precedes `Range`
+    // (RFC 9110 §13.2.2): a matching validator is a 304 whatever the range says.
+    // The validator needs only metadata, so the match is answered from a body-free
+    // `head()`; a mismatch falls through and reads the object as usual.
+    const ifNoneMatch = request.headers.get("if-none-match");
+    // Set only when the conditional branch already read the metadata, so a
+    // mismatched validator on a Range request does not pay for a second `head()`.
+    let conditionalMetadata: Omit<StorageObjectBody, "body"> | undefined;
+
+    if (ifNoneMatch !== null) {
+        const current = await context.storage.head(key);
+
+        if (!current) {
+            return new Response("Not Found", { status: 404 });
+        }
+
+        if (ifNoneMatchNames(ifNoneMatch, current.etag)) {
+            return new Response(undefined, {
+                headers: { "cache-control": cacheControl, etag: toHttpEtag(current.etag) },
+                status: 304,
+            });
+        }
+
+        conditionalMetadata = current;
     }
 
     const rangeHeader = request.headers.get("range");
@@ -338,7 +394,7 @@ const serveStorageObject = async (
     // A range has to be resolved against the object's size before it can be
     // requested, so this read exists only for the metadata — which is exactly why
     // it is a `head()` and not a `download()`.
-    const metadata = await context.storage.head(key);
+    const metadata = conditionalMetadata ?? (await context.storage.head(key));
 
     if (!metadata) {
         return new Response("Not Found", { status: 404 });

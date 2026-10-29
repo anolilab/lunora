@@ -1,23 +1,27 @@
 /**
- * Durable tables for the payment sync store — the **canonical column reference** for the store's
- * read/write contract.
+ * The payment store's tables, shipped as a schema extension. An app merges them with one call:
  *
- * NOTE: codegen discovers tables by parsing your `lunora/schema.ts` AST, so it cannot resolve a
- * cross-package `defineSchema({ ...paymentTables })` spread. Declare these tables **inline** in
- * your own `lunora/schema.ts` (mirroring the columns here) — that also lets you chain `.global()`
- * on read-heavy tables (e.g. `subscriptions`) to serve cross-region reads from D1. See
- * `examples/payment-demo/lunora/schema.ts`.
+ * ```ts
+ * // lunora/schema.ts
+ * export default defineSchema({ ... }).extend(paymentExtension);
+ * ```
  *
- * Money is stored as `(amountMinor: bigint, currency: string)` columns; every row carries a
+ * Codegen resolves the extension from the installed package, so a column or index added here
+ * reaches an app by upgrading `@lunora/payment` — no schema edit. Tables are namespaced with the
+ * `payment` key (`payment_customers`, `payment_events`, `payment_sessions`, `payment_subscriptions`,
+ * `payment_usageEvents`), the names `PAYMENT_TABLES` in `./database-store` reads and writes.
+ *
+ * Money is stored as `(amountMinor: number, currency: string)` columns. A double holds every
+ * integer up to 2^53 exactly — about 90 trillion dollars in cents — and the row codec in
+ * `./database-store` refuses any amount that is not a safe integer, so nothing is ever rounded. A
+ * number column, unlike a `v.bigint()` one, is also accepted on a `.global()` table and compares
+ * numerically there. Every row carries a
  * `provider` discriminator so multiple providers can coexist during a migration. A refund is folded
- * into its `paymentSessions` row (`refundedMinor` + a `refunded`/`partially_refunded` state), not a
- * separate ledger table.
- *
- * These five tables — `customers`, `subscriptions`, `paymentSessions`, `usageEvents`, and the
- * `events` webhook log — are exactly what the store reads and writes; mirror only these in your app.
+ * into its `sessions` row (`refundedMinor` + a `refunded`/`partially_refunded` state), not a separate
+ * ledger table.
  */
-import type { TableDefinition } from "@lunora/server";
-import { defineTable } from "@lunora/server";
+import type { SchemaExtension, TableDefinition } from "@lunora/server";
+import { defineSchemaExtension, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 
 const customers = defineTable({
@@ -41,30 +45,58 @@ const subscriptions = defineTable({
     createdAt: v.number(),
     currentPeriodEnd: v.optional(v.number()),
     currentPeriodStart: v.optional(v.number()),
+    // Provider time of the newest webhook applied — an older redelivery is ignored as stale.
+    lastEventAt: v.optional(v.number()),
     priceId: v.string(),
+
+    /**
+     * Every price/product id the subscription bills — a Stripe subscription is a list of items, and a
+     * base plan alongside an add-on or a metered price is ordinary. `priceId` stays the primary one.
+     *
+     * OPTIONAL, so adding it needs no backfill: a row written before this column (or by the webhook
+     * path, which carries one price id) reads as absent and falls back to `[priceId]`.
+     */
+    priceIds: v.optional(v.array(v.string())),
     provider: v.string(),
     providerSubscriptionId: v.string(),
     quantity: v.number(),
     referenceId: v.string(),
     state: v.string(),
+
+    /**
+     * Bumped by every write the store makes. A reconcile writes only when the revision it read is still
+     * current, so a webhook that landed in between is not overwritten. OPTIONAL, so a row written before
+     * this column reads as absent, which the store treats as revision 0.
+     */
+    revision: v.optional(v.number()),
     updatedAt: v.number(),
 })
     .index("by_provider_subscription", ["provider", "providerSubscriptionId"], { unique: true })
     .index("by_reference", ["referenceId"]);
 
-const paymentSessions = defineTable({
-    amountMinor: v.bigint(),
-    capturedMinor: v.bigint(),
+const sessions = defineTable({
+    amountMinor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
+    capturedMinor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
     createdAt: v.number(),
     currency: v.string(),
     provider: v.string(),
     providerSessionId: v.string(),
     referenceId: v.string(),
-    refundedMinor: v.bigint(),
+    refundedMinor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
     state: v.string(),
+    // The provider subscription this payment started — lends its owner to an unattributed subscription row.
+    subscriptionId: v.optional(v.string()),
+
+    /**
+     * Bumped by every write the store makes. A reconcile writes only when the revision it read is still
+     * current, so a webhook that landed in between is not overwritten. OPTIONAL, so a row written before
+     * this column reads as absent, which the store treats as revision 0.
+     */
+    revision: v.optional(v.number()),
     updatedAt: v.number(),
 })
     .index("by_provider_session", ["provider", "providerSessionId"], { unique: true })
+    .index("by_provider_subscription", ["provider", "subscriptionId"])
     .index("by_reference", ["referenceId"]);
 
 // Append-only webhook log: inbound idempotency + audit + debugging.
@@ -89,23 +121,16 @@ const usageEvents = defineTable({
     reportedToProvider: v.boolean(),
 })
     .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
-    .index("by_reference_feature", ["referenceId", "featureId"]);
+    .index("by_reference_feature_created", ["referenceId", "featureId", "createdAt"])
+    .index("by_reference_created", ["referenceId", "createdAt"]);
 
-/**
- * The canonical column reference for the payment tables — a value to READ (in a test, a migration
- * check, or your editor), not one to spread. `defineSchema({ ...paymentTables })` does NOT work:
- * codegen discovers tables by parsing your `lunora/schema.ts` AST and cannot resolve a
- * cross-package spread, so declare the same columns inline there (see the module docstring).
- *
- * `paymentTables` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
-const paymentTables: Record<string, TableDefinition> = {
-    customers,
-    events,
-    paymentSessions,
-    subscriptions,
-    usageEvents,
-};
+// The table names and key stay literal so `.extend(paymentExtension)` adds exactly
+// `payment_customers | … | payment_usageEvents`; row types come from codegen.
+const paymentExtension: SchemaExtension<
+    Record<"customers" | "events" | "sessions" | "subscriptions" | "usageEvents", TableDefinition>,
+    "payment"
+> = defineSchemaExtension("payment", {
+    tables: { customers, events, sessions, subscriptions, usageEvents },
+});
 
-export default paymentTables;
+export default paymentExtension;

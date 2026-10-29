@@ -3,6 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { AdminRouteIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 
 /** The `httpRoute.<verb>(...)` factory verbs. */
 const HTTP_VERBS = new Set(["delete", "get", "head", "options", "patch", "post", "put"]);
@@ -146,24 +147,18 @@ const adminRouteFromDeclaration = (declaration: VariableDeclaration, relativePat
         (Node.isArrowFunction(handlerArgument) || Node.isFunctionExpression(handlerArgument)) &&
         handlerReferencesGuard(handlerArgument);
 
-    return { exportName: declaration.getName(), file: relativePath, method: root.method, path: root.path, usesGuard };
+    return { exportName: exportedNameOf(declaration) ?? declaration.getName(), file: relativePath, method: root.method, path: root.path, usesGuard };
 };
 
 /** Admin-path routes in one source file. */
 const adminRoutesInSourceFile = (sourceFile: SourceFile, relativePath: string): AdminRouteIR[] => {
     const found: AdminRouteIR[] = [];
 
-    for (const statement of sourceFile.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
+    for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+        const ir = adminRouteFromDeclaration(declaration, relativePath);
 
-        for (const declaration of statement.getDeclarations()) {
-            const ir = adminRouteFromDeclaration(declaration, relativePath);
-
-            if (ir) {
-                found.push(ir);
-            }
+        if (ir) {
+            found.push(ir);
         }
     }
 

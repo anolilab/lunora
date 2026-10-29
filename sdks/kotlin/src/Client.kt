@@ -27,6 +27,15 @@ const val WS_PATH: String = "/_lunora/ws"
  */
 const val MAX_PENDING_POKES: Int = 64
 
+/** The close code the server sends when the session credential has expired (protocol §5.2). */
+private const val CLOSE_TOKEN_EXPIRED: Int = 4001
+
+/** The close code for a refused credential (protocol §6). */
+private const val CLOSE_REFUSED: Int = 4003
+
+/** The 4003 reason that marks a socket which never sent `connect`: it refused no credential. */
+private const val CONNECT_DEADLINE_REASON: String = "connect deadline"
+
 /**
  * Which RPC method a call dispatches to. Generated code emits these entries
  * rather than raw strings, so a typo in a target template is a compile error
@@ -35,13 +44,24 @@ const val MAX_PENDING_POKES: Int = 64
 enum class Verb { QUERY, MUTATION, ACTION }
 
 /**
+ * The code a call fails with when the server's reply was a SUCCESS whose `result`
+ * does not decode. The write behind it committed: a queued write settles
+ * `COMMITTED` carrying this error, and is never replayed.
+ */
+const val WIRE_DECODE_FAILED: String = "WIRE_DECODE_FAILED"
+
+/**
  * A coded error from an RPC error envelope.
  *
- * [transient] says the call never reached a verdict — a 5xx, or a non-2xx
- * carrying no envelope at all (an edge error page, a WAF block, a proxy). It is
- * set where the HTTP STATUS is still in scope, because nothing downstream can
- * recover it: [code] alone cannot tell a `BAD_REQUEST` the function returned from
- * the `INTERNAL` this client synthesises for a body that never came from one.
+ * [transient] says the call never reached a verdict: a reply carrying NO envelope
+ * at all — an edge error page, a WAF block, a proxy, a body that is not a JSON
+ * object — whatever its status (a 413 excepted: that is `PAYLOAD_TOO_LARGE`, a
+ * verdict on the request). It is set where the reply is still in scope, because
+ * [code] alone cannot tell a `BAD_REQUEST` the function returned from the
+ * `INTERNAL` this client synthesises for a body that never came from one. A CODED
+ * envelope never sets it: its code is the whole classification, whatever the
+ * status, so a coded 5xx is the server's verdict on the single-call path exactly
+ * as it is on the batch path.
  */
 class ApiException(val code: String, message: String, val data: WireValue? = null, val transient: Boolean = false) : RuntimeException(message)
 
@@ -61,7 +81,7 @@ data class HttpResponse(val status: Int, val body: String)
 class Client(
     private val baseUrl: String,
     private val post: ((String, Map<String, String>, ByteArray) -> HttpResponse)? = null,
-    @Volatile var authToken: String? = null,
+    authToken: String? = null,
     /**
      * Identifies this client to the shard. It rides every write that carries an
      * idempotency key, because an anonymous caller has no server-minted user id to
@@ -80,15 +100,106 @@ class Client(
      * namespace has to supply that continuity itself.
      */
     @Volatile var clientId: String = "client-${randomId()}",
+    identity: String? = null,
+) {
     /**
      * An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id,
      * not a bearer token. It is persisted alongside every queued write and
      * re-checked before that write replays, so a restart cannot push one user's
-     * queued writes as another. Null means signed out, which is itself an identity
-     * a write can be stamped with.
+     * queued writes as another. Left null, a write is stamped with a digest of
+     * [authToken] instead ([Identity.Token]; signed out with no token either), so a
+     * new token is a new identity: a token refresh rejects the writes queued under
+     * the old one and evicts its session. Set this to keep them across a refresh.
+     * Any string is accepted: no identity, however it is spelled, equals a token
+     * stamp.
+     *
+     * Changing it FROM a set value to a different one — a sign-out, or another
+     * user signing in — evicts the previous session: every query and shape
+     * subscription drops its resume cursor and epoch, so the next resubscribe is a
+     * cold one, and every shape view is emptied and its callback told so (`[]`).
+     * Those cursors were the previous identity's position in the changelog and
+     * those rows were what IT could see; resuming from them asks the server for a
+     * diff against a view the new identity never held. A first sign-in (from
+     * null) and re-asserting the same identity evict nothing.
      */
-    @Volatile var identity: String? = null,
-) {
+    @Volatile
+    var identity: String? = identity
+        set(value) {
+            val cleared = synchronized(lock) {
+                val previous = field
+
+                field = value
+
+                if (previous == null || previous == value) return
+
+                evictPreviousIdentitySession()
+            }
+
+            for (onRows in cleared) onRows(emptyList())
+        }
+
+    /**
+     * Supplies the session credential, read on every socket open and sent as
+     * `connect.token`. It never enters the socket URL. Null sends none.
+     *
+     * Assigning it starts a new credential generation, which re-arms the one 4003
+     * refusal report [onTokenExpired] makes per generation. A provider that reads a
+     * mutable token needs a fresh assignment to re-arm it.
+     */
+    @Volatile
+    var wsToken: (() -> String?)? = null
+        set(value) {
+            synchronized(lock) {
+                field = value
+                credentialGeneration++
+            }
+        }
+
+    /**
+     * Supplies the ephemeral admin ticket, read on every [wsUrl] call and sent as
+     * the `?token=` query parameter. Null sends none.
+     */
+    @Volatile
+    var wsTicket: (() -> String?)? = null
+
+    /**
+     * The bearer token every RPC carries; the next call picks up a new one.
+     *
+     * With [identity] unset the token's digest IS the identity, so a different
+     * token (or none) retires the previous one's session exactly as [identity]
+     * changing from a set value does. With [identity] set a token change is a
+     * refresh, not a change of user, and evicts nothing. Setting it flushes
+     * nothing: the app calls [flushOfflineQueue] after a refresh, as on a
+     * reconnect.
+     */
+    @Volatile
+    var authToken: String? = authToken
+        set(value) {
+            val cleared = synchronized(lock) {
+                val previous = effectiveIdentity()
+
+                field = value
+
+                if (previous == Identity.SignedOut || previous == effectiveIdentity()) return
+
+                evictPreviousIdentitySession()
+            }
+
+            for (onRows in cleared) onRows(emptyList())
+        }
+
+    /**
+     * Who a write queued now belongs to; call with [lock] held. [identity] when set,
+     * else [Identity.Token] of [authToken], else [Identity.SignedOut] — the
+     * reference's `identityFingerprint`. Without the token branch every write made
+     * with no identity was stamped signed out and matched any token, so a flush
+     * after an account switch sent the previous user's writes with the new user's
+     * credential.
+     */
+    internal fun effectiveIdentity(): Identity = identity?.let { Identity.Of(it) }
+        ?: authToken?.let { Identity.Token(tokenDigest(it)) }
+        ?: Identity.SignedOut
+
     /**
      * Guards every field below, and the `cursor`/`epoch`/row state hanging off
      * [Subscription] and [Shape].
@@ -111,9 +222,15 @@ class Client(
     internal val lock = Any()
 
     internal var send: ((Map<String, Any?>) -> Unit)? = null
+
+    /** Bumped by every attach and detach, so an attach whose connect is still going out can tell it was superseded. */
+    private var attachGeneration = 0L
     internal val subscriptions = LinkedHashMap<String, Subscription>()
     private val shapes = LinkedHashMap<String, Shape>()
     private val pokes = LinkedHashMap<String, PokeBuffer>()
+
+    /** The open [Stream]s, so [close] can end them. */
+    private val streams = mutableSetOf<Stream>()
     private var nextId = 0
     private var nextShapeId = 0
 
@@ -147,8 +264,14 @@ class Client(
      * The flag is tracked per SHAPE, not per poke: one poke can re-seed one shape
      * while delivering an ordinary diff to another on the same socket.
      */
-    private class PokeBuffer {
+    private class PokeBuffer(val epoch: Any?, val baseCheckpoint: Any?) {
         val parts = LinkedHashMap<String, MutableList<Map<String, Any?>>>()
+
+        /**
+         * Per shape, the checkpoint the server computed this diff against: the
+         * part's own `baseCheckpoint`, else the `pokeStart`'s.
+         */
+        val bases = mutableMapOf<String, Any>()
 
         /**
          * Shapes whose `rowsPatch` is the shape's COMPLETE membership rather than a
@@ -207,42 +330,82 @@ class Client(
          * caller believes its mutation committed.
          */
         fun parseRpcResponse(body: Map<*, *>, status: Int): WireValue {
-            val envelope = body["error"]
+            checkRpcResponse(body, status)
 
-            if (envelope is Map<*, *>) {
-                val data = envelope["data"]?.let { Wire.decode(it) }
-
-                throw ApiException(
-                    envelope["code"] as? String ?: "INTERNAL",
-                    envelope["message"] as? String ?: "request failed",
-                    data,
-                    // A 5xx is the shard or the edge failing UNDER the call, not a
-                    // verdict on it, so a queued write replayed under the same
-                    // idempotency key is still good. See [isTransient].
-                    status >= 500,
-                )
-            }
-
-            if (status !in 200..299) {
-                // No envelope at all, so this body never came from a Lunora
-                // function: an edge error page, a WAF block, a proxy. Nothing
-                // reached the shard, which makes it transport rather than a
-                // verdict — the batch path already classified the identical
-                // response that way, and a lone queued write must not be dropped
-                // for being alone.
-                throw ApiException("INTERNAL", "HTTP $status without an error envelope", transient = true)
-            }
-
-            return Wire.decode(body["result"])
+            return decodeResult(body["result"])
         }
 
-        fun buildConnectFrame(clientId: String? = null, context: Map<String, Any?>? = null): Map<String, Any?> {
+        /**
+         * Throws the verdict a response carries, if any: its coded envelope, or —
+         * with none — the transport error its non-2xx status stands for.
+         *
+         * A coded envelope is classified by its CODE alone ([isTransient]), never
+         * by the status beside it: the batch path has no per-slot status to read,
+         * so a status rule here made a coded 5xx a retry when a write was queued
+         * alone and a verdict when it shared a flush.
+         */
+        internal fun checkRpcResponse(body: Map<*, *>, status: Int) {
+            val envelope = body["error"]
+
+            if (envelope is Map<*, *>) throw envelopeError(envelope, "request failed")
+
+            if (status !in 200..299) throw envelopeless(status)
+        }
+
+        /**
+         * The coded error an envelope carries — a single call's, a batch slot's or a
+         * whole batch's — defaulting a missing code to `INTERNAL`.
+         *
+         * `data` the codec refuses is DROPPED, not thrown: the envelope is still the
+         * server's verdict and its code still classifies it. Throwing the codec's
+         * exception made it look like a transport failure on the single-call path
+         * (re-queued at the head of the queue forever) and aborted a batch's demux.
+         */
+        internal fun envelopeError(envelope: Map<*, *>, fallback: String): ApiException = ApiException(
+            envelope["code"] as? String ?: "INTERNAL",
+            envelope["message"] as? String ?: fallback,
+            try {
+                envelope["data"]?.let { Wire.decode(it) }
+            } catch (error: WireFormatException) {
+                null
+            },
+        )
+
+        /**
+         * A non-2xx reply with no envelope: nothing a Lunora function returned.
+         *
+         * A 413 is a verdict on the REQUEST whatever its body — an edge or proxy
+         * refuses an oversized body with its own page long before the worker could
+         * write the coded one — so it is `PAYLOAD_TOO_LARGE`, terminal for a lone
+         * write and the split signal for a batch. Anything else reached no verdict:
+         * transport, and transient.
+         */
+        internal fun envelopeless(status: Int): ApiException = if (status == 413) {
+            ApiException(PAYLOAD_TOO_LARGE, "HTTP 413 without an error envelope")
+        } else {
+            ApiException("INTERNAL", "HTTP $status without an error envelope", transient = true)
+        }
+
+        /**
+         * Decodes a success's `result`, failing with the SDK's own
+         * [WIRE_DECODE_FAILED] rather than the codec's exception: the call
+         * SUCCEEDED, and a caller — or the replay — has to be able to tell that
+         * apart from a call that never reached the server.
+         */
+        internal fun decodeResult(raw: Any?): WireValue = try {
+            Wire.decode(raw)
+        } catch (error: WireFormatException) {
+            throw ApiException(WIRE_DECODE_FAILED, "the call succeeded but its result could not be decoded: ${error.message}")
+        }
+
+        fun buildConnectFrame(clientId: String? = null, context: Map<String, Any?>? = null, token: String? = null): Map<String, Any?> {
             val frame = LinkedHashMap<String, Any?>()
 
             frame["id"] = "connect"
             frame["type"] = "connect"
             clientId?.let { frame["clientId"] = it }
             context?.let { frame["context"] = it }
+            token?.let { frame["token"] = it }
 
             return frame
         }
@@ -267,6 +430,13 @@ class Client(
         }
 
         fun buildUnsubscribeFrame(id: String): Map<String, Any?> = linkedMapOf("id" to id, "type" to "unsubscribe")
+
+        fun buildWhisperSubscribeFrame(topic: String): Map<String, Any?> = linkedMapOf("topic" to topic, "type" to "whisper_subscribe")
+
+        fun buildWhisperUnsubscribeFrame(topic: String): Map<String, Any?> = linkedMapOf("topic" to topic, "type" to "whisper_unsubscribe")
+
+        fun buildWhisperFrame(topic: String, data: WireValue): Map<String, Any?> =
+            linkedMapOf("data" to Wire.encode(data), "topic" to topic, "type" to "whisper")
 
         fun buildShapeSubscribeFrame(
             id: String,
@@ -301,9 +471,10 @@ class Client(
         /**
          * Whether a failed replay may be retried rather than dropped.
          *
-         * Three ways in: [ApiException.transient], set from the HTTP status where
-         * a code cannot say (a 5xx, or a non-2xx with no envelope at all); a shard
-         * code; or a rate limit, which is "not now" rather than "no" and is the
+         * ONE predicate for the single-call and the batch path alike. Three ways
+         * in: [ApiException.transient], set only for a reply carrying no envelope
+         * (a coded envelope is classified by its code alone, whatever the status);
+         * a shard code; or a rate limit, which is "not now" rather than "no" and is the
          * one verdict a durable queue must never honour — the write is valid and
          * the server asked for it later, so dropping it loses data for being
          * punctual.
@@ -321,7 +492,11 @@ class Client(
          * this arm is what keeps one surfacing from anywhere else terminal too.
          */
         fun isTransient(error: Exception): Boolean = when (error) {
-            is ApiException -> error.transient || error.code in TRANSIENT_ERROR_CODES || error.code in RATE_LIMIT_ERROR_CODES
+            is ApiException ->
+                error.transient ||
+                    error.code in TRANSIENT_ERROR_CODES ||
+                    error.code in RATE_LIMIT_ERROR_CODES ||
+                    error.code in AUTH_REPLAY_ERROR_CODES
             is OfflineException -> false
             is WireFormatException -> false
             else -> true
@@ -342,25 +517,224 @@ class Client(
     internal var flushNotBefore = 0L
     internal val settledListeners = mutableListOf<(MutationSettled) -> Unit>()
 
+    /** Bumped by every assignment to [wsToken]; see [detachSocket]. */
+    private var credentialGeneration = 0L
+
+    /** The generation the open socket's `connect` was sent under. */
+    private var socketGeneration = 0L
+
+    /** The generation of the last 4003 refusal reported to [onTokenExpired]; null before any. */
+    private var refusedGeneration: Long? = null
+
+    private val tokenExpiredListeners = mutableListOf<TokenExpiredListener>()
+
+    /** Joined topics and their listeners. A topic is present while it has at least one. */
+    private val whisperTopics = LinkedHashMap<String, MutableList<WhisperListener>>()
+
+    /** Topics whose join write failed; the next listener on one of them sends the join again. Guarded by [lock]. */
+    private val unjoinedTopics = mutableSetOf<String>()
+
+    private class WhisperListener(val onValue: (WireValue) -> Unit)
+
+    /** One token-expiry registration: its own object, so its handle removes only it. */
+    private class TokenExpiredListener(val run: () -> Unit)
+
     /**
-     * Registers the sender used for subscription frames. Call once the socket is
-     * open.
+     * Registers the sender for this socket and writes its `connect` frame first. Call
+     * it once per socket open, before [resendSubscriptions].
      *
      * It also latches "has connected at least once", which is what the write queue
      * gates on: a write made before the FIRST connect fails fast by default, so a
      * misconfigured endpoint surfaces on the first write instead of silently
      * filling a queue that will never flush.
+     *
+     * It sends the `connect` frame first, carrying [wsToken] resolved now, so every
+     * open and every reconnect presents the session credential before any
+     * subscription. The app must not send `connect` itself. [context], when given,
+     * rides that frame: the server records it for the `onConnect` hooks, so it applies
+     * to every open and reconnect. Pass nothing, or `null`, when there is none.
+     *
+     * After `connect`, every registered whisper topic is joined again. Subscriptions
+     * are not: [resendSubscriptions] sends those, and the app calls it after attaching.
      */
-    fun attachSocket(sender: (Map<String, Any?>) -> Unit) {
+    fun attachSocket(context: Map<String, Any?>? = null, sender: (Map<String, Any?>) -> Unit) {
+        // Writes queue while the connect frame goes out, so none can reach the socket this one replaces.
+        // The credential generation is read with the attach generation: a rotation racing this attach
+        // must not tag the socket with a generation newer than the credential it presents.
+        // The provider is read with the generation, so a rotation racing this attach cannot tag the
+        // socket with a generation newer than the credential it presents.
+        val (generation, credential, provider) = synchronized(lock) {
+            send = null
+            Triple(++attachGeneration, credentialGeneration, wsToken)
+        }
+        sender(buildConnectFrame(clientId = clientId, context = context, token = provider?.invoke()))
+        // A detach or a newer attach during the send supersedes this one: installing this sender would undo it,
+        // so it is not installed and its whisper joins are not sent. The joins are written under the lock, so a
+        // last-listener leave cannot unsubscribe between this snapshot and its join. A join that throws leaves
+        // the client offline, and the error propagates.
         synchronized(lock) {
+            if (generation != attachGeneration) return
             send = sender
+            socketGeneration = credential
             wasEverConnected = true
+            try {
+                for (topic in whisperTopics.keys.toList()) {
+                    // A sender that detaches or re-attaches during a write supersedes this attach.
+                    if (generation != attachGeneration) return
+                    sender(buildWhisperSubscribeFrame(topic))
+                }
+                unjoinedTopics.clear()
+            } catch (failure: Throwable) {
+                if (send === sender) send = null
+                throw failure
+            }
         }
     }
 
-    /** Forgets the sender, so subsequent writes queue rather than fail. */
-    fun detachSocket() {
-        synchronized(lock) { send = null }
+    /**
+     * Forgets the sender, so subsequent writes queue rather than fail. Every detach
+     * leaves the client offline.
+     *
+     * [closeCode] and [reason] are the close frame the socket ended with, when the
+     * socket library reports one; null means none. They decide whether
+     * [onTokenExpired] listeners hear of it:
+     *  - 4001 (token expired): always.
+     *  - 4003 (refused credential): once per credential generation, and only for a
+     *    socket that opened under the current one: a socket opened under a superseded
+     *    credential refused a credential no longer in force. A reason of exactly
+     *    "connect deadline" refuses no credential, so it notifies nothing.
+     *  - anything else: nothing.
+     */
+    fun detachSocket(closeCode: Int? = null, reason: String? = null) {
+        val expired = synchronized(lock) {
+            send = null
+            attachGeneration++
+
+            when {
+                closeCode == CLOSE_TOKEN_EXPIRED -> true
+                closeCode == CLOSE_REFUSED && reason != CONNECT_DEADLINE_REASON &&
+                    socketGeneration == credentialGeneration && refusedGeneration != socketGeneration -> {
+                    refusedGeneration = socketGeneration
+
+                    true
+                }
+
+                else -> false
+            }
+        }
+
+        if (expired) notifyTokenExpired()
+    }
+
+    /**
+     * Observes token expiry: a 4001 close, a `TOKEN_EXPIRED` error frame, or a 4003
+     * refusal (see [detachSocket]). Returns an unregister.
+     */
+    fun onTokenExpired(listener: () -> Unit): () -> Unit {
+        // Each registration is its own entry, so two registrations of one function keep separate handles.
+        val entry = TokenExpiredListener(listener)
+
+        synchronized(lock) { tokenExpiredListeners.add(entry) }
+
+        return { synchronized(lock) { tokenExpiredListeners.remove(entry) } }
+    }
+
+    private fun notifyTokenExpired() {
+        val listeners = synchronized(lock) { tokenExpiredListeners.toList() }
+
+        for (listener in listeners) {
+            try {
+                listener.run()
+            } catch (error: Exception) {
+                // One bad observer must not stop the rest, nor the socket teardown or
+                // frame handling that reported the expiry.
+            }
+        }
+    }
+
+    /**
+     * Joins [topic] and hands each relayed `whisper` value to [listener]. The join is
+     * sent now when a socket is attached and again after every reconnect. Returns the
+     * leave: removing the topic's last listener sends `whisper_unsubscribe`.
+     */
+    fun whisperSubscribe(topic: String, listener: (WireValue) -> Unit): () -> Unit {
+        val entry = WhisperListener(listener)
+
+        // The join goes out under the lock, in the order the listener state changes, so a leave cannot overtake
+        // it. A join that fails is retried by the next listener on the topic.
+        synchronized(lock) {
+            val listeners = whisperTopics.getOrPut(topic) { mutableListOf() }
+            val join = listeners.isEmpty() || topic in unjoinedTopics
+
+            listeners.add(entry)
+
+            val socket = send
+
+            if (join && socket != null) {
+                try {
+                    socket(buildWhisperSubscribeFrame(topic))
+                    unjoinedTopics.remove(topic)
+                } catch (failure: Throwable) {
+                    unjoinedTopics.add(topic)
+                    throw failure
+                }
+            }
+        }
+
+        return {
+            synchronized(lock) {
+                val listeners = whisperTopics[topic]
+
+                if (listeners != null && entry in listeners) {
+                    if (listeners.size == 1) {
+                        // The unsubscribe goes out before the topic is forgotten, so a write that throws leaves the
+                        // leave retryable: the membership is not stranded on the server.
+                        send?.invoke(buildWhisperUnsubscribeFrame(topic))
+                        whisperTopics.remove(topic)
+                        unjoinedTopics.remove(topic)
+                    } else {
+                        listeners.remove(entry)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Relays [data] to [topic] over the attached socket. Returns false, and queues
+     * nothing, when no socket is attached.
+     */
+    fun whisper(topic: String, data: WireValue): Boolean {
+        val socket = synchronized(lock) { send } ?: return false
+
+        socket(buildWhisperFrame(topic, data))
+
+        return true
+    }
+
+    /** A joined room: [send] relays a message to it, [close] leaves it. */
+    class Room internal constructor(private val relay: (WireValue) -> Boolean, private val leave: () -> Unit) {
+        @Volatile
+        private var closed = false
+
+        /** Relays [message]; false when no socket is attached, or the room is closed. */
+        fun send(message: WireValue): Boolean = !closed && relay(message)
+
+        fun close() {
+            closed = true
+            leave()
+        }
+    }
+
+    /**
+     * Joins the room `room:<name>` and hands its messages to [listener]. Does not wait
+     * for an ack: a room topic is never acknowledged.
+     */
+    fun connectRoom(name: String, listener: (WireValue) -> Unit): Room {
+        val topic = "room:$name"
+        val leave = whisperSubscribe(topic, listener)
+
+        return Room({ message -> whisper(topic, message) }, leave)
     }
 
     /** Whether a socket is currently attached. */
@@ -382,15 +756,19 @@ class Client(
     }
 
     /**
-     * Rejects every queued write so no caller waits on a dead client. Durable
-     * storage is untouched: the next session restores those writes.
+     * Rejects every queued write so no caller waits on a dead client, and ends
+     * every open [Stream], so a loop blocked on one returns instead of waiting
+     * forever on a client nothing will deliver to again. Durable storage is
+     * untouched: the next session restores those writes.
      */
     fun close() {
-        val discarded = synchronized(lock) {
+        val (discarded, open) = synchronized(lock) {
             closed = true
             send = null
-            offlineQueue.clear()
+            offlineQueue.clear() to streams.toList()
         }
+
+        for (stream in open) stream.close()
 
         reportDiscarded(discarded)
     }
@@ -415,10 +793,25 @@ class Client(
     }
 
     private fun rpc(functionPath: String, args: WireValue?, shardKey: String?, mutationId: String?): WireValue =
-        rpcFull(functionPath, args, shardKey, mutationId).result
+        rpcFull(functionPath, args, shardKey, mutationId).value()
 
-    /** One RPC round-trip: the decoded result plus the commit cursor the response echoed. */
-    data class RpcReply(val result: WireValue, val commitCursor: Long?)
+    /**
+     * One RPC round-trip: the decoded result plus the commit cursor the response
+     * echoed.
+     *
+     * [decodeError] is set, and [result] null, when the call SUCCEEDED but its
+     * result does not decode. Returned rather than thrown so the commit cursor
+     * survives it: the write committed, and its overlay is confirmed against that
+     * cursor like any other.
+     */
+    data class RpcReply(val result: WireValue?, val commitCursor: Long?, val decodeError: ApiException? = null) {
+        /** The result, or the [decodeError] thrown. */
+        fun value(): WireValue {
+            decodeError?.let { throw it }
+
+            return checkNotNull(result)
+        }
+    }
 
     /**
      * One round-trip, keeping the echoed `commitCursor`.
@@ -426,14 +819,23 @@ class Client(
      * The cursor is what gates an optimistic overlay's removal, so it has to
      * survive the call rather than be discarded by [parseRpcResponse].
      * [issuingClientId] overrides this session's, so a replayed write namespaces
-     * server-side under the id that ISSUED it.
+     * server-side under the id that ISSUED it. [token] is the bearer to send (null:
+     * none); a replay passes the one its identity gate judged the pass against, so
+     * a token swapped mid-flush cannot carry the rest of it.
      */
-    internal fun rpcFull(functionPath: String, args: WireValue?, shardKey: String?, mutationId: String?, issuingClientId: String? = null): RpcReply {
+    internal fun rpcFull(
+        functionPath: String,
+        args: WireValue?,
+        shardKey: String?,
+        mutationId: String?,
+        issuingClientId: String? = null,
+        token: String? = authToken,
+    ): RpcReply {
         val poster = post ?: throw ApiException("INTERNAL", "no HTTP poster configured")
         val headers = LinkedHashMap<String, String>()
 
         headers["content-type"] = "application/json"
-        authToken?.let { headers["authorization"] = "Bearer $it" }
+        token?.let { headers["authorization"] = "Bearer $it" }
 
         if (mutationId != null) {
             headers["x-lunora-mutation-id"] = mutationId
@@ -447,30 +849,55 @@ class Client(
 
         val payload = Json.write(buildRpcBody(functionPath, args, shardKey))
         val response = poster(join(RPC_PATH), headers, payload.toByteArray(StandardCharsets.UTF_8))
-        val body = Json.parse(response.body) as Map<*, *>
+        // A body that is not a JSON object carries neither a result nor an
+        // envelope — an HTML error page, a proxy's `null` — so it is read the way
+        // every envelope-less reply is, as the SDK's own error, never as the JSON
+        // parser's or a cast's exception escaping every handler the caller wrote.
+        val body = readObject(response.body) ?: throw if (response.status in 200..299) {
+            ApiException("INTERNAL", "HTTP ${response.status} with a body that is not a JSON object", transient = true)
+        } else {
+            envelopeless(response.status)
+        }
 
-        return RpcReply(parseRpcResponse(body, response.status), parseCommitCursor(body))
+        checkRpcResponse(body, response.status)
+
+        val cursor = parseCommitCursor(body)
+
+        return try {
+            RpcReply(decodeResult(body["result"]), cursor)
+        } catch (error: ApiException) {
+            RpcReply(null, cursor, error)
+        }
+    }
+
+    /** [raw] parsed as a JSON object, or null when it is not one (or not JSON at all). */
+    private fun readObject(raw: String): Map<*, *>? = try {
+        Json.parse(raw) as? Map<*, *>
+    } catch (error: IllegalArgumentException) {
+        null
     }
 
     /**
-     * POSTs one `/_lunora/rpc-batch` chunk, returning the parsed body.
+     * POSTs one `/_lunora/rpc-batch` chunk, returning the status and the parsed
+     * body — null when the body is not a JSON object. The status is kept because
+     * a 413 is a verdict on the request whatever its body says.
      *
      * No `x-lunora-mutation-id` on the request: a batch is ONE transport hop
      * carrying independent calls, so each entry carries its own idempotency key
      * and client id in the body. A single outer header would name one write and
-     * de-duplicate the whole chunk against it.
+     * de-duplicate the whole chunk against it. [token] as for [rpcFull].
      */
-    internal fun rpcBatch(calls: List<Any?>): Map<*, *> {
+    internal fun rpcBatch(calls: List<Any?>, token: String?): Pair<Int, Map<*, *>?> {
         val poster = post ?: throw ApiException("INTERNAL", "no HTTP poster configured")
         val headers = LinkedHashMap<String, String>()
 
         headers["content-type"] = "application/json"
-        authToken?.let { headers["authorization"] = "Bearer $it" }
+        token?.let { headers["authorization"] = "Bearer $it" }
 
         val payload = Json.write(mapOf("calls" to calls))
         val response = poster(join(RPC_BATCH_PATH), headers, payload.toByteArray(StandardCharsets.UTF_8))
 
-        return Json.parse(response.body) as? Map<*, *> ?: emptyMap<String, Any?>()
+        return response.status to readObject(response.body)
     }
 
     /**
@@ -583,14 +1010,19 @@ class Client(
      */
     fun stream(functionPath: String, args: WireValue? = null, shardKey: String? = null): Stream {
         val stream = Stream()
-
-        stream.unsubscribe = subscribe(
+        val unsubscribe = subscribe(
             functionPath,
             args,
             { value -> stream.events.add(StreamEvent(value, null)) },
             { error -> stream.events.add(StreamEvent(null, error)) },
             shardKey,
         )
+
+        stream.unsubscribe = {
+            synchronized(lock) { streams.remove(stream) }
+            unsubscribe()
+        }
+        synchronized(lock) { streams.add(stream) }
 
         return stream
     }
@@ -753,6 +1185,17 @@ class Client(
             }
             "error" -> {
                 val envelope = frame["error"] as? Map<*, *> ?: emptyMap<String, Any?>()
+
+                // Token expiry is the socket's signal, not a subscription's failure: the
+                // server sends it just before closing 4001, and routing it would hand the
+                // subscription an error the credential refresh is about to cure. Checked
+                // before the id lookup, so an id-less frame still notifies.
+                if (envelope["code"] == "TOKEN_EXPIRED") {
+                    notifyTokenExpired()
+
+                    return kind
+                }
+
                 val error = SubscriptionError(
                     envelope["code"] as? String,
                     frame["message"] as? String ?: envelope["message"] as? String ?: "subscription error",
@@ -761,8 +1204,23 @@ class Client(
 
                 for (handler in handlers) handler(error)
             }
-            "complete" -> synchronized(lock) { subscriptions.remove(id) }
+            "complete" -> {
+                // NON-DESTRUCTIVE, and that is the whole point: removing the
+                // entry takes it out of the map `resendSubscriptions` walks, so
+                // the query froze for the life of the process across every
+                // future reconnect, with nothing reported. Fan a cancellation to
+                // the listener and leave the registration in place; the next
+                // reconnect resubscribes it.
+                val cancelled = synchronized(lock) { subscriptions[id]?.onError }
+
+                cancelled?.invoke(SubscriptionError("SUBSCRIPTION_CANCELLED", "subscription was cancelled by the server"))
+            }
+            // A poke frame without a string `pokeId` names no poke, and one keyed by
+            // its rendering ("null", "7.0") would be joined by an equally malformed
+            // part or end.
             "pokeStart" -> synchronized(lock) {
+                val pokeId = frame["pokeId"] as? String ?: return kind
+
                 // Evict oldest-first at the cap. A LinkedHashMap iterates in
                 // insertion order, so the first key is the oldest buffer; one
                 // that old is no longer going to see its pokeEnd.
@@ -773,10 +1231,32 @@ class Client(
                     oldest.remove()
                 }
 
-                pokes[frame["pokeId"].toString()] = PokeBuffer()
+                pokes[pokeId] = PokeBuffer(frame["epoch"], frame["baseCheckpoint"])
             }
             "pokePart" -> bufferPokePart(frame)
             "pokeEnd" -> applyPoke(frame)
+            "whisper" -> {
+                // A frame with no topic names no listeners, and a payload the codec refuses
+                // is one bad frame, not a reason to end the read loop. Both are ignored.
+                val topic = frame["topic"] as? String
+
+                if (!topic.isNullOrEmpty()) {
+                    val value = try {
+                        Wire.decode(frame["data"])
+                    } catch (error: WireFormatException) {
+                        return kind
+                    }
+                    val listeners = synchronized(lock) { whisperTopics[topic]?.toList().orEmpty() }
+
+                    for (listener in listeners) {
+                        try {
+                            listener.onValue(value)
+                        } catch (error: Exception) {
+                            // An app listener must not end the read loop, nor skip the listeners after it.
+                        }
+                    }
+                }
+            }
         }
 
         return kind
@@ -803,8 +1283,32 @@ class Client(
         return hydrated.shardKeys
     }
 
+    /**
+     * Drops the resume state the previous identity left, under the lock; returns
+     * the shape callbacks to tell (outside it) that their view is now empty.
+     */
+    private fun evictPreviousIdentitySession(): List<(List<WireValue>) -> Unit> {
+        for (entry in subscriptions.values) {
+            entry.cursor = null
+            entry.epoch = null
+        }
+
+        return shapes.values.mapNotNull { shape ->
+            shape.rows.clear()
+            shape.order.clear()
+            shape.checkpoint = null
+            shape.epoch = null
+            shape.onRows
+        }
+    }
+
+    /**
+     * Tracks a frame's resume position. A `cursor` that is not an integer is not
+     * a cursor: resending it verbatim asks the server to resume from `"9"`, so it
+     * leaves the tracked one where it was.
+     */
     private fun advance(entry: Subscription, frame: Map<*, *>) {
-        if (frame.containsKey("cursor")) entry.cursor = frame["cursor"]
+        (frame["cursor"] as? Number)?.toDouble()?.takeIf { it == Math.rint(it) && !it.isInfinite() }?.let { entry.cursor = it }
         if (frame.containsKey("epoch")) entry.epoch = frame["epoch"]
     }
 
@@ -819,8 +1323,8 @@ class Client(
         synchronized(lock) {
             // A part for an unknown poke is dropped: without its pokeStart there
             // is no batch to join, and guessing would apply a fragment of one.
-            val buffer = pokes[frame["pokeId"].toString()] ?: return
-            val shapeId = frame["shapeId"].toString()
+            val buffer = pokes[frame["pokeId"] as? String ?: return] ?: return
+            val shapeId = frame["shapeId"] as? String ?: return
 
             buffer.parts.getOrPut(shapeId) { mutableListOf() }.addAll(operations)
 
@@ -829,6 +1333,8 @@ class Client(
             // signal: a missing `baseCheckpoint` does not imply a seed, and a
             // retention re-seed arrives with the epoch unchanged.
             if (frame["reset"] == true) buffer.resets.add(shapeId)
+
+            (frame["baseCheckpoint"] ?: buffer.baseCheckpoint)?.let { buffer.bases[shapeId] = it }
         }
     }
 
@@ -837,11 +1343,52 @@ class Client(
         // with the row snapshot taken while still holding it — so a callback sees
         // one consistent poke even if the next one lands mid-delivery.
         val deliveries = synchronized(lock) {
-            val buffer = pokes.remove(frame["pokeId"].toString()) ?: return
-            val pending = mutableListOf<Pair<(List<WireValue>) -> Unit, List<WireValue>>>()
+            val buffer = pokes.remove(frame["pokeId"] as? String ?: return) ?: return
+            val pending = mutableListOf<() -> Unit>()
+            val sender = send
 
             for ((shapeId, operations) in buffer.parts) {
                 val shape = shapes[shapeId] ?: continue
+
+                // Every row is decoded BEFORE the view is touched: a poke applies
+                // whole or not at all. Decoding inside the apply loop cleared the
+                // view for a reset and then threw on the bad row, leaving it half
+                // applied (or empty) with nothing reported — and the exception ended
+                // the caller's read loop. Refused, the shape keeps its view, its
+                // checkpoint and its epoch, so a resume still asks for the rows it
+                // never held; its error callback hears why.
+                val decoded = try {
+                    operations.map { operation ->
+                        operation to operation["value"]?.takeIf { operation["op"] != "delete" }?.let { Wire.decode(it) }
+                    }
+                } catch (error: WireFormatException) {
+                    shape.onError?.let { onError ->
+                        pending.add { onError(SubscriptionError(WIRE_DECODE_FAILED, error.message ?: "shape rows could not be decoded")) }
+                    }
+
+                    continue
+                }
+
+                // The server computed this diff against `base`. If the view is not at
+                // that checkpoint — a poke was refused or dropped — or the changelog
+                // epoch forked, splicing the ops on corrupts the view for good (the
+                // missed rows never come again). Drop it, skip the ops, tell the
+                // callback `[]` and re-subscribe COLD so the server re-seeds it. A
+                // reset part is the full membership and settles either case itself.
+                val base = buffer.bases[shapeId]
+                val epochForked = buffer.epoch != null && shape.epoch != null && buffer.epoch != shape.epoch
+                val baseDiverged = base != null && shape.checkpoint != null && shape.checkpoint != base
+
+                if (shapeId !in buffer.resets && (epochForked || baseDiverged)) {
+                    shape.rows.clear()
+                    shape.order.clear()
+                    shape.checkpoint = null
+                    shape.epoch = null
+                    shape.onRows?.let { onRows -> pending.add { onRows(emptyList()) } }
+                    sender?.let { pending.add { it(buildShapeSubscribeFrame(shapeId, shape.name, shape.args)) } }
+
+                    continue
+                }
 
                 // A reset part is the shape's complete membership, so it is
                 // authoritative on its own: drop what we hold before applying it.
@@ -853,7 +1400,7 @@ class Client(
                     shape.order.clear()
                 }
 
-                for (operation in operations) {
+                for ((operation, value) in decoded) {
                     val key = operation["key"]?.toString() ?: continue
 
                     if (operation["op"] == "delete") {
@@ -864,30 +1411,35 @@ class Client(
 
                     // A value-less upsert is membership-only; it must not blank an
                     // existing row.
-                    val value = operation["value"] ?: continue
+                    if (value == null) continue
 
                     if (!shape.rows.containsKey(key)) shape.order.add(key)
 
-                    shape.rows[key] = Wire.decode(value)
+                    shape.rows[key] = value
                 }
 
                 if (frame.containsKey("checkpoint")) shape.checkpoint = frame["checkpoint"]
                 if (frame.containsKey("epoch")) shape.epoch = frame["epoch"]
 
-                shape.onRows?.let { onRows -> pending.add(onRows to shape.order.mapNotNull { key -> shape.rows[key] }) }
+                shape.onRows?.let { onRows ->
+                    val rows = shape.order.mapNotNull { key -> shape.rows[key] }
+
+                    pending.add { onRows(rows) }
+                }
             }
 
             pending
         }
 
-        for ((onRows, rows) in deliveries) onRows(rows)
+        for (delivery in deliveries) delivery()
     }
 
     /**
-     * The socket URL: the origin with its scheme swapped, plus the shard and
-     * credential query parameters when present.
+     * The socket URL: the origin with its scheme swapped, plus the shard and the
+     * admin ticket as `?token=` when present. The session credential is never in
+     * the URL; it travels in the `connect` frame.
      */
-    fun wsUrl(shardKey: String? = null, token: String? = null): String {
+    fun wsUrl(shardKey: String? = null): String {
         var endpoint = join(WS_PATH)
 
         endpoint = when {
@@ -901,7 +1453,7 @@ class Client(
             // runtime would open a socket against a shard named "" rather than the
             // default one this client resolves an empty key to.
             namedShard(shardKey)?.let { add("shard=" + URLEncoder.encode(it, StandardCharsets.UTF_8)) }
-            token?.let { add("token=" + URLEncoder.encode(it, StandardCharsets.UTF_8)) }
+            wsTicket?.invoke()?.let { add("token=" + URLEncoder.encode(it, StandardCharsets.UTF_8)) }
         }
 
         if (params.isEmpty()) return endpoint

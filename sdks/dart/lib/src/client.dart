@@ -109,16 +109,75 @@ class LunoraClient {
   late final OfflineReplayer _replayer;
 
   /// The bearer token sent on every RPC. Rotate it at any time; the next call
-  /// picks it up.
+  /// picks it up, and queued writes a stale token was refused for replay.
+  ///
+  /// With an [authSubject] set, set it again after the new token to say whose
+  /// token it is:
+  ///
+  /// ```dart
+  /// client
+  ///   ..authToken = refreshed
+  ///   ..authSubject = userId; // the same id for a refresh, the new one for a switch
+  /// ```
+  ///
+  /// Until it is, queued writes are held rather than sent under a subject the
+  /// new token may not belong to; setting it re-flushes them.
   String? get authToken => transport.authToken;
 
-  set authToken(String? value) => transport.authToken = value;
+  set authToken(String? value) => _changeIdentity(() => transport.authToken = value);
 
   /// A stable subject — a user id — identifying who the client is acting as.
   /// See [LunoraTransport.authSubject].
   String? get authSubject => transport.authSubject;
 
-  set authSubject(String? value) => transport.authSubject = value;
+  set authSubject(String? value) => _changeIdentity(() => transport.authSubject = value);
+
+  /// Apply a credential change, and retire the previous identity's session when
+  /// it changed the identity FROM a set one — a sign-out, or another user
+  /// signing in. The identity is [identityFingerprint]: the subject when set,
+  /// else a digest of the token, so a token refresh with no subject is a change.
+  ///
+  /// Every resume cursor and epoch was that identity's position in the
+  /// changelog, and every shape row was a row IT could see; resuming from them
+  /// under the new identity asks the server for a diff against a view this one
+  /// never held and splices it onto someone else's rows. So they are dropped —
+  /// the next resubscribe is a cold one — and every shape view is emptied, its
+  /// callbacks told `[]`. A first sign-in (from unset) and a re-assertion of the
+  /// same identity evict nothing.
+  ///
+  /// It also re-flushes. A write refused for its credential, or held while the
+  /// identity could not be told, waits for exactly this: nothing else would
+  /// replay it while the socket stays up, since only a reconnect flushes. So
+  /// when anything the replay gate reads changed — the token, the identity, or
+  /// a subject re-set for a new token — every connected shard with writes queued
+  /// flushes. In a microtask, so `authToken` and `authSubject` set one after the
+  /// other are judged together: the gate holds a write while a new token's
+  /// subject is unconfirmed, and never sends it as the previous user.
+  void _changeIdentity(void Function() change) {
+    final previous = transport.identityFingerprint();
+    final previousToken = transport.authToken;
+    final wasAwaitingReconfirm = transport.subjectAwaitingReconfirm;
+
+    change();
+
+    final identityChanged = previous != transport.identityFingerprint();
+
+    if ((identityChanged || previousToken != transport.authToken || wasAwaitingReconfirm) && _queue.size > 0) {
+      scheduleMicrotask(_flushConnectedShards);
+    }
+
+    if (previous == null || !identityChanged) {
+      return;
+    }
+
+    for (final entry in _subscriptions.values) {
+      entry
+        ..cursor = null
+        ..epoch = null;
+    }
+
+    _shapeRegistry.evictSession();
+  }
 
   /// Identifies this client to the server's idempotency bookkeeping — see
   /// [LunoraTransport.clientId].
@@ -129,16 +188,34 @@ class LunoraClient {
       LunoraTransport.buildRpcBody(functionPath, args, shardKey: shardKey);
 
   /// Decodes one RPC response — see [LunoraTransport.parseRpcResponse].
-  static Object? parseRpcResponse(Map<String, Object?> body, {required int status}) => LunoraTransport.parseRpcResponse(body, status: status);
+  static Object? parseRpcResponse(Object? body, {required int status}) => LunoraTransport.parseRpcResponse(body, status: status);
 
   /// The identity a queued write is stamped with — see
   /// [LunoraTransport.identityFingerprint].
   String? identityFingerprint() => transport.identityFingerprint();
 
   /// The socket URL — see [LunoraTransport.wsUrl].
-  String wsUrl({String? shardKey, String? token}) => transport.wsUrl(shardKey: shardKey, token: token);
+  String wsUrl({String? shardKey, String? ticket}) => transport.wsUrl(shardKey: shardKey, ticket: ticket);
 
   LunoraFrameSender? _send;
+  String? _sessionToken;
+
+  /// Bumped whenever the session credential changes. A socket records the
+  /// generation it opened under; see [detachSocket].
+  int _credentialGeneration = 0;
+  int _socketGeneration = 0;
+
+  /// Bumped by attach and detach, so a superseded attach does not install its sender.
+  int _attachGeneration = 0;
+
+  /// The generation a 4003 was last reported for, so one credential's refusal
+  /// reports once however many retries repeat it.
+  int? _lastRefusedGeneration;
+  final List<void Function()> _tokenExpiredListeners = <void Function()>[];
+
+  /// The listeners on each whisper topic. A topic is joined on the server while
+  /// it has any, and left when the last one goes.
+  final Map<String, List<LunoraDataCallback>> _whisperListeners = <String, List<LunoraDataCallback>>{};
   final Map<String, _Subscription> _subscriptions = <String, _Subscription>{};
   final ShapeRegistry _shapeRegistry = ShapeRegistry();
   int _nextId = 0;
@@ -152,10 +229,138 @@ class LunoraClient {
   bool _wasEverConnected = false;
   bool _closed = false;
 
-  /// Registers the sender used for subscription frames. Call once the socket is
-  /// open.
-  void attachSocket(LunoraFrameSender sender) {
+  /// Registers the sender for this socket and writes its `connect` frame first.
+  ///
+  /// The frame carries the [sessionToken] when one is set, and [context] when
+  /// given. Whisper topics joined so far are rejoined right after it. Subscriptions
+  /// are not replayed here: call [resendSubscriptions] after this.
+  void attachSocket(LunoraFrameSender sender, {Map<String, Object?>? context}) {
+    // Offline until every write below has returned: a write that throws leaves the client offline, and a
+    // detach the sender makes during the writes supersedes this attach.
+    _send = null;
+    final attachGeneration = ++_attachGeneration;
+
+    if (_closed) {
+      return;
+    }
+
+    // The credential generation is read with the frames, before any sender callback can change it, so the
+    // socket is tagged with the credential it presented.
+    final credential = _credentialGeneration;
+
+    // Built before any is sent, for the reason [resendSubscriptions] gives: the
+    // sender is the caller's code.
+    final connect = buildConnectFrame(clientId: transport.clientId, context: context, token: _sessionToken);
+
+    // A sender that detaches or re-attaches during a write supersedes this attach: nothing more is written to
+    // a socket that is no longer attached.
+    if (attachGeneration != _attachGeneration) {
+      return;
+    }
+
+    sender(connect);
+
+    // A sender may register a topic while connect is written, and such a topic is in no earlier snapshot, so
+    // every topic is joined until none is left. A topic that has since been left is not joined.
+    final joined = <String>{};
+
+    while (attachGeneration == _attachGeneration) {
+      String? next;
+
+      for (final topic in _whisperListeners.keys) {
+        if (!joined.contains(topic)) {
+          next = topic;
+          break;
+        }
+      }
+
+      if (next == null) {
+        break;
+      }
+
+      joined.add(next);
+      sender(buildWhisperSubscribeFrame(next));
+    }
+
+    if (attachGeneration != _attachGeneration) {
+      return;
+    }
+
     _send = sender;
+    _socketGeneration = credential;
+  }
+
+  /// Forgets the sender, so a subscription made while the socket is down is
+  /// held for [resendSubscriptions] instead of written to the dead socket.
+  /// Unlike [close], the client stays usable and keeps its subscriptions.
+  ///
+  /// [code] and [reason] are the close frame the socket ended with, when there
+  /// was one. They decide whether the server refused the credential:
+  ///
+  /// - 4001 means the token expired, and always notifies [onTokenExpired].
+  /// - 4003 refuses the credential, and notifies once per credential. A socket
+  ///   opened under a credential that has since been replaced notifies nothing,
+  ///   because it was refused a credential no longer in force. The connect
+  ///   deadline also closes with 4003, but it refuses no credential.
+  /// - Any other close notifies nothing.
+  void detachSocket([int? code, String? reason]) {
+    final openedUnder = _socketGeneration;
+
+    // Offline before any listener runs, so a listener that reattaches is not
+    // undone by this method clearing the sender afterwards.
+    _send = null;
+    _attachGeneration++;
+
+    if (code == 4001) {
+      _notifyTokenExpired();
+    } else if (code == 4003 && reason != 'connect deadline' && openedUnder == _credentialGeneration && openedUnder != _lastRefusedGeneration) {
+      _lastRefusedGeneration = openedUnder;
+      _notifyTokenExpired();
+    }
+  }
+
+  /// The session credential: the WebSocket identity sent as `connect.token` on
+  /// every socket open. Never the RPC bearer ([authToken]) and never in the URL.
+  ///
+  /// Setting a different value supersedes the socket open under the old one, so
+  /// that socket's refusal is no longer reported; see [detachSocket]. Setting the
+  /// same value changes nothing. It takes effect on the next [attachSocket].
+  String? get sessionToken => _sessionToken;
+
+  set sessionToken(String? value) {
+    if (value == _sessionToken) {
+      return;
+    }
+
+    _sessionToken = value;
+    _credentialGeneration += 1;
+  }
+
+  /// Calls [listener] when the server says the session credential has expired
+  /// or refused it. Returns the handle that removes it.
+  LunoraUnsubscribe onTokenExpired(void Function() listener) {
+    _tokenExpiredListeners.add(listener);
+
+    var registered = true;
+
+    return () {
+      if (registered) {
+        registered = false;
+        _tokenExpiredListeners.remove(listener);
+      }
+    };
+  }
+
+  void _notifyTokenExpired() {
+    for (final listener in List<void Function()>.of(_tokenExpiredListeners)) {
+      // A listener is the app's code. Its failure must not stop this socket's
+      // close handling or the frame that reported the expiry.
+      try {
+        listener();
+      } on Object {
+        // Deliberately not rethrown: see above.
+      }
+    }
   }
 
   // ─── Connectivity ─────────────────────────────────────────────────────────
@@ -188,6 +393,7 @@ class LunoraClient {
 
     if (!connected) {
       _connectedShards.remove(shard);
+      _replayer.cancelRetries(shardKey: shardKey);
 
       return;
     }
@@ -230,16 +436,24 @@ class LunoraClient {
       return restored;
     }
 
-    // One flush per SHARD the restored writes belong to, and only for the ones
-    // already connected. A single global flush would drain another shard's
-    // writes down this shard's connection.
+    _flushConnectedShards();
+
+    return restored;
+  }
+
+  /// One flush per SHARD with writes queued, and only for the ones already
+  /// connected. A single global flush would drain another shard's writes down
+  /// this shard's connection.
+  void _flushConnectedShards() {
+    if (_closed) {
+      return;
+    }
+
     for (final shard in <String>{for (final item in _queue.items) item.shardKey ?? ''}) {
       if (_connectedShards.contains(shard)) {
         unawaited(flushOfflineQueue(shardKey: shard.isEmpty ? null : shard));
       }
     }
-
-    return restored;
   }
 
   /// Whether [close] has been called. A closed client accepts no further calls.
@@ -257,10 +471,23 @@ class LunoraClient {
   /// discard writes the next session will restore.
   void close() {
     _closed = true;
+    // An attach still in flight is superseded, so its sender is never installed after shutdown.
+    _attachGeneration++;
     _connectedShards.clear();
+    _replayer.cancelRetries(all: true);
     _send = null;
     _subscriptions.clear();
+    _whisperListeners.clear();
     _shapeRegistry.clear();
+
+    final streams = List<MultiStreamController<Object?>>.of(_streams);
+
+    _streams.clear();
+
+    for (final stream in streams) {
+      unawaited(stream.close());
+    }
+
     _queue.clear();
   }
 
@@ -289,6 +516,13 @@ class LunoraClient {
   /// it replays — see [setConnected]. [precondition] is evaluated just before
   /// that replay: returning false discards the write rather than sending it
   /// against state it no longer suits.
+  ///
+  /// [onlineOnly] is never queued, persisted or replayed. Where this write would
+  /// be queued, the Future fails at once with `LunoraApiException` coded
+  /// [offlineNotQueued], before any optimistic layer is applied, so [args] never
+  /// reach the queue or the persistence adapter. It does not wait for a flush or
+  /// queue behind pending writes, so it may overtake them. For a credential or a
+  /// one-time token.
   Future<Object?> mutation(
     String functionPath, {
     Object? args,
@@ -297,6 +531,7 @@ class LunoraClient {
     LunoraOptimistic? optimistic,
     LunoraOptimisticUpdate? optimisticUpdate,
     bool Function()? precondition,
+    bool onlineOnly = false,
   }) async {
     _assertOpen();
 
@@ -304,12 +539,28 @@ class LunoraClient {
     // and any replay of it, so the server can deduplicate a write it already
     // committed rather than applying it twice.
     final id = mutationId ?? nextMutationId();
-    final handles = _applyOptimistic(functionPath, args, optimistic, optimisticUpdate);
 
     // Per SHARD: a write for a shard whose socket is down queues even while
     // another shard is connected, because the connection that is up cannot
     // reach it.
-    if (!connectedTo(shardKey) && _queue.acceptsWhileDisconnected(everConnected: _wasEverConnected)) {
+    final queues = !connectedTo(shardKey) && _queue.acceptsWhileDisconnected(everConnected: _wasEverConnected);
+
+    if (queues && onlineOnly) {
+      throw LunoraApiException(offlineNotQueued, "'$functionPath' is online-only and the connection is not live, so it was not queued");
+    }
+
+    final handles = _applyOptimistic(functionPath, args, optimistic, optimisticUpdate);
+
+    // The optimistic callbacks are user code and may drop this shard's socket, so the decision above can
+    // be stale. The write is decided again now, and an online-only one that would queue is refused.
+    final queuesNow = !connectedTo(shardKey) && _queue.acceptsWhileDisconnected(everConnected: _wasEverConnected);
+
+    if (queuesNow && onlineOnly) {
+      rollbackOptimistic(handles);
+      throw LunoraApiException(offlineNotQueued, "'$functionPath' is online-only and the connection is not live, so it was not queued");
+    }
+
+    if (queuesNow) {
       return _enqueue(functionPath, args, shardKey, id, handles, precondition);
     }
 
@@ -323,8 +574,22 @@ class LunoraClient {
       }
 
       return outcome.result;
-    } on Object {
+    } on Object catch (error) {
       rollbackOptimistic(handles);
+
+      // An uncoded throw is the transport, not a verdict (the replay reads it the same
+      // way), so an online-only write that never reached the server while the shard has
+      // no socket is refused rather than surfacing the raw throw. An argument the codec
+      // refuses never left the process, so it surfaces as itself.
+      if (onlineOnly && error is! LunoraApiException && error is! WireFormatException && !connectedTo(shardKey)) {
+        throw LunoraApiException(
+          offlineNotQueued,
+          "'$functionPath' is online-only and the connection is not live, so it was not queued",
+          null,
+          false,
+          error,
+        );
+      }
 
       rethrow;
     }
@@ -368,7 +633,7 @@ class LunoraClient {
 
   // ─── Frame builders ───────────────────────────────────────────────────────
 
-  static Map<String, Object?> buildConnectFrame({String? clientId, Map<String, Object?>? context}) {
+  static Map<String, Object?> buildConnectFrame({String? clientId, Map<String, Object?>? context, String? token}) {
     final frame = <String, Object?>{'id': 'connect', 'type': 'connect'};
 
     if (clientId != null) {
@@ -376,6 +641,10 @@ class LunoraClient {
     }
     if (context != null) {
       frame['context'] = context;
+    }
+    // The session credential (protocol/README.md 5.1, 6): it never rides the URL.
+    if (token != null) {
+      frame['token'] = token;
     }
 
     return frame;
@@ -412,6 +681,18 @@ class LunoraClient {
 
   static Map<String, Object?> buildShapeUnsubscribeFrame(String id) => ShapeRegistry.buildUnsubscribeFrame(id);
 
+  static Map<String, Object?> buildWhisperSubscribeFrame(String topic) => <String, Object?>{'topic': topic, 'type': 'whisper_subscribe'};
+
+  static Map<String, Object?> buildWhisperUnsubscribeFrame(String topic) => <String, Object?>{'topic': topic, 'type': 'whisper_unsubscribe'};
+
+  /// A whisper to the topic's other members. [data] is wire-encoded here, so it
+  /// is passed as the application's value.
+  static Map<String, Object?> buildWhisperFrame(String topic, Object? data) => <String, Object?>{
+        'data': encodeWire(data),
+        'topic': topic,
+        'type': 'whisper',
+      };
+
   // ─── Subscriptions ────────────────────────────────────────────────────────
 
   LunoraUnsubscribe subscribe(String functionPath, {Object? args, LunoraDataCallback? onData, LunoraErrorCallback? onError}) {
@@ -444,11 +725,27 @@ class LunoraClient {
   /// listener AND on a re-listen after cancel, both of which a widget tree does
   /// routinely — a stream held in `State` and handed to two builders, or a
   /// builder that rebuilds after its subscription was cancelled.
+  ///
+  /// [close] ends every stream still open, so a listener sees `done` rather than
+  /// waiting forever on a client that will never feed it again.
   Stream<Object?> watch(String functionPath, {Object? args}) => Stream<Object?>.multi((controller) {
+        if (_closed) {
+          controller.close();
+
+          return;
+        }
+
         final cancel = subscribe(functionPath, args: args, onData: controller.add, onError: controller.addError);
 
-        controller.onCancel = cancel;
+        _streams.add(controller);
+        controller.onCancel = () {
+          _streams.remove(controller);
+          cancel();
+        };
       });
+
+  /// The `watch()` listeners still open, for [close] to end.
+  final Set<MultiStreamController<Object?>> _streams = <MultiStreamController<Object?>>{};
 
   /// Opens a partially-replicated keyed view. `onRows` fires once per applied
   /// poke with the view's full contents, in insertion order. See
@@ -485,6 +782,63 @@ class LunoraClient {
     for (final frame in frames) {
       sender(frame);
     }
+  }
+
+  // ─── Whisper and rooms ────────────────────────────────────────────────────
+
+  /// Joins [topic] and calls [listener] with every whisper sent to it, from any
+  /// member. The join goes out now if a socket is attached, and again after each
+  /// reconnect. Returns the handle that leaves it; the last listener to leave
+  /// sends `whisper_unsubscribe`.
+  LunoraUnsubscribe whisperSubscribe(String topic, LunoraDataCallback listener) {
+    final listeners = _whisperListeners[topic];
+
+    if (listeners == null) {
+      _whisperListeners[topic] = <LunoraDataCallback>[listener];
+      _send?.call(buildWhisperSubscribeFrame(topic));
+    } else {
+      listeners.add(listener);
+    }
+
+    var subscribed = true;
+
+    return () {
+      final current = _whisperListeners[topic];
+
+      if (!subscribed || current == null) {
+        return;
+      }
+
+      subscribed = false;
+      current.remove(listener);
+
+      if (current.isEmpty) {
+        _whisperListeners.remove(topic);
+        _send?.call(buildWhisperUnsubscribeFrame(topic));
+      }
+    };
+  }
+
+  /// Sends [data] to [topic]'s other members. Returns false, and sends nothing,
+  /// when no socket is attached: a whisper is transient, so it is not queued.
+  bool whisper(String topic, Object? data) {
+    final sender = _send;
+
+    if (sender == null) {
+      return false;
+    }
+
+    sender(buildWhisperFrame(topic, data));
+
+    return true;
+  }
+
+  /// Joins the room [name] (the topic `room:<name>`) and returns a handle to
+  /// send to it and to leave it. It does not wait for an acknowledgement.
+  LunoraRoom connectRoom(String name, LunoraDataCallback listener) {
+    final topic = 'room:$name';
+
+    return LunoraRoom._(this, topic, whisperSubscribe(topic, listener));
   }
 
   // ─── Inbound frames ───────────────────────────────────────────────────────
@@ -565,6 +919,15 @@ class LunoraClient {
       case 'error':
         final envelope = frame['error'];
         final coded = envelope is Map<String, Object?> ? envelope : const <String, Object?>{};
+
+        // The session expired. This is the credential's news, not the query's, so
+        // it notifies and reaches no subscription, whether or not it has an id.
+        if (coded['code'] == 'TOKEN_EXPIRED') {
+          _notifyTokenExpired();
+
+          return kind;
+        }
+
         final error = LunoraSubscriptionError(
           coded['code'] is String ? coded['code'] as String : null,
           frame['message'] is String
@@ -581,8 +944,15 @@ class LunoraClient {
 
         return kind;
       case 'complete':
+        // NON-DESTRUCTIVE, and that is the whole point: removing the entry
+        // takes it out of the map `resendSubscriptions` walks, so the query
+        // froze for the life of the process across every future reconnect, with
+        // nothing reported. Fan a cancellation to the listener and leave the
+        // registration in place; the next reconnect resubscribes it.
+        const cancelled = LunoraSubscriptionError('SUBSCRIPTION_CANCELLED', 'subscription was cancelled by the server');
+
         if (id != null) {
-          _subscriptions.remove(id);
+          _subscriptions[id]?.onError?.call(cancelled);
         }
 
         return kind;
@@ -595,7 +965,36 @@ class LunoraClient {
 
         return kind;
       case 'pokeEnd':
-        _shapeRegistry.applyPoke(frame);
+        _shapeRegistry.applyPoke(frame, sender: _send);
+
+        return kind;
+      case 'whisper':
+        final topic = frame['topic'];
+        final listeners = topic is String && topic.isNotEmpty ? _whisperListeners[topic] : null;
+
+        if (listeners == null) {
+          return kind;
+        }
+
+        final Object? value;
+
+        try {
+          value = decodeWire(frame['data']);
+        } on WireFormatException {
+          // Dropped. A payload that does not decode is not the read loop's failure.
+          return kind;
+        }
+
+        // A copy, so a listener that leaves its topic mid-delivery does not
+        // change the list being walked.
+        for (final listener in List<LunoraDataCallback>.of(listeners)) {
+          // An app listener must not end frame handling, nor skip the listeners after it.
+          try {
+            listener(value);
+          } on Object {
+            // Deliberately not rethrown: see above.
+          }
+        }
 
         return kind;
       default:
@@ -603,12 +1002,18 @@ class LunoraClient {
     }
   }
 
+  /// Record a frame's resume watermark — only when it IS one. A cursor that is
+  /// not an integer, or an epoch that is not a string, is not a position in the
+  /// changelog, and storing it verbatim resent `sinceSeq: "9"` on reconnect.
   void _advance(_Subscription entry, Map<String, Object?> frame) {
-    if (frame.containsKey('cursor')) {
-      entry.cursor = frame['cursor'];
+    final cursor = frame['cursor'];
+    final epoch = frame['epoch'];
+
+    if (cursor is int) {
+      entry.cursor = cursor;
     }
-    if (frame.containsKey('epoch')) {
-      entry.epoch = frame['epoch'];
+    if (epoch is String) {
+      entry.epoch = epoch;
     }
   }
 
@@ -714,6 +1119,30 @@ class LunoraClient {
     );
 
     return completer.future;
+  }
+}
+
+/// A joined room, from [LunoraClient.connectRoom].
+class LunoraRoom {
+  LunoraRoom._(this._client, this.topic, this._leave);
+
+  final LunoraClient _client;
+
+  /// The whisper topic this room is joined on, `room:<name>`.
+  final String topic;
+
+  final LunoraUnsubscribe _leave;
+
+  bool _closed = false;
+
+  /// Sends [message] to the room's other members. False when no socket is
+  /// attached, or when the room has been closed; see [LunoraClient.whisper].
+  bool send(Object? message) => !_closed && _client.whisper(topic, message);
+
+  /// Leaves the room. Calling it again does nothing.
+  void close() {
+    _closed = true;
+    _leave();
   }
 }
 

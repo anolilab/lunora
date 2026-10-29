@@ -1,3 +1,829 @@
+## @lunora/container [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.96...@lunora/container@1.0.0-alpha.97) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.76
+
+## @lunora/container [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.95...@lunora/container@1.0.0-alpha.96) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.75
+
+## @lunora/container [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.94...@lunora/container@1.0.0-alpha.95) (2026-10-28)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.74
+
+## @lunora/container [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.93...@lunora/container@1.0.0-alpha.94) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+
+## @lunora/container [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.92...@lunora/container@1.0.0-alpha.93) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+
+## @lunora/container [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.91...@lunora/container@1.0.0-alpha.92) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+
+## @lunora/container [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.90...@lunora/container@1.0.0-alpha.91) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+
+## @lunora/container [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.89...@lunora/container@1.0.0-alpha.90) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+
+## @lunora/container [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.88...@lunora/container@1.0.0-alpha.89) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+
+## @lunora/container [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.87...@lunora/container@1.0.0-alpha.88) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+
+## @lunora/container [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.86...@lunora/container@1.0.0-alpha.87) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+
+## @lunora/container [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.85...@lunora/container@1.0.0-alpha.86) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+
+## @lunora/container [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.84...@lunora/container@1.0.0-alpha.85) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+
+## @lunora/container [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.83...@lunora/container@1.0.0-alpha.84) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+
+## @lunora/container [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.82...@lunora/container@1.0.0-alpha.83) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+
+## @lunora/container [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.81...@lunora/container@1.0.0-alpha.82) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+
+## @lunora/container [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.80...@lunora/container@1.0.0-alpha.81) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+
+## @lunora/container [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.79...@lunora/container@1.0.0-alpha.80) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+
+## @lunora/container [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.78...@lunora/container@1.0.0-alpha.79) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+
+## @lunora/container [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.77...@lunora/container@1.0.0-alpha.78) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+
+## @lunora/container [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.76...@lunora/container@1.0.0-alpha.77) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.57
+
+## @lunora/container [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.75...@lunora/container@1.0.0-alpha.76) (2026-10-15)
+
+### Performance Improvements
+
+* **wire:** publish the wire codec once instead of inlining it into every package ([#1198](https://github.com/anolilab/lunora/issues/1198)) ([7020e2c](https://github.com/anolilab/lunora/commit/7020e2cec53c3e5c0f28ab8e569b33ee0ae3a55b))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.56
+* **@lunora/wire:** upgraded to 1.0.0-alpha.1
+
+## @lunora/container [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.74...@lunora/container@1.0.0-alpha.75) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+
+## @lunora/container [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.73...@lunora/container@1.0.0-alpha.74) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+
+## @lunora/container [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.72...@lunora/container@1.0.0-alpha.73) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+
+## @lunora/container [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.71...@lunora/container@1.0.0-alpha.72) (2026-10-09)
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** move Cloudflare-only commands under lunora cloudflare (#1080)
+
+### Code Refactoring
+
+* **cli:** move Cloudflare-only commands under lunora cloudflare ([#1080](https://github.com/anolilab/lunora/issues/1080)) ([e467884](https://github.com/anolilab/lunora/commit/e46788465b08a71b354556df1284fda20c429d37))
+
+## @lunora/container [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.70...@lunora/container@1.0.0-alpha.71) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+
+## @lunora/container [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.69...@lunora/container@1.0.0-alpha.70) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.51
+
+## @lunora/container [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.68...@lunora/container@1.0.0-alpha.69) (2026-10-03)
+
+### Bug Fixes
+
+* follow-ups to the cloudflare limits and ray id reviews ([#942](https://github.com/anolilab/lunora/issues/942), [#943](https://github.com/anolilab/lunora/issues/943)) ([#949](https://github.com/anolilab/lunora/issues/949)) ([34a4597](https://github.com/anolilab/lunora/commit/34a4597a14128ea2e48d52d101d0fbbf9b61e932)), closes [#944](https://github.com/anolilab/lunora/issues/944) [#944](https://github.com/anolilab/lunora/issues/944)
+
+## @lunora/container [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.67...@lunora/container@1.0.0-alpha.68) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+
+## @lunora/container [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.66...@lunora/container@1.0.0-alpha.67) (2026-10-03)
+
+### Bug Fixes
+
+* cloudflare oct 2026 limits + observability block ([#942](https://github.com/anolilab/lunora/issues/942)) ([6145c8c](https://github.com/anolilab/lunora/commit/6145c8cfd7d5ca5fb7ff1eb1a862b93c8bc5657e))
+
+## @lunora/container [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.65...@lunora/container@1.0.0-alpha.66) (2026-10-02)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+
+## @lunora/container [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.64...@lunora/container@1.0.0-alpha.65) (2026-10-02)
+
+### Features
+
+* **container:** Sandbox SDK 1.0 parity (spawn, terminal, files, backups, mounts) ([#932](https://github.com/anolilab/lunora/issues/932)) ([207b674](https://github.com/anolilab/lunora/commit/207b674982f2f2e722d0bad529acc88d09cc2f41))
+
+## @lunora/container [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.63...@lunora/container@1.0.0-alpha.64) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+
+## @lunora/container [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.62...@lunora/container@1.0.0-alpha.63) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.47
+
+## @lunora/container [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.61...@lunora/container@1.0.0-alpha.62) (2026-09-27)
+
+### Code Refactoring
+
+* stop exporting unused internals in add-on packages ([#875](https://github.com/anolilab/lunora/issues/875)) ([4c0ee9c](https://github.com/anolilab/lunora/commit/4c0ee9cda669e8d09c457ea8b875d29d398e39f1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+
+## @lunora/container [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.60...@lunora/container@1.0.0-alpha.61) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+
+## @lunora/container [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.59...@lunora/container@1.0.0-alpha.60) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+
+## @lunora/container [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.58...@lunora/container@1.0.0-alpha.59) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+
+## @lunora/container [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.57...@lunora/container@1.0.0-alpha.58) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+
+## @lunora/container [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.56...@lunora/container@1.0.0-alpha.57) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **container:** `start({ envVars })` no longer replaces the container
+environment; it is merged over `env`, `secrets` and `secretsStore`, and a
+missing Secrets Store binding now fails such a start too.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): keep pool instances out of .get() names
+
+`.any()` and `.pool()` picked instances named `pool-N`, the same namespace
+`.get(name)` uses. An entity called `pool-0` shared a Durable Object, disk
+and lifecycle with the pool's first instance, so `.get("pool-0").destroy()`
+stopped a pool member.
+
+Pool instances are now named `__lunora-pool-N`, and `.get()` rejects names
+with that prefix (also in `createContainerTestContext`).
+* **container:** pooled instances move to new Durable Object ids
+(`__lunora-pool-N`); `.get()` rejects names starting with `__lunora-pool-`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): keep container spans on one trace without traceparent
+
+Without an inbound `traceparent`, `createContainerTelemetry` minted a new
+trace id for every span, so one job's spans landed as unrelated root traces,
+and its log records carried no trace id at all. A dispatch that reached the
+shard with no `traceparent` (an alarm, a subscription re-run, a non-Lunora
+caller) always produced that case, because the shard forwarded nothing to
+the container even though it had minted its own trace anchor.
+
+- The telemetry instance mints one trace when there is no inbound parent;
+  every span shares it as a root, and every log record is stamped with it.
+- `ShardDO.getCurrentTraceparent()` falls back to the dispatch's minted
+  anchor (its trace id and root span), so container spans join the shard's
+  trace under its root span.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): keep the pool-N ids and reserve the prefix in .get()
+
+The previous commit renamed pool instances to `__lunora-pool-N`. Instance
+names are Durable Object ids, so a deploy would have started a second set of
+pool instances while the warm `pool-N` ones kept counting against wrangler's
+`max_instances` until `sleepAfter` (10m by default) — long enough for every
+`.any()`/`.pool()` call to fail with "no Container instance available".
+
+The pool keeps its `pool-N` ids. `.get(name)` now rejects any name starting
+with `pool-`, with an error that says the prefix is reserved for the
+instances `.any()`/`.pool()` pick.
+* **container:** `.get(name)` throws for a name starting with `pool-`. This
+only affects an app that already names an instance `pool-*`, and such an
+instance was already sharing a Durable Object (disk, lifecycle, `destroy()`)
+with a pool member, which is the bug this closes. Rename those instances.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): keep start({ envVars }) replacing the declared env
+
+Reverts the merge semantics from 5810b4341. Replacing the env set is a
+safety feature, not a bug: `start({ envVars })` is how an app boots an
+untrusted or model-driven exec sandbox without the credentials the
+definition declares (DATABASE_URL, Secrets Store values). With a merge the
+only way left to withhold a declared secret was to override each one with
+"", which fails open the moment a new secret is declared.
+
+What was wrong was the documentation. `ContainerStartOptions.envVars` said
+"merged over the definition's env/secrets"; it now says the per-instance
+set replaces `env`, `secrets` and `secretsStore` for that start, and that
+Secrets Store resolution is skipped. The container docs say the same and
+show `start({ envVars: {} })` for a credential-free sandbox.
+
+A new test pins the contract: a start with `envVars` passes exactly those
+variables to the base class, with the declared env, Worker secret and
+Secrets Store value all absent. It and the restored "skips Secrets Store
+resolution" test fail against the merging implementation.
+
+This undoes the BREAKING CHANGE recorded on 5810b4341: `start({ envVars })`
+behaves as it did before this PR.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): mint one trace per instance only when it is anchored
+
+f80628f7b gave every telemetry instance one trace even with no anchor. The
+documented setup creates the instance once per process, so a long-running
+container server put every span it ever made into one trace that never
+ended: collectors truncate it, and per-request filtering stops working.
+
+`createContainerTelemetry` is back to the anchored/unanchored split. With
+an anchor (`traceparent` option, the `request`'s header, or
+`LUNORA_TRACEPARENT`) every span hangs off it and every log carries its
+trace id. Without one, each span starts its own trace and logs name none.
+The shard still forwards its minted anchor when the dispatch arrived with
+no traceparent, so containers called through `ctx.containers` stay
+anchored to the shard's trace.
+
+The telemetry JSDoc and the observability docs now say to create the
+instance per request (`{ request }`) in a server and to keep a
+module-scope instance for one-shot jobs started with LUNORA_TRACEPARENT.
+The codegen comment on the forwarded traceparent no longer claims it is
+undefined outside a propagated dispatch, and `getCurrentTraceparent`
+documents the existing alarm-vs-RPC mis-attribution of the shared
+per-instance trace field (not fixed: it needs the anchor passed into
+buildCtx by value).
+
+The one-trace test is split into an anchored and an unanchored case; the
+unanchored one fails against f80628f7b.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(container): reach exec over an RPC, not a forgeable header
+
+The container DO let a `/__lunora/*` request through when it carried
+`x-lunora-container-exec: 1`. That header was a constant, so it was only as
+strong as every path that could present it:
+
+- an app forwarding an inbound request as-is
+  (`env.CONTAINER_X.get(id).fetch(request)`) forwarded an attacker's header;
+- `containerFetch` is a public RPC on the stub and skipped the `fetch`
+  override entirely.
+
+The exec route is now unreachable from request content:
+
+- `LunoraContainer.fetch` and `containerFetch` both answer 403 for any path
+  touching `/__lunora/*`, whatever headers the request carries.
+- `handle.exec` is delivered through a new `lunoraExec(request)` RPC, which
+  only code holding the binding can call. It serves only POST
+  `/__lunora/exec`, honouring a `.port(n)` handle's target-port header.
+- The header survives only as an in-worker routing mark: the stub sender
+  strips it and calls `lunoraExec` instead of `fetch`. Every caller `fetch`,
+  including on `.port()` and pooled handles, still strips it first.
+
+Both guards now check every successive percent-decoding of the path (up to
+five rounds), so a double-encoded `/%255F%255Flunora/exec` that a decoding
+proxy would turn into `/__lunora/exec` is refused too.
+
+Tests cover: the DO refusing the route with the header set to "1", "0" and
+"true", `%2F`, double encoding and a websocket upgrade; `containerFetch`
+refusing it; `lunoraExec` serving only the exec route on the targeted port;
+exec going over `lunoraExec` and marked caller fetches (plain, `.port()`,
+pooled) over `fetch`, with no mark on the wire; the double-encoded client
+path. All fail against the previous commit.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(container): send exec over RPC without an AbortSignal
+
+`handle.exec` puts its deadline signal on the Request, and cb7ad3337 passed
+that Request to `stub.lunoraExec(...)` as an RPC argument. workerd refuses
+to serialize an AbortSignal ("AbortSignal serialization is not enabled"),
+so every exec with a `timeoutMs` or `signal` failed on real workerd, and
+the error does not match the cold-start pattern, so it was not retried.
+`@lunora/agent`'s sandbox always passes `timeoutMs`. The unit double calls
+`lunoraExec` in-process, which is why the Node suite passed.
+
+- The RPC request is rebuilt from url, method, headers and the (small,
+  JSON) body, with no signal.
+- The deadline is enforced in the worker by racing the RPC against the
+  caller's signal. That signal is passed alongside the request rather than
+  read off it: a Request built from `init.signal` only follows it through a
+  weak reference in undici.
+- A timed-out exec is abandoned, not cancelled: the call keeps running and
+  the command keeps going in the container. The runner receives
+  `timeoutMs` in the body and is the only place that can stop it. The
+  container docs now say this.
+
+A workerd-project test drives `handle.exec` through a real DO RPC
+(`ExecProbe`, which exposes the same `lunoraExec` as `LunoraContainer`,
+which cannot boot without a container runtime): one exec with
+`timeoutMs` that answers, one that times out. Both failed with the
+serialization error before this change.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(container): persist the start({ envVars }) override per instance
+
+The docs advised `start({ envVars: {} })` for a credential-free sandbox,
+but the override lived only for the one start it was passed to:
+
+- after the container stopped (sleepAfter, a crash, hardTimeout), the next
+  `exec`/`fetch` restarted it through `startAndWaitForPorts` with the full
+  declared env and the Secrets Store values;
+- on an instance that was already running, upstream returns early, so the
+  call succeeded while the container kept its credentials.
+
+`LunoraContainer` now persists the override in the Durable Object's
+storage and every start of the instance reads it: explicit `start()`, and
+the implicit restart, on this or any later DO instance. With an override
+the Secrets Store is not read. `destroy()` drops it.
+
+A `start({ envVars })` whose env differs from the one the container is
+running (or starting) with is rejected with `CONFLICT` instead of being
+reported as applied; `stop()` first. The start env is now computed per
+start from the declared env plus a memoised Secrets Store map, rather
+than by merging resolved secrets into `envVars` once.
+
+Tests: restart after stop on a fresh DO instance keeps the override, and
+a differing start on a running instance is refused (both fail without the
+change), plus same-env repeat start and destroy() restoring the declared
+env. The option, secretsStore docblock, README and container docs say the
+same.
+* **container:** a `start({ envVars })` override now persists across
+restarts until `destroy()`, and a differing `start({ envVars })` on a
+running instance throws CONFLICT.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(container): fail closed on malformed and endless path escapes
+
+The reserved-path guards decode a path repeatedly and refuse `/__lunora/*`
+in any decoded form. Two holes remained:
+
+- A malformed escape anywhere made `decodeURIComponent` throw for the whole
+  path, and decoding stopped. `/%5F%5Flunora/exec/%ZZ` was allowed through,
+  while a lenient router (Hono's `tryDecodeURI`) decodes the valid escapes
+  around `%ZZ` and routes it to exec. A failed round now decodes each
+  `%XX` on its own, keeping the invalid ones.
+- A path still changing after the 5-round cap was treated as safe. It now
+  counts as reserved.
+
+`pathMatchesAnyDecoding` replaces `decodedPathForms` in both the client
+guard and the Durable Object guard.
+
+Also fix(do): re-pin the dispatch trace anchor with the request scope.
+`getCurrentTraceparent` falls back to `currentRequestTrace`, which
+`restoreRequestScope` did not restore, so a mutation queued at the replay
+gate forwarded to containers the trace of whichever dispatch ran while it
+waited. It is now part of `RequestScope`.
+
+Tests (each fails without the change): the malformed-escape and
+non-converging paths on the client guard and the DO; a gate-queued
+mutation forwarding its own trace rather than a sibling's.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* chore(container): update the api snapshot for LunoraContainer.destroy
+
+`LunoraContainer` now overrides `destroy()` to drop the persisted
+`start({ envVars })` override.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(container): say a start({ envVars }) override cannot change mid-start
+
+`persistEnvOverride` rejects a differing override with `CONFLICT` while the
+container is running AND while a start is still in flight, but the README,
+the container docs and the `ContainerStartOptions.envVars` JSDoc only named
+the running case. They now say the override cannot change while the
+container is running or still starting.
+
+Also restructures `touchesReservedNamespace` so Prettier and ESLint's
+list-newline rule agree on its formatting (it failed `Lint (prettier)`
+after ESLint's fix pass re-wrapped the call).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### security
+
+* **container:** exec reached only over RPC, pool-prefix reserve, anchored container traces ([#832](https://github.com/anolilab/lunora/issues/832)) ([8361d38](https://github.com/anolilab/lunora/commit/8361d38c3376be251c738a840b7433dd2b7da136))
+
+## @lunora/container [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.55...@lunora/container@1.0.0-alpha.56) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+
+## @lunora/container [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.54...@lunora/container@1.0.0-alpha.55) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+
+## @lunora/container [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.53...@lunora/container@1.0.0-alpha.54) (2026-09-23)
+
+### ⚠ BREAKING CHANGES
+
+* `SpanEvent` gains an optional `sampled` field; a sink that
+enumerates the shape must accept it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(do): fold the ctx.db summary tally onto the dispatch root span
+
+`instrumentDatabase: "summary"` is the default whenever a sink is configured. It
+counted every `ctx.db` call on the hot path and then threw the tally away for
+the commonest handler shape there is — one that reads `ctx.db` and nothing else:
+
+- the dispatch `finally` recorded the root span only when the handler had also
+  touched `ctx.trace` or `ctx.span`, so a db-only dispatch minted no span at
+  all; and
+- even when a root span WAS recorded, `recordDispatchRootSpan` built the
+  attribute bag only inside the `collector !== undefined` branch, so the
+  counters were dropped again unless the handler had opened `ctx.span`.
+
+A non-empty tally now counts as root-span content (`hasRootSpanContent`, shared
+by the dispatch and trigger gates so they cannot drift), and the attributes are
+assembled whether or not a wide event exists. A dispatch that ran no queries and
+recorded nothing still mints nothing, so the bounded span ring keeps its
+"traces worth looking at" property.
+
+No new export traffic: `exportWideEvent` still requires a `ctx.span` collector,
+so this adds no `lunora.dispatch` log record.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(container): keep an errored span when the head decision dropped its trace
+
+The container gated span export on `parent?.sampled !== false` alone, with no
+error re-check — so a failure inside a head-sampled-out trace was the one thing
+that never reached the collector. That is the exact case the tail bias exists
+for, and the worker and the shard both apply it.
+
+`emitSpan` now calls `shouldExportTrace` from `shared/sampling`, the same
+decision the worker's `emitRpcEvent` and the shard's dispatch `finally` take, so
+there is one implementation of head-verdict-plus-tail-bias rather than three
+spellings of it. The toggle comes from a new `alwaysSampleErrors` option
+falling back to `LUNORA_SAMPLE_ERRORS` (`"0"` turns it off), mirroring how the
+shard reads `x-lunora-sample-errors` so all three tiers default to keep.
+
+Scoped per span, and documented as such: a container is a long-running process
+with no dispatch boundary to re-decide at, so a span that already settled `ok`
+before a sibling failed is not retro-exported. That matches what the worker does
+with its own dispatch events.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* feat(platform): rate the telemetry surfaces that need a host primitive
+
+No telemetry surface carried a `PlatformCapabilities` rating, so the two that
+genuinely depend on platform-injected request metadata degraded silently off
+Cloudflare with nothing recording that they would.
+
+Three keys, each rated on both targets with the reasoning in its docblock:
+
+- `edgeRequestMetadata` — `request.cf`. Both the
+  `trustInboundTraceContext: "mtls"` trust signal and the OTLP placement
+  resource detector read it directly, and a host that injects none turns the
+  first into "never trust" and the second into "not Cloudflare".
+- `hostTraceFusion` — the sink's `fuseCloudflareTraces` opt-in, the one
+  telemetry surface that reaches past `ShardHost` into a provider API
+  (`cloudflare:workers`' `tracing.enterSpan`).
+- `logArchive` — reading the durable `ctx.log` archive back, which needs an
+  Iceberg catalog over the object store and an SQL engine to query it, not just
+  a bucket.
+
+All three are advisory by nature, recorded as such in the module doc: each is
+configured through a `createWorker` argument or an `ObservabilitySink` field,
+neither of which codegen reads, so there is no app-side declaration to gate on.
+The rest of the pipeline (`ctx.log`, `ctx.trace`, `ctx.span`, `ctx.metrics`,
+traced `ctx.fetch`, W3C propagation) deliberately gets no key — it is sink
+callbacks over the `fetch` global and needs no host primitive.
+
+Where that silence actually bit, the diagnostic now lands at the only tier that
+can observe it: a dropped inbound trace under a named trust signal whose
+metadata bag is absent from the request warns once, naming the signal, instead
+of being silenced along with the deliberate `true`/`false` answers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* docs(observability): state what sampling covers on the batch and container paths
+
+The sampling page claimed a trace is kept or dropped whole across every tier,
+which the batch dispatch path and the container exporter did not do. Both now
+do, so the page says so explicitly rather than leaving the reader to assume it:
+a batch rides one verdict, and a container applies the tail bias with the one
+honest limit its lack of a dispatch boundary imposes.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* feat(container): propagate the dispatch's tail-bias toggle to the container tier
+
+A container previously learned the tail-bias verdict only from its own
+`LUNORA_SAMPLE_ERRORS` env var, so it agreed with the worker and the shard
+because their defaults coincided rather than because it had been told. An
+operator who set `sampling.alwaysSampleErrors: false` on `createWorker` got a
+container that kept exporting errored spans of dropped traces.
+
+The verdict now travels the whole way, beside the `traceparent` it belongs
+with:
+
+- the shard reads `x-lunora-sample-errors` once into a request-scoped field and
+  exposes it as `getCurrentSampleErrors()` — in the same `RequestScope` as
+  `traceparent`, since re-pinning one but not the other would send a parked
+  request's verdict to the container;
+- codegen emits it as the fifth argument to `createContainerContext`, which
+  stamps the header onto every outbound container request (`get` / `any` /
+  `pool` / `.port()` / `exec`);
+- `createContainerTelemetry` gains a `request` option that reads both halves off
+  the inbound request, so a container handler does not have to know which header
+  carries what.
+
+Absent stays distinguishable from `"0"`: a dispatch that propagated no verdict
+(an alarm, a subscription re-run, a non-Lunora caller) omits the header and
+leaves the container on its own configuration, rather than being told "off".
+The env fallback is kept for the case it still serves — a one-shot container
+started with a fixed context and no request to read — and the precedence
+(explicit option, then request, then env, then tier default) is stated once, at
+the point of resolution.
+
+The header name moves to `shared/sampling.ts`, next to the decision it belongs
+to, rather than being spelled out at each of the four sites that now use it.
+
+Internally the container client carries one `OutboundTraceContext` object
+instead of threading a bare `traceparent` positional through six helpers, so a
+future addition cannot be forwarded by some paths and dropped by others.
+* `createContainerContext` takes a fifth `sampleErrors`
+parameter. Generated code passes it; a hand-written caller that omits it keeps
+the previous behaviour.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(runtime): mint a span id per shard in a batched dispatch
+
+The batch built its sub-request headers ONCE, outside the per-shard fan-out, so
+`injectTraceContext` stamped a single span id into a `traceparent` that every
+shard then received.
+
+Each shard runs its own dispatch and adopts the id it is handed as that
+dispatch's root (`resolveTraceAnchor` takes the inbound `parentSpanId`), then
+stamps it onto its `lunora.dispatch` wide event, every `ctx.log` record, and the
+parent of every `ctx.trace` child. Two shards in one batch therefore put
+unrelated work on the wire under a single `(traceId, spanId)`, and a collector
+resolves that inconsistently — merge, last-write, or duplicate.
+
+The header bag is now built inside the loop with a span id minted per shard, and
+each entry event parents to the span its OWN shard received rather than to the
+batch root. That also groups a batch's waterfall by the hop that actually
+carried each entry instead of flattening every entry under one bar.
+
+This is the rule the per-entry ids already followed, one level up and across
+processes: the comment on `entryTraceFields` describing why entries may not
+share an id applies just as much to the `traceparent`, and that is the one that
+mints spans in another process.
+
+The regression test asserts uniqueness over the whole batch's id set rather than
+comparing ids pairwise, across a three-shard fixture — a pairwise check written
+against two shards passes while a third collides.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* docs(platform): qualify when the Node log archive fails closed
+
+The Node `logArchive` note read as though the admin route always answers
+`LOG_ARCHIVE_NOT_CONFIGURED` on this host. It does not: the route is registered
+here like anywhere else, and that code is returned only while the `logArchive`
+table or the R2 SQL credentials are absent. Configure both and the route stops
+failing closed — it builds an R2 SQL client and queries Cloudflare's API over
+the network, which is not this host serving the archive.
+
+The rating is unchanged and still honest; what was wrong was the reason given
+for it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* five defects in the trace/metric export path ([#794](https://github.com/anolilab/lunora/issues/794)) ([ee1c1a7](https://github.com/anolilab/lunora/commit/ee1c1a7f15e5ee1178a9bf1f0fb8420283e7f004))
+
+## @lunora/container [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.52...@lunora/container@1.0.0-alpha.53) (2026-09-23)
+
+### Bug Fixes
+
+* **agent:** stop sandbox tools re-running billed side effects ([#786](https://github.com/anolilab/lunora/issues/786)) ([95bd227](https://github.com/anolilab/lunora/commit/95bd2270046d700993cd6c50bf27d7840b49008a))
+
+## @lunora/container [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.51...@lunora/container@1.0.0-alpha.52) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/container [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.50...@lunora/container@1.0.0-alpha.51) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/container [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.49...@lunora/container@1.0.0-alpha.50) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/container [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.48...@lunora/container@1.0.0-alpha.49) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+
 ## @lunora/container [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.47...@lunora/container@1.0.0-alpha.48) (2026-09-07)
 
 

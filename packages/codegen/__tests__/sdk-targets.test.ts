@@ -3,6 +3,7 @@
 // — and a language whose backend behaves differently fails here rather than in
 // a consumer's build.
 
+import { toJsonSchema, v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
 import type { OpenRpcDocument } from "../src/sdk";
@@ -92,24 +93,17 @@ describe("wire types no model can carry", () => {
     it("generates no args model for a v.bigint() or v.bytes() argument", async () => {
         expect.assertions(3);
 
-        // v.bigint() schemas as {format:"int64",type:"integer"} and v.bytes() as
-        // {contentEncoding:"base64",type:"string"}. quicktype renders those as a
-        // plain integer and string, but the wire needs the TAGGED forms — a
-        // typed model would send a number where the server demands a bigint and
-        // every call would fail validation.
+        // The schemas come from the values emitter itself, not a hand-written
+        // copy: `v.bigint()` changed from `{format:"int64",type:"integer"}` to
+        // `{format:"int64",type:"string"}`, a hand-written copy kept the old
+        // spelling, and this test went on passing while every SDK typed a bigint
+        // as a plain string — which the validator rejects ("Expected bigint at
+        // amount, received string"). The wire needs the TAGGED forms.
         const spec: OpenRpcDocument = {
             methods: [
                 {
                     name: "billing:charge",
-                    params: [
-                        {
-                            name: "args",
-                            schema: {
-                                properties: { amount: { format: "int64", type: "integer" }, blob: { contentEncoding: "base64", type: "string" } },
-                                type: "object",
-                            },
-                        },
-                    ],
+                    params: [{ name: "args", schema: toJsonSchema(v.object({ amount: v.bigint(), blob: v.bytes() })) }],
                     "x-lunora-function-kind": "action",
                 },
             ],
@@ -422,9 +416,9 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
                         {
                             name: "args",
                             // v.bigint() — deliberately gets no model, because a typed
-                            // field would send a plain number where the wire needs the
+                            // field would send a plain string where the wire needs the
                             // tagged form.
-                            schema: { properties: { amount: { format: "int64", type: "integer" } }, required: ["amount"], type: "object" },
+                            schema: toJsonSchema(v.object({ amount: v.bigint() })),
                         },
                     ],
                     "x-lunora-function-kind": "mutation",

@@ -26,8 +26,13 @@
             "packages": "${{ steps.changes.outputs.packages }}"
             "e2e": "${{ steps.changes.outputs.e2e }}"
             "templates": "${{ steps.changes.outputs.templates }}"
+            "templates_expo": "${{ steps.changes.outputs.templates_expo }}"
             "worker_size": "${{ steps.changes.outputs.worker_size }}"
+            "client_size": "${{ steps.changes.outputs.client_size }}"
+            "studio_size": "${{ steps.changes.outputs.studio_size }}"
+            "worker_startup": "${{ steps.changes.outputs.worker_startup }}"
             "sdks": "${{ steps.changes.outputs.sdks }}"
+            "celld": "${{ steps.changes.outputs.celld }}"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -51,25 +56,22 @@
         "if": "needs.files-changed.outputs.packages == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        # 45, not 30. The 22.15 leg runs `test:affected:coverage`, and a change to
-        # pnpm-lock.yaml / pnpm-workspace.yaml makes *every* package affected -- so
-        # this leg runs the whole suite under v8 coverage. That is ~25 min for
-        # @lunora/codegen alone, which left no room for the studio step after it and
-        # cancelled the job at 30 min with every test passing.
-        "timeout-minutes": 45
+        # Sized for a whole-suite plain run (lockfile change), which still carries codegen
+        # and cli at one vitest worker each: ~30 min.
+        "timeout-minutes": 60
         "strategy":
             "fail-fast": false
             "matrix":
-                # Both legs are the `engines` bounds, deliberately: `^22.15.0 || >=24.11.0`.
+                # The legs are the Astro-compatible 22.22 pin and 24.11, both with FTS5.
                 #
                 # `fts5` declares whether the leg's `node:sqlite` carries the FTS5 module,
                 # which is a property of the Node build, not of SQLite: it was switched on
-                # in 22.16.0 (nodejs/node#57621), so the engines-floor leg does not have it
-                # and every FTS5 suite skips itself there. The step below probes the real
-                # build and fails on any disagreement with what is declared here.
+                # in 22.16.0 (nodejs/node#57621); on an older build every FTS5 suite skips
+                # itself. The step below probes the real build and fails on any
+                # disagreement with what is declared here.
                 "include":
-                    - "node_version": "22.15"
-                      "fts5": "absent"
+                    - "node_version": "22.22"
+                      "fts5": "present"
                     - "node_version": "24.11"
                       "fts5": "present"
         "steps":
@@ -85,13 +87,15 @@
                   "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
               "with":
                   "node-version": "${{ matrix.node_version }}"
                   "cache-prefix": "test"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "enable-vis-cache": "true"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -106,6 +110,8 @@
             #
             # Before the build, not after: a mismatch is a matrix bug, and there is no
             # reason to spend twenty minutes compiling to find out.
+            # The node -e script is JavaScript, its `${}` is not shell.
+            # jactionlint ignore=SC2016
             - "name": "Report FTS5 coverage for this leg"
               "shell": "bash"
               "run": |
@@ -159,12 +165,17 @@
             # when `CI` was set — so a local run tripped a 10s timeout that read as a
             # hang. The budget is unconditional now (apps/playground/vitest.config.ts)
             # and the suite runs here, on the leg without coverage. It has no
-            # `test:coverage` script, so the 22.15 leg simply has nothing to run for it.
+            # `test:coverage` script, so the 22.22 leg simply has nothing to run for it.
+            #
+            # Coverage on PRs only; the merge queue re-tests what the PR already reported.
+            # The excluded projects must match the `test-coverage-shards` matrix.
             - "name": "Run affected tests"
               "shell": "bash"
+              "env":
+                  "COVERAGE": "${{ matrix.node_version == '22.22' && github.event_name != 'merge_group' }}"
               "run": |
-                  if [ "${{ matrix.node_version }}" = "22.15" ]; then
-                      pnpm run test:affected:coverage
+                  if [ "${COVERAGE}" = "true" ]; then
+                      pnpm exec vis affected test:coverage --query "project!=lunora-e2e && project!=codegen && project!=cli && project!=hyperdrive"
                   else
                       pnpm run test:affected
                   fi
@@ -181,7 +192,192 @@
                   pnpm --filter "@lunora/studio" run test
 
             - "name": "Upload coverage to Codecov"
-              "if": "matrix.node_version == '22.15' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
+              # Same-repo PRs only: forks have no token.
+              "if": "matrix.node_version == '22.22' && github.event.pull_request.head.repo.full_name == github.repository"
+              "continue-on-error": true
+              "uses": "codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac" # v5.5.5
+              "with":
+                  "token": "${{ secrets.CODECOV_TOKEN }}"
+                  "fail_ci_if_error": false
+
+    # The slowest coverage suites, sharded on their own runners. Under vis each vitest
+    # gets one worker; called directly it gets every core.
+    # Shards zero the thresholds (each covers part of `src`); `test-coverage-merge`
+    # enforces the real ones on the merged result.
+    "test-coverage-shards":
+        "name": "Coverage (${{ matrix.project }} ${{ matrix.shard }}/${{ matrix.shards }})"
+        "if": "needs.files-changed.outputs.packages == 'true' && github.event_name != 'merge_group'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                # Sized for ~5-10 min of tests per leg.
+                "include":
+                    - { "project": "codegen", "shard": 1, "shards": 3 }
+                    - { "project": "codegen", "shard": 2, "shards": 3 }
+                    - { "project": "codegen", "shard": 3, "shards": 3 }
+                    - { "project": "cli", "shard": 1, "shards": 2 }
+                    - { "project": "cli", "shard": 2, "shards": 2 }
+                    - { "project": "hyperdrive", "shard": 1, "shards": 1 }
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              # Full history so `vis affected` can resolve the PR base.
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "with":
+                  "fetch-depth": "0"
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
+              "with":
+                  "node-version": "22.22"
+                  # Per leg: the vis cache key has the job id but not the matrix.
+                  "cache-prefix": "test-coverage-${{ matrix.project }}-${{ matrix.shard }}"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "enable-vis-cache": "true"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # Captured first: under pipefail an early-exiting `grep -q` SIGPIPEs vis.
+            # Unrecognised output fails the leg instead of skipping it.
+            - "name": "Check whether ${{ matrix.project }} is affected"
+              "id": "affected"
+              "shell": "bash"
+              "env":
+                  "PROJECT": "${{ matrix.project }}"
+              "run": |
+                  out="$(pnpm exec vis affected test:coverage --dry-run --no-color --query "project=${PROJECT}" 2>&1)"
+                  if grep -q '^Affected projects:' <<<"${out}"; then
+                      echo "run=true" >> "${GITHUB_OUTPUT}"
+                  elif grep -qE 'No projects affected|No files changed' <<<"${out}"; then
+                      echo "::notice::${PROJECT} is not affected; this shard has nothing to run."
+                      echo "run=false" >> "${GITHUB_OUTPUT}"
+                  else
+                      printf '%s\n' "${out}"
+                      echo "::error::Could not tell from vis whether ${PROJECT} is affected."
+                      exit 1
+                  fi
+
+            - "name": "Build ${{ matrix.project }} and its dependencies"
+              "if": "steps.affected.outputs.run == 'true'"
+              "env":
+                  "PROJECT": "${{ matrix.project }}"
+              "run": |
+                  pnpm exec vis run build --query "project=${PROJECT}"
+
+            # Non-hidden blob path: upload-artifact skips vitest's default `.vitest-reports/`.
+            - "name": "Run ${{ matrix.project }} shard ${{ matrix.shard }}/${{ matrix.shards }} under coverage"
+              "if": "steps.affected.outputs.run == 'true'"
+              "env":
+                  "PROJECT": "${{ matrix.project }}"
+                  "SHARD": "${{ matrix.shard }}"
+                  "SHARDS": "${{ matrix.shards }}"
+              "run": |
+                  echo "vitest workers: $(( $(nproc) - 1 )) (nproc $(nproc))"
+                  pnpm --filter "@lunora/${PROJECT}" exec vitest run \
+                      --shard="${SHARD}/${SHARDS}" \
+                      --coverage \
+                      --coverage.thresholds.lines=0 \
+                      --coverage.thresholds.functions=0 \
+                      --coverage.thresholds.branches=0 \
+                      --coverage.thresholds.statements=0 \
+                      --reporter=dot \
+                      --reporter=blob \
+                      --outputFile.blob="${GITHUB_WORKSPACE}/blob-reports/${PROJECT}/blob-${SHARD}-${SHARDS}.json"
+
+            - "name": "Upload the shard's blob report"
+              "if": "steps.affected.outputs.run == 'true'"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "blob-${{ matrix.project }}-${{ matrix.shard }}"
+                  "path": "blob-reports"
+                  "if-no-files-found": "error"
+                  "retention-days": 1
+                  # A re-run of one failed shard re-uploads under the same name.
+                  "overwrite": true
+
+    # Merges each project's shard blobs, enforcing its real coverage thresholds, and
+    # uploads to Codecov. Replays results only, so no build.
+    "test-coverage-merge":
+        "name": "Coverage merge"
+        "if": "needs.files-changed.outputs.packages == 'true' && github.event_name != 'merge_group'"
+        "needs": ["files-changed", "test-coverage-shards"]
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 15
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            # After checkout, which cleans the workspace. No blobs = nothing affected; the
+            # steps below skip.
+            - "name": "Download the shard blob reports"
+              "uses": "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" # v4.3.0
+              "with":
+                  "pattern": "blob-*"
+                  "path": "blob-reports"
+                  "merge-multiple": true
+
+            # A missing blob would silently merge into a partial report.
+            - "name": "Assert every shard reported"
+              "if": "hashFiles('blob-reports/**') != ''"
+              "shell": "bash"
+              "run": |
+                  status=0
+                  for dir in blob-reports/*/; do
+                      project="$(basename "${dir}")"
+                      expected="$(find "${dir}" -name 'blob-*.json' | head -n 1 | sed -E 's/.*-([0-9]+)\.json$/\1/')"
+                      actual="$(find "${dir}" -name 'blob-*.json' | wc -l)"
+                      if [ "${actual}" -ne "${expected}" ]; then
+                          echo "::error::${project}: ${actual} of ${expected} shard blobs arrived."
+                          status=1
+                      fi
+                  done
+                  exit "${status}"
+
+            - "name": "Setup resources and environment"
+              "if": "hashFiles('blob-reports/**') != ''"
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "test"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Merge the blobs and check coverage thresholds"
+              "if": "hashFiles('blob-reports/**') != ''"
+              "shell": "bash"
+              # Check every package before failing, so one miss doesn't hide the others.
+              "run": |
+                  failed=()
+                  for dir in blob-reports/*/; do
+                      project="$(basename "${dir}")"
+                      pnpm --filter "@lunora/${project}" exec vitest --merge-reports "${GITHUB_WORKSPACE}/${dir}" --coverage --reporter=dot || failed+=("${project}")
+                  done
+                  if [ "${#failed[@]}" -gt 0 ]; then
+                      echo "::error::coverage check failed for: ${failed[*]}"
+                      exit 1
+                  fi
+
+            - "name": "Upload coverage to Codecov"
+              "if": "hashFiles('blob-reports/**') != '' && github.event.pull_request.head.repo.full_name == github.repository"
               "continue-on-error": true
               "uses": "codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac" # v5.5.5
               "with":
@@ -202,7 +398,31 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                "package": ["auth", "client", "container", "d1", "do", "queue", "runtime", "scheduler", "storage", "workflow", "x402"]
+                "package":
+                    [
+                        "packages/agent",
+                        "packages/auth",
+                        "packages/browser",
+                        "packages/client",
+                        "packages/container",
+                        "packages/d1",
+                        "packages/do",
+                        "packages/observability",
+                        "packages/payment",
+                        "packages/privacy",
+                        "packages/queue",
+                        "packages/ratelimit",
+                        "packages/replica",
+                        "packages/runtime",
+                        "packages/scheduler",
+                        "packages/server",
+                        "packages/shard-engine",
+                        "packages/sql-store",
+                        "packages/storage",
+                        "packages/workflow",
+                        "packages/x402",
+                        "examples/privacy",
+                    ]
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -213,51 +433,130 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "test-workerd"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The matrix is a hand-typed list of 11 packages, duplicated verbatim in
-            # test.yml and nightly.yml, with nothing tying either copy to the packages
-            # that actually declare a `workerd` vitest project. Drop a package from one
-            # and its workerd suites stop running with every check green. Each leg
-            # asserts its own package still declares the project, and that the leg count
-            # equals the number of packages that do — together that makes the matrix and
-            # the filesystem the same set, not merely the same size.
+            # The matrix is a hand-typed list of directories (21 packages, one example),
+            # duplicated verbatim in test.yml and nightly.yml, with nothing tying either
+            # copy to the packages/* and examples/* that actually declare a `workerd`
+            # vitest project. Drop one from either copy and its workerd suites stop
+            # running with every check green. Each leg asserts its own directory still
+            # declares the project, and that the leg count equals the number of
+            # directories that do — together that makes the matrix and the filesystem
+            # the same set, not merely the same size.
             - "name": "Assert the matrix matches the packages declaring a workerd project"
               "run": |
-                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts | sed 's|packages/||; s|/vitest.config.ts||' | sort)"
+                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts examples/*/vitest.config.ts | sed 's|/vitest.config.ts||' | sort)"
                   count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
                   if ! printf '%s\n' "$declared" | grep -qx "${{ matrix.package }}"; then
-                    echo "packages/${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
-                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    echo "${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
+                    echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
                     exit 1
                   fi
                   if [ "$count" != "${{ strategy.job-total }}" ]; then
                     echo "$count packages declare a workerd project but the matrix has ${{ strategy.job-total }} legs." >&2
-                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
                     echo "Fix the matrix in .github/workflows/test.yml AND .github/workflows/nightly.yml." >&2
                     exit 1
                   fi
 
             # `vis run build` walks upstream deps via dependsOn, so the package's dist
             # and everything it imports exists. `pnpm --filter "pkg..."` does not build
-            # deps reliably.
+            # deps reliably. An example is an app, not a library: only its dependencies
+            # are built (`name^...`), since its suites import their dist, not its own.
             - "name": "Build package and dependencies"
               "run": |
-                  pnpm exec vis run build --query "project=${{ matrix.package }}"
+                  project="$(node -p "require('./${{ matrix.package }}/project.json').name")"
+                  case "${{ matrix.package }}" in
+                    examples/*) pnpm exec vis run build --filter "${project}^..." ;;
+                    *) pnpm exec vis run build --query "project=${project}" ;;
+                  esac
 
             - "name": "Run workerd suites"
               "env":
                   "LUNORA_WORKERD_TESTS": "1"
               "run": |
-                  pnpm --filter "@lunora/${{ matrix.package }}" run test --project workerd
+                  pnpm --filter "$(node -p "require('./${{ matrix.package }}/package.json').name")" run test --project workerd
+
+    # The `@lunora/platform` and `@lunora/shard-engine` conformance suites against a
+    # live single-node celld (`@lunora/platform-celld`, project `celld`), gated
+    # behind LUNORA_CELLD_TESTS=1 for the workerd reasons: it needs the celld binary
+    # and localhost loopback, and contributes no coverage. The binary is a pinned
+    # release asset checked against its sha256 — the release publishes no checksum
+    # file or attestation of its own, so the pin is the integrity check. Bump
+    # CELLD_VERSION and CELLD_SHA256 together, alongside the ratings in
+    # CELLD_CAPABILITIES. With the gate on, a missing binary fails the spawn in
+    # `beforeAll`, so the job cannot go green having run nothing. The two-node
+    # fleet test needs an S3-compatible bucket; moto's server provides one (it
+    # implements the conditional writes celld's ownership records depend on),
+    # and on CI a missing endpoint fails the test rather than skipping it.
+    "test-celld":
+        "name": "celld integration (@lunora/platform-celld)"
+        "if": "needs.files-changed.outputs.celld == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "env":
+            "CELLD_VERSION": "v0.6.1"
+            "CELLD_SHA256": "79a8253cff5d4e8a4a9f7a2611e393390f7fe9025f00e88467875b007c44866b"
+            "MOTO_VERSION": "5.2.3"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "test-celld"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Install celld"
+              "run": |
+                  curl -fsSL -o celld.gz "https://github.com/denoland/celld/releases/download/${CELLD_VERSION}/celld-x86_64-unknown-linux-gnu.gz"
+                  echo "${CELLD_SHA256}  celld.gz" | sha256sum --check --strict
+                  gunzip celld.gz
+                  install -m 0755 celld "${RUNNER_TEMP}/celld"
+                  echo "LUNORA_CELLD_BIN=${RUNNER_TEMP}/celld" >> "$GITHUB_ENV"
+
+            - "name": "Start an S3-compatible endpoint for the fleet test"
+              "run": |
+                  pipx install "moto[server]==${MOTO_VERSION}"
+                  moto_server -p 19000 > "${RUNNER_TEMP}/moto.log" 2>&1 &
+                  for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:19000/ && exit 0; sleep 1; done
+                  cat "${RUNNER_TEMP}/moto.log" >&2
+                  exit 1
+
+            - "name": "Build package and dependencies"
+              "run": |
+                  pnpm exec vis run build --query "project=platform-celld"
+
+            - "name": "Run celld suites"
+              "env":
+                  "LUNORA_CELLD_TESTS": "1"
+                  "LUNORA_CELLD_S3_ENDPOINT": "http://127.0.0.1:19000"
+                  # The runner's Docker engine, on its default socket, backs the containers check.
+                  "LUNORA_CELLD_CONTAINERS": "1"
+              "run": |
+                  pnpm --filter "@lunora/platform-celld" run test --project celld
 
     # `@lunora/hyperdrive`'s MySQL suites — the only gate proving the SQL the store
     # core renders for a `.global()` MySQL backend actually executes. mysqld comes
@@ -288,13 +587,14 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "test-mysql"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -304,7 +604,7 @@
             - "name": "Assert the run covers every suite using the MySQL harness"
               "run": |
                   declared="$(grep -rl '_helpers/mysql-mem' packages/hyperdrive/__tests__/*.test.ts | sort | tr '\n' ' ')"
-                  expected='packages/hyperdrive/__tests__/create-hyperdrive.test.ts packages/hyperdrive/__tests__/global-collation-parity.test.ts packages/hyperdrive/__tests__/global-mysql.integration.test.ts '
+                  expected='packages/hyperdrive/__tests__/create-hyperdrive.test.ts packages/hyperdrive/__tests__/global-collation-parity.test.ts packages/hyperdrive/__tests__/global-json-paths.test.ts packages/hyperdrive/__tests__/global-mysql.integration.test.ts packages/hyperdrive/__tests__/global-null-placement.test.ts '
                   if [ "$declared" != "$expected" ]; then
                     echo "::error file=.github/workflows/test.yml::Suites using the MySQL harness are [$declared] but this job runs [$expected]. Update the run step below."
                     exit 1
@@ -321,9 +621,13 @@
                   pnpm --filter "@lunora/hyperdrive" run test \
                       __tests__/create-hyperdrive.test.ts \
                       __tests__/global-collation-parity.test.ts \
+                      __tests__/global-json-paths.test.ts \
                       __tests__/global-mysql.integration.test.ts \
+                      __tests__/global-null-placement.test.ts \
                       --reporter=default --reporter=json --outputFile.json=test-results/mysql.json
 
+            # The node -e script is JavaScript, its `${}` is not shell.
+            # jactionlint ignore=SC2016
             - "name": "Assert the suites executed their cases"
               "run": |
                   node -e '
@@ -362,13 +666,14 @@
                   "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "e2e"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -412,12 +717,19 @@
     # gate proving a `lunora init` scaffold still installs, and the only one that puts a
     # compiler on the copy-in auth-ui payload — no template imports it, so a build alone
     # tree-shakes it away first.
-    "templates":
-        "name": "Template scaffold matrix"
+    #
+    # One matrix leg per template (Expo has its own job below). A single leg ran every
+    # template in sequence and hit the job time limit; the script takes one template name
+    # as its positional argument, so each leg scaffolds only its own template. The legs are
+    # read from templates/ by `templates-matrix`, so a new template gets one without an edit here.
+    "templates-matrix":
+        "name": "Template matrix"
         "if": "needs.files-changed.outputs.templates == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 60
+        "timeout-minutes": 10
+        "outputs":
+            "list": "${{ steps.list.outputs.list }}"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -427,14 +739,45 @@
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
-            - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+            - "id": "list"
+              "name": "List the templates"
+              "run": |
+                  list=$(cd templates && find . -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | grep -vx expo | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+                  # An empty matrix fails the job with an unclear error, so name the cause here.
+                  if [ "$list" = "[]" ]; then echo "::error::No template directories found under templates/"; exit 1; fi
+                  echo "list=$list" >> "$GITHUB_OUTPUT"
+
+    "templates":
+        "name": "Template scaffold (${{ matrix.template }})"
+        # An empty matrix is an error in its own right: when no template is listed, the listing step has already failed, so skip here.
+        "if": "needs.files-changed.outputs.templates == 'true' && needs.templates-matrix.outputs.list != '[]'"
+        "needs": ["files-changed", "templates-matrix"]
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 60
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                "template": "${{ fromJSON(needs.templates-matrix.outputs.list) }}"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
               "with":
-                  "node-version": "22.15"
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            # Astro refuses to run below Node 22.23.4 and its check exits without a diagnostic on 22.22, which hid the
+            # real result, so this job pins the first Node 22 release Astro accepts.
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
+              "with":
+                  "node-version": "22.23.4"
                   "cache-prefix": "templates"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -446,14 +789,69 @@
             - "name": "Build packages (production artifacts)"
               "run": "pnpm run build:packages:prod"
 
-            - "name": "Run the template scaffold matrix"
-              "run": "pnpm run test:templates"
+            # Expo runs in its own leg below, on a narrower filter: its `pnpm install`
+            # pulls the react-native/expo graph that no other template shares, and
+            # editing `templates/next` cannot break it.
+            - "name": "Run the template scaffold"
+              "run": "pnpm run test:templates ${{ matrix.template }}"
 
             - "name": "Upload scaffold logs on failure"
               "if": "failure()"
               "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
               "with":
-                  "name": "template-smoke-logs"
+                  "name": "template-smoke-logs-${{ matrix.template }}"
+                  "path": ".template-smoke-logs"
+                  "retention-days": 7
+                  "if-no-files-found": "ignore"
+
+    # The Expo leg of the same matrix, split out by cost. Its `pnpm install` pulls the
+    # react-native/expo graph and no other template shares it, so it runs on
+    # `templates_expo` — its own tree, the packages it consumes, `shared/`, the harness
+    # and the lockfiles — and not on an edit to a sibling template that cannot reach it.
+    #
+    # Same script, scoped with its positional arg. The matrix job above skips `expo` via
+    # `SMOKE_SKIP_TEMPLATES`, so the two legs partition the templates rather than
+    # overlapping, and `templates/expo` is covered by exactly one of them.
+    "templates-expo":
+        "name": "Template scaffold matrix (expo)"
+        "if": "needs.files-changed.outputs.templates_expo == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "templates-expo"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # Same prerequisite as the matrix job: the harness packs `packages/*/dist`
+            # into tarballs, and the production build is what users install.
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm run build:packages:prod"
+
+            - "name": "Run the expo scaffold leg"
+              "run": "pnpm run test:templates expo"
+
+            - "name": "Upload scaffold logs on failure"
+              "if": "failure()"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "template-smoke-logs-expo"
                   "path": ".template-smoke-logs"
                   "retention-days": 7
                   "if-no-files-found": "ignore"
@@ -480,13 +878,14 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "worker-size"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -497,6 +896,123 @@
 
             - "name": "Weigh the reference Worker"
               "run": "pnpm run worker-size:check"
+
+    # Weighs what a browser app ships for `@lunora/client` plus each framework adapter
+    # (provider + live query + mutation + subscription, bundled by Vite) against the
+    # ceiling in `client-size.json`. The browser twin of the Worker size gate above.
+    "client-size":
+        "name": "Client size budget"
+        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.client_size == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "client-size"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # `:prod` for the same reason as the Worker size gate: users install the production build.
+            # The adapters the reference apps import; vis builds their workspace dependencies too.
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm exec vis run build:prod --projects client,react,vue,svelte,solid,angular,errors,wire,ratelimit"
+
+            - "name": "Weigh the reference browser apps"
+              "run": "pnpm run client-size:check"
+
+    # Weighs Lunora Studio's first load (`/__lunora`): the standalone `studio.js` plus every
+    # chunk it imports statically, against the ceiling in `studio-size.json`. Catches a heavy
+    # dependency (charts, motion, the diagram) slipping out from behind a lazy boundary.
+    "studio-size":
+        "name": "Studio size budget"
+        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.studio_size == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "studio-size"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # `build:prod` for studio AND its dependencies (vis walks `^build:prod`): a
+            # development `@lunora/react` makes the standalone bundle ship React's dev build.
+            - "name": "Build @lunora/studio (production artifacts)"
+              "run": "pnpm exec vis run build:prod --query 'project=studio'"
+
+            - "name": "Weigh the studio first load"
+              "run": "pnpm run studio-size:check"
+
+    # Guards Cloudflare's 1 s startup-CPU limit (error 10021, not raisable) for a large
+    # app: counts the modules a synthetic 300-procedure app evaluates at startup (static
+    # imports only) against the ceiling in `worker-startup.json`. Deterministic, so it
+    # can gate; CPU time is printed as advisory only. See scripts/check-worker-startup.js.
+    #
+    # Its own job, not a `postinstall` gate: a failing postinstall turns every job red
+    # in its setup step, with the cause invisible in the job that reports it.
+    "worker-startup":
+        "name": "Worker startup budget"
+        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.worker_startup == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "worker-startup"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # `:prod` for the same reason as the size gate: users install the production build.
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm run build:packages:prod"
+
+            - "name": "Count what the reference Worker evaluates at startup"
+              "run": "pnpm run worker-startup:check"
 
     # The non-JS SDKs against `protocol/fixtures/*.json`, the same golden frames the
     # TypeScript client is tested against. Nothing else runs them: `sdks/` is not a pnpm
@@ -717,12 +1233,13 @@
             # encode` on first invocation, Ruby one whose every method raised
             # NoMethodError — both with the compile gate green throughout.
             - "name": "Setup node"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "sdk-generate"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -752,7 +1269,25 @@
     # skipped (so a no-package-change PR with all jobs skipped still passes).
     "test-required-check":
         "name": "Check Test Run"
-        "needs": ["files-changed", "test", "test-workerd", "test-mysql", "e2e", "templates", "worker-size", "sdk-conformance"]
+        "needs":
+            [
+                "files-changed",
+                "test",
+                "test-coverage-shards",
+                "test-coverage-merge",
+                "test-workerd",
+                "test-celld",
+                "test-mysql",
+                "e2e",
+                "templates-matrix",
+                "templates",
+                "templates-expo",
+                "worker-size",
+                "client-size",
+                "studio-size",
+                "worker-startup",
+                "sdk-conformance",
+            ]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5

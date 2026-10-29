@@ -20,6 +20,7 @@ type VoiceServerFrame =
     | { text: string; type: "assistant_delta" }
     | { text: string; type: "assistant_done" }
     | { text: string; type: "user_transcript" }
+    | { type: "assistant_discarded" }
     | { type: "interrupted" };
 
 /**
@@ -259,6 +260,18 @@ const createVoiceAgent = (options: CreateVoiceAgentOptions): CreateVoiceAgentRes
 
                 break;
             }
+            case "assistant_discarded": {
+                // The turn failed, so the text streamed for it is not an answer. Drop it,
+                // and silence any of its audio still queued or in flight.
+                if (connection) {
+                    connection.suppressAudio = true;
+                }
+
+                connection?.speaker?.interrupt();
+                setInterimTranscript("");
+
+                break;
+            }
             case "assistant_done": {
                 if (connection) {
                     connection.awaitingTurn = false;
@@ -359,7 +372,7 @@ const createVoiceAgent = (options: CreateVoiceAgentOptions): CreateVoiceAgentRes
             // raw `globalThis.WebSocket`) — on React Native the client wraps this
             // constructor to inject the auth-headers factory's credential onto the
             // upgrade request, which a bare global reference would silently bypass,
-            // leaving the voice socket uncredentialed on the cookie-jar-less runtime
+            // leaving the voice socket uncredentialed on the native runtime
             // the auth design exists for.
             const openSocket: CreateSocket =
                 createSocket ??

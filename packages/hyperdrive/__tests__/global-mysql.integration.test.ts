@@ -1,5 +1,7 @@
 /* eslint-disable no-secrets/no-secrets -- companion table names like "__agg_todos_sumSeqByProject" trip the entropy heuristic; they're not secrets. */
 import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import { whereFilter } from "@lunora/shard-engine";
+import type { SqlExec } from "@lunora/sql-store";
 import {
     readSqlCdcChangedTables,
     readSqlCdcChanges,
@@ -9,12 +11,17 @@ import {
     runSqlRankMigrations,
     sweepSqlCdcRetention,
 } from "@lunora/sql-store";
+import mysql from "mysql2/promise";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createHyperdriveGlobalCtxDb } from "../src/global";
 import { mysqlDialect } from "../src/global-dialect";
+import { ADMIN_PLANE_TABLES, adminPlaneCases } from "./_helpers/admin-plane-cases";
+import backendParityCases from "./_helpers/backend-parity-cases";
 import type { MysqlHarness } from "./_helpers/mysql-mem";
 import { tryCreateMysqlHarness } from "./_helpers/mysql-mem";
+import rlsSearchCases from "./_helpers/rls-search-cases";
+import searchRaceCases from "./_helpers/search-races";
 
 /**
  * The store core (`createSqlCtxDb`) driven by the MySQL dialect against a **real
@@ -103,6 +110,56 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
         await harness.query("DROP TABLE IF EXISTS `__rank_todos_bySeq`");
         await harness.query("DROP TABLE IF EXISTS `__cdc_log`");
         await harness.query("DROP TABLE IF EXISTS `__cdc_sweep`");
+        await harness.query("DROP TABLE IF EXISTS `nullables`");
+        await harness.query("DROP TABLE IF EXISTS `__lunora_migration_state`");
+        await harness.query("DROP TABLE IF EXISTS `wide`");
+
+        for (const table of ADMIN_PLANE_TABLES) {
+            // eslint-disable-next-line no-await-in-loop -- children before parents: the FK forbids dropping them in any order
+            await harness.query(`DROP TABLE IF EXISTS \`${table}\``);
+        }
+    });
+
+    describe("admin plane — export, import, browser, CDC", () => {
+        it.each(
+            adminPlaneCases({
+                engine: "mysql",
+                get exec() {
+                    return harness.exec;
+                },
+                query: async (statement) => await harness.query(statement),
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            TEST_TIMEOUT * 2,
+        );
+    });
+
+    describe("values every engine must treat alike", () => {
+        it.each(
+            backendParityCases({
+                query: async (statement) => await harness.query(statement),
+                engine: "mysql",
+                setup: async (schema) => {
+                    await runSqlGlobalTableMigrations(harness.exec, schema, mysqlDialect);
+
+                    return writerFor(schema);
+                },
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            TEST_TIMEOUT * 4,
+        );
     });
 
     afterAll(async () => {
@@ -149,17 +206,17 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
 
                 const id = await writer.insert("todos", { archived: false, priority: "low", projectId: "p9", seq: 7 });
 
-                await writer.patch(id, { priority: "high" });
+                await writer.patch("todos", id, { priority: "high" });
                 const patched = await writer.findFirst("todos", { where: { _id: id } });
 
                 expect(patched?.["priority"]).toBe("high");
 
-                await writer.replace(id, { archived: true, priority: "mid", projectId: "p9", seq: 8 });
+                await writer.replace("todos", id, { archived: true, priority: "mid", projectId: "p9", seq: 8 });
                 const replaced = await writer.findFirst("todos", { where: { _id: id } });
 
                 expect(replaced?.["seq"]).toBe(8);
 
-                await writer.delete(id);
+                await writer.delete("todos", id);
 
                 await expect(writer.findFirst("todos", { where: { _id: id } })).resolves.toBeNull();
 
@@ -182,7 +239,7 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
 
                 // Re-writing identical values changes 0 rows; without CLIENT_FOUND_ROWS the
                 // affected-rows OCC guard would see 0 and throw. With it, it sees the matched row.
-                await expect(writer.patch(id, { priority: "low" })).resolves.not.toThrow();
+                await expect(writer.patch("todos", id, { priority: "low" })).resolves.not.toThrow();
             },
             TEST_TIMEOUT,
         );
@@ -256,6 +313,42 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
         );
     });
 
+    describe("`.global()` changelog poll — late commits", () => {
+        it(
+            "does not skip an append that commits after a higher `seq` the poll already saw",
+            async () => {
+                expect.assertions(3);
+
+                await runSqlCdcMigration(harness.exec, mysqlDialect);
+
+                const append = `INSERT INTO \`__cdc_log\` (\`ts\`, \`table\`, \`id\`, \`op\`) VALUES (?, ?, ?, 'insert')`;
+                const late = await mysql.createConnection(harness.connection);
+
+                try {
+                    // InnoDB hands out AUTO_INCREMENT at INSERT, so the open transaction
+                    // holds seq 1 while the autocommit append below takes seq 2.
+                    await late.query("BEGIN");
+                    await late.query(append, [FIXED_CLOCK, "late", "l1"]);
+                    await harness.query(append, [FIXED_CLOCK, "early", "e1"]);
+
+                    const first = await readSqlCdcChangedTables(harness.exec, 0, mysqlDialect, { now: FIXED_CLOCK });
+
+                    expect(first).toStrictEqual({ cursor: 0, tables: ["early"] });
+
+                    await late.query("COMMIT");
+
+                    const second = await readSqlCdcChangedTables(harness.exec, first.cursor, mysqlDialect, { now: FIXED_CLOCK });
+
+                    expect(second.tables).toContain("late");
+                    expect(second.cursor).toBe(2);
+                } finally {
+                    await late.end();
+                }
+            },
+            TEST_TIMEOUT,
+        );
+    });
+
     describe("value codec round-trips (per kind)", () => {
         const typesSchema: SchemaLike = {
             tables: {
@@ -304,6 +397,118 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
                 // survives as well as the bytes.
                 expect(row?.["blob"]).toBeInstanceOf(ArrayBuffer);
                 expect([...new Uint8Array(row?.["blob"] as ArrayBuffer)]).toEqual([1, 2, 3, 250]);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "binds an object, an array and bytes as one value each, never as SQL fragments",
+            async () => {
+                expect.assertions(3);
+
+                // mysql2's `query` would expand an object into `key = value` pairs and
+                // an array into a comma list, changing the statement's shape.
+                await expect(harness.exec.all("SELECT ? AS v", [{ a: 1, "b` = 1 OR `1": 2 }])).resolves.toStrictEqual([{ v: '{"a":1,"b` = 1 OR `1":2}' }]);
+                await expect(harness.exec.all("SELECT ? AS v, ? AS w", [[1, 2], "x"])).resolves.toStrictEqual([{ v: "[1,2]", w: "x" }]);
+                await expect(harness.exec.all("SELECT HEX(?) AS v", [new Uint8Array([0, 255])])).resolves.toStrictEqual([{ v: "00FF" }]);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "keeps a quote-bearing value inside its literal when the session sets NO_BACKSLASH_ESCAPES",
+            async () => {
+                expect.assertions(3);
+
+                const [{ mode }] = (await harness.query("SELECT @@SESSION.sql_mode AS mode")) as [{ mode: string }];
+
+                await harness.query("SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',NO_BACKSLASH_ESCAPES')");
+
+                try {
+                    const injection = "a' OR '1'='1";
+                    const jsonDocument = { q: "it's" };
+
+                    await expect(harness.exec.all("SELECT ? AS v", [injection])).resolves.toStrictEqual([{ v: injection }]);
+                    await expect(harness.exec.all("SELECT ? AS v", [jsonDocument])).resolves.toStrictEqual([{ v: JSON.stringify(jsonDocument) }]);
+
+                    // Under this mode mysql2's `\'` would close the literal after `x\\\`
+                    // and run `OR 1=1` with the rest commented out; doubled quotes keep
+                    // the whole value one column (its backslashes do come back doubled).
+                    const [row] = await harness.exec.all("SELECT ? AS v", [String.raw`x\' OR 1=1 -- `]);
+
+                    expect(Object.keys(row ?? {})).toStrictEqual(["v"]);
+                } finally {
+                    await harness.query("SET SESSION sql_mode = ?", [mode]);
+                }
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "round-trips quotes, backslashes and control characters, and compares with the connection collation",
+            async () => {
+                expect.assertions(2);
+
+                const tricky = "it's \\ \"q\" \\' \0 \n \r \u001A é";
+
+                await expect(harness.exec.all("SELECT ? AS v", [tricky])).resolves.toStrictEqual([{ v: tricky }]);
+                await expect(harness.exec.all("SELECT ? = 'x' AS same", ["X"])).resolves.toStrictEqual([{ same: 1 }]);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "leaves a ? inside a string literal alone when binding",
+            async () => {
+                expect.assertions(1);
+
+                await expect(harness.exec.all("SELECT 'why?' AS a, ? AS b", ["x"])).resolves.toStrictEqual([{ a: "why?", b: "x" }]);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it(
+            "binds a string to ?? as a backtick-quoted identifier",
+            async () => {
+                expect.assertions(1);
+
+                await expect(harness.exec.all("SELECT ?? AS v FROM (SELECT 7 AS col) AS t", ["col"])).resolves.toStrictEqual([{ v: 7 }]);
+            },
+            TEST_TIMEOUT,
+        );
+
+        it("rejects an undefined bind value instead of binding NULL", async () => {
+            expect.assertions(1);
+
+            await expect(harness.exec.all("SELECT ? AS v", [undefined])).rejects.toThrow(/parameter 1 is undefined/u);
+        });
+
+        it(
+            "round-trips doubles exactly over the text protocol",
+            async () => {
+                // `buildMysqlExec` uses `query` (client-side interpolation, text
+                // results), not `execute`'s binary protocol, so a double travels
+                // as a decimal string both ways and must still come back bit-exact.
+                expect.assertions(5);
+
+                const doubles = [0.1 + 0.2, 1e-300, 1.797_693_134_862_315_7e308, -2.5e-8, 123_456_789.123_456_78];
+
+                await runSqlGlobalTableMigrations(harness.exec, typesSchema, mysqlDialect);
+                const writer = writerFor(typesSchema);
+
+                const read = await Promise.all(
+                    doubles.map(async (n) => {
+                        const id = await writer.insert("things", { big: 1n, blob: new Uint8Array([0]), flag: false, meta: {}, n, title: "d" });
+
+                        const row = await writer.findFirst("things", { where: { _id: id } });
+
+                        return row?.["n"];
+                    }),
+                );
+
+                for (const [index, n] of doubles.entries()) {
+                    expect(read[index]).toBe(n);
+                }
             },
             TEST_TIMEOUT,
         );
@@ -476,6 +681,7 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
 
                 await harness.query("DROP TABLE IF EXISTS `notes__fts_by_body`");
                 await harness.query("DROP TABLE IF EXISTS `notes`");
+                await harness.query("DROP TABLE IF EXISTS `__lunora_search_state`");
                 await runSqlGlobalTableMigrations(harness.exec, searchSchema, mysqlDialect);
 
                 const writer = notesWriter();
@@ -489,13 +695,15 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
 
                 // Both companion columns carry the dialect's VARCHAR(768) `key`
                 // type — 3072 bytes each under utf8mb4 — so the (token, id)
-                // btree only fits InnoDB's 3072-byte key limit under a prefix.
-                // `Sub_part` is that prefix length, and asserting it is what
-                // proves the mechanism rather than merely that an index exists.
+                // unique key only fits InnoDB's 3072-byte key limit under
+                // prefixes: the whole token (the analyzer caps it at 256) and
+                // the rest for the id. `Sub_part` is that prefix length, and
+                // asserting it is what proves the mechanism rather than merely
+                // that an index exists.
                 const indexes = await harness.query("SHOW INDEX FROM `notes__fts_by_body`");
-                const btree = indexes.filter((row) => row["Key_name"] === "notes__fts_by_body__btree");
+                const unique = indexes.filter((row) => row["Key_name"] === "notes__fts_by_body__unique");
 
-                expect(btree.map((row) => row["Sub_part"])).toStrictEqual([191, 191]);
+                expect(unique.map((row) => row["Sub_part"])).toStrictEqual([256, 512]);
                 expect(ids(results)).toEqual(["n2", "n4", "n1"]);
             },
             TEST_TIMEOUT,
@@ -508,6 +716,7 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
 
                 await harness.query("DROP TABLE IF EXISTS `notes__fts_by_body`");
                 await harness.query("DROP TABLE IF EXISTS `notes`");
+                await harness.query("DROP TABLE IF EXISTS `__lunora_search_state`");
                 await runSqlGlobalTableMigrations(harness.exec, searchSchema, mysqlDialect);
 
                 const writer = notesWriter();
@@ -519,7 +728,7 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
                     .withSearchIndex("by_body", (q) => q.search("body", "hello").eq("channel", "other"))
                     .collect();
 
-                await writer.patch("n2", { body: "totally rewritten" });
+                await writer.patch("notes", "n2", { body: "totally rewritten" });
 
                 const fresh = await writer
                     .query("notes")
@@ -530,6 +739,131 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
                 expect(ids(fresh)).toEqual(["n2"]);
             },
             TEST_TIMEOUT,
+        );
+    });
+
+    describe("full-text search behind a read policy", () => {
+        const resetNotes = async (): Promise<void> => {
+            await harness.query("DROP TABLE IF EXISTS `notes__fts_by_body`");
+            await harness.query("DROP TABLE IF EXISTS `notes`");
+            await harness.query("DROP TABLE IF EXISTS `__lunora_search_state`");
+        };
+
+        const writerOver = async (schema: SchemaLike, onRows: (count: number) => void = () => undefined): Promise<DatabaseWriterLike> => {
+            await resetNotes();
+            await runSqlGlobalTableMigrations(harness.exec, schema, mysqlDialect);
+
+            let tick = FIXED_CLOCK;
+            const exec: SqlExec = {
+                ...harness.exec,
+                all: async (text, parameters) => {
+                    const rows = await harness.exec.all(text, parameters);
+
+                    onRows(rows.length);
+
+                    return rows;
+                },
+            };
+
+            return createHyperdriveGlobalCtxDb({
+                clock: () => {
+                    tick += 1000;
+
+                    return tick;
+                },
+                engine: "mysql",
+                exec,
+                schema,
+            });
+        };
+
+        it.each(
+            rlsSearchCases({
+                setup: writerOver,
+                textPushed: false,
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            240_000,
+        );
+
+        it(
+            "keeps a string policy exact on a column created with a case-insensitive collation",
+            async () => {
+                expect.assertions(3);
+
+                const schema: SchemaLike = {
+                    tables: {
+                        notes: {
+                            indexes: [],
+                            searchIndexes: [{ field: "body", filterFields: [], name: "by_body" }],
+                            shape: { body: col("string"), ownerId: col("string") },
+                            shardMode: { kind: "global" },
+                        },
+                    },
+                };
+                const writer = await writerOver(schema);
+
+                // A table provisioned before the dialect pinned `utf8mb4_0900_bin`.
+                await harness.query("ALTER TABLE `notes` MODIFY `ownerId` LONGTEXT COLLATE utf8mb4_0900_ai_ci NOT NULL");
+                await writer.insert("notes", { _id: "lower", body: "alpha", ownerId: "u1" }, { allowExplicitId: true });
+                await writer.insert("notes", { _id: "upper", body: "alpha", ownerId: "U1" }, { allowExplicitId: true });
+
+                const search = (where: Record<string, unknown>, admits: (row: Record<string, unknown>) => boolean) =>
+                    writer
+                        .query("notes")
+                        .filter(whereFilter(where, admits))
+                        .withSearchIndex("by_body", (q) => q.search("body", "alpha"));
+
+                // `ownerId <> 'u1'` under `_ai_ci` would drop "U1", which the policy admits.
+                const notLower = await search({ ownerId: { ne: "u1" } }, (row) => row["ownerId"] !== "u1").collect();
+
+                expect(ids(notLower)).toStrictEqual(["upper"]);
+
+                // `ownerId = 'u1'` would admit "U1" (the newest) into a LIMIT 1 the policy then empties.
+                const lower = await search({ ownerId: "u1" }, (row) => row["ownerId"] === "u1").take(1);
+
+                expect(ids(lower)).toStrictEqual(["lower"]);
+
+                const lowerFirst = await search({ ownerId: "u1" }, (row) => row["ownerId"] === "u1").first();
+
+                expect(lowerFirst?.["_id"]).toBe("lower");
+            },
+            TEST_TIMEOUT,
+        );
+    });
+
+    describe("full-text search (portable inverted index) across isolates", () => {
+        it.each(
+            searchRaceCases({
+                dialect: mysqlDialect,
+                engine: "mysql",
+                exec: () => harness.exec,
+                indexes: async (companion) => {
+                    const rows = await harness.query(`SHOW INDEX FROM \`${companion}\``);
+
+                    return new Map(rows.map((row) => [String(row["Key_name"]), Number(row["Non_unique"]) === 0]));
+                },
+                query: (text, parameters) => harness.query(text, parameters),
+                reset: async () => {
+                    await harness.query("DROP TABLE IF EXISTS `notes__fts_by_body`");
+                    await harness.query("DROP TABLE IF EXISTS `notes`");
+                    await harness.query("DROP TABLE IF EXISTS `__lunora_search_state`");
+                },
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            2 * TEST_TIMEOUT,
         );
     });
 });

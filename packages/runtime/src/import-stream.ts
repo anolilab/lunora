@@ -11,6 +11,7 @@
 import { MAX_BODY_BYTES } from "./body-readers";
 import type { ShardingInfo, WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
+import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
 interface AdminBatch {
@@ -241,6 +242,7 @@ interface ImportTotals {
     errors: ImportRowError[];
     failed: ImportShardFailure[];
     inserted: Record<string, number>;
+    replaced: number;
 }
 
 /**
@@ -262,7 +264,7 @@ const shardFailures = (shards: ReadonlyArray<{ error?: { message: string; timedO
  */
 const mergeImportResult = (
     totals: ImportTotals,
-    result: { conflicts: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number> },
+    result: { conflicts: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number>; replaced?: number },
 ): void => {
     for (const [table, count] of Object.entries(result.inserted)) {
         // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
@@ -275,6 +277,15 @@ const mergeImportResult = (
 
     // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
     totals.conflicts += result.conflicts;
+    // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
+    totals.replaced += result.replaced ?? 0;
+};
+
+/** Report every global row as an error, because the importer for them is missing or cannot take this request. */
+const refuseGlobalRows = (totals: ImportTotals, rows: ReadonlyArray<{ line: number; table: string }>, code: string, reason: string): void => {
+    for (const row of rows) {
+        totals.errors.push({ code, line: row.line, message: `row targets global table "${row.table}" but ${reason}`, table: row.table });
+    }
 };
 
 /**
@@ -286,21 +297,38 @@ const mergeImportResult = (
 const streamingImport = async (
     request: Request,
     options: WorkerOptions,
+    coordinator: QueryCoordinator,
     forwardedHeaders: Record<string, string>,
     namespace: ShardNamespaceLike,
+    dryRun: boolean,
+    onConflict: "replace" | "skip",
 ): Promise<{
     conflicts: number;
     errors: ImportRowError[];
     failed: ImportShardFailure[];
     inserted: Record<string, number>;
     received: number;
+    replaced: number;
     warnings?: string[];
 }> => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
     const { errors, globalRows, perShard, received } = await bucketImportStream(request, options, defaultShard);
 
-    const totals: ImportTotals = { conflicts: 0, errors, failed: [], inserted: {} };
+    // Refused before the shard fan-out, not per row after it: shard rows would already have been
+    // overwritten by the time the global plane said it cannot replace, and that is not undoable.
+    // A missing importer is the same case: it can never replace, and would only say so after the shards were written.
+    if (onConflict === "replace" && globalRows.length > 0 && (options.importGlobals === undefined || options.importGlobalsSupportsReplace !== true)) {
+        throw new LunoraError(
+            "onConflict=replace: global rows are present but no `importGlobals` that can overwrite existing rows is configured, so nothing was imported",
+            {
+                code: "BAD_REQUEST",
+                status: 400,
+            },
+        );
+    }
+
+    const totals: ImportTotals = { conflicts: 0, errors, failed: [], inserted: {}, replaced: 0 };
     const warnings: string[] = [];
 
     // A worker with no `resolveTableSharding` cannot tell a `.global()` table
@@ -320,12 +348,6 @@ const streamingImport = async (
     // Fan shard-local batches out via the coordinator. The order of batches
     // is insertion order so error line numbers reflect the source NDJSON.
     if (perShard.size > 0) {
-        const coordinator = options.queryCoordinator;
-
-        if (!coordinator) {
-            throw new LunoraError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
         // `namespace` is the worker's jurisdiction-pinned shard binding (create-worker
         // pins it once). Fanning out through it keeps import writing to the SAME DOs
         // the app reads — using the raw `options.shardDO` would land rows in the
@@ -333,7 +355,9 @@ const streamingImport = async (
         // the live worker (a fail-open leak).
         const result = await coordinator.orchestrateImport(namespace, {
             batches: [...perShard.values()],
+            dryRun,
             headers: forwardedHeaders,
+            onConflict,
         });
 
         mergeImportResult(totals, result);
@@ -342,24 +366,21 @@ const streamingImport = async (
 
     // Run global imports through the user-supplied helper.
     if (globalRows.length > 0) {
-        if (options.importGlobals) {
+        // A dry run must not reach an importer that has not said it can check without writing: one written before the flag existed would
+        // ignore it and insert the rows.
+        if (!options.importGlobals) {
+            refuseGlobalRows(totals, globalRows, "GLOBAL_NOT_CONFIGURED", "no `importGlobals` is configured");
+        } else if (dryRun && options.importGlobalsSupportsDryRun !== true) {
+            refuseGlobalRows(totals, globalRows, "GLOBAL_DRY_RUN_UNSUPPORTED", "the configured `importGlobals` cannot check rows without writing them");
+        } else {
             // Pass each row's true physical `line` (carried on the row) so error
             // attribution is correct even when global rows are interspersed with
             // shard rows or blank lines. `startLine` is the first global row's
             // line, retained only as a backward-compat fallback.
             const startLine = globalRows[0]?.line ?? 1;
-            const result = await options.importGlobals({ rows: globalRows, startLine });
+            const result = await options.importGlobals({ dryRun, onConflict, rows: globalRows, startLine });
 
             mergeImportResult(totals, result);
-        } else {
-            for (const globalRow of globalRows) {
-                totals.errors.push({
-                    code: "GLOBAL_NOT_CONFIGURED",
-                    line: globalRow.line,
-                    message: `row targets global table "${globalRow.table}" but no \`importGlobals\` is configured`,
-                    table: globalRow.table,
-                });
-            }
         }
     }
 
@@ -381,6 +402,7 @@ const streamingImport = async (
         failed: totals.failed,
         inserted: totals.inserted,
         received,
+        replaced: totals.replaced,
         ...(warnings.length > 0 ? { warnings } : {}),
     };
 };

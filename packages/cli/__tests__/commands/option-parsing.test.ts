@@ -69,6 +69,15 @@ describe("command option parsing → handler key mapping", () => {
         expect(parsed.workerPort).toBe(9000);
     });
 
+    it("`dev --inspector-port 9235` camelCases to `inspectorPort`", async () => {
+        expect.assertions(1);
+
+        const parsed = await parseOptions("dev", devCommand.options ?? [], ["dev", "--inspector-port", "9235"]);
+
+        // dev/handler.ts reads `options.inspectorPort`; dev/lifecycle.ts forwards it.
+        expect(parsed.inspectorPort).toBe(9235);
+    });
+
     it("`verify --no-typecheck` parses to the negated `typecheck` key the handler reads", async () => {
         expect.assertions(1);
 

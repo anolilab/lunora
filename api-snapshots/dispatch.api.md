@@ -15,6 +15,53 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 type ArgsOf<F> = F extends FunctionReference ? Record<string, unknown> : never;
 ```
 
+### `DEFAULT_DISPATCH_TIMEOUT_MS` (const)
+
+```ts
+const DEFAULT_DISPATCH_TIMEOUT_MS = 3e4;
+```
+
+### `DEFAULT_QUEUE_MAX_RETRIES` (const)
+
+```ts
+const DEFAULT_QUEUE_MAX_RETRIES = 3;
+```
+
+### `DISPATCH_CLAIM_CEILING_MS` (const)
+
+```ts
+const DISPATCH_CLAIM_CEILING_MS = 9e5;
+```
+
+### `DISPATCH_DECLINE_RETRY_DELAY_SECONDS` (const)
+
+```ts
+const DISPATCH_DECLINE_RETRY_DELAY_SECONDS: number;
+```
+
+### `DeclinedMessageContext` (interface)
+
+```ts
+interface DeclinedMessageContext {
+    maxRetries?: number;
+    requeue?: (delaySeconds: number) => Promise<void>;
+    where: string;
+}
+```
+
+### `DeclinedMessageLike` (interface)
+
+```ts
+interface DeclinedMessageLike {
+    ack: () => void;
+    readonly attempts?: number;
+    readonly id: string;
+    retry: (options?: {
+        delaySeconds?: number;
+    }) => void;
+}
+```
+
 ### `DispatchLogger` (interface)
 
 ```ts
@@ -73,6 +120,30 @@ const getDispatchMessageId: (error: unknown) => string | undefined;
 
 ```ts
 const isDeterministicDispatchFailure: (error: unknown) => error is LunoraError;
+```
+
+### `isDispatchDecline` (const)
+
+```ts
+const isDispatchDecline: (error: unknown) => error is LunoraError;
+```
+
+### `retryDeclinedMessage` (const)
+
+```ts
+const retryDeclinedMessage: (message: DeclinedMessageLike, context: DeclinedMessageContext) => Promise<"requeued" | "retried">;
+```
+
+### `signRequeue` (const)
+
+```ts
+const signRequeue: (secret: string, scope: string, id: string, payload: string) => Promise<string>;
+```
+
+### `verifyRequeue` (const)
+
+```ts
+const verifyRequeue: (secret: string, scope: string, id: string, payload: string, mac: unknown) => Promise<boolean>;
 ```
 
 ## Referenced internal declarations

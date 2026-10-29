@@ -32,11 +32,20 @@ export interface RegisteredLunoraFunction {
     handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
     /**
      * The lifecycle moment a hook fires on, when this registration came from
-     * `onConnect`/`onDisconnect`/`onShardInit`/`onQueryChange`. Read at
-     * dispatch to decide whether the function runs system-trusted: `init` and
-     * `reactor` have no caller identity, so RLS has no user to scope to.
+     * `onConnect`/`onDisconnect`/`onShardInit`/`onQueryChange`/`onWhisper`.
+     * Read at dispatch to decide whether the function runs system-trusted:
+     * `init` and `reactor` have no caller identity, so RLS has no user to scope
+     * to. `whisper` does have one — it runs under the asking socket's identity.
      */
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    /**
+     * Hoisted by the builder when the `.use()` chain carries a step with a
+     * per-dispatch effect — `rateLimit(...)` consuming budget, a single-use
+     * captcha token being burned. Read by `isCacheableQuery`: the chain runs
+     * inside the dispatch callback, and a reactive-cache HIT skips that
+     * callback, so such a query must never be memoized.
+     */
+    perDispatch?: boolean;
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
     /**
@@ -53,6 +62,7 @@ export interface RegisteredLunoraFunction {
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "notes:add": lunora_notes_0.add as unknown as RegisteredLunoraFunction,
     "notes:list": lunora_notes_0.list as unknown as RegisteredLunoraFunction,
+    "notes:summary": lunora_notes_0.summary as unknown as RegisteredLunoraFunction,
 };
 
 /**
@@ -88,17 +98,25 @@ export const LUNORA_SHAPES: Record<string, RegisteredShape> = {
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
  * client's WebSocket connects (`connect`) or disconnects (`disconnect`), once
- * per Durable Object instance before any handler runs (`init`), and after a
- * write flush when a watched read's result changed (`reactor`). Each path also
- * resolves through {@link LUNORA_FUNCTIONS}. The socket sides run under the
- * socket's verified identity; `init` and `reactor` have no caller, so they run
- * anonymous — all via system dispatch.
+ * per Durable Object instance before any handler runs (`init`), after a
+ * write flush when a watched read's result changed (`reactor`), and before a
+ * socket joins or broadcasts to a whisper topic (`whisper`). Each path also
+ * resolves through {@link LUNORA_FUNCTIONS}. The socket-scoped moments run under
+ * the socket's verified identity; `init` and `reactor` have no caller, so they
+ * run anonymous — all via system dispatch.
  */
-export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[]; init: readonly string[]; reactor: readonly string[] } = {
+export const LUNORA_LIFECYCLE_HOOKS: {
+    connect: readonly string[];
+    disconnect: readonly string[];
+    init: readonly string[];
+    reactor: readonly string[];
+    whisper: readonly string[];
+} = {
     connect: [],
     disconnect: [],
     init: [],
     reactor: [],
+    whisper: [],
 };
 
 /**
@@ -133,6 +151,7 @@ export interface Caller {
     notes: {
         add: (args: { body: string; boardId: string }) => Promise<import("@lunora/values").Id<"notes">>;
         list: (args: { boardId: string }) => Promise<import("./dataModel.js").Doc_notes[]>;
+        summary: (args?: {}) => Promise<({ body?: string | undefined; } & { title: string; }) | null>;
     };
 }
 
@@ -156,11 +175,15 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
     // The fallback covers a context that is not a shard dispatch (`runMutation` is
     // installed by `buildCtx` on every kind but a query's TYPE omits it); there is
     // no transaction to join in that case, so a direct call is all there is.
-    if (registered.kind === "mutation") {
-        const { runMutation } = context as { runMutation?: (reference: { __lunoraRef: string }, args: Record<string, unknown>) => Promise<unknown> };
+    //
+    // A query is routed through `ctx.runQuery` for the same reason: that is what
+    // hands it a query view of a mutation's or action's ctx (no request origin,
+    // query-guarded `run*`) instead of the caller's own.
+    if (registered.kind === "mutation" || registered.kind === "query") {
+        const run = (context as { runMutation?: unknown; runQuery?: unknown })[registered.kind === "mutation" ? "runMutation" : "runQuery"];
 
-        if (typeof runMutation === "function") {
-            return (await runMutation.call(context, { __lunoraRef: functionPath }, args ?? {})) as R;
+        if (typeof run === "function") {
+            return (await run.call(context, { __lunoraRef: functionPath }, args ?? {})) as R;
         }
     }
 
@@ -172,6 +195,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     notes: {
         add: (args) => callRegistered(context, "notes:add", args),
         list: (args) => callRegistered(context, "notes:list", args),
+        summary: (args) => callRegistered(context, "notes:summary", args),
     },
 });
 

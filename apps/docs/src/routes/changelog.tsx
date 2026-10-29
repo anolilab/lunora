@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { staticFunctionMiddleware } from "@tanstack/start-static-server-functions";
 
 import { createSeoHead } from "@/lib/seo";
 import Changelog from "@/pages/changelog";
@@ -7,11 +8,13 @@ import Changelog from "@/pages/changelog";
 // The changelogs are parsed into structured releases on the server rather than
 // compiled as MDX: the page renders a feed of versions, dates and grouped notes,
 // and one compiled document per package cannot be sorted, filtered or merged.
-const loadFeed = createServerFn({ method: "GET" }).handler(async () => {
-    const { listFeed } = await import("@/lib/changelog-source");
+const loadFeed = createServerFn({ method: "GET" })
+    .middleware([staticFunctionMiddleware])
+    .handler(async () => {
+        const { listFeed } = await import("@/lib/changelog-source");
 
-    return listFeed();
-});
+        return listFeed();
+    });
 
 const RouteComponent = () => <Changelog feed={Route.useLoaderData()} />;
 

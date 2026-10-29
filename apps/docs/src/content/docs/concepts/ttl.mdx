@@ -68,6 +68,15 @@ sweep has already deleted them.
     reach for [`ctx.scheduler`](/docs/concepts/scheduling) instead. TTL is the cheap default for "delete this whole class of ephemeral rows once they age out."
 </Callout>
 
+## Not on `.global()` tables
+
+The sweep runs on a shard's alarm and deletes from that shard's own SQLite. A
+[`.global()`](/docs/concepts/sharding) table's rows live in D1 (or
+Hyperdrive), which no shard owns, so no sweep can reach them. `defineSchema` and
+codegen both reject `.ttl()` on a `.global()` table rather than accept a policy
+that would never delete anything. To expire global rows, delete them from a
+[cron](/docs/concepts/scheduling) with an indexed range on the expiry column.
+
 ## Interaction with soft delete
 
 If the table also declares [`.softDelete()`](/docs/concepts/schema), the sweep

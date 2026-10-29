@@ -52,6 +52,20 @@ export default createWorker({
 });
 ```
 
+If that authority is a hosted identity provider that issues JWTs (Clerk, WorkOS
+AuthKit, Auth0, Supabase, or any OIDC issuer), you don't need to write this
+function. `@lunora/jwt-auth` verifies the token against the provider's JWKS and
+returns the identity, org and role claims included:
+
+```ts
+import { clerk } from "@lunora/jwt-auth";
+
+resolveIdentity: clerk({ publishableKey: env.CLERK_PUBLISHABLE_KEY, authorizedParties: ["https://app.example.com"] }),
+```
+
+[External auth](/docs/concepts/external-auth) covers the presets, client token
+refresh, and authenticating live-query sockets with a bearer.
+
 ### Memoize it
 
 `resolveIdentity` is called **once per RPC and once per fan-out leg**, so a
@@ -109,7 +123,7 @@ hand-roll the protocol. Use the typed client:
 ```ts
 import { createShardClient } from "lunorash/runtime";
 
-import { internal } from "../lunora/_generated/api";
+import { internal } from "../lunora/_generated/internal";
 
 const shard = createShardClient(env.SHARD).as({ userId }).forShard(userId);
 const nodes = await shard.call(internal.mcp.listNodes, { userId });
@@ -190,6 +204,10 @@ await client.importRows(api.migrate.importNodes, rows, {
     toArgs: (chunk) => ({ nodes: chunk }),
 });
 ```
+
+The result's `imported` counts rows the server committed. `queued` counts rows a
+durable outbox took but has not replayed yet, so the import is done only when
+`queued` is `0`.
 
 Back the receiving mutation with `ctx.db.insertMany(...)` (or `insertManyUnsafe` for
 data you vouch for). For the reverse (a user leaving, or GDPR erasure), use

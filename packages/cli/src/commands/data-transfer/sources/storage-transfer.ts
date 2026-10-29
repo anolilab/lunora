@@ -323,5 +323,4 @@ const transferStorageObjects = async (
     return transferred;
 };
 
-export type { SourceObject, SupabaseStorageCredentials };
 export { listLocalObjects, listSupabaseObjects, transferStorageObjects };

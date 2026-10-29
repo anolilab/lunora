@@ -706,6 +706,8 @@ func decodeMap(value []any, depth int) (any, error) {
 			return nil, err
 		}
 
+		key = positiveZero(key)
+
 		decoded, err := decodeWire(pair[1], depth+1)
 		if err != nil {
 			return nil, err
@@ -792,6 +794,7 @@ func decodeSet(value []any, depth int) (any, error) {
 	seen := map[string]struct{}{}
 
 	for _, item := range decoded {
+		item = positiveZero(item)
 		identity, collapses := mapKeyIdentity(item)
 
 		if collapses {
@@ -806,6 +809,18 @@ func decodeSet(value []any, depth int) (any, error) {
 	}
 
 	return Set{Items: items}, nil
+}
+
+// positiveZero stores a signed zero as +0, as Set.prototype.add and
+// Map.prototype.set do on INSERT — so a lone -0 member or key re-encodes (and
+// keys, per §3's bare `-0` token) as 0 in the reference, not only when it
+// collides with a 0 already held.
+func positiveZero(value any) any {
+	if number, ok := value.(float64); ok && number == 0 {
+		return float64(0)
+	}
+
+	return value
 }
 
 func decodeError(value []any, depth int) (any, error) {

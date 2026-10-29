@@ -33,6 +33,7 @@ const fakeDatabase = () => {
         findMany: vi.fn<(table: string) => Promise<{ rows: unknown[] }>>(async () => {
             return { rows: [] };
         }),
+        get: vi.fn<(table: string, id: string) => Promise<null>>(async () => null),
         insert: vi.fn<(table: string, document: Record<string, unknown>) => Promise<string>>(async () => "id-1"),
         normalizeId: (_table: string, id: string) => id,
         query: (table: string) => {
@@ -124,6 +125,25 @@ describe("instrumentDatabase", () => {
         expect(spans[0]?.attributes?.["db.collection.name"]).toBe("orders");
     });
 
+    it("names a by-id call with its table, never its row id", async () => {
+        expect.assertions(2);
+
+        const database = fakeDatabase();
+        const tally = createDatabaseTally();
+        const spans: SpanEvent[] = [];
+        const instrumented = instrumentDatabase(
+            database,
+            deps("spans", tally, (recorded) => {
+                spans.push(recorded);
+            }),
+        );
+
+        await instrumented.get("orders", "row_42");
+
+        expect(spans[0]?.name).toBe("db.get orders");
+        expect(spans[0]?.attributes?.["db.collection.name"]).toBe("orders");
+    });
+
     it("caps spans per ctx and reports the truncation instead of hiding it", async () => {
         expect.assertions(3);
 
@@ -164,6 +184,90 @@ describe("instrumentDatabase", () => {
         // break the chain and produce a span measuring nothing.
         expect(instrumented.query("orders")).toStrictEqual({ table: "orders" });
         expect(instrumented.normalizeId("orders", "x")).toBe("x");
+    });
+
+    // The generated ShardDO builds `ctx.db` through this wrapper whenever a telemetry sink is configured, then attaches one
+    // facade per table onto it (`db["notes"] = bindTableFacade(...)`) and hands that same object to the handler. A wrapper
+    // that swallowed the assignment left every `ctx.db.<table>` undefined in a deployed Worker while `lunora dev`, which
+    // has no sink and so no wrapper, kept working.
+    it("keeps a member assigned onto the instrumented database, readable through it and on the original", () => {
+        expect.assertions(4);
+
+        const database: Record<string, unknown> & ReturnType<typeof fakeDatabase> = fakeDatabase();
+        const instrumented = instrumentDatabase(
+            database,
+            deps("summary", createDatabaseTally(), () => undefined),
+        ) as Record<string, unknown>;
+        const facade = { findFirst: () => "row" };
+
+        instrumented["notes"] = facade;
+
+        expect(instrumented["notes"]).toBe(facade);
+        expect(database["notes"]).toBe(facade);
+        expect(Object.keys(instrumented)).toContain("notes");
+        expect("notes" in instrumented).toBe(true);
+    });
+
+    it("forwards a delete and a defineProperty to the original database", () => {
+        expect.assertions(3);
+
+        const database: Record<string, unknown> & ReturnType<typeof fakeDatabase> = fakeDatabase();
+        const instrumented = instrumentDatabase(
+            database,
+            deps("summary", createDatabaseTally(), () => undefined),
+        ) as Record<string, unknown>;
+
+        Object.defineProperty(instrumented, "tag", { configurable: true, enumerable: true, value: "x", writable: true });
+
+        expect(database["tag"]).toBe("x");
+
+        delete instrumented["tag"];
+
+        expect(database["tag"]).toBeUndefined();
+        expect(instrumented["tag"]).toBeUndefined();
+    });
+
+    // The wrapper for a method is cached so repeated reads share one function identity. A write that replaces the
+    // method must not keep serving the wrapper around the old one.
+    it("wraps a method that was replaced after it was first read, not the one it replaced", async () => {
+        expect.assertions(3);
+
+        const database: Record<string, unknown> & ReturnType<typeof fakeDatabase> = fakeDatabase();
+        const tally = createDatabaseTally();
+        const instrumented = instrumentDatabase(
+            database,
+            deps("summary", tally, () => undefined),
+        );
+        const original = database.insert;
+
+        await instrumented.insert("notes", { a: 1 });
+
+        const replacement = vi.fn<(table: string, document: Record<string, unknown>) => Promise<string>>(async () => "id-2");
+
+        instrumented["insert"] = replacement;
+
+        await expect(instrumented.insert("notes", { a: 2 })).resolves.toBe("id-2");
+
+        expect(original).toHaveBeenCalledTimes(1);
+        expect(replacement).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not break a wrapped storage method when members are assigned around it", async () => {
+        expect.assertions(2);
+
+        const database: Record<string, unknown> & ReturnType<typeof fakeDatabase> = fakeDatabase();
+        const tally = createDatabaseTally();
+        const instrumented = instrumentDatabase(
+            database,
+            deps("summary", tally, () => undefined),
+        );
+
+        instrumented["notes"] = { findFirst: () => "row" };
+
+        await instrumented.insert("notes", { a: 1 });
+
+        expect(database.insert).toHaveBeenCalledTimes(1);
+        expect(tally.calls).toBe(1);
     });
 
     it("returns a stable function identity for a wrapped method", () => {

@@ -624,10 +624,10 @@ describe("ctx-db relations", () => {
             await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
             await writer.insert("reactions", { _id: "r1", emoji: "👍", messageId: "m1" }, { allowExplicitId: true });
 
-            await writer.delete("u1");
+            await writer.delete("users", "u1");
 
-            await expect(writer.get("m1")).resolves.toBeNull();
-            await expect(writer.get("r1")).resolves.toBeNull();
+            await expect(writer.get("messages", "m1")).resolves.toBeNull();
+            await expect(writer.get("reactions", "r1")).resolves.toBeNull();
         });
 
         it("set null clears the FK on holder rows", async () => {
@@ -638,9 +638,9 @@ describe("ctx-db relations", () => {
             await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
             await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
 
-            await writer.delete("u1");
+            await writer.delete("users", "u1");
 
-            const message = await writer.get("m1");
+            const message = await writer.get("messages", "m1");
 
             expect(message).not.toBeNull();
             expect(message!["authorId"]).toBeNull();
@@ -654,8 +654,8 @@ describe("ctx-db relations", () => {
             await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
             await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
 
-            await expect(writer.delete("u1")).rejects.toThrow(/still references it/);
-            await expect(writer.get("u1")).resolves.not.toBeNull();
+            await expect(writer.delete("users", "u1")).rejects.toThrow(/still references it/);
+            await expect(writer.get("users", "u1")).resolves.not.toBeNull();
         });
 
         it("restrict allows deletion once no holders remain", async () => {
@@ -665,9 +665,87 @@ describe("ctx-db relations", () => {
 
             await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
 
-            await writer.delete("u1");
+            await writer.delete("users", "u1");
 
-            await expect(writer.get("u1")).resolves.toBeNull();
+            await expect(writer.get("users", "u1")).resolves.toBeNull();
+        });
+
+        const seedMessages = async (writer: DatabaseWriterLike, authorId: string, count: number): Promise<void> => {
+            const documents = Array.from({ length: count }, (_, index) => {
+                return { authorId, body: `m${String(index)}` };
+            });
+
+            await writer.insertMany!("messages", documents, { limit: count });
+        };
+
+        it("cascade walks more holders than one page", async () => {
+            expect.assertions(2);
+
+            const writer = makeWriter(buildSchema("cascade"));
+
+            await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+            await writer.insert("users", { _id: "u2", name: "Linus" }, { allowExplicitId: true });
+            await seedMessages(writer, "u1", 1200);
+            await seedMessages(writer, "u2", 3);
+
+            await writer.delete("users", "u1");
+
+            await expect(writer.count("messages", { authorId: "u1" })).resolves.toBe(0);
+            await expect(writer.count("messages", { authorId: "u2" })).resolves.toBe(3);
+        });
+
+        it("refuses a cascade over CASCADE_MAX_ROWS holders before deleting anything", { timeout: 60_000 }, async () => {
+            expect.assertions(3);
+
+            const writer = makeWriter(buildSchema("cascade"));
+
+            await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+            await seedMessages(writer, "u1", 10_001);
+
+            await expect(writer.delete("users", "u1")).rejects.toMatchObject({ code: "CASCADE_LIMIT" });
+            await expect(writer.get("users", "u1")).resolves.not.toBeNull();
+            await expect(writer.count("messages", { authorId: "u1" })).resolves.toBe(10_001);
+        });
+
+        it("sets null on the holders still present after an earlier relation's cascade removed some", async () => {
+            expect.assertions(3);
+
+            // `posts` is declared first, so its cascade runs first and takes `c1` with `p1`; the
+            // `comments.authorId` set-null that follows must not patch `c1`, which is gone by then.
+            const writer = makeWriter({
+                tables: {
+                    posts: {
+                        indexes: [{ fields: ["authorId"], name: "by_author" }],
+                        relationMap: { author: { field: "authorId", kind: "one", onDelete: "cascade", references: "_id", table: "users" } },
+                        shape: { authorId: { kind: "string" } },
+                    },
+                    comments: {
+                        indexes: [
+                            { fields: ["authorId"], name: "by_author" },
+                            { fields: ["postId"], name: "by_post" },
+                        ],
+                        relationMap: {
+                            author: { field: "authorId", kind: "one", onDelete: "set null", references: "_id", table: "users" },
+                            post: { field: "postId", kind: "one", onDelete: "cascade", references: "_id", table: "posts" },
+                        },
+                        shape: { authorId: { kind: "string", optional: true }, postId: { kind: "string" } },
+                    },
+                    users: { indexes: [], shape: { name: { kind: "string" } } },
+                },
+            } as SchemaLike);
+
+            await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+            await writer.insert("users", { _id: "u2", name: "Linus" }, { allowExplicitId: true });
+            await writer.insert("posts", { _id: "p1", authorId: "u1" }, { allowExplicitId: true });
+            await writer.insert("posts", { _id: "p2", authorId: "u2" }, { allowExplicitId: true });
+            await writer.insert("comments", { _id: "c1", authorId: "u1", postId: "p1" }, { allowExplicitId: true });
+            await writer.insert("comments", { _id: "c2", authorId: "u1", postId: "p2" }, { allowExplicitId: true });
+
+            await writer.delete("users", "u1");
+
+            await expect(writer.get("comments", "c1")).resolves.toBeNull();
+            await expect(writer.get("comments", "c2")).resolves.toMatchObject({ authorId: null, postId: "p2" });
+            await expect(writer.get("users", "u1")).resolves.toBeNull();
         });
     });
 
@@ -801,7 +879,7 @@ describe("ctx-db relations", () => {
 
                     return { continueCursor: null, isDone: true, page: [...rows.values()] };
                 },
-                async get(id: string) {
+                async get(_table: string, id: string) {
                     calls.push(`get:${id}`);
 
                     return rows.get(id) ?? null;
@@ -867,7 +945,7 @@ describe("ctx-db relations", () => {
                 sql: harness.sql,
             });
 
-            const row = await writer.get("g1");
+            const row = await writer.get("globals", "g1");
 
             expect(fake.calls).toContain("get:g1");
             expect(row).toMatchObject({ value: "alpha" });
@@ -944,7 +1022,7 @@ describe("ctx-db relations", () => {
             const rows = new Map<string, Record<string, unknown>>();
 
             const writer = {
-                async delete(id: string) {
+                async delete(_table: string, id: string) {
                     rows.delete(id);
                 },
                 async findMany(_table: string, query?: { where?: Record<string, unknown> }) {
@@ -960,7 +1038,7 @@ describe("ctx-db relations", () => {
 
                     return id;
                 },
-                async patch(id: string, patch: Record<string, unknown>) {
+                async patch(_table: string, id: string, patch: Record<string, unknown>) {
                     const existing = rows.get(id);
 
                     if (existing) {
@@ -990,7 +1068,7 @@ describe("ctx-db relations", () => {
             await fake.insert("memberships", { _id: "m2", groupId: "g1", userId: "u2" });
             await fake.insert("memberships", { _id: "m3", groupId: "g2", userId: "u3" });
 
-            await writer.delete("g1");
+            await writer.delete("groups", "g1");
 
             // The cascade should have removed every membership pointing at g1
             // and left the one pointing at g2 alone.
@@ -1008,7 +1086,7 @@ describe("ctx-db relations", () => {
 
             await writer.insert("groups", { _id: "g1", name: "Engineering" }, { allowExplicitId: true });
 
-            await expect(writer.delete("g1")).rejects.toThrow(/cross-backend cascade.*globalDb/u);
+            await expect(writer.delete("groups", "g1")).rejects.toThrow(/cross-backend cascade.*globalDb/u);
         });
     });
 

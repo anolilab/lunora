@@ -122,8 +122,72 @@ const looksLikeSecretValue = (value: string): boolean => {
     return trimmed.length >= 24 && STANDALONE_TOKEN.test(trimmed);
 };
 
-/** Matches a quoted (`"…"` / `'…'`) value; the inner contents are masked when credential-like. */
-const QUOTED_VALUE = /(["'])(?<inner>(?:\\.|(?!\1).)*)\1/gu;
+/** Characters a quoted value never spans, as `.` in a regular expression doesn't. */
+const LINE_TERMINATORS = new Set(["\n", "\r", "\u2028", "\u2029"]);
+
+/**
+ * Where the quoted value opened at `start` closes: at its first unescaped quote; without one before
+ * the line ends, at its last escaped quote (its backslash read as a plain character); else `-1`.
+ */
+const closingQuoteIndex = (message: string, start: number): number => {
+    const quote = message.charAt(start);
+    let lastEscapedQuote = -1;
+    let index = start + 1;
+
+    while (index < message.length) {
+        const character = message.charAt(index);
+
+        if (character === quote) {
+            return index;
+        }
+
+        if (LINE_TERMINATORS.has(character)) {
+            break;
+        }
+
+        const next = message.charAt(index + 1);
+
+        if (character === "\\" && index + 1 < message.length && !LINE_TERMINATORS.has(next)) {
+            if (next === quote) {
+                lastEscapedQuote = index + 1;
+            }
+
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+
+    return lastEscapedQuote;
+};
+
+/**
+ * Replaces each quoted (`"…"` / `'…'`) value in `message` with `replace(match, inner)`, closing
+ * each as {@link closingQuoteIndex} says.
+ *
+ * This is what `/(["'])((?:\\.|(?!\1).)*)\1/gu` matches, in one pass: that pattern could read
+ * every backslash as an escape or as a character, so a quote followed by a run of backslashes
+ * backtracked exponentially (40 backslashes took seconds; CodeQL js/polynomial-redos).
+ */
+const replaceQuotedValues = (message: string, replace: (match: string, inner: string) => string): string => {
+    let out = "";
+    let index = 0;
+
+    while (index < message.length) {
+        const character = message.charAt(index);
+        const close = character === '"' || character === "'" ? closingQuoteIndex(message, index) : -1;
+
+        if (close === -1) {
+            out += character;
+            index += 1;
+        } else {
+            out += replace(message.slice(index, close + 1), message.slice(index + 1, close));
+            index = close + 1;
+        }
+    }
+
+    return out;
+};
 
 /** Matches a `KEY=value` / `KEY: value` pair; the value is masked when the key is secret-named. */
 const KEYED_VALUE = /\b(?<key>[A-Za-z_]\w*)\s*[=:]\s*\S+/gu;
@@ -149,11 +213,7 @@ const KEYED_VALUE = /\b(?<key>[A-Za-z_]\w*)\s*[=:]\s*\S+/gu;
 const redactSecrets = (message: string): string => {
     let out = message;
 
-    out = out.replaceAll(QUOTED_VALUE, (match: string, ...groups: unknown[]) => {
-        const named = groups.at(-1) as { inner?: string } | undefined;
-
-        return named?.inner !== undefined && looksLikeSecretValue(named.inner) ? REDACTED : match;
-    });
+    out = replaceQuotedValues(out, (match, inner) => (looksLikeSecretValue(inner) ? REDACTED : match));
 
     // Redact only the password segment (between `:` and `@`), keeping scheme/user/host.
     out = out.replaceAll(URL_CREDENTIAL, (_match, user: string) => `://${user}:${REDACTED}@`);

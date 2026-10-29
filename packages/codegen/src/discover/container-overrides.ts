@@ -1,9 +1,9 @@
 import type { CallExpression, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName } from "../argument-taint";
 import type { ContainerOverrideIR } from "../ir";
-import { collectCallRows } from "./ast";
+import { collectCallRows, findObjectProperty } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /** Runtime egress-firewall mutators on a `<handle>.egress` control surface — the `egress_relaxation` sink set. */
 const EGRESS_MUTATING_METHODS = new Set(["allow", "deny", "setAllowed"]);
@@ -16,7 +16,7 @@ const hasEnableInternetTrue = (call: CallExpression): boolean => {
         return false;
     }
 
-    const property = argument.getProperty("enableInternet");
+    const property = findObjectProperty(argument, "enableInternet");
 
     return property !== undefined && Node.isPropertyAssignment(property) && Node.isTrueLiteral(property.getInitializerOrThrow());
 };
@@ -31,7 +31,7 @@ const enableInternetOverrideInCall = (call: CallExpression, relativePath: string
 
     return {
         detail: "enableInternet: true",
-        exportName: enclosingExportName(call),
+        scope: callSiteScopeOf(call),
         file: relativePath,
         kind: "enable_internet",
         line: call.getStartLineNumber(),
@@ -54,7 +54,7 @@ const egressRelaxationInCall = (call: CallExpression, relativePath: string): Con
 
     return {
         detail: callee.getName(),
-        exportName: enclosingExportName(call),
+        scope: callSiteScopeOf(call),
         file: relativePath,
         kind: "egress_relaxation",
         line: call.getStartLineNumber(),

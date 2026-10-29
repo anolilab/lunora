@@ -78,7 +78,7 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
 
     const document = readOpenRpcDocument(specPath);
 
-    if (document.methods.length === 0) {
+    if (document.methods.every((method) => method["x-lunora-function-kind"] === "stream")) {
         // Warn but keep going. Returning here would leave the PREVIOUS
         // generation's files on disk, so removing every RPC function would ship
         // a stale surface that still compiles and still calls functions the
@@ -117,9 +117,11 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
     // How many functions still return the untyped placeholder — i.e. declare no
     // `.output()`. Uses the same predicate the emitter does, so the warning can
     // never disagree with what was generated.
-    const untypedResults = document.methods.filter((method) => !isTypedSchema(method.result?.schema)).length;
+    // A `stream` is in the document for tooling but is not an SDK method, so the counts skip it.
+    const methods = document.methods.filter((method) => method["x-lunora-function-kind"] !== "stream");
+    const untypedResults = methods.filter((method) => !isTypedSchema(method.result?.schema)).length;
 
-    logger.success(`Generated ${language} SDK for ${String(document.methods.length)} function(s) → ${outputDirectory}`);
+    logger.success(`Generated ${language} SDK for ${String(methods.length)} function(s) → ${outputDirectory}`);
 
     // What was copied and from where, every run. The output is self-contained, so
     // this line is the only place the protocol vintage is stated out loud — and
@@ -156,7 +158,7 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
 
     if (untypedResults > 0) {
         logger.warn(
-            `${String(untypedResults)} of ${String(document.methods.length)} function(s) return an untyped result — declare \`.output()\` on them for typed returns.`,
+            `${String(untypedResults)} of ${String(methods.length)} function(s) return an untyped result — declare \`.output()\` on them for typed returns.`,
         );
     }
 

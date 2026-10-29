@@ -31,9 +31,6 @@ export type {
     ContextFetch,
     ContextMetrics,
     ContextTracer,
-    HostSpanLike,
-    HostTracingLike,
-    HostTracingResolver,
     MetricEvent,
     MetricKind,
     MetricsDeps,
@@ -50,8 +47,8 @@ export type {
     TracerDeps,
 } from "./context-telemetry";
 export { createMetrics, createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "./context-telemetry";
-export type { DatabaseInstrumentation, DatabaseTally, DatabaseTelemetryDeps } from "./database-telemetry";
-export { createDatabaseTally, formatTally, instrumentDatabase } from "./database-telemetry";
+export type { DatabaseInstrumentation, DatabaseTally, DatabaseTelemetryDeps, SqlClientLike, TallySurface } from "./database-telemetry";
+export { createDatabaseTally, formatTally, instrumentDatabase, instrumentSqlClient } from "./database-telemetry";
 export type { FunctionMetricBucket, FunctionMetricBucketsResult, FunctionMetricIndexHit, IndexHit, RecordFunctionMetricInput } from "./function-metrics";
 export {
     ensureFunctionMetricsTables,
@@ -71,6 +68,8 @@ export {
     readFunctionMetricsTotals,
     recordFunctionMetric,
 } from "./function-metrics";
+export type { HostSpanLike, HostTracingLike, HostTracingResolver } from "./host-span";
+export { applyHostRootSpan, setHostSpanAttributes } from "./host-span";
 export type { AiRunBinding, ExplainIssueArgs, ExplainIssueDegradedReason, ExplainIssueGrounding, ExplainIssueResult } from "./issue-explainer";
 export { DEFAULT_EXPLAIN_ISSUE_MODEL, explainIssue, parseExplainIssueArgs } from "./issue-explainer";
 export type { IssueSeverity, IssueState, IssueStatePatch, IssueStatus } from "./issue-state";
@@ -82,7 +81,7 @@ export { MetricBuffer } from "./metric-buffer";
 export type { MetricHistoryOptions, MetricHistoryPoint, MetricHistoryResult, MetricHistorySeries } from "./metric-history";
 export { readMetricHistory, recordMetricHistory } from "./metric-history";
 export type { QueryInsightBucket, QueryInsightEntry, QueryInsightsResult, QueryStatEntry } from "./query-metrics";
-export { readQueryInsights, readQueryMetrics, recordQueryMetric } from "./query-metrics";
+export { latencyBucketIndex, readQueryInsights, readQueryMetrics, recordQueryMetric } from "./query-metrics";
 export type {
     AppendRequestLogEntry,
     ContextLogLevel,
@@ -95,17 +94,25 @@ export type {
     RequestLogResult,
     RequestLogWriteOptions,
     RequestOutcome,
+    SensitiveScope,
 } from "./request-log";
 export {
     appendRequestLogEntry,
+    createSensitiveScope,
     emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
+    maskSensitiveArgs,
+    NO_SENSITIVE_SCOPE,
     parseLogArgs,
     readErrorIssues,
     readRequestLog,
     redactArgs,
+    redactCredentials,
     REQUEST_LOG_TABLE,
+    SENSITIVE_ARG_MASK,
+    sensitiveNames,
+    sensitiveValues,
 } from "./request-log";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";

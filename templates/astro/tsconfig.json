@@ -6,6 +6,6 @@
         "moduleResolution": "bundler",
         "types": ["@cloudflare/workers-types", "astro/client"]
     },
-    "include": ["src/**/*", "lunora/**/*", "astro.config.mjs"],
+    "include": ["src/**/*", "lunora/**/*", "astro.config.mjs", "lunora.config.ts"],
     "exclude": ["dist"]
 }

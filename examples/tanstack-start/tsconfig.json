@@ -3,12 +3,28 @@
     "compilerOptions": {
         "moduleResolution": "bundler",
         "jsx": "react-jsx",
-        "types": ["@cloudflare/workers-types", "node", "vite/client"],
-        "lib": ["DOM", "DOM.Iterable", "ES2024"],
+        "types": [
+            "@cloudflare/workers-types",
+            "node",
+            "vite/client"
+        ],
+        "lib": [
+            "DOM",
+            "DOM.Iterable",
+            "ES2024"
+        ],
         "noUncheckedIndexedAccess": false,
         "noUnusedLocals": false,
         "noUnusedParameters": false
     },
-    "include": ["src/**/*", "lunora/**/*", "vite.config.ts"],
-    "exclude": ["node_modules", "dist"]
+    "include": [
+        "src/**/*",
+        "lunora/**/*",
+        "vite.config.ts",
+        "__tests__/**/*"
+    ],
+    "exclude": [
+        "node_modules",
+        "dist"
+    ]
 }

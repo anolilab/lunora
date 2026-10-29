@@ -1,10 +1,11 @@
 import { isLunoraError, LunoraError, toErrorBody } from "@lunora/errors";
 import type { Infer, Validator, ValidatorKind } from "@lunora/values";
 import { ValidationError } from "@lunora/values";
+import { encodeWire } from "@lunora/wire";
 import type { Context } from "hono";
 import { Hono } from "hono";
 
-import { encodeWire } from "../../../shared/wire-codec";
+import type { LiveTopicRef } from "../../../shared/live-stream";
 import applyOutput from "./apply-output";
 import type { EmptyArgs } from "./builder/index";
 import { parseValidatorMap } from "./functions";
@@ -49,6 +50,14 @@ type HttpRunners = Pick<ActionContext, "runAction" | "runMutation" | "runQuery">
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 type HttpActionCtx = {
     /**
+     * Forward a server-to-server request to a shard Durable Object carrying the
+     * caller's resolved identity headers — the seam the live-stream primitive
+     * (`defineLiveStream`) uses to reach the shard's subscriber registry. See
+     * {@link ShardFetch}.
+     */
+    readonly fetchShard: ShardFetch;
+
+    /**
      * The same `run*` trio bound to `shardKey`, mirroring
      * `createShardClient(...).forShard(key)`:
      *
@@ -61,6 +70,10 @@ type HttpActionCtx = {
      * DO — silently, with no way to say otherwise.
      */
     readonly forShard: (shardKey: string) => HttpRunners;
+
+    /** Publish an arbitrary event to a live topic. See {@link LivePublisher}. */
+    readonly live: LivePublisher;
+
     readonly scheduler?: ActionContext["scheduler"];
     readonly storage?: ActionContext["storage"];
 
@@ -84,6 +97,62 @@ type HttpActionCtx = {
 
 /** A raw handler wrapped by {@link httpAction}. Receives the raw request, returns the raw response. */
 type HttpActionHandler = (context: HttpActionCtx, request: Request) => Promise<Response> | Response;
+
+/** Init for {@link ShardFetch} — the fields the live-stream primitive needs. */
+interface ShardFetchInit {
+    /** Request body (already serialized). */
+    body?: string;
+    /** Extra headers merged over the forwarded identity headers. */
+    headers?: Record<string, string>;
+    /** HTTP method; defaults to `GET`. */
+    method?: string;
+}
+
+/**
+ * Forward a server-to-server request to a shard Durable Object, carrying the
+ * caller's resolved identity headers. This is the seam the live-stream
+ * primitive uses to reach the shard's subscriber registry: a worker-side
+ * `.stream()` handler cannot itself hold a connection-scoped subscription (the
+ * registry must be the single-actor DO), so the SSE stream is served by the DO
+ * and this is how the route reaches it.
+ *
+ * Not a general-purpose escape hatch: like `ctx.run*` it dispatches as trusted
+ * worker code, so a handler must have already run whatever authorization it
+ * requires before forwarding. An internal call has no client-reachable path of
+ * its own — the DO is never directly addressable.
+ *
+ * `shardKey === undefined` targets the app's default shard.
+ */
+type ShardFetch = (shardKey: string | undefined, path: string, init?: ShardFetchInit) => Promise<Response>;
+
+/** Where a {@link LivePublisher.publish} goes. */
+interface LivePublishOptions {
+    /** The shard to publish on. Defaults to the ctx's default shard. */
+    shardKey?: string;
+}
+
+/**
+ * `ctx.live` — publish an event to a declared live topic. The event reaches the
+ * SSE subscribers of the stream that declares the topic and followed it, and the
+ * WebSocket whisper members that hold a live grant for that stream and topic
+ * (see the live-stream docblock).
+ *
+ * Reachable from an HTTP-action ctx; an action (a scheduled job) publishes
+ * through the same surface in-process (see the live-stream docblock).
+ */
+interface LivePublisher {
+    /**
+     * Publish `payload` to the topic `ref` names, from `_generated/live.ts`
+     * (`live.posts.post({ postId })`). The stream comes from the ref, and the payload
+     * is checked against the validator the topic declares. Best-effort — a topic with
+     * no subscribers is a no-op. Rejects when the shard refuses the publish: a payload
+     * its validator rejects or an undeclared topic (400), a `room:` topic (403), or a
+     * payload over the publish cap (413), so a refused publish is not silently
+     * dropped. On a target that does not serve live streams it rejects with
+     * `LIVE_STREAMS_UNSUPPORTED`.
+     */
+    publish: <Payload>(topic: LiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: LivePublishOptions) => Promise<void>;
+}
 
 /**
  * The hono {@link https://hono.dev | Hono} environment used by {@link httpRouter}.
@@ -166,7 +235,6 @@ interface HttpRouteHandlerOptions<SearchParams extends ArgsValidator, Body exten
  * handler receives. There is no parsed `body` — streams are typically GET, and
  * the raw `request` is exposed if a handler needs to read the body itself.
  * `signal` is tripped when the client disconnects.
- * @experimental Part of the HTTP-SSE stream surface; reconnect/POST-body design questions are still open.
  */
 interface HttpStreamHandlerOptions<SearchParams extends ArgsValidator, Params extends ArgsValidator> {
     ctx: HttpActionCtx;
@@ -222,12 +290,20 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
      * handler's yielded type — unless `.output()` was declared, in which case each
      * chunk must be that type and is parsed through the validator before the frame
      * is written (a violation ends the stream with an `event: error` frame).
-     * @experimental Reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
+     *
+     * A handler may yield a plain `R` (unchanged) or {@link sseEvent}, which
+     * wraps one chunk so the pump emits an `id:` line ahead of its `data:`.
      */
     stream: [Output] extends [undefined]
-        ? <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler
+        ? <R>(
+              handler: (
+                  options: HttpStreamHandlerOptions<SearchParams, Params>,
+              ) => AsyncGenerator<R | SseEvent<R>, void, void> | AsyncIterable<R | SseEvent<R>>,
+          ) => LunoraRouteHandler
         : (
-              handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<Output, void, void> | AsyncIterable<Output>,
+              handler: (
+                  options: HttpStreamHandlerOptions<SearchParams, Params>,
+              ) => AsyncGenerator<Output | SseEvent<Output>, void, void> | AsyncIterable<Output | SseEvent<Output>>,
           ) => LunoraRouteHandler;
 
     /**
@@ -419,7 +495,7 @@ const errorResponse = (error: unknown): Response => {
             console.error("[lunora] http action error (redacted on the wire):", error);
         }
 
-        return Response.json({ code: body.code, error: body.message }, { status });
+        return Response.json({ code: body.code, error: body.message, ...(body.why === undefined ? {} : { why: body.why }) }, { status });
     }
 
     throw error;
@@ -521,9 +597,80 @@ const SSE_HEADERS: Record<string, string> = {
 };
 
 /**
+ * Read the SSE resume position off a request: the `Last-Event-ID` header a
+ * browser `EventSource` replays automatically on reconnect, falling back to a
+ * `lastEventId` query parameter for clients that cannot set that header.
+ * The query fallback applies only when the header is absent. A present but empty
+ * header is a cleared position (the server emitted an empty `id:`), so it returns
+ * `undefined` rather than resurrecting a stale query value. Returns `undefined`
+ * when there is no resume position, so a handler can treat it the same as
+ * "resume from the beginning".
+ *
+ * The handler decides what to replay — the framework only surfaces the value.
+ */
+const lastEventId = (request: Request): string | undefined => {
+    const header = request.headers.get("last-event-id");
+
+    if (header !== null) {
+        return header === "" ? undefined : header;
+    }
+
+    const query = new URL(request.url).searchParams.get("lastEventId");
+
+    return query === null || query === "" ? undefined : query;
+};
+
+/**
+ * Module-unique brand marking a yielded chunk as an opt-in SSE frame that
+ * carries an event id. `Symbol.for` (not a fresh `Symbol()`) keeps the key
+ * stable even if this package is bundled twice into one worker, and the brand
+ * means a plain user chunk that happens to have `id`/`data` fields is NOT
+ * mistaken for a frame — {@link sseEvent} is the only way to opt in.
+ */
+const SSE_EVENT_BRAND: unique symbol = Symbol.for("@lunora/server/sse-event");
+
+/**
+ * The shape {@link sseEvent} returns and a `.stream()` handler yields to attach an
+ * SSE `id:` to one chunk. The brand is REQUIRED: a plain `{ data, id }` object does
+ * not satisfy it, so a yield typed `SseEvent<T>` is always a frame the pump unwraps,
+ * and the chunk type codegen derives from it is the type that reaches the wire.
+ */
+interface SseEvent<R> {
+    readonly data: R;
+    readonly id: string;
+    readonly [SSE_EVENT_BRAND]: true;
+}
+
+/**
+ * Wrap a chunk so the SSE pump emits `id: <id>` immediately before its `data:`
+ * line:
+ *
+ * ```ts
+ * httpRoute.get("/api/logs").stream(async function* logs() {
+ *     for await (const entry of tail()) {
+ *         yield sseEvent({ data: entry, id: entry.seq });
+ *     }
+ * });
+ * ```
+ *
+ * `data` goes through the same wire codec and per-chunk `.output()` enforcement
+ * as a plain yield; the wrapper is transport, not part of the user's contract.
+ */
+const sseEvent = <R>(frame: { data: R; id: string }): SseEvent<R> => {
+    return { [SSE_EVENT_BRAND]: true, data: frame.data, id: frame.id };
+};
+
+const isSseEvent = (value: unknown): value is SseEvent<unknown> =>
+    typeof value === "object" && value !== null && (value as Partial<SseEvent<unknown>>)[SSE_EVENT_BRAND] === true;
+
+/** A header or SSE field value that cannot break out of its line. */
+const isSafeHeaderValue = (value: string): boolean => !(value.includes("\r") || value.includes("\n") || value.includes("\0"));
+
+/**
  * Format one SSE frame. Each frame ends with `\n\n`, the spec-required
  * separator. `event:` is omitted for `data` (the default event name); we use
- * named events only for the terminal sentinels (`complete`, `error`).
+ * named events only for the terminal sentinels (`complete`, `error`). `id:` is
+ * omitted unless the chunk opted in via {@link sseEvent}.
  *
  * A default `data` frame carries a user chunk, so it goes through the wire codec
  * — the same bracketing the WS stream path has always had, and which this
@@ -535,11 +682,38 @@ const SSE_HEADERS: Record<string, string> = {
  * The terminal sentinels are NOT encoded: `complete` carries `{}` and `error`
  * carries a plain `{ code, message }` that the client reads without decoding.
  */
-const sseFrame = (chunk: unknown, event?: "complete" | "error"): string => {
+const sseFrame = (chunk: unknown, event?: "complete" | "error", id?: string): string => {
     const data = JSON.stringify(event === undefined ? encodeWire(chunk) : chunk);
+
+    // An id is written verbatim into an `id:` line, so a line break in it would
+    // end the frame early and let the id inject `event:` / `data:` lines.
+    if (id !== undefined && !isSafeHeaderValue(id)) {
+        throw new LunoraError("INTERNAL", "sseEvent id must not contain CR, LF or NUL");
+    }
+
+    const idLine = id === undefined ? "" : `id: ${id}\n`;
     const prefix = event ? `event: ${event}\n` : "";
 
-    return `${prefix}data: ${data}\n\n`;
+    return `${idLine}${prefix}data: ${data}\n\n`;
+};
+
+/**
+ * Encode one yielded chunk into a default SSE frame. `.output()` is enforced
+ * HERE — the pump's per-chunk contract check — against the chunk itself, or
+ * against a branded {@link sseEvent}'s inner `data` (the wrapper is transport,
+ * not the user's contract). A violating chunk throws out of the pump into its
+ * catch and becomes a redacted `event: error` frame, the same verdict the RPC
+ * and REST paths reach for a contract breach — a wrong chunk is not a stream
+ * that keeps going.
+ */
+const frameChunk = (output: Validator | undefined, chunk: unknown): string => {
+    if (isSseEvent(chunk)) {
+        const data = output ? applyOutput(output, chunk.data) : chunk.data;
+
+        return sseFrame(data, undefined, chunk.id);
+    }
+
+    return sseFrame(output ? applyOutput(output, chunk) : chunk);
 };
 
 /**
@@ -608,7 +782,7 @@ const buildStreamHandler =
             // pulling one chunk per `pull()`, which rewrites the abort / terminal-
             // frame / error-frame ordering this block already carries a scar from
             // (see the post-loop re-check). Do it when a real stream is observed
-            // outrunning its reader; the surface is `@experimental` until then.
+            // outrunning its reader; the fix is internal and does not move the public surface.
             async start(controller) {
                 try {
                     const iterator = userHandler({ ctx: context, params, request, searchParams, signal: ac.signal });
@@ -618,17 +792,12 @@ const buildStreamHandler =
                             break;
                         }
 
-                        // `.output()` applies HERE too. SSE was the one result path
-                        // that skipped `applyOutput`, whose own contract is "every
-                        // result-parsing site (RPC, REST, any future transport) must
-                        // route through this helper" — so a `.stream()` route accepted
-                        // an `.output()`, type-checked the handler against it, and then
-                        // discarded it, sending whatever the generator yielded. A
-                        // violating chunk throws out of the pump into the catch below
-                        // and becomes a redacted `event: error` frame, which is the
-                        // same verdict the RPC and REST paths reach for a contract
-                        // breach — a wrong chunk is not a stream that keeps going.
-                        controller.enqueue(encoder.encode(sseFrame(state.output ? applyOutput(state.output, chunk) : chunk)));
+                        // SSE was the one result path that skipped `applyOutput`,
+                        // whose own contract is "every result-parsing site (RPC,
+                        // REST, any future transport) must route through this
+                        // helper" — so `.output()` is enforced per chunk inside
+                        // `frameChunk`, alongside the branded-`sseEvent` framing.
+                        controller.enqueue(encoder.encode(frameChunk(state.output, chunk)));
                     }
 
                     // Re-check after the loop: a consumer `cancel()` (or a client
@@ -660,7 +829,19 @@ const buildStreamHandler =
                     // enqueueing onto the closed controller would throw out of
                     // this catch.
                     if (!ac.signal.aborted) {
-                        controller.enqueue(encoder.encode(sseFrame({ code: body.code, message: body.message }, "error")));
+                        controller.enqueue(
+                            encoder.encode(
+                                sseFrame(
+                                    {
+                                        code: body.code,
+                                        hint: body.hint,
+                                        message: body.message,
+                                        why: body.why,
+                                    },
+                                    "error",
+                                ),
+                            ),
+                        );
                     }
                 } finally {
                     request.signal.removeEventListener("abort", onAbort);
@@ -739,9 +920,8 @@ const httpRoute: HttpRoute = {
  * handler can guard a request-derived header value before writing it — the fix the
  * `http_action_response_header_injection` advisor lint points to.
  */
-const isSafeHeaderValue = (value: string): boolean => !(value.includes("\r") || value.includes("\n") || value.includes("\0"));
 
-export { httpAction, httpRoute, httpRouter, isSafeHeaderValue };
+export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, lastEventId, sseEvent };
 
 export type {
     HttpActionCtx,
@@ -753,7 +933,12 @@ export type {
     HttpRouteHandlerOptions,
     HttpRunners,
     HttpStreamHandlerOptions,
+    LivePublisher,
+    LivePublishOptions,
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
+    ShardFetch,
+    ShardFetchInit,
+    SseEvent,
 };

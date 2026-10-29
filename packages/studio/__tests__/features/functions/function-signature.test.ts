@@ -1,3 +1,4 @@
+import { decodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
 import { argumentsTemplate, formatSignature } from "../../../src/features/functions/function-signature";
@@ -62,5 +63,16 @@ describe("argumentsTemplate", () => {
         expect.assertions(1);
 
         expect(JSON.parse(argumentsTemplate(NUMERIC_ARGS))).toStrictEqual({ b: false, n: 0 });
+    });
+
+    it("placeholders bigint and bytes in the tagged form the runner decodes", () => {
+        expect.assertions(1);
+
+        const template = argumentsTemplate([
+            { kind: "bigint", name: "amount", optional: false },
+            { kind: "bytes", name: "blob", optional: false },
+        ]);
+
+        expect(decodeWire(JSON.parse(template))).toStrictEqual({ amount: 0n, blob: new ArrayBuffer(0) });
     });
 });

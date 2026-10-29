@@ -49,9 +49,14 @@ const fail = (message) => {
 const kib = (bytes) => `${(bytes / 1024).toFixed(1)} KiB`;
 
 /**
- * Cloudflare's pre-compression Worker script limit — 64 MB, the same on Free and
- * Paid, alongside the per-plan gzip limit (3 MB / 10 MB).
- * https://developers.cloudflare.com/workers/platform/limits/
+ * Cloudflare's Worker size limit — 64 MiB uncompressed, the same on Free and
+ * Paid. There is no compressed limit; only the uncompressed bundle counts.
+ * https://developers.cloudflare.com/workers/platform/limits/#worker-size
+ *
+ * Mirrors `WORKER_SIZE_LIMIT_BYTES` in
+ * `packages/cli/src/commands/build/bundle-size.ts` (what `lunora build` warns
+ * against). This script cannot import it — it measures that CLI's own output —
+ * so change both together.
  */
 const RAW_LIMIT_BYTES = 64 * 1024 * 1024;
 
@@ -124,15 +129,17 @@ const measure = (appDirectory) => {
         fail("check-worker-size: `lunora build` failed on the reference template (its output is above).");
     }
 
-    const result = JSON.parse(stdout);
+    // `--format json` puts every command's payload under `data` in the shared
+    // `{ code, data, error }` envelope, so the measurement is `data.bundle`.
+    const { bundle } = JSON.parse(stdout).data ?? {};
 
     // A measurement of zero must never pass as a healthy result: that is exactly
     // what a changed wrangler out-dir layout would look like.
-    if (!result.bundle || result.bundle.files < 1 || result.bundle.gzipBytes < 1) {
+    if (!bundle || bundle.files < 1 || bundle.gzipBytes < 1) {
         fail("check-worker-size: `lunora build` reported no bundle — the wrangler out-dir layout may have changed.");
     }
 
-    return result.bundle;
+    return bundle;
 };
 
 const baseline = JSON.parse(readFileSync(fixturePath, "utf8"));
@@ -163,8 +170,8 @@ if (update) {
     process.exit(0);
 }
 
-// Cloudflare enforces two ceilings, not one: the plan's gzip limit AND a 64 MB
-// pre-compression limit on both plans. The baseline check below is a regression
+// Cloudflare's only size ceiling is the 64 MiB uncompressed limit (both plans;
+// there is no compressed limit). The baseline check below is a regression
 // signal measured in gzip, so it cannot see a bundle that compresses extremely
 // well — a large generated lookup table is tiny gzipped and enormous raw. That
 // bundle would pass the gate and be rejected at upload, so the raw limit gets

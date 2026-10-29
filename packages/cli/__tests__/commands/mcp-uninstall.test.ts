@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runMcpInstall } from "../../src/commands/mcp/install";
 import { runMcpUninstall } from "../../src/commands/mcp/uninstall";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const captureLogger = (): { logger: Logger; messages: string[] } => {
@@ -146,7 +147,7 @@ describe("lunora mcp uninstall", () => {
 
         const { logger } = captureLogger();
 
-        expect(runMcpUninstall(options(logger, { clients: ["emacs"] })).code).toBe(1);
+        expect(runMcpUninstall(options(logger, { clients: ["emacs"] })).code).toBe(EXIT_CODE.USAGE);
     });
 
     it("leaves no temp file behind", () => {
@@ -283,7 +284,7 @@ describe("dry run and scope", () => {
         const { logger, messages } = captureLogger();
         const result = runMcpUninstall(options(logger, { docsOnly: true, localOnly: true }));
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(messages.join("\n")).toContain("mutually exclusive");
     });
 });

@@ -277,6 +277,8 @@ describe("defineSchema(...).extend(...)", () => {
 
         const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(ratelimit.extension);
 
+        expectTypeOf<keyof typeof schema.tables>().toEqualTypeOf<"ratelimit_buckets" | "todos">();
+
         expect(Object.keys(schema.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(["ratelimit_buckets", "todos"]);
     });
 
@@ -291,6 +293,18 @@ describe("defineSchema(...).extend(...)", () => {
             .extend(b);
 
         expect(Object.keys(schema.tables).toSorted((left, right) => left.localeCompare(right))).toEqual(["a_one", "b_two", "base"]);
+    });
+
+    it("keeps the extension key literal, so .extend() adds exactly <key>_<table> to the table names (#1021)", () => {
+        expect.assertions(1);
+
+        const extension = defineSchemaExtension("billing", { tables: { invoices: defineTable({ total: v.number() }) } });
+        const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(extension);
+
+        expectTypeOf(extension.key).toEqualTypeOf<"billing">();
+        expectTypeOf<keyof typeof schema.tables>().toEqualTypeOf<"billing_invoices" | "todos">();
+
+        expect(Object.keys(schema.tables)).toContain("billing_invoices");
     });
 
     it("two extensions with the same key + table collide under the shared prefix", () => {

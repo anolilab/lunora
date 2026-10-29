@@ -8,6 +8,8 @@ import type { MailTransport, QueueLike, SendPayload } from "../src/types";
 const FROM_PATTERN = /from/;
 const API_KEY_PATTERN = /apiKey/;
 const QUEUE_PATTERN = /queue/;
+const NO_TRANSPORT_PATTERN = /no transport configured/;
+const RECIPIENT_PATTERN = /at least one recipient/;
 
 const fakeTransport = (id: string = "msg-1"): { sent: SendPayload[]; transport: MailTransport } => {
     const sent: SendPayload[] = [];
@@ -33,6 +35,17 @@ describe("createMailer", () => {
         expect.assertions(1);
 
         expect(() => createMailer({ from: "noreply@x.test" })).toThrow(API_KEY_PATTERN);
+    });
+
+    it("builds a producer-only mailer from a queue alone: queue() works, send() rejects", async () => {
+        expect.assertions(3);
+
+        const enqueue = vi.fn<QueueLike["send"]>(async () => undefined);
+        const mailer = createMailer({ from: "noreply@x.test", queue: { send: enqueue } });
+
+        await expect(mailer.queue({ subject: "Hi", text: "x", to: "a@x.test" })).resolves.toStrictEqual({ queued: true });
+        expect(enqueue).toHaveBeenCalledTimes(1);
+        await expect(mailer.send({ subject: "Hi", text: "x", to: "a@x.test" })).rejects.toThrow(NO_TRANSPORT_PATTERN);
     });
 
     it("send() forwards to the transport with the default `from`", async () => {
@@ -94,6 +107,36 @@ describe("createMailer", () => {
             subject: "Queued",
             to: ["a@x.test", "b@x.test"],
         });
+        expect(sent).toHaveLength(0);
+    });
+
+    it("queue() rejects a message with no recipients instead of enqueueing a poison message", async () => {
+        expect.assertions(3);
+
+        const { sent, transport } = fakeTransport();
+        const queueMessages: unknown[] = [];
+        const queue: QueueLike = {
+            send: vi.fn<QueueLike["send"]>(async (payload: unknown) => {
+                queueMessages.push(payload);
+            }),
+        };
+        const mailer = createMailer({ from: "Default <noreply@x.test>", queue, transport });
+
+        // `queue()` must apply the same recipient check `send()` does, and apply it
+        // BEFORE the enqueue — an empty `to` fails on every consumer attempt and
+        // retries its way to the dead-letter queue after the caller was told it was queued.
+        await expect(mailer.queue({ subject: "Queued", text: "hi", to: [] })).rejects.toThrow(RECIPIENT_PATTERN);
+        expect(queueMessages).toHaveLength(0);
+        expect(sent).toHaveLength(0);
+    });
+
+    it("send() rejects a message with no recipients on every transport", async () => {
+        expect.assertions(2);
+
+        const { sent, transport } = fakeTransport();
+        const mailer = createMailer({ from: "Default <noreply@x.test>", transport });
+
+        await expect(mailer.send({ subject: "Hi", text: "hi", to: [] })).rejects.toThrow(RECIPIENT_PATTERN);
         expect(sent).toHaveLength(0);
     });
 

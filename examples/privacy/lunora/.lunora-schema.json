@@ -1,0 +1,431 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "exportFiles": {
+            "commitOrdered": false,
+            "fields": {
+                "body": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "encoding": {
+                    "kind": "union",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false,
+                    "members": [
+                        {
+                            "kind": "literal",
+                            "nullable": false,
+                            "optional": false,
+                            "unique": false,
+                            "literal": "\"base64\""
+                        },
+                        {
+                            "kind": "literal",
+                            "nullable": false,
+                            "optional": false,
+                            "unique": false,
+                            "literal": "\"text\""
+                        }
+                    ]
+                },
+                "name": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "requestId": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                }
+            },
+            "indexes": {
+                "byRequestAndName": {
+                    "fields": ["requestId", "name"],
+                    "unique": false
+                }
+            },
+            "memory": false,
+            "relations": {},
+            "shardMode": "root"
+        },
+        "privacy_archive": {
+            "commitOrdered": false,
+            "fields": {
+                "archivedAt": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "datasetId": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "retainUntil": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "row": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "subjectId": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "table": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                }
+            },
+            "indexes": {
+                "bySubjectDataset": {
+                    "fields": ["subjectId", "datasetId"],
+                    "unique": false
+                }
+            },
+            "memory": false,
+            "relations": {},
+            "shardMode": "root"
+        },
+        "privacy_events": {
+            "commitOrdered": false,
+            "fields": {
+                "at": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "detail": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false
+                },
+                "kind": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "requestId": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                }
+            },
+            "indexes": {
+                "byRequest": {
+                    "fields": ["requestId", "at"],
+                    "unique": false
+                }
+            },
+            "memory": false,
+            "relations": {},
+            "shardMode": "root"
+        },
+        "privacy_holds": {
+            "commitOrdered": false,
+            "fields": {
+                "datasetId": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "requestId": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false
+                },
+                "retainUntil": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "rule": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "subjectId": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                }
+            },
+            "indexes": {
+                "bySubject": {
+                    "fields": ["subjectId"],
+                    "unique": false
+                }
+            },
+            "memory": false,
+            "relations": {},
+            "shardMode": "root"
+        },
+        "privacy_requests": {
+            "commitOrdered": false,
+            "fields": {
+                "dueAt": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "erasureGraceUntil": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false
+                },
+                "errorMessage": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false
+                },
+                "expiresAt": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false
+                },
+                "extendedDueAt": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false
+                },
+                "progress": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "reason": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false
+                },
+                "receivedAt": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "status": {
+                    "kind": "union",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false,
+                    "members": [
+                        {
+                            "kind": "literal",
+                            "nullable": false,
+                            "optional": false,
+                            "unique": false,
+                            "literal": "\"cancelled\""
+                        },
+                        {
+                            "kind": "literal",
+                            "nullable": false,
+                            "optional": false,
+                            "unique": false,
+                            "literal": "\"completed\""
+                        },
+                        {
+                            "kind": "literal",
+                            "nullable": false,
+                            "optional": false,
+                            "unique": false,
+                            "literal": "\"failed\""
+                        },
+                        {
+                            "kind": "literal",
+                            "nullable": false,
+                            "optional": false,
+                            "unique": false,
+                            "literal": "\"grace\""
+                        },
+                        {
+                            "kind": "literal",
+                            "nullable": false,
+                            "optional": false,
+                            "unique": false,
+                            "literal": "\"processing\""
+                        },
+                        {
+                            "kind": "literal",
+                            "nullable": false,
+                            "optional": false,
+                            "unique": false,
+                            "literal": "\"ready\""
+                        },
+                        {
+                            "kind": "literal",
+                            "nullable": false,
+                            "optional": false,
+                            "unique": false,
+                            "literal": "\"received\""
+                        }
+                    ]
+                },
+                "storageKey": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false
+                },
+                "subjectId": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "type": {
+                    "kind": "union",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false,
+                    "members": [
+                        {
+                            "kind": "literal",
+                            "nullable": false,
+                            "optional": false,
+                            "unique": false,
+                            "literal": "\"erasure\""
+                        },
+                        {
+                            "kind": "literal",
+                            "nullable": false,
+                            "optional": false,
+                            "unique": false,
+                            "literal": "\"export\""
+                        }
+                    ]
+                },
+                "verifiedAt": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false
+                },
+                "workflowInstanceId": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": true,
+                    "unique": false
+                }
+            },
+            "indexes": {
+                "byStatus": {
+                    "fields": ["status", "dueAt"],
+                    "unique": false
+                },
+                "bySubject": {
+                    "fields": ["subjectId", "type"],
+                    "unique": false
+                }
+            },
+            "memory": false,
+            "relations": {},
+            "shardMode": "root"
+        },
+        "privacy_tombstones": {
+            "commitOrdered": false,
+            "fields": {
+                "erasedAt": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "scope": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "subjectKey": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                }
+            },
+            "indexes": {
+                "bySubjectKey": {
+                    "fields": ["subjectKey"],
+                    "unique": false
+                }
+            },
+            "memory": false,
+            "relations": {},
+            "shardMode": "root"
+        },
+        "tasks": {
+            "commitOrdered": false,
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "done": {
+                    "kind": "boolean",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "title": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                },
+                "userId": {
+                    "kind": "string",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false
+                }
+            },
+            "indexes": {
+                "byUser": {
+                    "fields": ["userId"],
+                    "unique": false
+                }
+            },
+            "memory": false,
+            "relations": {},
+            "shardMode": "root"
+        }
+    },
+    "version": 1
+}

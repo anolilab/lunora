@@ -78,8 +78,11 @@ export interface LunoraPluginOptions {
      * the value set is derived from `CodegenOptions` so it can't drift.
      */
     apiSpec?: CodegenOptions["apiSpec"];
+
     /** Pass through to `@cloudflare/vite-plugin`. Pass `false` to opt out. Defaults to `true`. */
     cloudflare?: boolean | CloudflarePluginOptions;
+    /** Emit a per-module lazy function registry; omitted keeps the eager registry. */
+    lazyFunctions?: CodegenOptions["lazyFunctions"];
 
     /**
      * Inject `@visulima/vite-overlay` for runtime errors (dev only). Pass
@@ -105,7 +108,7 @@ export interface LunoraPluginOptions {
 
     /**
      * Deploy target the emitted `ctx.*` surface is tailored to. Defaults to
-     * `"target"` in `lunora.json`, then `"cloudflare"` — so an existing project
+     * `"target"` in `lunora.config.*`, then `"cloudflare"` — so an existing project
      * emits byte-identical output.
      *
      * Set it here only to override the project config for one build — keeping
@@ -134,6 +137,8 @@ export interface ResolvedLunoraPluginOptions {
      * build. Derived, so the import base cannot disagree with the emitter.
      */
     generatedDir: string;
+
+    lazyFunctions: boolean;
     overlay: false | OverlayPluginOptions;
     projectRoot: string;
     schemaDir: string;

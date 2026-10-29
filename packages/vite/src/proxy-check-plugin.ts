@@ -22,9 +22,8 @@
  * and warns with the exact remedy.
  */
 
+import { lunoraLine } from "@lunora/config";
 import type { Plugin } from "vite";
-
-import { lunoraLine } from "./log";
 
 /** Path prefixes a Lunora worker serves — a proxy entry matching one carries live traffic. */
 const LUNORA_PATH_PREFIXES = ["/_lunora"];

@@ -50,7 +50,6 @@
  * counts against the request's subrequest budget. What the timeout buys is that
  * the caller's request stops waiting — which is the difference between a user
  * seeing a fast error and a user watching a spinner for half a minute.
- * @experimental
  */
 import { LunoraError, unreachable } from "@lunora/errors";
 import type { SqlCtxExec } from "@lunora/sql-store";
@@ -170,7 +169,6 @@ const messageOf = (error: unknown): string => {
  * and surfaces immediately. Retrying a genuine bug — a syntax error, a
  * constraint violation — turns one fast failure into three slow ones and
  * hides the cause.
- * @experimental
  */
 const isTransientD1Error = (error: unknown): boolean => {
     const message = messageOf(error);
@@ -208,7 +206,6 @@ const defaultSleep = async (ms: number): Promise<void> =>
  * Its own class so a caller can tell "D1 hung" apart from "D1 returned an
  * error" — they have different remedies, and collapsing them hides which one
  * is happening.
- * @experimental
  */
 class D1TimeoutError extends Error {
     /** Milliseconds waited before the attempt was abandoned. */
@@ -254,7 +251,6 @@ const withTimeout = async <T>(operation: () => Promise<T>, timeoutMs: number): P
  * are. A write is only if it is idempotent — an upsert keyed on a primary key,
  * a delete by id, an `INSERT OR IGNORE`. A bare `INSERT` or a relative
  * `UPDATE` is not, and re-running one after a lost response double-applies it.
- * @experimental
  */
 const withD1Retry = async <T>(operation: () => Promise<T>, options: D1RetryOptions = {}): Promise<T> => {
     const attempts = options.attempts ?? DEFAULT_ATTEMPTS;
@@ -318,7 +314,6 @@ const withD1Retry = async <T>(operation: () => Promise<T>, options: D1RetryOptio
  * `all` is not the read path either. It only retries when
  * {@link isReadOnlyD1Sql} proves the statement is one, because `UPDATE …
  * RETURNING` runs through `all` too.
- * @experimental
  */
 const retryingExec = (exec: SqlCtxExec, options?: D1RetryOptions): SqlCtxExec => {
     return {

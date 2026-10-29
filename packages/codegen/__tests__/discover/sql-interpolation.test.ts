@@ -57,7 +57,7 @@ describe("discoverSqlInterpolation", () => {
         const found = discoverSqlInterpolation(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "search", file: "search" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "search" }, file: "search" });
     });
 
     it("flags a string-concatenation text in ctx.sql.query", () => {

@@ -12,10 +12,33 @@ export interface AgentFunctionReference {
 }
 
 /**
+ * Per-call options an {@link AgentRunFunction} forwards to the dispatcher —
+ * a structural subset of `@lunora/dispatch`'s `RunFunctionOptions`, declared
+ * locally so this module stays free of that import.
+ * @experimental
+ */
+export interface AgentRunOptions {
+    /**
+     * Abort the dispatch after this many ms, overriding the runner's 30s
+     * default (`DEFAULT_DISPATCH_TIMEOUT_MS`).
+     *
+     * Load-bearing for any tool whose target legitimately runs longer than
+     * that. A dispatch timeout answers 503, which is NOT a deterministic
+     * dispatch failure, so the tool's `step.do` rethrows and the host retries
+     * the step — dispatching the same call again while the FIRST one is still
+     * running. For a side-effecting target (a container command, a billed page
+     * render) that is a second execution, not a second attempt. Set this at
+     * least as wide as the target's own budget, and give the target an inner
+     * deadline strictly under it so the target aborts itself first.
+     */
+    timeoutMs?: number;
+}
+
+/**
  * `ctx.run`-shaped dispatcher the loop uses to call Lunora functions.
  * @experimental
  */
-export type AgentRunFunction = (reference: AgentFunctionReference, args?: Record<string, unknown>) => Promise<unknown>;
+export type AgentRunFunction = (reference: AgentFunctionReference, args?: Record<string, unknown>, options?: AgentRunOptions) => Promise<unknown>;
 
 /**
  * Structural subset of the Cloudflare Workflows durable-step API the loop needs.
@@ -64,6 +87,8 @@ export interface AgentToolContext {
 
     /** The Worker environment bindings. */
     env: Record<string, unknown>;
+    /** The invoking context's `ctx.exports`, where Cloudflare exposes the declared agents (see `agent.asTool`). */
+    exports?: unknown;
 
     /**
      * Read the thread's synced state — dispatches the public owner-gated
@@ -81,6 +106,13 @@ export interface AgentToolContext {
     getState: () => Promise<Record<string, unknown> | undefined>;
     /** Deterministic idempotency key — the tool's durable-step name. */
     idempotencyKey: string;
+
+    /**
+     * The workflow instance (the run) this tool call belongs to. A provider-issued
+     * tool-call id can repeat across runs, so a secret request is claimed by this
+     * id, not by the call id alone.
+     */
+    instanceId: string;
 
     /**
      * Verified owner of the thread this run belongs to (the loop copies it off
@@ -210,6 +242,15 @@ export interface AgentToolDefinition<Input = unknown, Output = unknown> {
      * {@link AgentApprovalContext}.
      */
     needsApproval?: ((input: Input, context: AgentApprovalContext) => boolean | Promise<boolean>) | boolean;
+
+    /**
+     * Set by `requestSecretTool`. The loop never calls `execute` on such a tool: it
+     * pauses the run until a human supplies (or declines) a value and records
+     * `{ secretRef }` as the tool result, where `secretRef` is the request's
+     * slot, `<turn>:<tool-call id>`. The client answers the pause with the tool-call id it sees on it. `consumer` names the only tool
+     * that may read the value. The value never reaches the loop, the thread or the model.
+     */
+    secretRequest?: { consumer: string };
 }
 
 /**
@@ -345,14 +386,32 @@ export interface AgentMemorySource extends AgentMemoryOptions {
 }
 
 /**
- * Cumulative or per-turn token usage — AI SDK `LanguageModelUsage` field names.
+ * Cumulative or per-turn token usage — AI SDK `LanguageModelUsage` field names, plus
+ * the cache and reasoning breakdowns. The breakdowns are subsets of the totals they
+ * sit under (`cacheReadTokens` and `cacheWriteTokens` are part of `inputTokens`,
+ * `reasoningTokens` is part of `outputTokens`), so they are never added on top.
+ * Each is omitted when the provider reported none.
  * @experimental
  */
 export interface AgentUsage {
-    /** Prompt (input) tokens. */
+    /** Input tokens served from the provider's prompt cache. */
+    cacheReadTokens?: number;
+    /** Input tokens written to the provider's prompt cache. */
+    cacheWriteTokens?: number;
+    /** Prompt (input) tokens, including any cache-read and cache-write tokens. */
     inputTokens?: number;
-    /** Completion (output) tokens. */
+    /** Completion (output) tokens, including any reasoning tokens. */
     outputTokens?: number;
+    /** Output tokens spent on hidden reasoning. */
+    reasoningTokens?: number;
+
+    /**
+     * Whether the provider's report covers every bucket it should carry: `complete` when all
+     * of it was reported, `partial` when some was, `unavailable` when none was. A run's total
+     * is `partial` as soon as one of its turns was not complete. Absent on a value written
+     * before this field existed; that row cannot say whether it was complete, so it reads as unknown.
+     */
+    status?: "complete" | "partial" | "unavailable";
     /** Input + output tokens. */
     totalTokens?: number;
 }
@@ -725,7 +784,7 @@ export interface AgentConfig {
      * Optional override for the deployed workflow name (`wrangler.jsonc`
      * `workflows[].name`). Defaults to `agent-<kebab-cased export name>`. Does
      * NOT change the binding name, which is always derived from the export
-     * name (`support` → `AGENT_SUPPORT`).
+     * name (`support` → `SupportAgentWorkflow`).
      */
     name?: string;
 
@@ -929,7 +988,7 @@ export interface AgentAsToolOptions {
 
     /**
      * The child agent's export name — selects its `AGENT_<NAME>` Workflow
-     * binding (e.g. `"researcher"` → `AGENT_RESEARCHER`). The model-facing tool
+     * export key (e.g. `"researcher"` → `ResearcherAgentWorkflow`). The model-facing tool
      * name is the KEY assigned in the parent's `tools` map, not this.
      */
     name: string;
@@ -974,16 +1033,20 @@ export interface AgentDefinition extends AgentConfig {
 /**
  * What `agentEnsureThread` reports back to the loop.
  *
- * A discriminated union rather than a bag of optional booleans: the four
- * outcomes are mutually exclusive, and the data each carries only exists for its
- * own case. `queued` has a position, `replaced` has the instance it took the
- * thread from, and the other two have nothing — encoding that as five
- * independent optional fields made every reader re-derive which combination was
- * legal.
+ * A discriminated union rather than a bag of optional booleans: the outcomes are
+ * mutually exclusive, and the data each carries only exists for its own case.
+ * `queued` has a position, `replaced` has the instance it took the thread from,
+ * and the rest have nothing — encoding that as independent optional fields made
+ * every reader re-derive which combination was legal.
+ *
+ * `completed` is the odd one: the thread was NOT (re)opened. This run already
+ * reported its outcome and is replaying because only the reply was lost, so it
+ * takes no ownership and revives nothing — it runs its body out of the step
+ * journal to re-dispatch the effects that never landed.
  * @experimental
  */
 export type EnsureThreadOutcome =
-    { outcome: "continued" | "created" } | { outcome: "queued"; position: number } | { outcome: "replaced"; priorInstanceId: string };
+    { outcome: "completed" | "continued" | "created" } | { outcome: "queued"; position: number } | { outcome: "replaced"; priorInstanceId: string };
 
 /**
  * Params of one agent run (the compiled workflow's payload).
@@ -1050,6 +1113,12 @@ export interface AgentFunctionPaths {
     appendMessage: string;
 
     /**
+     * The internal `agents:agentApprovalGranted` query the loop dispatches from
+     * inside a tool's approval-gate step: whether the tool is granted for the thread.
+     */
+    approvalGranted: string;
+
+    /**
      * The internal `agents:agentCompleteRun` mutation the loop dispatches at the
      * end of a run: it writes the terminal status AND hands the thread to the
      * next queued run in the same mutation.
@@ -1061,6 +1130,8 @@ export interface AgentFunctionPaths {
      * retire the HITL approval marker once the decision has landed.
      */
     deleteMessage: string;
+    /** The internal `agents:agentDiscardSecret` mutation a secret-consuming tool dispatches after it has used the value. */
+    discardSecret: string;
     ensureThread: string;
     /** The internal `agents:agentEpisodeRecall` query the loop dispatches for an episodic-kind read. */
     episodeRecall: string;
@@ -1070,7 +1141,16 @@ export interface AgentFunctionPaths {
     graphTraverse: string;
     /** The internal `agents:agentGraphUpsert` mutation the loop dispatches on run-end graph extraction. */
     graphUpsert: string;
+
+    /**
+     * The internal `agents:agentHistory` query the loop dispatches for a compacting
+     * turn: the stored running summary plus only the messages it does not yet cover.
+     */
+    history: string;
     listMessages: string;
+    /** The internal `agents:agentOpenSecretRequest` mutation that writes the pending request row when a run pauses. */
+    openSecretRequest: string;
+
     patchThread: string;
 
     /**
@@ -1081,24 +1161,31 @@ export interface AgentFunctionPaths {
     run: string;
     /** The internal `agents:agentSetState` mutation the loop dispatches for `setState`. */
     setState: string;
+    /** The internal `agents:agentSettleSecretRequest` mutation that reads a paused request's outcome once its wait ends. */
+    settleSecretRequest: string;
     /** The public owner-gated `agents:agentState` query (`getState` + `useAgentState`). */
     state: string;
+    /** The internal `agents:agentTakeSecret` mutation a secret-consuming tool dispatches to read a supplied value. */
+    takeSecret: string;
 }
 
 /**
  * Approval lifecycle marker on a message: `"awaiting_approval"` on the
  * placeholder written while a run pauses on a gated tool, then `"approved"` /
- * `"rejected"` on the tool result once a client resolves it. Absent on ordinary
- * messages. `"awaiting_approval"` rows are filtered out of the model prompt.
+ * `"rejected"` on the tool result once a client resolves it. `"awaiting_secret"`
+ * is the same pause for a {@link AgentToolDefinition.secretRequest} tool. Absent
+ * on ordinary messages. Both pause markers are filtered out of the model prompt.
  * @experimental
  */
-export type AgentMessageStatus = "approved" | "awaiting_approval" | "rejected";
+export type AgentMessageStatus = "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
 
 /**
  * One persisted thread message, as the loop reads it back.
  * @experimental
  */
 export interface AgentMessageRow {
+    /** On an approved tool result: `"thread"` when the approval also granted the tool for the rest of the thread. */
+    approvalScope?: "thread";
     content: string;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
@@ -1216,6 +1303,13 @@ export type AgentCompact = (input: {
     messages: ModelMessage[];
     /** The compaction model (the config's `model`, else the agent's). */
     model: AgentModelInput;
+
+    /**
+     * The previous brief being folded into, when this is an incremental update.
+     * A seam MUST merge it rather than summarise only the new messages, or facts
+     * from earlier turns are lost until the next from-scratch rebuild.
+     */
+    previousSummary?: string;
 }) => Promise<string>;
 
 /** The one-line summary an episodic-memory run records for later recency recall. */
@@ -1326,11 +1420,12 @@ export type AgentTokenSink = (event: AgentLiveEvent) => void;
 export type AgentStreamGenerate = (options: AgentGenerateOptions, onDelta: (text: string) => void) => Promise<AgentGenerateResult>;
 
 /**
- * Spec entry codegen emits per agent: `{ binding: "AGENT_SUPPORT", exportName: "support" }`.
+ * Spec entry codegen emits per agent: `{ className: "SupportAgentWorkflow", exportName: "support" }`.
  * @experimental
  */
 export interface AgentBindingSpec {
-    binding: string;
+    /** The agent's export key — its generated class name, e.g. `SupportAgentWorkflow`. */
+    className: string;
     exportName: string;
 
     /**

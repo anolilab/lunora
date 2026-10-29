@@ -1,6 +1,7 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import { LunoraError } from "@lunora/errors";
+import { stableWireKey } from "@lunora/wire";
 import type { MaybeRefOrGetter, Ref } from "vue";
 import { onScopeDispose, ref, toValue, watch } from "vue";
 
@@ -32,9 +33,14 @@ const useSubscription = <F extends FunctionReference>(
     const data = ref<ReturnOf<F> | undefined>(undefined) as Ref<ReturnOf<F> | undefined>;
     const error = ref<Error | undefined>(undefined);
 
+    // Keyed on the args' CONTENT (`stableWireKey`), not object identity — a
+    // getter that re-runs and produces equal args must not tear the live
+    // subscription down and re-snapshot. See `use-query`.
     watch(
-        () => toValue(args),
-        (currentArgs, _previous, onCleanup) => {
+        () => stableWireKey(toValue(args)),
+        (_key, _previousKey, onCleanup) => {
+            const currentArgs = toValue(args);
+
             // Each args generation starts clean: the previous args' value must not
             // render under the new args until the new subscription's first frame.
             data.value = undefined;
@@ -65,10 +71,12 @@ const useSubscription = <F extends FunctionReference>(
                         // Preserve the server-supplied `code` so consumers of the
                         // `error` ref can branch on the error kind (UNAUTHORIZED
                         // vs NOT_FOUND, …) instead of only seeing a flat message.
-                        error.value =
+                        error.value = Object.assign(
                             subscriptionError.code === undefined
                                 ? new Error(subscriptionError.message)
-                                : new LunoraError(subscriptionError.code, subscriptionError.message);
+                                : new LunoraError(subscriptionError.code, subscriptionError.message),
+                            subscriptionError.why === undefined ? {} : { why: subscriptionError.why },
+                        );
                         data.value = undefined;
                         // `UseQueryOptions.onError` is part of this composable's
                         // surface; forward the raw wire error (code included) so a

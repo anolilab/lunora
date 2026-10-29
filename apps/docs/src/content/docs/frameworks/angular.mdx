@@ -22,9 +22,10 @@ This page is the task-oriented guide; for the full reference see
 [`@lunora/angular`](/docs/packages/angular).
 
 <Callout type="warn">
-    **Deliberately small surface.** The Angular adapter ships the core four: DI wiring, `liveQuery`, `mutate`, `connectionStatus`. Parity extras the other
-    adapters have (paginated queries, bound optimistic-mutation handles, presence) aren't here yet. Reactive loaders are, via `@lunora/angular/server` +
-    `hydratePreloaded` (see below). For adapter maturity across frameworks see [Bring your framework](/docs/frameworks/bring-your-framework).
+    **Deliberately small surface.** The Angular adapter ships the core four — DI wiring, `liveQuery`, `mutate`, `connectionStatus` — alongside the parity extras
+    the other adapters have: `paginatedQuery` / `infiniteQuery`, the bound optimistic-mutation handle `mutator`, and `presence`. Reactive loaders are there too,
+    via `@lunora/angular/server` + `hydratePreloaded` (see below). For adapter maturity across frameworks see [Bring your
+    framework](/docs/frameworks/bring-your-framework).
 </Callout>
 
 ## Install
@@ -106,8 +107,9 @@ signal stays `undefined`.
 readonly profile = liveQuery(api.users.me, signedIn ? {} : "skip");
 ```
 
-Unlike the Vue/Solid adapters, `args` is a plain value here, not a reactive
-source, and changing it after the fact does not re-subscribe.
+Pass a plain object for static args (resolved once), or a function/`Signal` —
+`() => ({ channelId: channelId() })` — to re-subscribe when it changes, as in the
+Vue/Solid adapters.
 
 ## Mutations
 

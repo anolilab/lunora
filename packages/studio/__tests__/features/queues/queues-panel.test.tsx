@@ -104,6 +104,28 @@ describe("queuesPanel", () => {
         expect(screen.queryByTestId("queues-error")).toBeNull();
     });
 
+    it("renders a bigint / bytes body instead of [unserializable]", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: [oneQueue] } satisfies QueuesResult;
+                }
+
+                return { entries: [message({ body: { amountMinor: 1999n, receipt: new Uint8Array([1, 2]).buffer } })] };
+            },
+        });
+
+        render(renderPanel(mock));
+        fireEvent.click(screen.getByTestId("queues-tab-messages"));
+
+        const row = await screen.findByTestId("queues-message-msg-1");
+
+        expect(row.textContent).toContain('{"amountMinor":"1999","receipt":"<bytes: 2 B>"}');
+        expect(row.textContent).not.toContain("unserializable");
+    });
+
     it("surfaces a rejected replay in the panel's error surface", async () => {
         expect.assertions(1);
 
@@ -191,5 +213,124 @@ describe("queuesPanel", () => {
         await waitFor(() => {
             expect(screen.queryByTestId("queues-message-msg-1")).toBeNull();
         });
+    });
+
+    // The panel holds ONE page of the log (`DEFAULT_MESSAGE_LIMIT`), while the
+    // clear empties the whole reserved table — up to `QUEUE_RETENTION` rows. The
+    // confirm used to quote the page length, which is a number it never measured
+    // and is smaller than what the click destroys whenever the log is full.
+    it("confirms by scope, not by the loaded page's length", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: [oneQueue] } satisfies QueuesResult;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getQueueMessages) {
+                    return { entries: [message()] };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("queues-tab-messages"));
+        await screen.findByTestId("queues-message-msg-1");
+
+        fireEvent.click(screen.getByTestId("queues-clear"));
+
+        expect(screen.getByTestId("queues-clear-confirm").textContent).toBe("Clear the whole message log?");
+    });
+
+    const topicQueues: QueueMetadata[] = [
+        oneQueue,
+        { binding: "QUEUE_AUDIT", exportName: "audit", mode: "push", name: "audit", topic: "signups" },
+        { binding: "QUEUE_WELCOME", exportName: "welcome", mode: "push", name: "welcome", topic: "signups" },
+    ];
+
+    it("groups subscriptions under their topic", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: topicQueues } satisfies QueuesResult;
+                }
+
+                return { entries: [] };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        const header = await screen.findByTestId("queues-topic-signups");
+
+        expect(header.textContent).toContain("signups");
+        expect(header.textContent).toContain("2 subscriptions");
+    });
+
+    it("publishes a test message to every subscription of a topic", async () => {
+        expect.hasAssertions();
+
+        const sentTo: string[] = [];
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: topicQueues } satisfies QueuesResult;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.sendQueueMessage) {
+                    sentTo.push((args as { exportName: string }).exportName);
+
+                    return { sent: 1 };
+                }
+
+                return { entries: [] };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(await screen.findByTestId("queues-tab-send"));
+        fireEvent.change(await screen.findByTestId("queues-send-select"), { target: { value: "topic:signups" } });
+        fireEvent.click(screen.getByTestId("queues-send-button"));
+
+        await waitFor(() => {
+            expect(sentTo.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["audit", "welcome"]);
+        });
+    });
+
+    it("names the subscriptions a topic publish did not reach", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: topicQueues } satisfies QueuesResult;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.sendQueueMessage) {
+                    if ((args as { exportName: string }).exportName === "audit") {
+                        throw new Error("binding missing");
+                    }
+
+                    return { sent: 1 };
+                }
+
+                return { entries: [] };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(await screen.findByTestId("queues-tab-send"));
+        fireEvent.change(await screen.findByTestId("queues-send-select"), { target: { value: "topic:signups" } });
+        fireEvent.click(screen.getByTestId("queues-send-button"));
+
+        await expect(screen.findByText(/Not sent to audit: binding missing/u)).resolves.toBeDefined();
     });
 });

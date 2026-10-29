@@ -8,7 +8,7 @@
  *
  * Each handler reaches the admin gate, the coordinator, the shard namespace, and
  * the export/import primitives through the injected {@link DataMovementAdminRouteDeps}.
- * The export/import row producers (`streamExportRows` / `streamingImport`) are
+ * The export/import row producers (`prepareExportRows` / `streamingImport`) are
  * injected rather than imported because they close over the worker options and
  * are shared with the scheduled R2 backup — so this module imports no runtime
  * values from `create-worker`, only the shared `./body-readers` + `./connector-cdc`
@@ -90,30 +90,26 @@ interface DataMovementAdminRouteDeps {
     exportSinks?: Record<string, ExportSink>;
     /** Best-effort enumeration of known tables for the auto-discovery path (bound to the worker's table resolver). */
     knownTables: () => string[];
-    /** The cross-shard query coordinator; absent on a single-DO deployment. */
-    queryCoordinator?: QueryCoordinator;
-    /** Admin-gate + require a configured option, else throw the given error. Shared with the sibling admin route modules. */
-    requireAdminOption: <T>(request: Request, value: T | undefined, notConfigured: { code: string; message: string }) => T;
-    /** Resolve the headers forwarded to each shard (incl. the inbound admin bearer + identity). */
-    resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
-    /** The shard DO namespace fanned across. */
-    shardDO: ShardNamespaceLike;
 
     /**
-     * Produce export rows (shard-local then global), invoking `writeRow` per row.
-     * Injected because it closes over the worker options and is shared with the
-     * scheduled R2 backup.
+     * Settle the shard-local export fan-out and return every row (shard-local
+     * then global). Injected because it closes over the worker options and is
+     * shared with the scheduled R2 backup.
      */
-    streamExportRows: (
-        coordinator: QueryCoordinator,
-        headers: Record<string, string>,
-        tables: ReadonlyArray<string> | undefined,
-        writeRow: (row: ExportRow) => void,
-    ) => Promise<void>;
+    prepareExportRows: (headers: Record<string, string>, tables: ReadonlyArray<string> | undefined) => Promise<AsyncIterable<ExportRow>>;
+    /** The cross-shard query coordinator (the worker's own, or its default). */
+    queryCoordinator: QueryCoordinator;
+    /** Resolve the headers forwarded to each shard (incl. the inbound admin bearer + identity). */
+    resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
+
+    /** The shard DO namespace fanned across. */
+    shardDO: ShardNamespaceLike;
     /** Stream-parse + fan-out an NDJSON import body (bound to the worker options). */
     streamingImport: (
         request: Request,
         headers: Record<string, string>,
+        dryRun: boolean,
+        onConflict: "replace" | "skip",
     ) => Promise<{
         conflicts: number;
         errors: ReadonlyArray<ImportRowError>;
@@ -121,6 +117,7 @@ interface DataMovementAdminRouteDeps {
         failed: ReadonlyArray<ImportShardFailure>;
         inserted: Record<string, number>;
         received: number;
+        replaced: number;
         warnings?: ReadonlyArray<string>;
     }>;
     /** Read a page of `.global()` (D1) CDC changes; absent when no global plane is configured. */
@@ -135,12 +132,11 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         exportCursorStore,
         exportSinks,
         knownTables,
-        queryCoordinator,
+        queryCoordinator: coordinator,
         assertAdmin,
-        requireAdminOption,
         resolveForwardContext,
         shardDO,
-        streamExportRows,
+        prepareExportRows,
         streamingImport,
         syncGlobals,
     } = deps;
@@ -152,28 +148,28 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Export endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         const body = await parseExportBody(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
-        // Stream NDJSON: shard-local rows first, then global rows. Caveat: each
-        // shard returns a single materialised envelope, and the whole fan-out is
-        // collected before the stream drains, so peak worker memory still scales
-        // with the total shard-local row count — the streaming only keeps the
-        // *response* from being buffered, it does not bound the source data.
+        // The shard-local fan-out settles HERE, before any status is committed, so
+        // a failed shard (502) or a `.shardBy()` table the registry cannot list
+        // (400) answers with a real status. Past this point only the `.global()`
+        // rows can still fail, and those end the body as an errored stream.
+        // Caveat: each shard returns a single materialised envelope, so peak
+        // worker memory scales with the total shard-local row count — the
+        // streaming only keeps the *response* from being buffered.
+        const rows = await prepareExportRows(forwardedHeaders, body.tables);
+
         const stream = new ReadableStream<Uint8Array>({
             async pull(controller) {
-                const writeRow = (row: ExportRow): void => {
-                    controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
-                };
-
                 try {
-                    await streamExportRows(coordinator, forwardedHeaders, body.tables, writeRow);
+                    for await (const row of rows) {
+                        controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
+                    }
+
                     controller.close();
                 } catch (error: unknown) {
                     controller.error(error);
@@ -190,6 +186,20 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      * gets back each shard's change page plus its new cursor, and the global
      * (D1) page when `syncGlobals` is configured. Stateless: the consumer owns
      * the cursors and re-posts them to resume, so the worker holds no offsets.
+     *
+     * Each shard's page also carries the CDC `epoch` its cursor belongs to, and
+     * the caller may post those back in a parallel `epochs` map. Both halves are
+     * optional and additive: a caller that ignores `epoch` and never sends
+     * `epochs` gets byte-for-byte the behaviour it had. One that stores the pair
+     * and echoes it is refused (that shard's `error`, its prior cursor echoed)
+     * when the shard's timeline forked after the page it last read — which the
+     * cursor alone stops being able to prove as soon as post-restore writes
+     * carry the high-watermark back over it.
+     *
+     * The global (D1) half deliberately has no counterpart. An epoch is the
+     * fan-out of a detection, and that plane has no detector to fan out — no
+     * `.global()` changelog archive, so nothing seals a fork with no consumer
+     * present. `globalCursor` stays a bare integer.
      */
     const handleCdcSync = async (request: Request, env: unknown): Promise<Response> => {
         const wrongMethod = methodGuard(request, ["POST"]);
@@ -198,13 +208,11 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Sync endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         const raw = await readJsonBodyWithLimit(request);
         const cursors = typeof raw["cursors"] === "object" && raw["cursors"] !== null ? (raw["cursors"] as Record<string, number>) : {};
+        const epochs = typeof raw["epochs"] === "object" && raw["epochs"] !== null ? (raw["epochs"] as Record<string, string>) : {};
         const limit = typeof raw["limit"] === "number" ? raw["limit"] : undefined;
         const globalCursor = typeof raw["globalCursor"] === "number" ? raw["globalCursor"] : 0;
         const requestedTables = stringTables(raw["tables"]);
@@ -217,6 +225,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         const shardResult = await coordinator.orchestrateCdcSync(shardDO, {
             cursors,
             defaultShardKey,
+            epochs,
             headers: forwardedHeaders,
             limit,
             tables: probeTables,
@@ -246,6 +255,20 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      * delete with a monotonic per-source `seq`, so deletes ARE captured (a delete
      * surfaces as `{ op: "delete", doc: { _id } }`). A consumer maps the response
      * onto Fivetran/Airbyte via `toFivetranResponse` / `toAirbyteMessages`.
+     *
+     * **Why the cursor carries no per-shard CDC epoch, where {@link handleCdcSync}
+     * does.** Storing one would be free — the token is opaque, version-tagged,
+     * fail-soft-decoded, and already per-shard. What is not free is the refusal
+     * it would arm. `ConnectorSyncPage` is `{ changes, nextCursor, hasMore }`:
+     * it has no error channel, and this handler deliberately tolerates a failed
+     * shard by folding its (absent) changes and echoing its prior cursor. So a
+     * shard refusing a stale epoch would reach the consumer as an empty page
+     * with `hasMore: false` — "caught up" — which is strictly worse than the
+     * unguarded read it replaced, and exactly the silent degradation the epoch
+     * exists to prevent. Making it audible means giving this response an error
+     * channel, or failing the whole page on any one shard's error (which would
+     * also fail it on a single transient timeout it tolerates today). Either is
+     * a change to the published connector contract, and neither belongs here.
      */
     const handleConnectorSync = async (request: Request, env: unknown): Promise<Response> => {
         const wrongMethod = methodGuard(request, ["POST"]);
@@ -254,10 +277,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Connector sync endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         const raw = await readJsonBodyWithLimit(request);
         const state = decodeConnectorCursor(raw["cursor"]);
@@ -311,7 +331,8 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
     };
 
     /**
-     * Replay endpoint behind `lunora backup restore --to <time>`. Accepts
+     * Replay endpoint (`POST /_lunora/admin/apply`) for a connector replaying a
+     * `/sync` page; no `lunora` subcommand drives it today. Accepts
      * per-shard pre-bucketed batches (the shape `/sync` emits, so the caller
      * just forwards each shard's changes back to the same shard — no
      * re-bucketing, which also sidesteps deletes carrying no shard-key field)
@@ -325,10 +346,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Apply endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         const raw = await readJsonBodyWithLimit(request);
         const rawBatches = Array.isArray(raw["batches"]) ? raw["batches"] : [];
@@ -359,23 +377,34 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        // Admin gate only. Import fans out through `streamingImport`, which never
-        // touches the coordinator — this used to demand one anyway, which made
-        // `lunora seed` (and every other bulk import) fail with "requires a
-        // `queryCoordinator`" on every app the builder produces, since the
-        // builder has no way to configure one.
         assertAdmin(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
-        const result = await streamingImport(request, forwardedHeaders);
+        const { searchParams } = new URL(request.url);
+        // `?dryRun=true` checks the body and reports what it would reject, writing nothing.
+        const dryRun = searchParams.get("dryRun") === "true";
+        // `?onConflict=replace` overwrites rows whose `_id` already exists; absent, they are conflicts left unchanged.
+        const onConflictParameter = searchParams.get("onConflict") ?? "skip";
+
+        if (onConflictParameter !== "replace" && onConflictParameter !== "skip") {
+            throw new LunoraError(`onConflict must be "skip" or "replace", got ${JSON.stringify(onConflictParameter)}`, { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const result = await streamingImport(request, forwardedHeaders, dryRun, onConflictParameter);
+
+        // A client sends a dry run only to a worker that honours the flag, and an
+        // older worker answers with the same body and writes. The echo is how it
+        // tells them apart before any row is sent. `onConflict` is echoed for the
+        // same reason: an older worker ignores it and reports conflicts instead.
+        const body = { ...result, ...(dryRun ? { dryRun: true } : {}), ...(onConflictParameter === "replace" ? { onConflict: "replace" } : {}) };
 
         // A shard the fan-out never reached leaves an unknown slice of the batch
         // unwritten, and its rows contribute to neither `inserted` nor `errors`.
         // Answering 200 there makes a partial write indistinguishable from a clean
         // one to every client that checks the status code and nothing else — 207
         // Multi-Status says "read the body", which is exactly the situation.
-        return Response.json(result, {
+        return Response.json(body, {
             headers: { "content-type": "application/json" },
             status: result.failed.length > 0 ? 207 : 200,
         });
@@ -399,10 +428,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             return wrongMethod;
         }
 
-        const coordinator = requireAdminOption(request, queryCoordinator, {
-            code: "BAD_REQUEST",
-            message: "Export-tap endpoint requires a `queryCoordinator` on the worker",
-        });
+        assertAdmin(request);
 
         if (exportSinks === undefined || Object.keys(exportSinks).length === 0 || exportCursorStore === undefined) {
             throw new LunoraError("Export-tap endpoint requires `exportSinks` + `exportCursorStore` on the worker", {

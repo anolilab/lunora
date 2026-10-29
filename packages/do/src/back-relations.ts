@@ -170,4 +170,3 @@ const readBackRelationCounts = (
 };
 
 export { MAX_BACK_RELATION_IDS, MAX_BACK_RELATIONS, readBackRelationCounts };
-export type { BackRelationCounts, BackRelationCountsResult, BackRelationRequest };

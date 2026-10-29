@@ -124,6 +124,78 @@ describe("memoizeIdentity", () => {
         expect(resolver).toHaveBeenCalledTimes(2);
     });
 
+    it("does not serve a null result for a credential from the cross-request cache", async () => {
+        expect.assertions(3);
+
+        // An auth outage and a lapsed session both resolve null; neither may pin the
+        // credential as anonymous for the window.
+        let healthy = false;
+        const resolver = vi.fn<() => Promise<{ userId: string } | null>>(async () => (healthy ? { userId: "u1" } : null));
+        const memoized = memoizeIdentity(resolver, { ttlMs: 60_000 });
+
+        await expect(memoized(authed(), {})).resolves.toBeNull();
+
+        healthy = true;
+
+        await expect(memoized(authed(), {})).resolves.toStrictEqual({ userId: "u1" });
+
+        await memoized(authed(), {});
+
+        // Two calls: the null was re-resolved, the non-null identity was then served from cache.
+        expect(resolver).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps no cross-request map when the window is zero", async () => {
+        expect.assertions(2);
+
+        const set = vi.spyOn(Map.prototype, "set");
+
+        try {
+            const resolver = vi.fn<() => Promise<{ userId: string }>>(async () => {
+                return { userId: "u1" };
+            });
+            const memoized = memoizeIdentity(resolver, { ttlMs: 0 });
+
+            await memoized(authed(), {});
+            await memoized(authed(), {});
+
+            // One lookup per request, and nothing was written to any Map.
+            expect(resolver).toHaveBeenCalledTimes(2);
+            expect(set.mock.calls.filter(([key]) => typeof key === "string" && key.includes("session=abc"))).toHaveLength(0);
+        } finally {
+            set.mockRestore();
+        }
+    });
+
+    it("drops expired entries before evicting a live one at capacity", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        try {
+            const start = Date.now();
+            const resolver = vi.fn<(request: Request) => Promise<{ expiresAtMs?: number; userId: string }>>(async (request) => {
+                const cookie = request.headers.get("cookie");
+
+                return cookie === "s=short" ? { expiresAtMs: start + 1000, userId: "short" } : { userId: cookie ?? "" };
+            });
+            const memoized = memoizeIdentity(resolver, { maxEntries: 2, ttlMs: 60_000 });
+
+            await memoized(authed("s=live"), {});
+            await memoized(authed("s=short"), {});
+            vi.advanceTimersByTime(2000);
+
+            // At capacity: the expired entry must go, not the older but still-live one.
+            await memoized(authed("s=new"), {});
+            await memoized(authed("s=live"), {});
+
+            expect(resolver).toHaveBeenCalledTimes(3);
+            expect(resolver.mock.calls.map(([request]) => request.headers.get("cookie"))).toStrictEqual(["s=live", "s=short", "s=new"]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("does not cache a failed verification", async () => {
         expect.assertions(2);
 
@@ -237,6 +309,36 @@ describe("memoizeIdentity", () => {
         await memoized(withApiKey("key-alice"), {});
 
         expect(resolver).toHaveBeenCalledTimes(2);
+    });
+
+    it("expires an entry at the identity's own expiry, not the full TTL", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        try {
+            const start = Date.now();
+            // The first lookup sees a session expiring in 2s; the credential then gets
+            // refreshed, so the second lookup reports a later expiry.
+            const resolver = vi
+                .fn<() => Promise<{ expiresAtMs: number; userId: string }>>()
+                .mockResolvedValueOnce({ expiresAtMs: start + 2000, userId: "u1" })
+                .mockResolvedValue({ expiresAtMs: start + 3_600_000, userId: "u1" });
+            const memoized = memoizeIdentity(resolver, { ttlMs: 60_000 });
+
+            await memoized(authed(), {});
+            vi.advanceTimersByTime(1000);
+            await memoized(authed(), {});
+
+            expect(resolver).toHaveBeenCalledTimes(1);
+
+            vi.advanceTimersByTime(1500);
+
+            await expect(memoized(authed(), {})).resolves.toMatchObject({ expiresAtMs: start + 3_600_000 });
+            expect(resolver).toHaveBeenCalledTimes(2);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("still collapses duplicate calls within one request", async () => {

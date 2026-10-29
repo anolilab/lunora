@@ -17,3 +17,10 @@ Portability was a claim, not a construction check — `PLATFORM_MATRICES` held e
 ## Scope
 
 This is a **spike**, not a production target: it is not wired into `lunora dev`, has no deploy driver, and several capabilities are honestly rated `emulated`/`unsupported` in its capability matrix entry (see `@lunora/platform`'s `NODE_CAPABILITIES`). Wiring it into the dev server is the payoff and a follow-up, not this change.
+
+## On-demand profiling
+
+`createNodeProfileHandler({ token })` serves an on-demand CPU or heap profile
+(gzip pprof) behind a bearer-guarded route the app mounts itself. The full
+description, including what each profile type does and does not show, is in
+[`docs/index.mdx`](./docs/index.mdx#on-demand-profiling).

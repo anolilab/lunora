@@ -1,11 +1,22 @@
-import { estimateModelCost } from "@lunora/ai";
+import { estimateModelCost, USAGE_ATTRIBUTE, usageStatus } from "@lunora/ai/create";
 import type { Telemetry } from "ai";
 
 import type { OtlpAttribute, OtlpAttributeValue } from "../../../../shared/otlp";
 import { encodeAttribute, mergeHeaders, otlpRandomHex, otlpUnixNano, wrapResourceSpans } from "../../../../shared/otlp";
 import type { CommonOptions } from "./common";
-import { contentText, readField, summarizeGatewayTelemetry, summarizeUsage, toolInputOf, toolNameOf } from "./common";
+import { contentText, failedTurnEvent, readField, summarizeGatewayTelemetry, summarizeUsage, toolInputOf, toolNameOf } from "./common";
 import { createInFlightCalls } from "./in-flight-calls";
+
+/** Spans per OTLP export before an early flush. */
+const MAX_BATCH_SPANS = 50;
+/** Encoded span bytes per OTLP export before an early flush. */
+const MAX_BATCH_BYTES = 256 * 1024;
+
+/** UTF-8 encoder for the encoded-size counter; `Buffer` does not exist on Workers. */
+const UTF8_ENCODER = new TextEncoder();
+
+/** A {@link Telemetry} that buffers and exports on `flush()`; the agent loop calls it once per run. */
+type FlushableTelemetry = Telemetry & { flush: () => void };
 
 /** Push one attribute, skipping nullish values and JSON-stringifying non-primitives. */
 const pushAttribute = (attributes: OtlpAttribute[], key: string, value: unknown): void => {
@@ -140,8 +151,12 @@ export interface OtlpTelemetryOptions extends CommonOptions {
  * text leaves the worker without an explicit opt-in; only structural metadata +
  * token counts are recorded.
  *
- * Each export is fire-and-forget (registered with `waitUntil` when supplied);
- * every rejection is swallowed so a flaky collector never surfaces to the run.
+ * Spans are buffered and exported as ONE POST per batch (50 spans or 256 KB), and
+ * the agent loop calls `flush()` at run end. A caller driving this integration
+ * outside the loop must call `flush()` itself or the tail of the buffer is never
+ * sent. Each export is fire-and-forget (registered with `waitUntil` when
+ * supplied); every rejection is swallowed so a flaky collector never surfaces to
+ * the run.
  *
  * One deliberate difference from the SDK-backed bridges, which delegate to a host
  * tracer: flat, not nested. Every span gets `traceId` (shared when `traceId` is
@@ -152,7 +167,7 @@ export interface OtlpTelemetryOptions extends CommonOptions {
  * `recordOutputs` privacy flags.
  * @experimental
  */
-export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
+export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry => {
     const { conversationId, endpoint, headers, recordInputs = false, recordOutputs = false, token, traceId: fixedTraceId, waitUntil } = options;
     const serviceName = options.serviceName ?? "lunora";
 
@@ -167,7 +182,36 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
     // `token` last so it wins over any authorization in `headers`.
     const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers, token);
 
-    /** POST one span body fire-and-forget, keeping it alive past the turn when a `waitUntil` is present. */
+    let buffer: unknown[] = [];
+    let bufferBytes = 0;
+
+    /** POST every buffered span as ONE export, fire-and-forget, kept alive past the turn when a `waitUntil` is present. */
+    const flush = (): void => {
+        if (buffer.length === 0) {
+            return;
+        }
+
+        const spans = buffer;
+
+        buffer = [];
+        bufferBytes = 0;
+
+        try {
+            const sent = fetch(tracesUrl, {
+                body: JSON.stringify(wrapResourceSpans(spans, "@lunora/agent", serviceName)),
+                headers: mergedHeaders,
+                method: "POST",
+            }).catch(() => {
+                // Network error / non-OK — intentionally ignored.
+            });
+
+            waitUntil?.(sent);
+        } catch {
+            // A synchronous `fetch` throw (e.g. invalid URL) must not break the turn.
+        }
+    };
+
+    /** Buffer one span; export when the batch reaches its count or encoded-size ceiling. */
     const emitSpan = (name: string, startTs: number, ok: boolean, message: string | undefined, attributes: OtlpAttribute[]): void => {
         const span = {
             attributes,
@@ -182,18 +226,13 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
             traceId: fixedTraceId ?? otlpRandomHex(16),
         };
 
-        try {
-            const sent = fetch(tracesUrl, {
-                body: JSON.stringify(wrapResourceSpans(span, "@lunora/agent", serviceName)),
-                headers: mergedHeaders,
-                method: "POST",
-            }).catch(() => {
-                // Network error / non-OK — intentionally ignored.
-            });
+        buffer.push(span);
+        // The ceiling is documented as ENCODED span bytes, so count UTF-8 length:
+        // `String#length` is UTF-16 code units and undercounts multibyte attributes.
+        bufferBytes += UTF8_ENCODER.encode(JSON.stringify(span)).byteLength;
 
-            waitUntil?.(sent);
-        } catch {
-            // A synchronous `fetch` throw (e.g. invalid URL) must not break the turn.
+        if (buffer.length >= MAX_BATCH_SPANS || bufferBytes >= MAX_BATCH_BYTES) {
+            flush();
         }
     };
 
@@ -230,12 +269,19 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
         // `execute()` resolves with carries no usage at all, because it resolves the
         // moment `doStream` hands the stream back.
         const usage = summarizeUsage(readField(event, "usage") ?? readField(result, "usage"));
+        const status = usageStatus(usage);
 
-        if (usage) {
-            pushAttribute(attributes, "gen_ai.usage.input_tokens", usage.inputTokens);
-            pushAttribute(attributes, "gen_ai.usage.output_tokens", usage.outputTokens);
-            pushAttribute(attributes, "gen_ai.usage.total_tokens", usage.totalTokens);
-        }
+        // Stamped on every chat span, even with no usage, so `unavailable` is visible
+        // rather than an absent attribute. Same names and semantics as `@lunora/ai`.
+        pushAttribute(attributes, "lunora.usage.status", status);
+        // Cache and reasoning counts are subsets of the input and output totals; each is
+        // emitted only when reported, so an absent bucket is never a counted zero.
+        pushAttribute(attributes, USAGE_ATTRIBUTE.inputTokens, usage?.inputTokens);
+        pushAttribute(attributes, USAGE_ATTRIBUTE.outputTokens, usage?.outputTokens);
+        pushAttribute(attributes, "gen_ai.usage.total_tokens", usage?.totalTokens);
+        pushAttribute(attributes, USAGE_ATTRIBUTE.cacheReadTokens, usage?.cacheReadTokens);
+        pushAttribute(attributes, USAGE_ATTRIBUTE.cacheWriteTokens, usage?.cacheWriteTokens);
+        pushAttribute(attributes, USAGE_ATTRIBUTE.reasoningTokens, usage?.reasoningTokens);
 
         // Cloudflare AI Gateway telemetry — additive, only present when the
         // call was routed through a gateway (LUNORA_AI_GATEWAY_*). `pushAttribute`
@@ -251,12 +297,20 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
 
         // A provider-reported cost always wins; without a gateway the cost
         // is derived from token usage and the price table, so spend stays
-        // visible off Cloudflare too. The two are never conflated — the
-        // source is stamped alongside, exactly as the RAG embed span does.
+        // visible off Cloudflare too. An estimate is priced only from a complete
+        // report: a partial one would understate the call. The two are never
+        // conflated — the source is stamped alongside, exactly as the RAG embed span does.
         const reportedCost = gateway?.cost;
         const cost =
             reportedCost ??
-            (typeof modelId === "string" ? estimateModelCost(modelId, { inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens }) : undefined);
+            (typeof modelId === "string" && status === "complete"
+                ? estimateModelCost(modelId, {
+                      cacheReadTokens: usage?.cacheReadTokens,
+                      cacheWriteTokens: usage?.cacheWriteTokens,
+                      inputTokens: usage?.inputTokens,
+                      outputTokens: usage?.outputTokens,
+                  })
+                : undefined);
 
         if (cost !== undefined) {
             pushAttribute(attributes, "gen_ai.usage.cost", cost);
@@ -298,7 +352,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
             message = raw;
         }
 
-        calls.close(callId, false, message, undefined);
+        calls.close(callId, false, message, failedTurnEvent(raw));
     };
 
     /** The entry one model call opens with — its start time and request metadata. */
@@ -313,6 +367,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
     };
 
     return {
+        flush,
         executeLanguageModelCall: async (options_) => {
             const { callId } = options_;
 
@@ -334,7 +389,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
             } catch (error) {
                 // The provider call itself failed, so this IS the end of the span and
                 // no end event will follow.
-                calls.close(callId, false, error instanceof Error ? error.message : String(error), undefined);
+                calls.close(callId, false, error instanceof Error ? error.message : String(error), failedTurnEvent(error));
 
                 throw error;
             }
@@ -367,7 +422,9 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
             // Fired after the response has been normalized and parsed — for a stream
             // that is after its `finish` part, so this is the first moment the call's
             // real duration AND its token usage are both known.
-            calls.close(callId, true, undefined, event);
+            // The registry grades the end event by its `finishReason`, so an error finish that
+            // reaches the end event (the turn guard forwards it) closes as a failure, not a success.
+            calls.fromLifecycle(event);
         },
         onLanguageModelCallStart: (event: unknown) => {
             const callId = readField(event, "callId");
@@ -408,3 +465,5 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
         },
     };
 };
+
+export type { FlushableTelemetry };

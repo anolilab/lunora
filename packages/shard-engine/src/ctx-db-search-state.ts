@@ -27,7 +27,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search-state" mirrors its parent "ctx-db.ts" (the established public module name). */
 
-import type { SearchBackfillState } from "@lunora/search-core";
+import type { BackfillState } from "@lunora/search-core";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { searchCoverageSurvives } from "@lunora/search-core";
 import { sql as dsql } from "drizzle-orm";
@@ -47,19 +47,23 @@ const migrateSearchState = (sql: SqlExec): void => {
         dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(SEARCH_STATE_TABLE)} (${dsql.identifier("companion")} TEXT PRIMARY KEY, ${dsql.identifier("cursor")} TEXT, ${dsql.identifier("done")} INTEGER NOT NULL DEFAULT 0, ${dsql.identifier("profile")} TEXT, ${dsql.identifier("covered")} INTEGER NOT NULL DEFAULT 0)`,
     );
 
-    // A table created by an earlier build has no `profile` column, and
-    // `CREATE TABLE IF NOT EXISTS` will not add one — every read would then
-    // fail on the missing column. Mirrors the sql-store twin.
-    try {
+    // A table created by an earlier build has no `profile` / `covered` column, and
+    // `CREATE TABLE IF NOT EXISTS` will not add one — every read would then fail on
+    // the missing column. Pragma-checked rather than blindly ALTERed: this runs on
+    // every cold start, and an ALTER that raises "duplicate column" each time is two
+    // failed statements per wake. Same shape as `reactor-state.ts`.
+    const existing = new Set(
+        runDrizzle<{ name: string }>(sql, dsql`PRAGMA table_info(${dsql.identifier(SEARCH_STATE_TABLE)})`)
+            .toArray()
+            .map((column) => column.name),
+    );
+
+    if (!existing.has("profile")) {
         runDrizzle(sql, dsql`ALTER TABLE ${dsql.identifier(SEARCH_STATE_TABLE)} ADD COLUMN ${dsql.identifier("profile")} TEXT`);
-    } catch {
-        // Already present (or the table was just created with it).
     }
 
-    try {
+    if (!existing.has("covered")) {
         runDrizzle(sql, dsql`ALTER TABLE ${dsql.identifier(SEARCH_STATE_TABLE)} ADD COLUMN ${dsql.identifier("covered")} INTEGER NOT NULL DEFAULT 0`);
-    } catch {
-        // Already present (or the table was just created with it).
     }
 
     // Backfill `covered` for rows that predate the column, in its OWN statement
@@ -101,11 +105,15 @@ const readSearchIndexCoverage = (sql: SqlExec, companion: string): boolean => {
     return isTrue(rows[0]?.covered);
 };
 
-/** Read a companion's progress. An unknown companion has done nothing yet. */
-const readSearchBackfillState = (sql: SqlExec, companion: string): SearchBackfillState => {
+/**
+ * Read one backfill's progress row from `stateTable` — any table keyed by a
+ * `companion` column with `cursor`/`done`/`profile` beside it. Shared by the
+ * search companions and the vector backfill. An unknown key has done nothing yet.
+ */
+const readBackfillState = (sql: SqlExec, stateTable: string, companion: string): BackfillState => {
     const rows = runDrizzle<{ cursor: null | string; done: number; profile: null | string }>(
         sql,
-        dsql`SELECT ${dsql.identifier("cursor")}, ${dsql.identifier("done")}, ${dsql.identifier("profile")} FROM ${dsql.identifier(SEARCH_STATE_TABLE)} WHERE ${dsql.identifier("companion")} = ${companion}`,
+        dsql`SELECT ${dsql.identifier("cursor")}, ${dsql.identifier("done")}, ${dsql.identifier("profile")} FROM ${dsql.identifier(stateTable)} WHERE ${dsql.identifier("companion")} = ${companion}`,
     ).toArray();
 
     const row = rows[0];
@@ -120,6 +128,9 @@ const readSearchBackfillState = (sql: SqlExec, companion: string): SearchBackfil
     // disagreeing about whether an index is finished.
     return { cursor: row.cursor ?? undefined, done: isTrue(row.done), profile: row.profile ?? undefined };
 };
+
+/** Read a search companion's progress. */
+const readSearchBackfillState = (sql: SqlExec, companion: string): BackfillState => readBackfillState(sql, SEARCH_STATE_TABLE, companion);
 
 /**
  * Record a page's outcome: how far it got, whether the table is done, and under
@@ -156,4 +167,4 @@ const writeSearchBackfillState = (sql: SqlExec, companion: string, cursor: strin
     );
 };
 
-export { migrateSearchState, readSearchBackfillState, readSearchIndexCoverage, SEARCH_STATE_TABLE, writeSearchBackfillState };
+export { migrateSearchState, readBackfillState, readSearchBackfillState, readSearchIndexCoverage, SEARCH_STATE_TABLE, writeSearchBackfillState };

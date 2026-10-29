@@ -201,6 +201,166 @@ describe(createContainerTelemetry, () => {
         expect(records[0]?.flags).toBe(0);
     });
 
+    // The tail bias, the same rule the worker and the shard apply: a trace the
+    // head decision dropped is still exported when it ERRORED. Without it a
+    // container failure inside a sampled-out trace is the one thing that is
+    // never visible — exactly the failure sampling is supposed to never hide.
+    it("exports an errored span of a sampled-OUT trace, and only that one", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+        });
+
+        telemetry.emitSpan({ endMs: 10, name: "ok-work", startMs: 5 });
+        telemetry.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad-work", startMs: 10 });
+        await telemetry.flush();
+
+        const traceCalls = calls.filter((call) => call.url.endsWith("/v1/traces"));
+
+        expect(traceCalls).toHaveLength(1);
+
+        const { span } = spanFrom(traceCalls[0]!.body);
+
+        expect(span.name).toBe("bad-work");
+        // Head-sampled out: the bit stays clear even though the span shipped.
+        expect(span.flags).toBe(0);
+    });
+
+    it("drops even an errored span of a sampled-OUT trace when the tail bias is off", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            alwaysSampleErrors: false,
+            endpoint: "https://collect.example.com",
+            fetch,
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+        });
+
+        telemetry.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad-work", startMs: 10 });
+        await telemetry.flush();
+
+        expect(calls.filter((call) => call.url.endsWith("/v1/traces"))).toHaveLength(0);
+    });
+
+    it("reads the tail-bias toggle from LUNORA_SAMPLE_ERRORS", async () => {
+        vi.stubEnv("LUNORA_SAMPLE_ERRORS", "0");
+
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+        });
+
+        telemetry.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad-work", startMs: 10 });
+        await telemetry.flush();
+
+        expect(calls.filter((call) => call.url.endsWith("/v1/traces"))).toHaveLength(0);
+    });
+
+    // The whole point of propagating the toggle: the container obeys what the
+    // WORKER decided, not what its own environment happens to say. With the env
+    // unset, the inbound request is the only thing that can tell it the operator
+    // turned the tail bias off — and it must be enough.
+    it("obeys a tail-bias toggle propagated on the inbound request, with no env set", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            request: new Request("https://container/work", {
+                headers: {
+                    traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+                    "x-lunora-sample-errors": "0",
+                },
+            }),
+        });
+
+        telemetry.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad-work", startMs: 10 });
+        await telemetry.flush();
+
+        expect(calls.filter((call) => call.url.endsWith("/v1/traces"))).toHaveLength(0);
+    });
+
+    // The same request with the toggle ON keeps the errored span, so the test
+    // above is reading the header rather than failing for some other reason.
+    it("keeps the errored span when the propagated toggle leaves the tail bias on", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            request: new Request("https://container/work", {
+                headers: {
+                    traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00",
+                    "x-lunora-sample-errors": "1",
+                },
+            }),
+        });
+
+        telemetry.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad-work", startMs: 10 });
+        await telemetry.flush();
+
+        const traceCalls = calls.filter((call) => call.url.endsWith("/v1/traces"));
+
+        expect(traceCalls).toHaveLength(1);
+        expect(spanFrom(traceCalls[0]!.body).span.name).toBe("bad-work");
+    });
+
+    // `request` also carries the trace context, so a container handler reads one
+    // thing instead of two headers it would have to know the names of.
+    it("takes the trace context off the request too", async () => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({
+            endpoint: "https://collect.example.com",
+            fetch,
+            request: new Request("https://container/work", {
+                headers: { traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01" },
+            }),
+        });
+
+        telemetry.emitSpan({ endMs: 10, name: "transcode", startMs: 5 });
+        await telemetry.flush();
+
+        const { span } = spanFrom(calls[0]!.body);
+
+        expect(span.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
+        expect(span.parentSpanId).toBe("b7ad6b7169203331");
+    });
+
+    // Precedence, asserted rather than assumed: an explicit option beats the
+    // request, which beats the env.
+    it("prefers an explicit option over the request, and the request over the env", async () => {
+        vi.stubEnv("LUNORA_SAMPLE_ERRORS", "1");
+
+        const sampledOut = { traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00" };
+        const requestSaysOff = new Request("https://container/work", {
+            headers: { ...sampledOut, "x-lunora-sample-errors": "0" },
+        });
+
+        // Request beats the env's "1".
+        const viaRequest = stubFetch();
+        const fromRequest = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch: viaRequest.fetch, request: requestSaysOff });
+
+        fromRequest.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad", startMs: 10 });
+        await fromRequest.flush();
+
+        expect(viaRequest.calls.filter((call) => call.url.endsWith("/v1/traces"))).toHaveLength(0);
+
+        // The explicit option beats the request's "0".
+        const viaOption = stubFetch();
+        const fromOption = createContainerTelemetry({
+            alwaysSampleErrors: true,
+            endpoint: "https://collect.example.com",
+            fetch: viaOption.fetch,
+            request: requestSaysOff,
+        });
+
+        fromOption.emitSpan({ endMs: 20, error: { message: "boom", type: "Error" }, name: "bad", startMs: 10 });
+        await fromOption.flush();
+
+        expect(viaOption.calls.filter((call) => call.url.endsWith("/v1/traces"))).toHaveLength(1);
+    });
+
     it("stamps every log record with the propagated trace context", async () => {
         const { calls, fetch } = stubFetch();
         const telemetry = createContainerTelemetry({
@@ -219,6 +379,51 @@ describe(createContainerTelemetry, () => {
         expect(records[0]?.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
         expect(records[0]?.spanId).toBe("b7ad6b7169203331");
         expect(records[0]?.flags).toBe(1);
+    });
+
+    const exportedTrace = async (
+        options: Parameters<typeof createContainerTelemetry>[0],
+    ): Promise<{ records: ReturnType<typeof logsFrom>["records"]; spans: ParsedSpan[] }> => {
+        const { calls, fetch } = stubFetch();
+        const telemetry = createContainerTelemetry({ endpoint: "https://collect.example.com", fetch, ...options });
+
+        telemetry.emitSpan({ endMs: 10, name: "step-a", startMs: 5 });
+        telemetry.emitSpan({ endMs: 20, name: "step-b", startMs: 15 });
+        telemetry.emitLog({ message: "done" });
+        await telemetry.flush();
+
+        const traceBody = calls.find((call) => call.url.endsWith("/v1/traces"))!.body;
+        const { spans } = (JSON.parse(traceBody) as { resourceSpans: { scopeSpans: { spans: ParsedSpan[] }[] }[] }).resourceSpans[0]!.scopeSpans[0]!;
+
+        return { records: logsFrom(calls.find((call) => call.url.endsWith("/v1/logs"))!.body).records, spans };
+    };
+
+    it("puts every span of an ANCHORED telemetry instance on the anchor's trace and stamps it on logs", async () => {
+        expect.assertions(4);
+
+        // A per-request or per-job instance with a traceparent (inbound request,
+        // explicit option, or LUNORA_TRACEPARENT) is one unit of work: one trace.
+        const { records, spans } = await exportedTrace({ traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01" });
+
+        expect(spans.map((span) => span.traceId)).toStrictEqual(["0af7651916cd43dd8448eb211c80319c", "0af7651916cd43dd8448eb211c80319c"]);
+        expect(spans.map((span) => span.parentSpanId)).toStrictEqual(["b7ad6b7169203331", "b7ad6b7169203331"]);
+        expect(records[0]?.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
+        expect(records[0]?.spanId).toBe("b7ad6b7169203331");
+    });
+
+    it("gives each span of an UNANCHORED telemetry instance its own trace", async () => {
+        expect.assertions(4);
+
+        // No anchor means nothing says these spans are one unit of work. A
+        // module-scope instance in a long-lived server is the common case, and
+        // pinning it to one trace would put every span the process ever makes
+        // into a single trace that never ends. Logs name no trace they cannot know.
+        const { records, spans } = await exportedTrace({});
+
+        expect(spans[0]!.traceId).toMatch(TRACE_ID_HEX);
+        expect(spans[1]!.traceId).toMatch(TRACE_ID_HEX);
+        expect(spans[1]!.traceId).not.toBe(spans[0]!.traceId);
+        expect(records[0]?.traceId).toBeUndefined();
     });
 
     it("carries the sampled bit in the exported span flags", async () => {

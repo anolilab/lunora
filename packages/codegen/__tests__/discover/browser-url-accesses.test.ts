@@ -37,7 +37,21 @@ describe("discoverBrowserUrlAccesses", () => {
         const found = discoverBrowserUrlAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "grab", file: "shot", line: 1, method: "screenshot" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "grab" }, file: "shot", line: 1, method: "screenshot" });
+    });
+
+    it("flags a destructured `args` url — the form the browser registry item ships", () => {
+        expect.assertions(2);
+
+        write(
+            "destructured.ts",
+            `export const grab = action.input({ url: v.string() }).action(async ({ args: { url }, ctx }) => ctx.browser.screenshot(assertAllowedTarget(url)));`,
+        );
+
+        const found = discoverBrowserUrlAccesses(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "grab" }, file: "destructured", method: "screenshot" });
     });
 
     it("flags each of pdf/content/scrape with an args-derived url", () => {
@@ -83,6 +97,16 @@ export const c = action(async ({ ctx, args }) => ctx.browser.scrape(args.url));`
         write("other.ts", `export const grab = action(async ({ ctx, args }) => { return foo.screenshot(args.url); });`);
 
         expect(discoverBrowserUrlAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags an args-derived url passed through the `URL` global", () => {
+        expect.assertions(1);
+
+        // The `browser` registry item's shape: the url is parsed with `new URL(…)`,
+        // a `declare var` in `lib.dom.d.ts`, on its way to the sink.
+        write("parsed.ts", `export const grab = action(async ({ ctx, args }) => ctx.browser.pdf(new URL(args.url).href));`);
+
+        expect(discoverBrowserUrlAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
     it("ignores a ctx.browser method that is not a URL-navigation method", () => {

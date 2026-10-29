@@ -113,6 +113,30 @@ describe("createWorker — functions admin endpoint", () => {
         ]);
     });
 
+    it("serves codegen argument descriptors without loading live validators", async () => {
+        expect.assertions(1);
+
+        const registry: FunctionRegistryLike = {
+            "messages:list": {
+                argumentDescriptors: [
+                    { kind: "id", name: "channelId", optional: false, table: "channels" },
+                    { kind: "string", name: "text", optional: true },
+                ],
+                kind: "query",
+            },
+        };
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, functions: registry, shardDO: noopNamespace });
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/functions", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        await expect(response.json()).resolves.toEqual({
+            functions: [{ args: registry["messages:list"]?.argumentDescriptors, kind: "query", path: "messages:list" }],
+        });
+    });
+
     it("rejects non-GET (405)", async () => {
         expect.assertions(1);
 

@@ -14,11 +14,86 @@
  * further down in `shared/otlp.ts`, shared with `@lunora/container` so the worker
  * and container speak an identical wire format.
  */
+import { redactCredentials } from "@lunora/observability";
+
+import { toPlainOperatorContext } from "../../../shared/error-detail";
 import { coerceFieldValue } from "../../../shared/log-fields";
 import type { OtlpAttribute } from "../../../shared/otlp";
 import { encodeAttribute, encodeAttributes, LUNORA_ATTR, OTLP_SEVERITY, OTLP_SPAN_KIND, otlpRandomHex, otlpUnixNano } from "../../../shared/otlp";
 import type { KeepAlive } from "../../../shared/otlp-batch";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySinkContext, SpanEvent } from "./observability";
+
+/** W3C `sampled` bit — the value OTLP's per-span `flags` field carries when the trace was kept by the head decision. */
+const SAMPLED_TRACE_FLAG = 1;
+
+/** Trace flags with `sampled` clear — a trace the head decision dropped, exported anyway by the tail bias. */
+const UNSAMPLED_TRACE_FLAG = 0;
+
+/**
+ * Span attribute keys the RPC encoder can emit, including the ones it only emits when the event
+ * carries the field. A caller or enricher key with one of these names is dropped whether or not the
+ * event has that field, so an enricher cannot forge `error.type` on a successful span.
+ */
+const RESERVED_SPAN_KEYS: ReadonlySet<string> = new Set([
+    "cloudflare.ray_id",
+    "error.type",
+    "http.request.method",
+    "http.response.status_code",
+    "http.route",
+    "lunora.error_status",
+    "lunora.fanout.failed",
+    "lunora.fanout.shards",
+    "lunora.fanout.table",
+    "lunora.function_path",
+    "lunora.ok",
+    "lunora.shard_key",
+    "server.address",
+    "server.port",
+    "url.path",
+    "url.scheme",
+    "user_agent.original",
+]);
+
+/** The built-in fields a signal can declare to `encodeSignalAttributes`, by the name the caller uses for them. */
+interface SignalReserved {
+    errorType?: string;
+    functionPath: string;
+    rayId?: string;
+    shardKey?: string;
+    userId?: string;
+}
+
+/** The attribute key each {@link SignalReserved} field is written under. */
+const RESERVED_ATTR_KEY: Readonly<Record<keyof SignalReserved, string>> = {
+    errorType: LUNORA_ATTR.errorType,
+    functionPath: LUNORA_ATTR.functionPath,
+    rayId: LUNORA_ATTR.rayId,
+    shardKey: LUNORA_ATTR.shardKey,
+    userId: LUNORA_ATTR.userId,
+};
+
+/**
+ * The operator context as one JSON attribute, with credentials masked. A value JSON cannot
+ * encode (a bigint, a cycle) drops only this attribute: throwing here would discard the
+ * whole buffered flush the event belongs to.
+ */
+const operatorContextAttribute = (internal: Record<string, unknown>): OtlpAttribute[] => {
+    const plain = toPlainOperatorContext(internal);
+
+    return plain === undefined ? [] : [encodeAttribute("lunora.error.internal", JSON.stringify(redactCredentials(plain)))];
+};
+
+/**
+ * OTel semconv `exception.*` attributes, shared by the RPC span's exception event and an error log record.
+ * The operator-only `internal` context rides along as one JSON attribute, masked by
+ * {@link operatorContextAttribute}; it is only ever written to the operator's own collector, never a client.
+ */
+const exceptionAttributes = (type: string, message: string, stack: string | undefined, internal?: Record<string, unknown>): OtlpAttribute[] => [
+    encodeAttribute("exception.type", type),
+    encodeAttribute("exception.message", message),
+    ...(stack === undefined ? [] : [encodeAttribute("exception.stacktrace", stack)]),
+    ...(internal === undefined ? [] : operatorContextAttribute(internal)),
+];
 
 /** Build the OTLP trace-export body for one RPC dispatch event. */
 const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
@@ -58,6 +133,12 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
         attributes.push(encodeAttribute(LUNORA_ATTR.shardKey, event.shardKey));
     }
 
+    // `cloudflare.ray_id` — the key Cloudflare's own Workers traces use, so one
+    // collector query finds this span and the platform's spans for the request.
+    if (event.rayId !== undefined) {
+        attributes.push(encodeAttribute(LUNORA_ATTR.rayId, event.rayId));
+    }
+
     // HTTP response status code is present on every RPC span. Successful
     // dispatches carry no explicit status in the event, so we default to 200;
     // error events use the error's HTTP-ish status.
@@ -75,6 +156,16 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
             encodeAttribute("lunora.fanout.shards", event.fanOut.shards),
             encodeAttribute("lunora.fanout.failed", event.fanOut.failed),
         );
+    }
+
+    // A caller key never replaces a built-in span field. The enricher's bag merges under the
+    // reserved attributes, as `SinkEnricher` documents, and a duplicate KeyValue would be
+    // resolved ambiguously by a collector, so a colliding caller key is dropped.
+    if (event.attributes !== undefined) {
+        const reserved = new Set([...RESERVED_SPAN_KEYS, ...attributes.map((attribute) => attribute.key)]);
+        const caller = encodeAttributes(Object.fromEntries(Object.entries(event.attributes).map(([key, value]) => [key, coerceFieldValue(value)])));
+
+        attributes.push(...caller.filter((attribute) => !reserved.has(attribute.key)));
     }
 
     const span: Record<string, unknown> = {
@@ -105,7 +196,7 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
     if (event.error) {
         span.events = [
             {
-                attributes: [encodeAttribute("exception.type", event.error.code), encodeAttribute("exception.message", event.error.message)],
+                attributes: exceptionAttributes(event.error.code, event.error.message, event.error.stack, event.error.internal),
                 name: "exception",
                 timeUnixNano: otlpUnixNano(endMs),
             },
@@ -119,17 +210,30 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
  * Build the OTLP attribute list shared by every signal: the reserved `lunora.*`
  * keys, then the caller's own attributes.
  *
- * Keyed by name so a caller key that collides with a reserved one **overrides**
- * it rather than emitting a duplicate `KeyValue` (which a collector resolves
- * ambiguously). That precedence is a wire contract, and it was previously
- * re-implemented in the span, log, and metric encoders — three copies of one
- * rule, free to drift apart. One implementation, asserted once.
+ * Keyed by name so a caller key that collides with a reserved one never emits a
+ * duplicate `KeyValue` (which a collector resolves ambiguously). The reserved value
+ * wins: a caller key cannot replace `functionPath`, `shardKey` and the other built-in
+ * fields. That precedence is a wire contract, and it was previously re-implemented in
+ * the span, log, and metric encoders, three copies of one rule. One implementation.
+ *
+ * A caller key is also dropped when it names a field the signal declares, even if this event
+ * leaves that field unset, so an enricher cannot fill the gap. A field the signal does not
+ * declare is left to the caller: a metric's own `error.type` tag is not forged over anything.
  */
-const encodeSignalAttributes = (
-    reserved: { errorType?: string; functionPath: string; shardKey?: string; userId?: string },
-    caller: Record<string, unknown> | undefined,
-): OtlpAttribute[] => {
-    const byKey = new Map<string, OtlpAttribute>([[LUNORA_ATTR.functionPath, encodeAttribute(LUNORA_ATTR.functionPath, reserved.functionPath)]]);
+const encodeSignalAttributes = (reserved: SignalReserved, caller: Record<string, unknown> | undefined): OtlpAttribute[] => {
+    const byKey = new Map<string, OtlpAttribute>();
+    const declared = new Set(Object.keys(reserved).map((name) => RESERVED_ATTR_KEY[name as keyof SignalReserved]));
+
+    // Caller values arrive pre-normalized to JSON-safe primitives;
+    // `coerceFieldValue` re-applies for a sink fed a raw event.
+    for (const [key, value] of Object.entries(caller ?? {})) {
+        if (!declared.has(key)) {
+            byKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
+        }
+    }
+
+    // Written last, so a caller key can never replace a reserved one.
+    byKey.set(LUNORA_ATTR.functionPath, encodeAttribute(LUNORA_ATTR.functionPath, reserved.functionPath));
 
     if (reserved.shardKey !== undefined) {
         byKey.set(LUNORA_ATTR.shardKey, encodeAttribute(LUNORA_ATTR.shardKey, reserved.shardKey));
@@ -139,15 +243,13 @@ const encodeSignalAttributes = (
         byKey.set(LUNORA_ATTR.userId, encodeAttribute(LUNORA_ATTR.userId, reserved.userId));
     }
 
+    if (reserved.rayId !== undefined) {
+        byKey.set(LUNORA_ATTR.rayId, encodeAttribute(LUNORA_ATTR.rayId, reserved.rayId));
+    }
+
     if (reserved.errorType !== undefined) {
         // `error.type` is the OTel semantic-convention key.
         byKey.set(LUNORA_ATTR.errorType, encodeAttribute(LUNORA_ATTR.errorType, reserved.errorType));
-    }
-
-    // Caller values arrive pre-normalized to JSON-safe primitives;
-    // `coerceFieldValue` re-applies for a sink fed a raw event.
-    for (const [key, value] of Object.entries(caller ?? {})) {
-        byKey.set(key, encodeAttribute(key, coerceFieldValue(value)));
     }
 
     return [...byKey.values()];
@@ -167,10 +269,15 @@ const encodeSignalAttributes = (
 const otlpSpanBody = (event: SpanEvent): unknown => {
     const span: Record<string, unknown> = {
         attributes: encodeSignalAttributes(
-            { errorType: event.error?.type, functionPath: event.functionPath, shardKey: event.shardKey, userId: event.userId },
+            { errorType: event.error?.type, functionPath: event.functionPath, rayId: event.rayId, shardKey: event.shardKey, userId: event.userId },
             event.attributes,
         ),
         endTimeUnixNano: otlpUnixNano(event.startTs + event.durationMs),
+        // W3C trace flags, mirroring the trace's settled verdict. Without it a
+        // collector reading `flags` sees 0 (UNSAMPLED) on every `ctx.trace`,
+        // `ctx.fetch` and db span we ship, including the ones it is meant to
+        // keep. Absent verdict reads as keep, like every other tier.
+        flags: event.sampled === false ? UNSAMPLED_TRACE_FLAG : SAMPLED_TRACE_FLAG,
         // Defaults to SPAN_KIND_INTERNAL — right for the vast majority of
         // `ctx.trace` spans — but honours an explicit kind so a call OUT to another
         // service can be CLIENT and a queue hop PRODUCER/CONSUMER. That is what a
@@ -235,7 +342,13 @@ const otlpMetricBody = (event: MetricEvent): unknown => {
     // `deltatocumulative` processor and Prometheus remote-write paths treat as
     // invalid and may drop. Omitting it lets the collector infer the interval
     // from the previous export, which is what it does for a stream of deltas.
-    const dataPoint = { asDouble: event.value, attributes, timeUnixNano };
+    // The measurement's OTel **exemplar**: the trace id the shard stamped when
+    // the measurement ran inside a dispatch. This is the entire point of
+    // carrying `MetricEvent.traceId` — without it on the wire, a spike on a
+    // chart cannot be navigated to a trace that produced it. `spanId` is
+    // deliberately absent: the shard stamps the trace, not a particular span.
+    const exemplars = event.traceId === undefined ? undefined : [{ asDouble: event.value, timeUnixNano, traceId: event.traceId }];
+    const dataPoint = { asDouble: event.value, attributes, ...(exemplars === undefined ? {} : { exemplars }), timeUnixNano };
 
     if (event.kind === "gauge") {
         return { gauge: { dataPoints: [dataPoint] }, name: event.name };
@@ -250,6 +363,7 @@ const otlpMetricBody = (event: MetricEvent): unknown => {
                         attributes,
                         bucketCounts: ["1"],
                         count: "1",
+                        ...(exemplars === undefined ? {} : { exemplars }),
                         explicitBounds: [],
                         max: event.value,
                         min: event.value,
@@ -272,7 +386,10 @@ const otlpLogBody = (event: LogEvent): unknown => {
     const logRecord: Record<string, unknown> = {
         // Caller-supplied structured fields become log-record attributes so a
         // pipeline can filter/index on them; precedence per `encodeSignalAttributes`.
-        attributes: encodeSignalAttributes({ functionPath: event.functionPath, shardKey: event.shardKey, userId: event.userId }, event.fields),
+        attributes: encodeSignalAttributes(
+            { functionPath: event.functionPath, rayId: event.rayId, shardKey: event.shardKey, userId: event.userId },
+            event.fields,
+        ),
         body: { stringValue: event.message },
         severityNumber: OTLP_SEVERITY[event.level],
         severityText: event.level.toUpperCase(),
@@ -290,13 +407,28 @@ const otlpLogBody = (event: LogEvent): unknown => {
         logRecord.spanId = event.spanId;
     }
 
+    // OTel semconv for an exception carried on a log record: the same
+    // `exception.*` keys the RPC span's exception event uses.
+    // A caller field of the same name gives way, so the record never carries a
+    // key twice (collectors may reject that).
+    if (event.error !== undefined) {
+        const exception = exceptionAttributes(event.error.name, event.error.message, event.error.stack, event.error.internal);
+        const keys = new Set(exception.map((attribute) => attribute.key));
+
+        logRecord.attributes = [...(logRecord.attributes as OtlpAttribute[]).filter((attribute) => !keys.has(attribute.key)), ...exception];
+    }
+
     if (event.eventName !== undefined) {
         // Both spellings, deliberately: `eventName` is the proto >= 1.5 field, and
         // the `event.name` attribute is how every collector recognised events
         // before it. Emitting one or the other silently loses the event's identity
         // on half the pipelines in the wild.
         logRecord.eventName = event.eventName;
-        (logRecord.attributes as OtlpAttribute[]).push(encodeAttribute("event.name", event.eventName));
+        // A caller field of the same name gives way here too, or the record would carry `event.name` twice.
+        logRecord.attributes = [
+            ...(logRecord.attributes as OtlpAttribute[]).filter((attribute) => attribute.key !== "event.name"),
+            encodeAttribute("event.name", event.eventName),
+        ];
     }
 
     return logRecord;

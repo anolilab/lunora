@@ -35,7 +35,7 @@ describe("renderDeploySummary", () => {
 
         const { lines, logger } = recordingLogger();
 
-        renderDeploySummary({ cwd: workdir, env: "production", logger });
+        renderDeploySummary({ cwd: workdir, env: "production", logger, logsAvailable: true });
 
         const out = lines.join("\n");
 
@@ -58,7 +58,7 @@ describe("renderDeploySummary", () => {
 
         const { lines, logger } = recordingLogger();
 
-        renderDeploySummary({ cwd: workdir, logger });
+        renderDeploySummary({ cwd: workdir, logger, logsAvailable: true });
 
         const out = lines.join("\n");
 

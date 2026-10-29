@@ -1,7 +1,7 @@
 /**
  * The Node {@link DeployDriver} — the second registered target.
  *
- * It exists so `lunora.json`'s `"target": "node"` resolves and codegen can gate
+ * It exists so `lunora.config.*`'s `"target": "node"` resolves and codegen can gate
  * the emitted `ctx.*` surface against `NODE_CAPABILITIES` (`@lunora/platform`),
  * which is the only thing this target actually needs from the registry.
  *

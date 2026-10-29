@@ -22,6 +22,18 @@ describe("lunoraError", () => {
         await expect(response.json()).resolves.toEqual({ error: { code: "FORBIDDEN", message: "nope" } });
     });
 
+    it("keeps why on the response and the operator internal context off it", async () => {
+        expect.assertions(3);
+
+        const error = new LunoraError("nope", { code: "CONFLICT", internal: { shardId: "s-1" }, status: 409, why: "row moved" });
+        const response = error.toResponse();
+        const text = await response.text();
+
+        expect(error.why).toBe("row moved");
+        expect(JSON.parse(text)).toMatchObject({ error: { code: "CONFLICT", message: "nope", why: "row moved" } });
+        expect(text).not.toContain("s-1");
+    });
+
     it("toErrorResponse passes LunoraError through unchanged", async () => {
         expect.assertions(2);
 

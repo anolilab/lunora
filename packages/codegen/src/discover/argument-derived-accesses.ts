@@ -1,8 +1,11 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
+import { Node } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext, isUnmodifiedArgumentPassthrough } from "../argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { isArgumentDerived, isScopedByContext, isUnmodifiedArgumentPassthrough } from "../argument-taint";
+import type { CallSiteScope } from "../ir";
+import { collectCallRows } from "./ast";
+import { callSiteScopeOf } from "./attribution";
+import { matchesContextReceiver } from "./context-root";
 
 /**
  * The sink method name when `node` is a `<receiver>.<method>` property access
@@ -23,7 +26,7 @@ const sinkMethod = (node: TsNode, config: ArgumentDerivedAccessConfig): string |
         return undefined;
     }
 
-    return config.matchReceiver(node.getExpression().getText()) ? method : undefined;
+    return matchesContextReceiver(node.getExpression(), config.matchReceiver) ? method : undefined;
 };
 
 /** The IR row for a sink call whose `config.argIndex` argument is arg-derived and unscoped, or `undefined`. */
@@ -53,22 +56,7 @@ const accessInCall = (call: CallExpression, relativePath: string, config: Argume
         return undefined;
     }
 
-    return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber(), method };
-};
-
-/** Arg-derived, unscoped sink accesses matching `config` in one source file. */
-const accessesInSourceFile = (sourceFile: SourceFile, relativePath: string, config: ArgumentDerivedAccessConfig): ArgumentDerivedAccessIR[] => {
-    const found: ArgumentDerivedAccessIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const access = accessInCall(call, relativePath, config);
-
-        if (access) {
-            found.push(access);
-        }
-    }
-
-    return found;
+    return { scope: callSiteScopeOf(call), file: relativePath, line: call.getStartLineNumber(), method };
 };
 
 /**
@@ -81,14 +69,14 @@ const accessesInSourceFile = (sourceFile: SourceFile, relativePath: string, conf
  * this shape.
  */
 export interface ArgumentDerivedAccessIR {
-    /** Export binding name of the procedure performing the sink call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the sink call, or `0` when unknown. */
     line: number;
     /** The sink method invoked (one of `config.methods`). */
     method: string;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -129,14 +117,5 @@ export interface ArgumentDerivedAccessConfig {
  * whose callee is not a property access don't fit this shape and keep their own
  * hand-written feeder.
  */
-export const discoverArgumentDerivedAccesses = (project: Project, lunoraDirectory: string, config: ArgumentDerivedAccessConfig): ArgumentDerivedAccessIR[] => {
-    const accesses: ArgumentDerivedAccessIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        accesses.push(...accessesInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath), config));
-    }
-
-    return accesses;
-};
+export const discoverArgumentDerivedAccesses = (project: Project, lunoraDirectory: string, config: ArgumentDerivedAccessConfig): ArgumentDerivedAccessIR[] =>
+    collectCallRows(project, lunoraDirectory, (call, file) => accessInCall(call, file, config));

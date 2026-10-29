@@ -1,9 +1,9 @@
 import { LunoraProvider } from "@lunora/react";
+import { encodeWire } from "@lunora/wire";
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { encodeWire } from "../../../../../shared/wire-codec";
 import { GenerateRowsDialog } from "../../../src/features/data/generate-rows-dialog";
 import type { InsertBatchOutcome } from "../../../src/features/data/hooks/use-generate-rows";
 import { useGenerateRows } from "../../../src/features/data/hooks/use-generate-rows";

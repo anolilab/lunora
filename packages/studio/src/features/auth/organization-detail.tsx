@@ -1,12 +1,13 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { useClientQuery } from "../../hooks/use-admin-query";
-import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import { settlePolls, useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatCell } from "../../lib/internal";
+import { AuthPager, useOwnedOffset } from "./auth-pager";
 import {
     ConfirmDialog,
     MemberAddDialog,
@@ -20,6 +21,9 @@ import type { Column, DialogState } from "./organization-primitives";
 import { ManagedTable, SectionCard } from "./organization-primitives";
 import { OrganizationMembers, OrganizationRoles, OrganizationTeamMembers, OrganizationTeams } from "./organization-sections";
 import type { Row } from "./types";
+
+/** Members per page. */
+const MEMBERS_PAGE_SIZE = 200;
 
 interface OrganizationDetailProps {
     /** The organization being managed. */
@@ -40,7 +44,7 @@ interface OrganizationDetailProps {
  * is HTTP-only with no live channel.
  */
 export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled }: OrganizationDetailProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [dialog, setDialog] = useState<DialogState>(null);
@@ -48,7 +52,11 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
     const [actionBusy, setActionBusy] = useState<boolean>(false);
     const [actionError, setActionError] = useState<null | string>(null);
 
-    const membersQuery = useClientQuery(["lunora-auth-org-members", organizationId], () => client.listAuthOrgMembers({ limit: 200, organizationId }));
+    // Owned by the organization, so picking another one opens its first page.
+    const [membersOffset, setMembersOffset] = useOwnedOffset(organizationId);
+    const membersQuery = useClientQuery(["lunora-auth-org-members", organizationId, membersOffset], () =>
+        client.listAuthOrgMembers({ limit: MEMBERS_PAGE_SIZE, offset: membersOffset, organizationId }),
+    );
     const invitationsQuery = useClientQuery(["lunora-auth-org-invitations", organizationId], () =>
         client.listAuthOrgInvitations({ limit: 200, organizationId }),
     );
@@ -72,24 +80,34 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
 
     const error = membersQuery.error ?? invitationsQuery.error ?? teamsQuery.error ?? rolesQuery.error ?? teamMembersQuery.error;
 
-    const refetchAll = (): void => {
-        membersQuery.refetch();
-        invitationsQuery.refetch();
+    const pollAll = (): Promise<void> => {
+        const polls: Promise<void>[] = [membersQuery.poll(), invitationsQuery.poll()];
 
         if (teamsEnabled) {
-            teamsQuery.refetch();
+            polls.push(teamsQuery.poll());
         }
 
         if (rolesEnabled) {
-            rolesQuery.refetch();
+            polls.push(rolesQuery.poll());
         }
 
         if (selectedTeam !== null) {
-            teamMembersQuery.refetch();
+            polls.push(teamMembersQuery.poll());
         }
+
+        return settlePolls(polls);
     };
 
-    useAutoRefresh(refetchAll, true);
+    const refetchAll = (): void => {
+        fireAndForget(pollAll());
+    };
+
+    // One timer per read: a failing team read backs off only itself, not the members or invitations lists.
+    useAutoRefresh(() => membersQuery.poll(), true);
+    useAutoRefresh(() => invitationsQuery.poll(), true);
+    useAutoRefresh(() => teamsQuery.poll(), teamsEnabled);
+    useAutoRefresh(() => rolesQuery.poll(), rolesEnabled);
+    useAutoRefresh(() => teamMembersQuery.poll(), selectedTeam !== null);
 
     const closeDialog = (): void => {
         setDialog(null);
@@ -178,6 +196,15 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
                 onRemoveMember={(memberId) => {
                     runAction(() => client.removeAuthOrgMember({ memberId }));
                 }}
+            />
+
+            <AuthPager
+                count={members.length}
+                offset={membersOffset}
+                onOffsetChange={setMembersOffset}
+                pageSize={MEMBERS_PAGE_SIZE}
+                prefix="org-members"
+                total={membersQuery.data?.total}
             />
 
             {invitations.length > 0 && (

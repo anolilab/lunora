@@ -167,4 +167,34 @@ describe("createWorker (workerd)", () => {
 
         expect(manifest).toMatchObject({ cron: "0 3 * * *", rows: 2 });
     });
+
+    it("authenticates a browser socket from a lunora.bearer subprotocol and selects the lunora protocol", async () => {
+        expect.assertions(4);
+
+        const token = btoa("user:alice").replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+        const response = await SELF.fetch("https://app.test/_lunora/ws", {
+            headers: { "sec-websocket-protocol": `lunora, lunora.bearer.${token}`, upgrade: "websocket" },
+        });
+
+        expect(response.status).toBe(101);
+        // A browser that offered subprotocols fails the handshake unless the response selects one.
+        expect(response.headers.get("sec-websocket-protocol")).toBe("lunora");
+
+        const socket = response.webSocket as WebSocket;
+        const first = new Promise<string>((resolve) => {
+            socket.addEventListener("message", (event) => {
+                resolve(String(event.data));
+            });
+        });
+
+        socket.accept();
+
+        const frame = JSON.parse(await first) as { protocol: string | null; userId: string | null };
+
+        expect(frame.userId).toBe("alice");
+        // The bearer itself never reaches the shard.
+        expect(frame.protocol).toBe("lunora");
+
+        socket.close();
+    });
 });

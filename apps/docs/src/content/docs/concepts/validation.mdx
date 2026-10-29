@@ -97,7 +97,7 @@ export const getProfile = query
     .input({ userId: v.id("users") })
     .output(v.object({ id: v.id("users"), name: v.string() }))
     .query(async ({ ctx, args }) => {
-        const user = await ctx.db.get(args.userId);
+        const user = await ctx.db.get("users", args.userId);
         return { id: user._id, name: user.name };
     });
 ```
@@ -112,14 +112,16 @@ undeclared keys instead:
 ```ts
 .output(v.object({ id: v.id("users"), name: v.string() }))
 .query(async ({ ctx, args }) => {
-    const user = await ctx.db.get(args.userId);
+    const user = await ctx.db.get("users", args.userId);
 
     return user; // ← 500: "object has 3 undeclared key(s): email, createdAt, …"
 });
 ```
 
 The error names the keys, so the fix is either adding them to the validator or
-saying you meant to drop them.
+saying you meant to drop them. The exception is a shape that holds a
+`v.sensitive` field: there the error reports the count and `[redacted]`, because
+a key a caller chose can be the secret itself.
 
 #### Narrowing on purpose: `.strip()`
 
@@ -128,7 +130,7 @@ Trimming an internal field off a row before it reaches a client is a real use of
 
 ```ts
 .output(v.object({ id: v.id("users"), name: v.string() }).strip())
-.query(async ({ ctx, args }) => ctx.db.get(args.userId)); // email, passwordHash dropped
+.query(async ({ ctx, args }) => ctx.db.get("users", args.userId)); // email, passwordHash dropped
 ```
 
 `.strip()` returns a **new** validator, so calling it on a shared const does not
@@ -156,22 +158,22 @@ second schema to keep in sync: the validator is the contract on both ends.
 
 ## Common validators
 
-| Validator              | Accepts                       | Notes                                    |
-| ---------------------- | ----------------------------- | ---------------------------------------- |
-| `v.string()`           | `string`                      | UTF-8 text                               |
-| `v.number()`           | `number`                      | Finite JS number; `NaN` throws           |
-| `v.boolean()`          | `boolean`                     | `true` / `false`                         |
-| `v.null()`             | `null`                        | Only `null`                              |
-| `v.bigint()`           | `bigint`                      | Stored lossless as INTEGER in D1         |
-| `v.bytes()`            | `ArrayBuffer` / `Uint8Array`  | Binary (BLOB in D1)                      |
-| `v.id(table)`          | `Id<table>`                   | Branded foreign-key id                   |
-| `v.literal(value)`     | exact `value`                 | String / number / boolean / null literal |
-| `v.array(inner)`       | `Array<Infer<inner>>`         | Homogeneous array                        |
-| `v.object(shape)`      | `{ ...shape }`                | Extra keys: stripped in, rejected out    |
-| `v.union(a, b, ...)`   | any member                    | Discriminated by `kind` when present     |
-| `v.record(key, value)` | `Record<key, value>`          | Map-style object                         |
-| `v.optional(inner)`    | `Infer<inner>` \| `undefined` | Makes a field optional                   |
-| `v.any()`              | anything                      | Escape hatch; disables runtime checks    |
+| Validator              | Accepts                       | Notes                                                                        |
+| ---------------------- | ----------------------------- | ---------------------------------------------------------------------------- |
+| `v.string()`           | `string`                      | UTF-8 text                                                                   |
+| `v.number()`           | `number`                      | Finite JS number; `NaN` throws                                               |
+| `v.boolean()`          | `boolean`                     | `true` / `false`                                                             |
+| `v.null()`             | `null`                        | Only `null`                                                                  |
+| `v.bigint()`           | `bigint`                      | Stored lossless as INTEGER in D1                                             |
+| `v.bytes()`            | `ArrayBuffer`                 | Binary (BLOB in D1); pass `u8.buffer` for a `Uint8Array`                     |
+| `v.id(table)`          | `Id<table>`                   | Branded foreign-key id                                                       |
+| `v.literal(value)`     | exact `value`                 | String / number / boolean / null literal                                     |
+| `v.array(inner)`       | `Array<Infer<inner>>`         | Homogeneous array                                                            |
+| `v.object(shape)`      | `{ ...shape }`                | Extra keys: stripped in, rejected out                                        |
+| `v.union(a, b, ...)`   | any member                    | First member that parses wins (declaration order); no discriminant fast-path |
+| `v.record(key, value)` | `Record<key, value>`          | Map-style object                                                             |
+| `v.optional(inner)`    | `Infer<inner>` \| `undefined` | Makes a field optional                                                       |
+| `v.any()`              | anything                      | Escape hatch; disables runtime checks                                        |
 
 Compose them freely for both columns and function contracts:
 `v.array(v.object({ ... }))`, `v.union(v.literal("a"),

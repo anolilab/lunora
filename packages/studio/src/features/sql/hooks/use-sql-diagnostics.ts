@@ -1,7 +1,7 @@
-import { useLunora } from "@lunora/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import useDebounced from "../../../hooks/use-debounced";
+import useStudioClient from "../../../hooks/use-studio-client";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
 import type { SqlSchema } from "../sql-autocomplete";
@@ -39,7 +39,7 @@ interface LintReply {
  * worse than one that quietly lints less.
  */
 const useSqlDiagnostics = (draft: string, schema: SqlSchema, shardKey: string): ReadonlyArray<SqlDiagnostic> => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     const [serverDiagnostics, setServerDiagnostics] = useState<ReadonlyArray<SqlDiagnostic>>([]);
 

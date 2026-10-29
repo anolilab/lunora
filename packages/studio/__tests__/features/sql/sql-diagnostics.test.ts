@@ -12,6 +12,13 @@ const schema: SqlSchema = {
     tables: ["messages", "users", "posts"],
 };
 
+/** A probed shard table as it really is: three physical columns, the model's fields inside `__doc__`. */
+const docSchema: SqlSchema = {
+    columns: { posts: ["id", "_creationTime", "__doc__"] },
+    docFields: { posts: ["status", "zip"] },
+    tables: ["posts"],
+};
+
 describe("maskNonCode", () => {
     it("lints a script per statement, agreeing with what Run does", () => {
         expect.assertions(2);
@@ -245,5 +252,48 @@ describe("quoted identifiers", () => {
         expect.assertions(1);
 
         expect(lintDraft("SELECT * FROM messages WHERE body = 'from nowhere'", schema)).toStrictEqual([]);
+    });
+});
+
+describe("doc fields written as columns", () => {
+    it("flags a bare reference to a `__doc__` field and names the json_extract form", () => {
+        expect.assertions(3);
+
+        const [diagnostic, ...rest] = lintDraft("SELECT status FROM posts", docSchema);
+
+        expect(rest).toStrictEqual([]);
+        expect(diagnostic?.message).toBe("`status` is a `__doc__` field, not a column — use `json_extract(__doc__, '$.status')`");
+        expect("SELECT status FROM posts".slice(diagnostic?.offset ?? 0, (diagnostic?.offset ?? 0) + (diagnostic?.length ?? 0))).toBe("status");
+    });
+
+    // The severe half. SQLite raises `no such column: status` for the bare
+    // spelling, but workerd's build resolves an unresolvable DOUBLE-QUOTED
+    // identifier to the string literal of its own name — so this statement
+    // returns the word "status" for every row, and nothing anywhere errors.
+    it("flags the quoted spelling, which workerd answers silently and wrongly", () => {
+        expect.assertions(2);
+
+        const [diagnostic, ...rest] = lintDraft('SELECT "status" FROM posts', docSchema);
+
+        expect(rest).toStrictEqual([]);
+        expect('SELECT "status" FROM posts'.slice(diagnostic?.offset ?? 0, (diagnostic?.offset ?? 0) + (diagnostic?.length ?? 0))).toBe("status");
+    });
+
+    it("stays quiet when the name is bound as an alias", () => {
+        expect.assertions(1);
+
+        // The correct spelling of the same query, which reuses the field's name
+        // for the result column. Flagging it would punish exactly the fix.
+        expect(lintDraft(`SELECT json_extract(__doc__, '$.status') AS status FROM posts ORDER BY status`, docSchema)).toStrictEqual([]);
+    });
+
+    it("stays quiet on a real column, a table name, and a function call", () => {
+        expect.assertions(3);
+
+        expect(lintDraft("SELECT id, __doc__ FROM posts", docSchema)).toStrictEqual([]);
+        expect(lintDraft("SELECT count(*) FROM posts", docSchema)).toStrictEqual([]);
+        // A table whose columns were never probed contributes no fields, so an
+        // unprobed schema cannot make this rule speak from absent knowledge.
+        expect(lintDraft("SELECT status FROM messages", schema)).toStrictEqual([]);
     });
 });

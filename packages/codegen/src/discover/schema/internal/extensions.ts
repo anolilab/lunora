@@ -2,14 +2,15 @@ import type { CallExpression, Expression, Node as TsNode, ObjectLiteralExpressio
 import { Node } from "ts-morph";
 
 import { diagnosticAt } from "../../../diagnostics";
-import type { TableIR, VectorIndexIR } from "../../../ir";
+import type { TableIR, ValidatorIR, VectorIndexIR } from "../../../ir";
 import { resolvePackageExtension } from "../../../resolve-package-extension";
+import { findObjectProperty, propertyKeyName } from "../../ast";
 import { asMetric, getNumberProperty, getStringProperty, objectPropertyInitializer } from "./properties";
 import { assertTableNameAllowed, parseTableBuilder, TABLE_NAME_IDENTIFIER_RE } from "./table-builder";
 
 /** Read the `source.table` literal off a `defineVectorIndex({ source: { table } })` options object. */
 const sourceTableOf = (optionsExpression: ObjectLiteralExpression): string => {
-    const sourceProperty = optionsExpression.getProperty("source");
+    const sourceProperty = findObjectProperty(optionsExpression, "source");
 
     if (sourceProperty && Node.isPropertyAssignment(sourceProperty)) {
         const sourceInitializer = sourceProperty.getInitializer();
@@ -88,7 +89,7 @@ const prefixTableName = (key: string, bareName: string): string => `${key}_${bar
  * The key is concatenated into every table the extension contributes, so its
  * characters land in generated type names (`Doc_<name>`) and unquoted property
  * keys exactly as a table name's do. Nothing checked it: `defineSchemaExtension("rate-limit", …)`
- * discovered cleanly and then died in `emit.ts` with an unlocated `INTERNAL`
+ * discovered cleanly and then died in `emit/` with an unlocated `INTERNAL`
  * naming `rate-limit_buckets` — a table the user never typed, with no file, no
  * line and no mention of the call that composed it. Validating the KEY reports
  * what the user actually wrote, where they wrote it.
@@ -119,6 +120,26 @@ const rewriteReference = (target: string, key: string, bareNames: ReadonlySet<st
     bareNames.has(target) ? prefixTableName(key, target) : target;
 
 /**
+ * Point every `v.id("table")` inside `validator` that names an extension table at its prefixed name, through the
+ * wrappers an id column is declared under (`optional`, `array`, a union member, an object field, a record).
+ */
+const retargetIds = (validator: ValidatorIR, resolve: (name: string) => string): ValidatorIR => {
+    const next = (child: ValidatorIR | undefined): ValidatorIR | undefined => (child === undefined ? undefined : retargetIds(child, resolve));
+
+    return {
+        ...validator,
+        ...(validator.tableName === undefined ? {} : { tableName: resolve(validator.tableName) }),
+        ...(validator.inner === undefined ? {} : { inner: next(validator.inner) }),
+        ...(validator.keyType === undefined ? {} : { keyType: next(validator.keyType) }),
+        ...(validator.valueType === undefined ? {} : { valueType: next(validator.valueType) }),
+        ...(validator.members === undefined ? {} : { members: validator.members.map((member) => retargetIds(member, resolve)) }),
+        ...(validator.shape === undefined
+            ? {}
+            : { shape: Object.fromEntries(Object.entries(validator.shape).map(([field, child]) => [field, retargetIds(child, resolve)])) }),
+    };
+};
+
+/**
  * Apply the runtime namespacing transform to one parsed extension table:
  * prefix the table's own name, rewrite relation targets, and rewrite inline
  * vector-index `table` references. The inline-vectorize parser stamps the
@@ -136,7 +157,7 @@ const rewriteReference = (target: string, key: string, bareNames: ReadonlySet<st
  * API (they resolve by `{op, field?, where?}`), so there is nothing to rewrite
  * here — unlike the runtime, which additionally rewrites their `on` fields.
  */
-const namespaceExtensionTable = (table: TableIR, key: string, bareNames: ReadonlySet<string>): TableIR => {
+const namespaceExtensionTable = (table: TableIR, key: string, bareNames: ReadonlySet<string>, fromPackage: boolean): TableIR => {
     const ownPrefixed = prefixTableName(key, table.name);
 
     return {
@@ -144,9 +165,21 @@ const namespaceExtensionTable = (table: TableIR, key: string, bareNames: Readonl
         // Provenance for the generated `AppTableName` union — this table came from
         // an add-on, not from the app's own `defineSchema`.
         extensionKey: key,
+        // A package component ships its code in `node_modules`; only a copy-in
+        // (registry item) has code under `lunora/<key>/` for its module to own.
+        ...(fromPackage ? { extensionFromPackage: true as const } : {}),
         name: ownPrefixed,
+        // A column pointing at another extension table (`v.id("tags")`) names it bare inside the extension.
+        shape: Object.fromEntries(
+            Object.entries(table.shape).map(([field, validator]) => [field, retargetIds(validator, (name) => rewriteReference(name, key, bareNames))]),
+        ),
         relations: table.relations.map((relation) => {
-            return { ...relation, table: rewriteReference(relation.table, key, bareNames) };
+            const target = rewriteReference(relation.table, key, bareNames);
+
+            // Two branches rather than one spread: a conditional `through` would widen the keyed variant's `through?: never`.
+            return relation.through === undefined
+                ? { ...relation, table: target }
+                : { ...relation, table: target, through: { ...relation.through, table: rewriteReference(relation.through.table, key, bareNames) } };
         }),
         // Inline `.vectorize()` stamps `table` with the bare owner name, so it
         // is always one of `bareNames` and resolves to `ownPrefixed`.
@@ -326,7 +359,7 @@ const extensionPartsOf = (call: CallExpression): { key: string; keyNode: TsNode;
 
 /** Parse the `tables: {...}` property of a `defineSchemaExtension` options object into bare-named {@link TableIR}s. */
 const parseExtensionTables = (options: ObjectLiteralExpression): TableIR[] => {
-    const tablesProperty = options.getProperty("tables");
+    const tablesProperty = findObjectProperty(options, "tables");
 
     if (!tablesProperty || !Node.isPropertyAssignment(tablesProperty)) {
         return [];
@@ -351,7 +384,7 @@ const parseExtensionTables = (options: ObjectLiteralExpression): TableIR[] => {
             continue;
         }
 
-        const name = property.getName();
+        const name = propertyKeyName(property);
 
         // Validate the extension's BARE name — the user wrote this one; the
         // eventual `${key}_${bareName}` prefix is codegen's own construction,
@@ -366,7 +399,7 @@ const parseExtensionTables = (options: ObjectLiteralExpression): TableIR[] => {
 
 /** Parse the optional `vectorIndexes: {...}` property of a `defineSchemaExtension` options object (Shape B map). */
 const parseExtensionVectorIndexes = (options: ObjectLiteralExpression): VectorIndexIR[] => {
-    const property = options.getProperty("vectorIndexes");
+    const property = findObjectProperty(options, "vectorIndexes");
 
     if (!property || !Node.isPropertyAssignment(property)) {
         return [];
@@ -397,6 +430,7 @@ const namespaceExtension = (
     bareTables: ReadonlyArray<TableIR>,
     bareVectorIndexes: ReadonlyArray<VectorIndexIR>,
     node: TsNode,
+    fromPackage: boolean,
 ): MergedExtension => {
     // The KEY is checked here because both paths reach the prefixing through
     // here and NEITHER checked it — an unchecked key ends up spliced into a
@@ -408,7 +442,7 @@ const namespaceExtension = (
     assertExtensionKeyAllowed(key, node);
 
     const bareNames = new Set(bareTables.map((table) => table.name));
-    const tables = bareTables.map((table) => namespaceExtensionTable(table, key, bareNames));
+    const tables = bareTables.map((table) => namespaceExtensionTable(table, key, bareNames, fromPackage));
 
     // Standalone vector indexes carry their own bare map key plus a `table`
     // reference; prefix both, matching the runtime merge.
@@ -421,7 +455,13 @@ const namespaceExtension = (
 
 /** Apply runtime namespacing to one AST-resolved `defineSchemaExtension(...)` options object. */
 const mergeExtension = (key: string, keyNode: TsNode, options: ObjectLiteralExpression): MergedExtension =>
-    namespaceExtension(key, parseExtensionTables(options), parseExtensionVectorIndexes(options), keyNode);
+    namespaceExtension(
+        key,
+        parseExtensionTables(options),
+        parseExtensionVectorIndexes(options),
+        keyNode,
+        keyNode.getSourceFile().getFilePath().includes("/node_modules/"),
+    );
 
 /**
  * Resolve + merge one `.extend(...)` call into a {@link MergedExtension}, or
@@ -460,7 +500,7 @@ const mergeExtendCall = (extendCall: CallExpression, projectRoot: string | undef
                     assertTableNameAllowed(table.name, extendArgument);
                 }
 
-                return namespaceExtension(fromPackage.key, fromPackage.bareTables, fromPackage.bareVectorIndexes, extendArgument);
+                return namespaceExtension(fromPackage.key, fromPackage.bareTables, fromPackage.bareVectorIndexes, extendArgument, true);
             }
         }
 

@@ -44,19 +44,11 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 
 ### `GENERATED_CLASS_MODULES` (const)
 
-```ts
-const GENERATED_CLASS_MODULES: readonly [
-    "agents",
-    "containers",
-    "workflows"
-];
-```
+Re-exported from `@lunora/config` — signature tracked at its source.
 
 ### `GeneratedClassModule` (type)
 
-```ts
-type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
-```
+Re-exported from `@lunora/config` — signature tracked at its source.
 
 ### `LUNORA_API_UPDATED_EVENT` (const)
 
@@ -77,6 +69,7 @@ interface LunoraPluginOptions {
     allowUnauthenticatedShardAccess?: boolean;
     apiSpec?: CodegenOptions["apiSpec"];
     cloudflare?: boolean | CloudflarePluginOptions;
+    lazyFunctions?: CodegenOptions["lazyFunctions"];
     overlay?: boolean | OverlayPluginOptions;
     projectRoot?: string;
     schemaDir?: string;
@@ -117,7 +110,7 @@ type OverlayPluginOptions = NonNullable<Parameters<typeof errorOverlayPlugin>[0]
 
 ```ts
 interface PlanViteRemoteOptions {
-    materialize?: typeof materializeRemoteWranglerConfig;
+    materialize?: typeof materializeDevWranglerConfig;
     projectRoot: string;
     readPreference?: typeof readProjectRemotePreference;
     remoteEnv?: string;
@@ -136,6 +129,7 @@ interface ResolvedLunoraPluginOptions {
     apiSpec: NonNullable<CodegenOptions["apiSpec"]>;
     cloudflare: false | CloudflarePluginOptions;
     generatedDir: string;
+    lazyFunctions: boolean;
     overlay: false | OverlayPluginOptions;
     projectRoot: string;
     schemaDir: string;
@@ -148,9 +142,7 @@ interface ResolvedLunoraPluginOptions {
 
 ### `STUDIO_PATH` (const)
 
-```ts
-const STUDIO_PATH = "/__lunora";
-```
+Re-exported from `@lunora/config` — signature tracked at its source.
 
 ### `Solution` (type)
 
@@ -178,6 +170,7 @@ interface ViteRemotePlan {
     configPath?: string;
     enabled: boolean;
     reason?: string;
+    withheld: WithheldBinding[];
 }
 ```
 
@@ -185,6 +178,18 @@ interface ViteRemotePlan {
 
 ```ts
 const WORKER_STARTUP_HINT: string;
+```
+
+### `WorkerEntryComposition` (interface)
+
+```ts
+interface WorkerEntryComposition {
+    allowUnauthenticatedShardAccess?: boolean;
+    appConfigModule?: string;
+    classModules?: ReadonlyArray<GeneratedClassModule>;
+    mergeDurableObjects?: boolean;
+    shard?: LunoraShardConfig;
+}
 ```
 
 ### `augmentWorkerStartupError` (const)
@@ -206,7 +211,7 @@ const buildStudioUrl: (input: {
 ### `buildWorkerEntrySource` (const)
 
 ```ts
-const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, classModules?: ReadonlyArray<GeneratedClassModule>, allowUnauthenticatedShardAccess?: boolean, shard?: LunoraShardConfig) => string;
+const buildWorkerEntrySource: (framework: DetectedFramework, generatedImportBase: string, composition?: WorkerEntryComposition) => string;
 ```
 
 ### `checkLunoraProxy` (const)
@@ -218,13 +223,13 @@ const checkLunoraProxy: (proxy: Record<string, unknown> | undefined, label: stri
 ### `codegenPlugin` (const)
 
 ```ts
-const codegenPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
+const codegenPlugin: (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache) => Plugin;
 ```
 
 ### `containerLogsPlugin` (const)
 
 ```ts
-const containerLogsPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
+const containerLogsPlugin: (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache) => Plugin;
 ```
 
 ### `detectFramework` (const)
@@ -334,7 +339,7 @@ const withWorkerStartupHint: (plugins: ReadonlyArray<Plugin>) => Plugin[];
 ### `wranglerValidatorPlugin` (const)
 
 ```ts
-const wranglerValidatorPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
+const wranglerValidatorPlugin: (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache) => Plugin;
 ```
 
 ## Referenced internal declarations

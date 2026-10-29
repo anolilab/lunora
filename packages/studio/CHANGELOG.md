@@ -1,3 +1,2912 @@
+## @lunora/studio [1.0.0-alpha.354](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.353...@lunora/studio@1.0.0-alpha.354) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.268
+* **@lunora/client:** upgraded to 1.0.0-alpha.261
+* **@lunora/react:** upgraded to 1.0.0-alpha.273
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.251
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.168
+
+## @lunora/studio [1.0.0-alpha.353](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.352...@lunora/studio@1.0.0-alpha.353) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.267
+* **@lunora/client:** upgraded to 1.0.0-alpha.260
+* **@lunora/react:** upgraded to 1.0.0-alpha.272
+* **@lunora/mail:** upgraded to 1.0.0-alpha.129
+* **@lunora/notify:** upgraded to 1.0.0-alpha.101
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.250
+
+## @lunora/studio [1.0.0-alpha.352](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.351...@lunora/studio@1.0.0-alpha.352) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.266
+* **@lunora/client:** upgraded to 1.0.0-alpha.259
+* **@lunora/react:** upgraded to 1.0.0-alpha.271
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.249
+
+## @lunora/studio [1.0.0-alpha.351](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.350...@lunora/studio@1.0.0-alpha.351) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** `runMigrateToHyperdriveCommand` is now `runMigrateBackendCommand`
+and requires a `direction`.
+* **hyperdrive:** ImportShardResult and the global ImportResult gain a required
+`replaced` count; `streamingImport` takes an `onConflict` argument.
+* **do:** codegen rejects an exported defineWorkflowEvent anywhere in lunora/ whose type
+is not a string literal (WORKFLOW_EVENT_NOT_LITERAL) or that shares its type with another export
+(WORKFLOW_EVENT_DUPLICATE).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): keep a failed status refresh apart from a failed event send
+
+Discovery of workflow events now also reads definitions called through a namespace import of
+@lunora/workflow and definitions followed by a non-null assertion. In the Send event form, a
+failed instance refresh after a delivered event is reported as such instead of as a send
+failure, so the operator is not nudged into sending the event twice. readInstance no longer
+uses a catch-less try.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(cli): add workflow create and send-event commands
+
+`lunora workflow create <exportName>` starts an instance (`--id`, `--params`) and
+`lunora workflow send-event <exportName> <instanceId> <eventType>` delivers an event
+(`--payload`). Both decode their arguments and dispatch the same admin ops the Studio
+Workflows panel calls through the `lunora run` RPC path, so target resolution, the admin
+bearer and HTTP-status exit codes are shared and the worker stays the only validator.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(do): correct the send-event parser comment on payload validation
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* chore(cli): update api snapshot for the workflow command
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(workflows): unwrap CLI json output, trim create ids, keep send result on audit failure
+
+- lunora workflow --format json returned the admin RPC { result } envelope, so the instance id
+  sat at data.result.id; it is now data.id.
+- createWorkflowInstance trims an explicit id like getWorkflowInstanceStatus and
+  sendWorkflowEvent do, so the id a create returns is the one later lookups address.
+- sendWorkflowEvent logs a failed audit write instead of turning an already delivered event
+  into an error response that invites a duplicate send.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(studio): reset the send-event busy flag in one finally
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(studio): clear the send-event busy flag with promise finally
+
+React Compiler cannot lower a try statement without a catch clause, so the
+try/finally left the send form without automatic memoization. The send and
+refresh now run in their own function, and the caller clears the flag with
+.finally(), as the export/import panel already does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): reset the send-event form when the selected workflow changes
+
+The form kept its instance id across workflow selections, so an id typed for
+one workflow could send the event to a same-id instance of the next one. The
+form is now keyed by the selected workflow, which starts it fresh.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): send workflow events through the studio admin client
+
+Alpha moved Studio's admin calls from useLunora to useStudioClient and
+dropped the useLunora import from the workflows panel, so the send-event
+form threw a ReferenceError after rebasing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **do:** send events to workflow instances from admin ([#1359](https://github.com/anolilab/lunora/issues/1359)) ([d833e43](https://github.com/anolilab/lunora/commit/d833e43bbb5fe3e97e71b86d7c4c8c488d82ce4f)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+* **hyperdrive:** wire the admin global plane, add replace imports and migrate hyperdrive-to-d1 ([#1360](https://github.com/anolilab/lunora/issues/1360)) ([f25b400](https://github.com/anolilab/lunora/commit/f25b400a13fbf76d19e5e587f4d20f00242a7ece)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.265
+* **@lunora/client:** upgraded to 1.0.0-alpha.258
+* **@lunora/react:** upgraded to 1.0.0-alpha.270
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.248
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+
+## @lunora/studio [1.0.0-alpha.350](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.349...@lunora/studio@1.0.0-alpha.350) (2026-10-27)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** the admin methods (`listFunctions`, `listKvKeys`,
+`listScheduledJobs`, `listAuthUsers`, `getAuthConfig`, ... ) are no longer
+on `LunoraClient`; construct `new LunoraAdminClient(...)` from
+`@lunora/client/admin` to call them. `@lunora/react`'s admin-auth hooks
+throw unless the provider's client is a LunoraAdminClient. `@lunora/studio`'s
+`client` prop and `@lunora/mcp`'s `client` option and `callTool` now take a
+LunoraAdminClient.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* ci: note that the client size job builds its workspace deps
+
+The step lists only the adapters; vis expands it to their whole
+dependency closure (26 build tasks, including server, shard-engine and
+values, which the reference apps resolve through ratelimit).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* ci: count TanStack Query in the React size budget and require baselines
+
+- `@tanstack/*` was external to the reference apps, but the React adapter
+  ships TanStack Query, so adapter-driven growth there passed the gate. It is
+  now bundled; the React baseline moves from 47.3 to 56.7 KiB gzip (the other
+  adapters do not use it and are unchanged).
+- An app with no committed baseline got an unlimited ceiling. Check mode now
+  fails it with the instruction to run `client-size:update`.
+- The reference apps are written out literally instead of built from
+  JSON.stringify templates, which code scanning flagged as code built from
+  improperly sanitized values (the inputs were constants, so nothing was
+  injectable, but the literal source is also simpler to read).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(studio): embed Studio with a LunoraAdminClient
+
+The README still built a plain `LunoraClient` for `<Studio>`, which now
+requires the admin client, so following it crashed on first render. Also
+points the data browser's transport note at `useStudioClient` and fixes a
+`{@link}` to `readGlobalTablePage`, which moved to `LunoraAdminClient`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(mcp): reject an injected client without the admin surface
+
+A JS caller or a cast that passes a plain LunoraClient as `client` used to
+fail on the first tool call with `listFunctions is not a function`. Fail at
+construction instead, with the same LunoraAdminClient message Studio and the
+React admin-auth hooks give.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* ci: run the client size gate on lockfile and catalog bumps
+
+The gate bundles TanStack Query and each adapter's framework runtime, so a
+dependency bump changes the shipped size without touching `packages/**`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* test: type the mcp client stubs and sort an admin-list import
+
+The Lint (eslint) job failed on `vitest/require-mock-type-parameters` for the
+`listFunctions` stubs added with the MCP client guard, and on import order in
+the admin-auth-lists test after it switched to LunoraAdminClient.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(client): drop admin doc comments that restate the method
+
+Eight auth-admin methods carried a one-line comment that only repeated the
+method name; the signature already says it. The rest name a plugin
+requirement, a cascade or a caveat and stay.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(studio): split five panels past the complexity budget
+
+VectorBrowser, MetricsPanel, HealthPanel, QueuesPanel and
+PermissionsPlayground each exceeded react-doctor's cyclomatic/cognitive
+limit of 15. Their independent render branches move into components
+(index table, matches, metrics tabs/toolbar/overview, status banner,
+shards card, DLQ warning, probe outcome and run controls), and the send
+form's validation into a pure parseSendInput.
+
+The metrics sparkline series is now tagged with its shard and reads as
+empty under another, instead of being reset by a setState in the effect,
+which react-doctor flagged as adjusting state on a prop change. A test
+covers the shard switch.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): reset shard metrics series when the shard changes
+
+The sparkline series stayed in state after a shard switch until the new shard recorded its first
+delta, so returning to a previously viewed shard restored its stale history and appended new
+deltas to it. A shard switch now starts an empty series.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(deps): pin @lunora/client to the version that ships ./admin
+
+react, mcp, studio and lunorash import the @lunora/client/admin subpath but pinned older
+exact versions that do not export it. Pin them to the current in-repo version.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Performance Improvements
+
+* **client:** smaller browser bundle, one-pass delta merge, client size gate ([#1353](https://github.com/anolilab/lunora/issues/1353)) ([b940830](https://github.com/anolilab/lunora/commit/b9408305ff0fa5d6328a63078bf40e66e70893eb))
+* **studio:** window the kv list, cache i18n, lazy-load motion ([#1363](https://github.com/anolilab/lunora/issues/1363)) ([fa992e5](https://github.com/anolilab/lunora/commit/fa992e5b636fa599a0a97ad7c9a8f4db76989c1d)), closes [#1369](https://github.com/anolilab/lunora/issues/1369)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.263
+* **@lunora/client:** upgraded to 1.0.0-alpha.257
+* **@lunora/react:** upgraded to 1.0.0-alpha.269
+* **@lunora/mail:** upgraded to 1.0.0-alpha.127
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.246
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.165
+
+## @lunora/studio [1.0.0-alpha.349](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.348...@lunora/studio@1.0.0-alpha.349) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.262
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.137
+* **@lunora/client:** upgraded to 1.0.0-alpha.256
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/react:** upgraded to 1.0.0-alpha.268
+* **@lunora/mail:** upgraded to 1.0.0-alpha.126
+* **@lunora/notify:** upgraded to 1.0.0-alpha.99
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.245
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.164
+
+## @lunora/studio [1.0.0-alpha.348](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.347...@lunora/studio@1.0.0-alpha.348) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.267
+
+## @lunora/studio [1.0.0-alpha.347](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.346...@lunora/studio@1.0.0-alpha.347) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/mail:** upgraded to 1.0.0-alpha.125
+* **@lunora/notify:** upgraded to 1.0.0-alpha.98
+
+## @lunora/studio [1.0.0-alpha.346](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.345...@lunora/studio@1.0.0-alpha.346) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.260
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.136
+* **@lunora/client:** upgraded to 1.0.0-alpha.253
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/react:** upgraded to 1.0.0-alpha.266
+* **@lunora/mail:** upgraded to 1.0.0-alpha.124
+* **@lunora/notify:** upgraded to 1.0.0-alpha.97
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.242
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.162
+
+## @lunora/studio [1.0.0-alpha.345](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.344...@lunora/studio@1.0.0-alpha.345) (2026-10-26)
+
+### Bug Fixes
+
+* **privacy:** erasure replay, coverage, retention and persistence fixes ([#1286](https://github.com/anolilab/lunora/issues/1286)) ([1ef4e1b](https://github.com/anolilab/lunora/commit/1ef4e1be46596c97f576e125cdf6c11d2d86b324))
+
+## @lunora/studio [1.0.0-alpha.344](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.343...@lunora/studio@1.0.0-alpha.344) (2026-10-26)
+
+### Features
+
+* **studio:** filter a table by a cell value, including NULL ([#1318](https://github.com/anolilab/lunora/issues/1318)) ([e5c3f4b](https://github.com/anolilab/lunora/commit/e5c3f4bff3d4335ba33de46952c0039e9d057f4c))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.258
+* **@lunora/client:** upgraded to 1.0.0-alpha.251
+* **@lunora/react:** upgraded to 1.0.0-alpha.264
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.240
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.160
+
+## @lunora/studio [1.0.0-alpha.343](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.342...@lunora/studio@1.0.0-alpha.343) (2026-10-26)
+
+### Bug Fixes
+
+* **seed:** validator bounds, unique indexes and dangling FKs ([#1284](https://github.com/anolilab/lunora/issues/1284)) ([8ede8ab](https://github.com/anolilab/lunora/commit/8ede8abc2e7434bc71443ad95388315ff4ec7dee))
+
+## @lunora/studio [1.0.0-alpha.342](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.341...@lunora/studio@1.0.0-alpha.342) (2026-10-26)
+
+### Features
+
+* **studio:** import a CSV file into a table ([#1321](https://github.com/anolilab/lunora/issues/1321)) ([360930a](https://github.com/anolilab/lunora/commit/360930a9edc00a56f90c5cdf6a9d3218e428aeea))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.257
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.135
+* **@lunora/client:** upgraded to 1.0.0-alpha.250
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/react:** upgraded to 1.0.0-alpha.263
+* **@lunora/mail:** upgraded to 1.0.0-alpha.123
+* **@lunora/notify:** upgraded to 1.0.0-alpha.96
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.239
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+
+## @lunora/studio [1.0.0-alpha.341](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.340...@lunora/studio@1.0.0-alpha.341) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.256
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.134
+* **@lunora/client:** upgraded to 1.0.0-alpha.249
+* **@lunora/react:** upgraded to 1.0.0-alpha.262
+* **@lunora/platform:** upgraded to 1.0.0-alpha.75
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.238
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+
+## @lunora/studio [1.0.0-alpha.340](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.339...@lunora/studio@1.0.0-alpha.340) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.248
+* **@lunora/react:** upgraded to 1.0.0-alpha.261
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.237
+
+## @lunora/studio [1.0.0-alpha.339](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.338...@lunora/studio@1.0.0-alpha.339) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.255
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.133
+* **@lunora/client:** upgraded to 1.0.0-alpha.247
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/react:** upgraded to 1.0.0-alpha.260
+* **@lunora/mail:** upgraded to 1.0.0-alpha.122
+* **@lunora/notify:** upgraded to 1.0.0-alpha.95
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.236
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+
+## @lunora/studio [1.0.0-alpha.338](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.337...@lunora/studio@1.0.0-alpha.338) (2026-10-24)
+
+### Features
+
+* **mcp:** serve each app function as an MCP tool, with progress for streams ([#1315](https://github.com/anolilab/lunora/issues/1315)) ([5202bfb](https://github.com/anolilab/lunora/commit/5202bfb2f4508d7e03f64cd96e0edd20aa58dab5))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.254
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.132
+* **@lunora/client:** upgraded to 1.0.0-alpha.246
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/react:** upgraded to 1.0.0-alpha.259
+* **@lunora/mail:** upgraded to 1.0.0-alpha.121
+* **@lunora/notify:** upgraded to 1.0.0-alpha.94
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.235
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+
+## @lunora/studio [1.0.0-alpha.337](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.336...@lunora/studio@1.0.0-alpha.337) (2026-10-23)
+
+### Features
+
+* **studio:** show enum values in the schema graph ([#1319](https://github.com/anolilab/lunora/issues/1319)) ([ad062ac](https://github.com/anolilab/lunora/commit/ad062ac318896082b79e2a6af5b79be2ddb1481c))
+* **studio:** show SQL run time in the results header ([#1317](https://github.com/anolilab/lunora/issues/1317)) ([27f3e8e](https://github.com/anolilab/lunora/commit/27f3e8ea19e6ec528835f7a0af708794815796d2))
+
+## @lunora/studio [1.0.0-alpha.336](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.335...@lunora/studio@1.0.0-alpha.336) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.253
+* **@lunora/client:** upgraded to 1.0.0-alpha.245
+* **@lunora/react:** upgraded to 1.0.0-alpha.258
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.234
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+
+## @lunora/studio [1.0.0-alpha.335](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.334...@lunora/studio@1.0.0-alpha.335) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.252
+* **@lunora/client:** upgraded to 1.0.0-alpha.244
+* **@lunora/react:** upgraded to 1.0.0-alpha.257
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.233
+
+## @lunora/studio [1.0.0-alpha.334](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.333...@lunora/studio@1.0.0-alpha.334) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.251
+* **@lunora/client:** upgraded to 1.0.0-alpha.243
+* **@lunora/react:** upgraded to 1.0.0-alpha.256
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.232
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.154
+
+## @lunora/studio [1.0.0-alpha.333](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.332...@lunora/studio@1.0.0-alpha.333) (2026-10-22)
+
+### Bug Fixes
+
+* **client:** keep the session WebSocket credential out of the URL ([#1282](https://github.com/anolilab/lunora/issues/1282)) ([be89863](https://github.com/anolilab/lunora/commit/be89863726b49c0f5d8e8bb7e479b793f93197d9))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.250
+* **@lunora/client:** upgraded to 1.0.0-alpha.242
+* **@lunora/react:** upgraded to 1.0.0-alpha.255
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.231
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+
+## @lunora/studio [1.0.0-alpha.332](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.331...@lunora/studio@1.0.0-alpha.332) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.249
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.131
+* **@lunora/client:** upgraded to 1.0.0-alpha.241
+* **@lunora/react:** upgraded to 1.0.0-alpha.254
+* **@lunora/platform:** upgraded to 1.0.0-alpha.74
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.230
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+
+## @lunora/studio [1.0.0-alpha.331](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.330...@lunora/studio@1.0.0-alpha.331) (2026-10-20)
+
+### Bug Fixes
+
+* **shard-engine,studio:** relay frame validation, bounded SQL console, safer run-as and export ([#1277](https://github.com/anolilab/lunora/issues/1277)) ([0805d3a](https://github.com/anolilab/lunora/commit/0805d3a06b5cce0c8e1221a2ed9c3f1c14196756))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.247
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.130
+* **@lunora/client:** upgraded to 1.0.0-alpha.239
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/react:** upgraded to 1.0.0-alpha.252
+* **@lunora/mail:** upgraded to 1.0.0-alpha.120
+* **@lunora/notify:** upgraded to 1.0.0-alpha.93
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.228
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+
+## @lunora/studio [1.0.0-alpha.330](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.329...@lunora/studio@1.0.0-alpha.330) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.246
+* **@lunora/client:** upgraded to 1.0.0-alpha.238
+* **@lunora/react:** upgraded to 1.0.0-alpha.251
+
+## @lunora/studio [1.0.0-alpha.329](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.328...@lunora/studio@1.0.0-alpha.329) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.237
+* **@lunora/react:** upgraded to 1.0.0-alpha.250
+
+## @lunora/studio [1.0.0-alpha.328](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.327...@lunora/studio@1.0.0-alpha.328) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.245
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.129
+* **@lunora/client:** upgraded to 1.0.0-alpha.236
+* **@lunora/react:** upgraded to 1.0.0-alpha.249
+* **@lunora/platform:** upgraded to 1.0.0-alpha.73
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.227
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.149
+
+## @lunora/studio [1.0.0-alpha.327](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.326...@lunora/studio@1.0.0-alpha.327) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.244
+* **@lunora/client:** upgraded to 1.0.0-alpha.235
+* **@lunora/react:** upgraded to 1.0.0-alpha.248
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.226
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.148
+
+## @lunora/studio [1.0.0-alpha.326](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.325...@lunora/studio@1.0.0-alpha.326) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.243
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.128
+* **@lunora/client:** upgraded to 1.0.0-alpha.234
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/react:** upgraded to 1.0.0-alpha.247
+* **@lunora/mail:** upgraded to 1.0.0-alpha.119
+* **@lunora/notify:** upgraded to 1.0.0-alpha.92
+* **@lunora/platform:** upgraded to 1.0.0-alpha.72
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.225
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+
+## @lunora/studio [1.0.0-alpha.325](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.324...@lunora/studio@1.0.0-alpha.325) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.242
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.127
+* **@lunora/client:** upgraded to 1.0.0-alpha.233
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/react:** upgraded to 1.0.0-alpha.246
+* **@lunora/mail:** upgraded to 1.0.0-alpha.118
+* **@lunora/notify:** upgraded to 1.0.0-alpha.91
+* **@lunora/platform:** upgraded to 1.0.0-alpha.71
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.224
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.146
+
+## @lunora/studio [1.0.0-alpha.324](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.323...@lunora/studio@1.0.0-alpha.324) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.232
+* **@lunora/react:** upgraded to 1.0.0-alpha.245
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.223
+
+## @lunora/studio [1.0.0-alpha.323](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.322...@lunora/studio@1.0.0-alpha.323) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.241
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.126
+* **@lunora/client:** upgraded to 1.0.0-alpha.231
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/react:** upgraded to 1.0.0-alpha.244
+* **@lunora/mail:** upgraded to 1.0.0-alpha.117
+* **@lunora/notify:** upgraded to 1.0.0-alpha.90
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.222
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+
+## @lunora/studio [1.0.0-alpha.322](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.321...@lunora/studio@1.0.0-alpha.322) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.240
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.125
+* **@lunora/client:** upgraded to 1.0.0-alpha.230
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/react:** upgraded to 1.0.0-alpha.243
+* **@lunora/mail:** upgraded to 1.0.0-alpha.116
+* **@lunora/notify:** upgraded to 1.0.0-alpha.89
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.221
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.144
+
+## @lunora/studio [1.0.0-alpha.321](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.320...@lunora/studio@1.0.0-alpha.321) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.239
+
+## @lunora/studio [1.0.0-alpha.320](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.319...@lunora/studio@1.0.0-alpha.320) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.238
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.124
+* **@lunora/client:** upgraded to 1.0.0-alpha.229
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/react:** upgraded to 1.0.0-alpha.242
+* **@lunora/mail:** upgraded to 1.0.0-alpha.115
+* **@lunora/notify:** upgraded to 1.0.0-alpha.88
+* **@lunora/platform:** upgraded to 1.0.0-alpha.70
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.220
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.143
+
+## @lunora/studio [1.0.0-alpha.319](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.318...@lunora/studio@1.0.0-alpha.319) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.237
+
+## @lunora/studio [1.0.0-alpha.318](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.317...@lunora/studio@1.0.0-alpha.318) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.236
+* **@lunora/client:** upgraded to 1.0.0-alpha.228
+* **@lunora/react:** upgraded to 1.0.0-alpha.241
+
+## @lunora/studio [1.0.0-alpha.317](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.316...@lunora/studio@1.0.0-alpha.317) (2026-10-18)
+
+### Features
+
+* **workflow:** add restart action and rollingBack status ([#1249](https://github.com/anolilab/lunora/issues/1249)) ([01ec235](https://github.com/anolilab/lunora/commit/01ec2353b2d3cad8d26e32aff70fd42dd5590c96))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.123
+* **@lunora/client:** upgraded to 1.0.0-alpha.227
+* **@lunora/react:** upgraded to 1.0.0-alpha.240
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.219
+
+## @lunora/studio [1.0.0-alpha.316](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.315...@lunora/studio@1.0.0-alpha.316) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.234
+* **@lunora/client:** upgraded to 1.0.0-alpha.226
+* **@lunora/react:** upgraded to 1.0.0-alpha.239
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.218
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.141
+
+## @lunora/studio [1.0.0-alpha.315](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.314...@lunora/studio@1.0.0-alpha.315) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.233
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.122
+* **@lunora/client:** upgraded to 1.0.0-alpha.225
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/react:** upgraded to 1.0.0-alpha.238
+* **@lunora/mail:** upgraded to 1.0.0-alpha.114
+* **@lunora/notify:** upgraded to 1.0.0-alpha.87
+* **@lunora/platform:** upgraded to 1.0.0-alpha.69
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.217
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.140
+
+## @lunora/studio [1.0.0-alpha.314](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.313...@lunora/studio@1.0.0-alpha.314) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.232
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.121
+* **@lunora/client:** upgraded to 1.0.0-alpha.224
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/react:** upgraded to 1.0.0-alpha.237
+* **@lunora/mail:** upgraded to 1.0.0-alpha.113
+* **@lunora/notify:** upgraded to 1.0.0-alpha.86
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.216
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.139
+
+## @lunora/studio [1.0.0-alpha.313](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.312...@lunora/studio@1.0.0-alpha.313) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.231
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.120
+* **@lunora/client:** upgraded to 1.0.0-alpha.222
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/react:** upgraded to 1.0.0-alpha.236
+* **@lunora/mail:** upgraded to 1.0.0-alpha.112
+* **@lunora/notify:** upgraded to 1.0.0-alpha.85
+* **@lunora/platform:** upgraded to 1.0.0-alpha.68
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.215
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.138
+
+## @lunora/studio [1.0.0-alpha.312](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.311...@lunora/studio@1.0.0-alpha.312) (2026-10-18)
+
+### Bug Fixes
+
+* **do:** address review of the retired shape scan ([#1240](https://github.com/anolilab/lunora/issues/1240)) ([#1244](https://github.com/anolilab/lunora/issues/1244)) ([62fcfad](https://github.com/anolilab/lunora/commit/62fcfadfcca02f41c17f1e29a37d6faff5efaaed))
+* **do:** stop scanning retired shapes after cleanup ([#1240](https://github.com/anolilab/lunora/issues/1240)) ([487d2ab](https://github.com/anolilab/lunora/commit/487d2abec6ad50c9fce2074689e322de8c0891e5))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.230
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.119
+* **@lunora/client:** upgraded to 1.0.0-alpha.221
+* **@lunora/react:** upgraded to 1.0.0-alpha.235
+* **@lunora/platform:** upgraded to 1.0.0-alpha.67
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.214
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.137
+
+## @lunora/studio [1.0.0-alpha.311](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.310...@lunora/studio@1.0.0-alpha.311) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.219
+* **@lunora/react:** upgraded to 1.0.0-alpha.234
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.212
+
+## @lunora/studio [1.0.0-alpha.310](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.309...@lunora/studio@1.0.0-alpha.310) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.228
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.118
+* **@lunora/client:** upgraded to 1.0.0-alpha.218
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+* **@lunora/react:** upgraded to 1.0.0-alpha.233
+* **@lunora/mail:** upgraded to 1.0.0-alpha.111
+* **@lunora/notify:** upgraded to 1.0.0-alpha.84
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.211
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.135
+
+## @lunora/studio [1.0.0-alpha.309](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.308...@lunora/studio@1.0.0-alpha.309) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.227
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.117
+* **@lunora/client:** upgraded to 1.0.0-alpha.217
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+* **@lunora/react:** upgraded to 1.0.0-alpha.232
+* **@lunora/mail:** upgraded to 1.0.0-alpha.110
+* **@lunora/notify:** upgraded to 1.0.0-alpha.83
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.210
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.134
+
+## @lunora/studio [1.0.0-alpha.308](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.307...@lunora/studio@1.0.0-alpha.308) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.226
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.116
+* **@lunora/client:** upgraded to 1.0.0-alpha.216
+* **@lunora/react:** upgraded to 1.0.0-alpha.231
+* **@lunora/platform:** upgraded to 1.0.0-alpha.66
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.209
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.133
+
+## @lunora/studio [1.0.0-alpha.307](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.306...@lunora/studio@1.0.0-alpha.307) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.225
+* **@lunora/client:** upgraded to 1.0.0-alpha.215
+* **@lunora/react:** upgraded to 1.0.0-alpha.230
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.208
+
+## @lunora/studio [1.0.0-alpha.306](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.305...@lunora/studio@1.0.0-alpha.306) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.229
+
+## @lunora/studio [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.304...@lunora/studio@1.0.0-alpha.305) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.223
+* **@lunora/client:** upgraded to 1.0.0-alpha.214
+* **@lunora/react:** upgraded to 1.0.0-alpha.228
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.206
+
+## @lunora/studio [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.303...@lunora/studio@1.0.0-alpha.304) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.222
+* **@lunora/react:** upgraded to 1.0.0-alpha.227
+
+## @lunora/studio [1.0.0-alpha.303](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.302...@lunora/studio@1.0.0-alpha.303) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.221
+* **@lunora/react:** upgraded to 1.0.0-alpha.226
+
+## @lunora/studio [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.301...@lunora/studio@1.0.0-alpha.302) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.220
+* **@lunora/client:** upgraded to 1.0.0-alpha.213
+* **@lunora/react:** upgraded to 1.0.0-alpha.225
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.205
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.131
+
+## @lunora/studio [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.300...@lunora/studio@1.0.0-alpha.301) (2026-10-15)
+
+### Performance Improvements
+
+* **wire:** publish the wire codec once instead of inlining it into every package ([#1198](https://github.com/anolilab/lunora/issues/1198)) ([7020e2c](https://github.com/anolilab/lunora/commit/7020e2cec53c3e5c0f28ab8e569b33ee0ae3a55b))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.219
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.114
+* **@lunora/client:** upgraded to 1.0.0-alpha.212
+* **@lunora/errors:** upgraded to 1.0.0-alpha.56
+* **@lunora/react:** upgraded to 1.0.0-alpha.224
+* **@lunora/wire:** upgraded to 1.0.0-alpha.1
+* **@lunora/mail:** upgraded to 1.0.0-alpha.108
+* **@lunora/notify:** upgraded to 1.0.0-alpha.81
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.204
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.130
+
+## @lunora/studio [1.0.0-alpha.300](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.299...@lunora/studio@1.0.0-alpha.300) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.211
+* **@lunora/react:** upgraded to 1.0.0-alpha.223
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.203
+
+## @lunora/studio [1.0.0-alpha.299](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.298...@lunora/studio@1.0.0-alpha.299) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.217
+* **@lunora/client:** upgraded to 1.0.0-alpha.209
+* **@lunora/react:** upgraded to 1.0.0-alpha.222
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.201
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.129
+
+## @lunora/studio [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.297...@lunora/studio@1.0.0-alpha.298) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.208
+* **@lunora/react:** upgraded to 1.0.0-alpha.221
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.200
+
+## @lunora/studio [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.296...@lunora/studio@1.0.0-alpha.297) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.216
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.112
+* **@lunora/client:** upgraded to 1.0.0-alpha.207
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+* **@lunora/react:** upgraded to 1.0.0-alpha.220
+* **@lunora/mail:** upgraded to 1.0.0-alpha.107
+* **@lunora/notify:** upgraded to 1.0.0-alpha.80
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.199
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.128
+
+## @lunora/studio [1.0.0-alpha.296](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.295...@lunora/studio@1.0.0-alpha.296) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.206
+* **@lunora/react:** upgraded to 1.0.0-alpha.219
+
+## @lunora/studio [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.294...@lunora/studio@1.0.0-alpha.295) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.214
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.111
+* **@lunora/client:** upgraded to 1.0.0-alpha.205
+* **@lunora/react:** upgraded to 1.0.0-alpha.218
+* **@lunora/platform:** upgraded to 1.0.0-alpha.64
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.198
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.127
+
+## @lunora/studio [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.293...@lunora/studio@1.0.0-alpha.294) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.213
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.110
+* **@lunora/client:** upgraded to 1.0.0-alpha.204
+* **@lunora/react:** upgraded to 1.0.0-alpha.217
+* **@lunora/platform:** upgraded to 1.0.0-alpha.63
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.197
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.126
+
+## @lunora/studio [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.292...@lunora/studio@1.0.0-alpha.293) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.212
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.109
+* **@lunora/client:** upgraded to 1.0.0-alpha.203
+* **@lunora/react:** upgraded to 1.0.0-alpha.216
+* **@lunora/platform:** upgraded to 1.0.0-alpha.62
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.196
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.125
+
+## @lunora/studio [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.291...@lunora/studio@1.0.0-alpha.292) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.202
+* **@lunora/react:** upgraded to 1.0.0-alpha.215
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.195
+
+## @lunora/studio [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.290...@lunora/studio@1.0.0-alpha.291) (2026-10-14)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** RelationDefinition, RelationDefinitionLike, RelationIR and AdvisorRelation are
+now unions of the single-key relation and a through relation, which has no field, references or
+onDelete. Code reading relation.field must narrow on relation.through first.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(server): document many-to-many relations through a join table
+
+Add a Many-to-many section to the relations page: the through declaration, the unique-index rule
+checked at schema load, reads and predicates, delete behaviour inherited from the join table's own
+foreign keys, and the connect/disconnect/set writes with their refusals. List the new advisor lint
+and note the union types in the alpha upgrade guide.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(plans): record the many-to-many relation execution
+
+Mark plan 489 done, record the owner's decision and the answers to its open questions, and list
+the gates, the bench and what is left open.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(d1): run the many-to-many cases on a real D1 binding
+
+Run the shared through-relation conformance cases, including the 150-id wide ones, against a real D1
+binding on workerd, and cover the masked join-key refusal. Refresh the API snapshots for the
+relation unions, and record the final gates and what is left open in plan 489.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(server): pin read and write policies on a many-to-many join table
+
+A read policy on the join table or the target hides a link from with, some and _count, and a write
+policy on the join table refuses the insert a connect makes and the delete a disconnect makes, each
+checked against the same call with no policy. Also cover the live-shape guard for a sharded or
+memory join table, and refresh the plan's measured gates.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(server): close review findings on many-to-many relations
+
+Bugs and security
+- connect and set no longer fail with a unique conflict (or leak that a hidden link exists) when the
+  join table's read policy hides the existing link; the insert treats the conflict as already linked
+- disconnect needs a readable target, and set only releases links to targets the caller can read,
+  matching a one-to-many
+- the transaction gate fails closed: a writer that does not report an open transaction is refused,
+  and the in-process runtime now reports its BEGIN/COMMIT span
+- a join column the server stamps (serverDefault) no longer makes the join table unwritable
+- from and to naming the same column is rejected at schema load and at codegen
+- connect and disconnect of the same id in one write are rejected as ambiguous
+- unindexed_relation_target also checks the join table's to column
+
+Structure
+- relation write info is a discriminated union (keyed or through) in the engine and the server
+  mirror, which removes the throughOf cast and the scattered optional checks
+- one replace diff, one attach step for loaders, one unique-pair predicate shared by the schema
+  check and the advisor, and a non-escalating key reader instead of casts
+- join-table schema rules move out of schema.ts; the schema snapshot's through variant drops its
+  invented field
+
+The plan is complete, so plans/489 is deleted and its README row moves to Shipped.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(shard-engine): bound the many-to-many reads and validate plugin joins
+
+Reads
+- the join-row hop of a many-to-many with/_count is bounded and fails closed past 10 000 rows for a
+  page, instead of reading every link
+- both hops of a some/every/none predicate read at most one row past maxRelationKeys, so a join
+  table with many rows per key cannot be materialised before the cap is checked
+- _count counts readable targets with one grouped count when the target shares the parent's store
+  and only reads the rows for a cross-backend target
+
+Schema
+- a through relation declared by a plugin extension now merges: the join table's bare v.id targets
+  resolve to their prefixed names, while a join that points at the wrong table is still rejected
+
+Tests
+- the through conformance cases move to shared/ so no package imports another package's tests
+- cover the bounds with a stubbed store, the plugin merge, a namespaced extension through codegen,
+  and the 100/101 bound-parameter cap on a real D1 binding
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(shard-engine): refuse relation predicates in shard-local shapes
+
+A shard-local live shape cannot filter by a relation. Its seed and its per-flush membership probe
+compile the predicate straight to SQL over the shape's own table, so the relation key matched
+nothing and the shape seeded empty without an error; and a write that touched only the related
+table (a join row, a child) produced no changed key on the shape's table, so it never re-probed.
+The same-DO and .global() target cases were documented as allowed but never worked.
+
+assertShapeShardable now refuses such a shape with SHAPE_RELATION_PREDICATE and the remedies
+(denormalize, make the table .global(), or use a live query). A .global() shape is read through
+the store's findMany, which resolves relations, and is unaffected.
+* **server:** a shape whose predicate contains a relation operator (is, isNot, some, every,
+none) on a non-global table is now rejected at subscribe with SHAPE_RELATION_PREDICATE instead of
+silently replicating nothing.
+
+Also namespace the v.id foreign keys of a plugin extension that name a sibling extension table,
+at runtime and in codegen's IR, so the relation graph keeps their edges and generated ids point
+at the prefixed tables.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(server): keep non-pair conflicts and nested ids in the review follow-ups
+
+- connect and set treat a unique conflict on a join insert as "already linked" only when the
+  (from, to) pair is the join table's sole uniqueness rule; with another unique index or column the
+  conflict may be a different constraint, so it surfaces instead of reporting an unwritten link
+- the plugin extension id retarget follows an id through object fields, record values and union
+  members as well as optional and array, so no stale bare table name is left in the merged schema
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **server:** declare many-to-many relations through a join table ([#1146](https://github.com/anolilab/lunora/issues/1146)) ([585aa4a](https://github.com/anolilab/lunora/commit/585aa4a1645814e7fa851251a67785d8db25b9fd))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.211
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.108
+* **@lunora/client:** upgraded to 1.0.0-alpha.201
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+* **@lunora/react:** upgraded to 1.0.0-alpha.214
+* **@lunora/mail:** upgraded to 1.0.0-alpha.106
+* **@lunora/notify:** upgraded to 1.0.0-alpha.79
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.194
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.124
+
+## @lunora/studio [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.289...@lunora/studio@1.0.0-alpha.290) (2026-10-13)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.210
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.107
+* **@lunora/client:** upgraded to 1.0.0-alpha.200
+* **@lunora/react:** upgraded to 1.0.0-alpha.213
+* **@lunora/platform:** upgraded to 1.0.0-alpha.61
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.193
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.123
+
+## @lunora/studio [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.288...@lunora/studio@1.0.0-alpha.289) (2026-10-12)
+
+### Features
+
+* **privacy:** add the @lunora/privacy data-rights package ([#1127](https://github.com/anolilab/lunora/issues/1127)) ([01ad496](https://github.com/anolilab/lunora/commit/01ad496fad562fbeddf3052e71ac6a3abeb38d0a))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.209
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.106
+* **@lunora/client:** upgraded to 1.0.0-alpha.199
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+* **@lunora/react:** upgraded to 1.0.0-alpha.212
+* **@lunora/mail:** upgraded to 1.0.0-alpha.105
+* **@lunora/notify:** upgraded to 1.0.0-alpha.78
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.192
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.122
+
+## @lunora/studio [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.287...@lunora/studio@1.0.0-alpha.288) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.208
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.105
+* **@lunora/client:** upgraded to 1.0.0-alpha.198
+* **@lunora/react:** upgraded to 1.0.0-alpha.211
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.191
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.121
+
+## @lunora/studio [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.286...@lunora/studio@1.0.0-alpha.287) (2026-10-12)
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.207
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.104
+* **@lunora/client:** upgraded to 1.0.0-alpha.197
+* **@lunora/react:** upgraded to 1.0.0-alpha.210
+* **@lunora/platform:** upgraded to 1.0.0-alpha.59
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.190
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.120
+
+## @lunora/studio [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.285...@lunora/studio@1.0.0-alpha.286) (2026-10-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.196
+* **@lunora/react:** upgraded to 1.0.0-alpha.209
+
+## @lunora/studio [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.284...@lunora/studio@1.0.0-alpha.285) (2026-10-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.195
+* **@lunora/react:** upgraded to 1.0.0-alpha.208
+
+## @lunora/studio [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.283...@lunora/studio@1.0.0-alpha.284) (2026-10-10)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.206
+* **@lunora/client:** upgraded to 1.0.0-alpha.194
+* **@lunora/react:** upgraded to 1.0.0-alpha.207
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.189
+
+## @lunora/studio [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.282...@lunora/studio@1.0.0-alpha.283) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.205
+* **@lunora/client:** upgraded to 1.0.0-alpha.193
+* **@lunora/react:** upgraded to 1.0.0-alpha.206
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.188
+
+## @lunora/studio [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.281...@lunora/studio@1.0.0-alpha.282) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.204
+* **@lunora/client:** upgraded to 1.0.0-alpha.192
+* **@lunora/react:** upgraded to 1.0.0-alpha.205
+
+## @lunora/studio [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.280...@lunora/studio@1.0.0-alpha.281) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.203
+
+## @lunora/studio [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.279...@lunora/studio@1.0.0-alpha.280) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/mail:** upgraded to 1.0.0-alpha.104
+
+## @lunora/studio [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.278...@lunora/studio@1.0.0-alpha.279) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.202
+
+## @lunora/studio [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.277...@lunora/studio@1.0.0-alpha.278) (2026-10-08)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.201
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.103
+* **@lunora/client:** upgraded to 1.0.0-alpha.191
+* **@lunora/react:** upgraded to 1.0.0-alpha.204
+* **@lunora/platform:** upgraded to 1.0.0-alpha.58
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.187
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.119
+
+## @lunora/studio [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.276...@lunora/studio@1.0.0-alpha.277) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.200
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.102
+* **@lunora/client:** upgraded to 1.0.0-alpha.190
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/react:** upgraded to 1.0.0-alpha.203
+* **@lunora/mail:** upgraded to 1.0.0-alpha.103
+* **@lunora/notify:** upgraded to 1.0.0-alpha.77
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.186
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.118
+
+## @lunora/studio [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.275...@lunora/studio@1.0.0-alpha.276) (2026-10-08)
+
+
+### Dependencies
+
+* **@lunora/mail:** upgraded to 1.0.0-alpha.102
+
+## @lunora/studio [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.274...@lunora/studio@1.0.0-alpha.275) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.199
+
+## @lunora/studio [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.273...@lunora/studio@1.0.0-alpha.274) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.198
+* **@lunora/client:** upgraded to 1.0.0-alpha.189
+* **@lunora/react:** upgraded to 1.0.0-alpha.202
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.185
+
+## @lunora/studio [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.272...@lunora/studio@1.0.0-alpha.273) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.197
+* **@lunora/react:** upgraded to 1.0.0-alpha.201
+
+## @lunora/studio [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.271...@lunora/studio@1.0.0-alpha.272) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.196
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.100
+* **@lunora/client:** upgraded to 1.0.0-alpha.188
+* **@lunora/react:** upgraded to 1.0.0-alpha.200
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.184
+
+## @lunora/studio [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.270...@lunora/studio@1.0.0-alpha.271) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.195
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.99
+* **@lunora/client:** upgraded to 1.0.0-alpha.187
+* **@lunora/react:** upgraded to 1.0.0-alpha.199
+* **@lunora/platform:** upgraded to 1.0.0-alpha.57
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.183
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.116
+
+## @lunora/studio [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.269...@lunora/studio@1.0.0-alpha.270) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.194
+* **@lunora/client:** upgraded to 1.0.0-alpha.186
+* **@lunora/react:** upgraded to 1.0.0-alpha.198
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.182
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.115
+
+## @lunora/studio [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.268...@lunora/studio@1.0.0-alpha.269) (2026-10-06)
+
+### Bug Fixes
+
+* **payment:** lazy ctx.payments, context-aware authorize, multi-reference creem ([#1001](https://github.com/anolilab/lunora/issues/1001)) ([b7d6285](https://github.com/anolilab/lunora/commit/b7d6285cad41b9a6c8f64ef048362360a6c478d0))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.193
+* **@lunora/client:** upgraded to 1.0.0-alpha.185
+* **@lunora/react:** upgraded to 1.0.0-alpha.197
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.181
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.114
+
+## @lunora/studio [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.267...@lunora/studio@1.0.0-alpha.268) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.192
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.98
+* **@lunora/client:** upgraded to 1.0.0-alpha.184
+* **@lunora/react:** upgraded to 1.0.0-alpha.196
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.180
+
+## @lunora/studio [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.266...@lunora/studio@1.0.0-alpha.267) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.183
+* **@lunora/react:** upgraded to 1.0.0-alpha.195
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.179
+
+## @lunora/studio [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.265...@lunora/studio@1.0.0-alpha.266) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.181
+* **@lunora/react:** upgraded to 1.0.0-alpha.193
+
+## @lunora/studio [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.264...@lunora/studio@1.0.0-alpha.265) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.190
+* **@lunora/client:** upgraded to 1.0.0-alpha.180
+* **@lunora/react:** upgraded to 1.0.0-alpha.192
+* **@lunora/mail:** upgraded to 1.0.0-alpha.99
+* **@lunora/notify:** upgraded to 1.0.0-alpha.75
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.177
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.112
+* **@lingui/core:** ^6.6.0 → ^6.9.0
+* **@lingui/message-utils:** ^6.6.0 → ^6.9.0
+* **@hugeicons/core-free-icons:** ^4.3.0 → ^4.3.5
+* **tailwind-merge:** ^3.6.0 → ^3.7.0
+* **motion:** ^13.2.0 → ^14.0.0
+* **@tanstack/react-router:** ^1.170.32 → ^1.170.41
+* **@tanstack/react-table:** ^9.2.4 → ^9.2.6
+* **@tanstack/react-virtual:** ^3.14.10 → ^3.14.13
+* **@xyflow/react:** ^12.11.6 → ^12.12.0
+
+## @lunora/studio [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.263...@lunora/studio@1.0.0-alpha.264) (2026-10-05)
+
+### Tests
+
+* **studio:** give the capability-gate tests the route-load timeout ([#988](https://github.com/anolilab/lunora/issues/988)) ([dc3f719](https://github.com/anolilab/lunora/commit/dc3f719b41eda8d282418c9395a231fcadc9fdef))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.179
+* **@lunora/react:** upgraded to 1.0.0-alpha.191
+* **@lunora/mail:** upgraded to 1.0.0-alpha.98
+* **@lunora/notify:** upgraded to 1.0.0-alpha.74
+
+## @lunora/studio [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.262...@lunora/studio@1.0.0-alpha.263) (2026-10-04)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.178
+* **@lunora/react:** upgraded to 1.0.0-alpha.190
+* **@lunora/mail:** upgraded to 1.0.0-alpha.97
+* **@lunora/notify:** upgraded to 1.0.0-alpha.73
+
+## @lunora/studio [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.261...@lunora/studio@1.0.0-alpha.262) (2026-10-04)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.177
+* **@lunora/react:** upgraded to 1.0.0-alpha.189
+
+## @lunora/studio [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.260...@lunora/studio@1.0.0-alpha.261) (2026-10-04)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.176
+* **@lunora/react:** upgraded to 1.0.0-alpha.188
+
+## @lunora/studio [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.259...@lunora/studio@1.0.0-alpha.260) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.175
+* **@lunora/react:** upgraded to 1.0.0-alpha.187
+
+## @lunora/studio [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.258...@lunora/studio@1.0.0-alpha.259) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.188
+* **@lunora/react:** upgraded to 1.0.0-alpha.186
+
+## @lunora/studio [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.257...@lunora/studio@1.0.0-alpha.258) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.187
+* **@lunora/react:** upgraded to 1.0.0-alpha.185
+
+## @lunora/studio [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.256...@lunora/studio@1.0.0-alpha.257) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.186
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.96
+* **@lunora/client:** upgraded to 1.0.0-alpha.174
+* **@lunora/react:** upgraded to 1.0.0-alpha.184
+* **@lunora/platform:** upgraded to 1.0.0-alpha.55
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.176
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.111
+
+## @lunora/studio [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.255...@lunora/studio@1.0.0-alpha.256) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.185
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.95
+* **@lunora/client:** upgraded to 1.0.0-alpha.173
+* **@lunora/react:** upgraded to 1.0.0-alpha.183
+* **@lunora/platform:** upgraded to 1.0.0-alpha.54
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.175
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.110
+
+## @lunora/studio [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.254...@lunora/studio@1.0.0-alpha.255) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.184
+* **@lunora/client:** upgraded to 1.0.0-alpha.172
+* **@lunora/react:** upgraded to 1.0.0-alpha.182
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.174
+
+## @lunora/studio [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.253...@lunora/studio@1.0.0-alpha.254) (2026-10-03)
+
+### ⚠ BREAKING CHANGES
+
+* `@lunora/bindings/analytics` no longer exports `createAnalyticsSqlClient`,
+`AnalyticsSqlError` or the `AnalyticsSqlClient`, `AnalyticsSqlConfig`, `AnalyticsSqlResult` and
+`AnalyticsSqlColumnMeta` types, and the `ANALYTICS_SQL_ERROR` code is gone. Query with
+`ctx.analyticsSql` or `createAnalyticsSql({ binding: createAnalyticsSqlRest(...) })` in the
+Analytics SQL dialect; failures are `AnalyticsSqlQueryError` (`ANALYTICS_SQL_QUERY_ERROR`).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* refactor(advisor): read ae metrics in the analytics sql dialect only
+
+The quarantined Analytics Engine feeder speaks only the Analytics SQL dialect, the one
+`ctx.analyticsSql` runs: `events.analyticsEngine."<dataset>"`, the SQL API's sample-weighted
+`COUNT(*)`, and every value bound as a parameter - `$since`, `$event`, and `$group` when a group
+is given. The `AnalyticsMetricsDialect` union, `dialectParts`, the `sqlString` literal escaper
+and the hidden "were params passed" dialect switch are gone; the dataset, which names the table
+and so cannot be a parameter, keeps its identifier guard.
+* `AnalyticsMetricsOptions` requires `since` (an ISO-8601 lower `timestamp`
+bound) and has no `dialect`; `AnalyticsMetricsSource.query` always receives `params`; the
+`AnalyticsMetricsDialect` type is removed. Pass `ctx.analyticsSql` as the source.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(studio): ask the host for usage panels by key, never with sql
+
+The Analytics tab has one runner, `analyticsSqlQuery(panel)`, which receives a panel key
+(`"volume"`, `"latency"`, `"hotShards"`) and resolves the rows. The host answers through an
+admin-gated action that builds the statement server-side with `functionUsageQuery(panel)` and
+runs it on `ctx.analyticsSql`. The old shape handed the host a SQL string to execute, which
+invited an action that runs caller-supplied SQL against the whole account. The prop docs and the
+not-wired message now say the action must be admin-only and take the key.
+
+The panel drops the second (token-dialect) runner, the precedence between the two, the dataset
+prop (now the server's choice) and `toPanelResult`: columns are `string[]`, read off the first
+row's keys in SELECT order.
+* `StudioProps.analyticsQuery` is removed and `analyticsSqlQuery` now has the
+signature `(panel: FunctionUsagePanel) => Promise<AnalyticsSqlQueryResult>`.
+`AnalyticsPanelProps` loses `dataset` and `runAnalyticsSql`, and its `runQuery` takes a panel
+key.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(config): report artifacts as unsupported in the alchemy translation
+
+The Alchemy translator emits only D1, R2, KV and Queue resources, but an
+artifacts[] binding was neither emitted nor listed in unsupported, so a
+config using ctx.artifacts produced a Worker without env.ARTIFACTS and no
+diagnostic. Raised by review on #941.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* docs(bindings): list the analytics-sql subpath in the readme table
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Features
+
+* cloudflare analytics sql binding as ctx.analyticsSql ([#946](https://github.com/anolilab/lunora/issues/946)) ([9c931dd](https://github.com/anolilab/lunora/commit/9c931dd11bc3f6770dd893d5792b3b31627c0f7b))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.183
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.93
+* **@lunora/client:** upgraded to 1.0.0-alpha.171
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+* **@lunora/react:** upgraded to 1.0.0-alpha.181
+* **@lunora/mail:** upgraded to 1.0.0-alpha.96
+* **@lunora/notify:** upgraded to 1.0.0-alpha.72
+* **@lunora/platform:** upgraded to 1.0.0-alpha.52
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.173
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.108
+
+## @lunora/studio [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.252...@lunora/studio@1.0.0-alpha.253) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.182
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.92
+* **@lunora/client:** upgraded to 1.0.0-alpha.170
+* **@lunora/react:** upgraded to 1.0.0-alpha.180
+* **@lunora/platform:** upgraded to 1.0.0-alpha.51
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.172
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.107
+
+## @lunora/studio [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.251...@lunora/studio@1.0.0-alpha.252) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.181
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.91
+* **@lunora/client:** upgraded to 1.0.0-alpha.169
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/react:** upgraded to 1.0.0-alpha.179
+* **@lunora/mail:** upgraded to 1.0.0-alpha.95
+* **@lunora/notify:** upgraded to 1.0.0-alpha.71
+* **@lunora/platform:** upgraded to 1.0.0-alpha.50
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.171
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.106
+
+## @lunora/studio [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.250...@lunora/studio@1.0.0-alpha.251) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.178
+
+## @lunora/studio [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.249...@lunora/studio@1.0.0-alpha.250) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.180
+* **@lunora/react:** upgraded to 1.0.0-alpha.177
+
+## @lunora/studio [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.248...@lunora/studio@1.0.0-alpha.249) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.179
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.90
+* **@lunora/client:** upgraded to 1.0.0-alpha.168
+* **@lunora/react:** upgraded to 1.0.0-alpha.176
+* **@lunora/platform:** upgraded to 1.0.0-alpha.49
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.170
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.105
+
+## @lunora/studio [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.247...@lunora/studio@1.0.0-alpha.248) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.178
+* **@lunora/react:** upgraded to 1.0.0-alpha.175
+
+## @lunora/studio [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.246...@lunora/studio@1.0.0-alpha.247) (2026-10-02)
+
+### Features
+
+* **codegen:** typed service bindings to sibling workers ([#918](https://github.com/anolilab/lunora/issues/918)) ([e57cf93](https://github.com/anolilab/lunora/commit/e57cf930ea443c21b1d1d6abf2600d031f010c5c))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.177
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.89
+* **@lunora/client:** upgraded to 1.0.0-alpha.167
+* **@lunora/react:** upgraded to 1.0.0-alpha.174
+* **@lunora/platform:** upgraded to 1.0.0-alpha.48
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.169
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.104
+
+## @lunora/studio [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.245...@lunora/studio@1.0.0-alpha.246) (2026-10-01)
+
+### Features
+
+* **codegen:** modules, a call-graph manifest and an architecture view ([#917](https://github.com/anolilab/lunora/issues/917)) ([522a779](https://github.com/anolilab/lunora/commit/522a7799d183c20d1edeb8cbd8b72939eb847fb2))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.176
+* **@lunora/client:** upgraded to 1.0.0-alpha.166
+* **@lunora/react:** upgraded to 1.0.0-alpha.173
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.168
+
+## @lunora/studio [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.244...@lunora/studio@1.0.0-alpha.245) (2026-10-01)
+
+### Features
+
+* **queue:** add pub/sub topics over cloudflare queues ([#916](https://github.com/anolilab/lunora/issues/916)) ([eba0175](https://github.com/anolilab/lunora/commit/eba0175f586e804555d0e0c485a3a93d73f15d1f))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.175
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.88
+* **@lunora/client:** upgraded to 1.0.0-alpha.165
+* **@lunora/react:** upgraded to 1.0.0-alpha.172
+* **@lunora/platform:** upgraded to 1.0.0-alpha.47
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.167
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.103
+
+## @lunora/studio [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.243...@lunora/studio@1.0.0-alpha.244) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.174
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.87
+* **@lunora/client:** upgraded to 1.0.0-alpha.164
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/react:** upgraded to 1.0.0-alpha.171
+* **@lunora/mail:** upgraded to 1.0.0-alpha.94
+* **@lunora/notify:** upgraded to 1.0.0-alpha.70
+* **@lunora/platform:** upgraded to 1.0.0-alpha.46
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.166
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.102
+
+## @lunora/studio [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.242...@lunora/studio@1.0.0-alpha.243) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.173
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.86
+* **@lunora/client:** upgraded to 1.0.0-alpha.163
+* **@lunora/react:** upgraded to 1.0.0-alpha.170
+* **@lunora/platform:** upgraded to 1.0.0-alpha.45
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.165
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.101
+
+## @lunora/studio [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.241...@lunora/studio@1.0.0-alpha.242) (2026-09-30)
+
+### ⚠ BREAKING CHANGES
+
+* **ai:** `ctx.ai` is no longer present on query and mutation contexts at
+runtime. Code reaching it through a cast from a query or mutation now gets
+`undefined`; move the inference into an action.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(platform): state ai gateway routing in the capability matrix
+
+The `ai` rating now covers the `<provider>/<model>` and `dynamic/<route>` ids
+`ctx.ai.model()` routes through AI Gateway: native on Cloudflare over the same
+`AI` binding, and part of the existing `unsupported` rating on node and celld,
+which have no gateway (or `env.AI` binding) to route through.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat(cli): add ai gateway provisioning and doctor checks
+
+Add `lunora ai gateway`, which creates (or reuses) a Cloudflare AI Gateway over
+the REST API (POST/GET /accounts/{account_id}/ai-gateway/gateways) and writes
+LUNORA_AI_GATEWAY_ID + LUNORA_AI_GATEWAY_ACCOUNT_ID into the wrangler `vars`,
+preserving comments. The id defaults to the worker name (--id overrides); log
+collection is on by default (--no-logs turns it off); --dry-run makes no API
+call and edits nothing. Credentials come from CLOUDFLARE_API_TOKEN and
+CLOUDFLARE_ACCOUNT_ID (falling back to wrangler `account_id`).
+
+`lunora doctor` gains three codes: ai-binding-missing (warn),
+ai-gateway-token-unused (warn) and ai-gateway-default (info).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(studio): add ai usage panel
+
+New Observability page (tab `aiUsage`) showing what ctx.ai.model(...) calls cost:
+total spend, input/output tokens and call count, a per-minute cost sparkline, breakdowns
+by function path and by model, and the recent ai.generate / ai.stream calls linking
+through to their trace.
+
+Totals read the durable gen_ai.usage.{input_tokens,output_tokens,cost} counter series
+from getMetricHistory: bucket `sum` is the tokens/USD spent, bucket `count` the calls
+(one ctx.metrics.count per call). Calls = max(input count, output count) so a call
+reporting both is not counted twice. Cost stays split by lunora.usage.cost.source;
+estimated (or unlabelled) cost is always marked "Estimated" and never shown as
+provider-reported. With no history yet, totals fall back to the live trace ring and
+the page says they reset on hibernation.
+
+The pure fold lives in features/ai-usage/ai-usage.ts with unit tests in the node
+`unit` project.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(ai): route provider slugs to a self-hosted proxy off cloudflare
+
+LUNORA_AI_PROXY_URL (+ LUNORA_AI_PROXY_TOKEN) points ctx.ai at any
+OpenAI-compatible proxy (LiteLLM, OpenRouter, your own). "<provider>/<model>"
+slugs go there unchanged instead of AI Gateway, and no AI binding is needed, so
+ctx.ai works on celld. @cf/... ids and ctx.ai.run still need the binding.
+
+celld's `ai` capability moves from unsupported to emulated, so codegen emits
+ctx.ai there again. lunora doctor skips the binding and default-gateway checks
+when the proxy var is set.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(ai): settle stream spans on cancel and share usage accounting
+
+- Stream telemetry re-emits parts through a ReadableStream, so an ai.stream span closes on
+  consumer cancel and fails on an upstream error; a TransformStream's flush never ran on
+  either, leaving the span and its gen_ai.usage counters pending forever.
+- recordUsage/modelIdOf live in usage.ts and are shared with defineRag, whose embeds now
+  also count into ctx.metrics (RagContext.metrics), so RAG spend reaches the durable
+  history. The duplicate EmbedSpan/EmbedTracer types are gone in favour of AiSpan/AiTracer.
+- The binding path selects the gateway by LUNORA_AI_GATEWAY_ID alone; the account id is
+  only needed for a bring-your-own provider's baseURL.
+- No per-call slug metadata on top of an explicit gateway's own, which could exceed AI
+  Gateway's 5-key limit and get the whole object rejected.
+- createAi no longer throws without a binding, provider or proxy: it returns a facade whose
+  calls throw one directed error (embeddings and ai.run included), so codegen always emits
+  createAi and drops its aiStub.
+- node rates ai as emulated through LUNORA_AI_PROXY_URL, like celld.
+- Docs: unified-catalog providers are paid through Unified Billing on the run path; keys
+  stored on the gateway apply only to gateway-path providers.
+* **ai:** createAi({}) returns a throwing facade instead of throwing at construction.
+Every ctx.ai app now bundles @ai-sdk/openai and @ai-sdk/anthropic.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(cli): align ai doctor checks with the runtime
+
+- ai-gateway-token-unused now fires whenever ctx.ai is used with LUNORA_AI_GATEWAY_TOKEN set:
+  the Workers AI binding cannot send it, with or without a gateway id.
+- The checks read top-level vars, env.<name>.vars and .dev.vars, so a proxy or gateway id
+  set outside top-level vars no longer triggers a spurious finding.
+- Binding inference runs once in runDoctor and feeds both the export and AI checks.
+- WranglerConfig types the `ai` binding; the env var names live in one CLI module.
+- `lunora ai gateway` reuses @lunora/config's applyModify (now exported from
+  @lunora/config/cloudflare) and returns one failure shape from its resolvers.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(studio): count cost-only ai calls and fold usage per model
+
+- The history call count takes the largest series count per (function, model) pair and sums
+  across pairs, so a call that reported only a cost is counted and two models' counts are
+  never merged by max.
+- One slice-based flow serves both the history and live halves.
+- ai.embed spans (defineRag) show up in recent calls.
+- formatUsd/formatTokens move to reports/metrics-format and use the renderer's locale.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* docs(platform-node): match the ai row to the emulated rating
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(ai): refuse a proxy token over plain http
+
+- LUNORA_AI_PROXY_TOKEN is never sent to a non-HTTPS LUNORA_AI_PROXY_URL off loopback; the
+  proxy provider throws a directed error on use instead, as it does for an unparsable URL.
+- `lunora ai gateway --dry-run` warns when the account id a real run needs is missing.
+- doctor reads an unreadable .dev.vars as unset instead of aborting the run.
+- The node `agents` note no longer claims `ai` is unsupported there.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(ai): record stream usage that arrived before an upstream error
+
+A stream that emitted its `finish` part and then errored lost that usage: the span failed
+before recordUsage ran. The instrumented stream now settles once with its outcome and the
+error, so usage is recorded first and the error is then rethrown to fail the span.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Features
+
+* **ai:** AI Gateway model routing, per-function AI spend, and ctx.ai action-only ([#910](https://github.com/anolilab/lunora/issues/910)) ([f0e8623](https://github.com/anolilab/lunora/commit/f0e8623068b35d7c05bdb1b131761b95de768f9c))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.172
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.85
+* **@lunora/client:** upgraded to 1.0.0-alpha.162
+* **@lunora/react:** upgraded to 1.0.0-alpha.169
+* **@lunora/platform:** upgraded to 1.0.0-alpha.44
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.164
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.100
+
+## @lunora/studio [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.240...@lunora/studio@1.0.0-alpha.241) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.171
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.84
+* **@lunora/client:** upgraded to 1.0.0-alpha.161
+* **@lunora/react:** upgraded to 1.0.0-alpha.168
+* **@lunora/platform:** upgraded to 1.0.0-alpha.43
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.163
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.99
+
+## @lunora/studio [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.239...@lunora/studio@1.0.0-alpha.240) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.170
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.83
+* **@lunora/client:** upgraded to 1.0.0-alpha.160
+* **@lunora/react:** upgraded to 1.0.0-alpha.167
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.162
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.98
+
+## @lunora/studio [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.238...@lunora/studio@1.0.0-alpha.239) (2026-09-29)
+
+### Features
+
+* **studio:** inline AI rewrite for the SQL console ([#508](https://github.com/anolilab/lunora/issues/508)) ([c50eebb](https://github.com/anolilab/lunora/commit/c50eebb04a768e3d6840b8274ee458360808bd0d))
+
+## @lunora/studio [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.237...@lunora/studio@1.0.0-alpha.238) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.169
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.82
+* **@lunora/client:** upgraded to 1.0.0-alpha.159
+* **@lunora/react:** upgraded to 1.0.0-alpha.166
+* **@lunora/platform:** upgraded to 1.0.0-alpha.42
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.161
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.97
+
+## @lunora/studio [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.236...@lunora/studio@1.0.0-alpha.237) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.158
+* **@lunora/react:** upgraded to 1.0.0-alpha.165
+
+## @lunora/studio [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.235...@lunora/studio@1.0.0-alpha.236) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.168
+* **@lunora/client:** upgraded to 1.0.0-alpha.157
+* **@lunora/react:** upgraded to 1.0.0-alpha.164
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.160
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.96
+
+## @lunora/studio [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.234...@lunora/studio@1.0.0-alpha.235) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.167
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.80
+* **@lunora/client:** upgraded to 1.0.0-alpha.156
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/react:** upgraded to 1.0.0-alpha.163
+* **@lunora/mail:** upgraded to 1.0.0-alpha.92
+* **@lunora/notify:** upgraded to 1.0.0-alpha.68
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.159
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.95
+
+## @lunora/studio [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.233...@lunora/studio@1.0.0-alpha.234) (2026-09-27)
+
+### Code Refactoring
+
+* **studio:** remove dead types, components and helpers ([#873](https://github.com/anolilab/lunora/issues/873)) ([8d06856](https://github.com/anolilab/lunora/commit/8d06856ff20a7e671df6d93ebd9ec4cfe64f6e66))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.166
+* **@lunora/client:** upgraded to 1.0.0-alpha.155
+* **@lunora/react:** upgraded to 1.0.0-alpha.162
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.158
+
+## @lunora/studio [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.232...@lunora/studio@1.0.0-alpha.233) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.154
+* **@lunora/react:** upgraded to 1.0.0-alpha.161
+
+## @lunora/studio [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.231...@lunora/studio@1.0.0-alpha.232) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.153
+* **@lunora/react:** upgraded to 1.0.0-alpha.160
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.157
+
+## @lunora/studio [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.230...@lunora/studio@1.0.0-alpha.231) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.152
+* **@lunora/react:** upgraded to 1.0.0-alpha.159
+
+## @lunora/studio [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.229...@lunora/studio@1.0.0-alpha.230) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.151
+* **@lunora/react:** upgraded to 1.0.0-alpha.158
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.156
+
+## @lunora/studio [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.228...@lunora/studio@1.0.0-alpha.229) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.157
+
+## @lunora/studio [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.227...@lunora/studio@1.0.0-alpha.228) (2026-09-27)
+
+### Bug Fixes
+
+* **studio:** guard more panels against results that outlive a selection change ([#862](https://github.com/anolilab/lunora/issues/862)) ([341c3a3](https://github.com/anolilab/lunora/commit/341c3a3a2dce28f6e4337e8f2aace8943c616e29))
+
+## @lunora/studio [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.226...@lunora/studio@1.0.0-alpha.227) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.165
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.79
+* **@lunora/client:** upgraded to 1.0.0-alpha.150
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+* **@lunora/react:** upgraded to 1.0.0-alpha.156
+* **@lunora/mail:** upgraded to 1.0.0-alpha.91
+* **@lunora/notify:** upgraded to 1.0.0-alpha.67
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.155
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.94
+
+## @lunora/studio [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.225...@lunora/studio@1.0.0-alpha.226) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.149
+* **@lunora/react:** upgraded to 1.0.0-alpha.155
+
+## @lunora/studio [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.224...@lunora/studio@1.0.0-alpha.225) (2026-09-27)
+
+### Bug Fixes
+
+* **studio:** guard panels against late results after a selection switch ([#858](https://github.com/anolilab/lunora/issues/858)) ([391765b](https://github.com/anolilab/lunora/commit/391765b5edff1dbfd9a71dfcc893fec26596f15f))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.148
+* **@lunora/react:** upgraded to 1.0.0-alpha.154
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.154
+
+## @lunora/studio [1.0.0-alpha.224](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.223...@lunora/studio@1.0.0-alpha.224) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.147
+* **@lunora/react:** upgraded to 1.0.0-alpha.153
+
+## @lunora/studio [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.222...@lunora/studio@1.0.0-alpha.223) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.146
+* **@lunora/react:** upgraded to 1.0.0-alpha.152
+
+## @lunora/studio [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.221...@lunora/studio@1.0.0-alpha.222) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **studio:** DataBrowser and TableEditor take a canGenerateRows prop
+(default false); `editable` alone no longer shows "Generate rows".
+StudioFeaturesResult gains an optional `platform` field.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(studio): hold capability-gated pages until the host is known
+
+The capability gate failed open while the studioFeatures payload was in
+flight. The default flags carry no host, so a direct link to /pitr on a Node
+worker mounted the lazy PITR panel and fired getPitrBookmark before the gate
+could apply. useStudioFeatures now reports `settled`, and a tab with a
+capability gate renders the route skeleton until the worker has answered (or
+failed, which still means no capability gating).
+
+The usage table and the capability table are now one TAB_GATES table in
+app/tab-gates.tsx. gateTab returns hidden / pending / unavailable(reason) / ok,
+and resolveNav applies it to the whole nav, which takes the inline loop out of
+the shell. The nav tooltips come from one merged description map.
+
+- Payload: `platform` is now `{ id, name, unsupported: string[] }`, the keys
+  the target's matrix rates unsupported. This drops the level coercion and the
+  mirrored level type. buildStudioFeatures takes the target and builds it.
+- Reasons read "Mail delivery is not supported on Node." from a per-capability
+  label, never a raw matrix key.
+- storageRules is no longer capability-gated: it shows codegen metadata and
+  asks the host for nothing.
+- The studio's capability keys are a typed union, pinned against both shipped
+  matrices by a test (@lunora/platform is a new devDependency).
+- The studio docs describe the capability gate next to the usage-flag gate.
+* **studio:** StudioFeaturesResult.platform is `{ id, name, unsupported }`
+instead of a per-feature level map.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(studio): drop a superseded studio features answer
+
+A client swap re-runs the features effect, and the earlier fetch could still
+land afterwards and overwrite the newer host's capabilities. The effect now
+aborts its own run on cleanup and only applies an answer that is still current.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(studio): drop the previous worker's features on a client swap
+
+The features hook kept the last client's answer until the new client's
+arrived, so tabs, routes and the command palette were gated on the wrong
+host in between. The stored answer is now keyed on the client that gave it,
+and a different client reads as unsettled at once.
+
+The PITR panel also disables preview, restore and undo once the host answers
+PITR_UNAVAILABLE (local Wrangler keeps no bookmarks), and stops polling for a
+bookmark it will never get, instead of leaving controls that can only fail.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(studio): assert the disabled PITR controls without a cast
+
+Read the disabled state through the attribute, so the test typechecks under
+the studio test tsconfig without an element cast.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(studio): keep the PITR panel on the current host's answer
+
+A bookmark read started against the previous client could land after the
+new client's and overwrite the panel's bookmark and availability, re-enabling
+controls the current host refuses. The mount read now aborts when the client
+or shard changes and drops its answer.
+
+A restore that answers PITR_UNAVAILABLE now disables the controls too:
+restore support is checked on its own, so a host can serve bookmarks and
+still refuse to arm one.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Features
+
+* **studio:** gate pages on the worker's host capabilities ([#851](https://github.com/anolilab/lunora/issues/851)) ([52b9e70](https://github.com/anolilab/lunora/commit/52b9e70969577c197d2d27f207a77f5d96924131))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.164
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.78
+* **@lunora/client:** upgraded to 1.0.0-alpha.145
+* **@lunora/react:** upgraded to 1.0.0-alpha.151
+* **@lunora/platform:** upgraded to 1.0.0-alpha.41
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.153
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.92
+
+## @lunora/studio [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.220...@lunora/studio@1.0.0-alpha.221) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.144
+* **@lunora/react:** upgraded to 1.0.0-alpha.150
+
+## @lunora/studio [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.219...@lunora/studio@1.0.0-alpha.220) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.143
+* **@lunora/react:** upgraded to 1.0.0-alpha.149
+* **@lunora/mail:** upgraded to 1.0.0-alpha.90
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.152
+
+## @lunora/studio [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.218...@lunora/studio@1.0.0-alpha.219) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.142
+* **@lunora/react:** upgraded to 1.0.0-alpha.148
+
+## @lunora/studio [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.217...@lunora/studio@1.0.0-alpha.218) (2026-09-26)
+
+### Bug Fixes
+
+* **studio:** bigint filter data loss, cross-shard commits, and panel defects ([#844](https://github.com/anolilab/lunora/issues/844)) ([41585c7](https://github.com/anolilab/lunora/commit/41585c7142c20932f2aefbb0fbc84fc52f7e7db8))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.163
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.77
+* **@lunora/client:** upgraded to 1.0.0-alpha.141
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+* **@lunora/react:** upgraded to 1.0.0-alpha.147
+* **@lunora/mail:** upgraded to 1.0.0-alpha.89
+* **@lunora/notify:** upgraded to 1.0.0-alpha.66
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.151
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.91
+
+## @lunora/studio [1.0.0-alpha.217](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.216...@lunora/studio@1.0.0-alpha.217) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.161
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.76
+* **@lunora/client:** upgraded to 1.0.0-alpha.139
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+* **@lunora/react:** upgraded to 1.0.0-alpha.146
+* **@lunora/mail:** upgraded to 1.0.0-alpha.88
+* **@lunora/notify:** upgraded to 1.0.0-alpha.65
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.149
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.89
+
+## @lunora/studio [1.0.0-alpha.216](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.215...@lunora/studio@1.0.0-alpha.216) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.160
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.75
+* **@lunora/client:** upgraded to 1.0.0-alpha.138
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+* **@lunora/react:** upgraded to 1.0.0-alpha.145
+* **@lunora/mail:** upgraded to 1.0.0-alpha.87
+* **@lunora/notify:** upgraded to 1.0.0-alpha.64
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.148
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.88
+
+## @lunora/studio [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.214...@lunora/studio@1.0.0-alpha.215) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.144
+
+## @lunora/studio [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.213...@lunora/studio@1.0.0-alpha.214) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.159
+* **@lunora/client:** upgraded to 1.0.0-alpha.137
+* **@lunora/react:** upgraded to 1.0.0-alpha.143
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.147
+
+## @lunora/studio [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.212...@lunora/studio@1.0.0-alpha.213) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.158
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.74
+* **@lunora/client:** upgraded to 1.0.0-alpha.136
+* **@lunora/react:** upgraded to 1.0.0-alpha.142
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.146
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.87
+
+## @lunora/studio [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.211...@lunora/studio@1.0.0-alpha.212) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.157
+* **@lunora/client:** upgraded to 1.0.0-alpha.135
+* **@lunora/react:** upgraded to 1.0.0-alpha.141
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.145
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.86
+
+## @lunora/studio [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.210...@lunora/studio@1.0.0-alpha.211) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.156
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.73
+* **@lunora/client:** upgraded to 1.0.0-alpha.134
+* **@lunora/react:** upgraded to 1.0.0-alpha.140
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.144
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.85
+
+## @lunora/studio [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.209...@lunora/studio@1.0.0-alpha.210) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.155
+* **@lunora/client:** upgraded to 1.0.0-alpha.133
+* **@lunora/react:** upgraded to 1.0.0-alpha.139
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.143
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.84
+
+## @lunora/studio [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.208...@lunora/studio@1.0.0-alpha.209) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.154
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.72
+* **@lunora/client:** upgraded to 1.0.0-alpha.132
+* **@lunora/react:** upgraded to 1.0.0-alpha.138
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.142
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.83
+
+## @lunora/studio [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.207...@lunora/studio@1.0.0-alpha.208) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.153
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.71
+* **@lunora/client:** upgraded to 1.0.0-alpha.131
+* **@lunora/react:** upgraded to 1.0.0-alpha.137
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.141
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.82
+
+## @lunora/studio [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.206...@lunora/studio@1.0.0-alpha.207) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.152
+* **@lunora/client:** upgraded to 1.0.0-alpha.130
+* **@lunora/react:** upgraded to 1.0.0-alpha.136
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.140
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.81
+
+## @lunora/studio [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.205...@lunora/studio@1.0.0-alpha.206) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.151
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.69
+* **@lunora/client:** upgraded to 1.0.0-alpha.129
+* **@lunora/react:** upgraded to 1.0.0-alpha.135
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.139
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.80
+
+## @lunora/studio [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.204...@lunora/studio@1.0.0-alpha.205) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.150
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.68
+* **@lunora/client:** upgraded to 1.0.0-alpha.128
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+* **@lunora/react:** upgraded to 1.0.0-alpha.134
+* **@lunora/mail:** upgraded to 1.0.0-alpha.86
+* **@lunora/notify:** upgraded to 1.0.0-alpha.63
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.138
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.79
+
+## @lunora/studio [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.203...@lunora/studio@1.0.0-alpha.204) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.149
+* **@lunora/client:** upgraded to 1.0.0-alpha.127
+* **@lunora/react:** upgraded to 1.0.0-alpha.133
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.137
+
+## @lunora/studio [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.202...@lunora/studio@1.0.0-alpha.203) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.148
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.67
+* **@lunora/client:** upgraded to 1.0.0-alpha.126
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/react:** upgraded to 1.0.0-alpha.132
+* **@lunora/mail:** upgraded to 1.0.0-alpha.85
+* **@lunora/notify:** upgraded to 1.0.0-alpha.62
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.136
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.78
+
+## @lunora/studio [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.201...@lunora/studio@1.0.0-alpha.202) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.125
+* **@lunora/react:** upgraded to 1.0.0-alpha.131
+
+## @lunora/studio [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.200...@lunora/studio@1.0.0-alpha.201) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.146
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.66
+* **@lunora/client:** upgraded to 1.0.0-alpha.124
+* **@lunora/react:** upgraded to 1.0.0-alpha.130
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.135
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.77
+
+## @lunora/studio [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.199...@lunora/studio@1.0.0-alpha.200) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.123
+* **@lunora/react:** upgraded to 1.0.0-alpha.129
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.134
+
+## @lunora/studio [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.198...@lunora/studio@1.0.0-alpha.199) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.122
+* **@lunora/react:** upgraded to 1.0.0-alpha.128
+
+## @lunora/studio [1.0.0-alpha.198](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.197...@lunora/studio@1.0.0-alpha.198) (2026-09-23)
+
+### Bug Fixes
+
+* **runtime:** restore the documented admin exemption on the WS upgrade, and 404 an unknown storage bucket ([#779](https://github.com/anolilab/lunora/issues/779)) ([b354595](https://github.com/anolilab/lunora/commit/b35459560b5606db18571fc9e9c822cbbdfe1eb8))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.145
+* **@lunora/client:** upgraded to 1.0.0-alpha.121
+* **@lunora/react:** upgraded to 1.0.0-alpha.127
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.133
+
+## @lunora/studio [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.196...@lunora/studio@1.0.0-alpha.197) (2026-09-23)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** `__lunora_admin__:deleteRows` and `__lunora_admin__:clearTable`
+remove rows physically on a `.softDelete()` table instead of tombstoning them.
+
+The suite missed this because the bulk harness' schema declared no
+`softDeleteMode`, so the tombstone branch was never reached. It now carries a
+`.softDelete()` table alongside the plain one, and the drain helper reports the
+batch count — a spinning drain and a capped one report the same outcome, so the
+round-trip count is what separates converged from spun.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **do:** make the admin bulk delete converge on a soft-delete table ([#782](https://github.com/anolilab/lunora/issues/782)) ([d1fcf5f](https://github.com/anolilab/lunora/commit/d1fcf5f38677945df25d001fbb3f1a8081b0b8e5))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.120
+* **@lunora/react:** upgraded to 1.0.0-alpha.126
+
+## @lunora/studio [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.195...@lunora/studio@1.0.0-alpha.196) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.144
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.65
+* **@lunora/client:** upgraded to 1.0.0-alpha.119
+* **@lunora/react:** upgraded to 1.0.0-alpha.125
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.132
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.76
+
+## @lunora/studio [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.194...@lunora/studio@1.0.0-alpha.195) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.143
+* **@lunora/client:** upgraded to 1.0.0-alpha.117
+* **@lunora/react:** upgraded to 1.0.0-alpha.123
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.130
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.75
+
+## @lunora/studio [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.193...@lunora/studio@1.0.0-alpha.194) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.122
+
+## @lunora/studio [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.192...@lunora/studio@1.0.0-alpha.193) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.116
+* **@lunora/react:** upgraded to 1.0.0-alpha.121
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.129
+
+## @lunora/studio [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.191...@lunora/studio@1.0.0-alpha.192) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.115
+* **@lunora/react:** upgraded to 1.0.0-alpha.120
+
+## @lunora/studio [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.190...@lunora/studio@1.0.0-alpha.191) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.142
+* **@lunora/client:** upgraded to 1.0.0-alpha.114
+* **@lunora/react:** upgraded to 1.0.0-alpha.119
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.128
+
+## @lunora/studio [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.189...@lunora/studio@1.0.0-alpha.190) (2026-09-21)
+
+### Features
+
+* **client:** poll live queries over HTTP when the socket will not open ([#760](https://github.com/anolilab/lunora/issues/760)) ([69c1469](https://github.com/anolilab/lunora/commit/69c1469e2e0aee906556f7743e84b42057d628d0))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.141
+* **@lunora/client:** upgraded to 1.0.0-alpha.113
+* **@lunora/react:** upgraded to 1.0.0-alpha.118
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.127
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.74
+
+## @lunora/studio [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.188...@lunora/studio@1.0.0-alpha.189) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.140
+* **@lunora/client:** upgraded to 1.0.0-alpha.112
+* **@lunora/react:** upgraded to 1.0.0-alpha.117
+
+## @lunora/studio [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.187...@lunora/studio@1.0.0-alpha.188) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.139
+* **@lunora/client:** upgraded to 1.0.0-alpha.111
+* **@lunora/react:** upgraded to 1.0.0-alpha.116
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.126
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.73
+
+## @lunora/studio [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.186...@lunora/studio@1.0.0-alpha.187) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* `createVectorSyncHook` no longer compensates a partial
+fan-out with deletes — a partially applied write is left partial.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(studio): make the SQL export replayable
+
+The data browser's `.sql` export targeted the grid's DISPLAY columns. A shard
+table physically holds `(id, _creationTime, __doc__)` and the browser lifts
+every `__doc__` field to a top-level column, so the dump named columns that do
+not exist: replaying `notes.sql` answers `table notes has no column named
+authorId`, and had SQLite accepted it the rows would have carried no `__doc__`
+at all, which every read path fails on.
+
+`toSql` now takes the page's `sqlColumns` — already reported alongside
+`columns` for exactly this reason — and, when the table carries a `__doc__`,
+targets the physical columns and re-assembles the blob from the lifted fields.
+The SQL console keeps the literal column-for-column dump: its grid is an
+arbitrary query's result set with no table behind it.
+
+Proved end to end rather than on the statement text: the new suite writes rows
+through `ctx.db`, exports the page, replays the dump into a fresh database and
+reads a row back through `readTablePage` — the call the browser itself makes.
+It fails on the old emitter at the replay, not at an assertion.
+
+Still lossy in the way the CSV and JSON exports already are: a bigint field
+re-assembles as its decimal string and a `v.bytes()` field as the
+`<bytes: n B>` placeholder, because the grid holds the decoded value rather
+than the sort-key projection the writer stores beside it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* chore(do): record deferAfterCommit in the api snapshot
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* two write-path defects — post-commit hooks and the SQL export ([#753](https://github.com/anolilab/lunora/issues/753)) ([4c2bb4a](https://github.com/anolilab/lunora/commit/4c2bb4af0b24cc988b6651f97001745799982f72))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.64
+* **@lunora/client:** upgraded to 1.0.0-alpha.110
+* **@lunora/react:** upgraded to 1.0.0-alpha.115
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.125
+
+## @lunora/studio [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.185...@lunora/studio@1.0.0-alpha.186) (2026-09-13)
+
+### Bug Fixes
+
+* **codegen:** record table modifiers in the drift snapshot ([#751](https://github.com/anolilab/lunora/issues/751)) ([b8e9212](https://github.com/anolilab/lunora/commit/b8e92129ef721619405e1f4df274932fc28635a5))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.138
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.63
+* **@lunora/client:** upgraded to 1.0.0-alpha.109
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/react:** upgraded to 1.0.0-alpha.114
+* **@lunora/mail:** upgraded to 1.0.0-alpha.84
+* **@lunora/notify:** upgraded to 1.0.0-alpha.60
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.124
+
+## @lunora/studio [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.184...@lunora/studio@1.0.0-alpha.185) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.137
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.62
+* **@lunora/client:** upgraded to 1.0.0-alpha.108
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/react:** upgraded to 1.0.0-alpha.113
+* **@lunora/mail:** upgraded to 1.0.0-alpha.83
+* **@lunora/notify:** upgraded to 1.0.0-alpha.59
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.123
+
+## @lunora/studio [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.183...@lunora/studio@1.0.0-alpha.184) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.136
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.61
+* **@lunora/client:** upgraded to 1.0.0-alpha.107
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/react:** upgraded to 1.0.0-alpha.112
+* **@lunora/mail:** upgraded to 1.0.0-alpha.82
+* **@lunora/notify:** upgraded to 1.0.0-alpha.58
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.122
+
+## @lunora/studio [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.182...@lunora/studio@1.0.0-alpha.183) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.135
+* **@lunora/client:** upgraded to 1.0.0-alpha.106
+* **@lunora/react:** upgraded to 1.0.0-alpha.111
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.121
+
+## @lunora/studio [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.181...@lunora/studio@1.0.0-alpha.182) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.134
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.60
+* **@lunora/client:** upgraded to 1.0.0-alpha.105
+* **@lunora/react:** upgraded to 1.0.0-alpha.110
+* **@lunora/mail:** upgraded to 1.0.0-alpha.81
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.120
+
+## @lunora/studio [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.180...@lunora/studio@1.0.0-alpha.181) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.133
+
+## @lunora/studio [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.179...@lunora/studio@1.0.0-alpha.180) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **studio,do:** `TablePage` now carries `sqlColumns`, the table's physical
+column names. A caller feeding columns to anything SQL-shaped wants that list,
+not `columns`.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+* **studio,codegen:** `ColumnMeta` (`@lunora/shard-engine`, mirrored in `@lunora/studio`) gains
+an optional `onDelete`, and the generated shard's `tableColumns` signature widens with it.
+Regenerate with `lunora codegen`.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **studio,codegen:** confirm only what a delete measured ([#728](https://github.com/anolilab/lunora/issues/728)) ([da7be59](https://github.com/anolilab/lunora/commit/da7be59f282403363115b82ae0937c18fb84034d))
+* **studio,do:** make SQL surfaces report what the DB holds ([#729](https://github.com/anolilab/lunora/issues/729)) ([b756d58](https://github.com/anolilab/lunora/commit/b756d58859dce16ad1fd2d7050e6f97bb437cbfc))
+* **studio,do:** probe the real path, guard a blank search ([#726](https://github.com/anolilab/lunora/issues/726)) ([ebeeba9](https://github.com/anolilab/lunora/commit/ebeeba9f8eff51b74d7b10d4246a54d92a315795))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.132
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.59
+* **@lunora/client:** upgraded to 1.0.0-alpha.104
+* **@lunora/react:** upgraded to 1.0.0-alpha.109
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.119
+
+## @lunora/studio [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.178...@lunora/studio@1.0.0-alpha.179) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.108
+
+## @lunora/studio [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.177...@lunora/studio@1.0.0-alpha.178) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.130
+* **@lunora/client:** upgraded to 1.0.0-alpha.102
+* **@lunora/react:** upgraded to 1.0.0-alpha.107
+* **@lunora/notify:** upgraded to 1.0.0-alpha.57
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.117
+
+## @lunora/studio [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.176...@lunora/studio@1.0.0-alpha.177) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.128
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.57
+* **@lunora/client:** upgraded to 1.0.0-alpha.101
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/react:** upgraded to 1.0.0-alpha.106
+* **@lunora/mail:** upgraded to 1.0.0-alpha.80
+* **@lunora/notify:** upgraded to 1.0.0-alpha.55
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.116
+
+## @lunora/studio [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.175...@lunora/studio@1.0.0-alpha.176) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.127
+* **@lunora/client:** upgraded to 1.0.0-alpha.100
+* **@lunora/react:** upgraded to 1.0.0-alpha.105
+* **@lunora/mail:** upgraded to 1.0.0-alpha.79
+* **@lunora/notify:** upgraded to 1.0.0-alpha.54
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.115
+
+## @lunora/studio [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.174...@lunora/studio@1.0.0-alpha.175) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.126
+* **@lunora/client:** upgraded to 1.0.0-alpha.99
+* **@lunora/react:** upgraded to 1.0.0-alpha.104
+* **@lunora/mail:** upgraded to 1.0.0-alpha.78
+* **@lunora/notify:** upgraded to 1.0.0-alpha.53
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.114
+
+## @lunora/studio [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.173...@lunora/studio@1.0.0-alpha.174) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.125
+* **@lunora/client:** upgraded to 1.0.0-alpha.98
+* **@lunora/react:** upgraded to 1.0.0-alpha.103
+* **@lunora/mail:** upgraded to 1.0.0-alpha.77
+* **@lunora/notify:** upgraded to 1.0.0-alpha.52
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.113
+
+## @lunora/studio [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.172...@lunora/studio@1.0.0-alpha.173) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.124
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.56
+* **@lunora/client:** upgraded to 1.0.0-alpha.97
+* **@lunora/react:** upgraded to 1.0.0-alpha.102
+* **@lunora/mail:** upgraded to 1.0.0-alpha.76
+* **@lunora/notify:** upgraded to 1.0.0-alpha.51
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.112
+
+## @lunora/studio [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.171...@lunora/studio@1.0.0-alpha.172) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.123
+* **@lunora/client:** upgraded to 1.0.0-alpha.96
+* **@lunora/react:** upgraded to 1.0.0-alpha.101
+* **@lunora/mail:** upgraded to 1.0.0-alpha.75
+* **@lunora/notify:** upgraded to 1.0.0-alpha.50
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.111
+
+## @lunora/studio [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.170...@lunora/studio@1.0.0-alpha.171) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.122
+* **@lunora/client:** upgraded to 1.0.0-alpha.95
+* **@lunora/react:** upgraded to 1.0.0-alpha.100
+* **@lunora/mail:** upgraded to 1.0.0-alpha.74
+* **@lunora/notify:** upgraded to 1.0.0-alpha.49
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.110
+
+## @lunora/studio [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.169...@lunora/studio@1.0.0-alpha.170) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.121
+* **@lunora/client:** upgraded to 1.0.0-alpha.94
+* **@lunora/react:** upgraded to 1.0.0-alpha.99
+* **@lunora/mail:** upgraded to 1.0.0-alpha.73
+* **@lunora/notify:** upgraded to 1.0.0-alpha.48
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.109
+
+## @lunora/studio [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.168...@lunora/studio@1.0.0-alpha.169) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.120
+* **@lunora/client:** upgraded to 1.0.0-alpha.93
+* **@lunora/react:** upgraded to 1.0.0-alpha.98
+* **@lunora/mail:** upgraded to 1.0.0-alpha.72
+* **@lunora/notify:** upgraded to 1.0.0-alpha.47
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.108
+
+## @lunora/studio [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.167...@lunora/studio@1.0.0-alpha.168) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.119
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.55
+* **@lunora/client:** upgraded to 1.0.0-alpha.92
+* **@lunora/react:** upgraded to 1.0.0-alpha.97
+* **@lunora/mail:** upgraded to 1.0.0-alpha.71
+* **@lunora/notify:** upgraded to 1.0.0-alpha.46
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.107
+
+## @lunora/studio [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.166...@lunora/studio@1.0.0-alpha.167) (2026-09-08)
+
+### Code Refactoring
+
+* **studio:** port the data browser grid to TanStack Table v9 ([#660](https://github.com/anolilab/lunora/issues/660)) ([95caae0](https://github.com/anolilab/lunora/commit/95caae06f049aab7d3efc8cab276b03da9bdb2ba))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.118
+* **@lunora/client:** upgraded to 1.0.0-alpha.91
+* **@lunora/react:** upgraded to 1.0.0-alpha.96
+* **@lunora/mail:** upgraded to 1.0.0-alpha.70
+* **@lunora/notify:** upgraded to 1.0.0-alpha.45
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.106
+
+## @lunora/studio [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.165...@lunora/studio@1.0.0-alpha.166) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.117
+* **@lunora/client:** upgraded to 1.0.0-alpha.90
+* **@lunora/react:** upgraded to 1.0.0-alpha.95
+* **@lunora/mail:** upgraded to 1.0.0-alpha.69
+* **@lunora/notify:** upgraded to 1.0.0-alpha.44
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.105
+
+## @lunora/studio [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.164...@lunora/studio@1.0.0-alpha.165) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.116
+* **@lunora/client:** upgraded to 1.0.0-alpha.89
+* **@lunora/react:** upgraded to 1.0.0-alpha.94
+* **@lunora/mail:** upgraded to 1.0.0-alpha.68
+* **@lunora/notify:** upgraded to 1.0.0-alpha.43
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.104
+
 ## @lunora/studio [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.163...@lunora/studio@1.0.0-alpha.164) (2026-09-07)
 
 

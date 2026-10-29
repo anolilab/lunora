@@ -28,6 +28,16 @@ vi.mock("workers-ai-provider", () => {
 
 const { default: createAi } = await import("../src/create-ai");
 
+/** The AI Gateway wire-format plugins the gateway-slug provider is configured with. */
+const GATEWAY_PLUGINS = [expect.objectContaining({ wireFormat: "openai" }), expect.objectContaining({ wireFormat: "anthropic" })];
+
+/** The provider loads on the first model call, so drive one and let the (mock) call fail. */
+const build = async (options: Parameters<typeof createAi>[0]): Promise<void> => {
+    const model = createAi(options).model("@cf/meta/llama") as unknown as { doGenerate: (options: never) => Promise<unknown> };
+
+    await model.doGenerate({} as never).catch(() => {});
+};
+
 const fakeBinding = (): AiBindingLike => {
     return {
         run: async () => {
@@ -41,24 +51,46 @@ describe("provider construction from a binding", () => {
         createWorkersAI.mockClear();
     });
 
-    it("threads the binding through createWorkersAI", () => {
+    it("threads the binding through createWorkersAI", async () => {
         expect.assertions(2);
 
         const binding = fakeBinding();
 
-        createAi({ binding });
+        await build({ binding });
 
         expect(createWorkersAI).toHaveBeenCalledTimes(1);
         expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: undefined });
     });
 
-    it("threads the AI Gateway config through createWorkersAI", () => {
+    it("builds the plugin-less provider for @cf ids and a plugin-equipped one only for gateway slugs", async () => {
+        expect.assertions(5);
+
+        const ai = createAi({ binding: fakeBinding() });
+        const cf = ai.model("@cf/meta/llama") as unknown as { doGenerate: (options: never) => Promise<unknown> };
+
+        expect(createWorkersAI).not.toHaveBeenCalled();
+
+        await cf.doGenerate({} as never).catch(() => {});
+
+        expect(createWorkersAI).toHaveBeenCalledTimes(1);
+
+        const slug = ai.model("openai/gpt-4o");
+        const model = slug as unknown as { doGenerate: (options: never) => Promise<unknown> };
+
+        await model.doGenerate({} as never).catch(() => {});
+
+        expect(createWorkersAI).toHaveBeenCalledTimes(2);
+        expect(createWorkersAI).toHaveBeenLastCalledWith({ binding: expect.anything(), providers: GATEWAY_PLUGINS, gateway: undefined });
+        expect(createWorkersAI.mock.calls[0]?.[0]).not.toHaveProperty("providers");
+    });
+
+    it("threads the AI Gateway config through createWorkersAI", async () => {
         expect.assertions(1);
 
         const binding = fakeBinding();
         const gateway = { cacheTtl: 60, id: "my-gateway" };
 
-        createAi({ binding, gateway });
+        await build({ binding, gateway });
 
         expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway });
     });
@@ -73,35 +105,35 @@ describe("provider construction from a binding", () => {
         expect(createWorkersAI).not.toHaveBeenCalled();
     });
 
-    it("routes Workers AI through an env-configured AI Gateway (opt-in)", () => {
+    it("routes Workers AI through an env-configured AI Gateway (opt-in)", async () => {
         expect.assertions(1);
 
         const binding = fakeBinding();
 
-        createAi({ binding, env: { LUNORA_AI_GATEWAY_ACCOUNT_ID: "acct-123", LUNORA_AI_GATEWAY_ID: "my-gateway" } });
+        await build({ binding, env: { LUNORA_AI_GATEWAY_ACCOUNT_ID: "acct-123", LUNORA_AI_GATEWAY_ID: "my-gateway" } });
 
         // The env vars derive the Workers AI `gateway` option by id so the gateway
         // computes token + dollar-cost telemetry.
         expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: { id: "my-gateway" } });
     });
 
-    it("leaves the direct-provider path unchanged when env has no gateway vars", () => {
+    it("leaves the direct-provider path unchanged when env has no gateway vars", async () => {
         expect.assertions(1);
 
         const binding = fakeBinding();
 
-        createAi({ binding, env: { SOME_OTHER: "x" } });
+        await build({ binding, env: { SOME_OTHER: "x" } });
 
         expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: undefined });
     });
 
-    it("prefers an explicit gateway over the env-derived one", () => {
+    it("prefers an explicit gateway over the env-derived one", async () => {
         expect.assertions(1);
 
         const binding = fakeBinding();
         const gateway = { cacheTtl: 60, id: "explicit-gateway" };
 
-        createAi({ binding, env: { LUNORA_AI_GATEWAY_ACCOUNT_ID: "acct-123", LUNORA_AI_GATEWAY_ID: "env-gateway" }, gateway });
+        await build({ binding, env: { LUNORA_AI_GATEWAY_ACCOUNT_ID: "acct-123", LUNORA_AI_GATEWAY_ID: "env-gateway" }, gateway });
 
         expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway });
     });
@@ -117,12 +149,12 @@ describe("gateway correlation metadata", () => {
         createWorkersAI.mockClear();
     });
 
-    it("folds functionPath + traceId into the env-derived gateway's metadata", () => {
+    it("folds functionPath + traceId into the env-derived gateway's metadata", async () => {
         expect.assertions(1);
 
         const binding = fakeBinding();
 
-        createAi({
+        await build({
             binding,
             env: { LUNORA_AI_GATEWAY_ACCOUNT_ID: "acct-123", LUNORA_AI_GATEWAY_ID: "my-gateway" },
             metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID },
@@ -130,30 +162,35 @@ describe("gateway correlation metadata", () => {
 
         expect(createWorkersAI).toHaveBeenCalledWith({
             binding,
+
             gateway: { id: "my-gateway", metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID } },
         });
     });
 
-    it("sends only the defined metadata fields", () => {
+    it("sends only the defined metadata fields", async () => {
         expect.assertions(1);
 
         const binding = fakeBinding();
 
-        createAi({
+        await build({
             binding,
             env: { LUNORA_AI_GATEWAY_ACCOUNT_ID: "acct-123", LUNORA_AI_GATEWAY_ID: "my-gateway" },
             metadata: { functionPath: "messages:send" },
         });
 
-        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: { id: "my-gateway", metadata: { functionPath: "messages:send" } } });
+        expect(createWorkersAI).toHaveBeenCalledWith({
+            binding,
+
+            gateway: { id: "my-gateway", metadata: { functionPath: "messages:send" } },
+        });
     });
 
-    it("omits gateway metadata entirely when no correlation field is defined", () => {
+    it("omits gateway metadata entirely when no correlation field is defined", async () => {
         expect.assertions(1);
 
         const binding = fakeBinding();
 
-        createAi({
+        await build({
             binding,
             env: { LUNORA_AI_GATEWAY_ACCOUNT_ID: "acct-123", LUNORA_AI_GATEWAY_ID: "my-gateway" },
             metadata: { functionPath: undefined, traceId: undefined },
@@ -164,38 +201,39 @@ describe("gateway correlation metadata", () => {
         expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: { id: "my-gateway" } });
     });
 
-    it("does not attach metadata when no gateway is configured (additive/opt-in)", () => {
+    it("does not attach metadata when no gateway is configured (additive/opt-in)", async () => {
         expect.assertions(1);
 
         const binding = fakeBinding();
 
-        createAi({ binding, env: { SOME_OTHER: "x" }, metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID } });
+        await build({ binding, env: { SOME_OTHER: "x" }, metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID } });
 
         // Without gateway env vars there is no gateway to correlate — the direct
         // Workers AI path stays exactly as before.
         expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: undefined });
     });
 
-    it("folds metadata into an explicit gateway that carries none", () => {
+    it("folds metadata into an explicit gateway that carries none", async () => {
         expect.assertions(1);
 
         const binding = fakeBinding();
 
-        createAi({ binding, gateway: { cacheTtl: 60, id: "explicit" }, metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID } });
+        await build({ binding, gateway: { cacheTtl: 60, id: "explicit" }, metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID } });
 
         expect(createWorkersAI).toHaveBeenCalledWith({
             binding,
+
             gateway: { cacheTtl: 60, id: "explicit", metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID } },
         });
     });
 
-    it("preserves an explicit gateway's own metadata over the threaded correlation", () => {
+    it("preserves an explicit gateway's own metadata over the threaded correlation", async () => {
         expect.assertions(1);
 
         const binding = fakeBinding();
         const gateway = { id: "explicit", metadata: { tenant: "acme" } };
 
-        createAi({ binding, gateway, metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID } });
+        await build({ binding, gateway, metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID } });
 
         expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway });
     });

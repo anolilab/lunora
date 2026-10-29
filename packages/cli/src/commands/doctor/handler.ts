@@ -1,19 +1,48 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
-import { DEV_VARS_FILE, discoverSchemaInfo, inferLunoraBindings, isPlaceholderValue, parseDevVariableEntries } from "@lunora/config";
+import { DEFAULT_TARGET, readProjectTarget } from "@lunora/codegen";
+import {
+    D1_PLACEHOLDER_ID,
+    DEV_VARS_FILE,
+    discoverSchemaInfo,
+    inferLunoraBindings,
+    isPlaceholderValue,
+    parseDevVariableEntries,
+    probeCelldToolchain,
+    readProjectDependencies,
+    resolveSchemaDirectory,
+} from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
-import { collectExportGaps, findWranglerFile, readWranglerJsonc, validateWranglerConfig } from "@lunora/config/cloudflare";
+import {
+    collectExportGaps,
+    detectCloudflareCliConfig,
+    findWranglerFile,
+    readWranglerJsonc,
+    UNEXPORTED_CLASS_MARKER,
+    validateWranglerProject,
+} from "@lunora/config/cloudflare";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
+import type { ArtifactsJurisdictionCheck } from "../../util/artifacts-jurisdiction";
+import { checkArtifactsJurisdiction } from "../../util/artifacts-jurisdiction";
+import { nonEmpty } from "../../util/cloudflare-credentials";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import type { DurableObjectBudget } from "../../util/durable-object-budget";
+import { checkDurableObjectBudget } from "../../util/durable-object-budget";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import type { OutputFormat } from "../../util/output-format";
 import isInsideDirectory from "../../util/path-containment";
 import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
+import checkAi from "./ai-checks";
+import checkCimdFetchFlag from "./cimd-checks";
+import { applyDoctorFixes, isD1PlaceholderId, isUnfinishedD1Id } from "./fix";
 import type { DoctorOptions } from "./index";
+import checkObservabilitySampling from "./observability-checks";
+import checkPaidProducts from "./paid-product-checks";
+import checkServices from "./service-checks";
 
 /** Severity of a single doctor check. `fail` drives a non-zero exit; `warn`/`info`/`pass` don't. */
 type FindingLevel = "fail" | "info" | "pass" | "warn";
@@ -30,20 +59,46 @@ type FindingLevel = "fail" | "info" | "pass" | "warn";
 const DOCTOR_CODES = [
     "admin-token-missing",
     "admin-token-set",
+    "ai-binding-missing",
+    "ai-gateway-default",
+    "ai-gateway-token-unused",
+    "artifacts-jurisdiction-mismatch",
+    "artifacts-jurisdiction-ok",
+    "artifacts-jurisdiction-unchecked",
+    "artifacts-namespace-missing",
+    "celld-toolchain-missing",
+    "celld-toolchain-ok",
+    "celld-toolchain-warn",
+    "cf-config-present",
+    "cimd-fetch-not-strictly-public",
     "cli-shadowed",
+    "cpu-limit-missing",
     "d1-placeholder-id",
     "declared-export-missing",
     "declared-export-ok",
     "declared-export-unchecked",
     "dev-vars-missing-secret",
+    "do-class-budget-full",
+    "do-class-budget-near",
+    "do-class-budget-ok",
+    "do-class-budget-unchecked",
     "email-destination-placeholder",
+    "observability-full-sampling",
+    "paid-product-bound",
+    "paid-product-unknown",
+    "r2-lifecycle-unset",
     "scheduler-origin-missing",
     "schema-unreadable",
+    "service-workers-dev",
+    "stale-lunora-json",
     "vector-metadata-index-required",
     "vector-metadata-unfilterable",
     "version-counter-spread",
     "version-skew-channels",
     "version-skew-cores",
+    "wrangler-advisory",
+    "wrangler-class-unexported",
+    "wrangler-invalid",
     "wrangler-missing",
     "wrangler-shard-binding-missing",
     "wrangler-shard-binding-ok",
@@ -76,27 +131,20 @@ interface DoctorResult {
 interface RunDoctorOptions {
     cwd?: string;
 
+    /** Where the Cloudflare credentials for the account checks are read from (defaults to `process.env`). */
+    environment?: Readonly<Record<string, string | undefined>>;
+
     /**
      * Path of the running `lunora` executable (defaults to `process.argv[1]`).
      * Overridable so the CLI-shadow check is testable without re-launching the
      * process, the same seam `cwd` provides for the filesystem checks.
      */
     executablePath?: string;
+
+    /** The `fetch` the account checks call the Cloudflare API with — injectable so tests stay offline. */
+    fetch?: typeof globalThis.fetch;
     logger: Logger;
 }
-
-/** A D1 `database_id` placeholder that still needs `wrangler d1 create` run. */
-const isD1PlaceholderId = (databaseId: string): boolean => {
-    const value = databaseId.trim();
-
-    if (value === "") {
-        return true;
-    }
-
-    const lower = value.toLowerCase();
-
-    return lower.includes("replace") || (lower.startsWith("<") && lower.endsWith(">"));
-};
 
 /**
  * Read + parse the wrangler config for the project, or `undefined` when absent
@@ -116,7 +164,7 @@ const readWrangler = (cwd: string): { parsed: WranglerConfig | undefined; path: 
 };
 
 /** Check `wrangler.jsonc` is present and declares the SHARD DO binding (via the shared config validator). */
-const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefined, findings: Finding[]): void => {
+const checkWrangler = (cwd: string, parsed: WranglerConfig | undefined, path: string | undefined, findings: Finding[]): void => {
     if (path === undefined) {
         findings.push({
             code: "wrangler-missing",
@@ -134,7 +182,25 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
         return;
     }
 
-    const report = validateWranglerConfig(parsed);
+    // The FS-AWARE validator, not `validateWranglerConfig`. Doctor read the pure
+    // one, which cannot see the worker entry — so the check that cross-checks
+    // every declared Durable Object / Workflow `class_name` against the entry's
+    // exports never ran here, and `doctor` gave a clean bill of health to a tree
+    // `wrangler` refuses to bundle. Its own `declared-export-missing` check
+    // covers containers/workflows/agents off inference, and stopped there.
+    const { report } = validateWranglerProject({ projectRoot: cwd });
+
+    // Its OWN code, not `declared-export-missing`. That one is emitted from
+    // binding inference over the schema's declarations (`checkDeclaredExports`),
+    // and containers/workflows/agents reach `wrangler.jsonc` too — so both fire
+    // for the same class. `DOCTOR_CODES` is "the contract behind `--format
+    // json`", per the block above, and a job counting one code must not
+    // double-count. This one is the wrangler-config view: it also covers
+    // `SchedulerDO` / `SessionDO` and hand-written classes, which inference
+    // never sees. The validator carries the full remedy in the message.
+    for (const error of report.errors.filter((entry) => entry.includes(UNEXPORTED_CLASS_MARKER))) {
+        findings.push({ code: "wrangler-class-unexported", level: "fail", message: error });
+    }
 
     // `doctor`'s job is "tell me what is misconfigured", so it reports the
     // scheduler-origin warning too. Reading only the SHARD error gave a clean
@@ -146,6 +212,32 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
             level: "warn",
             message: warning,
         });
+    }
+
+    // Everything the validator found that no check above claimed, rather than
+    // dropped. Doctor cherry-picked three findings out of the report and
+    // discarded the rest, so an unchained `.vectors()` / `.global()`, a
+    // container image pointing at a missing Dockerfile, a bad
+    // `compatibility_date` and a missing migration entry all read as a clean
+    // bill of health — from the command whose whole job is to say what it found.
+    //
+    // One catch-all code rather than one per family, so a check added to the
+    // validator later surfaces here by construction instead of being silently
+    // dropped again. The two claimed codes are excluded to keep `--format json`
+    // counts honest.
+    const claimed = (entry: string): boolean => entry.includes(UNEXPORTED_CLASS_MARKER) || entry.includes("SHARD");
+
+    for (const error of report.errors.filter((entry) => !claimed(entry))) {
+        findings.push({
+            code: "wrangler-invalid",
+            fix: "Fix the reported wrangler.jsonc problem; `lunora verify` reports the same set.",
+            level: "fail",
+            message: error,
+        });
+    }
+
+    for (const warning of report.warnings.filter((entry) => !entry.includes("LUNORA_ORIGIN_URL"))) {
+        findings.push({ code: "wrangler-advisory", level: "warn", message: warning });
     }
 
     const shardError = report.errors.find((error) => error.includes("SHARD"));
@@ -160,6 +252,102 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
             message: shardError,
         });
     }
+};
+
+/**
+ * `lunora.json` is no longer read — `lunora.config.*` replaced it.
+ *
+ * A file left behind is not an error (nothing reads it, so nothing breaks), but
+ * silence is the wrong answer: a `lunora.json` declaring `target: "node"` used to
+ * select the provider, and after the rename the project gets the default one with
+ * nothing to explain why. That is the wrong-provider outcome the target reader
+ * refuses everywhere else.
+ */
+const checkStaleProjectConfig = (cwd: string, findings: Finding[]): void => {
+    if (!existsSync(join(cwd, "lunora.json"))) {
+        return;
+    }
+
+    findings.push({
+        code: "stale-lunora-json",
+        fix: 'Move `target` / `remote` into `lunora.config.ts` (`export default { target: "…" }`), then delete lunora.json.',
+        level: "warn",
+        message: "lunora.json is present but no longer read — lunora.config.* replaced it, so any `target` or `remote` in it is being ignored.",
+    });
+};
+
+/**
+ * A Cloudflare CLI config (`cloudflare.config.{ts,mts,js,mjs}`) in the project
+ * root → WARN.
+ *
+ * Lunora reconciles the wrangler config and never touches the `cf` config, so
+ * `cf dev` / `cf build` / `cf deploy` would ship without whatever Lunora adds
+ * after `cf migrate` wrote it. WARN rather than FAIL: nothing `lunora deploy`
+ * runs reads the file, and `cf` resource commands are fine — the risk is a
+ * separate `cf` lifecycle command. Reported on every run, ignoring the
+ * once-per-process-tree guard the other surfaces share: listing what it found is
+ * doctor's job. The message names the wrangler file actually present, or "the
+ * project root" when there is none, so it never contradicts `wrangler-missing`.
+ * See https://github.com/anolilab/lunora/issues/964.
+ */
+const checkCloudflareCliConfig = (cwd: string, findings: Finding[]): void => {
+    const detected = detectCloudflareCliConfig(cwd);
+
+    if (detected === undefined) {
+        return;
+    }
+
+    findings.push({ code: "cf-config-present", fix: detected.fix, level: "warn", message: detected.message });
+};
+
+/**
+ * No `limits.cpu_ms` in the wrangler config → INFO.
+ *
+ * Alerting is lagging by definition: by the time a threshold trips, the runaway
+ * handler or retry storm has already run. A CPU cap is one of the few controls
+ * that bounds the blast radius rather than reporting on it after the fact, and
+ * it costs nothing to set. INFO rather than WARN because the platform default
+ * is a real (if generous) limit, so this is a tightening, not a missing
+ * requirement.
+ */
+const checkCpuLimit = (parsed: WranglerConfig | undefined, findings: Finding[]): void => {
+    if (parsed === undefined || parsed.limits?.cpu_ms !== undefined) {
+        return;
+    }
+
+    findings.push({
+        code: "cpu-limit-missing",
+        fix: 'Add `"limits": { "cpu_ms": 30000 }` to wrangler.jsonc, tuned to your slowest legitimate handler.',
+        level: "info",
+        message: "no limits.cpu_ms is set — a runaway handler can burn CPU up to the platform default before anything stops it.",
+    });
+};
+
+/**
+ * An R2 bucket with no lifecycle rule → INFO, once per config.
+ *
+ * Orphaned incomplete multipart uploads are a classic silent storage cost: they
+ * are billed, they never appear as objects a listing would show, and nothing
+ * surfaces them until the invoice does. Lifecycle rules are the fix, and they
+ * live in Cloudflare (dashboard/API), not in wrangler config — so this can only
+ * ever be a prompt to go check, which is why it names the command instead of
+ * asserting a config shape.
+ */
+const checkR2Lifecycle = (parsed: WranglerConfig | undefined, findings: Finding[]): void => {
+    // `r2_buckets` entries are typed nullable — the validator parses user JSON
+    // defensively, so a hand-edited config can carry a hole in the array.
+    const names = (parsed?.r2_buckets ?? []).map((entry) => entry?.bucket_name).filter((name): name is string => typeof name === "string" && name.length > 0);
+
+    if (names.length === 0) {
+        return;
+    }
+
+    findings.push({
+        code: "r2-lifecycle-unset",
+        fix: "wrangler r2 bucket lifecycle list <bucket> — add an abort-incomplete-multipart rule if none exists.",
+        level: "info",
+        message: `R2 bucket(s) ${names.join(", ")}: verify a lifecycle rule aborts incomplete multipart uploads — orphaned parts are billed but invisible in a listing.`,
+    });
 };
 
 /**
@@ -214,17 +402,21 @@ const checkVectorMetadataIndexes = (cwd: string, findings: Finding[]): void => {
 };
 
 /** Any D1 `database_id` still a placeholder → FAIL (the binding can't resolve). */
-const checkD1Placeholders = (parsed: WranglerConfig | undefined, findings: Finding[]): void => {
+const checkD1Placeholders = (cwd: string, parsed: WranglerConfig | undefined, findings: Finding[]): void => {
     if (parsed === undefined) {
         return;
     }
 
+    // celld's projection replaces only the exact placeholder with a name-derived id; any other placeholder still reaches it.
+    const celld = (readProjectTarget(cwd) ?? DEFAULT_TARGET) === "celld";
     const databases = ((parsed as { d1_databases?: ReadonlyArray<{ binding?: string; database_id?: string }> }).d1_databases ?? []).filter(Boolean);
 
     for (const database of databases) {
         const databaseId = typeof database.database_id === "string" ? database.database_id : "";
 
-        if (isD1PlaceholderId(databaseId)) {
+        const blocks = celld ? isUnfinishedD1Id(databaseId) && databaseId !== D1_PLACEHOLDER_ID : isD1PlaceholderId(databaseId);
+
+        if (blocks) {
             const label = typeof database.binding === "string" && database.binding.length > 0 ? database.binding : "<unnamed>";
 
             findings.push({
@@ -316,24 +508,15 @@ const checkAdminToken = (cwd: string, findings: Finding[]): void => {
     }
 };
 
-/**
- * Every declared container, workflow and agent must be exported by the worker
- * entry — wrangler rejects a `class_name` the worker doesn't export, so the
- * failure lands at deploy, on a project where `tsc`, codegen and the tests are
- * all green. Inference already computes the status for all three kinds; this
- * surfaces it proactively (the generators auto-wire it, but a hand-declared
- * entry can still miss it). Skips cleanly when nothing is declared.
- *
- * Containers used to be the only kind checked here, which made the omission
- * invisible: a project could pass `doctor` and still deploy three workflows with
- * no workflow to run. `collectExportGaps` covers all three from one place, so a
- * fourth kind cannot be added to inference and silently skipped here.
- */
-const checkDeclaredExports = async (cwd: string, findings: Finding[]): Promise<void> => {
-    let inferred: Awaited<ReturnType<typeof inferLunoraBindings>>;
+type InferredBindings = Awaited<ReturnType<typeof inferLunoraBindings>>;
 
+/**
+ * Infer the project's bindings once for every check that needs them, or
+ * `undefined` (reported as `declared-export-unchecked`) when the scan fails.
+ */
+const inferBindings = async (cwd: string, findings: Finding[]): Promise<InferredBindings | undefined> => {
     try {
-        inferred = await inferLunoraBindings({ projectRoot: cwd });
+        return await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
     } catch (error: unknown) {
         // Best-effort — other checks own the real failures, so this does not fail
         // the run. It is still SAID: a silent return made a skipped check
@@ -348,9 +531,24 @@ const checkDeclaredExports = async (cwd: string, findings: Finding[]): Promise<v
             message: `could not check whether declared containers/workflows/agents are re-exported by the worker entry: ${error instanceof Error ? error.message : String(error)}`,
         });
 
-        return;
+        return undefined;
     }
+};
 
+/**
+ * Every declared container, workflow and agent must be exported by the worker
+ * entry — wrangler rejects a `class_name` the worker doesn't export, so the
+ * failure lands at deploy, on a project where `tsc`, codegen and the tests are
+ * all green. Inference already computes the status for all three kinds; this
+ * surfaces it proactively (the generators auto-wire it, but a hand-declared
+ * entry can still miss it). Skips cleanly when nothing is declared.
+ *
+ * Containers used to be the only kind checked here, which made the omission
+ * invisible: a project could pass `doctor` and still deploy three workflows with
+ * no workflow to run. `collectExportGaps` covers all three from one place, so a
+ * fourth kind cannot be added to inference and silently skipped here.
+ */
+const checkDeclaredExports = (inferred: InferredBindings, findings: Finding[]): void => {
     const gaps = collectExportGaps(inferred);
     const declared = [
         ...inferred.containers.map((entry) => {
@@ -429,21 +627,8 @@ const parseLunoraVersion = (spec: string): LunoraVersion | undefined => {
  * is normal and is reported as INFO with the spread, so a reader can judge it.
  */
 const checkVersionSkew = (cwd: string, findings: Finding[]): void => {
-    const manifestPath = join(cwd, "package.json");
-
-    if (!existsSync(manifestPath)) {
-        return;
-    }
-
-    let manifest: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-
-    try {
-        manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as typeof manifest;
-    } catch {
-        return; // A malformed manifest is another check's problem.
-    }
-
-    const specs = { ...manifest.devDependencies, ...manifest.dependencies };
+    // A missing or malformed manifest reads as no dependencies — another check's problem.
+    const specs = readProjectDependencies(cwd);
     const parsed: { name: string; version: LunoraVersion }[] = [];
 
     for (const [name, spec] of Object.entries(specs)) {
@@ -572,6 +757,170 @@ const checkCliShadow = (cwd: string, executablePath: string | undefined, finding
     });
 };
 
+/** The doctor code and level for each budget verdict. A full account warns: it is a fact about the account, not this project. */
+const DURABLE_OBJECT_BUDGET_FINDINGS = {
+    full: { code: "do-class-budget-full", level: "warn" },
+    near: { code: "do-class-budget-near", level: "warn" },
+    ok: { code: "do-class-budget-ok", level: "pass" },
+    unchecked: { code: "do-class-budget-unchecked", level: "info" },
+} as const satisfies Record<DurableObjectBudget["verdict"], { code: DoctorCode; level: FindingLevel }>;
+
+/**
+ * Every distinct `account_id` the config deploys to — the top level and each
+ * `env.*` block (wrangler lets an environment override it) — with the blocks
+ * that name it.
+ */
+const configuredAccounts = (parsed: WranglerConfig | undefined): Map<string, string[]> => {
+    const accounts = new Map<string, string[]>();
+    const add = (accountId: unknown, block: string): void => {
+        const id = nonEmpty(accountId);
+
+        if (id !== undefined) {
+            accounts.set(id, [...(accounts.get(id) ?? []), block]);
+        }
+    };
+
+    add(parsed?.account_id, "top level");
+
+    for (const [name, block] of Object.entries(parsed?.env ?? {})) {
+        add((block as WranglerConfig | null | undefined)?.account_id, `env.${name}`);
+    }
+
+    return accounts;
+};
+
+/**
+ * How close the Cloudflare account is to its Durable Object class cap (plan
+ * 462). The one doctor check that goes online, and only with credentials in the
+ * environment; without them it says it did not check.
+ *
+ * Doctor takes no `--env`, so it checks every account the config deploys to,
+ * naming each when there is more than one. `CLOUDFLARE_ACCOUNT_ID` overrides
+ * every block, as it does for wrangler, so it is then the one account checked.
+ */
+const checkDurableObjectClassBudget = async (
+    cwd: string,
+    parsed: WranglerConfig | undefined,
+    options: RunDoctorOptions,
+    findings: Finding[],
+): Promise<void> => {
+    // A Cloudflare account limit: a celld / node target has none to check.
+    if ((readProjectTarget(cwd) ?? DEFAULT_TARGET) !== "cloudflare") {
+        return;
+    }
+
+    const overridden = nonEmpty((options.environment ?? process.env).CLOUDFLARE_ACCOUNT_ID) !== undefined;
+    const accounts = overridden ? [] : [...configuredAccounts(parsed)];
+    const targets: [string | undefined, string[]][] = accounts.length === 0 ? [[undefined, []]] : accounts;
+    const results = await Promise.all(
+        targets.map(async ([accountId, blocks]) => {
+            return { accountId, blocks, budget: await checkDurableObjectBudget({ accountId, environment: options.environment, fetch: options.fetch }) };
+        }),
+    );
+
+    for (const { accountId, blocks, budget } of results) {
+        findings.push({
+            ...DURABLE_OBJECT_BUDGET_FINDINGS[budget.verdict],
+            message: results.length > 1 ? `account ${String(accountId)} (${blocks.join(", ")}): ${budget.message}` : budget.message,
+            ...(budget.fix === undefined ? {} : { fix: budget.fix }),
+        });
+    }
+};
+
+const BUCKET_UNSET = "CELLD_BUCKET is not set — a live `lunora deploy` needs it to name the fleet bucket; `lunora dev` and a dry run do not.";
+
+/**
+ * The celld toolchain a deploy needs (`celld`, `esbuild`, `CELLD_BUCKET`), checked
+ * the way `lunora deploy` checks it. Only for a celld project. A missing bucket
+ * only warns: a project that runs `lunora dev` or dry-run deploys never needs it.
+ */
+const checkCelldToolchain = async (cwd: string, options: RunDoctorOptions, findings: Finding[]): Promise<void> => {
+    if ((readProjectTarget(cwd) ?? DEFAULT_TARGET) !== "celld") {
+        return;
+    }
+
+    // The override carries credentials, not the host PATH: the probe spawns celld and esbuild with this
+    // environment, so without the host variables a tool on PATH reads as missing. The bucket check reads the same merge.
+    const environment = { ...process.env, ...options.environment };
+    const probe = await probeCelldToolchain({ dryRun: true, env: environment, purpose: "deploy" });
+    const warnings = (environment["CELLD_BUCKET"] ?? "").trim() === "" ? [...probe.warnings, BUCKET_UNSET] : probe.warnings;
+
+    for (const message of probe.errors) {
+        findings.push({ code: "celld-toolchain-missing", level: "fail", message });
+    }
+
+    for (const message of warnings) {
+        findings.push({ code: "celld-toolchain-warn", level: "warn", message });
+    }
+
+    if (probe.errors.length === 0 && warnings.length === 0) {
+        findings.push({ code: "celld-toolchain-ok", level: "pass", message: "celld, esbuild and CELLD_BUCKET are in place for a deploy." });
+    }
+};
+
+/** The doctor code and level for each Artifacts jurisdiction verdict. Unchecked warns: residency is not best-effort. */
+const ARTIFACTS_JURISDICTION_FINDINGS = {
+    mismatch: { code: "artifacts-jurisdiction-mismatch", level: "fail" },
+    missing: { code: "artifacts-namespace-missing", level: "fail" },
+    ok: { code: "artifacts-jurisdiction-ok", level: "pass" },
+    unchecked: { code: "artifacts-jurisdiction-unchecked", level: "warn" },
+} as const satisfies Record<ArtifactsJurisdictionCheck["verdict"], { code: DoctorCode; level: FindingLevel }>;
+
+/**
+ * Whether every bound Artifacts namespace lives in the schema's
+ * `.jurisdiction("…")` (plan 460 D) — the check `lunora deploy` gates on. Doctor
+ * takes no `--env`, so it reads the top level and every `env.*` block
+ * (`artifacts` is non-inheritable; `account_id` falls back to the top level).
+ */
+const checkArtifactsJurisdictions = async (
+    cwd: string,
+    parsed: WranglerConfig | undefined,
+    jurisdiction: InferredBindings["jurisdiction"],
+    options: RunDoctorOptions,
+    findings: Finding[],
+): Promise<void> => {
+    if (jurisdiction === undefined || parsed === undefined || (readProjectTarget(cwd) ?? DEFAULT_TARGET) !== "cloudflare") {
+        return;
+    }
+
+    const blocks: [string, WranglerConfig][] = [
+        ["", parsed],
+        ...Object.entries(parsed.env ?? {}).map(([name, block]): [string, WranglerConfig] => [`env.${name}: `, block]),
+    ];
+    // One lookup per account + namespace, however many blocks bind it.
+    const lookups = new Map<string, { accountId: unknown; binding: string; label: string; namespace: string }>();
+
+    for (const [label, block] of blocks) {
+        const accountId = block.account_id ?? parsed.account_id;
+
+        for (const entry of block.artifacts ?? []) {
+            const key = `${String(accountId)}/${String(entry?.namespace)}`;
+
+            if (typeof entry?.binding === "string" && typeof entry.namespace === "string" && !lookups.has(key)) {
+                lookups.set(key, { accountId, binding: entry.binding, label, namespace: entry.namespace });
+            }
+        }
+    }
+
+    const results = await Promise.all(
+        [...lookups.values()].map(async ({ label, ...lookup }) => {
+            // Read-only: a namespace that does not exist yet is not a failure, `lunora deploy` creates it in the jurisdiction.
+            return {
+                check: await checkArtifactsJurisdiction({ ...lookup, environment: options.environment, fetch: options.fetch, jurisdiction, missingOk: true }),
+                label,
+            };
+        }),
+    );
+
+    for (const { check, label } of results) {
+        findings.push({
+            ...ARTIFACTS_JURISDICTION_FINDINGS[check.verdict],
+            message: `${label}${check.message}`,
+            ...(check.fix === undefined ? {} : { fix: check.fix }),
+        });
+    }
+};
+
 /**
  * Pure, testable preflight core: run the read-only project checks against `cwd`
  * and return the aggregated findings + the exit code (1 if any hard FAIL). Does
@@ -584,15 +933,33 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
 
     const { parsed, path } = readWrangler(cwd);
 
-    checkWrangler(parsed, path, findings);
-    checkD1Placeholders(parsed, findings);
+    checkWrangler(cwd, parsed, path, findings);
+    checkCloudflareCliConfig(cwd, findings);
+    checkD1Placeholders(cwd, parsed, findings);
     checkEmailDestination(parsed, findings);
+    checkCpuLimit(parsed, findings);
+    checkR2Lifecycle(parsed, findings);
+    checkObservabilitySampling(parsed, findings);
     checkDevVariables(cwd, findings);
     checkAdminToken(cwd, findings);
     checkVersionSkew(cwd, findings);
     checkVectorMetadataIndexes(cwd, findings);
+    checkStaleProjectConfig(cwd, findings);
     checkCliShadow(cwd, options.executablePath ?? process.argv[1], findings);
-    await checkDeclaredExports(cwd, findings);
+    checkServices(cwd, findings);
+    checkPaidProducts(cwd, findings);
+
+    const inferred = await inferBindings(cwd, findings);
+
+    if (inferred !== undefined) {
+        checkDeclaredExports(inferred, findings);
+    }
+
+    checkAi(parsed, cwd, inferred?.usesAi === true, findings);
+    await checkCelldToolchain(cwd, options, findings);
+    await checkDurableObjectClassBudget(cwd, parsed, options, findings);
+    await checkArtifactsJurisdictions(cwd, parsed, inferred?.jurisdiction, options, findings);
+    checkCimdFetchFlag(parsed, inferred?.usesCimdWorkers === true, findings);
 
     const summary: Record<FindingLevel, number> = { fail: 0, info: 0, pass: 0, warn: 0 };
 
@@ -638,45 +1005,54 @@ const renderReport = (result: DoctorResult, logger: Logger): void => {
     }
 };
 
+/** The `--format json` payload: every finding, plus the per-level tally. */
+interface DoctorData {
+    findings: ReadonlyArray<Finding>;
+    summary: Record<FindingLevel, number>;
+}
+
 interface DoctorCommandOptions extends RunDoctorOptions {
     /** Output format: `pretty` (default) or `json`. */
-    format?: string;
+    format?: OutputFormat;
 }
 
 /**
  * Run the preflight and emit it in the requested format. `pretty` prints the
- * human report exactly as before; `json` routes that same report to stderr (via
- * {@link loggerForFormat}) and puts a single {@link DoctorResult} document on
- * stdout, so `lunora doctor --format json | …` stays pipeable. The exit code is
- * the same in both formats.
+ * human report exactly as before; `json` routes that same report to stderr (the
+ * logger `defineHandler` hands in is already stderr there) and puts a single
+ * {@link DoctorResult} document on stdout, so `lunora doctor --format json | …`
+ * stays pipeable. The exit code is the same in both formats.
  */
 const runDoctorCommand = async (options: DoctorCommandOptions): Promise<DoctorResult> => {
-    const formatError = validateOutputFormat("doctor", options.format);
-
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
-
-        return { code: 1, findings: [], ok: false, summary: { fail: 0, info: 0, pass: 0, warn: 0 } };
-    }
-
-    const logger = loggerForFormat(options.format, options.logger);
+    const { logger } = options;
     const result = await runDoctor({ ...options, logger });
 
     renderReport(result, logger);
-
-    if (isJsonFormat(options.format)) {
-        printJson(result);
-    }
 
     return result;
 };
 
 /** `lunora doctor` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DoctorOptions> = defineHandler<DoctorOptions>(async ({ cwd, logger, options }) => {
-    const result = await runDoctorCommand({ cwd, format: options.format, logger });
+const execute: CommandHandler<DoctorOptions> = defineHandler<DoctorOptions, DoctorData>(async ({ cwd, format, logger, options }) => {
+    if (options.fix === true) {
+        const { path } = readWrangler(cwd);
+        const fixes = await applyDoctorFixes({ configPath: path, cwd, dryRun: options.dryRun === true, logger });
 
-    return { code: result.code };
+        for (const line of fixes.applied) {
+            logger.info(`fix: ${line}`);
+        }
+
+        for (const line of fixes.skipped) {
+            logger.warn(`not fixed: ${line}`);
+        }
+    }
+
+    const result = await runDoctorCommand({ cwd, format, logger });
+
+    // `ok` is not in the document: the envelope's `code` already says whether
+    // the preflight passed, and two fields answering that can disagree.
+    return { code: result.code, data: { findings: result.findings, summary: result.summary } };
 });
 
 export { DOCTOR_CODES, execute, runDoctor, runDoctorCommand };
-export type { DoctorCode, DoctorCommandOptions, DoctorResult, Finding, FindingLevel, RunDoctorOptions };
+export type { DoctorCode, DoctorCommandOptions, DoctorData, DoctorResult, Finding, FindingLevel, RunDoctorOptions };

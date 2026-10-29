@@ -36,8 +36,16 @@ const STATUS_RING: Readonly<Record<TableStatus, string>> = {
     removed: "opacity-70 ring-2 ring-destructive/60",
 };
 
-/** Map a snapshot's shard mode onto the diagram's storage tier. */
-const tierOf = (shardMode: string): StorageTier => (shardMode === "global" ? "global" : "shard");
+/**
+ * Map a snapshot's shard mode onto the diagram's storage tier.
+ *
+ * A prefix test, not `=== "global"`: a current snapshot encodes the BACKEND
+ * (`global:d1` / `global:hyperdrive`), because those are two different physical
+ * stores, while a snapshot written before that says bare `global`. Both are the
+ * global tier, and an equality check against the old spelling would render every
+ * global table in the ledger as a shard table.
+ */
+const tierOf = (shardMode: string): StorageTier => (shardMode === "global" || shardMode.startsWith("global:") ? "global" : "shard");
 
 /**
  * One row in the version timeline.
@@ -133,11 +141,14 @@ const CHANGE_SHAPE: Readonly<Record<DriftChange["type"], { action: ChangeAction;
     addedRelation: { action: "added", kind: "relation" },
     addedRequiredField: { action: "added", kind: "field" },
     addedTable: { action: "added", kind: "table" },
+    changedCommitOrdering: { action: "changed", kind: "commit ordering" },
     changedFieldKind: { action: "changed", kind: "field kind" },
     changedFieldShape: { action: "changed", kind: "field shape" },
     changedIndex: { action: "changed", kind: "index" },
     changedJurisdiction: { action: "changed", kind: "jurisdiction" },
+    changedMemoryMode: { action: "changed", kind: "memory mode" },
     changedShardMode: { action: "changed", kind: "shard mode" },
+    changedTtlPolicy: { action: "changed", kind: "TTL policy" },
     fieldOptionalToRequired: { action: "changed", kind: "field → required" },
     fieldRequiredToOptional: { action: "changed", kind: "field → optional" },
     // All three relaxations drop something the column used to promise — `.unique()`,
@@ -434,4 +445,5 @@ export const SchemaHistoryPanel = ({ pane, shardKey = "" }: SchemaHistoryPanelPr
     );
 };
 
+export { tierOf };
 export type { SchemaHistoryPanelProps };

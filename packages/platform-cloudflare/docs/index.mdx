@@ -22,20 +22,22 @@ today the roots serve new Durable Objects and this package's tests.
 import { createShardPlatform } from "@lunora/platform-cloudflare";
 
 // Inside a Durable Object constructor:
-const platform = createShardPlatform(state);
+const platform = createShardPlatform(state, env);
 ```
 
 ## What it provides
 
-| Factory                | Contract         | Backed by                                                           |
-| ---------------------- | ---------------- | ------------------------------------------------------------------- |
-| `createShardHost`      | `ShardHost`      | `state.storage.sql`, `blockConcurrencyWhile`, `storage.transaction` |
-| `createSocketHost`     | `SocketHost`     | `state.acceptWebSocket` + hibernation, `state.getWebSockets(tag)`   |
-| `createShardAlarms`    | alarm surface    | `storage.setAlarm` / `getAlarm` / `deleteAlarm`                     |
-| `createShardKvStore`   | `ShardKvStore`   | `storage.list` with prefix scan                                     |
-| `createShardDirectory` | `ShardDirectory` | `idFromName` / `get`, with jurisdiction pinning                     |
-| `createShardPlatform`  | all of the above | one call, for a DO constructor                                      |
-| `createWorkerPlatform` | worker-tier host | the fetch/scheduled/queue entry, outside a shard                    |
+| Factory                  | Contract           | Backed by                                                                                                                                                                                           |
+| ------------------------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createShardHost`        | `ShardHost`        | `state.storage.sql`, `blockConcurrencyWhile`, `storage.transaction`                                                                                                                                 |
+| `createSocketHost`       | `SocketHost`       | `state.acceptWebSocket` + hibernation, `state.getWebSockets(tag)`                                                                                                                                   |
+| `createShardAlarms`      | alarm surface      | `storage.setAlarm` / `getAlarm` / `deleteAlarm`                                                                                                                                                     |
+| `createShardKvStore`     | `ShardKvStore`     | `storage.list` with prefix scan; hides secret records under the reserved secret-value prefix                                                                                                        |
+| `createSecretValueHost`  | `SecretValueHost`  | `createSecretValueStore` wrapped in AES-256-GCM. The key is the `LUNORA_SECRET_VALUE_KEY` Worker secret (`_PREVIOUS` during rotation), read from `env`; no key means every `put` and `take` refuses |
+| `createSecretValueStore` | `SecretValueStore` | `storage.put` / `get` / `delete` under a reserved prefix; `storage.transaction` for `take`, which binds the claimant only once `open` accepts the record; holds only what `seal(ref)` returns       |
+| `createShardDirectory`   | `ShardDirectory`   | `idFromName` / `get`, with jurisdiction pinning                                                                                                                                                     |
+| `createShardPlatform`    | all of the above   | one call, for a DO constructor                                                                                                                                                                      |
+| `createWorkerPlatform`   | worker-tier host   | the fetch/scheduled/queue entry, outside a shard                                                                                                                                                    |
 
 ## Two things it does deliberately
 

@@ -117,11 +117,23 @@ describe("durable-stream store", () => {
         claimStreamRun(harness.sql, "run-long", STARTED_AT, TTL_MS);
         appendStreamChunk(harness.sql, "run-long", 1, JSON.stringify("hello"));
 
-        trimStreamRuns(harness.sql, STARTED_AT + 60_001);
+        trimStreamRuns(harness.sql, STARTED_AT + 60_001, new Set());
 
         expect(readStreamRun(harness.sql, "run-short")).toBeUndefined();
         expect(readStreamChunks(harness.sql, "run-short", 0)).toStrictEqual([]);
         expect(readStreamRun(harness.sql, "run-long")).toBeDefined();
         expect(readStreamChunks(harness.sql, "run-long", 0)).toHaveLength(1);
+    });
+
+    it("spares an expired run the caller is still producing", () => {
+        expect.assertions(2);
+
+        claimStreamRun(harness.sql, "run-live", STARTED_AT, 60_000);
+        appendStreamChunk(harness.sql, "run-live", 1, JSON.stringify("tick"));
+
+        trimStreamRuns(harness.sql, STARTED_AT + 60_001, new Set(["run-live"]));
+
+        expect(readStreamRun(harness.sql, "run-live")?.status).toBe("running");
+        expect(readStreamChunks(harness.sql, "run-live", 0)).toHaveLength(1);
     });
 });

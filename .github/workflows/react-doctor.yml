@@ -46,4 +46,4 @@
             # is for.
             - "uses": "millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784" # react-doctor@v2.2.7
               "with":
-                  "version": "0.9.11"
+                  "version": "0.9.14"

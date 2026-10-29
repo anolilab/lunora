@@ -25,19 +25,21 @@ from __future__ import annotations
 
 import contextlib
 import json
+import random
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from .errors import LunoraError
+from .errors import PAYLOAD_TOO_LARGE, LunoraError, decode_failed, envelope_error, reply_error
 from .offline import (
     CLIENT_CLOSED,
     OFFLINE_IDENTITY_CHANGED,
+    OFFLINE_NOT_QUEUED,
     OFFLINE_WRITE_UNENCODABLE,
     OfflineError,
     QueuedMutation,
-    identity_allows_replay,
     random_id,
+    replay_identity_verdict,
     same_shard,
 )
 from .optimistic import (
@@ -46,7 +48,7 @@ from .optimistic import (
     confirm_all,
     rollback_all,
 )
-from .wire import decode_wire, encode_wire, stable_wire_key
+from .wire import WireFormatError, decode_wire, encode_wire, stable_wire_key
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     # Under TYPE_CHECKING alone: `client.py` imports this module at run time, so
@@ -60,7 +62,7 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 #: idempotency key is expected to succeed later; dropping it would lose a durable
 #: write to a transient condition. Everything else coded is a verdict — replaying
 #: it would only re-trigger the same failure (a poison-message loop).
-TRANSIENT_ERROR_CODES = frozenset({"SHARD_ERROR", "SHARD_UNAVAILABLE"})
+TRANSIENT_ERROR_CODES = frozenset({"DELIVERY_FENCED", "SHARD_ERROR", "SHARD_UNAVAILABLE"})
 
 #: Codes that say "not now" rather than "no". A rate-limited replay is the one
 #: verdict a durable queue must never honour: the write is perfectly valid and
@@ -68,6 +70,12 @@ TRANSIENT_ERROR_CODES = frozenset({"SHARD_ERROR", "SHARD_UNAVAILABLE"})
 #: punctual. The delay comes from the envelope's ``data.retryAfterMs`` (see
 #: ``protocol/fixtures/rpc.json``'s ``responseError.with-data``).
 RATE_LIMIT_ERROR_CODES = frozenset({"RATE_LIMITED", "TOO_MANY_REQUESTS"})
+
+#: A refused CREDENTIAL, not a refused write, so the write is HELD. A write
+#: queued offline replays with the bearer the client held when it went offline,
+#: which has very often expired by reconnect; settling it destroyed the user's
+#: own durable write over a problem one token refresh fixes.
+AUTH_HOLD_ERROR_CODES = frozenset({"TOKEN_EXPIRED", "UNAUTHENTICATED", "UNAUTHORIZED"})
 
 #: Hard cap on entries in one batch, matching the server's own
 #: (``shared/batch-wire.ts``). A Durable Object is single-threaded and replays a
@@ -90,10 +98,10 @@ MAX_BATCH_BYTES = 1_048_576 - 65_536
 #: a queue; the write is not dropped either way, only retried sooner.
 MAX_RETRY_AFTER_MS = 60_000
 
-#: The worker's answer to a body over its cap. Coded, so it arrives as a
-#: whole-batch envelope — which every other coded envelope is a verdict on every
-#: entry, and this one is not.
-PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
+#: The first wait of a hintless replay backoff, doubled per consecutive answered
+#: failure up to :data:`MAX_RETRY_AFTER_MS` (the reference's
+#: ``BASE_REPLAY_RETRY_DELAY_MS``).
+BASE_REPLAY_RETRY_DELAY_MS = 1_000
 
 Transform = Callable[[Any], Any]
 
@@ -155,7 +163,7 @@ class MutationSettled:
 class FlushReport:
     """What one :meth:`LunoraClient.flush_offline_queue` pass achieved."""
 
-    __slots__ = ("committed", "conflicted", "rejected", "requeued", "retry_after_ms")
+    __slots__ = ("_answered", "committed", "conflicted", "rejected", "requeued", "retry_after_ms")
 
     def __init__(self) -> None:
         #: Milliseconds the server asked the caller to wait before flushing
@@ -168,10 +176,15 @@ class FlushReport:
         #: Ids dropped on a server verdict, an identity change, an unencodable
         #: payload, or a stale precondition.
         self.rejected: list[str] = []
-        #: Ids left queued for the next reconnect after a transient failure.
+        #: Ids left queued for the next flush: a transient failure, or held
+        #: because nobody is signed in to say whose write it is.
         self.requeued: list[str] = []
         #: Ids dropped because their precondition no longer held.
         self.conflicted: list[str] = []
+        #: A server or edge ANSWERED a replay with a transient refusal (a 429, a
+        #: 503, a shard blip), so the socket stays up and nothing reconnects to
+        #: flush again: ``connect_and_run`` schedules the retry off this.
+        self._answered = False
 
 
 @dataclass
@@ -207,6 +220,13 @@ class SubmitOptions:
     #: Re-evaluated just before a QUEUED write replays; ``False`` drops it rather
     #: than replaying a write that can only fail.
     precondition: Optional[Callable[[], bool]] = None
+    #: Never queued, persisted or replayed. Where a normal write would be queued,
+    #: this raises ``OfflineError`` with ``OFFLINE_NOT_QUEUED`` before any
+    #: optimistic layer is installed, so the arguments never reach the queue, the
+    #: persistence adapter or disk. It does not wait for a queue flush or queue
+    #: behind pending writes, so it may overtake them. For a credential or a
+    #: one-time token.
+    online_only: bool = False
     #: Reports the eventual verdict on a queued write.
     on_settled: Optional[Callable[[MutationSettled], None]] = None
 
@@ -225,7 +245,7 @@ def is_transient(error: BaseException) -> bool:
     """
 
     if isinstance(error, LunoraError):
-        return error.transient or error.code in TRANSIENT_ERROR_CODES or error.code in RATE_LIMIT_ERROR_CODES
+        return error.transient or error.code in TRANSIENT_ERROR_CODES or error.code in RATE_LIMIT_ERROR_CODES or error.code in AUTH_HOLD_ERROR_CODES
 
     return True
 
@@ -248,6 +268,30 @@ def retry_after_ms(error: BaseException) -> Optional[int]:
         return None
 
     return min(delay, MAX_RETRY_AFTER_MS)
+
+
+def replay_backoff_ms(attempt: int, rand: Callable[[], float] = random.random) -> int:
+    """The wait before retrying a transient refusal that named no delay.
+
+    Exponential in ``attempt`` (1-based) from :data:`BASE_REPLAY_RETRY_DELAY_MS`,
+    capped at :data:`MAX_RETRY_AFTER_MS`, then jittered across the top half of
+    that ceiling so clients refused by one limiter do not return in lockstep —
+    the reference's ``defaultReplayRetryDelayMs``.
+    """
+
+    ceiling = min(BASE_REPLAY_RETRY_DELAY_MS * 2 ** max(attempt - 1, 0), MAX_RETRY_AFTER_MS)
+
+    return round(ceiling * (0.5 + rand() * 0.5))
+
+
+def _is_answered(error: BaseException) -> bool:
+    """Whether a transient failure came back FROM a server or an edge.
+
+    A raw transport exception never landed, so the reconnect that follows it
+    flushes anyway; a held credential waits for a new token instead.
+    """
+
+    return isinstance(error, LunoraError) and error.code not in AUTH_HOLD_ERROR_CODES
 
 
 async def submit_write(client: LunoraClient, options: SubmitOptions) -> MutationOutcome:
@@ -282,8 +326,13 @@ async def submit_write(client: LunoraClient, options: SubmitOptions) -> Mutation
         if client._closed:
             raise OfflineError(CLIENT_CLOSED, "client is closed")
 
-        confirms, rollbacks = _install_layers(client, options, overrides, deferred)
         queue_it = client._send is None and (client._was_ever_connected or client.offline_queue.queue_before_first_connect)
+
+        # Refused before anything is installed, so no overlay outlives the call.
+        if queue_it and options.online_only:
+            raise OfflineError(OFFLINE_NOT_QUEUED, f"'{options.function_path}' is online-only and the connection is not live, so it was not queued")
+
+        confirms, rollbacks = _install_layers(client, options, overrides, deferred)
 
         if queue_it:
             entry = _build_entry(client, options, write_id, confirms, rollbacks)
@@ -293,18 +342,55 @@ async def submit_write(client: LunoraClient, options: SubmitOptions) -> Mutation
 
     run_deferred(deferred)
 
+    # The notifications above are subscriber callbacks, and one may drop the socket. An online-only write that would
+    # now queue is refused here, with its overlays rolled back, rather than sent while the shard is disconnected.
+    if entry is None and options.online_only:
+        settle_now: list = []
+        with client._lock:
+            would_queue = client._send is None and (client._was_ever_connected or client.offline_queue.queue_before_first_connect)
+
+            if would_queue:
+                rollback_all(rollbacks, settle_now)
+
+        if would_queue:
+            run_deferred(settle_now)
+
+            raise OfflineError(OFFLINE_NOT_QUEUED, f"'{options.function_path}' is online-only and the connection is not live, so it was not queued")
+
     if entry is not None:
         report_discarded(client, evicted)
 
         return MutationOutcome("queued", write_id)
 
+    # Encoded and serialized before any transport attempt. An argument the codec or the JSON
+    # encoder refuses (a cycle, or a stack too shallow to encode it) never leaves the process, so
+    # it surfaces as its own error. Inside the transport `try` it would read as an unreached send
+    # and be refused as offline. The overlays this call installed are rolled back first.
     try:
-        value, commit_cursor = await client._rpc_full(options.function_path, options.args, options.shard_key, write_id)
+        json.dumps(encode_wire(options.args if options.args is not None else {}))
     except Exception:
         settle: list = []
         with client._lock:
             rollback_all(rollbacks, settle)
         run_deferred(settle)
+        raise
+
+    try:
+        value, commit_cursor, decode_error = await client._rpc_full(options.function_path, options.args, options.shard_key, write_id)
+    except Exception as error:
+        settle: list = []
+        with client._lock:
+            rollback_all(rollbacks, settle)
+            # A raw exception is the transport, not a verdict (the replay reads it the
+            # same way), so an online-only write that never reached the server while
+            # the shard has no socket is refused rather than surfacing the raw error.
+            # A `TypeError` is not a refusal the transport can vouch for: a transport may send the
+            # request and then raise one, so its fate is unknown and the original exception stays.
+            # An argument the codec refuses never reaches this handler; the preflight above catches it.
+            unreached = options.online_only and not isinstance(error, (LunoraError, WireFormatError, TypeError)) and client._send is None
+        run_deferred(settle)
+        if unreached:
+            raise OfflineError(OFFLINE_NOT_QUEUED, f"'{options.function_path}' is online-only and the connection is not live, so it was not queued") from error
         raise
 
     settle = []
@@ -314,6 +400,10 @@ async def submit_write(client: LunoraClient, options: SubmitOptions) -> Mutation
         # resolve timing, which races the socket broadcast.
         confirm_all(confirms, commit_cursor, settle)
     run_deferred(settle)
+
+    # Committed, so the overlay was confirmed above; only the VALUE is lost.
+    if decode_error is not None:
+        raise decode_error
 
     return MutationOutcome("committed", write_id, value, commit_cursor)
 
@@ -363,7 +453,8 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
             return report
 
         queue = client.offline_queue
-        current_identity = client.identity
+        current_identity = client._identity_fingerprint()
+        current_token = client._auth_token
         pending = queue.items()
 
     # The consumer's predicate, evaluated with the lock RELEASED and over a
@@ -391,12 +482,21 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
         return report
 
     # Gated against ONE identity snapshot: a flush is a single authenticated
-    # burst, so every write in it necessarily runs under one identity.
+    # burst, so every write in it runs under one identity — and is SENT with the
+    # token snapshotted beside it, never the one held when its request goes out,
+    # or a token swapped mid-flush would carry the rest of the pass. A write
+    # whose owner cannot be told (nobody signed in) is HELD: back on the queue,
+    # still persisted, unsettled — the reference's "unknown" verdict.
     sendable: list = []
     terminal: list = []
 
     for item in drained:
-        if not identity_allows_replay(item.identity, current_identity):
+        verdict = replay_identity_verdict(item.identity, current_identity, current_token)
+
+        if verdict == "unknown":
+            continue
+
+        if verdict == "mismatch":
             terminal.append((item, OfflineError(OFFLINE_IDENTITY_CHANGED, "offline mutation skipped: auth identity changed before replay")))
             continue
 
@@ -421,36 +521,45 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
         settle_rejected(client, item, error)
         report.rejected.append(item.id)
 
-    # A lone write rides the single-call path, which is the proven one. Two or
-    # more coalesce into batch round trips — the flaky-reconnect win, where N
-    # queued writes cost a handful of hops instead of N.
-    if len(sendable) == 1:
-        await _replay_sequential(client, queue, sendable, report)
+    try:
+        # A lone write rides the single-call path, which is the proven one. Two
+        # or more coalesce into batch round trips — the flaky-reconnect win,
+        # where N queued writes cost a handful of hops instead of N.
+        if len(sendable) == 1:
+            await _replay_sequential(client, queue, sendable, report, current_token)
+        else:
+            # Chunks replay sequentially, which is what preserves FIFO across a
+            # flush longer than one batch. A whole-chunk transport failure stops
+            # the flush rather than sending on into a connection that just failed.
+            for chunk in _chunk_batches(sendable):
+                if await _replay_batched(client, queue, chunk, report, current_token):
+                    break
+    finally:
+        # EVERY drained write that did not settle goes back to the FRONT, in
+        # order: a held write, a transient failure, a slot the server never
+        # answered, the chunks after a stop — and whatever was still in hand when
+        # something unexpected raised. The replay paths never requeue themselves;
+        # doing it once, here, is what keeps an exception from losing drained
+        # writes that were no longer in the queue and not yet settled. Over
+        # `drained`, not `sendable`, so a held write keeps its place in line.
+        settled = set(report.committed) | set(report.rejected)
+        leftover = [item for item in drained if item.id not in settled]
 
-        return report
+        if leftover:
+            # Unless the client closed underneath the flush: `close` already
+            # emptied the queue and could not see these writes, so putting them
+            # back would strand them in a closed client with no caller settled.
+            with client._lock:
+                closed = client._closed
+                if not closed:
+                    queue.requeue(leftover)
 
-    to_requeue: list = []
-    chunks = _chunk_batches(sendable)
-
-    for index, chunk in enumerate(chunks):
-        # Chunks replay sequentially, which is what preserves FIFO across a flush
-        # longer than one batch.
-        chunk_requeue, stop = await _replay_batched(client, queue, chunk, report)
-        to_requeue.extend(chunk_requeue)
-
-        if stop:
-            # A whole-chunk transport failure. Leave every write not yet sent
-            # queued, in order, rather than sending on into a connection that
-            # just failed.
-            for later in chunks[index + 1 :]:
-                to_requeue.extend(later)
-
-            break
-
-    if to_requeue:
-        with client._lock:
-            queue.requeue(to_requeue)
-        report.requeued.extend(entry.id for entry in to_requeue)
+            if closed:
+                report.rejected.extend(item.id for item in leftover)
+                for item in leftover:
+                    settle_rejected(client, item, OfflineError(CLIENT_CLOSED, "client closed with the write still queued"))
+            else:
+                report.requeued.extend(item.id for item in leftover)
 
     return report
 
@@ -504,6 +613,9 @@ def _chunk_batches(items: list) -> list:
 def _note_retry_after(client: LunoraClient, report: FlushReport, error: BaseException) -> None:
     """Record a rate limit's delay, and hold the next flush off until it passes."""
 
+    if _is_answered(error):
+        report._answered = True
+
     delay = retry_after_ms(error)
 
     if delay is None:
@@ -515,54 +627,57 @@ def _note_retry_after(client: LunoraClient, report: FlushReport, error: BaseExce
         client._flush_not_before = max(client._flush_not_before, time.monotonic() + delay / 1000)
 
 
-async def _replay_sequential(client: LunoraClient, queue: Any, items: list, report: FlushReport) -> None:
-    """Replay writes one at a time. FIFO is preserved by the loop itself."""
+async def _replay_sequential(client: LunoraClient, queue: Any, items: list, report: FlushReport, token: Optional[str]) -> None:
+    """Replay writes one at a time. FIFO is preserved by the loop itself.
 
-    for index, item in enumerate(items):
+    A write left unsettled — a transient failure, and every write after it — is
+    re-queued by :func:`flush_queue`, in order: nothing after it may go out
+    ahead of it, since replaying out of order is how a durable queue corrupts
+    the data it was protecting.
+    """
+
+    for item in items:
         try:
-            value, commit_cursor = await client._rpc_full(
+            value, commit_cursor, decode_error = await client._rpc_full(
                 item.function_path,
                 item.args,
                 item.shard_key,
                 item.id,
                 client_id=item.client_id,
+                token=token,
             )
         except Exception as error:
             if is_transient(error):
                 _note_retry_after(client, report, error)
-                # Nothing after this write may go out ahead of it: replaying out
-                # of order is how a durable queue corrupts the data it was
-                # protecting.
-                with client._lock:
-                    queue.requeue(items[index:])
-                report.requeued.extend(entry.id for entry in items[index:])
 
                 return
 
             with client._lock:
                 queue.unpersist(item.id)
-            settle_rejected(client, item, error)
             report.rejected.append(item.id)
+            settle_rejected(client, item, error)
 
             continue
 
+        # A committed write whose result does not decode is still committed:
+        # replaying it can only return the same bytes, so it settles here with
+        # the decode error rather than being retried forever.
         with client._lock:
             queue.unpersist(item.id)
-        settle_committed(client, item, value, commit_cursor)
         report.committed.append(item.id)
+        settle_committed(client, item, value, commit_cursor, decode_error)
 
 
-async def _replay_batched(client: LunoraClient, queue: Any, items: list, report: FlushReport) -> tuple:
-    """Replay one chunk over ``POST /_lunora/rpc-batch``.
+async def _replay_batched(client: LunoraClient, queue: Any, items: list, report: FlushReport, token: Optional[str]) -> bool:
+    """Replay one chunk over ``POST /_lunora/rpc-batch``; ``True`` means stop the flush.
 
     The worker forwards the entries to their shard, which dispatches each through
     its ordinary single-call path — so per-entry ``mutationId`` idempotency and
     in-order application are inherited from the proven route rather than
     re-implemented here.
 
-    Returns ``(requeue, stop)``: the writes to put back, and whether the caller
-    should STOP because the whole chunk failed at the transport level. Re-queuing
-    is the caller's, once and in order, so a write cannot land twice in the queue.
+    Stop means the whole chunk failed without a verdict. Whatever this leaves
+    unsettled is re-queued by :func:`flush_queue`, once and in order.
     """
 
     calls = [
@@ -583,68 +698,56 @@ async def _replay_batched(client: LunoraClient, queue: Any, items: list, report:
     ]
 
     try:
-        body = await client._rpc_batch(calls)
+        status, body = await client._rpc_batch(calls, token)
     except Exception:
         # Transport failure — nothing committed, so retry everything.
-        return items, True
+        return True
 
-    results = body.get("results")
+    results = body.get("results") if isinstance(body, dict) else None
 
     if isinstance(results, list):
-        return _settle_batch_slots(client, queue, items, results, report), False
+        _settle_batch_slots(client, queue, items, results, report)
 
-    # No per-slot results. A coded envelope is a verdict on the WHOLE batch — a
-    # bad request, an authorization denial — and therefore terminal for every
-    # entry; anything else is transport, and transient.
-    envelope = body.get("error")
+        return False
 
-    if isinstance(envelope, dict):
-        error = LunoraError(
-            envelope.get("code") if isinstance(envelope.get("code"), str) else "INTERNAL",
-            envelope.get("message") if isinstance(envelope.get("message"), str) else "batch rejected",
-            decode_wire(envelope["data"]) if envelope.get("data") is not None else None,
-        )
+    # No per-slot results, so the reply is about the WHOLE batch, and it is
+    # classified by the very predicate a single call's reply is: a coded envelope
+    # by its code, a 413 as PAYLOAD_TOO_LARGE, anything else as transport. A 2xx
+    # carrying neither results nor an envelope said nothing about any entry.
+    error = reply_error(body, status) or LunoraError("INTERNAL", "batch reply carried no results", transient=True)
 
-        # The body was too big, not wrong — every entry in it would have
-        # committed alone. Halve and retry; the estimate the chunker used cannot
-        # see the framing the worker actually measured, and only the answer can.
-        if error.code == PAYLOAD_TOO_LARGE and len(items) > 1:
-            middle = len(items) // 2
-            left, stop = await _replay_batched(client, queue, items[:middle], report)
+    # The body was too big, not wrong — every entry in it would have committed
+    # alone. Halve and retry, on ANY 413: an edge refuses an oversized body with
+    # its own page, and re-queuing that chunk whole sent the identical body into
+    # the identical refusal on every flush. A lone write still refused settles
+    # below, terminally, as a coded 413 does.
+    if error.code == PAYLOAD_TOO_LARGE and len(items) > 1:
+        middle = len(items) // 2
 
-            if stop:
-                return left + items[middle:], True
+        return await _replay_batched(client, queue, items[:middle], report, token) or await _replay_batched(client, queue, items[middle:], report, token)
 
-            right, stop = await _replay_batched(client, queue, items[middle:], report)
+    # A shard blip or a rate limit is not a verdict on the batch's contents.
+    if is_transient(error):
+        _note_retry_after(client, report, error)
 
-            return left + right, stop
+        return True
 
-        # A shard blip or a rate limit is not a verdict on the batch's contents.
-        # Requeue it whole and stop the flush, exactly as the single-call path
-        # does for the same codes.
-        if is_transient(error):
-            _note_retry_after(client, report, error)
-
-            return items, True
-
-        with client._lock:
-            for item in items:
-                queue.unpersist(item.id)
-
+    with client._lock:
         for item in items:
-            settle_rejected(client, item, error)
-            report.rejected.append(item.id)
+            queue.unpersist(item.id)
 
-        return [], False
+    for item in items:
+        report.rejected.append(item.id)
+        settle_rejected(client, item, error)
 
-    return items, True
+    return False
 
 
-def _settle_batch_slots(client: LunoraClient, queue: Any, items: list, results: list, report: FlushReport) -> list:
+def _settle_batch_slots(client: LunoraClient, queue: Any, items: list, results: list, report: FlushReport) -> None:
     """Demux a batch reply back onto the writes it replayed, in input order.
 
     Each slot is classified exactly as :func:`_replay_sequential` classifies a
-    whole response. Returns the writes the caller must re-queue.
+    whole response. A write left unsettled is re-queued by :func:`flush_queue`.
     """
 
     by_slot = {}
@@ -653,26 +756,28 @@ def _settle_batch_slots(client: LunoraClient, queue: Any, items: list, results: 
         if isinstance(entry, dict) and isinstance(entry.get("id"), int) and isinstance(entry.get("body"), dict):
             by_slot[entry["id"]] = entry["body"]
 
-    requeue: list = []
-
     for index, item in enumerate(items):
         slot = by_slot.get(index)
 
         if slot is None:
             # The server never returned this slot. It may or may not have
             # committed, so retry it — the `mutationId` makes that safe.
-            requeue.append(item)
+            continue
 
+        if "error" in slot and not isinstance(slot["error"], dict):
+            # An `error` key holding a string, a null, an array or a number is
+            # no envelope (``protocol/README.md`` 4.2), and a slot carries no
+            # HTTP status of its own to classify it by — so nothing readable
+            # came back about this entry, which is exactly the position of a
+            # slot the server never returned. 4.3 retries that one. Falling
+            # through to the commit branch below settled a durable write
+            # COMMITTED with a null result and un-persisted it.
             continue
 
         envelope = slot.get("error")
 
         if isinstance(envelope, dict):
-            error = LunoraError(
-                envelope.get("code") if isinstance(envelope.get("code"), str) else "INTERNAL",
-                envelope.get("message") if isinstance(envelope.get("message"), str) else "request failed",
-                decode_wire(envelope["data"]) if envelope.get("data") is not None else None,
-            )
+            error = envelope_error(envelope)
 
             # A transient shard failure — or a limiter that refused to look — is
             # the batch's counterpart of an uncoded throw on the single-call path:
@@ -680,25 +785,30 @@ def _settle_batch_slots(client: LunoraClient, queue: Any, items: list, results: 
             # queue rather than being reported as failed.
             if is_transient(error):
                 _note_retry_after(client, report, error)
-                requeue.append(item)
 
                 continue
 
             with client._lock:
                 queue.unpersist(item.id)
-            settle_rejected(client, item, error)
             report.rejected.append(item.id)
+            settle_rejected(client, item, error)
 
             continue
 
+        # The outcome is decided FIRST, inside a guard: a result that does not
+        # decode is still a commit, and letting the codec error escape here lost
+        # every later slot of the batch. Only then is the durable record removed.
         cursor = slot.get("commitCursor")
+
+        try:
+            value, decode_error = decode_wire(slot.get("result")), None
+        except WireFormatError as failure:
+            value, decode_error = None, decode_failed(failure)
 
         with client._lock:
             queue.unpersist(item.id)
-        settle_committed(client, item, decode_wire(slot.get("result")), cursor if isinstance(cursor, int) else None)
         report.committed.append(item.id)
-
-    return requeue
+        settle_committed(client, item, value, cursor if isinstance(cursor, int) and not isinstance(cursor, bool) else None, decode_error)
 
 
 def close_queue(client: LunoraClient) -> None:
@@ -796,7 +906,7 @@ def _build_entry(client: LunoraClient, options: SubmitOptions, write_id: str, co
         function_path=options.function_path,
         # Bound at enqueue time, so the write can only ever replay as whoever
         # made it.
-        identity=client.identity,
+        identity=client._identity_fingerprint(),
         live_awaiter=True,
         mutation_id=write_id,
         on_settled=options.on_settled,
@@ -820,7 +930,14 @@ def report_discarded(client: LunoraClient, discarded: list) -> None:
         settle_rejected(client, item.entry, item.error())
 
 
-def settle_committed(client: LunoraClient, item: QueuedMutation, value: Any, commit_cursor: Optional[int]) -> None:
+def settle_committed(client: LunoraClient, item: QueuedMutation, value: Any, commit_cursor: Optional[int], error: Optional[Exception] = None) -> None:
+    """Settle a write the server committed.
+
+    ``error`` is set — with no value — when the result did not decode
+    (``WIRE_DECODE_FAILED``): the write still committed, so its overlay is
+    confirmed and it is reported ``committed`` all the same.
+    """
+
     deferred: list = []
     # The overlay is confirmed BEFORE the caller is told, so the gapless drop is
     # already in place when the confirming frame lands.
@@ -828,7 +945,7 @@ def settle_committed(client: LunoraClient, item: QueuedMutation, value: Any, com
         confirm_all(item.confirms, commit_cursor, deferred)
     run_deferred(deferred)
 
-    emit_settled(client, item, "committed", value=value)
+    emit_settled(client, item, "committed", value=value, error=error)
 
 
 def settle_rejected(client: LunoraClient, item: QueuedMutation, error: Exception) -> None:
@@ -864,7 +981,12 @@ def emit_settled(client: LunoraClient, item: QueuedMutation, status: str, value:
 
 
 def run_deferred(deferred: list) -> None:
-    """Run notifications queued while the lock was held."""
+    """Run notifications queued while the lock was held, each in its own guard.
+
+    They are subscriber callbacks, and one raising must not stop the rest — nor
+    unwind the flush that is settling a write.
+    """
 
     for call in deferred:
-        call()
+        with contextlib.suppress(Exception):
+            call()

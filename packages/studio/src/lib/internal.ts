@@ -1,5 +1,8 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 
+/** Error codes no retry will fix: an admin or session rejection a poller must stop on rather than back off from. */
+const TERMINAL_POLL_CODES: ReadonlySet<string> = new Set(["ADMIN_FORBIDDEN", "FORBIDDEN", "UNAUTHORIZED"]);
+
 /**
  * Dispatch a Lunora RPC through the client method that matches the function's
  * `kind`: an `action` runs via `client.action`, a `mutation` via `client.mutation`,
@@ -21,7 +24,9 @@ export const dispatchByKind = (
             return client.action(reference, args, options);
         }
         case "mutation": {
-            return client.mutation(reference, args, options);
+            // The operator sees the answer now, so a write is never parked in the offline queue, where a
+            // sensitive argument would be persisted before the console could refuse it.
+            return client.mutation(reference, args, { ...options, onlineOnly: true });
         }
         default: {
             return client.query(reference, args, options);
@@ -64,6 +69,13 @@ export const errorCode = (error: unknown): string | undefined => {
     const { code } = error as { code?: unknown };
 
     return typeof code === "string" ? code : undefined;
+};
+
+/** Whether a poll failure is one no retry will fix. A poll callback that catches its own error must rethrow this so the timer stops. */
+export const isTerminalPollError = (error: unknown): boolean => {
+    const code = errorCode(error);
+
+    return code !== undefined && TERMINAL_POLL_CODES.has(code);
 };
 
 /**
@@ -145,7 +157,7 @@ export const formatBytes = (bytes: null | number | undefined): string => {
  * reaches the studio as a real `bigint` and a `v.bytes()` column as an
  * `ArrayBuffer`. `JSON.stringify` **throws** on the former and flattens the
  * latter to `{}` — so any surface that serializes a row (the JSON view, the JSON
- * export) dies or loses data on a table like `paymentSessions`. Both render
+ * export) dies or loses data on a table like `payment_sessions`. Both render
  * exactly as {@link formatCell} renders them; JSON has no bigint, so a decimal
  * string is the honest form.
  *
@@ -162,6 +174,15 @@ export const jsonRowReplacer = (_key: string, value: unknown): unknown => {
 
     return value;
 };
+
+/**
+ * The filter value a facet click sends for `value`. A `v.bigint()` facet value
+ * arrives as a real `bigint`, which no query key, URL or saved view can hold
+ * (`JSON.stringify` throws) — so it travels as its exact decimal text, which the
+ * server's filter binding parses back to the stored key. Everything else is sent
+ * as-is.
+ */
+export const facetFilterValue = (value: unknown): unknown => (typeof value === "bigint" ? value.toString() : value);
 
 /**
  * Render a single table-cell value as text without throwing on objects or null.
@@ -245,6 +266,21 @@ export const resolveOrigin = (explicit?: string): string => {
     }
 
     return "http://localhost:5173";
+};
+
+/**
+ * The base URL of the worker the studio's client talks to — `client.url`, which
+ * is NOT the page's own origin when the studio is served on its own host — with
+ * trailing slashes dropped so `${base}/path` never doubles one.
+ */
+export const workerBaseUrl = (clientUrl: string): string => {
+    let base = resolveOrigin(clientUrl);
+
+    while (base.endsWith("/")) {
+        base = base.slice(0, -1);
+    }
+
+    return base;
 };
 
 /**

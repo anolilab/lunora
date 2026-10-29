@@ -1,6 +1,6 @@
 ---
 title: "@lunora/react"
-description: React 18+/19 hooks built on @lunora/client, with React Server Component data loading.
+description: React 19 hooks built on @lunora/client, with React Server Component data loading.
 related:
     - to: /docs/packages/client
     - to: /docs/packages/storage#end-user-uploads-rls-gated
@@ -52,12 +52,35 @@ what you need:
 
 ```tsx
 const { mutate, pending } = useMutation(api.messages.send);
-await mutate({ channelId, text }, { optimistic: (current) => [...(current ?? []), draft] });
+
+await mutate(
+    { channelId, text },
+    {
+        optimisticUpdate: (store, args) => {
+            const current = store.getQuery(api.messages.list, { channelId: args.channelId }) ?? [];
+
+            store.setQuery(api.messages.list, { channelId: args.channelId }, [...current, draft]);
+        },
+    },
+);
 ```
 
-For a multi-query optimistic update bound to every call, use
+`optimisticUpdate` names the query it patches, which is what the `send`/`list`
+shape needs: the per-call `optimistic: (current) => next` shortcut only patches a
+subscription registered under the **mutation's own** reference and args, so it
+fits a query and a mutation that share a path (a counter, a document by id) and
+quietly does nothing for anything else.
+
+To bind the same update to every call of a handle, use
 `withOptimisticUpdate(update)`, which returns the same handle with the update
 applied by default.
+
+Offline, `mutate` calls `client.mutation` at once when the client can queue the
+write: the optimistic update paints, and the write goes to the offline queue (or
+your durable outbox) to replay on reconnect. Before the shard's first connect
+(unless `queueBeforeFirstConnect` is set), or on a client with no WebSocket, the
+client cannot queue, so the call waits until the browser is back online and then
+sends. TanStack never retries; the queue owns replays.
 
 ## `useAction(fn)`
 
@@ -72,10 +95,10 @@ second's outcome. A success clears `error`; a failure leaves the previous `data`
 in place, so a transient error does not blank the view. `reset()` clears both,
 but does not cancel an in-flight call — its result still lands.
 
-Unlike `useMutation`, the call never pauses while offline and is never retried:
-`client.action` has no offline queue and sends no idempotency key, so a paused
-call would fire minutes later on reconnect and a retry could run a third-party
-side effect twice. It fails fast instead and lets you decide.
+Unlike `useMutation`, the call never waits for the network, is never queued and
+is never retried: `client.action` has no offline queue and sends no idempotency
+key, so a paused call would fire minutes later on reconnect and a retry could run
+a third-party side effect twice. It fails fast instead and lets you decide.
 
 ```tsx
 const { call: runVerify, pending } = useAction(api.commands.run);
@@ -96,8 +119,25 @@ without a separate `useState`.
 
 ## `useAuth()`
 
-Returns `{ user, token, setToken(next) }`. Call `setToken(jwt)` after a
-sign-in flow; subsequent RPC calls carry the token automatically.
+Returns `{ status, user, token, setToken(next) }`. Call `setToken(jwt)` after a
+sign-in flow; subsequent RPC calls carry the token automatically. It does not
+re-authenticate an open subscription — a socket keeps the session credential it
+connected with; `client.setWsToken(token)` rotates that.
+
+`status` is the gate: `"loading"`, `"authenticated"`, `"unauthenticated"` or
+`"unreachable"` (a credential is held but the identity endpoint could not be
+reached — gates as authenticated). Branch on it, never on whether `user` is
+null: `user` is null both when signed out and when a held credential's identity
+has not resolved, so a `user` gate renders the sign-in form to a signed-in user.
+See the [`@lunora/client` reference](/docs/packages/client) for the full table.
+
+```tsx
+const { setToken, status, user } = useAuth();
+
+if (status === "loading") return <Spinner />;
+if (status === "unauthenticated") return <SignInForm onToken={setToken} />;
+return <Dashboard email={user?.email} />;
+```
 
 Resolving the session also keys the client's offline-queue identity on the
 user id rather than the token bytes, so rotating the JWT for the same user
@@ -201,9 +241,19 @@ import type { Preloaded } from "@lunora/react/server";
 
 export function Post({ preloaded }: { preloaded: Preloaded<{ title: string }> }) {
     const post = usePreloadedQuery(preloaded); // server value first, then live
+
+    // `undefined` after a sign-out or user switch, until the new identity's subscription answers.
+    if (!post) {
+        return <p>Loading…</p>;
+    }
+
     return <h1>{post.title}</h1>;
 }
 ```
+
+`usePreloadedQuery` returns `T | undefined`. The preloaded value was read for whoever was
+signed in when the page loaded, so after a sign-out or user switch it is dropped and the hook
+returns `undefined` until the live value arrives: guard before reading fields.
 
 ### Providers
 
@@ -239,20 +289,29 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
 End-user file uploads (live progress, pause/resume, large-file resumable and
 per-part retry) are re-exported from `@visulima/storage-client` (Lunora does not
-hand-roll the uploader). `useUpload` auto-selects TUS / chunked-REST / multipart
-by file size; the TUS path survives a pause/resume and a dropped connection.
+hand-roll the uploader). `useUpload` speaks the protocol named in `method`; without it, it uses the only
+endpoint given, or picks between several by file size against `tusThreshold`.
+The TUS path survives a pause/resume and a dropped connection.
 Point the endpoint at a route backed by
 [`@lunora/storage/upload`](/docs/packages/storage#end-user-uploads-rls-gated);
 these uploads are gated by _your_ per-user RLS policy, **not** the studio
-`adminToken`.
+`adminToken`. [File storage](/docs/concepts/file-storage#resumable-uploads-from-the-browser)
+walks through mounting the handler, authenticating the route, and the size limits.
 
 ### TanStack Query reconciliation
 
 The **upload** hooks (`useUpload`, `useMultipartUpload`, `useTusUpload`,
 `useChunkedRestUpload`, `useFileInput`, `usePasteUpload`) hold their own state and
-need **no** `QueryClientProvider`. The `@visulima/storage-client` _data_ hooks
-(`useGetFileList` …) do use TanStack Query, and `LunoraProvider` already mounts a
-`QueryClient`, so they coexist with Lunora's own `useQuery` without extra wiring.
+need **no** `QueryClientProvider`, so they coexist with Lunora's own `useQuery`.
+The `@visulima/storage-client` _data_ hooks (`useGetFileList` …) are not
+re-exported and do not work against a Lunora upload route: they read files over
+`GET`, which the route refuses (`405`). Read stored files with `ctx.storage` or a
+signed URL.
+
+For resumable uploads use `useTusUpload` (or `useUpload` with TUS).
+`useChunkedRestUpload` sends four chunks in parallel, which the binding-backed
+provider refuses, so it can only upload a file as one chunk; see
+[Chunked REST](/docs/packages/storage#chunked-rest).
 
 ### Drag-and-drop uploader with a progress bar
 
@@ -264,15 +323,17 @@ export function Uploader() {
     const [dragging, setDragging] = useState(false);
     const controlRef = useRef(null);
 
-    // `endpointTus` points at the RLS-gated `@lunora/storage/upload` handler.
-    // The hook auto-selects TUS for large files (resumable), a plain multipart
-    // POST for small ones.
+    // Each endpoint is its own `@lunora/storage/upload` handler: one handler
+    // speaks one protocol. The hook auto-selects TUS for large files
+    // (resumable), a plain multipart POST for small ones.
     const { upload, progress, isUploading, isPaused, pause, resume, abort, error, result } = useUpload({
-        endpointTus: "/upload",
-        endpointMultipart: "/upload",
+        endpointTus: "/uploads",
+        endpointMultipart: "/uploads-form",
+        // Over R2 each TUS chunk is a multipart part, and R2 rejects parts under 5 MiB.
+        chunkSize: 5 * 1024 * 1024,
         // Send the user's session so the server's `authorize` gate can identify them.
         headers: async () => ({ authorization: `Bearer ${await getSessionToken()}` }),
-        restrictions: { maxFileSize: 5 * 1024 * 1024 * 1024, allowedTypes: ["video/*", "image/*"] },
+        restrictions: { maxFileSize: 5 * 1024 * 1024 * 1024, allowedFileTypes: ["video/*", "image/*"] },
         onSuccess: (file) => console.log("uploaded", file.id),
     });
 
@@ -488,6 +549,10 @@ The part the type signature does not tell you:
   `AudioContext` resumption outside one. It is idempotent while a call is
   active, and a denied permission lands in `error` rather than throwing at the
   call site.
+- **A failed turn drops its partial answer.** When the model fails mid-answer (or its
+  stream is cut short), the text already streamed for that turn is cleared from
+  `interimTranscript` and `error` is set; the call returns to `listening`. A retried
+  turn starts its text from empty, never from the failed attempt's prefix.
 - **`endCall()` releases everything** — the socket, the microphone tracks, and
   the Web Audio graph — and is idempotent. The hook also tears the call down on
   unmount, so a component that navigates away mid-call leaks nothing.

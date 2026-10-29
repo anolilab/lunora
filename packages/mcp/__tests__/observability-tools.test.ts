@@ -1,4 +1,6 @@
-import type { FunctionDescriptor, LunoraClient } from "@lunora/client";
+import type { FunctionDescriptor } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
+import { LunoraError } from "@lunora/errors";
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { describe, expect, it, vi } from "vitest";
 
@@ -19,13 +21,13 @@ const logEntry = (index: number, level: string): Record<string, unknown> => {
 const mockClient = (
     results: Record<string, unknown> = {},
 ): {
-    asClient: LunoraClient;
+    asClient: LunoraAdminClient;
     query: ReturnType<typeof vi.fn>;
 } => {
     const query = vi.fn<(reference: { __lunoraRef: string }) => Promise<unknown>>(async (reference) => results[reference.__lunoraRef] ?? {});
     const listFunctions = vi.fn<() => Promise<FunctionDescriptor[]>>(async () => []);
 
-    return { asClient: { listFunctions, query } as unknown as LunoraClient, query };
+    return { asClient: { listFunctions, query } as unknown as LunoraAdminClient, query };
 };
 
 describe("observability tool definitions", () => {
@@ -33,7 +35,7 @@ describe("observability tool definitions", () => {
         expect.assertions(3);
 
         expect(OBSERVABILITY_TOOL_DEFINITIONS.map((tool) => tool.name)).toStrictEqual(OBSERVABILITY_NAMES);
-        expect(OBSERVABILITY_TOOL_DEFINITIONS.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
+        expect(OBSERVABILITY_TOOL_DEFINITIONS.every((tool) => tool.annotations?.readOnlyHint)).toBe(true);
         // The MCP spec requires an output schema to be an object at the root.
         expect(OBSERVABILITY_TOOL_DEFINITIONS.every((tool) => tool.outputSchema?.type === "object")).toBe(true);
     });
@@ -52,7 +54,7 @@ describe("observability-tier gating", () => {
 
         const names = toolDefinitions(false).map((tool) => tool.name);
 
-        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_get_function_schema", "lunora_run_query"]);
+        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_get_function_schema", "lunora_run_query", "lunora_explain_error"]);
         expect(names.some((name) => OBSERVABILITY_NAMES.includes(name))).toBe(false);
     });
 
@@ -64,6 +66,7 @@ describe("observability-tier gating", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
+            "lunora_explain_error",
             ...OBSERVABILITY_NAMES,
         ]);
         expect(toolDefinitions(true, true).map((tool) => tool.name)).toStrictEqual([
@@ -71,6 +74,7 @@ describe("observability-tier gating", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
+            "lunora_explain_error",
             ...OBSERVABILITY_NAMES,
             "lunora_run_mutation",
             "lunora_run_action",
@@ -86,6 +90,7 @@ describe("observability-tier gating", () => {
             "lunora_list_tables",
             "lunora_get_function_schema",
             "lunora_run_query",
+            "lunora_explain_error",
             "lunora_run_mutation",
             "lunora_run_action",
         ]);
@@ -185,7 +190,7 @@ describe("lunora_get_logs", () => {
     it("maps a bigint / bytes leaf so structuredContent survives the transport's JSON.stringify", async () => {
         expect.assertions(3);
 
-        // `LunoraClient` decodes every response, so a `v.int64()` field logged
+        // `LunoraAdminClient` decodes every response, so a `v.int64()` field logged
         // into `fields` reaches the tool as a real bigint. Left unmapped it
         // would throw when the transport serializes `structuredContent`.
         const entries = [{ fields: { blob: new Uint8Array([1, 2, 3]), id: 9_007_199_254_740_993n }, level: "info", message: "m", timestamp: 1 }];
@@ -327,11 +332,11 @@ describe("the remaining reads", () => {
 
         const mock = mockClient();
 
-        mock.query.mockRejectedValueOnce(new Error("ADMIN_FORBIDDEN"));
+        mock.query.mockRejectedValueOnce(new LunoraError("ADMIN_FORBIDDEN", "the admin token was rejected"));
 
         const result = await callTool(mock.asClient, "lunora_get_logs", {}, false, true);
 
         expect(result.isError).toBe(true);
-        expect(result.content[0]!.text).toContain("ADMIN_FORBIDDEN");
+        expect(result.structuredContent).toStrictEqual({ code: "ADMIN_FORBIDDEN", message: "the admin token was rejected" });
     });
 });

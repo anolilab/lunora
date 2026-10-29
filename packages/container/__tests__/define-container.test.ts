@@ -213,6 +213,27 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ image: "./app", interceptHttps: "yes" as unknown as boolean })).toThrow("`interceptHttps` must be a boolean");
     });
 
+    it("accepts a boolean sandbox flag and rejects anything else", () => {
+        expect.assertions(2);
+
+        expect(defineContainer({ image: "./app", sandbox: true }).sandbox).toBe(true);
+        expect(() => defineContainer({ image: "./app", sandbox: "yes" as unknown as boolean })).toThrow("`sandbox` must be a boolean");
+    });
+
+    it("validates backups: it needs sandbox, a bucket binding and a slash-terminated prefix", () => {
+        expect.assertions(4);
+
+        expect(defineContainer({ backups: { bucket: "WORKSPACES", prefix: "ws/" }, image: "./app", sandbox: true }).backups).toStrictEqual({
+            bucket: "WORKSPACES",
+            prefix: "ws/",
+        });
+        expect(() => defineContainer({ backups: { bucket: "WORKSPACES" }, image: "./app" })).toThrow("`backups` needs `sandbox: true`");
+        expect(() => defineContainer({ backups: { bucket: " " }, image: "./app", sandbox: true })).toThrow("`backups.bucket` must name an R2 bucket binding");
+        expect(() => defineContainer({ backups: { bucket: "WORKSPACES", prefix: "ws" }, image: "./app", sandbox: true })).toThrow(
+            "`backups.prefix` must be a string ending in `/`",
+        );
+    });
+
     it("accepts hardTimeout and readyOn config", () => {
         expect.assertions(3);
 
@@ -366,5 +387,73 @@ describe(resolveContainerEnvVars, () => {
         const definition = defineContainer({ image: "./app", secrets: ["API_KEY"] });
 
         expect(() => resolveContainerEnvVars(definition, {}, "transcoder")).toThrow('container "transcoder": declared secret "API_KEY" is not set');
+    });
+
+    describe("schedulingPolicy durable_object", () => {
+        it("accepts named images, a default image and a runtime size", () => {
+            expect.assertions(2);
+
+            const definition = defineContainer({
+                image: "base",
+                images: { base: "./container", pinned: { registry: "registry.cloudflare.com/acct/repo@sha256:abc" } },
+                instanceType: { diskMb: 8000, memoryMib: 4096, vcpu: 1 },
+                schedulingPolicy: "durable_object",
+            });
+
+            expect(definition.schedulingPolicy).toBe("durable_object");
+            expect(defineContainer({ image: "cloudflare/debian-trixie", schedulingPolicy: "durable_object" }).image).toBe("cloudflare/debian-trixie");
+        });
+
+        it("rejects a default image that names no declared or managed image", () => {
+            expect.assertions(1);
+
+            expect(() => defineContainer({ image: "gpu", images: { base: "./container" }, schedulingPolicy: "durable_object" })).toThrow(
+                /must name an entry of `images`/u,
+            );
+        });
+
+        it("rejects registry references outside the Cloudflare registry or without a digest", () => {
+            expect.assertions(2);
+
+            expect(() => defineContainer({ images: { base: { registry: "docker.io/acme/app:1" } }, schedulingPolicy: "durable_object" })).toThrow(
+                /digest-pinned \(@sha256\) reference under registry.cloudflare.com/u,
+            );
+            expect(() =>
+                defineContainer({ images: { base: { registry: "registry.cloudflare.com/acct/repo:latest" } }, schedulingPolicy: "durable_object" }),
+            ).toThrow(/digest-pinned/u);
+        });
+
+        it("rejects wrangler-only sizes and partial custom sizes", () => {
+            expect.assertions(2);
+
+            expect(() => defineContainer({ instanceType: "basic" as never, schedulingPolicy: "durable_object" })).toThrow(/not a runtime size/u);
+            expect(() => defineContainer({ instanceType: { vcpu: 1 } as never, schedulingPolicy: "durable_object" })).toThrow(
+                /needs diskMb in 1–20000 \(got undefined\)/u,
+            );
+        });
+
+        it("holds a custom runtime size to Cloudflare's custom instance bounds", () => {
+            expect.assertions(4);
+
+            const size = (instanceType: { diskMb: number; memoryMib: number; vcpu: number }) => () =>
+                defineContainer({ instanceType, schedulingPolicy: "durable_object" });
+
+            // Below the 1-vCPU floor of a custom size: a named runtime size covers that range.
+            expect(size({ diskMb: 2000, memoryMib: 4096, vcpu: 0.5 })).toThrow(/needs vcpu in 1–4 \(got 0\.5\) — below 1 vCPU use a named runtime size/u);
+            expect(size({ diskMb: 2000, memoryMib: 16_384, vcpu: 4 })).toThrow(/needs memoryMib in 1–12288 \(got 16384\)/u);
+            // 3 GiB per vCPU: 2 vCPU needs at least 6144 MiB.
+            expect(size({ diskMb: 2000, memoryMib: 4096, vcpu: 2 })).toThrow(/≥ 3072 MiB memory per vCPU \(got 4096 MiB for 2 vCPU\)/u);
+            expect(size({ diskMb: 20_000, memoryMib: 12_288, vcpu: 4 })).not.toThrow();
+        });
+
+        it("rejects default-policy fields, and images without the policy", () => {
+            expect.assertions(3);
+
+            expect(() => defineContainer({ maxInstances: 3, schedulingPolicy: "durable_object" } as never)).toThrow(/`maxInstances` is not supported/u);
+            expect(() => defineContainer({ rollout: { stepPercentage: 10 }, schedulingPolicy: "durable_object" } as never)).toThrow(
+                /`rollout` is not supported/u,
+            );
+            expect(() => defineContainer({ image: "./app", images: { base: "./x" } } as never)).toThrow(/`images` needs schedulingPolicy "durable_object"/u);
+        });
     });
 });

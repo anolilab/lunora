@@ -1,6 +1,6 @@
 {
     "name": "@lunora/codegen",
-    "version": "1.0.0-alpha.166",
+    "version": "1.0.0-alpha.369",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
     "keywords": [
         "cloudflare",
@@ -40,6 +40,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./sdk": {
+            "types": "./dist/sdk/index.d.ts",
+            "import": "./dist/sdk/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -61,28 +65,31 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/advisor": "1.0.0-alpha.115",
-        "@lunora/agent": "1.0.0-alpha.95",
-        "@lunora/container": "1.0.0-alpha.48",
-        "@lunora/errors": "1.0.0-alpha.35",
-        "@lunora/platform": "1.0.0-alpha.27",
-        "@lunora/queue": "1.0.0-alpha.51",
-        "@lunora/scheduler": "1.0.0-alpha.58",
-        "@lunora/values": "1.0.0-alpha.43",
-        "@lunora/workflow": "1.0.0-alpha.49",
-        "jsonc-parser": "catalog:vite",
+        "@lunora/advisor": "1.0.0-alpha.268",
+        "@lunora/agent": "1.0.0-alpha.259",
+        "@lunora/container": "1.0.0-alpha.96",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/platform": "1.0.0-alpha.75",
+        "@lunora/queue": "1.0.0-alpha.131",
+        "@lunora/scheduler": "1.0.0-alpha.155",
+        "@lunora/values": "1.0.0-alpha.85",
+        "@lunora/workflow": "1.0.0-alpha.99",
+        "@visulima/fs": "catalog:cli",
+        "jiti": "catalog:tooling",
         "quicktype-core": "catalog:tooling",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.123",
-        "@lunora/server": "1.0.0-alpha.108",
-        "@lunora/shard-engine": "1.0.0-alpha.61",
+        "@lunora/bindings": "1.0.0-alpha.139",
+        "@lunora/client": "1.0.0-alpha.261",
+        "@lunora/do": "1.0.0-alpha.259",
+        "@lunora/payment": "1.0.0-alpha.250",
+        "@lunora/server": "1.0.0-alpha.249",
+        "@lunora/shard-engine": "1.0.0-alpha.168",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
-        "drizzle-orm": "catalog:drizzle",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "prettier": "catalog:lint",

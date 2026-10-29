@@ -21,6 +21,7 @@ import type { R2BucketLike } from "@lunora/platform";
 import type { CdcChange, SqlExec } from "@lunora/shard-engine";
 import {
     archiveCdcSegment,
+    cdcArchiveRewound,
     cdcSeqLeavingRows,
     compactCdcDocs,
     envOptionalPositiveInt,
@@ -33,6 +34,42 @@ import {
 
 /** R2 bucket binding that receives changelog segments. Absent ⇒ archiving is off. */
 const CDC_ARCHIVE_BINDING = "LUNORA_CDC_ARCHIVE";
+
+const CDC_LOG_RETENTION_KEY = "LUNORA_CDC_LOG_RETENTION";
+
+/**
+ * Changelog rows a shard keeps when `LUNORA_CDC_LOG_RETENTION` is not set.
+ *
+ * An unbounded log is a slow leak: every write appends a row and nothing removes
+ * one, so a busy shard's SQLite grows until it hits the storage ceiling. A million rows is generous — at a write a second that is
+ * eleven days of history — and a consumer that falls further behind is told to
+ * re-seed from a snapshot (`CDC_LOG_TRIMMED`), never handed a silent gap. The sweep
+ * still never crosses the in-shard consumers' floor.
+ */
+const DEFAULT_CDC_LOG_RETENTION_ROWS = 1_000_000;
+
+/**
+ * The row window the sweep keeps: `LUNORA_CDC_LOG_RETENTION` when set to a whole
+ * positive integer, `off` to opt out and keep the log unbounded, otherwise
+ * {@link DEFAULT_CDC_LOG_RETENTION_ROWS}.
+ *
+ * A malformed value reads as the default rather than as a tighter window — the
+ * strict whole-string parse is what stops `10k` becoming "keep 10 rows".
+ *
+ * `LUNORA_CDC_PAYLOAD_RETENTION` does not change this: compaction strips payloads
+ * but keeps every row, so a payload window on its own would leave the log growing
+ * without bound. Only an explicit `off` removes the row window.
+ * @returns the row count to keep, or `undefined` when row retention is switched off
+ */
+const resolveCdcLogRetention = (environment: unknown): number | undefined => {
+    const raw = (environment as Record<string, unknown> | undefined)?.[CDC_LOG_RETENTION_KEY];
+
+    if (typeof raw === "string" && raw.trim().toLowerCase() === "off") {
+        return undefined;
+    }
+
+    return envOptionalPositiveInt(environment, CDC_LOG_RETENTION_KEY) ?? DEFAULT_CDC_LOG_RETENTION_ROWS;
+};
 
 /**
  * Minimum spacing between retention sweeps. The sweep is amortized onto a write
@@ -95,8 +132,17 @@ interface CdcRetentionHost {
     epoch: () => string | undefined;
     /** Report a swallowed failure; retention is maintenance and must never surface on a write path. */
     recordError: (scope: string, error: unknown) => void;
+
     /** Lowest cursor any durable in-shard consumer has reached — the seq a sweep may not cross. */
     retentionFloor: (sql: SqlExec) => number;
+
+    /**
+     * Re-mint the CDC epoch because this shard's changelog has provably forked —
+     * `ShardDO.sealForkedTimeline`. The sweep calls it when the ARCHIVE turns out
+     * to know about segments the shard has no record of writing, which is what a
+     * rewound watermark looks like from the one place a restore cannot reach.
+     */
+    sealTimeline: () => void;
     /** This DO's shard key, or `__root__` for the single-DO default. */
     shardKey: () => string;
     sql: () => SqlExec;
@@ -145,11 +191,14 @@ class CdcRetentionRunner {
      * Bound the changelog to the configured windows, archiving anything
      * destructible first when a bucket is bound.
      *
-     * Two independent, opt-in windows. `LUNORA_CDC_PAYLOAD_RETENTION` strips
+     * Two independent windows. `LUNORA_CDC_PAYLOAD_RETENTION` (opt-in) strips
      * post-images past N rows, keeping every key — a client below that floor
      * still gets an exact key-level delta and reads the values from the tables.
      * `LUNORA_CDC_LOG_RETENTION` deletes rows outright past N, which is the
-     * level that destroys information and the one the archive exists for.
+     * level that destroys information and the one the archive exists for. It
+     * defaults to {@link DEFAULT_CDC_LOG_RETENTION_ROWS} so the log is bounded
+     * out of the box, whether or not a payload window is set; `off` restores the
+     * unbounded log.
      *
      * Both levels are enforced on the READ paths, not merely intended here —
      * `evaluateResume` and `computeOpLogShapeSeed` gate on `minCdcSeq`, and
@@ -158,15 +207,17 @@ class CdcRetentionRunner {
      * handed the surviving tail with an advanced cursor has no way to notice a
      * range went missing, so every path that can serve one has to refuse.
      *
-     * **Both are opt-in, and that is a deliberate answer rather than caution.**
+     * **The window is a statement about out-of-shard consumers.**
      * The log's in-shard consumers record durable cursors this sweep can read
      * ({@link CdcRetentionHost.retentionFloor}), but its out-of-shard consumers
      * do not: a warehouse connector holds an opaque cursor token issued by the
      * Worker, and nothing in this shard knows where it is. Trimming to a floor
-     * computed only from what SQLite can see would silently drop rows a
-     * connector had not read — so a deployment that wants retention states the
-     * window it can afford, and gets a sweep that additionally never crosses the
-     * in-shard floor. A shard that configures neither behaves exactly as before.
+     * computed only from what SQLite can see drops rows such a connector may
+     * not have read — which is why the read paths refuse a cursor below the
+     * floor (`CDC_LOG_TRIMMED`) rather than serving a silent gap, and why the
+     * window is the operator's to size: raise `LUNORA_CDC_LOG_RETENTION` for a
+     * consumer that can lag further, or bind an archive bucket to keep what the
+     * trim removes. The sweep additionally never crosses the in-shard floor.
      *
      * Best-effort throughout: a stub `sql` handle or a shard without CDC is a
      * no-op, and a failure here must never surface on a write path whose data
@@ -191,9 +242,10 @@ class CdcRetentionRunner {
         // use) turns `LUNORA_CDC_LOG_RETENTION=10k` into "keep 10 rows" — an
         // operator's typo silently destroying the changelog rather than being
         // ignored. `envOptionalPositiveInt` requires the whole string to be an
-        // integer and treats anything else as unset, i.e. as off.
+        // integer and treats anything else as unset: the payload window is then off,
+        // and the row window falls back to its default (see `resolveCdcLogRetention`).
         const environment = this.host.env();
-        const keepRows = envOptionalPositiveInt(environment, "LUNORA_CDC_LOG_RETENTION");
+        const keepRows = resolveCdcLogRetention(environment);
         const keepPayloads = envOptionalPositiveInt(environment, "LUNORA_CDC_PAYLOAD_RETENTION");
 
         if (keepRows === undefined && keepPayloads === undefined) {
@@ -211,7 +263,9 @@ class CdcRetentionRunner {
         try {
             const bucket = cdcArchiveBucket(environment);
 
-            // Archiving is gated on ROW retention, not on a bucket alone.
+            // Archiving is gated on ROW retention, not on a bucket alone. (Row
+            // retention defaults on, so in practice binding a bucket is the
+            // switch; only an explicit `LUNORA_CDC_LOG_RETENTION=off` leaves it unarchived.)
             //
             // What the archive undoes is the trim. Compaction keeps the key and
             // drops the payload, and the SHAPE paths degrade gracefully to a
@@ -314,8 +368,26 @@ class CdcRetentionRunner {
                     // epoch the read path refuses, so they would cost storage
                     // forever and answer nothing.
                     const epoch = this.host.epoch() as string;
+                    const scope = { epoch, shard: this.host.shardKey() };
 
-                    await archiveCdcSegment(bucket, { epoch, shard: this.host.shardKey() }, batch);
+                    // A segment above the watermark means the shard and the
+                    // archive disagree about what has been written, and the
+                    // reachable cause is a point-in-time restore: it reverts the
+                    // watermark and the epoch together, so without this the
+                    // rewound timeline archives over the old one's objects under
+                    // the same prefix. Seal the fork and let the NEXT sweep write
+                    // under the fresh prefix — the watermark did not advance, so
+                    // nothing in this batch is lost by skipping a cycle, and the
+                    // retention below it must not run either: trimming rows whose
+                    // only copy lives under a prefix this shard has just stopped
+                    // reading would destroy them outright.
+                    if (await cdcArchiveRewound(bucket, scope, archivedAlready)) {
+                        this.host.sealTimeline();
+
+                        return;
+                    }
+
+                    await archiveCdcSegment(bucket, scope, batch);
 
                     // Only now. The watermark is the claim "this is durable
                     // elsewhere", and advancing it over an upload that did not
@@ -354,9 +426,9 @@ class CdcRetentionRunner {
      * whether or not a bucket is configured.
      */
     public async syncPage(
-        readLive: () => { changes: CdcChange[]; cursor: number },
+        readLive: () => { changes: CdcChange[]; cursor: number; epoch?: string },
         args: { limit?: number; sinceSeq: number },
-    ): Promise<{ changes: CdcChange[]; cursor: number }> {
+    ): Promise<{ changes: CdcChange[]; cursor: number; epoch?: string }> {
         try {
             return readLive();
         } catch (error) {
@@ -401,7 +473,11 @@ class CdcRetentionRunner {
                 throw error;
             }
 
-            return archived;
+            // Stamped with the same epoch the segments were read under, so a
+            // page recovered from the cold tier names its timeline exactly as
+            // the live read would. The archive is keyed BY the epoch, so these
+            // rows cannot belong to another one.
+            return { ...archived, epoch };
         }
     }
 
@@ -453,5 +529,4 @@ class CdcRetentionRunner {
     }
 }
 
-export { cdcArchiveBucket, CdcRetentionRunner };
-export type { CdcRetentionHost };
+export { cdcArchiveBucket, CdcRetentionRunner, DEFAULT_CDC_LOG_RETENTION_ROWS, resolveCdcLogRetention };

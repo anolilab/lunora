@@ -1,0 +1,21 @@
+// Test-only wrangler config consumed by `@cloudflare/vitest-plugin`. Not deployed.
+//
+// The Durable Object is the point: `ctx.storage` is the real KV and SQL API the
+// rate limiter's database and SQL stores sit on, so the awaits that separate a
+// read from its write are workerd's own storage operations.
+//
+// The D1 binding backs the ORM adapter for a `.global()` table: in a shard's
+// `ctx.db`, a global table's reads and writes go to D1, which is real I/O that does
+// not hold the DO's input gate. The `database_id` is a local miniflare handle.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-ratelimit-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "d1_databases": [{ "binding": "GLOBAL_DB", "database_id": "lunora-ratelimit-test", "database_name": "lunora-ratelimit-test" }],
+    "durable_objects": {
+        "bindings": [{ "class_name": "RateLimitDO", "name": "RATE_LIMIT_DO" }],
+    },
+    "migrations": [{ "new_sqlite_classes": ["RateLimitDO"], "tag": "v1" }],
+}

@@ -19,7 +19,7 @@ import { insertCronJob } from "./_helpers/insert-cron.js";
 
 const freshCrons = (jobName: string): string => `import { cronJobs } from "@lunora/scheduler";
 
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 
 /**
  * Code-first cron registry. Each registration runs the referenced internal
@@ -33,7 +33,7 @@ import { internal } from "./_generated/api.js";
  *   crons.daily(name, { hourUTC: 9, minuteUTC: 0 }, fn, args)  // daily at a UTC time
  *   crons.weekly(name, { dayOfWeek: "monday", hourUTC: 9, minuteUTC: 0 }, fn, args)
  *   crons.monthly(name, { day: 1, hourUTC: 9, minuteUTC: 0 }, fn, args)
- *   crons.cron(name, "0 9 * * 1L", fn, args)                   // raw cron escape hatch (full cron-parser grammar)
+ *   crons.cron(name, "0 9 * * 1L", fn, args)                   // raw cron escape hatch (full @visulima/cron-parser Cloudflare grammar)
  *
  * The target can be an \`internal.<file>.<fn>\` function reference (one-shot
  * dispatch) OR a durable workflow via the generated \`workflows.<name>\`

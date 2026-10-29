@@ -35,7 +35,7 @@ same machinery.
 
 An item is a directory containing a `registry.json` plus the files it scaffolds:
 
-```json title="registry/ratelimit/registry.json"
+```json title="An example registry.json"
 {
     "$schema": "../schema/registry-item.schema.json",
     "name": "ratelimit",
@@ -143,11 +143,11 @@ A manifest that violates any of these is rejected rather than partially applied.
 ## Building the catalog
 
 `lunora registry build` regenerates the local catalog `index.json` that `list`
-and `view` read:
+and `view` read. `--from` names the registry root and is required:
 
 ```bash
-lunora registry build
-lunora registry build --check    # verify the index is current — a CI gate
+lunora registry build --from ./registry
+lunora registry build --from ./registry --check    # verify the index is current — a CI gate
 ```
 
 Run `--check` in CI so an item added without rebuilding the index fails the

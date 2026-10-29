@@ -19,9 +19,24 @@
  * `"…"`/`` `…` `` identifiers per engine. These dialects only carry what drizzle
  * can't infer from a dynamic, column-per-field schema.
  */
+import type { RenderedSql } from "@lunora/shard-engine";
 import type { SqlDialect } from "@lunora/sql-store";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { PgDialect } from "drizzle-orm/pg-core";
+
+const PG_DIALECT = new PgDialect();
+const MYSQL_DIALECT = new MySqlDialect();
+
+/** Render through this engine's own drizzle dialect, so a bundle without it never loads the other. */
+const renderWith =
+    (dialect: PgDialect | MySqlDialect) =>
+    (query: SQL): RenderedSql => {
+        const { params, sql: text } = dialect.sqlToQuery(query);
+
+        return { params, sql: text };
+    };
 
 /** Companion columns for the Postgres native layout: the document id and its indexed vector. */
 const VECTOR_ID_COLUMN = "__id__";
@@ -79,6 +94,13 @@ const PG_UNIQUE_VIOLATION_RE = /duplicate key value violates unique constraint/i
  * cold start. A binding provisioned before this ships needs the operator to run
  * `ALTER TABLE <t> CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`
  * once per table, companions included.
+ *
+ * The same rule covers `NOT NULL` on a column whose validator now accepts null:
+ * relaxing it takes a `MODIFY COLUMN`, so the store only reports it, with the
+ * statement to run (`relaxNullAcceptingColumns` in `@lunora/sql-store`). And a
+ * wide `in` list past the placeholder cap compares under the column's collation
+ * only when that is `utf8mb4_0900_ai_ci` or a `_bin` one; another legacy
+ * collation raises "Illegal mix of collations" until the table is converted.
  */
 const MYSQL_COLLATION = "utf8mb4_0900_bin";
 
@@ -209,6 +231,8 @@ export const postgresDialect: SqlDialect = {
     /** Postgres allows 1,600 columns per table (fewer once wide types are involved, which the engine reports on its own). */
     maxTableColumns: 1600,
     name: "postgres",
+    render: renderWith(PG_DIALECT),
+    searchBackfillHint: "call backfillSqlSearchIndexes from @lunora/sql-store with the store's exec from a host-side admin path",
     supportsFts5: false,
 
     /**
@@ -230,8 +254,11 @@ export const postgresDialect: SqlDialect = {
         createIndexes: (companion) => [
             sql`CREATE INDEX IF NOT EXISTS ${sql.identifier(`${companion}__gin`)} ON ${sql.identifier(companion)} USING GIN (${sql.identifier(VECTOR_COLUMN)})`,
         ],
-        indexDocument: (companion, id, analyzed) =>
-            sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier(VECTOR_ID_COLUMN)}, ${sql.identifier(VECTOR_COLUMN)}) VALUES (${id}, ${toVector(analyzed)})`,
+        // An upsert on the id key, so two writers of one document converge
+        // instead of one failing on the key. The guard sits in the SELECT: a
+        // writer that lost the race to a newer one inserts and updates nothing.
+        indexDocument: (companion, id, analyzed, guard) =>
+            sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier(VECTOR_ID_COLUMN)}, ${sql.identifier(VECTOR_COLUMN)}) SELECT ${id}, ${toVector(analyzed)} WHERE ${guard} ON CONFLICT (${sql.identifier(VECTOR_ID_COLUMN)}) DO UPDATE SET ${sql.identifier(VECTOR_COLUMN)} = EXCLUDED.${sql.identifier(VECTOR_COLUMN)}`,
         matches: (companion, terms) => sql`${vectorRef(companion)} @@ ${toQuery(terms)}`,
         rank: (companion, terms) => sql`ts_rank_cd(${vectorRef(companion)}, ${toQuery(terms)})`,
     },
@@ -294,6 +321,8 @@ export const mysqlDialect: SqlDialect = {
     /** MySQL's hard ceiling is 4,096 columns per table; InnoDB's practical limit is lower and row-size-bound, which the engine reports on its own. */
     maxTableColumns: 4096,
     name: "mysql",
+    render: renderWith(MYSQL_DIALECT),
+    searchBackfillHint: "call backfillSqlSearchIndexes from @lunora/sql-store with the store's exec from a host-side admin path",
     supportsFts5: false,
     supportsReturning: false,
 

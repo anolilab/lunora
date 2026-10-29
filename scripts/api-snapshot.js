@@ -122,6 +122,7 @@ const TIER_1 = [
     "server",
     "values",
     "errors",
+    "wire",
     "runtime",
     "do",
     "client",
@@ -172,6 +173,9 @@ const TIER_2 = [
     "flags",
     "fingerprint",
     "dispatch",
+    // Graduated from TIER_3 (plan 463): full audit, workerd suite, no `@experimental` exports.
+    "payment",
+    "x402",
 ];
 
 /**
@@ -202,6 +206,11 @@ const TIER_2 = [
  * surface that moves there moves under someone's billing. Recollection is the
  * wrong instrument for "has this settled?" on a surface with that blast radius.
  *
+ * `rspack` is the newest adapter and starts here for the plainest reason: it
+ * has no adopters yet, so its option surface is still free to move. What the
+ * snapshot buys today is the record that `@lunora/vite` did not have when it
+ * was this young.
+ *
  * `angular`, `browser`, `react-native`, `replica` and `x402` were added last,
  * for the plainest reason: they were the only published packages whose surface
  * no record described, so the graduation question had no instrument at all for
@@ -209,7 +218,20 @@ const TIER_2 = [
  * `@lunora/react`, and a re-export is pinned by name + kind + source package
  * with its signature tracked in the owning snapshot.
  */
-const TIER_3 = ["agent", "ai", "angular", "browser", "container", "payment", "platform-node", "react-native", "replica", "x402"];
+const TIER_3 = [
+    "agent",
+    "ai",
+    "angular",
+    "browser",
+    "container",
+    "jwt-auth",
+    "platform-celld",
+    "platform-node",
+    "privacy",
+    "react-native",
+    "replica",
+    "rspack",
+];
 
 /**
  * The tiers, each carrying the stability sentence its snapshot header ends with.
@@ -1043,7 +1065,12 @@ const rendered = buildAll();
  * This runs before `update` writes anything, so `pnpm run api:update` cannot
  * launder a newly-tagged export into the committed snapshot either.
  */
-const FULLY_TRACKED_SNAPSHOTS = new Set(["container.api.md"]);
+// Every Core and Stable-adapter package is here: their SemVer promise is only as wide as the
+// tracked signatures, so an `@experimental` tag in one of them is a silent hole in the 1.0
+// guarantee. `container` and `browser` are experimental packages that also document the
+// invariant: every export is untagged, and they stay experimental only on verification grounds
+// (Docker for `container`, a live Browser Run session for `browser`).
+const FULLY_TRACKED_SNAPSHOTS = new Set([...TIER_1, ...TIER_2, "browser", "container"].map((dir) => snapshotFileName(dir)));
 
 // A configured snapshot that no longer renders would make this check silently
 // inert — the loop below only sees what `rendered` contains, so a package

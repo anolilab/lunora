@@ -1,5 +1,5 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
+import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -7,10 +7,12 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { fireAndForget, formatTimestamp } from "../../lib/internal";
+import { AuthPager } from "./auth-pager";
 
-/** How many sessions to pull for the global browser. */
+/** Sessions per page of the global browser. */
 const SESSION_LIMIT = 200;
 
 /**
@@ -22,20 +24,19 @@ const SESSION_LIMIT = 200;
  */
 
 const AuthSessionsPanel = (): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     // The auth store is HTTP-only (no admin-RPC path), so it's a `useClientQuery`
     // over `client.listAuthSessions`.
-    const sessionsQuery = useClientQuery(["lunora-auth-sessions", SESSION_LIMIT], () => client.listAuthSessions({ limit: SESSION_LIMIT }));
+    const [offset, setOffset] = useState<number>(0);
+    const sessionsQuery = useClientQuery(["lunora-auth-sessions", SESSION_LIMIT, offset], () => client.listAuthSessions({ limit: SESSION_LIMIT, offset }));
     const { error } = sessionsQuery;
     const sessions = sessionsQuery.data?.rows ?? null;
 
     // No subscription channel, so poll to catch new sessions / revokes without a
     // reload button (paused while the tab is hidden).
-    useAutoRefresh(() => {
-        sessionsQuery.refetch();
-    }, true);
+    useAutoRefresh(() => sessionsQuery.poll(), true);
 
     /** Revoke a session, then refetch so the list reflects the removal. */
     const onRevoke = (sessionId: string): void => {
@@ -98,6 +99,17 @@ const AuthSessionsPanel = (): ReactElement => {
                         </Table>
                     </CardContent>
                 </Card>
+            )}
+
+            {sessions !== null && (
+                <AuthPager
+                    count={sessions.length}
+                    offset={offset}
+                    onOffsetChange={setOffset}
+                    pageSize={SESSION_LIMIT}
+                    prefix="auth-sessions"
+                    total={sessionsQuery.data?.total}
+                />
             )}
         </div>
     );

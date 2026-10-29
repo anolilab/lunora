@@ -6,7 +6,7 @@
  *
  * ```ts
  * import { cronJobs } from "@lunora/scheduler";
- * import { internal } from "./_generated/api.js";
+ * import { internal } from "./_generated/internal.js";
  *
  * const crons = cronJobs();
  * crons.interval("clear presence", { minutes: 30 }, internal.presence.clear, {});
@@ -110,20 +110,25 @@ interface CronJob {
      * Set when the job targets a durable workflow rather than a function: the
      * workflow's stable name (`defineWorkflow({ name })`) when one was declared,
      * otherwise `""`. `@lunora/codegen` statically resolves the concrete
-     * `lunora/workflows.ts` export + its `WORKFLOW_*` binding for the emitted
+     * `lunora/workflows.ts` export + its class name for the emitted
      * dispatch map, so this authoring-time value is informational only.
      */
     workflow?: string;
 }
 
+/**
+ * Cloudflare Cron Triggers number weekdays 1–7 with **1 = Sunday to 7 = Saturday**
+ * (the docs call this out as different from the 0–6 systems), so this table is one
+ * higher than a `Date#getDay()`-style one and there is no `0`.
+ */
 const WEEKDAY_INDEX: Record<WeeklySchedule["dayOfWeek"], number> = {
-    friday: 5,
-    monday: 1,
-    saturday: 6,
-    sunday: 0,
-    thursday: 4,
-    tuesday: 2,
-    wednesday: 3,
+    friday: 6,
+    monday: 2,
+    saturday: 7,
+    sunday: 1,
+    thursday: 5,
+    tuesday: 3,
+    wednesday: 4,
 };
 
 const HOURS_PER_DAY = 24;
@@ -312,7 +317,7 @@ const compileCronSchedule = (
  */
 interface CronJobsBuilder {
     /**
-     * Raw cron expression escape hatch (5- or 6-field, full cron-parser grammar).
+     * Raw cron expression escape hatch (5- or 6-field, full `@visulima/cron-parser` Cloudflare grammar).
      * The target may be a function (`internal.file.fn`) or a durable workflow
      * (`workflows.<name>`); a workflow's `args` are inferred from its `params`.
      */
@@ -350,8 +355,8 @@ const cronJobs = (): CronJobsBuilder => {
         }
 
         // Workflow target — starts a durable workflow INSTANCE per fire (args ⇒
-        // its `params`). The concrete `lunora/workflows.ts` export + `WORKFLOW_*`
-        // binding is resolved statically by `@lunora/codegen`; the builder only
+        // its `params`). The concrete `lunora/workflows.ts` export + its class
+        // name is resolved statically by `@lunora/codegen`; the builder only
         // records the optional stable-name override for `.jobs()` introspection.
         let dispatchTarget: { functionPath: string } | { workflow: string };
 

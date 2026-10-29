@@ -27,7 +27,6 @@ several; combine them with `combineSinks`.
 | `consoleSink()`                 | `console` (local dev)                                           |
 | `otlpSink({ endpoint })`        | any OTLP-over-HTTP collector                                    |
 | `webhookSink({ url })`          | an arbitrary HTTP endpoint (your own JSON shape)                |
-| `sentrySink({ capture })`       | Sentry, through a callback you wire                             |
 | `analyticsEngineSink({ … })`    | a Cloudflare Analytics Engine dataset                           |
 | `pipelineLogSink({ pipeline })` | a Cloudflare Pipeline → R2 (durable log store, read via R2 SQL) |
 
@@ -43,22 +42,18 @@ export default createWorker({
 });
 ```
 
-`sentrySink` bundles no Sentry client and takes no `dsn`. It forwards to a
-`capture` callback you wire to your own client, so the runtime keeps no
-dependency on `@sentry/*`; constructing it without one throws:
-
-```ts
-sentrySink({ capture: (event) => Sentry.captureMessage(event.name) });
-```
+Error trackers (Sentry, PostHog, Datadog, …) need no sink of their own:
+`webhookSink`'s `transform` / `transformLog` return the request body, so any
+JSON ingestion API is a mapping function, and an SDK is a plain object with an
+`onRpc` method. See [Error tracking](/docs/concepts/error-tracking) for recipes
+and for what a failed call's `event.error` carries (including the thrown
+error's `stack`).
 
 Sinks that carry RPC events accept `onlyErrors` to drop successful RPCs and
-export only failures. It defaults to `false` everywhere except `sentrySink`,
-which defaults to `true` — capturing every successful RPC would flood a Sentry
-project — so pass `onlyErrors: false` there to get all events.
+export only failures. It defaults to `false`.
 `pipelineLogSink` is log-only, so it has no such option; log events always pass
-through regardless. All four network/log sinks (`otlpSink`, `webhookSink`,
-`pipelineLogSink`, plus `sentrySink` when you wire its `captureLog`) forward
-`ctx.log` lines; `webhookSink` takes a `transformLog` redactor mirroring its RPC
+through regardless. All three network/log sinks (`otlpSink`, `webhookSink`,
+`pipelineLogSink`) forward `ctx.log` lines; `webhookSink` takes a `transformLog` redactor mirroring its RPC
 `transform`.
 
 :::caution[Upgrading a `webhookSink`]
@@ -73,9 +68,90 @@ neither. Two consequences for an existing config:
   the worker.
 
 Set `transformLog` (or point the sink at a trusted endpoint) before upgrading if
-your handlers log user data. `sentrySink` (opt-in via `captureLog`) and
-`otlpSink` don't have this expansion.
+your handlers log user data. `otlpSink` doesn't have this expansion.
 :::
+
+### Enrich and route
+
+`enrichSink(sink, enrich)` adds derived attributes to every event a sink
+receives. `filterSink(sink, { include, exclude })` keeps only the signals whose
+function path matches. Both wrap any sink and return a sink, so they compose with
+`combineSinks` and with each other. Pass the same wrapped object to
+`createWorker` and `createShardDO` and both halves of telemetry are covered: the
+RPC event from the worker, and `ctx.log`, `ctx.trace` and `ctx.metrics` from the
+shard.
+
+```ts
+const routed = filterSink(
+    enrichSink(otlpSink({ endpoint: env.LUNORA_OTLP_ENDPOINT, token: env.LUNORA_OTLP_TOKEN }), (event, signal) => ({
+        signal,
+        tenant: event.shardKey,
+    })),
+    { exclude: ["admin:*"], include: ["messages:*", "alarm:*"] },
+);
+```
+
+- The enricher receives the event and its signal (`"log"`, `"metric"`, `"span"`
+  or `"rpc"`). Its values land in the log `fields` or the `attributes` of the
+  other signals.
+- In a pattern, `*` matches any run of characters, including `:` and `/`.
+  `exclude` wins over `include`. An absent or empty `include` matches every path.
+- Platform records use synthetic paths such as `ttl:sweep` or `scheduler:outbox`.
+  Some are kept only in the shard's local log and never reach a sink, so no filter
+  can route them. The filter applies to the records a sink receives.
+- Enriched values are redacted, then normalized to JSON-safe primitives. Log lines use the same
+  rules as logged fields, which mask personal data such as emails and ids. Metric,
+  span and RPC values use credential-only redaction, so ids and URLs survive on
+  those signals. Keep personal data out of an enricher for those signals. An
+  enricher that throws leaves the event unchanged.
+
+### Other OTLP vendors
+
+Any vendor that accepts OTLP over HTTP works through `otlpSink`, so there is no
+per-vendor sink to install. You provide three things: the vendor's base endpoint,
+its credentials, and any routing headers it needs. The sink appends
+`/v1/traces`, `/v1/logs` and `/v1/metrics` to the endpoint.
+
+```ts
+otlpSink({
+    endpoint: env.OTLP_ENDPOINT, // the vendor's OTLP base URL, without a path
+    token: env.OTLP_TOKEN, // sent as `Authorization: Bearer <token>`
+    headers: { "x-vendor-project": env.OTLP_PROJECT }, // any other header the vendor requires
+});
+```
+
+Keep the credentials in the environment so they can be injected at deploy time.
+
+**Routing headers can differ per signal.** `otlpSink` sends one `headers` object
+for every signal. When a vendor needs a different header for one signal, give that
+signal its own instance and forward only the signals the vendor should receive.
+Axiom is an example: traces and logs use `x-axiom-dataset`, and metrics use
+`x-axiom-metrics-dataset`, so metrics go through a second instance:
+
+```ts
+const endpoint = `https://${env.AXIOM_DOMAIN}`;
+const traces = otlpSink({ endpoint, token: env.AXIOM_TOKEN, headers: { "x-axiom-dataset": "app-traces" } });
+const metrics = otlpSink({ endpoint, token: env.AXIOM_TOKEN, headers: { "x-axiom-metrics-dataset": "app-metrics" } });
+
+observability: combineSinks(
+    { flush: traces.flush, onLog: traces.onLog, onRpc: traces.onRpc, onSpan: traces.onSpan },
+    { flush: metrics.flush, onMetric: metrics.onMetric },
+),
+```
+
+For Sentry, or any other vendor, take the endpoint, the auth header and the
+dataset or project header from that vendor's OpenTelemetry setup page. Check
+which signals it accepts before you forward them. The pattern is the same: one
+`otlpSink` per header set, and an object that forwards only the accepted methods.
+
+Checklist for a new vendor:
+
+1. **Endpoint.** Use the base URL. The sink adds the signal paths.
+2. **Auth.** Use `token` for a Bearer token. Put any other auth header in `headers`.
+3. **Routing.** If a signal needs a different header, give it its own `otlpSink`.
+4. **Signals.** Forward only the signals the vendor accepts.
+5. **Verify.** Send one event and confirm it arrives. A failed POST is swallowed,
+   so a wrong header or endpoint looks like missing data, not an error.
 
 ### `otlpSink`
 
@@ -300,6 +376,13 @@ console-style. The rendered message and the structured fields reach the dev
 terminal, Workers Logs, the Studio Logs panel, and any sink; the raw positional
 args of a console-style call reach only the in-process `onLog` sink you control.
 
+Log an `Error` either way, `ctx.log.error("charge failed", err)` or
+`ctx.log.error("charge failed", { err, orderId })`, and it renders as
+`TypeError: card declined` (not `{}`). The log event also gets an `error`
+holding the thrown error's `name`, unredacted `message`, and `stack`; `otlpSink`
+ships these as `exception.*` attributes, and an
+[error tracker](/docs/concepts/error-tracking) reads them directly.
+
 :::caution[Behavior change]
 A two-argument call whose second argument is a plain object, such as `ctx.log.info("saved", user)`, is now the **structured** form: the message is `"saved"` and `user` becomes `fields`, instead of being rendered into the message as `saved {…}`. Calls with a non-object second argument, or three or more arguments, are unchanged. If you relied on the object being folded into the message text, pass it as a third argument (`ctx.log.info("saved", "-", user)`) or pre-render it.
 :::
@@ -404,6 +487,19 @@ If an inbound `traceparent` is dropped while this option is unset, Lunora logs a
 one-time hint naming it, because a broken waterfall shouldn't be silent. Setting
 the option to `false` keeps the behaviour and silences the hint.
 
+:::note[Cloudflare Traces and its incoming propagation policy]
+[Cloudflare Traces](https://blog.cloudflare.com/cloudflare-tracing/) adds a
+zone-level _incoming propagation policy_ that decides whether the edge accepts a
+W3C `traceparent` from upstream. Lunora still treats the `traceparent` that
+reaches the worker as caller-controlled: Cloudflare does not document a
+forge-proof header the edge mints, so the worker cannot tell an edge-issued
+context from one a client sent. Keep `trustInboundTraceContext` off unless the
+zone policy guarantees that no client-supplied `traceparent` reaches the worker
+(for example, the zone strips or replaces it and the worker has no other route
+in). Adopting Cloudflare's native OpenTelemetry API is tracked in
+[#939](https://github.com/anolilab/lunora/issues/939).
+:::
+
 :::tip[Keep span names low-cardinality]
 Put the varying part in the attributes, not the name: `ctx.trace("stripe.charge", …, { orderId })`, never a name interpolated from the order id. A name
 built from an id makes every span its own group in a collector, which is exactly
@@ -435,6 +531,78 @@ traces are retained; it is also emitted on the `Logpush` console event, so a SIE
 can join a request to its spans.
 :::
 
+### Attributing a spike to a deploy
+
+Bind Cloudflare's version metadata and the runtime stamps `deploymentId` /
+`versionTag` onto every durable request-log row and every emitted Workers-Logs
+event:
+
+```jsonc
+// wrangler.jsonc — every `lunora init` template ships this
+"version_metadata": { "binding": "CF_VERSION_METADATA" },
+```
+
+That turns "latency doubled some time this afternoon" into a group-by rather
+than a graph-correlation exercise: filter the Requests view or the Workers Logs
+Query Builder on the deploy id and the before/after split is exact. It costs
+nothing when unused, and nothing reads it but the stamp.
+
+Pair it with `"observability": { "logs": { "invocation_logs": true } }`, which
+the templates also ship — the Query Builder groups on the per-invocation summary
+line, and without it only explicit `console` events survive, leaving the
+group-by nothing to group.
+
+### From a Lunora log to Cloudflare Traces
+
+On Cloudflare, every request carries a **Ray ID**: the edge stamps it as the
+`cf-ray` header, and it is the key [Cloudflare Traces](https://blog.cloudflare.com/cloudflare-tracing/),
+Workers Logs and Security Events are searched by. Lunora reads it at the Worker
+entry and carries it through the request:
+
+| Where                                                          | Field                         |
+| -------------------------------------------------------------- | ----------------------------- |
+| the worker's per-request `onRpc` event                         | `rayId`                       |
+| the RPC dispatch `SERVER` span (`otlpSink`)                    | `cloudflare.ray_id` attribute |
+| `ctx.log` events: `onLog`, the Workers Logs line, OTLP record  | `rayId` / `cloudflare.ray_id` |
+| `ctx.trace`, `ctx.fetch` and `ctx.db` spans on the shard       | `rayId` / `cloudflare.ray_id` |
+| the shard's per-request Workers Logs event (`type: "request"`) | `rayId`                       |
+
+The value is the bare 16-hex id, with the data-center suffix (`-FRA`) dropped.
+That suffix names a colo, not the request. `cloudflare.ray_id` is the same
+attribute Cloudflare's own Workers traces use, so one collector query on it finds
+both Lunora's spans and the platform's spans for a request.
+
+To jump from a Lunora log line to the Cloudflare trace:
+
+1. Copy `rayId` off the log line: the Workers Logs event, the `onRpc` event, or
+   the `cloudflare.ray_id` attribute in your OTLP backend.
+2. In your worker's observability view in the Cloudflare dashboard, filter traces
+   (or logs) on `cloudflare.ray_id` equal to that value.
+
+The reverse works too. A Ray ID taken from a Cloudflare error page or a support
+ticket finds the matching Lunora events by filtering on `rayId` /
+`cloudflare.ray_id`.
+
+The Ray ID is **informational only**. It is never used for authorization or
+routing, it is not echoed onto client-visible responses, and a malformed value
+is dropped rather than logged. It is a Cloudflare-only signal: `wrangler dev`
+(Miniflare) does not set `cf-ray`, and neither does any other host, so locally
+every event simply has no `rayId`. Dispatches that no HTTP request started, such
+as alarms, cron jobs and subscription re-runs, have none either.
+
+The same holds for work dispatched over a WebSocket: a subscription's first
+evaluation, stream queries, and the `onConnect` / `onDisconnect` lifecycle hooks.
+The upgrade request does carry a `cf-ray`, but the worker strips every
+`x-lunora-*` header from the upgrade before forwarding it to the shard (a
+security boundary, so a client cannot forge the server-minted ones). The Ray ID
+does not cross that hop, and the socket's later frames are not HTTP requests
+with a Ray ID of their own. Correlate socket-driven work by its `traceId`
+instead.
+
+Wiring Lunora's spans into Cloudflare's native trace tree, rather than linking
+the two by Ray ID, is tracked in
+[#939](https://github.com/anolilab/lunora/issues/939).
+
 ### Generation spans (AI)
 
 An AI model call is a span with the OpenTelemetry
@@ -455,7 +623,10 @@ A generation span carries `gen_ai.request.model` and, from the model result,
 `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens`; with the agent
 integration's `recordInputs` / `recordOutputs` it also carries the prompt /
 completion (off by default). The Lunora cloud reads these to show the model,
-token counts, and cost on the Traces waterfall.
+token counts, and cost on the Traces waterfall. On the agent's `otlpTelemetry`
+spans, `lunora.usage.status` says whether the token report was `complete`,
+`partial` or `unavailable`; an estimated cost is set only from a complete report,
+while a provider-reported cost is always kept.
 
 ### Span durations on Workers
 
@@ -484,6 +655,68 @@ workerd _without_ the production mitigation, so locally the clock advances
 normally and a CPU-only span shows a plausible non-zero duration. The same span
 collapses to `0 ms` in production. A timing profile that looks fine locally is
 not evidence that it will hold.
+
+## Database telemetry (`ctx.db` and `ctx.sql`)
+
+With a sink configured, `ctx.db` and the action-only `ctx.sql`
+([Hyperdrive](/docs/packages/hyperdrive)) are instrumented automatically. One
+sink field, `instrumentDatabase`, sets the level for both:
+
+| Level                 | What you get                                                                                       |
+| --------------------- | -------------------------------------------------------------------------------------------------- |
+| `"summary"` (default) | Aggregate counters on the dispatch's root span. Flat cost, however many queries the handler makes  |
+| `"spans"`             | One CLIENT span per call, OTel `db.*` semantic conventions. Capped at 100 per surface per dispatch |
+| `"off"`               | Nothing; the clients are handed to the handler untouched                                           |
+
+```ts
+export default createWorker({
+    // …schema, functions…
+    observability: { ...otlpSink({ endpoint: env.LUNORA_OTLP_ENDPOINT }), instrumentDatabase: "spans" },
+});
+```
+
+The two surfaces keep **separate tallies**, because they are different cost
+classes — a `ctx.db` call is a local SQLite read inside the Durable Object, a
+`ctx.sql` call is a network round trip to your own Postgres/MySQL. Merging them
+would hide which one a slow request was bound on.
+
+| Surface   | Summary keys                                                                            | Span name            | `db.system.name`                          |
+| --------- | --------------------------------------------------------------------------------------- | -------------------- | ----------------------------------------- |
+| `ctx.db`  | `db.calls`, `db.duration_ms`, `db.errors`, `db.op.<method>`, `db.spans_truncated`       | `db.findMany orders` | `sqlite`                                  |
+| `ctx.sql` | `sql.calls`, `sql.duration_ms`, `sql.errors`, `sql.op.<KEYWORD>`, `sql.spans_truncated` | `sql.SELECT`         | `postgresql` / `mysql` (from the adapter) |
+
+A `ctx.sql` span's `db.operation.name` is the statement's **leading keyword**
+only (`SELECT`, `INSERT`, `UPDATE`, …, or `OTHER`), parsed past leading
+comments and parentheses and nothing further. It also carries
+`db.response.returned_rows`. It never records the statement text or its
+parameters, and sets no `db.collection.name` — finding the table means parsing
+the statement, which is neither cheap nor safe. A failed call sets `error.type`
+(the error class, or the `LunoraError` code); outside development the span's
+error message is that type too, never the driver's message, because an external
+database's errors routinely quote the offending row.
+
+`fuseCloudflareTraces` treats the two surfaces identically: per-call database
+spans go to your sink but are not re-emitted as Cloudflare custom spans (only
+`ctx.trace` spans are), while the summary counters ride the dispatch root span,
+whose attributes are mirrored onto Cloudflare's invocation span.
+
+A fused `ctx.trace` span that fails gets an `exception` event
+(`span.recordException`) and an `error` span status (`span.setStatus`), both
+with the redacted message, so Cloudflare's trace view shows it as failed. A
+successful span's status stays unset, as OTel instrumentation leaves it.
+
+Cloudflare's invocation span is marked failed in two cases: when an RPC
+dispatch answers with a 5xx, whether or not the handler recorded any
+telemetry, and whenever a trigger such as an alarm throws. An RPC that answers
+with a 4xx, such as a validation, auth or not-found error, leaves it unset.
+Both methods are feature-detected, so on a runtime without them the span
+simply carries the error attributes.
+
+If you run your own Drizzle instance against Hyperdrive **outside** `ctx.sql`,
+Lunora does not see those queries.
+[`cloudflare-drizzle-tracing`](https://github.com/Cherry/cloudflare-drizzle-tracing)'s
+`instrumentDrizzle()` wraps such an instance in Cloudflare-native spans — note
+it records query text and parameters, which `ctx.sql` deliberately does not.
 
 ## Trace sampling
 
@@ -516,6 +749,14 @@ only job is failures (a Sentry or alerting destination sitting alongside a
 sampled `otlpSink`).
 :::
 
+`sampling` is Lunora's own export decision. Cloudflare's Workers Logs and Traces
+sample separately, through `observability.head_sampling_rate` and
+`observability.traces.head_sampling_rate` in `wrangler.jsonc`. Lunora writes
+`head_sampling_rate: 1` by default and never lowers a rate you set. Workers
+Observability is billed from 2026-12-01 (Free caps ingestion at 0.5 GB/day; Paid
+includes 50 GB per billing cycle, then $0.25/GB), so `lunora doctor` reports an
+`observability-full-sampling` info finding while either rate is still 1.
+
 ### Traces are kept or dropped whole
 
 The decision is **deterministic per trace**, derived from the trace id rather
@@ -526,7 +767,10 @@ missing, or the reverse.
 
 The worker decides once and propagates it: the sampled bit rides the
 `traceparent` it forwards, so the shard drops the matching spans without
-re-deciding.
+re-deciding. That includes a **batched** call (`client.batch(...)`, and the
+coalesced replay of queued offline writes): one verdict covers the whole batch
+and every sub-request carries it, so a batch is kept or dropped as one thing
+rather than each entry deciding for itself.
 
 ### Errors are never sampled away
 
@@ -540,6 +784,23 @@ that exports only its tail.
 So `headRate: 0.01` does not mean "1% of your errors". It means 1% of your
 _successful_ traffic, plus every failure. That is usually the shape you want:
 aggressive sampling on the boring path, complete traces on the interesting one.
+
+A **container** applies the same bias to its own spans, and is _told_ the
+verdict rather than guessing it: the shard stamps this dispatch's toggle onto
+every `ctx.containers.<name>` request beside the `traceparent`, so
+`createContainerTelemetry({ request })` picks up both. One honest limit — a
+container is a long-running process with no dispatch boundary to re-decide at,
+so it keeps the span that errored rather than holding and re-exporting that
+span's siblings.
+
+```ts
+// inside the container's request handler
+const telemetry = createContainerTelemetry({ request });
+```
+
+Pass `alwaysSampleErrors` explicitly to override what the request carries. A
+one-shot container with no request to read falls back to `LUNORA_SAMPLE_ERRORS`
+in its env, then to the same default as every other tier.
 
 :::note[`headRate` and the trace id]
 `headRate >= 1` keeps everything and `<= 0` drops every non-error trace; in
@@ -556,6 +817,22 @@ choose its own sampling outcome by picking a trace id. When you have opted into
 trusting the upstream, the upstream's trace id is used, which is what keeps a
 distributed trace whole across services.
 :::
+
+## Source maps
+
+On the Cloudflare target, Lunora writes `"upload_source_maps": true` into
+`wrangler.jsonc` when the key is absent, so production stack traces and
+[on-demand profiles](/packages/cli#lunora-cloudflare-profile) show your source
+function names instead of mangled bundle names. When Wrangler bundles the
+Worker itself, it generates and uploads the maps at `wrangler deploy`. A Worker
+built by Vite is deployed pre-bundled, so the key only has an effect when that
+build emits source maps: set `build.sourcemap` for the worker environment too.
+Cloudflare reads uploaded maps after the invocation finishes, so they add no
+request CPU. Cloudflare documents no separate charge for them, but each map is
+capped at 15 MB gzipped, and the maps carry your source, stored in your own
+account. Set `"upload_source_maps": false` to opt out; an explicit value is
+never changed. The celld and Node targets don't read the key, and Lunora does
+not write it for them.
 
 ## Application metrics with `ctx.metrics`
 
@@ -664,6 +941,24 @@ telemetry.emitLog({ level: "info", message: "done", attributes: { jobId: job.id 
 // necessarily been sent yet — a job that exits without this reports nothing at all.
 await telemetry.flush();
 ```
+
+**Which trace a span lands on** depends on whether the instance has an anchor:
+a `traceparent` option, the inbound `request` (its `traceparent` header), or
+`LUNORA_TRACEPARENT` in the env. An anchored instance puts every span under that
+trace and stamps it on every log, so one request or one job reads as one thing.
+An unanchored instance gives each span its own trace and leaves logs unstamped.
+So in a long-running server, create the telemetry **per request** from the
+inbound request rather than once per process:
+
+```ts
+app.post("/transcode", async (request) => {
+    const telemetry = createContainerTelemetry({ request }); // one trace per request
+    // …
+});
+```
+
+A module-scope instance is right for a one-shot job started with
+`LUNORA_TRACEPARENT`, where the whole process is one unit of work.
 
 With no endpoint resolvable the exporter is a **silent no-op** (`telemetry.enabled
 === false`): `trace` still runs your work, it just records nothing. The same code
@@ -790,6 +1085,7 @@ Worker spans carry these attributes:
 | `server.port`               | if known     | the inbound port (int)                    |
 | `user_agent.original`       | if known     | the inbound `User-Agent`                  |
 | `lunora.shard_key`          | if sharded   | the shard key                             |
+| `cloudflare.ray_id`         | on the edge  | the request's Cloudflare Ray ID           |
 | `error.type`                | on error     | the Lunora error `code`                   |
 | `lunora.error_status`       | on error     | the HTTP/RPC status (int)                 |
 | `lunora.fanout.table`       | on a fan-out | the table fanned across                   |
@@ -827,7 +1123,7 @@ upper-cased level; `severityNumber` maps as:
 | `fatal`        | 21               |
 
 Worker log records also carry `lunora.function_path`, and `lunora.shard_key` /
-`lunora.user_id` when known. Structured `fields` (below) become additional
+`lunora.user_id` / `cloudflare.ray_id` when known. Structured `fields` (below) become additional
 log-record attributes, and each record carries its dispatch's `trace_id` /
 `span_id` so a line links back to its RPC span.
 

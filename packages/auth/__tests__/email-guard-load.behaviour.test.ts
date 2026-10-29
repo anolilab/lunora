@@ -9,12 +9,12 @@ import { describe, expect, it, vi } from "vitest";
  *
  * Two failure modes live here and neither is visible to the rest of the suite.
  *
- * Vite (and wrangler's esbuild) INLINE a `.json` dynamic import, so the bundled
- * build never exercises native ESM's JSON rules. The published
- * `dist/email-guard.mjs` does — and a bare `import()` of a `.json` module throws
- * `ERR_IMPORT_ATTRIBUTE_MISSING` there, turning every signup into a 500. The
- * first test therefore re-runs the module's own import specifiers under a real
- * `node` process, outside any bundler.
+ * Vite (and wrangler's esbuild) INLINE the `/domains` dynamic imports, so the
+ * bundled build never exercises native ESM's module/attribute rules. The
+ * published `dist/email-guard.mjs` does — the wrong form (a JSON attribute on a
+ * JS module, or none on a raw JSON one) throws `ERR_IMPORT_ATTRIBUTE_*` there,
+ * turning every signup into a 500. The first test therefore re-runs the module's
+ * own import specifiers under a real `node` process, outside any bundler.
  *
  * The load is also memoised with `??=`, which caches a REJECTED promise for the
  * isolate's life. One transient failure would brick the gate permanently.
@@ -85,6 +85,29 @@ describe("loadEmailDomainLists — module loading", () => {
         expect(classifyEmail("user@gmail.com").emailClass).toBe("free");
 
         vi.doUnmock("@visulima/free-email-domains");
+        vi.resetModules();
+    });
+});
+
+describe("classifyEmail — unloaded lists", () => {
+    it("throws instead of classifying everything as business when the lists cannot be read", async () => {
+        expect.assertions(1);
+
+        vi.resetModules();
+        vi.doMock(import("@visulima/disposable-email-domains"), async (importOriginal) => {
+            return {
+                ...(await importOriginal()),
+                assertListLoaded: () => {
+                    throw new Error("The built-in list is not loaded");
+                },
+            };
+        });
+
+        const { classifyEmail } = await import("../src/email-guard");
+
+        expect(() => classifyEmail("user@mailinator.com")).toThrow("loadEmailDomainLists");
+
+        vi.doUnmock("@visulima/disposable-email-domains");
         vi.resetModules();
     });
 });

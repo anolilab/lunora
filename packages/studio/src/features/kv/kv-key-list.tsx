@@ -1,18 +1,16 @@
 import type { KvKeyEntry } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useReducer, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
-import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../components/ui/sheet";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
 import KvCreateForm from "./kv-create-form";
-import { formatExpiration } from "./kv-fields";
+import KvKeyTable from "./kv-key-table";
 import KvValueEditor from "./kv-value-editor";
 
 /** Default page size for the key list. */
@@ -39,9 +37,10 @@ interface KeyListState {
 }
 
 type KeyListAction =
-    | { cursor: null | string; keys: KvKeyEntry[]; listComplete: boolean; type: "appendPage" | "firstPage" }
+    | { cursor: null | string; keys: KvKeyEntry[]; listComplete: boolean; type: "firstPage" }
+    | { cursor: null | string; generation: number; keys: KvKeyEntry[]; listComplete: boolean; type: "appendPage" }
     | { deleted: string[]; error: null | string; type: "bulkDeleted" }
-    | { error: string; type: "loadFailed" }
+    | { error: string; generation?: number; type: "loadFailed" }
     | { name: string; type: "keyDeleted" | "toggleBulk" }
     | { name: null | string; type: "selectKey" }
     | { names: string[]; type: "toggleAllBulk" }
@@ -66,6 +65,13 @@ const INITIAL_KEY_LIST_STATE: KeyListState = {
 const keyListReducer = (state: KeyListState, action: KeyListAction): KeyListState => {
     switch (action.type) {
         case "appendPage": {
+            // A "Load more" issued before a filter change or reload belongs to the
+            // listing that was replaced: appending it would splice the old prefix's
+            // keys (and its cursor) onto the new list.
+            if (action.generation !== state.reloadNonce) {
+                return state;
+            }
+
             return { ...state, cursor: action.cursor, keys: [...(state.keys ?? []), ...action.keys], listComplete: action.listComplete, loading: false };
         }
         case "applyFilter": {
@@ -116,6 +122,10 @@ const keyListReducer = (state: KeyListState, action: KeyListAction): KeyListStat
             };
         }
         case "loadFailed": {
+            if (action.generation !== undefined && action.generation !== state.reloadNonce) {
+                return state;
+            }
+
             return { ...state, loadError: action.error, loading: false };
         }
         case "loadStart": {
@@ -154,7 +164,7 @@ const keyListReducer = (state: KeyListState, action: KeyListAction): KeyListStat
  * and bulk-deleting selected keys.
  */
 const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [state, dispatch] = useReducer(keyListReducer, INITIAL_KEY_LIST_STATE);
@@ -210,6 +220,8 @@ const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactElement 
 
         dispatch({ type: "loadStart" });
 
+        const generation = reloadNonce;
+
         fireAndForget(
             (async (): Promise<void> => {
                 try {
@@ -220,9 +232,9 @@ const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactElement 
                         prefix: appliedPrefix === "" ? undefined : appliedPrefix,
                     });
 
-                    dispatch({ cursor: result.cursor ?? null, keys: result.keys, listComplete: result.listComplete, type: "appendPage" });
+                    dispatch({ cursor: result.cursor ?? null, generation, keys: result.keys, listComplete: result.listComplete, type: "appendPage" });
                 } catch (error_) {
-                    dispatch({ error: errorMessage(error_), type: "loadFailed" });
+                    dispatch({ error: errorMessage(error_), generation, type: "loadFailed" });
                 }
             })(),
         );
@@ -269,7 +281,7 @@ const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactElement 
     };
 
     const allSelected = keys !== null && keys.length > 0 && bulk.length === keys.length;
-    // A Set, not `bulk.includes` per row: the checkbox below asks once per rendered
+    // A Set, not `bulk.includes` per row: each row checkbox in `KvKeyTable` asks once per rendered
     // key, so the array scan made selection quadratic in the page size.
     const bulkSelected = new Set(bulk);
 
@@ -325,50 +337,15 @@ const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactElement 
                 {keys !== null && keys.length > 0 && (
                     <Card className="overflow-hidden py-0">
                         <CardContent className="px-0">
-                            <Table data-testid="kv-key-table">
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className="w-10">
-                                            <Checkbox
-                                                aria-label={t("Select all")}
-                                                checked={allSelected}
-                                                data-testid="kv-select-all"
-                                                onCheckedChange={onToggleAll}
-                                            />
-                                        </TableHead>
-                                        <TableHead>{t("Key")}</TableHead>
-                                        <TableHead>{t("Expiration")}</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {keys.map((entry) => (
-                                        <TableRow
-                                            className={entry.name === selectedKey ? "border-l-2 border-l-royal-amethyst bg-muted/50" : "cursor-pointer"}
-                                            data-key={entry.name}
-                                            data-testid={`kv-key-row-${entry.name}`}
-                                            key={entry.name}
-                                            onClick={onSelectKey}
-                                        >
-                                            <TableCell
-                                                onClick={(event) => {
-                                                    event.stopPropagation();
-                                                }}
-                                            >
-                                                <Checkbox
-                                                    aria-label={t("Select {name}", { name: entry.name })}
-                                                    checked={bulkSelected.has(entry.name)}
-                                                    data-testid={`kv-select-${entry.name}`}
-                                                    onCheckedChange={() => {
-                                                        onToggleBulk(entry.name);
-                                                    }}
-                                                />
-                                            </TableCell>
-                                            <TableCell className="font-mono text-xs">{entry.name}</TableCell>
-                                            <TableCell className="tabular-nums text-xs">{formatExpiration(entry.expiration)}</TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
+                            <KvKeyTable
+                                allSelected={allSelected}
+                                bulkSelected={bulkSelected}
+                                keys={keys}
+                                onSelectKey={onSelectKey}
+                                onToggleAll={onToggleAll}
+                                onToggleBulk={onToggleBulk}
+                                selectedKey={selectedKey}
+                            />
                         </CardContent>
                     </Card>
                 )}

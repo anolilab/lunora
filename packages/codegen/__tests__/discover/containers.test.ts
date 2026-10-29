@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { discoverContainers } from "../../src/discover/containers";
 import { emitContainers, emitServer, emitShard } from "../../src/emit";
-import type { SchemaIR } from "../../src/ir";
+import type { DefaultScheduledContainerIR, SchemaIR } from "../../src/ir";
 
 let workdir: string;
 
@@ -107,7 +107,7 @@ describe("discover/containers", () => {
 
         writeContainers(`
             import { defineContainer } from "@lunora/container";
-            const path = "./containers/worker";
+            let path = "./containers/worker";
             export const worker = defineContainer({ image: path });
         `);
 
@@ -130,7 +130,7 @@ describe("discover/containers", () => {
 
         writeContainers(`
             import { defineContainer } from "@lunora/container";
-            const n = 5;
+            const n = Number("5");
             export const worker = defineContainer({ image: "./w", maxInstances: n });
         `);
 
@@ -146,11 +146,76 @@ describe("discover/containers", () => {
             export const worker = defineContainer({ image: "./w", env: { LOG_LEVEL: level }, sleepAfter: 60 * 5 });
         `);
 
-        const [container] = discoverContainers(newProject(), workdir);
+        const [container] = discoverContainers(newProject(), workdir) as DefaultScheduledContainerIR[];
 
         expect(container).toBeDefined();
         // sleepAfter was a non-literal expression — lifted as undefined, not an error.
         expect(container?.sleepAfter).toBeUndefined();
+    });
+
+    it("lifts a durable_object container's policy and named images, without an application image", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            export const agentComputer = defineContainer({
+                schedulingPolicy: "durable_object",
+                image: "base",
+                images: { base: "./container", pinned: { registry: "registry.cloudflare.com/acct/repo@sha256:abc" } },
+                instanceType: "standard-2",
+            });
+        `);
+
+        expect(discoverContainers(newProject(), workdir)).toEqual([
+            {
+                bindingName: "CONTAINER_AGENT_COMPUTER",
+                className: "AgentComputerContainer",
+                exportName: "agentComputer",
+                images: {
+                    base: { buildContext: "./container", dockerfilePath: "./container/Dockerfile", kind: "dockerfile" },
+                    pinned: { kind: "registry", reference: "registry.cloudflare.com/acct/repo@sha256:abc" },
+                },
+                instanceType: "standard-2",
+                schedulingPolicy: "durable_object",
+            },
+        ]);
+    });
+
+    it("applies the same image rules as defineContainer: registry digests and a declared default image", () => {
+        expect.assertions(2);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const a = defineContainer({ schedulingPolicy: "durable_object", images: { base: { registry: "docker.io/acme/app:1" } } });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/digest-pinned \(@sha256\) reference under registry.cloudflare.com/u);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const a = defineContainer({ schedulingPolicy: "durable_object", image: "gpu", images: { base: "./container" } });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/`image` "gpu" must name an entry of `images`/u);
+    });
+
+    it("rejects default-policy fields on a durable_object container, and images without the policy", () => {
+        expect.assertions(2);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const a = defineContainer({ schedulingPolicy: "durable_object", maxInstances: 3 });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/`maxInstances` is not supported with schedulingPolicy "durable_object"/u);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const a = defineContainer({ image: "./app", images: { base: "./x" } });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/`images` needs schedulingPolicy "durable_object"/u);
     });
 
     it("lifts a Railpack { build } image source", () => {
@@ -161,7 +226,10 @@ describe("discover/containers", () => {
             export const worker = defineContainer({ image: { build: "./services/worker/" } });
         `);
 
-        expect(discoverContainers(newProject(), workdir)[0]?.image).toStrictEqual({ buildDir: "./services/worker", kind: "build" });
+        expect((discoverContainers(newProject(), workdir) as DefaultScheduledContainerIR[])[0]?.image).toStrictEqual({
+            buildDir: "./services/worker",
+            kind: "build",
+        });
     });
 
     it("lifts literal enableInternet and sleepAfter for the advisor", () => {
@@ -172,10 +240,37 @@ describe("discover/containers", () => {
             export const worker = defineContainer({ image: "./w", enableInternet: false, sleepAfter: "30s" });
         `);
 
-        const [container] = discoverContainers(newProject(), workdir);
+        const [container] = discoverContainers(newProject(), workdir) as DefaultScheduledContainerIR[];
 
         expect(container?.enableInternet).toBe(false);
         expect(container?.sleepAfter).toBe("30s");
+    });
+
+    it("lifts a literal sandbox flag", () => {
+        expect.assertions(2);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const box = defineContainer({ image: "./box", sandbox: true });
+            export const plain = defineContainer({ image: "./plain" });
+        `);
+
+        const [box, plain] = discoverContainers(newProject(), workdir);
+
+        expect(box?.sandbox).toBe(true);
+        expect(plain?.sandbox).toBeUndefined();
+    });
+
+    it("rejects a sandbox flag it cannot read statically", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            const enabled = process.env.SANDBOX === "1";
+            export const box = defineContainer({ image: "./box", sandbox: enabled });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow("`sandbox` must be a static true/false literal");
     });
 });
 
@@ -208,6 +303,69 @@ describe("emit (containers)", () => {
         expect(content).toContain("export class TranscoderContainer extends LunoraContainer {");
         expect(content).toContain('super(ctx, env, transcoder, "transcoder");');
         expect(content).toContain("Re-export them from your worker entry");
+    });
+
+    it("emitContainers exports the sandbox gateways only when a container opts in", () => {
+        expect.assertions(3);
+
+        const plain = emitContainers(discover());
+
+        expect(plain).not.toContain("@lunora/container/sandbox");
+        // Unchanged output for an app that never opts in: the ContainerProxy
+        // re-export is still followed directly by the first class.
+        expect(plain).toContain('export { ContainerProxy } from "@lunora/container/do";\n\n/** Container DO for');
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const box = defineContainer({ image: "./box", sandbox: true });
+            export const transcoder = defineContainer({ image: "./containers/transcoder" });
+        `);
+
+        expect(emitContainers(discoverContainers(newProject(), workdir))).toContain(
+            'export { DirectoryBackupGateway, S3Gateway } from "@lunora/container/sandbox";',
+        );
+    });
+
+    it("emitContainers extends LunoraSandboxContainer for a sandbox container, and imports only the bases in use", () => {
+        expect.assertions(5);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const box = defineContainer({ image: "./box", sandbox: true });
+            export const transcoder = defineContainer({ image: "./containers/transcoder" });
+        `);
+
+        const mixed = emitContainers(discoverContainers(newProject(), workdir));
+
+        expect(mixed).toContain("export class BoxContainer extends LunoraSandboxContainer {");
+        expect(mixed).toContain("export class TranscoderContainer extends LunoraContainer {");
+        expect(mixed).toContain('import { LunoraSandboxContainer } from "@lunora/container/sandbox";');
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const box = defineContainer({ image: "./box", sandbox: true });
+        `);
+
+        const sandboxOnly = emitContainers(discoverContainers(newProject(), workdir));
+
+        expect(sandboxOnly).not.toContain('import { LunoraContainer } from "@lunora/container/do";');
+        expect(sandboxOnly).toContain("ConstructorParameters<typeof LunoraSandboxContainer>[0]");
+    });
+
+    it("emitServer types a sandbox container as a SandboxContainerAccessor", () => {
+        expect.assertions(3);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const box = defineContainer({ image: "./box", sandbox: true });
+            export const transcoder = defineContainer({ image: "./containers/transcoder" });
+        `);
+
+        const server = emitServer({ containers: discoverContainers(newProject(), workdir), schema: EMPTY_SCHEMA });
+
+        expect(server).toContain('import type { ContainerAccessor, SandboxContainerAccessor } from "@lunora/container";');
+        expect(server).toContain("readonly box: SandboxContainerAccessor;");
+        expect(server).toContain("readonly transcoder: ContainerAccessor;");
     });
 
     it('emitContainers returns "" without containers', () => {
@@ -247,7 +405,9 @@ describe("emit (containers)", () => {
 
         expect(shard).toContain('import { createContainerContext } from "@lunora/container";');
         expect(shard).toContain('{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 5 },');
-        expect(shard).toContain("const containers = createContainerContext(env, LUNORA_CONTAINERS, undefined, this.getCurrentTraceparent());");
+        expect(shard).toContain(
+            "const containers = createContainerContext(env, LUNORA_CONTAINERS, undefined, this.getCurrentTraceparent(), this.getCurrentSampleErrors());",
+        );
         expect(shard).toContain("containers,");
     });
 
@@ -262,6 +422,229 @@ describe("emit (containers)", () => {
 
         const shard = emitShard({ schema: { ...EMPTY_SCHEMA, jurisdiction: "us" }, containers: discover() });
 
-        expect(shard).toContain('const containers = createContainerContext(env, LUNORA_CONTAINERS, "us", this.getCurrentTraceparent());');
+        expect(shard).toContain(
+            'const containers = createContainerContext(env, LUNORA_CONTAINERS, "us", this.getCurrentTraceparent(), this.getCurrentSampleErrors());',
+        );
+    });
+
+    it("reads shorthand and spread wrangler settings through module-scope consts", () => {
+        expect.assertions(1);
+
+        // `{ maxInstances, instanceType }` and `{ ...base }` used to be skipped,
+        // so the deploy config silently lost `max_instances` / `instance_type`.
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const maxInstances = 20;
+            const instanceType = "standard-4";
+            const NODE_VERSION = "22";
+            const base = { image: "./containers/base", rollout: { stepPercentage: 25 } };
+
+            export const worker = defineContainer({ ...base, maxInstances, instanceType, buildArgs: { NODE_VERSION } });
+        `);
+
+        const [container] = discoverContainers(newProject(), workdir) as DefaultScheduledContainerIR[];
+
+        expect({
+            buildArgs: container?.buildArgs,
+            image: container?.image,
+            instanceType: container?.instanceType,
+            maxInstances: container?.maxInstances,
+            rollout: container?.rollout,
+        }).toStrictEqual({
+            buildArgs: { NODE_VERSION: "22" },
+            image: { buildContext: "./containers/base", dockerfilePath: "./containers/base/Dockerfile", kind: "dockerfile" },
+            instanceType: "standard-4",
+            maxInstances: 20,
+            rollout: { stepPercentage: 25 },
+        });
+    });
+
+    it("rejects a shorthand wrangler setting it cannot resolve instead of dropping it", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            let maxInstances = 20;
+
+            export const worker = defineContainer({ image: "./containers/worker", maxInstances });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow("`maxInstances` is deploy configuration codegen writes into wrangler.jsonc");
+    });
+
+    it("rejects an opaque spread that can carry a wrangler setting", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const settings = (): { maxInstances: number; env: Record<string, string> } => ({ maxInstances: 3, env: {} });
+
+            export const worker = defineContainer({ image: "./containers/worker", ...settings() });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow("this spread can set `maxInstances`");
+    });
+
+    it("leaves an opaque spread of runtime-only fields to the runtime", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const runtime = (): { env: Record<string, string>; defaultPort: number } => ({ env: {}, defaultPort: 8080 });
+
+            export const worker = defineContainer({ image: "./containers/worker", ...runtime() });
+        `);
+
+        expect(discoverContainers(newProject(), workdir)).toHaveLength(1);
+    });
+
+    it("rejects a buildArgs entry it cannot read statically", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            export const worker = defineContainer({ image: "./containers/worker", buildArgs: { VERSION: process.env.VERSION } });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow("`buildArgs.VERSION` must be a static string literal");
+    });
+
+    it("rejects two containers whose exports map to one binding name", () => {
+        expect.assertions(1);
+
+        // Both normalize to CONTAINER_IMAGE_RESIZER: wrangler would receive two
+        // Durable Object bindings under one name.
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            export const imageResizer = defineContainer({ image: "./containers/a" });
+            export const image_resizer = defineContainer({ image: "./containers/b" });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(
+            'containers "imageResizer" and "image_resizer" both map to the binding CONTAINER_IMAGE_RESIZER',
+        );
+    });
+
+    it.each([
+        ["an `any` spread", 'const settings: any = JSON.parse("{}");', "...settings"],
+        ["a `T | undefined` spread", "const settings = Math.random() > 0.5 ? { maxInstances: 3 } : undefined;", "...settings"],
+        ["a union-typed spread", 'const settings = Math.random() > 0.5 ? { maxInstances: 3 } : { sleepAfter: "5m" };', "...settings"],
+    ])("refuses %s that can hide a wrangler setting", (_label, declaration, spread) => {
+        expect.assertions(1);
+
+        // `getProperties()` on these types is empty (any, `T | undefined`) or
+        // only the common keys (a union), so the spread used to be skipped and
+        // `max_instances` silently dropped.
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            ${declaration}
+
+            export const worker = defineContainer({ image: "./containers/worker", ${spread} });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/this spread can set/u);
+    });
+
+    it("refuses a const settings object that is written to elsewhere in the file", () => {
+        expect.assertions(1);
+
+        // The initializer says 2; the runtime value is 10. Reading the initializer
+        // would deploy `max_instances: 2` for a container that runs with 10.
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const base = { image: "./containers/worker", maxInstances: 2 };
+
+            base.maxInstances = 10;
+
+            export const worker = defineContainer({ ...base });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/`base` is a const object that is written to elsewhere/u);
+    });
+
+    it.each([
+        `base["maxInstances"] = 10;`,
+        `base.maxInstances++;`,
+        `delete base.maxInstances;`,
+        `Object.assign(base, { maxInstances: 10 });`,
+        `(base as { maxInstances: number }).maxInstances = 10;`,
+        `[base.maxInstances] = [10];`,
+    ])("refuses a const settings object written through `%s`", (write) => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const base = { image: "./containers/worker", maxInstances: 2 };
+
+            ${write}
+
+            export const worker = defineContainer({ ...base });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/`base` is a const object that is written to elsewhere/u);
+    });
+
+    it("refuses self-referential spreads with a diagnostic instead of overflowing the stack", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const a: any = { image: "./containers/worker", ...b };
+            const b: any = { ...a };
+
+            export const worker = defineContainer({ ...a });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/refers back to an object it is part of/u);
+    });
+
+    it("reads settings through `as const` and `satisfies`", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const maxInstances = 3 as const;
+            const base = { image: "./containers/worker", instanceType: "standard-2" } satisfies Record<string, string>;
+
+            export const worker = defineContainer({ ...base, maxInstances });
+        `);
+
+        const [container] = discoverContainers(newProject(), workdir) as DefaultScheduledContainerIR[];
+
+        expect({ instanceType: container?.instanceType, maxInstances: container?.maxInstances }).toStrictEqual({ instanceType: "standard-2", maxInstances: 3 });
+    });
+
+    it("reads a shorthand whose const aliases another const, like the explicit form", () => {
+        expect.assertions(1);
+
+        // `{ maxInstances: LIMIT }` already resolved; `{ maxInstances }` over
+        // `const maxInstances = LIMIT` stopped at the identifier and failed the
+        // static-number check. Same for guarded keys inside `rollout`.
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const LIMIT = 3;
+            const maxInstances = LIMIT;
+            const GRACE = 30;
+            const ALIASED_GRACE = GRACE;
+            const gracePeriodSeconds = ALIASED_GRACE as const;
+
+            export const worker = defineContainer({ image: "./containers/worker", maxInstances, rollout: { gracePeriodSeconds } });
+        `);
+
+        const [container] = discoverContainers(newProject(), workdir) as DefaultScheduledContainerIR[];
+
+        expect({ maxInstances: container?.maxInstances, rollout: container?.rollout }).toStrictEqual({ maxInstances: 3, rollout: { gracePeriodSeconds: 30 } });
     });
 });

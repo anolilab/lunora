@@ -188,13 +188,13 @@ describe("search — write cost", () => {
     bench("patch the indexed field (re-indexes)", async () => {
         counter += 1;
 
-        await patchIndexedTarget.patch("d000001", { body: bodyFor(counter) });
+        await patchIndexedTarget.patch("docs", "d000001", { body: bodyFor(counter) });
     });
 
     bench("patch an unrelated field (should not re-index)", async () => {
         counter += 1;
 
-        await patchUnrelatedTarget.patch("d000002", { title: `t${String(counter)}` });
+        await patchUnrelatedTarget.patch("docs", "d000002", { title: `t${String(counter)}` });
     });
 });
 

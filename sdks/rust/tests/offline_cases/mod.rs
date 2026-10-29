@@ -12,11 +12,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use lunora::client::{Client, ClientError};
+use lunora::client::{Client, ClientError, TransportError};
 use lunora::offline::{
-    identity_allows_replay, is_stale_version, random_id, same_shard, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation, CODE_CLIENT_CLOSED,
-    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW, CODE_OFFLINE_WRITE_UNDECODABLE,
-    CODE_OFFLINE_WRITE_UNENCODABLE, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS,
+    is_stale_version, random_id, replay_identity_verdict, same_shard, token_digest, token_stamp, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation,
+    ReplayVerdict, CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_NOT_QUEUED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW,
+    CODE_OFFLINE_WRITE_UNDECODABLE, CODE_OFFLINE_WRITE_UNENCODABLE, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS,
 };
 use lunora::submit::{MutationStatus, SubmitOptions};
 use lunora::wire::{decode_wire, encode_wire, WireValue, MAX_DEPTH};
@@ -120,7 +120,7 @@ fn recording_client(body: Value) -> (Client, String, Arc<Mutex<Vec<WireValue>>>)
     let seen = Arc::new(Mutex::new(Vec::new()));
     let observer = Arc::clone(&seen);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let id = client.subscribe(
         FUNCTION,
@@ -162,7 +162,7 @@ pub fn optimistic_layer_rebases_onto_server_frame() {
 
     // Queued rather than sent, so the layer is still pending when the frame
     // lands — installed by the write path a consumer would use.
-    client.detach_socket();
+    client.detach_socket(None, None);
 
     let outcome = submit_appending(&mut client, wire(&case["appended"])).expect("queued");
 
@@ -191,7 +191,7 @@ fn declining_layer_is_skipped() {
     let case = optimistic_case("throwingLayerSkipped");
     let (mut client, id, seen) = recording_client(json!({ "result": null }));
 
-    client.detach_socket();
+    client.detach_socket(None, None);
     client
         .submit(
             SubmitOptions::new(FUNCTION, args()).with_optimistic(Arc::new(|current: &WireValue| match current {
@@ -296,7 +296,7 @@ fn constant_layer_masks_the_frame() {
     let case = optimistic_case("constantMask");
     let (mut client, id, seen) = primed(json!({ "error": { "code": "NOT_FOUND", "message": "gone" } }), &case["base"]);
 
-    client.detach_socket();
+    client.detach_socket(None, None);
     client
         .submit(SubmitOptions::new(FUNCTION, args()).with_optimistic_query(FUNCTION, args(), wire(&case["value"])))
         .expect("queued");
@@ -309,7 +309,7 @@ fn constant_layer_masks_the_frame() {
 
     // The replay's coded verdict is terminal, which is what takes the override
     // down — the same path a failed write takes.
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let report = client.flush_offline_queue(None);
 
@@ -329,7 +329,7 @@ pub fn optimistic_cursorless_frame_preserves_cursor() {
     let commit_cursor = case["commitCursor"].as_i64().expect("cursor");
     let (mut client, id, seen) = primed(json!({ "commitCursor": commit_cursor, "result": { "ok": true } }), &case["base"]);
 
-    client.detach_socket();
+    client.detach_socket(None, None);
     submit_appending(&mut client, wire(&case["appended"])).expect("queued");
     client.handle_frame(&frame(&id, &case["cursoredFrame"])).expect("cursored frame");
     client.handle_frame(&frame(&id, &case["cursorlessFrame"])).expect("cursorless frame");
@@ -346,7 +346,7 @@ pub fn optimistic_cursorless_frame_preserves_cursor() {
     );
     assert_eq!(layers(&client, &id), count(&case["layersAfterCursorlessFrame"]));
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
     client.flush_offline_queue(None);
 
     // With the cursor preserved the commit cursor has already been reached, so
@@ -730,10 +730,12 @@ pub fn offline_queue_identity_gate_rejects_replay() {
             Value::String(subject) => Identity::Subject(subject.clone()),
             _ => Identity::SignedOut,
         };
-        let current = spec["current"].as_str();
+        let current = spec["current"]
+            .as_str()
+            .map_or(Identity::SignedOut, |subject| Identity::Subject(subject.to_string()));
 
         assert_eq!(
-            identity_allows_replay(&stamped, current),
+            replay_identity_verdict(&stamped, &current, None) == ReplayVerdict::Match,
             spec["replays"].as_bool().expect("verdict"),
             "identity gate: {}",
             spec["name"].as_str().unwrap_or("?")
@@ -753,7 +755,7 @@ pub fn offline_queue_identity_gate_rejects_replay() {
         })),
     );
 
-    client.identity = Some("user-b".to_string());
+    client.set_identity(Some("user-b".to_string()));
 
     let mut queued = entry("m1", None);
 
@@ -862,6 +864,15 @@ pub fn batch_entry_cap_matches_protocol() {
 pub fn offline_flush_batches_multiple_writes() {
     let case = queue_case("batchReplay");
     let slots = case["slots"].clone();
+    // A slot the fixture no longer describes is a case that asserts nothing.
+    let unreadable = slots
+        .as_array()
+        .expect("slots")
+        .iter()
+        .filter(|slot| slot["outcome"] == json!("unreadable-error") && slot.get("rawError").is_some())
+        .count();
+
+    assert_eq!(unreadable, 1, "batchReplay must carry one unreadable slot");
     let seen = Arc::new(Mutex::new(Vec::new()));
     let recorder = Arc::clone(&seen);
     let store = MemoryStore::default();
@@ -876,12 +887,14 @@ pub fn offline_flush_batches_multiple_writes() {
                 .as_array()
                 .expect("slots")
                 .iter()
-                .map(|slot| {
-                    if slot["outcome"].as_str() == Some("ok") {
-                        json!({ "id": slot["id"], "body": { "commitCursor": slot["commitCursor"], "result": Value::Null } })
-                    } else {
-                        json!({ "id": slot["id"], "body": { "error": { "code": slot["code"], "message": "slot failed" } } })
-                    }
+                .map(|slot| match slot["outcome"].as_str() {
+                    Some("ok") => json!({ "id": slot["id"], "body": { "commitCursor": slot["commitCursor"], "result": Value::Null } }),
+                    // An `error` key holding a NON-object: no envelope to read a
+                    // verdict out of, and no per-slot HTTP status to fall back
+                    // on. Verbatim from the fixture, so a port cannot pass by
+                    // answering itself a shape the spec does not describe.
+                    Some("unreadable-error") => json!({ "id": slot["id"], "body": { "error": slot["rawError"] } }),
+                    _ => json!({ "id": slot["id"], "body": { "error": { "code": slot["code"], "message": "slot failed" } } }),
                 })
                 .collect();
 
@@ -993,8 +1006,8 @@ pub fn offline_flush_unencodable_write_settles_terminal() {
     }));
 
     // Connected once, then offline, so the writes queue rather than fail fast.
-    client.attach_socket(Box::new(|_frame| {}));
-    client.detach_socket();
+    client.attach_socket(Box::new(|_frame| {}), None);
+    client.detach_socket(None, None);
 
     for id in ids(&case["queued"]) {
         let mut options = SubmitOptions::new(
@@ -1023,7 +1036,7 @@ pub fn offline_flush_unencodable_write_settles_terminal() {
         "and no substitute record was persisted"
     );
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let report = client.flush_offline_queue(None);
 
@@ -1460,7 +1473,7 @@ fn submit_queues_while_offline(commit_cursor: i64) {
     let observer = Arc::clone(&seen);
     let args = WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
     client.subscribe(
         "messages:list",
         args.clone(),
@@ -1470,7 +1483,7 @@ fn submit_queues_while_offline(commit_cursor: i64) {
 
     // Prime the subscription with a server value, then drop the socket.
     client.handle_frame(r#"{"cursor":1,"data":["a"],"id":"sub_1","type":"data"}"#).expect("prime");
-    client.detach_socket();
+    client.detach_socket(None, None);
 
     let outcome = client
         .submit(SubmitOptions::new("messages:list", args).with_optimistic(shared_appender(WireValue::String("c".into()))))
@@ -1483,7 +1496,7 @@ fn submit_queues_while_offline(commit_cursor: i64) {
     // Queued, not sent: nothing may reach the wire while the socket is down.
     assert_eq!(*posts.lock().expect("posts"), 0);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
     client.flush_offline_queue(None);
 
     assert_eq!(*posts.lock().expect("posts"), 1, "the flush replayed it");
@@ -1518,4 +1531,887 @@ fn submit_before_first_connect_fails_fast() {
 
     assert_eq!(outcome.status, MutationStatus::Queued);
     assert_eq!(client.pending_mutation_count(), 1);
+}
+
+/// Every request a flush sent, as `(url, parsed body)`.
+type Requests = Arc<Mutex<Vec<(String, Value)>>>;
+
+/// A client whose poster answers every request through `respond`, recording each.
+fn replying_client(respond: impl Fn(&Value) -> (u16, Vec<u8>) + Send + 'static) -> (Client, Requests) {
+    let requests: Requests = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&requests);
+    let client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |url, _headers, body| {
+            let request: Value = serde_json::from_slice(body).map_err(|error| error.to_string())?;
+
+            recorder.lock().expect("requests").push((url.to_string(), request.clone()));
+
+            Ok(respond(&request))
+        })),
+    );
+
+    (client, requests)
+}
+
+/// A reply committing every write the request carries, on either endpoint.
+fn committing(request: &Value) -> (u16, Vec<u8>) {
+    let body = match request.get("calls").and_then(Value::as_array) {
+        Some(calls) => json!({
+            "results": calls
+                .iter()
+                .map(|call| json!({ "id": call["id"], "body": { "commitCursor": 1, "result": "ok" } }))
+                .collect::<Vec<_>>(),
+        }),
+        None => json!({ "commitCursor": 1, "result": "ok" }),
+    };
+
+    (200, serde_json::to_vec(&body).expect("body"))
+}
+
+/// How many writes one request carries: a batch's calls, or the one single call.
+fn call_count(request: &Value) -> usize {
+    request.get("calls").and_then(Value::as_array).map_or(1, Vec::len)
+}
+
+/// `(id, status, error code, value)` of every settled event, in order.
+type SettledLog = Arc<Mutex<Vec<(String, MutationStatus, Option<String>, WireValue)>>>;
+
+fn record_settled(client: &mut Client) -> SettledLog {
+    let log: SettledLog = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&log);
+
+    client.on_mutation_settled(Box::new(move |event| {
+        observer.lock().expect("settled").push((
+            event.mutation_id.clone(),
+            event.status,
+            event.error.as_ref().map(|error| error.code.clone()),
+            event.value.clone(),
+        ));
+    }));
+
+    log
+}
+
+/// The error codes the writes in `ids` settled with, in order.
+fn settled_codes(log: &SettledLog, ids: &[String]) -> Vec<Option<String>> {
+    let log = log.lock().expect("settled");
+
+    ids.iter()
+        .map(|id| log.iter().find(|entry| &entry.0 == id).and_then(|entry| entry.2.clone()))
+        .collect()
+}
+
+/// An empty shard key is the default shard on BOTH replay paths: no request body
+/// the flush sends — a single call or a batch entry — carries a `shardKey` key.
+pub fn offline_flush_empty_shard_key_routes_to_default() {
+    let case = queue_case("emptyShardKey");
+
+    for path in ["batch", "lone"] {
+        let spec = &case[path];
+        let (mut client, requests) = replying_client(committing);
+
+        for queued in spec["queued"].as_array().expect("queued") {
+            client
+                .offline_queue
+                .enqueue(entry(queued["id"].as_str().expect("id"), queued["shardKey"].as_str()), Ok(json!({})));
+        }
+
+        let report = client.flush_offline_queue(spec["flushShardKey"].as_str());
+
+        assert_eq!(report.committed, ids(&spec["committed"]), "{path}");
+
+        let requests = requests.lock().expect("requests");
+
+        assert!(!requests.is_empty(), "{path}: the flush sent nothing");
+
+        for (url, request) in requests.iter() {
+            let bodies = match request.get("calls").and_then(Value::as_array) {
+                Some(calls) => calls.clone(),
+                None => vec![request.clone()],
+            };
+
+            for body in bodies {
+                assert!(body.get("shardKey").is_none(), "{path}: {url} carried a shardKey: {body}");
+            }
+        }
+    }
+}
+
+/// A write the server COMMITTED whose result does not decode settles committed —
+/// overlay confirmed, record removed, the decode error attached — on the batch
+/// path without costing any other slot, and on the lone path without a retry.
+pub fn offline_flush_undecodable_result_settles_committed() {
+    let case = queue_case("undecodableResult");
+    let code = case["code"].as_str().expect("code").to_string();
+    let raw = case["rawResult"].clone();
+
+    // Batch: one undecodable slot among good ones.
+    let spec = &case["batch"];
+    let bad_slot = spec["undecodableSlot"].clone();
+    let slot_result = raw.clone();
+    let (mut client, _requests) = replying_client(move |request| {
+        let slots: Vec<Value> = request["calls"]
+            .as_array()
+            .expect("a batch")
+            .iter()
+            .map(|call| {
+                let result = if call["id"] == bad_slot { slot_result.clone() } else { json!("ok") };
+
+                json!({ "id": call["id"], "body": { "commitCursor": 3, "result": result } })
+            })
+            .collect();
+
+        (200, serde_json::to_vec(&json!({ "results": slots })).expect("body"))
+    });
+    let store = MemoryStore::default();
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+
+    let settled = record_settled(&mut client);
+
+    for id in ids(&spec["queued"]) {
+        client.offline_queue.enqueue(entry(&id, None), Ok(json!({})));
+    }
+
+    let report = client.flush_offline_queue(None);
+
+    assert_eq!(report.committed, ids(&spec["committed"]), "batch: every slot commits");
+    assert_eq!(report.rejected, ids(&spec["rejected"]), "batch");
+    assert_eq!(
+        queued_ids(&client.offline_queue),
+        ids(&spec["queuedAfterFlush"]),
+        "batch: nothing is left queued"
+    );
+    assert_eq!(store.removed(), ids(&spec["persistRemoveCalls"]), "batch: every record is removed");
+    assert_decode_failures(&settled, &ids(&spec["queued"]), &ids(&spec["decodeFailed"]), &code);
+
+    // Lone: the single-call path, with an overlay that must be confirmed rather
+    // than rolled back.
+    let spec = &case["lone"];
+    let lone_result = raw.clone();
+    let (mut client, requests) =
+        replying_client(move |_request| (200, serde_json::to_vec(&json!({ "commitCursor": 7, "result": lone_result })).expect("body")));
+    let store = MemoryStore::default();
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+
+    let settled = record_settled(&mut client);
+
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let subscription = client.subscribe(FUNCTION, args(), None, None);
+
+    client.detach_socket(None, None);
+
+    for id in ids(&spec["queued"]) {
+        let mut options = SubmitOptions::new(FUNCTION, args()).with_optimistic(shared_appender(WireValue::String("pending".into())));
+
+        options.mutation_id = Some(id);
+        client.submit(options).expect("queued");
+    }
+
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let report = client.flush_offline_queue(None);
+
+    assert_eq!(report.committed, ids(&spec["committed"]), "lone: it commits");
+    assert_eq!(report.rejected, ids(&spec["rejected"]), "lone");
+    assert_eq!(queued_ids(&client.offline_queue), ids(&spec["queuedAfterFlush"]), "lone: never requeued");
+    assert_eq!(store.removed(), ids(&spec["persistRemoveCalls"]), "lone");
+    assert_decode_failures(&settled, &ids(&spec["queued"]), &ids(&spec["decodeFailed"]), &code);
+    assert_eq!(layers(&client, &subscription), 1, "lone: the overlay is confirmed, not rolled back");
+
+    client
+        .handle_frame(&frame(&subscription, &json!({ "cursor": 7, "data": [] })))
+        .expect("confirming frame");
+
+    assert_eq!(layers(&client, &subscription), 0, "lone: and drops at the echoed commit cursor");
+
+    client.flush_offline_queue(None);
+
+    assert_eq!(
+        requests.lock().expect("requests").len() as u64,
+        count(&spec["requestsAfterSecondFlush"]),
+        "lone: a second flush sends nothing"
+    );
+
+    a_direct_submit_with_an_undecodable_result_commits(&raw, &code);
+}
+
+/// The ONLINE `submit` path reaches the same verdict as the replay: the write
+/// committed, so the outcome is `Committed` with its overlay confirmed, no value
+/// and the coded decode error — not a bare codec error that reads as a failure.
+fn a_direct_submit_with_an_undecodable_result_commits(raw: &Value, code: &str) {
+    let result = raw.clone();
+    let (mut client, _requests) = replying_client(move |_request| (200, serde_json::to_vec(&json!({ "commitCursor": 7, "result": result })).expect("body")));
+
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let subscription = client.subscribe(FUNCTION, args(), None, None);
+    let outcome = client
+        .submit(SubmitOptions::new(FUNCTION, args()).with_optimistic(shared_appender(WireValue::String("pending".into()))))
+        .expect("a committed write is not a failed submit");
+
+    assert_eq!(outcome.status, MutationStatus::Committed);
+    assert_eq!(outcome.commit_cursor, Some(7));
+    assert_eq!(outcome.value, WireValue::Null);
+    assert_eq!(outcome.error.map(|error| error.code), Some(code.to_string()));
+    assert_eq!(layers(&client, &subscription), 1, "the overlay is confirmed, not rolled back");
+}
+
+/// Every write in `queued` settled committed; exactly `failed` carry `code` and
+/// no value.
+fn assert_decode_failures(settled: &SettledLog, queued: &[String], failed: &[String], code: &str) {
+    let log = settled.lock().expect("settled");
+
+    assert_eq!(
+        log.iter().map(|entry| entry.0.clone()).collect::<Vec<_>>(),
+        queued,
+        "each settles once, in order"
+    );
+
+    for (id, status, error, value) in log.iter() {
+        assert_eq!(*status, MutationStatus::Committed, "{id} settles committed");
+
+        if failed.contains(id) {
+            assert_eq!(error.as_deref(), Some(code), "{id} carries the decode error");
+            assert_eq!(*value, WireValue::Null, "{id} has no value");
+        } else {
+            assert_eq!(*error, None, "{id} settles clean");
+            assert_eq!(*value, WireValue::String("ok".into()), "{id} keeps its value");
+        }
+    }
+}
+
+/// ONE predicate for both replay paths: a coded envelope is classified by its
+/// code alone whatever the status, an envelope-less reply by its status.
+pub fn offline_flush_classifies_single_and_batch_alike() {
+    let case = queue_case("replayClassification");
+
+    for spec in case["cases"].as_array().expect("cases") {
+        let status = spec["status"].as_u64().expect("status") as u16;
+        let body = match spec.get("body") {
+            Some(body) => serde_json::to_vec(body).expect("body"),
+            None => spec["rawBody"].as_str().expect("rawBody").as_bytes().to_vec(),
+        };
+
+        for path in ["single", "batch"] {
+            let label = format!("{} ({path})", spec["name"].as_str().unwrap_or("?"));
+            let queued = ids(&case["paths"][path]);
+            let reply = body.clone();
+            let (mut client, _requests) = replying_client(move |_request| (status, reply.clone()));
+            let settled = record_settled(&mut client);
+
+            for id in &queued {
+                client.offline_queue.enqueue(entry(id, None), Ok(json!({})));
+            }
+
+            let report = client.flush_offline_queue(None);
+
+            match spec["outcome"].as_str() {
+                Some("rejected") => {
+                    assert_eq!(report.rejected, queued, "{label}: a coded envelope is a verdict");
+                    assert!(queued_ids(&client.offline_queue).is_empty(), "{label}");
+                    assert_eq!(
+                        settled_codes(&settled, &queued),
+                        vec![spec["code"].as_str().map(str::to_string); queued.len()],
+                        "{label}"
+                    );
+                }
+                Some("requeued") => {
+                    assert_eq!(report.requeued, queued, "{label}: no verdict was reached");
+                    assert_eq!(queued_ids(&client.offline_queue), queued, "{label}");
+                    assert!(settled.lock().expect("settled").is_empty(), "{label}: nothing settles");
+                }
+                other => panic!("{label}: unknown outcome {other:?}"),
+            }
+        }
+    }
+}
+
+/// A 413 is PAYLOAD_TOO_LARGE whatever its body: a batch splits on an HTML 413 as
+/// it does on a coded one, and a lone write still refused settles terminally.
+pub fn offline_flush_batch_splits_on_envelopeless_413() {
+    let case = queue_case("envelopelessPayloadTooLarge");
+    let raw = case["rawBody"].as_str().expect("rawBody").as_bytes().to_vec();
+    let code = case["code"].as_str().map(str::to_string);
+
+    for name in ["split", "alwaysRefused", "lone"] {
+        let spec = &case[name];
+        let refuse_above = spec.get("refuseCallsAbove").and_then(Value::as_u64).map_or(0, |above| above as usize);
+        let refusal = raw.clone();
+        let (mut client, _requests) = replying_client(move |request| {
+            if call_count(request) > refuse_above {
+                (413, refusal.clone())
+            } else {
+                committing(request)
+            }
+        });
+        let settled = record_settled(&mut client);
+
+        for id in ids(&spec["queued"]) {
+            client.offline_queue.enqueue(entry(&id, None), Ok(json!({})));
+        }
+
+        let report = client.flush_offline_queue(None);
+        let rejected = ids(&spec["rejected"]);
+
+        assert_eq!(report.committed, ids(&spec["committed"]), "{name}");
+        assert_eq!(report.rejected, rejected, "{name}");
+        assert_eq!(
+            queued_ids(&client.offline_queue),
+            ids(&spec["queuedAfterFlush"]),
+            "{name}: nothing parks in the queue"
+        );
+        assert_eq!(settled_codes(&settled, &rejected), vec![code.clone(); rejected.len()], "{name}");
+    }
+}
+
+/// A write refused for its CREDENTIAL is held, and replays under the next token
+/// set for the same user: the header is read when the replay is SENT, never the
+/// token the write was queued under.
+pub fn offline_write_held_for_credential_replays_after_token_refresh() {
+    let case = queue_case("credentialRefresh");
+    let stale = format!("Bearer {}", case["staleToken"].as_str().expect("staleToken"));
+    let refusal_status = case["refusal"]["status"].as_u64().expect("status") as u16;
+    let refusal = serde_json::to_vec(&case["refusal"]["body"]).expect("body");
+    let headers = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&headers);
+    let store = MemoryStore::default();
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, request_headers, _body| {
+            let authorization = request_headers.get("authorization").cloned().unwrap_or_default();
+
+            recorder.lock().expect("headers").push(authorization.clone());
+
+            if authorization == stale {
+                Ok((refusal_status, refusal.clone()))
+            } else {
+                Ok((200, br#"{"result":null}"#.to_vec()))
+            }
+        })),
+    );
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+    client.set_identity(case["identity"].as_str().map(str::to_string));
+    client.set_auth_token(case["staleToken"].as_str().map(str::to_string));
+    client.attach_socket(Box::new(|_frame| {}), None);
+    client.detach_socket(None, None);
+
+    let settled = record_settled(&mut client);
+    let queued = ids(&case["queued"]);
+
+    for id in &queued {
+        let mut options = SubmitOptions::new(FUNCTION, args());
+
+        options.mutation_id = Some(id.clone());
+
+        assert_eq!(client.submit(options).expect("queued").status, MutationStatus::Queued, "{id} queues offline");
+    }
+
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let refused = client.flush_offline_queue(None);
+    let after_refusal = &case["afterRefusal"];
+
+    assert_eq!(refused.committed, ids(&after_refusal["committed"]), "refused: nothing commits");
+    assert_eq!(refused.rejected, ids(&after_refusal["rejected"]), "refused: an expired token is not a verdict");
+    assert_eq!(
+        queued_ids(&client.offline_queue),
+        ids(&after_refusal["queuedAfterFlush"]),
+        "refused: the write is held"
+    );
+    assert!(settled.lock().expect("settled").is_empty(), "refused: nothing settles");
+    assert!(store.removed().is_empty(), "refused: the durable record is not removed");
+    assert_eq!(store.records(), queued.len(), "refused: the durable record stays");
+
+    // A refresh, not an account switch: the identity is unchanged. This port
+    // never flushes on its own, so the app flushes once more.
+    client.set_auth_token(case["freshToken"].as_str().map(str::to_string));
+
+    let replayed = client.flush_offline_queue(None);
+    let after_refresh = &case["afterRefresh"];
+
+    assert_eq!(replayed.committed, ids(&after_refresh["committed"]), "refreshed: it replays and commits");
+    assert_eq!(replayed.rejected, ids(&after_refresh["rejected"]), "refreshed");
+    assert_eq!(queued_ids(&client.offline_queue), ids(&after_refresh["queuedAfterFlush"]), "refreshed");
+    assert_eq!(
+        *headers.lock().expect("headers"),
+        ids(&case["authorizationHeaders"]),
+        "the token is read when the replay is sent"
+    );
+}
+
+/// Every request a flush sent, as `(authorization header, writes carried)`.
+type Bearers = Arc<Mutex<Vec<(Option<String>, usize)>>>;
+
+/// A client committing every write, recording each request's bearer. It has
+/// connected once and is offline, so a submit queues.
+fn bearer_client(token: Option<&str>) -> (Client, Bearers) {
+    let bearers: Bearers = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&bearers);
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, headers, body| {
+            let request: Value = serde_json::from_slice(body).map_err(|error| error.to_string())?;
+
+            recorder
+                .lock()
+                .expect("bearers")
+                .push((headers.get("authorization").cloned(), call_count(&request)));
+
+            Ok(committing(&request))
+        })),
+    );
+
+    set_token(&mut client, token);
+    client.attach_socket(Box::new(|_frame| {}), None);
+    client.detach_socket(None, None);
+
+    (client, bearers)
+}
+
+fn set_token(client: &mut Client, token: Option<&str>) {
+    client.set_auth_token(token.map(str::to_string));
+}
+
+fn queue_writes(client: &mut Client, count: usize) {
+    for _ in 0..count {
+        assert_eq!(
+            client.submit(SubmitOptions::new(FUNCTION, args())).expect("queued").status,
+            MutationStatus::Queued
+        );
+    }
+}
+
+fn sent(bearers: &Bearers) -> Vec<Option<String>> {
+    bearers.lock().expect("bearers").iter().map(|(bearer, _)| bearer.clone()).collect()
+}
+
+/// With no identity set, a write is stamped with a digest of the bearer token,
+/// so the flush an app starts after an account switch rejects the previous
+/// user's write instead of sending it with the next user's token.
+pub fn offline_unset_identity_stamps_token_digest() {
+    let switch = &queue_case("tokenIdentity")["accountSwitch"];
+    let queued_under = switch["queuedUnder"].as_str().expect("queuedUnder");
+    let flushed_under = switch["flushedUnder"].as_str().expect("flushedUnder");
+    let code = queue_case("identityGate")["code"].as_str().expect("code").to_string();
+
+    // Switched: nothing reaches the wire, and the write is rejected.
+    let (mut client, bearers) = bearer_client(Some(queued_under));
+    let settled = record_settled(&mut client);
+
+    queue_writes(&mut client, 1);
+    set_token(&mut client, Some(flushed_under));
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let report = client.flush_offline_queue(None);
+
+    assert!(
+        sent(&bearers).is_empty(),
+        "user A's write must not be sent with user B's bearer: {:?}",
+        sent(&bearers)
+    );
+    assert_eq!(report.rejected.len(), 1, "the switched write is rejected");
+    assert_eq!(settled_codes(&settled, &report.rejected), vec![Some(code)]);
+    assert_eq!(client.pending_mutation_count(), 0);
+
+    // Unswitched: the same write replays with the token it was queued under.
+    let (mut client, bearers) = bearer_client(Some(queued_under));
+
+    queue_writes(&mut client, 1);
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let report = client.flush_offline_queue(None);
+
+    assert_eq!(sent(&bearers), vec![Some(format!("Bearer {queued_under}"))]);
+    assert_eq!(report.committed.len(), 1);
+
+    token_digest_matches_the_reference_client();
+    token_write_is_held_while_no_token_is_set();
+    legacy_null_stamp_is_not_sent_under_a_token();
+    every_request_of_a_pass_carries_its_token();
+    an_identity_spelled_like_a_digest_never_matches_a_token_stamp();
+    a_token_stamp_survives_persistence();
+    verdicts_follow_the_reference();
+}
+
+/// The digest is the reference client's `hashToken`, read from the shared
+/// fixture every port asserts.
+fn token_digest_matches_the_reference_client() {
+    for spec in queue_case("tokenIdentity")["digests"].as_array().expect("digests") {
+        let token = spec["token"].as_str().expect("token");
+
+        assert_eq!(token_digest(token), spec["digest"].as_str().expect("digest"), "digest of {token:?}");
+    }
+}
+
+/// A token write is stamped as a token digest and an identity as itself, so
+/// neither can be taken for the other however the identity is spelled.
+fn an_identity_spelled_like_a_digest_never_matches_a_token_stamp() {
+    let digest = token_digest("token-a");
+
+    // Queued under the token, flushed under an identity spelled as its digest.
+    let (mut client, bearers) = bearer_client(Some("token-a"));
+
+    queue_writes(&mut client, 1);
+    set_token(&mut client, None);
+    client.set_identity(Some(digest.clone()));
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    assert_eq!(client.flush_offline_queue(None).rejected.len(), 1);
+    assert!(sent(&bearers).is_empty());
+
+    // Queued under that identity, flushed under the token with no identity.
+    let (mut client, bearers) = bearer_client(None);
+
+    client.set_identity(Some(digest.clone()));
+    queue_writes(&mut client, 1);
+    client.set_identity(None);
+    set_token(&mut client, Some("token-a"));
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    assert_eq!(client.flush_offline_queue(None).rejected.len(), 1);
+    assert!(sent(&bearers).is_empty());
+
+    assert_eq!(
+        replay_identity_verdict(&Identity::Token(digest.clone()), &Identity::Subject(digest.clone()), None),
+        ReplayVerdict::Mismatch
+    );
+    assert_eq!(
+        replay_identity_verdict(&Identity::Subject(digest.clone()), &token_stamp("token-a"), Some("token-a")),
+        ReplayVerdict::Mismatch
+    );
+}
+
+/// The typed stamp round-trips through the durable record, as JSON text.
+fn a_token_stamp_survives_persistence() {
+    let store = MemoryStore::default();
+    let (mut client, _bearers) = bearer_client(Some("token-a"));
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+    queue_writes(&mut client, 1);
+
+    let record = serialised(&store.appended_at(0));
+
+    assert_eq!(record["identity"], json!({ "tokenDigest": token_digest("token-a") }));
+
+    let restored = QueuedMutation::from_record(&record, args());
+
+    assert_eq!(restored.identity, token_stamp("token-a"));
+    assert_eq!(
+        replay_identity_verdict(&restored.identity, &token_stamp("token-a"), Some("token-a")),
+        ReplayVerdict::Match
+    );
+}
+
+/// The reference's three verdicts over plain, signed-out and absent stamps.
+fn verdicts_follow_the_reference() {
+    let user = |name: &str| Identity::Subject(name.to_string());
+    let cases = [
+        (user("user-a"), user("user-a"), None, ReplayVerdict::Match),
+        (user("user-a"), user("user-b"), None, ReplayVerdict::Mismatch),
+        (user("user-a"), Identity::SignedOut, None, ReplayVerdict::Unknown),
+        (Identity::SignedOut, Identity::SignedOut, None, ReplayVerdict::Match),
+        (Identity::SignedOut, user("user-a"), None, ReplayVerdict::Mismatch),
+        (Identity::SignedOut, token_stamp("token-b"), Some("token-b"), ReplayVerdict::Mismatch),
+        (Identity::Absent, user("user-a"), None, ReplayVerdict::Match),
+        // A token stamp of the token held NOW matches even after an identity is named.
+        (token_stamp("token-a"), user("user-a"), Some("token-a"), ReplayVerdict::Match),
+        (token_stamp("token-a"), token_stamp("token-b"), Some("token-b"), ReplayVerdict::Mismatch),
+        (token_stamp("token-a"), Identity::SignedOut, None, ReplayVerdict::Unknown),
+    ];
+
+    for (stamped, current, token, verdict) in cases {
+        assert_eq!(replay_identity_verdict(&stamped, &current, token), verdict, "{stamped:?} under {current:?}");
+    }
+}
+
+/// Nobody is signed in, so whose write it is cannot be told: held, neither sent
+/// nor dropped, and replayed once the token is back.
+fn token_write_is_held_while_no_token_is_set() {
+    let store = MemoryStore::default();
+    let (mut client, bearers) = bearer_client(Some("token-a"));
+    let settled = record_settled(&mut client);
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+    queue_writes(&mut client, 1);
+    set_token(&mut client, None);
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let report = client.flush_offline_queue(None);
+
+    assert!(sent(&bearers).is_empty(), "held: nothing is sent: {:?}", sent(&bearers));
+    assert!(report.rejected.is_empty() && report.committed.is_empty(), "held: nothing settles");
+    assert!(settled.lock().expect("settled").is_empty(), "held: nobody is told");
+    assert_eq!(client.pending_mutation_count(), 1, "held: still queued");
+    assert!(store.removed().is_empty(), "held: still persisted");
+
+    set_token(&mut client, Some("token-a"));
+    client.flush_offline_queue(None);
+
+    assert_eq!(sent(&bearers), vec![Some("Bearer token-a".to_string())]);
+}
+
+/// A record persisted with a signed-out stamp says nothing about whose write it
+/// was once a token is held: a mismatch, as a `null` stamp is in the reference.
+fn legacy_null_stamp_is_not_sent_under_a_token() {
+    let (mut client, bearers) = bearer_client(Some("token-b"));
+    let mut queued = entry("m1", None);
+
+    queued.identity = Identity::SignedOut;
+    client.offline_queue.enqueue(queued, Ok(json!({})));
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let report = client.flush_offline_queue(None);
+
+    assert!(sent(&bearers).is_empty(), "a null stamp is not sent under a token: {:?}", sent(&bearers));
+    assert_eq!(report.rejected, vec!["m1".to_string()]);
+
+    // An unstamped legacy record still replays ambiently.
+    let (mut client, bearers) = bearer_client(Some("token-b"));
+
+    client.offline_queue.enqueue(entry("m2", None), Ok(json!({})));
+    client.attach_socket(Box::new(|_frame| {}), None);
+    client.flush_offline_queue(None);
+
+    assert_eq!(sent(&bearers), vec![Some("Bearer token-b".to_string())]);
+}
+
+/// Every request of one pass — each batch chunk and each half of a 413 split —
+/// carries the token the pass was gated against. `&mut self` already makes a
+/// swap mid-pass unrepresentable here; this pins that no path reads another.
+fn every_request_of_a_pass_carries_its_token() {
+    let bearers: Bearers = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&bearers);
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, headers, body| {
+            let request: Value = serde_json::from_slice(body).map_err(|error| error.to_string())?;
+            let mut seen = recorder.lock().expect("bearers");
+
+            seen.push((headers.get("authorization").cloned(), call_count(&request)));
+
+            if seen.len() == 1 {
+                return Ok((413, br#"{"error":{"code":"PAYLOAD_TOO_LARGE","message":"too large"}}"#.to_vec()));
+            }
+
+            Ok(committing(&request))
+        })),
+    );
+
+    set_token(&mut client, Some("token-a"));
+    client.offline_queue = OfflineQueue::new().with_max_items(MAX_BATCH_ENTRIES + 1);
+    client.attach_socket(Box::new(|_frame| {}), None);
+    client.detach_socket(None, None);
+    queue_writes(&mut client, MAX_BATCH_ENTRIES + 1);
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let report = client.flush_offline_queue(None);
+
+    assert_eq!(report.committed.len(), MAX_BATCH_ENTRIES + 1);
+    assert!(bearers.lock().expect("bearers").len() >= 4, "two halves of a split chunk, then the tail");
+    assert!(sent(&bearers).iter().all(|bearer| bearer.as_deref() == Some("Bearer token-a")));
+}
+
+/// An online-only write is the one a socket-down client must refuse, so its
+/// arguments never reach the queue or the persistence adapter.
+const SECRET: &str = "sentinel-secret-7731";
+
+fn online_only_write() -> SubmitOptions {
+    let args = WireValue::Object(vec![("token".into(), WireValue::String(SECRET.into()))]);
+    let mut options = SubmitOptions::new("auth:setPassword", args);
+    options.online_only = true;
+
+    options
+}
+
+fn disconnected_client(store: &MemoryStore, posts: Arc<Mutex<Vec<Vec<u8>>>>) -> Client {
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, _headers, body| {
+            posts.lock().expect("posts").push(body.to_vec());
+
+            Ok((200, br#"{"commitCursor":3,"result":{"ok":true}}"#.to_vec()))
+        })),
+    );
+    client.offline_queue = OfflineQueue::new()
+        .with_persistence(Box::new(store.clone()))
+        .with_queue_before_first_connect(true);
+
+    client
+}
+
+/// With the socket down, an online-only write is refused before anything is
+/// queued, persisted or sent.
+pub fn offline_online_only_refused_when_disconnected() {
+    let store = MemoryStore::seeded(Vec::new());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let mut client = disconnected_client(&store, Arc::clone(&posts));
+
+    // A subscription on the write's own path and args, primed with a server value,
+    // so an overlay the write applied would be displayed.
+    let args = WireValue::Object(vec![("token".into(), WireValue::String(SECRET.into()))]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&seen);
+
+    client.attach_socket(Box::new(|_frame| {}), None);
+    client.subscribe(
+        "auth:setPassword",
+        args,
+        Some(Box::new(move |value| observer.lock().expect("seen").push(value.clone()))),
+        None,
+    );
+    client.handle_frame(r#"{"cursor":1,"data":["a"],"id":"sub_1","type":"data"}"#).expect("prime");
+    client.detach_socket(None, None);
+
+    let write = online_only_write().with_optimistic(shared_appender(WireValue::String("c".into())));
+    let error = client.submit(write).expect_err("an online-only write must be refused");
+
+    assert!(
+        matches!(&error, ClientError::Api(api) if api.code == CODE_OFFLINE_NOT_QUEUED),
+        "refused with OFFLINE_NOT_QUEUED, got {error:?}"
+    );
+    let predicted = WireValue::Array(vec![WireValue::String("a".into()), WireValue::String("c".into())]);
+
+    assert!(!seen.lock().expect("seen").contains(&predicted), "a refused write's overlay is never displayed");
+    assert_eq!(client.pending_mutation_count(), 0);
+    assert_eq!(store.appended(), 0, "the persistence adapter must never see the write");
+    let persisted = serde_json::to_string(&store.inner.lock().expect("store lock").records).expect("records");
+    assert!(!persisted.contains(SECRET), "the arguments reached durable storage");
+    assert!(posts.lock().expect("posts").is_empty(), "a refused write reached the wire");
+}
+
+/// With the socket up, an online-only write is sent normally and commits.
+pub fn offline_online_only_sends_when_connected() {
+    let store = MemoryStore::seeded(Vec::new());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let mut client = disconnected_client(&store, Arc::clone(&posts));
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let outcome = client.submit(online_only_write()).expect("committed");
+
+    assert_eq!(outcome.status, MutationStatus::Committed);
+    let sent = posts.lock().expect("posts");
+    assert_eq!(sent.len(), 1, "one request for the write");
+    assert!(String::from_utf8_lossy(&sent[0]).contains(SECRET), "the arguments go out on the wire");
+    assert_eq!(store.appended(), 0, "a sent write is not persisted");
+}
+
+/// A normal write made with the socket down still queues beside an online-only one.
+pub fn offline_online_only_leaves_normal_writes_queued() {
+    let store = MemoryStore::seeded(Vec::new());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let mut client = disconnected_client(&store, Arc::clone(&posts));
+
+    let args = WireValue::Object(vec![("text".into(), WireValue::String("hi".into()))]);
+    let outcome = client.submit(SubmitOptions::new("messages:send", args)).expect("queued");
+
+    assert_eq!(outcome.status, MutationStatus::Queued);
+    assert_eq!(client.pending_mutation_count(), 1);
+    assert_eq!(store.appended(), 1);
+    assert!(posts.lock().expect("posts").is_empty(), "a queued write is not sent");
+}
+
+/// A client that has never connected, so an online-only write takes the direct
+/// path. Every request gets `reply`, the only answer the network gives.
+fn never_connected_client(store: &MemoryStore, reply: Result<(u16, Vec<u8>), String>, sends: Arc<Mutex<usize>>) -> Client {
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, _headers, _body| {
+            *sends.lock().expect("sends") += 1;
+
+            reply.clone()
+        })),
+    );
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+
+    client
+}
+
+/// Subscribes to the write's own path and args, primed with the server value
+/// `["a"]`, so an overlay the write applies is displayed. No socket is attached.
+fn primed_online_only_subscription(client: &mut Client) -> Arc<Mutex<Vec<WireValue>>> {
+    let args = WireValue::Object(vec![("token".into(), WireValue::String(SECRET.into()))]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&seen);
+    let id = client.subscribe(
+        "auth:setPassword",
+        args,
+        Some(Box::new(move |value| observer.lock().expect("seen").push(value.clone()))),
+        None,
+    );
+    client
+        .handle_frame(&format!(r#"{{"cursor":1,"data":["a"],"id":"{id}","type":"data"}}"#))
+        .expect("prime");
+
+    seen
+}
+
+/// An online-only write sent directly to a shard that never connected, whose
+/// request got no reply, is refused as a queued write would be: nothing queued or
+/// persisted, the overlay rolled back, the transport error kept as the source. A
+/// coded rejection surfaces as itself, and a failure while the socket is up
+/// surfaces unchanged.
+pub fn offline_online_only_transport_failure_refused() {
+    use std::error::Error as _;
+
+    let unreachable = "dial tcp: connection refused";
+    let sends = Arc::new(Mutex::new(0));
+    let store = MemoryStore::seeded(Vec::new());
+    let mut client = never_connected_client(&store, Err(unreachable.into()), Arc::clone(&sends));
+    let seen = primed_online_only_subscription(&mut client);
+
+    let write = online_only_write().with_optimistic(shared_appender(WireValue::String("c".into())));
+    let error = client.submit(write).expect_err("a send with no reply must be refused");
+
+    assert!(
+        matches!(&error, ClientError::Api(api) if api.code == CODE_OFFLINE_NOT_QUEUED),
+        "refused with OFFLINE_NOT_QUEUED, got {error:?}"
+    );
+    let cause = error.source().and_then(|cause| cause.downcast_ref::<TransportError>());
+    assert_eq!(
+        cause,
+        Some(&TransportError(unreachable.into())),
+        "the transport error is the cause, got {error:?}"
+    );
+    assert_eq!(*sends.lock().expect("sends"), 1, "one direct send, not a queued one");
+    assert_eq!(client.pending_mutation_count(), 0);
+    assert_eq!(store.appended(), 0, "the persistence adapter must never see the write");
+
+    let shown = seen.lock().expect("seen").clone();
+    let predicted = WireValue::Array(vec![WireValue::String("a".into()), WireValue::String("c".into())]);
+    assert!(shown.contains(&predicted), "the overlay was never shown, so its rollback proves nothing");
+    assert_eq!(
+        shown.last(),
+        Some(&WireValue::Array(vec![WireValue::String("a".into())])),
+        "the overlay is rolled back"
+    );
+
+    let coded_sends = Arc::new(Mutex::new(0));
+    let coded = Ok((403, br#"{"error":{"code":"PERMISSION_DENIED","message":"not allowed"}}"#.to_vec()));
+    let store = MemoryStore::seeded(Vec::new());
+    let mut client = never_connected_client(&store, coded, coded_sends);
+    primed_online_only_subscription(&mut client);
+
+    let error = client.submit(online_only_write()).expect_err("a coded rejection is an error");
+
+    assert!(
+        matches!(&error, ClientError::Api(api) if api.code == "PERMISSION_DENIED" && api.source.is_none()),
+        "a coded rejection surfaces as itself, got {error:?}"
+    );
+
+    let connected_sends = Arc::new(Mutex::new(0));
+    let store = MemoryStore::seeded(Vec::new());
+    let mut client = never_connected_client(&store, Err(unreachable.into()), connected_sends);
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let error = client.submit(online_only_write()).expect_err("a failed send is an error");
+
+    assert!(
+        matches!(&error, ClientError::Transport(message) if message == unreachable),
+        "a failure while connected surfaces unchanged, got {error:?}"
+    );
 }

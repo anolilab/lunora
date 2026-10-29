@@ -1,0 +1,62 @@
+/**
+ * Writes a studio handler has made and regenerated from, so the source watcher
+ * can skip codegen for the event of its own write: running it again would only
+ * repeat that work. The watcher still runs the rest of its regeneration (the
+ * project's `postcodegen`, the reload), which the handler does not. A write is
+ * recorded only once its codegen emitted, so a failed run is left to the watcher.
+ *
+ * A skip is granted only while the file still holds exactly the text the handler
+ * wrote, and each write is granted once: an edit made after it, or a second
+ * event for the same write, regenerates as usual.
+ */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+/** How long a recorded write can still be matched by the watcher's event. */
+const WINDOW_MS = 5000;
+
+const pending = new Map<string, { expiresAt: number; text: string }>();
+
+/**
+ * Suffix of the temporary file a studio handler writes and renames over its
+ * target. A watcher that sees every file has to ignore it: its events are part
+ * of the handler's write, not a change of their own.
+ */
+export const STUDIO_WRITE_TEMP_SUFFIX = ".lunora-tmp";
+
+/** Record a write the studio handler has just made to `path`. */
+export const recordStudioWrite = (path: string, text: string, now: number = Date.now()): void => {
+    for (const [key, write] of pending) {
+        if (write.expiresAt < now) {
+            pending.delete(key);
+        }
+    }
+
+    pending.set(resolve(path), { expiresAt: now + WINDOW_MS, text });
+};
+
+/**
+ * Whether a watcher event for `path` is the echo of a studio write. Returns true,
+ * and spends the record, only when the file still holds the text that was written.
+ */
+export const consumeStudioWrite = (path: string, now: number = Date.now()): boolean => {
+    const key = resolve(path);
+    const write = pending.get(key);
+
+    if (write === undefined) {
+        return false;
+    }
+
+    pending.delete(key);
+
+    if (write.expiresAt < now) {
+        return false;
+    }
+
+    try {
+        return readFileSync(key, "utf8") === write.text;
+    } catch {
+        // A file that cannot be read is not an echo of anything we wrote.
+        return false;
+    }
+};

@@ -10,11 +10,15 @@ import type { CapabilityKey } from "../src/capabilities";
 import type { FeatureUsage } from "../src/discover/feature-usage";
 import { readProjectTarget, resolveCodegenTarget } from "../src/platform-target";
 import { runCodegen } from "../src/run-codegen";
+import emittedJsonData from "./emitted-json-data";
 
 const ALL_OFF: FeatureUsage = {
     access: false,
     ai: false,
+    aiSearch: false,
     analytics: false,
+    analyticsSql: false,
+    artifacts: false,
     browser: false,
     container: false,
     flags: false,
@@ -82,6 +86,41 @@ describe("gatePlatformFeatures", () => {
         ]);
     });
 
+    it.each([
+        ["a binding-free helper", `import { buildSignedUrl } from "@lunora/storage";\n\nexport const sign = buildSignedUrl;\n`, []],
+        [
+            "the binding-backed factory beside it",
+            `import { buildSignedUrl, createStorage } from "@lunora/storage";\n\nexport const make = [buildSignedUrl, createStorage];\n`,
+            ["storage"],
+        ],
+        ["a ctx.storage read", `export const f = async ({ ctx }) => ctx.storage.getUrl("a");\n`, ["storage"]],
+    ])("gates object storage on what the app reaches, not on importing %s", async (_case, source, expected) => {
+        expect.assertions(2);
+
+        // No registered target rates `objectStorage` unsupported today, so the
+        // synthetic matrix stands in for the first one that does.
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const { discoverFeatureUsage } = await import("../src/discover/feature-usage");
+        const { Project } = await import("ts-morph");
+        const directory = mkdtempSync(join(tmpdir(), "lunora-storage-gate-"));
+
+        try {
+            writeFileSync(join(directory, "files.ts"), source, "utf8");
+
+            const usage = discoverFeatureUsage(new Project({ skipAddingFilesFromTsConfig: true }), directory);
+            const result = gateAgainstMatrix(
+                usage,
+                { features: { objectStorage: { level: "unsupported" } }, id: "no-storage", name: "No-Storage Host" },
+                "no-storage",
+            );
+
+            expect(usage.storage).toBe(expected.length > 0);
+            expect(result.diagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(expected);
+        } finally {
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
     it("fails closed on a feature the matrix omits, under its own diagnostic name", async () => {
         expect.assertions(5);
 
@@ -131,23 +170,39 @@ describe("gatePlatformFeatures", () => {
         expect.assertions(1);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
-        // flags / access / payments / x402 / r2sql / notify are credential-based
+        // flags / access / payments / r2sql / notify are credential-based
         // add-ons (they work anywhere fetch works), not platform primitives — they
         // must survive any target unchanged. `images` is NOT in this list: it is
         // binding-based (`env.IMAGES`) and gated like `browser`/`vectors`. The
         // list is spelled out here and derived from the source in "capability
         // classification" below, which is what stops the two drifting again.
-        const usage: FeatureUsage = { ...ALL_OFF, access: true, flags: true, notify: true, payments: true, r2sql: true, x402: true };
+        const usage: FeatureUsage = { ...ALL_OFF, access: true, flags: true, notify: true, payments: true, r2sql: true };
 
         const result = gatePlatformFeatures(usage, "cloudflare");
 
         expect(result.usage).toStrictEqual(usage);
     });
 
+    it("gates ctx.x402 on a target without a secrets store", async () => {
+        expect.assertions(3);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        // The generated rail reads its wallet key through `ctx.secrets`, which `node`
+        // rates unsupported, so raw-key and CDP custody would fail on the first payment.
+        const usage: FeatureUsage = { ...ALL_OFF, x402: true };
+
+        expect(gatePlatformFeatures(usage, "cloudflare").usage.x402).toBe(true);
+
+        const node = gatePlatformFeatures(usage, "node");
+
+        expect(node.usage.x402).toBe(false);
+        expect(node.diagnostics).toMatchObject([{ feature: "x402", name: "platform_unsupported_feature" }]);
+    });
+
     // Plan 234: `node` is a REGISTERED target (unlike the synthetic "partial"
     // matrix above), so this exercises the real `NODE_CAPABILITIES` matrix
     // through the actual registry lookup — the thing `platformMatrixIds`
-    // reports and `resolveCodegenTarget`/`lunora.json`'s `target` field select.
+    // reports and `resolveCodegenTarget`/`lunora.config.*`'s `target` field select.
     it("gates a project declaring an unsupported ctx.* for the node target", async () => {
         expect.assertions(6);
 
@@ -177,6 +232,138 @@ describe("gatePlatformFeatures", () => {
             "images",
         ]);
     });
+
+    // `celld` is the second spike target (see `@lunora/platform-celld`): a
+    // Workers-compatible self-hosted Durable Objects runtime whose matrix
+    // (`CELLD_CAPABILITIES`, tracking celld v0.6.1) rates the bindings celld
+    // actually ships — KV, R2, D1, Queues, Workflows, Cron Triggers — as real
+    // support, so those (and the queue-backed `mail`) must survive gating. What
+    // it gates is the managed Cloudflare services celld has no binding for.
+    /** The capability key the remediation names (`… marks "workflowRollback" as …`). */
+    const QUOTED_KEY = /"(\w+)"/u;
+
+    // Rollback and egress fail at first use on celld rather than run without the
+    // feature, so they are gated from the app's declaration, not discovered in
+    // production. Worker Loaders (`jsCodeTool`) exist on both Workers hosts only.
+    it.each([
+        ["celld", ["containerEgressPolicy", "containerRuntimeScheduling", "containerSandboxTools", "workflowRollback"]],
+        ["node", ["containerEgressPolicy", "containerRuntimeScheduling", "containerSandboxTools", "workerLoaders"]],
+        ["cloudflare", []],
+    ])(
+        "gates step rollback, container egress policies, container scheduling, container sandbox helpers and worker loaders per target (%s)",
+        async (target, refused) => {
+            expect.assertions(1);
+
+            const { gatePlatformFeatures } = await import("../src/platform-target");
+            const result = gatePlatformFeatures(ALL_OFF, target, {
+                containerEgressPolicy: true,
+                containerRuntimeScheduling: true,
+                containerSandboxTools: true,
+                workerLoaders: true,
+                workflowRollback: true,
+            });
+
+            expect(
+                result.diagnostics
+                    .filter((diagnostic) => diagnostic.name === "platform_unsupported_feature")
+                    .map((diagnostic) => QUOTED_KEY.exec(diagnostic.remediation)?.[1])
+                    .toSorted((a, b) => String(a).localeCompare(String(b))),
+            ).toStrictEqual(refused);
+        },
+    );
+
+    it.each([
+        ["celld", true],
+        ["node", true],
+        ["cloudflare", false],
+    ])("gates scheduled workflows per target (%s)", async (target, refused) => {
+        expect.assertions(1);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures(ALL_OFF, target, { workflowSchedules: true });
+
+        expect(result.signals.workflowSchedules).toBe(!refused);
+    });
+
+    it.each([
+        ["celld", true],
+        ["node", true],
+        ["cloudflare", false],
+    ])("gates a requestSecretTool agent per target (%s)", async (target, refused) => {
+        expect.assertions(2);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures(ALL_OFF, target, { secretValues: true });
+
+        expect(result.signals.secretValues).toBe(!refused);
+        expect(
+            result.diagnostics
+                .filter((diagnostic) => diagnostic.name === "platform_unsupported_feature")
+                .map((diagnostic) => QUOTED_KEY.exec(diagnostic.remediation)?.[1]),
+        ).toStrictEqual(refused ? ["secretValues"] : []);
+    });
+
+    it.each(["celld", "node", "cloudflare"])("lets topics through on every target, since each rates them emulated (%s)", async (target) => {
+        expect.assertions(2);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures(ALL_OFF, target, { queues: true, topics: true });
+
+        expect(result.signals.topics).toBe(true);
+        expect(result.diagnostics.filter((diagnostic) => diagnostic.name === "platform_unsupported_feature")).toStrictEqual([]);
+    });
+
+    it("gates the celld target on what celld actually lacks, not on the whole surface", async () => {
+        expect.assertions(7);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const usage: FeatureUsage = { ...ALL_OFF, ai: true, kv: true, mail: true, scheduler: true, storage: true, vectors: true };
+
+        const result = gatePlatformFeatures(usage, "celld");
+
+        expect(result.usage.kv).toBe(true);
+        expect(result.usage.storage).toBe(true);
+        expect(result.usage.scheduler).toBe(true);
+        expect(result.usage.mail).toBe(true);
+        // Emulated through LUNORA_AI_PROXY_URL, so ctx.ai is still emitted.
+        expect(result.usage.ai).toBe(true);
+        expect(result.diagnostics.every((diagnostic) => diagnostic.name === "platform_unsupported_feature")).toBe(true);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(["vectors"]);
+    });
+
+    // AI Search is a Cloudflare-only managed service with no host contract
+    // behind it: celld and node rate it unsupported, so `ctx.aiSearch` must be
+    // withheld there with a diagnostic rather than emitted as a runtime throw.
+    it.each([
+        ["cloudflare", true, []],
+        ["celld", false, ["platform_unsupported_feature"]],
+        ["node", false, ["platform_unsupported_feature"]],
+    ])("gates ctx.aiSearch against the %s matrix", async (target, kept, diagnostics) => {
+        expect.assertions(2);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures({ ...ALL_OFF, aiSearch: true }, target);
+
+        expect(result.usage.aiSearch).toBe(kept);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(diagnostics);
+    });
+
+    // The Analytics SQL binding exists only on Cloudflare. Its REST transport is
+    // importable anywhere, but it reads Cloudflare-hosted data, so celld and node
+    // rate the ctx surface unsupported and must withhold it with a diagnostic.
+    it.each([
+        ["cloudflare", true, []],
+        ["celld", false, ["platform_unsupported_feature"]],
+        ["node", false, ["platform_unsupported_feature"]],
+    ])("gates ctx.analyticsSql against the %s matrix", async (target, kept, diagnostics) => {
+        expect.assertions(2);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures({ ...ALL_OFF, analyticsSql: true }, target);
+
+        expect(result.usage.analyticsSql).toBe(kept);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(diagnostics);
+    });
 });
 
 describe("project-declared target", () => {
@@ -193,12 +380,12 @@ describe("project-declared target", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    const writeConfig = (text: string): void => {
-        writeFileSync(join(workdir, "lunora.json"), text, "utf8");
+    const writeConfig = (body: string): void => {
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default ${body};\n`, "utf8");
     };
 
     const diagnosticNames = (target?: string): string[] =>
-        runCodegen({ projectRoot: workdir, target }).platformDiagnostics.map((diagnostic) => diagnostic.name);
+        runCodegen({ projectRoot: workdir, target, wranglerQueueProducers: [] }).platformDiagnostics.map((diagnostic) => diagnostic.name);
 
     it("gates against the project's declared target when the caller passes none", () => {
         expect.assertions(2);
@@ -227,13 +414,77 @@ describe("project-declared target", () => {
         expect(diagnosticNames()).toStrictEqual([]);
     });
 
-    it("reads the target as JSONC, matching how the rest of lunora.json is parsed", () => {
+    it("recognises celld as a registered target end-to-end through runCodegen", () => {
         expect.assertions(1);
 
-        // `@lunora/config` parses this file with `jsonc-parser`. A second reader
-        // using plain `JSON.parse` would reject a config the CLI accepts, which
-        // is exactly the drift a shared parser exists to prevent.
-        writeConfig(`{\n    // the target we ship to\n    "target": "aws",\n}`);
+        // Same shape as the `node` case: the fixture uses no gated ctx.*
+        // surface, so a registered target resolves through `PLATFORM_MATRICES`
+        // with no diagnostics rather than failing as `platform_unknown_target`.
+        writeConfig(`{ "target": "celld" }`);
+
+        expect(diagnosticNames()).toStrictEqual([]);
+    });
+
+    it("reads a quoted key, which is valid TypeScript", () => {
+        expect.assertions(1);
+
+        // ts-morph's `getName()` keeps the quotes on a string-literal key, so
+        // `{ "target": … }` read as the name `"target"` and was ignored — the
+        // project silently got the default provider.
+        writeConfig(`{ "target": "aws" }`);
+
+        expect(diagnosticNames()).toStrictEqual(["platform_unknown_target"]);
+    });
+
+    it("warns rather than silently defaulting when the target cannot be read as a literal", () => {
+        expect.assertions(1);
+
+        // The sync reader parses literals; `runCodegen` resolves the target inside
+        // itself and cannot await. Falling back to the default in SILENCE meant a
+        // project that declared `node` got the Cloudflare surface emitted and the
+        // wrangler toolchain run — the wrong-provider outcome this file's own
+        // `readProjectTarget` docblock refuses.
+        writeConfig(`{ target: ["a", "ws"].join("") }`);
+
+        expect(diagnosticNames()).toStrictEqual(["platform_unreadable_target"]);
+    });
+
+    it("says nothing when the config simply declares no target", () => {
+        expect.assertions(1);
+
+        // "no target declared" and "a target I could not read" must not be the
+        // same silence, but they must also not be the same warning.
+        writeConfig(`{ remote: true }`);
+
+        expect(diagnosticNames()).toStrictEqual([]);
+    });
+
+    it("does not read an unreadable advisor floor as an unreadable target", () => {
+        expect.assertions(1);
+
+        // `advisor.minSeverity` reports its own finding; the target warning means
+        // "you may be shipping to the wrong provider", which this is not.
+        writeConfig(`{ advisor: { minSeverity: ["w", "arn"].join("") } }`);
+
+        expect(diagnosticNames()).toStrictEqual([]);
+    });
+
+    it("says nothing when --target was passed, which wins anyway", () => {
+        expect.assertions(1);
+
+        writeConfig(`{ target: ["a", "ws"].join("") }`);
+
+        expect(diagnosticNames("cloudflare")).toStrictEqual([]);
+    });
+
+    it("reads the target from a real TypeScript config, comments and all", () => {
+        expect.assertions(1);
+
+        // This path is `runCodegen` -> `readProjectTarget` -> the LITERAL reader
+        // (ts-morph), not the `jiti` evaluator: `runCodegen` is synchronous. In a
+        // file whose central risk is having two readers, naming the wrong one is
+        // worse than saying nothing.
+        writeConfig(`{\n    // the target we ship to\n    target: "aws",\n}`);
 
         expect(diagnosticNames()).toStrictEqual(["platform_unknown_target"]);
     });
@@ -318,7 +569,8 @@ describe("capability classification", () => {
 
         const usage: FeatureUsage = { ...ALL_OFF, ...Object.fromEntries(exempt.map((key) => [key, true])) };
 
-        expect(gateAgainstMatrix(usage, EMPTY_MATRIX, "empty")).toStrictEqual({ diagnostics: [], signals: {}, usage });
+        // A matrix that rates no `liveStreams` withholds live streams: the fail-closed arm.
+        expect(gateAgainstMatrix(usage, EMPTY_MATRIX, "empty")).toStrictEqual({ diagnostics: [], liveStreamsWithheld: true, signals: {}, usage });
     });
 });
 
@@ -348,6 +600,69 @@ describe("app-declarable signals with no capability row", () => {
         expect(result.diagnostics[0]?.message).toContain("durable streams");
     });
 
+    it("diagnoses a defineLiveStream on a host that rates liveStreams unsupported, and not on one that supports it", async () => {
+        expect.assertions(4);
+
+        // `liveStreams` is rated in every matrix; a `defineLiveStream` on a host without it must be refused,
+        // and a supporting host must pass with no diagnostic.
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const unsupported: PlatformCapabilities = {
+            features: { liveStreams: { level: "unsupported" } },
+            id: "no-live",
+            name: "No Live",
+        };
+        const supported: PlatformCapabilities = {
+            features: { liveStreams: { level: "native" } },
+            id: "live",
+            name: "Live",
+        };
+
+        const refused = gateAgainstMatrix(ALL_OFF, unsupported, "no-live", { liveStreams: true });
+
+        expect(refused.diagnostics).toHaveLength(1);
+        expect(refused.diagnostics[0]?.name).toBe("platform_unsupported_feature");
+        expect(refused.diagnostics[0]?.message).toContain("live topic streams");
+        expect(gateAgainstMatrix(ALL_OFF, supported, "live", { liveStreams: true }).diagnostics).toStrictEqual([]);
+    });
+
+    it("diagnoses a declared `.deliveryAuthorization(...)` on a host that rates it unsupported, and not on one that supports it", async () => {
+        expect.assertions(4);
+
+        // The builder method is a signal, not a `ctx.*` row: without the signal the
+        // gate had no way to refuse it, and the emitted app builder carried the
+        // method onto a host whose shard answers its authority-fenced routes 501.
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const unsupported: PlatformCapabilities = {
+            features: { deliveryAuthorization: { level: "unsupported" } },
+            id: "no-auth",
+            name: "No Auth",
+        };
+        const supported: PlatformCapabilities = {
+            features: { deliveryAuthorization: { level: "native" } },
+            id: "auth",
+            name: "Auth",
+        };
+
+        const refused = gateAgainstMatrix(ALL_OFF, unsupported, "no-auth", { deliveryAuthorization: true });
+
+        expect(refused.diagnostics).toHaveLength(1);
+        expect(refused.diagnostics[0]?.name).toBe("platform_unsupported_feature");
+        expect(refused.diagnostics[0]?.message).toContain("delivery authorization");
+        expect(gateAgainstMatrix(ALL_OFF, supported, "auth", { deliveryAuthorization: true }).diagnostics).toStrictEqual([]);
+    });
+
+    it("rates the builder method available only where the matrix supports it, failing closed on an unrated key", async () => {
+        expect.assertions(4);
+
+        const { platformFeatureAvailable } = await import("../src/platform-target");
+
+        expect(platformFeatureAvailable("cloudflare", "deliveryAuthorization")).toBe(true);
+        expect(platformFeatureAvailable("node", "deliveryAuthorization")).toBe(false);
+        expect(platformFeatureAvailable("celld", "deliveryAuthorization")).toBe(false);
+        // An unregistered target has no matrix to gate against, so nothing is withheld.
+        expect(platformFeatureAvailable("unregistered-host", "deliveryAuthorization")).toBe(true);
+    });
+
     it("diagnoses a `.commitOrdered()` table the target cannot order", async () => {
         expect.assertions(3);
 
@@ -367,6 +682,28 @@ describe("app-declarable signals with no capability row", () => {
         expect(result.diagnostics).toHaveLength(1);
         expect(result.diagnostics[0]?.name).toBe("platform_unsupported_feature");
         expect(result.diagnostics[0]?.message).toContain("commit-ordered tables");
+    });
+
+    it("diagnoses a relation graph the target cannot traverse", async () => {
+        expect.assertions(4);
+
+        // The `v.id(...)` columns are what make `ctx.db.related` meaningful, and
+        // they are a schema declaration — so a host that cannot serve the
+        // traversal's per-hop read shape must refuse the app rather than emit a
+        // `related` that fails on the first hop.
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const matrix: PlatformCapabilities = {
+            features: { relationGraph: { level: "unsupported" } },
+            id: "some-host",
+            name: "Some Host",
+        };
+
+        const result = gateAgainstMatrix(ALL_OFF, matrix, "some-host", { relationGraph: true });
+
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.name).toBe("platform_unsupported_feature");
+        expect(result.diagnostics[0]?.message).toContain("relation-graph traversal");
+        expect(result.signals.relationGraph).toBe(false);
     });
 
     it("fails closed on an unrated app-declarable feature", async () => {
@@ -411,7 +748,7 @@ describe("app-declarable signals with no capability row", () => {
 
 /**
  * The gate as an app author meets it: a real `runCodegen` over a real project
- * whose `lunora.json` declares `target: "node"`, asserting on what codegen
+ * whose `lunora.config.ts` declares `target: "node"`, asserting on what codegen
  * EMITTED — the diagnostics it returned and the surface it wrote — rather than
  * on an intermediate flag. Asserting the flag is how the `browserTool` hole
  * below survived a passing test suite: `usage.browser` was correctly `false`
@@ -425,7 +762,7 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-target-node-"));
         cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
-        writeFileSync(join(workdir, "lunora.json"), `{ "target": "node" }`, "utf8");
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
     });
 
     afterEach(() => {
@@ -445,7 +782,7 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         writeFileSync(schemaPath, `${text.slice(0, close)}${source}\n${text.slice(close)}`, "utf8");
     };
 
-    const codegen = (): ReturnType<typeof runCodegen> => runCodegen({ projectRoot: workdir });
+    const codegen = (): ReturnType<typeof runCodegen> => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
     it("gates a declared cron on a target where nothing dispatches one", () => {
         expect.assertions(3);
@@ -466,6 +803,139 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(result.cronTriggers).toStrictEqual(["0 3 * * *"]);
         expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
         expect(result.platformDiagnostics[0]?.message).toContain("cron");
+    });
+
+    // The whole path: the declaration in `lunora/`, the discovery pass, the
+    // declaration surface handing the signal to the gate, and the diagnostic
+    // `lunora deploy` blocks on.
+    it("gates a step rollback and a container egress policy declared in lunora/ on celld", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
+        write(
+            "steps.ts",
+            `import { defineStep } from "@lunora/workflow";\n\nexport const charge = defineStep("charge", { args: {}, handler: async () => 1, rollback: async () => {} });\n`,
+        );
+        write(
+            "containers.ts",
+            `import { defineContainer } from "@lunora/container";\n\nexport const box = defineContainer({ allowedHosts: ["example.com"], image: "./Dockerfile" });\n`,
+        );
+
+        const messages = codegen()
+            .platformDiagnostics.filter((diagnostic) => diagnostic.name === "platform_unsupported_feature")
+            .map((diagnostic) => diagnostic.message);
+
+        expect(messages.some((message) => message.includes("workflow step rollback"))).toBe(true);
+        expect(messages.some((message) => message.includes("container egress policies"))).toBe(true);
+    });
+
+    it("withholds the .deliveryAuthorization() builder on node and celld, and keeps it on cloudflare", () => {
+        expect.assertions(9);
+
+        // The real shape: the hook sits in `lunora.config.*` at the project root,
+        // outside `lunora/`. The builder method is emitted whether or not the app
+        // calls it, so node and celld withhold it even when no diagnostic is raised
+        // for an app that never uses it (checked below).
+        const configWith = (target: string): void => {
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `export default {\n    target: "${target}",\n    app: (app: { deliveryAuthorization: (selector: () => unknown) => unknown }) => app.deliveryAuthorization(() => undefined),\n};\n`,
+                "utf8",
+            );
+        };
+
+        configWith("node");
+        const node = codegen();
+
+        expect(node.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(node.platformDiagnostics[0]?.message).toContain("delivery authorization");
+        expect(node.platformDiagnostics[0]?.target).toBe("node");
+        expect(node.generated.app).not.toContain("public deliveryAuthorization(");
+        expect(node.generated.app).not.toContain("deliveryAuthorization: this.deliveryAuthorizationSelector");
+
+        configWith("celld");
+        const celld = codegen();
+
+        expect(celld.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(celld.generated.app).not.toContain("public deliveryAuthorization(");
+
+        configWith("cloudflare");
+        const cloudflare = codegen();
+
+        expect(cloudflare.platformDiagnostics).toStrictEqual([]);
+        expect(cloudflare.generated.app).toContain("public deliveryAuthorization(");
+    });
+
+    it("ignores a deliveryAuthorization method on an unrelated object or a bare call, on node", () => {
+        expect.assertions(2);
+
+        // Only a call on the app builder declares the feature; a same-named
+        // method or helper elsewhere under lunora/ must not gate the build.
+        write(
+            "auth.ts",
+            `const myObject = { deliveryAuthorization: (value: unknown) => value };\n\nexport const verdict = myObject.deliveryAuthorization(1);\n\nfunction deliveryAuthorization(value: unknown) {\n    return value;\n}\n\nexport const other = deliveryAuthorization(2);\n`,
+        );
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics).toStrictEqual([]);
+        expect(result.generated.app).not.toContain("public deliveryAuthorization(");
+    });
+
+    it("omits the node builder method for an app that never calls it, without a diagnostic", () => {
+        expect.assertions(2);
+
+        // The method is target-keyed, so the surface is withheld for every app on
+        // a host that cannot back it. But an app that never calls it has nothing to
+        // be told: silence there matches every other unused capability. The config
+        // carries an `app` hook that makes no such call, so the config-file scan is
+        // exercised and still finds nothing.
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default {\n    target: "node",\n    app: (app: unknown) => app,\n};\n`, "utf8");
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).not.toContain("platform_unsupported_feature");
+        expect(result.generated.app).not.toContain("public deliveryAuthorization(");
+    });
+
+    it("wires ctx.live onto the shard action and the queue consumer only where the target serves live streams", () => {
+        expect.assertions(11);
+
+        // The declaration in `lunora/`, the signal the gate hands the emitters, and the
+        // surface they write: the shard's action ctx and the push consumer's publisher.
+        write(
+            "live.ts",
+            `import { defineLiveStream, v } from "@lunora/server";\n\nexport const posts = defineLiveStream({ id: "posts", topics: { post: { payload: v.null() } } });\n`,
+        );
+        write("queues.ts", `import { defineQueue } from "@lunora/queue";\n\nexport const digest = defineQueue({ handler: async () => {} });\n`);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "cloudflare" };\n`, "utf8");
+
+        const served = codegen();
+
+        expect(served.platformDiagnostics).toStrictEqual([]);
+        expect(served.generated.shard).toContain("ctx.live = live;");
+        expect(served.generated.app).toContain("live: queueLive,");
+
+        // The node host rates liveStreams emulated, so the same declaration is served
+        // there too: the publisher is wired and no diagnostic is raised.
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+
+        const onNode = codegen();
+
+        expect(onNode.platformDiagnostics).toStrictEqual([]);
+        expect(onNode.generated.shard).toContain("ctx.live = live;");
+        expect(onNode.generated.app).toContain("live: queueLive,");
+
+        // celld rates liveStreams native (the celld TCK live leg), so it serves the same declaration.
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
+
+        const onCelld = codegen();
+
+        expect(onCelld.platformDiagnostics).toStrictEqual([]);
+        expect(onCelld.generated.shard).toContain("ctx.live = live;");
+        expect(onCelld.generated.app).toContain("live: queueLive,");
+        expect(onCelld.generated.app).not.toContain("liveStreams: false");
+        expect(onNode.generated.app).not.toContain("liveStreams: false");
     });
 
     it("gates a schema-declared vector index the target has no binding for", () => {
@@ -554,12 +1024,33 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         appendTable(`    docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 768, index: "docs_search", metric: "cosine" }),`);
 
         const result = codegen();
+        const studioFeatures = emittedJsonData(result.generated.shard, "LUNORA_STUDIO_FEATURES");
 
         expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
-        expect(result.generated.shard).toContain(`"vectors": false`);
+        expect(studioFeatures).toHaveProperty("vectors", false);
         // The sibling `@lunora/bindings` feature stays on — the verdict is
         // per-capability, and `keyValueStore` is `emulated` on this target.
-        expect(result.generated.shard).toContain(`"kv": true`);
+        expect(studioFeatures).toHaveProperty("kv", true);
+    });
+
+    it("tells the studio which host the worker targets, and which features it cannot serve", () => {
+        expect.assertions(4);
+
+        type Emitted = { platform: { id: string; unsupported: string[] } };
+
+        // A studio hosted apart from the worker has no other way to learn it is
+        // talking to a Node host, whose PITR ops can only answer PITR_UNAVAILABLE.
+        const node = emittedJsonData(codegen().generated.shard, "LUNORA_STUDIO_FEATURES") as Emitted;
+
+        expect(node.platform.id).toBe("node");
+        expect(node.platform.unsupported).toContain("pointInTimeRecovery");
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "cloudflare" };\n`, "utf8");
+
+        const cloudflare = emittedJsonData(codegen().generated.shard, "LUNORA_STUDIO_FEATURES") as Emitted;
+
+        expect(cloudflare.platform.id).toBe("cloudflare");
+        expect(cloudflare.platform.unsupported).toStrictEqual([]);
     });
 
     it("gates ctx.browser reached through @lunora/agent's browserTool exactly as it gates a direct import", () => {
@@ -582,6 +1073,40 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
         expect(viaImport.platformDiagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(["browser"]);
         expect(viaImport.generated.server).not.toContain(browserField);
+    });
+
+    it("leaves the images URL helpers alone, and gates the binding they sit beside", () => {
+        expect.assertions(4);
+
+        const imagesField = `readonly images: import("@lunora/bindings/images").Images;`;
+
+        // Pure WebCrypto / string builders: they run on any host, so a target
+        // without an Images binding must not reject them, nor emit `ctx.images`.
+        write(
+            "images.ts",
+            `import { buildImageDeliveryUrl, buildSignedImageUrl, verifySignedImageUrl } from "@lunora/bindings/images";\n\nexport const helpers = [buildImageDeliveryUrl, buildSignedImageUrl, verifySignedImageUrl];\n`,
+        );
+
+        const helpersOnly = codegen();
+
+        expect(helpersOnly.platformDiagnostics).toStrictEqual([]);
+        expect(helpersOnly.generated.server).not.toContain(imagesField);
+
+        // `createImages(env.IMAGES)` needs the binding with no `ctx.images` read.
+        write("images.ts", `import { createImages } from "@lunora/bindings/images";\n\nexport const images = createImages;\n`);
+
+        const viaFactory = codegen();
+
+        expect(viaFactory.platformDiagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(["images"]);
+        expect(viaFactory.generated.server).not.toContain(imagesField);
+    });
+
+    it("gates mail on its import, since it has no ctx helper to read", () => {
+        expect.assertions(1);
+
+        write("send.ts", `import { createMailer } from "@lunora/mail";\n\nexport const mailer = createMailer;\n`);
+
+        expect(codegen().platformDiagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(["mail"]);
     });
 
     it("gates a destructured ctx.secrets read, not only a direct property access", () => {
@@ -639,6 +1164,24 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
         expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
         expect(result.platformDiagnostics[0]?.message).toContain("durable");
+    });
+
+    const LIVE_PUBLISH_ACTION = `import { action } from "@lunora/server";\n\nexport const announce = action.action(async ({ ctx }) => {\n    await ctx.live.publish("posts", { id: 1 });\n\n    return null;\n});\n`;
+
+    it("accepts the same ctx.live read on a target that serves live streams", () => {
+        expect.assertions(2);
+
+        // Node rates liveStreams emulated, so the publisher is wired and the read is supported.
+        write("announce.ts", LIVE_PUBLISH_ACTION);
+
+        const onNode = codegen();
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "cloudflare" };\n`, "utf8");
+
+        const onCloudflare = codegen();
+
+        expect(onNode.platformDiagnostics).toStrictEqual([]);
+        expect(onCloudflare.platformDiagnostics).toStrictEqual([]);
     });
 
     it("gates a declared agent on a target that cannot run one", () => {

@@ -64,6 +64,30 @@ export default defineSchema({
 });
 ```
 
+To track when a row last changed, add `.timestamps()` to the table. It adds an
+`updatedAt` column (rename it with `.timestamps({ field: "modifiedAt" })`) that is
+stamped on insert and restamped on every update: any `patch` or `replace`,
+including a soft delete and `restore()`. A write that sets the column itself
+wins, so a mutation that passes client input straight through lets the client set
+it too.
+
+It is shorthand for `v.timestamp().defaultNow().$onUpdateFn(() => Date.now())`.
+If you already declare a column of that name it has to be exactly that: a
+`v.timestamp()` with an insert default and the `$onUpdateFn` (it is kept as it is);
+any other column of that name is an error, because the call would otherwise do
+nothing or stamp the wrong type. Options must be an object literal with a string
+literal `field`, since codegen reads the column name from the source. Creation time is already on every row as
+`_creationTime`.
+
+Call `.timestamps()` before `.index()` or `.ttl()` to reference the column there
+(`.timestamps().index("by_updated", ["updatedAt"])`). Rows written before you
+added `.timestamps()` have no `updatedAt` until their next write, so backfill it
+in a [migration](/docs/concepts/migrations) if you read it for every row. A
+`.ttl("updatedAt")` ignores a row with no value, so those rows do not expire until
+they are written or backfilled. On a `.global()` table the generated migration adds
+the column as nullable, since SQLite cannot add a required column to a table that
+already has rows.
+
 Storing times as numbers keeps them sortable and range-queryable through an
 ordinary [index](/docs/concepts/indexes), with no date parsing on the read path.
 

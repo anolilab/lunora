@@ -1,7 +1,8 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { API_SPEC_HELP } from "../../util/api-spec";
-import { TARGET_OPTION } from "../../util/deploy-target";
+import TARGET_OPTION from "../../util/deploy-target";
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 
 const codegenCommand: Command = {
     description: "Run codegen for lunora/ functions and schema",
@@ -14,7 +15,8 @@ const codegenCommand: Command = {
     name: "codegen",
     options: [
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
-        { description: "Output format: pretty (default) or json", name: "format", type: String },
+        { description: "Use per-module lazy imports for registered functions (opt-in; default eager)", name: "lazy-functions", type: Boolean },
+        OUTPUT_FORMAT_OPTION,
         // Both the positive AND the `no-*` form are declared explicitly (#285).
         // Declaring only `no-strict-advisories` and relying on cerebro to
         // synthesize `--strict-advisories` has two problems: (1) the synthesized
@@ -54,6 +56,7 @@ export { codegenCommand };
 export type CodegenOptions = CreateOptions<{
     "api-spec": string | undefined;
     format: string | undefined;
+    "lazy-functions": boolean | undefined;
     "strict-advisories": boolean | undefined;
     target: string | undefined;
 }>;

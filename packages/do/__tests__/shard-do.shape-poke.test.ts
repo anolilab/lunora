@@ -1,8 +1,8 @@
 import type { CdcChangeKey, DatabaseWriterLike, SocketAttachment, SqlExec } from "@lunora/shard-engine";
 import { createShardCtxDb as createShardContextDatabase, readCdcCursor, readShapePokeCursor, runShardMigrations } from "@lunora/shard-engine";
+import { encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import messagesSchema from "./_helpers/messages-schema";
@@ -56,12 +56,12 @@ class ShapePokeShard extends ShardDO {
 
         switch (functionPath) {
             case "messages:move": {
-                await writer.patch(args["_id"] as string, { channelId: args["channelId"] });
+                await writer.patch("messages", args["_id"] as string, { channelId: args["channelId"] });
 
                 break;
             }
             case "messages:remove": {
-                await writer.delete(args["_id"] as string);
+                await writer.delete("messages", args["_id"] as string);
 
                 break;
             }

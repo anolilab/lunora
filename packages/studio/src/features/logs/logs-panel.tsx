@@ -633,5 +633,3 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
 
 export { filterLogs, summarizeLogs };
 export type { LogFilterCriteria, LogsPanelProps, TimeRange };
-
-export { type LogsView } from "./logs-view-bar";

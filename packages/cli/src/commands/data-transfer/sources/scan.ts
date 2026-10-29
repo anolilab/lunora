@@ -190,4 +190,4 @@ const scanFirebaseDump = async (collections: ReadonlyArray<DumpFile>, cwd: strin
     return mapping;
 };
 
-export { inferReshape, scanFirebaseDump, scanSupabaseDump };
+export { scanFirebaseDump, scanSupabaseDump };

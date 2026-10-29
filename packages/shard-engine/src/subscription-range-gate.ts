@@ -27,6 +27,27 @@ interface SubscriptionReadFootprint {
 type ChangedKeys = Map<string, IndexKeyEntry[] | undefined>;
 
 /**
+ * Most positions tracked per table before it is recorded as unknown. A bulk
+ * write past this re-runs every subscription on the table, which is always
+ * safe, and keeps the per-write gate cost bounded instead of growing with the
+ * number of rows written.
+ */
+const MAX_TRACKED_KEYS_PER_TABLE = 1000;
+
+/**
+ * Append `entries` to `target` in place, or report the table unknown (`undefined`) once
+ * it is past the cap. Appending in place keeps a bulk write linear; copying the whole list
+ * per written row is quadratic. `target` must be owned by the batch, never a caller's array.
+ */
+const appendCapped = (target: IndexKeyEntry[], entries: ReadonlyArray<IndexKeyEntry>): IndexKeyEntry[] | undefined => {
+    for (const entry of entries) {
+        target.push(entry);
+    }
+
+    return target.length > MAX_TRACKED_KEYS_PER_TABLE ? undefined : target;
+};
+
+/**
  * Fold one request's written positions into the coalesced refresh batch.
  *
  * Pessimistic by construction: a table counts as unknown if it is unknown in
@@ -48,7 +69,7 @@ const mergeChangedKeys = (pending: ChangedKeys | undefined, incoming: ChangedKey
             continue;
         }
 
-        merged.set(table, previous ? [...previous, ...next] : next);
+        merged.set(table, appendCapped(previous ?? [], next));
     }
 
     return merged;
@@ -82,9 +103,7 @@ const recordChangedKeys = (pending: ChangedKeys | undefined, table: string, inde
         return keysByTable;
     }
 
-    const existing = keysByTable.get(table);
-
-    keysByTable.set(table, existing ? [...existing, ...indexKeys] : [...indexKeys]);
+    keysByTable.set(table, appendCapped(keysByTable.get(table) ?? [], indexKeys));
 
     return keysByTable;
 };
@@ -124,5 +143,5 @@ const writeTouchesMemo = (memo: SubscriptionReadFootprint, changed: Set<string>,
     return false;
 };
 
-export { mergeChangedKeys, recordChangedKeys, writeTouchesMemo };
+export { MAX_TRACKED_KEYS_PER_TABLE, mergeChangedKeys, recordChangedKeys, writeTouchesMemo };
 export type { ChangedKeys, SubscriptionReadFootprint };

@@ -24,10 +24,25 @@ interface Subscription {
     /** Start of the current billing period — the window metered usage is summed over. */
     readonly currentPeriodStart?: number;
     readonly id: string;
+    /** When the provider says the last applied event happened (epoch ms); older redeliveries are ignored. */
+    readonly lastEventAt?: number;
     readonly priceId: string;
+
+    /**
+     * EVERY price/product id the subscription bills, not just the primary one. A Stripe
+     * subscription can carry an add-on or a metered price alongside the base plan, and a
+     * customer paying for one is entitled to it — so entitlements test membership here.
+     *
+     * Optional because the webhook path and any pre-existing stored row carry only
+     * `priceId`; absent reads as `[priceId]`, which is exactly right for the single-item
+     * case every other provider has.
+     */
+    readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
+    /** Store-maintained write counter. The kit does not read it; it is mirrored so the drift gate sees every field. */
+    readonly revision?: number;
     readonly state: "active" | "canceled" | "past_due" | "paused" | "trialing";
     readonly updatedAt: number;
 }

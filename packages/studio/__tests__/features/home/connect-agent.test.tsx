@@ -1,6 +1,43 @@
-import { describe, expect, it } from "vitest";
+import { LunoraProvider } from "@lunora/react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
-import { buildAgentPrompt, buildMcpConfig } from "../../../src/features/home/connect-agent";
+import { buildAgentPrompt, buildMcpConfig, ConnectAgentCard } from "../../../src/features/home/connect-agent";
+import { createMockClient } from "../../mock-client";
+
+describe("connectAgentCard", () => {
+    it("points the copied MCP config at the worker, not the studio's own origin", () => {
+        expect.assertions(1);
+
+        const writes: string[] = [];
+
+        vi.stubGlobal("navigator", {
+            clipboard: {
+                writeText: async (text: string): Promise<void> => {
+                    writes.push(text);
+                },
+            },
+        });
+
+        try {
+            const mock = createMockClient();
+
+            // A studio served on its own host, pointed at a deployed worker.
+            (mock.asClient as unknown as { url: string }).url = "https://api.prod.example/";
+
+            render(
+                <LunoraProvider client={mock.asClient}>
+                    <ConnectAgentCard />
+                </LunoraProvider>,
+            );
+            fireEvent.click(screen.getByTestId("home-connect-agent-copy-config"));
+
+            expect(JSON.parse(writes[0] ?? "{}")).toMatchObject({ mcpServers: { lunora: { env: { LUNORA_URL: "https://api.prod.example" } } } });
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+});
 
 describe("buildMcpConfig", () => {
     it("emits an mcpServers entry wiring npx @lunora/mcp to the given origin", () => {

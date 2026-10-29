@@ -32,9 +32,19 @@ import { LunoraError } from "@lunora/errors";
 
 import type { RelationOperator } from "../../../shared/relation-operators";
 import { isRelationPredicate as isSharedRelationPredicate, RELATION_OPERATOR_SET } from "../../../shared/relation-operators";
+import { mergeWhere } from "./aggregates";
 import { isMemoryTable } from "./ctx-db-memory";
+import { buildSeekWhere, decodeCursor, equalityPinnedFields, normalizeOrderKeys, softDeleteScope, uniqueIndexFields } from "./query-args";
 import { distinctValues } from "./relations";
-import type { QueryArgs, QueryPage, RelationDefinitionLike, TableDefinitionLike } from "./schema-types";
+import type {
+    KeyedRelationDefinitionLike,
+    OrderKey,
+    QueryArgs,
+    QueryPage,
+    RelationDefinitionLike,
+    TableDefinitionLike,
+    ThroughRelationDefinitionLike,
+} from "./schema-types";
 import type { WhereInput } from "./where-types";
 import { RELATION_EXISTS_KEY } from "./where-types";
 
@@ -102,7 +112,7 @@ const requireOperatorMeta = (operator: string): RelationOperatorMeta => {
  * - **project** — the *child* column whose distinct values the semijoin reads
  * off matched rows. Always the mirror of `clause`.
  */
-const joinColumns = (relation: RelationDefinitionLike): { clause: string; project: string } =>
+const joinColumns = (relation: KeyedRelationDefinitionLike): { clause: string; project: string } =>
     relation.kind === "one" ? { clause: relation.field, project: relation.references } : { clause: relation.references, project: relation.field };
 
 /**
@@ -130,7 +140,7 @@ interface RelationExistsMarker {
     /** Table the outer `where` reads — the correlation's parent side. */
     parentTable: string;
     /** The relation crossed, carrying kind + join columns. */
-    relation: RelationDefinitionLike;
+    relation: KeyedRelationDefinitionLike;
 }
 
 /**
@@ -162,7 +172,7 @@ interface ResolveRelationPredicatesOptions {
      * parent+child co-location in one SQLite DB; D1 omits it (cross-backend, no
      * shared subquery scope).
      */
-    canPushExists?: (relation: RelationDefinitionLike) => boolean;
+    canPushExists?: (relation: KeyedRelationDefinitionLike) => boolean;
     /** Push-eligible-node policy (see {@link ExistsPushMode}). Defaults to `"auto"`. */
     existsPushMode?: ExistsPushMode;
     /** Backend-routed child reader — `resolveWith`'s `fetcher` (a DO/D1 `findMany`). */
@@ -178,7 +188,7 @@ interface ResolveRelationPredicatesOptions {
 
 /** Internal threaded context (everything but the per-call `tableName`). */
 interface ResolveContext {
-    canPushExists?: (relation: RelationDefinitionLike) => boolean;
+    canPushExists?: (relation: KeyedRelationDefinitionLike) => boolean;
     existsPushMode: ExistsPushMode;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
     maxRelationKeys: number;
@@ -260,13 +270,12 @@ const assertFlatPredicate = (where: WhereInput | undefined, schema: ResolveConte
  * child's RLS read filter rides `baseWhere`, so an unreadable child row never
  * contributes a key — relation predicates are fail-closed by construction.
  */
-const projectChildKeys = async (
-    relation: RelationDefinitionLike,
+const readChildKeys = async (
+    relation: Pick<RelationDefinitionLike, "table">,
     childWhere: WhereInput,
     projectField: string,
     context: ResolveContext,
-    escalatable: boolean,
-): Promise<typeof KEY_OVERFLOW | unknown[]> => {
+): Promise<unknown[]> => {
     // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a child predicate may itself cross relations (multi-hop)
     const resolvedChildWhere = await resolveForTable(childWhere, relation.table, context);
     const { page } = await context.fetcher(relation.table, {
@@ -274,24 +283,108 @@ const projectChildKeys = async (
         relationBaseWhere: context.relationBaseWhere,
         where: resolvedChildWhere,
     });
-    const keys = distinctValues(page, projectField);
 
-    if (keys.length > context.maxRelationKeys) {
-        // A co-located relation can escape the cap via the (unbounded) EXISTS
-        // push-down — signal the overflow so the caller escalates. Otherwise
-        // (cross-backend/cross-shard) there is no subquery to fall back to, so
-        // fail closed rather than truncate the `IN (...)` and silently mis-match.
-        if (escalatable) {
-            return KEY_OVERFLOW;
-        }
+    return distinctValues(page, projectField);
+};
 
-        throw new LunoraError(
-            "INTERNAL",
-            `relation predicate on "${relation.table}" matched ${String(keys.length)} rows, exceeding the ${String(context.maxRelationKeys)}-key limit; narrow the predicate (a same-shard EXISTS push-down lifts this cap)`,
-        );
+/** Fail closed rather than truncate the `IN (...)` and silently mis-match. */
+const failOverKeyCap = (relation: Pick<RelationDefinitionLike, "table">, count: number, context: ResolveContext): never => {
+    throw new LunoraError(
+        "INTERNAL",
+        `relation predicate on "${relation.table}" matched ${String(count)} rows, exceeding the ${String(context.maxRelationKeys)}-key limit; narrow the predicate (a same-shard EXISTS push-down lifts this cap)`,
+    );
+};
+
+/**
+ * Fail closed on a many-to-many hop. The count is of DISTINCT keys, not rows, and the walk stops at the first page
+ * that crosses the cap, so the number is a lower bound. A through hop never escalates to EXISTS, so no hint is offered.
+ */
+const failOverDistinctKeyCap = (relation: Pick<RelationDefinitionLike, "table">, count: number, context: ResolveContext): never => {
+    throw new LunoraError(
+        "INTERNAL",
+        `relation predicate on "${relation.table}" matched at least ${String(count)} distinct keys, exceeding the ${String(context.maxRelationKeys)}-key limit; narrow the predicate`,
+    );
+};
+
+const projectChildKeys = async (
+    relation: Pick<RelationDefinitionLike, "table">,
+    childWhere: WhereInput,
+    projectField: string,
+    context: ResolveContext,
+    escalatable: boolean,
+): Promise<typeof KEY_OVERFLOW | unknown[]> => {
+    const keys = await readChildKeys(relation, childWhere, projectField, context);
+
+    if (keys.length <= context.maxRelationKeys) {
+        return keys;
     }
 
-    return keys;
+    // A co-located relation can escape the cap via the (unbounded) EXISTS
+    // push-down — signal the overflow so the caller escalates. Otherwise
+    // (cross-backend/cross-shard) there is no subquery to fall back to.
+    return escalatable ? KEY_OVERFLOW : failOverKeyCap(relation, keys.length, context);
+};
+
+/**
+ * Read the distinct keys of a hop that never escalates to EXISTS, as both hops of a many-to-many predicate. The walk is
+ * keyset-paged in pages of `maxRelationKeys + 1` rows and fails closed once the DISTINCT keys pass the cap. The cap
+ * counts owners, not join rows, so a join table with many rows per owner still resolves, and only one page plus the
+ * key set is held at a time. The walk ends only on a final page: a page larger than the limit it asked for, or a
+ * non-final page with no advancing cursor, is refused rather than trusted, because stopping short would under-match
+ * `some` and over-match `none`/`every`. The row walk is paged because `QueryArgs` has no DISTINCT projection.
+ */
+const projectBoundedKeys = async (
+    relation: Pick<RelationDefinitionLike, "table">,
+    childWhere: WhereInput,
+    projectField: string,
+    context: ResolveContext,
+): Promise<unknown[]> => {
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a child predicate may itself cross relations (multi-hop)
+    const resolvedChildWhere = await resolveForTable(childWhere, relation.table, context);
+    const pageLimit = context.maxRelationKeys + 1;
+    const keys = new Set<unknown>();
+    let cursor: string | undefined;
+
+    for (;;) {
+        // eslint-disable-next-line no-await-in-loop -- keyset pagination: each page's cursor comes from the previous page
+        const result = await context.fetcher(relation.table, {
+            baseWhere: context.relationBaseWhere?.(relation.table),
+            // Default order: creation time with the `id` tiebreak, which makes the cursor total.
+            cursor,
+            limit: pageLimit,
+            relationBaseWhere: context.relationBaseWhere,
+            where: resolvedChildWhere,
+        });
+
+        if (result.page.length > pageLimit) {
+            throw new LunoraError(
+                "INTERNAL",
+                `relation predicate on "${relation.table}" read ${String(result.page.length)} rows for a page of at most ${String(pageLimit)}; the fetcher did not honour the page limit`,
+            );
+        }
+
+        for (const key of distinctValues(result.page, projectField)) {
+            keys.add(key);
+        }
+
+        if (keys.size > context.maxRelationKeys) {
+            failOverDistinctKeyCap(relation, keys.size, context);
+        }
+
+        if (result.isDone) {
+            return [...keys];
+        }
+
+        if (typeof result.continueCursor !== "string") {
+            throw new LunoraError("INTERNAL", `relation predicate on "${relation.table}" returned a page that is not final but has no cursor to continue from`);
+        }
+
+        if (result.continueCursor === cursor) {
+            throw new LunoraError("INTERNAL", `relation predicate on "${relation.table}" paged with a cursor that did not advance`);
+        }
+
+        cursor = result.continueCursor;
+    }
 };
 
 /**
@@ -314,7 +407,7 @@ const projectChildKeys = async (
  */
 const compileOperator = async (
     operator: string,
-    relation: RelationDefinitionLike,
+    relation: KeyedRelationDefinitionLike,
     childWhere: WhereInput,
     context: ResolveContext,
     escalatable: boolean,
@@ -339,6 +432,30 @@ const compileOperator = async (
 };
 
 /**
+ * A many-to-many operator is the semijoin run twice: the target rows matching the predicate (`every` runs it
+ * negated, as {@link compileOperator} does), then the join rows pointing at them, then the parents those rows name.
+ * Both child reads honour their own table's RLS filter, so a link the caller cannot see, or one to a target it
+ * cannot read, matches nothing.
+ *
+ * Never EXISTS-escalated: the correlated push-down is built from one foreign key, and a join table is two. A key
+ * set past the cap fails closed, like any semijoin whose relation is not co-located.
+ */
+const compileThroughOperator = async (
+    operator: string,
+    relation: ThroughRelationDefinitionLike,
+    childWhere: WhereInput,
+    context: ResolveContext,
+): Promise<WhereInput> => {
+    const meta = requireOperatorMeta(operator);
+    const { from, table, to } = relation.through;
+    const targetKeys = await projectBoundedKeys(relation, meta.negateChild ? { NOT: childWhere } : childWhere, "_id", context);
+    // Nothing matched on the target side, so no join row can: skip the second read.
+    const ownerKeys = targetKeys.length === 0 ? [] : await projectBoundedKeys({ table }, { [to]: { in: targetKeys } }, from, context);
+
+    return { _id: meta.negated ? { notIn: ownerKeys } : { in: ownerKeys } };
+};
+
+/**
  * Phase 2: rewrite a pushable relation operator into a correlated-EXISTS marker
  * instead of a semijoin (no child fetch). The child predicate is RLS-merged
  * (`relationBaseWhere`) and recursively resolved — so a co-located grandchild
@@ -349,7 +466,7 @@ const compileOperator = async (
  */
 const buildExistsMarker = async (
     operator: string,
-    relation: RelationDefinitionLike,
+    relation: KeyedRelationDefinitionLike,
     childWhere: WhereInput,
     parentTable: string,
     context: ResolveContext,
@@ -394,6 +511,14 @@ const resolveRelationNode = async (
         assertCardinality(operator, name, relation);
 
         const childWhere = predicate[operator] ?? {};
+
+        if (relation.through !== undefined) {
+            // eslint-disable-next-line no-await-in-loop -- sequential bounded resolution per operator, as below
+            clauses.push(await compileThroughOperator(operator, relation, childWhere, context));
+
+            continue;
+        }
+
         const pushable = context.canPushExists?.(relation) ?? false;
 
         if (pushable && context.existsPushMode === "always") {
@@ -489,6 +614,44 @@ const resolveRelationPredicates = async (where: WhereInput | undefined, options:
 };
 
 /**
+ * Compose the predicate, ordering and page size of a `findMany`-shaped read. This is the one
+ * place that fixes the composition order, so `findMany` and `explain` cannot disagree about it:
+ * the ordering and keyset seek come from the cursor's own columns; `baseWhere` (RLS / aggregate
+ * scope) AND-merges with `where`; the soft-delete scope joins them; relation predicates are then
+ * resolved to flat columns (the one await, which reads through `relation.fetcher`); and the seek
+ * is ANDed in last. A malformed cursor throws before any child fetch runs.
+ *
+ * Each dialect compiles the result to its own SQL. `fetchLimit` is `limit + 1`, the over-fetch
+ * that tells the caller whether another page exists without a second query.
+ */
+const composeReadPredicate = async (
+    definition: TableDefinitionLike,
+    args: QueryArgs,
+    relation: Omit<ResolveRelationPredicatesOptions, "relationBaseWhere">,
+): Promise<{ fetchLimit: number | undefined; limit: number | undefined; orderKeys: OrderKey[]; predicate: WhereInput | undefined }> => {
+    const orderKeys = normalizeOrderKeys(args.orderBy, definition.shape, {
+        pinned: equalityPinnedFields(args.where),
+        uniqueBy: uniqueIndexFields(definition.indexes, definition.shape),
+    });
+    const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
+
+    let predicate: WhereInput | undefined = mergeWhere(args.baseWhere, args.where);
+    predicate = mergeWhere(predicate, softDeleteScope(definition.softDeleteMode, args.includeDeleted));
+
+    // `relationBaseWhere` threads a child table's RLS read filter onto each relation hop, as the
+    // `with`-load `resolveWith` calls do; without it a relation predicate could read rows the caller may not.
+    predicate = await resolveRelationPredicates(predicate, { ...relation, relationBaseWhere: args.relationBaseWhere });
+
+    if (seek) {
+        predicate = predicate ? { AND: [predicate, seek] } : seek;
+    }
+
+    const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
+
+    return { fetchLimit: limit === undefined ? undefined : limit + 1, limit, orderKeys, predicate };
+};
+
+/**
  * A relation predicate whose target table a live shape cannot observe, and which
  * of the two reasons applies — they need different remedies in the message.
  */
@@ -524,8 +687,12 @@ const inspectKey = (key: string, value: WhereInput[string], schema: ResolveConte
         return undefined;
     }
 
-    if (schema.tables[relation.table]?.shardMode?.kind === "shardBy") {
-        return { kind: "shard", relation: key, target: relation.table };
+    // A many-to-many predicate reads the join table too, so the join table must be observable as well.
+    const reached = relation.through === undefined ? [relation.table] : [relation.table, relation.through.table];
+    const sharded = reached.find((table) => schema.tables[table]?.shardMode?.kind === "shardBy");
+
+    if (sharded !== undefined) {
+        return { kind: "shard", relation: key, target: sharded };
     }
 
     // A `.memory()` target is invisible for the same reason a memory-backed
@@ -533,8 +700,10 @@ const inspectKey = (key: string, value: WhereInput[string], schema: ResolveConte
     // hop away: a write to the related table produces no changed key, so the
     // SOURCE table is never re-probed and the shape keeps whatever membership it
     // seeded with. Same refusal, different remedy.
-    if (isMemoryTable(schema.tables[relation.table])) {
-        return { kind: "memory", relation: key, target: relation.table };
+    const memory = reached.find((table) => isMemoryTable(schema.tables[table]));
+
+    if (memory !== undefined) {
+        return { kind: "memory", relation: key, target: memory };
     }
 
     // The relation target isn't itself unreplicable, but its OWN nested predicate
@@ -560,6 +729,27 @@ const findUnreplicableRelationTarget = (where: WhereInput, schema: ResolveContex
     }
 
     return undefined;
+};
+
+/**
+ * A shard-local shape cannot filter by a relation. Its seed and its per-flush membership probe compile `effectiveWhere`
+ * straight to SQL over the shape's own table, with no step that resolves a relation predicate first, so the relation
+ * key compiles as a column and matches nothing: the shape seeds empty and stays empty, with no error. And a write that
+ * touches only the related table (a join row, a child) produces no changed key on the shape's own table, so the shape
+ * would never be told its membership moved. A `.global()` shape is read through the store's `findMany`, which does
+ * resolve relations, so it is exempt.
+ */
+const assertNoRelationPredicate = (effectiveWhere: WhereInput, schema: ResolveContext["schema"], table: string): void => {
+    if (schema.tables[table]?.shardMode?.kind === "global" || !containsRelationPredicate(effectiveWhere, schema, table)) {
+        return;
+    }
+
+    throw Object.assign(
+        new Error(
+            `shape on "${table}" filters by a relation, which a shard-local shape cannot replicate: its seed and membership probe read "${table}" alone, so the relation never matches, and a write that only touches the related table never moves the shape. Fix it by (a) denormalizing the related columns into "${table}" and filtering on those, (b) moving "${table}" to .global() so it is served through the latency-tiered D1 shape tier, or (c) reading it through a live query (\`useQuery\`), which does resolve relations.`,
+        ),
+        { code: "SHAPE_RELATION_PREDICATE", name: "LunoraError", status: 400 },
+    );
 };
 
 /**
@@ -609,6 +799,8 @@ const assertShapeShardable = (effectiveWhere: WhereInput | undefined, schema: Re
     const offending = findUnreplicableRelationTarget(effectiveWhere, schema, table);
 
     if (!offending) {
+        assertNoRelationPredicate(effectiveWhere, schema, table);
+
         return;
     }
 
@@ -629,5 +821,13 @@ const assertShapeShardable = (effectiveWhere: WhereInput | undefined, schema: Re
     );
 };
 
-export { assertFlatPredicate, assertShapeShardable, containsRelationPredicate, DEFAULT_MAX_RELATION_KEYS, isRelationPredicate, resolveRelationPredicates };
+export {
+    assertFlatPredicate,
+    assertShapeShardable,
+    composeReadPredicate,
+    containsRelationPredicate,
+    DEFAULT_MAX_RELATION_KEYS,
+    isRelationPredicate,
+    resolveRelationPredicates,
+};
 export type { RelationExistsMarker, ResolveRelationPredicatesOptions };

@@ -1,6 +1,5 @@
+import { stableStringify } from "@lunora/wire";
 import { bench, describe } from "vitest";
-
-import { stableStringify } from "../../../shared/stable-key";
 
 /**
  * `applyOptimisticUpdates` fans out across every active subscription on every

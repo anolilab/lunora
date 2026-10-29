@@ -1,4 +1,3 @@
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { AsyncStorageLike } from "./async-storage-persistence";
 import { assertMaxEntries } from "./query-cache";
 import { singleBlobStore } from "./single-blob-store";
@@ -33,17 +32,8 @@ const DEFAULT_MAX_ENTRIES = 50;
  * Native / Expo counterpart to `createIndexedDbQueryCache`. The whole cache is
  * serialized under a single key (`key`).
  *
- * Values pass through the transport's {@link encodeWire}/{@link decodeWire}
- * codec, NOT raw `JSON.stringify`. What this cache holds is a decoded SERVER
- * value — whatever the query returned, including the `bigint`, `Date`, `Map`,
- * `Set`, `ArrayBuffer`/typed-array, and `NaN`/`Infinity` leaves `decodeWire`
- * just reconstructed on the way in. Raw JSON would mangle every one of them
- * (`Date` to a string, bytes to `{}`, `NaN` to `null`) or throw outright on a
- * `bigint`, and nothing would ever repair it: a `resume` frame keeps the
- * hydrated value as-is, so the damage would survive every reconnect and every
- * delta merged onto it. The IndexedDB sibling gets this for free via structured
- * clone; here it is explicit. (This is what separates the read cache from the
- * outbox, which stores JSON-safe args the caller chose.)
+ * Values round-trip through {@link singleBlobStore}'s wire codec (a `bigint`,
+ * `Date`, or bytes survives a reload); a corrupt blob reads as an empty cache.
  *
  * AsyncStorage has no transactions, so every read-modify-write runs through
  * {@link singleBlobStore}'s serialized chain — concurrent `put`/`remove` calls
@@ -59,14 +49,14 @@ const createAsyncStorageQueryCache = (options: AsyncStorageQueryCacheOptions): Q
     const blob = singleBlobStore(options.storage, options.key ?? DEFAULT_KEY);
 
     const readAll = async (): Promise<Map<string, StoredQuery>> => {
-        const parsed = decodeWire(await blob.read());
+        const parsed = await blob.read();
 
         return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
             ? new Map(Object.entries(parsed as Record<string, StoredQuery>))
             : new Map();
     };
 
-    const writeAll = (entries: Map<string, StoredQuery>): Promise<void> => blob.write(encodeWire(Object.fromEntries(entries)));
+    const writeAll = (entries: Map<string, StoredQuery>): Promise<void> => blob.write(Object.fromEntries(entries));
 
     /** Drop oldest rows by `ts` until the cache is back under the cap. */
     const evict = (entries: Map<string, StoredQuery>): void => {

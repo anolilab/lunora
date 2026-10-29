@@ -62,9 +62,8 @@
 import { isLunoraError } from "@lunora/errors";
 import type { Id } from "@lunora/values";
 import { v } from "@lunora/values";
+import { decodeWire, encodeWire, stableWireKey } from "@lunora/wire";
 
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import { stableWireKey } from "../../../shared/wire-key";
 import { initLunora } from "./builder/index";
 import type { Component, SchemaExtension } from "./plugin";
 import { defineComponent, defineSchemaExtension } from "./plugin";
@@ -139,9 +138,9 @@ interface ActionCacheQuery {
  * directly.
  */
 interface ActionCacheDatabase {
-    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    delete: <T extends string>(table: T, id: Id<T>) => Promise<void>;
     insert: (table: string, document: Record<string, unknown>) => Promise<unknown>;
-    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    patch: <T extends string>(table: T, id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
     query: (table: string) => ActionCacheQuery;
 }
 
@@ -277,7 +276,7 @@ const actionCacheExtension = defineSchemaExtension(ACTION_CACHE_KEY, {
             // Drives the opportunistic reap and `purgeExpired`, both oldest-first.
             .index("byExpiresAt", ["expiresAt"]),
     },
-}) as unknown as SchemaExtension<{ [ACTION_CACHE_BARE_TABLE]: ReturnType<typeof defineTable> }>;
+}) as unknown as SchemaExtension<{ [ACTION_CACHE_BARE_TABLE]: ReturnType<typeof defineTable> }, typeof ACTION_CACHE_KEY>;
 
 // No generated server here, so bind the base context via the builder factory —
 // same as `definePresence`. `internalMutation`, NOT `mutation`: `purgeExpired`
@@ -306,7 +305,7 @@ const defineActionCache = (options: DefineActionCacheOptions = {}): ActionCacheC
         const oldest = await context.db.query(ACTION_CACHE_TABLE).withIndex("byExpiresAt").order("asc").take(REAP_BATCH);
         const expired = oldest.filter((row) => (row["expiresAt"] as number) <= now);
 
-        await Promise.all(expired.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
+        await Promise.all(expired.map(async (row) => context.db.delete(ACTION_CACHE_TABLE, row["_id"] as Id<typeof ACTION_CACHE_TABLE>)));
     };
 
     const rowFor = async (context: ActionCacheContext, key: string): Promise<Record<string, unknown> | null> =>
@@ -338,7 +337,10 @@ const defineActionCache = (options: DefineActionCacheOptions = {}): ActionCacheC
     const store = async (context: ActionCacheContext, existing: Record<string, unknown> | null, entry: Record<string, unknown>): Promise<void> => {
         try {
             await (existing
-                ? context.db.patch(existing["_id"] as Id<string>, { expiresAt: entry["expiresAt"], value: entry["value"] })
+                ? context.db.patch(ACTION_CACHE_TABLE, existing["_id"] as Id<typeof ACTION_CACHE_TABLE>, {
+                      expiresAt: entry["expiresAt"],
+                      value: entry["value"],
+                  })
                 : context.db.insert(ACTION_CACHE_TABLE, entry));
         } catch (error: unknown) {
             if (isLunoraError(error) && CONCURRENT_WRITE_CODES.has(error.code)) {
@@ -384,7 +386,7 @@ const defineActionCache = (options: DefineActionCacheOptions = {}): ActionCacheC
             // A stale row for a key whose fresh answer is too big to keep would
             // otherwise stay readable until it expires, serving the old value
             // while the new one is silently uncached.
-            await context.db.delete(existing["_id"] as Id<string>);
+            await context.db.delete(ACTION_CACHE_TABLE, existing["_id"] as Id<typeof ACTION_CACHE_TABLE>);
         }
 
         await reap(context, storedAt);
@@ -403,7 +405,7 @@ const defineActionCache = (options: DefineActionCacheOptions = {}): ActionCacheC
         // duplicate unreachable in a healthy table — but an invalidation is
         // usually triggered by a permission change or a data correction, and
         // leaving a sibling row behind serves the value the caller just purged.
-        await Promise.all(rows.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
+        await Promise.all(rows.map(async (row) => context.db.delete(ACTION_CACHE_TABLE, row["_id"] as Id<typeof ACTION_CACHE_TABLE>)));
     };
 
     /**
@@ -437,7 +439,7 @@ const defineActionCache = (options: DefineActionCacheOptions = {}): ActionCacheC
             return { complete: true, deleted };
         }
 
-        await Promise.all(page.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
+        await Promise.all(page.map(async (row) => context.db.delete(ACTION_CACHE_TABLE, row["_id"] as Id<typeof ACTION_CACHE_TABLE>)));
 
         return deleteNamedPage(context, name, deleted + page.length, round + 1);
     };
@@ -459,7 +461,7 @@ const defineActionCache = (options: DefineActionCacheOptions = {}): ActionCacheC
         // tail — filtering rather than breaking keeps this one pass.
         const expired = oldest.filter((row) => (row["expiresAt"] as number) <= now);
 
-        await Promise.all(expired.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
+        await Promise.all(expired.map(async (row) => context.db.delete(ACTION_CACHE_TABLE, row["_id"] as Id<typeof ACTION_CACHE_TABLE>)));
 
         return { deleted: expired.length };
     });

@@ -90,6 +90,35 @@ describe("client IP trust", () => {
             expect(limiter.limit).toHaveBeenCalledWith("rest", { key: "203.0.113.7" });
         });
 
+        it("keys an IPv6 caller on its /64, so rotating within the prefix shares one bucket", async () => {
+            expect.assertions(1);
+
+            vi.stubGlobal("navigator", CLOUDFLARE_NAVIGATOR);
+
+            const { namespace } = recordingShard();
+            const limiter = {
+                limit: vi.fn<(name: string, args?: { key?: string }) => Promise<{ ok: boolean; retryAfter: number }>>(async () => {
+                    return { ok: true, retryAfter: 0 };
+                }),
+            };
+            const worker = createWorker({ functions, restRateLimit: createRestRateLimit(limiter, { name: "rest" }), shardDO: namespace });
+            const get = async (ip: string): Promise<Response> =>
+                worker.fetch(new Request("https://app.example/_lunora/rest/messages/list", { headers: { "cf-connecting-ip": ip } }), {}, fakeContext);
+
+            await get("2001:db8:1:2::1");
+            await get("2001:db8:1:2:ffff:ffff:ffff:ffff");
+            await get("2001:db8:1:3::1");
+            // eslint-disable-next-line sonarjs/no-hardcoded-ip -- an IPv4-mapped fixture is the input under test
+            await get("::ffff:203.0.113.7");
+
+            expect(limiter.limit.mock.calls.map(([, args]) => args?.key)).toStrictEqual([
+                "2001:db8:1:2::/64",
+                "2001:db8:1:2::/64",
+                "2001:db8:1:3::/64",
+                "203.0.113.7",
+            ]);
+        });
+
         it("does not key on a client-supplied cf-connecting-ip off Cloudflare", async () => {
             expect.assertions(2);
 

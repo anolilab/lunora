@@ -1,5 +1,6 @@
 import type { LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, lunoraD1Adapter } from "@lunora/auth";
+import { createMigrationAuth } from "@lunora/auth/migrate";
 import { bearer } from "@lunora/auth/plugins";
 import { expo } from "@better-auth/expo";
 
@@ -17,9 +18,11 @@ const APP_SCHEME = "lunorachat";
  *   runs against `/api/auth/*` works.
  * - `bearer()` lets `getSession` authenticate from an `Authorization: Bearer`
  *   header, not just a cookie. The native client sends its session as a bearer
- *   token (React Native has no cookie jar, and a `Cookie` header would be
- *   rejected by the runtime's CSRF guard on an `Origin`-less native request) —
- *   see `src/lunora.ts` / `src/server/index.ts`.
+ *   token — see `src/lunora.ts` / `src/server/index.ts`. A cookie credential
+ *   cannot work here: the runtime's CSRF guard rejects a cookie-bearing
+ *   state-changing request that carries no trusted `Origin`, and a native request
+ *   sends none. (React Native's cookie jar is real, so the client explicitly
+ *   sends `credentials: "omit"` to keep a stray session cookie off the wire.)
  *
  * `trustedOrigins` lists the scheme explicitly.
  *
@@ -56,5 +59,5 @@ export const buildAuth = (env: { AUTH_SECRET: string; AUTH_URL?: string; DB: unk
  * Migration-only instance wired to raw D1 so `ensureMigrated`'s Kysely migrator
  * can create the better-auth tables the SQL adapter then reads/writes.
  */
-export const buildMigrationAuth = (env: { AUTH_SECRET: string; AUTH_URL?: string; DB: unknown }): ReturnType<typeof createAuth> =>
-    createAuth({ ...options(env), database: env.DB as never });
+export const buildMigrationAuth = (env: { AUTH_SECRET: string; AUTH_URL?: string; DB: unknown }): ReturnType<typeof createMigrationAuth> =>
+    createMigrationAuth({ ...options(env), database: env.DB as never });

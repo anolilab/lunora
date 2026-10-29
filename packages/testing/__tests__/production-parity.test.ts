@@ -56,7 +56,7 @@ const addOwned = mutation
     .mutation(async ({ args, ctx }) => {
         const id = await ctx.db.insert("owned", { title: args.title });
 
-        return ctx.db.get(id);
+        return ctx.db.get("owned", id);
     });
 
 describe("lunoraTest identity normalisation", () => {

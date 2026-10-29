@@ -65,18 +65,18 @@ export const channelWelcome = defineWorkflow<
 The handler receives one argument bundling the durable-step API and a typed
 function caller:
 
-| Member                 | What it is                                                                                             |
-| ---------------------- | ------------------------------------------------------------------------------------------------------ |
-| `context.params`       | The input passed to `.create({ params })`, typed as `Params`.                                          |
-| `context.step`         | The durable-step API: `do` / `sleep` / `sleepUntil` / `waitForEvent`.                                  |
-| `context.run`          | Call a Lunora function (`api.*`) by typed reference; pass `{ shardKey }` to target a shard.            |
-| `context.runStep`      | Run a reusable, schema-validated `defineStep` as a durable step (see below).                           |
-| `context.parallel`     | Fan out branches as isolated child workflow instances and await their outputs (see below).             |
-| `context.spawn`        | Fire-and-forget start of a declared child workflow (replay-safe; returns a live handle).               |
-| `context.waitForEvent` | Hibernate until a declared event (`defineWorkflowEvent`) arrives; resolves with its validated payload. |
-| `context.log`          | Structured logger (`debug`/`info`/`warn`/`error`), captured by `wrangler tail` and the Studio logs.    |
-| `context.event`        | The raw triggering event (`id`, `payload`, timestamp).                                                 |
-| `context.env`          | The Worker environment bindings.                                                                       |
+| Member                 | What it is                                                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `context.params`       | The input passed to `.create({ params })`, typed as `Params`.                                                                     |
+| `context.step`         | The durable-step API: `do` / `sleep` / `sleepUntil` / `waitForEvent`.                                                             |
+| `context.run`          | Call a Lunora function (`api.*`) by typed reference; `{ shardKey }` targets a shard, `{ dedupId }` overrides the replay-dedup id. |
+| `context.runStep`      | Run a reusable, schema-validated `defineStep` as a durable step (see below).                                                      |
+| `context.parallel`     | Fan out branches as isolated child workflow instances and await their outputs (see below).                                        |
+| `context.spawn`        | Fire-and-forget start of a declared child workflow (replay-safe; returns a live handle).                                          |
+| `context.waitForEvent` | Hibernate until a declared event (`defineWorkflowEvent`) arrives; resolves with its validated payload.                            |
+| `context.log`          | Structured logger (`debug`/`info`/`warn`/`error`), captured by `wrangler tail` and the Studio logs.                               |
+| `context.event`        | The raw triggering event (`instanceId`, `payload`, `timestamp`, `workflowName`).                                                  |
+| `context.env`          | The Worker environment bindings.                                                                                                  |
 
 ### Durable steps
 
@@ -87,9 +87,19 @@ function caller:
 // result without re-running the callback.
 const order = await context.step.do("load", () => context.run(api.orders.get, { id: orderId }, { shardKey: orderId }));
 
-// Per-step retry policy.
+// Per-step retry policy. A raw `step.do` retries its callback IN PLACE, so a
+// call that writes needs an explicit `dedupId` — see "Exactly-once dispatches"
+// below, or reach for `context.runStep`, which pins one for you.
 await context.step.do("charge", { retries: { limit: 3, delay: "2 seconds", backoff: "exponential" }, timeout: "30 seconds" }, () =>
-    context.run(api.payments.charge, { orderId }),
+    context.run(api.payments.charge, { orderId }, { dedupId: `charge:${orderId}` }),
+);
+
+// `delay` can also be a function of the failed attempt: return the next wait as a
+// duration. It replaces `backoff`, so it can honour a provider's Retry-After.
+await context.step.do(
+    "sync",
+    { retries: { limit: 5, delay: ({ ctx, error }) => (error.message.includes("rate limit") ? `${ctx.attempt * 30} seconds` : "10 seconds") } },
+    () => context.run(api.customers.sync, { orderId }, { dedupId: `sync:${orderId}` }),
 );
 
 // Durable delays — minutes to weeks, not held in memory.
@@ -109,6 +119,81 @@ const approval = await context.step.waitForEvent<{ approved: boolean }>("await-a
     retry, so don't rely on side effects outside the step's return value.
 </Callout>
 
+### Exactly-once dispatches (`dedupId`)
+
+A workflow is a replay machine: a failed step body is retried in place, and the
+handler body itself re-executes from the top on every activation (after a
+`step.sleep`, a `waitForEvent`, an eviction). Every `context.run` on those paths
+is therefore issued more than once — so each one carries a deterministic
+**replay-dedup id**, which the shard applies as its `(identity, mutationId)`
+idempotency key. The same logical call re-issued on a retry or a replay resolves
+with the first application's result instead of applying again. The id is scoped
+by the workflow's export name as well as the instance id
+(`<workflow>/<instanceId>#body.<n>`, `…#step<i>.<n>`), because an instance id is
+unique only within one workflow: two workflows can both run as `order-42`.
+
+Pinned for you on three surfaces:
+
+- top-level `context.run` in the handler body — stable across activations;
+- `context.run` inside a `context.runStep` body — stable across that step's retries;
+- `context.run` inside a step's `rollback` — stable across the rollback's own retries, and never shared with the forward call.
+
+Three paths are **not** covered, and stay at-least-once:
+
+- **A bare `context.run` inside a raw `context.step.do(...)` callback.** The pin
+  numbers calls in body order and cannot see that `step.do` is re-invoking its
+  callback in place, so attempt 2 issues a _new_ id. Use `context.runStep`, or
+  pass your own `{ dedupId }` (as in the `charge` example above).
+- **A body whose `context.run` order varies per attempt** — branching on
+  `Date.now()`, `Math.random()`, or unordered concurrent settles. The automatic
+  ids are positional, so pass your own.
+- **A replay more than 24 hours after the first attempt.** Dedup rows are pruned
+  past that window, so a workflow that sleeps for days re-dispatches on wake.
+
+The full guarantee applies to **mutations**, which take the dedup read under the
+shard's single-writer gate. An action or query is not gated, so the shard
+claims its id instead while the handler runs: a second dispatch of the same id
+that arrives before the first has finished is declined with
+`409 DISPATCH_IN_PROGRESS` rather than run alongside it. The claim is released
+when the first run settles, and after that the id is served from the replay
+cache. It also expires after fifteen minutes, so a handler that never settles
+cannot block the id forever. Past that point a new dispatch runs, even if the
+old handler is somehow still going, so an action that can run longer than
+fifteen minutes must be idempotent on its own.
+
+#### Slow calls and the retry budget
+
+The usual source of a decline is the workflow's own retry. `context.run` gives
+up on a call after 30 seconds (`timeoutMs` overrides it), but the shard keeps
+running the call. The step retries and re-issues the same id, and that id is
+still claimed. A decline is not a failure of the call, so `context.run` does not
+throw it into the engine's retry budget. It waits and re-dispatches the same id,
+after pauses that start at 1 second and double up to 30 seconds, until the
+first run's result is served. If that run died, the re-dispatch runs the call
+itself. The wait is bounded by the claim's fifteen-minute ceiling, counted from
+the first decline. A decline after that is rethrown and retried like any other
+failure. The guarantee stays at-least-once: a decline is never treated as
+success.
+
+Inside `context.runStep`, the wait is also bounded by the step's own `timeout`
+(Cloudflare's default is 10 minutes). It stops 2 seconds before that timeout
+and rethrows the decline, so the attempt fails once, with the decline, and the
+next attempt picks the wait up. Without that, the engine would time the attempt
+out anyway and the abandoned wait would keep re-dispatching next to the retry.
+A re-check can find the claim gone and run the call itself, so each one gets no
+more `timeoutMs` than the attempt has left, and the wait ends while at least a
+second remains. A step's `rollback` is bounded the same way by its own
+`rollbackConfig.timeout`. The engine hands a rollback the forward step's
+`ctx.config`, so the rollback's timeout is not read from there. A
+`context.run` inside a raw `context.step.do(...)` cannot see its step's timeout
+and is bounded by the claim alone. The Node host does not enforce step
+timeouts, so there this bound charges an attempt the host would not have ended.
+
+Two things can still spend an attempt, then: a wait that reaches the step's
+timeout, and the 30-second give-up itself, which is a retryable failure like any
+other. Give a slow action's step a `timeout` above its expected runtime, or
+raise the call's `timeoutMs`.
+
 ### Declared events (`defineWorkflowEvent`)
 
 The native `step.waitForEvent(name, { type })` matches `instance.sendEvent({ type })`
@@ -125,6 +210,10 @@ import { v } from "@lunora/values";
 
 export const orderApproved = defineWorkflowEvent("order-approved", v.object({ approvedBy: v.string() }));
 ```
+
+Export every definition, and write its `type` as a string literal: codegen reads
+the exported definitions in `lunora/` into the registry the Studio's event form
+validates against, and fails on a computed type or on two exports sharing one.
 
 Wait on it inside the workflow — the payload is typed **and** parsed:
 
@@ -213,6 +302,12 @@ The step handler context gives you `context.attempt` (1-based retry counter),
 `context.runStep(step, args, { config })` to override the step's durability
 config for a single call.
 
+Both `context.run`s above — the handler's and the rollback's — carry a pinned
+replay-dedup id, so a retried `charge` does not charge twice and a retried
+`refund` does not refund twice. See
+[Exactly-once dispatches](#exactly-once-dispatches-dedupid) for the paths that
+still need an explicit `dedupId`.
+
 ### Fan-out with child-DO isolation (`ctx.parallel` / `ctx.spawn`)
 
 A workflow instance is one Durable Object: ~128 MB memory and a 5-minute CPU
@@ -271,8 +366,8 @@ For fire-and-forget (start a child pipeline without awaiting it), use
 await ctx.spawn("sendReceipt", { orderId: ctx.params.orderId });
 ```
 
-Both reach child workflows through the standard `WORKFLOW_*` bindings codegen
-already wires, so there is nothing extra to configure. A branch/spawn name with
+Both reach child workflows through `ctx.exports`, keyed by the class codegen
+generates, so there is nothing extra to configure. A branch/spawn name with
 no matching declared workflow throws an error.
 
 ### Rollback (saga compensation)
@@ -331,6 +426,37 @@ export const charge = defineStep("charge", {
 });
 ```
 
+### Deploy settings (`schedules`, `limits`, `defaultRetention`)
+
+Three optional keys on `defineWorkflow` are deploy configuration: codegen reads
+them statically (string and number literals only) and writes them into the
+workflow's `wrangler.jsonc` entry.
+
+```ts
+export const nightlyReport = defineWorkflow({
+    handler: async (ctx) => {
+        /* … */
+    },
+    // Each cron tick starts a new instance with no params — no scheduled() handler needed.
+    schedules: ["0 3 * * *"],
+    // Raise the per-instance step cap (10,000 by default, up to 25,000).
+    limits: { steps: 25_000 },
+    // How long finished instances keep their state, unless create({ retention }) overrides it.
+    defaultRetention: { successRetention: "3 days", errorRetention: "30 days" },
+});
+```
+
+These land as `schedules`, `limits.steps`, and
+`default_retention.{success_retention,error_retention}`. Each cron expression is
+checked at codegen. When you change a setting, the existing entry is updated.
+When you remove one, it stays in `wrangler.jsonc` and reconcile warns about it,
+because a removed setting and a hand-set one look the same. Delete it by hand.
+
+<Callout type="warn">
+    `schedules` needs a host that starts instances itself. It is refused with a `platform_unsupported_feature` diagnostic on `target: "node"` (nothing reads the
+    list there) and on celld (not verified). `limits` and `defaultRetention` are ignored by the Node host.
+</Callout>
+
 ## Start and manage instances
 
 Codegen wires a typed `ctx.workflows` handle onto **mutations and actions**.
@@ -360,7 +486,9 @@ export const create = mutation.input({ channelId: v.id("channels") }).mutation(a
         before the instance exists.
     </Callout>
 
-- `createBatch([...])`: start many in one batch.
+- `createBatch({ instances: [...] })` or `createBatch({ count, params })`: start many in one batch. Returns `{ created, errors }`; an instance that could not be created is in `errors` with its input `index`, not dropped.
+- `deleteBatch([...ids])`: delete up to 100 instances and their stored state. Returns
+  `{ deleted, errors }` with one entry per id; unknown ids come back as errors.
 - `get(id)`: a handle to an existing instance.
 
 - `sendEvent(instanceId, event, payload)`: deliver a
@@ -369,7 +497,26 @@ export const create = mutation.input({ channelId: v.id("channels") }).mutation(a
 
 `create`/`get` hand back the native Cloudflare instance, which exposes its own
 lifecycle: `status()` (returns `status` + `output`/`error`), `pause()`, `resume()`,
-`restart()`, `terminate()`, and the untyped `sendEvent({ type, payload })`.
+`restart()`, `terminate()`, `delete()` (stops the instance and frees its state), `subscribe()`, and the untyped `sendEvent({ type, payload })`.
+
+`subscribe({ cursor?, filter? })` streams the instance's events without polling.
+It replays the full history, then waits for new events until the instance
+completes, errors, or is terminated. Each event carries `eventId`, `instanceId`,
+`timestamp`, and a `type` (`workflow_started`, `step_completed`,
+`attempt_errored`, `rollback_started`, …) plus that type's fields. The typed
+mirror leaves those fields open so new event types still type-check:
+
+```ts
+const instance = await ctx.workflows.get("orderPipeline").get(instanceId);
+const subscription = await instance.subscribe({ filter: ["step_completed", "workflow_completed"] });
+
+for (let event = await subscription.next(); !event.done; event = await subscription.next()) {
+    console.log(event.value.type, event.value.stepName);
+}
+```
+
+The Node host rejects `subscribe()` with `NOT_IMPLEMENTED`, because its engine
+keeps no per-instance event log.
 
 ### Listing instances and step timelines
 
@@ -404,8 +551,9 @@ save). It:
 1. Emits a `WorkflowEntrypoint` subclass per export into
    `lunora/_generated/workflows.ts` (`channelWelcome` → `ChannelWelcomeWorkflow`).
 2. Wires the typed `ctx.workflows` handle.
-3. Reconciles the `binding`, `class_name`, and `name` entries of
-   `wrangler.jsonc`'s `workflows[]` array from the same definition.
+3. Declares each workflow in `wrangler.jsonc`'s `exports` map, keyed by the
+   generated class, with its `name` and any
+   [deploy settings](#deploy-settings-schedules-limits-defaultretention).
 
 Your worker entry must re-export the generated classes so wrangler can find
 them:
@@ -415,14 +563,47 @@ them:
 export { ChannelWelcomeWorkflow } from "../../lunora/_generated/workflows";
 ```
 
-The resulting binding:
+The resulting entry:
 
 ```jsonc
 // wrangler.jsonc (codegen-reconciled)
 {
-    "workflows": [{ "binding": "WORKFLOW_CHANNEL_WELCOME", "class_name": "ChannelWelcomeWorkflow", "name": "channel-welcome" }],
+    "exports": {
+        "ChannelWelcomeWorkflow": { "type": "workflow", "name": "channel-welcome" },
+    },
 }
 ```
+
+There is no `workflows[]` binding. The shard Durable Object that runs your
+mutations, the Worker that runs actions and cron triggers, and every generated
+`WorkflowEntrypoint` (`ctx.spawn`, `ctx.parallel`) each reach the workflow as
+`ctx.exports.ChannelWelcomeWorkflow`. Agents are declared the same way. This
+needs Wrangler 4.142.0 or newer (or `@cloudflare/vite-plugin` 1.61.0 or newer)
+to run locally.
+
+A project with a `workflows[]` binding for a class Lunora declares has it moved
+into `exports` on the next reconcile, under the binding's deployed `name` (a
+different declared `name` is reported, not applied). Cloudflare shares
+instances between a binding and an export with the same `name`, so running
+instances carry over. Settings you set by hand on the binding move with it. A
+binding to another Worker's workflow (`script_name`) is left alone. When the
+installed wrangler is older than 4.142 (or `@cloudflare/vite-plugin` older than
+1.61), reconcile leaves `workflows[]` untouched and warns with the upgrade
+command. A `workflows[]` block inside an `env.<name>` environment is reported,
+not rewritten.
+
+<Callout type="warn">
+    Work queued before the upgrade still names the old `WORKFLOW_*` / `AGENT_*` bindings: a `ctx.scheduler.runAfter(workflows.x, …)` job that has not fired yet,
+    and a `ctx.parallel` branch still running. After the deploy the scheduled job fails and is dead-lettered, and the branch cannot signal its parent (the
+    parent waits out its timeout). Let the scheduler drain and in-flight fan-outs finish before deploying the upgrade.
+</Callout>
+
+On celld, which has no workflow `exports`, the deploy projection turns each
+export back into a `workflows[]` binding named after the class. The runtime
+looks that name up on `env` when `ctx.exports` has no match.
+
+`introspectWorkflow()` in `@cloudflare/vitest-plugin` still needs a binding: add
+a test-only `workflows[]` binding with the same `name` to introspect one.
 
 ## Advisor lints
 
@@ -438,9 +619,19 @@ Two static [advisors](/docs/concepts/advisors) keep workflow wiring honest:
 
 The Studio's **Workflows** panel (under the Functions domain) lists every
 declared workflow with its export name, generated class, binding, and deployed
-name; lets you **start an instance** from a JSON-params form; and shows a table
-of instances with their live status (queued / running / complete / errored) and
-output. See [the Studio guide](/docs/packages/studio#functions).
+name; lets you **start an instance** from a JSON-params form; **sends an event**
+(type plus optional JSON payload) to an instance waiting in `ctx.waitForEvent`;
+and shows a table of instances with their live status (queued / running /
+complete / errored) and output. See [the Studio guide](/docs/packages/studio#functions).
+
+The event form gives an admin send the guarantee `ctx.workflows.sendEvent` has.
+Codegen registers every exported `defineWorkflowEvent` in `lunora/` (its `type`
+must be a string literal, and unique across the app), and the send looks the
+type up there: an undeclared type is refused with the list of declared ones, a
+payload that fails the definition's validator is refused with the validation
+message, and only the parsed payload reaches the instance. Nothing is sent on a
+refusal, so a mistyped payload cannot fail a waiting instance for good. The
+reserved `lunora:` types are refused too. The form suggests the declared types.
 
 <Callout type="warn">
     Cloudflare bills for workflow instance-state storage. Keep step payloads small and set a `retention` policy when you don't need long-lived instance history.

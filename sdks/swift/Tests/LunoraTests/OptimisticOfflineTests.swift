@@ -8,7 +8,7 @@ import XCTest
 /// A file-scope function rather than a method: it is called from inside a poster
 /// closure, where reaching for `self` would capture the test case.
 func batchCalls(_ body: Data) -> [[String: Any]] {
-    guard let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+    guard let parsed = try? LunoraJSON.parse(body) as? [String: Any],
         let calls = parsed["calls"] as? [[String: Any]]
     else { return [] }
 
@@ -95,7 +95,7 @@ extension ConformanceTests {
 
         let raw = try JSONSerialization.data(withJSONObject: payload)
 
-        _ = try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+        _ = client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
     }
 
     /// A client with one live subscription, seeded from `base` through that same
@@ -655,7 +655,7 @@ extension ConformanceTests {
             }
 
             XCTAssertEqual(
-                stamped.allowsReplay(under: spec["current"] as? String),
+                stamped.replayVerdict(current: .stamp(identity: spec["current"] as? String, token: nil), token: nil) == .match,
                 try XCTUnwrap(spec["replays"] as? Bool),
                 "identity gate: \(spec["name"] as? String ?? "?")"
             )
@@ -894,6 +894,11 @@ extension ConformanceTests {
     func caseOfflineFlushBatchesMultipleWrites() throws {
         let testCase = try scenario("offlineQueue", "batchReplay")
         let slots = testCase["slots"] as? [[String: Any]] ?? []
+        // A slot the fixture no longer describes is a case that asserts nothing.
+        let unreadable = slots.filter { $0["outcome"] as? String == "unreadable-error" && $0.keys.contains("rawError") }
+
+        XCTAssertEqual(unreadable.count, 1, "batchReplay must carry one unreadable slot")
+
         var urls: [String] = []
         var calls: [[String: Any]] = []
         let store = MemoryPersistence()
@@ -910,6 +915,21 @@ extension ConformanceTests {
                         let cursor = (slot["commitCursor"] as? NSNumber)?.intValue ?? 0
 
                         return "{\"id\":\(id),\"body\":{\"commitCursor\":\(cursor),\"result\":null}}"
+                    }
+
+                    if slot["outcome"] as? String == "unreadable-error" {
+                        // An `error` key holding a NON-object: no envelope to
+                        // read a verdict out of, and no per-slot HTTP status to
+                        // fall back on. Serialised from the fixture's own value,
+                        // so a port cannot pass by answering itself a shape the
+                        // spec does not describe.
+                        let raw =
+                            (try? JSONSerialization.data(
+                                withJSONObject: [slot["rawError"] ?? NSNull()]
+                            )) ?? Data("[null]".utf8)
+                        let inner = String(String(decoding: raw, as: UTF8.self).dropFirst().dropLast())
+
+                        return "{\"id\":\(id),\"body\":{\"error\":\(inner)}}"
                     }
 
                     let code = slot["code"] as? String ?? "INTERNAL"
@@ -1076,7 +1096,7 @@ extension ConformanceTests {
         client.attachSocket { _ in }
         client.subscribe("messages:list", args: args, onData: { seen.append($0) })
         // Prime the subscription with a server value, then drop the socket.
-        _ = try client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+        _ = client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
         client.detachSocket()
 
         let outcome = try client.submit(
@@ -1097,7 +1117,7 @@ extension ConformanceTests {
         // only once a frame reaches it.
         XCTAssertEqual(canonical(seen.last), canonical(["a", "c"]), "the overlay survives the reply")
 
-        _ = try client.handleFrame(
+        _ = client.handleFrame(
             "{\"cursor\":\(commitCursor),\"data\":[\"a\",\"c\"],\"id\":\"sub_1\",\"type\":\"data\"}"
         )
 
@@ -1140,7 +1160,7 @@ extension ConformanceTests {
 
         client.attachSocket { _ in }
         client.subscribe("messages:list", args: [String: Any](), onData: { seen.append($0) })
-        _ = try client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+        _ = client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
 
         XCTAssertThrowsError(
             try client.submit(
@@ -1284,6 +1304,321 @@ extension ConformanceTests {
         )
         XCTAssertTrue(drained.value, "and the flush ran to completion")
     }
+
+    // MARK: - Replay classification
+
+    /// The settled events whose error carries `code`, by id.
+    private func settledWith(_ code: String?, _ settled: [LunoraMutationSettled]) -> [String] {
+        settled.filter { ($0.error as? LunoraAPIError)?.code == code }.map(\.mutationID)
+    }
+
+    /// No body the flush sends — single call or batch entry — carries a
+    /// `shardKey` for a write queued under an empty or absent one.
+    func caseOfflineFlushEmptyShardKeyRoutesToDefault() throws {
+        for path in ["batch", "lone"] {
+            let spec = try scenario("offlineQueue", "emptyShardKey")[path] as? [String: Any] ?? [:]
+            var bodies: [[String: Any]] = []
+            let client = LunoraClient(
+                url: "https://app.example",
+                post: { _, _, body in
+                    let calls = batchCalls(body)
+
+                    bodies += calls.isEmpty ? [(try? LunoraJSON.parse(body)) as? [String: Any] ?? [:]] : calls
+
+                    return (200, echoBatchSlots(body, commitCursor: 1))
+                }
+            )
+
+            let queued = spec["queued"] as? [[String: Any]] ?? []
+
+            for spec in queued {
+                client.offlineQueue.enqueue(entry(try XCTUnwrap(spec["id"] as? String), shardKey: spec["shardKey"] as? String))
+            }
+
+            let report = client.flushOfflineQueue(shardKey: spec["flushShardKey"] as? String)
+
+            XCTAssertEqual(report.committed, ids(spec["committed"]).compactMap { $0 }, path)
+            XCTAssertEqual(bodies.count, queued.count, "\(path): one body per write")
+
+            for body in bodies {
+                XCTAssertFalse(body.keys.contains("shardKey"), "\(path): an empty shard key is the default shard, never `\"\"`")
+            }
+        }
+    }
+
+    /// A committed write whose result does not decode settles COMMITTED with
+    /// `WIRE_DECODE_FAILED` and no value — never retried, never requeued, and
+    /// never costing a sibling slot.
+    func caseOfflineFlushUndecodableResultSettlesCommitted() throws {
+        let block = try scenario("offlineQueue", "undecodableResult")
+        let code = block["code"] as? String
+        let rawResult = Wire.stableStringify(block["rawResult"])
+
+        // Batch: one slot's result is undecodable.
+        let batch = try XCTUnwrap(block["batch"] as? [String: Any])
+        let badSlot = (batch["undecodableSlot"] as? NSNumber)?.intValue ?? -1
+        let store = MemoryPersistence()
+        var settled: [LunoraMutationSettled] = []
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, body in
+                let slots = batchCalls(body).indices.map { index in
+                    "{\"id\":\(index),\"body\":{\"commitCursor\":\(index + 1),\"result\":\(index == badSlot ? rawResult : "\"ok\"")}}"
+                }
+
+                return (200, Data("{\"results\":[\(slots.joined(separator: ","))]}".utf8))
+            }
+        )
+
+        client.offlineQueue = LunoraOfflineQueue(persistence: store)
+        client.onMutationSettled { settled.append($0) }
+
+        for id in ids(batch["queued"]) {
+            client.offlineQueue.enqueue(entry(try XCTUnwrap(id)))
+        }
+
+        let report = client.flushOfflineQueue()
+
+        XCTAssertEqual(report.committed, ids(batch["committed"]).compactMap { $0 })
+        XCTAssertEqual(report.rejected, ids(batch["rejected"]).compactMap { $0 })
+        XCTAssertTrue(report.requeued.isEmpty)
+        XCTAssertEqual(queuedIDs(client.offlineQueue), ids(batch["queuedAfterFlush"]))
+        XCTAssertEqual(store.removed, ids(batch["persistRemoveCalls"]).compactMap { $0 })
+        XCTAssertEqual(settledWith(code, settled), ids(batch["decodeFailed"]).compactMap { $0 })
+        XCTAssertTrue(settled.allSatisfy { $0.status == .committed }, "the undecodable write is still a commit")
+        XCTAssertNil(settled.first { $0.error != nil }?.value, "and carries no value")
+
+        // Lone: the single-call path, then a second flush that must send nothing.
+        let lone = try XCTUnwrap(block["lone"] as? [String: Any])
+        let loneStore = MemoryPersistence()
+        var posts = 0
+        var loneSettled: [LunoraMutationSettled] = []
+        let single = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in
+                posts += 1
+
+                return (200, Data("{\"commitCursor\":4,\"result\":\(rawResult)}".utf8))
+            }
+        )
+
+        single.offlineQueue = LunoraOfflineQueue(persistence: loneStore)
+        single.onMutationSettled { loneSettled.append($0) }
+
+        for id in ids(lone["queued"]) {
+            single.offlineQueue.enqueue(entry(try XCTUnwrap(id)))
+        }
+
+        let loneReport = single.flushOfflineQueue()
+
+        single.flushOfflineQueue()
+
+        XCTAssertEqual(loneReport.committed, ids(lone["committed"]).compactMap { $0 })
+        XCTAssertEqual(loneReport.rejected, ids(lone["rejected"]).compactMap { $0 })
+        XCTAssertTrue(loneReport.requeued.isEmpty, "never re-queued: a replay returns the same result")
+        XCTAssertEqual(queuedIDs(single.offlineQueue), ids(lone["queuedAfterFlush"]))
+        XCTAssertEqual(loneStore.removed, ids(lone["persistRemoveCalls"]).compactMap { $0 })
+        XCTAssertEqual(settledWith(code, loneSettled), ids(lone["decodeFailed"]).compactMap { $0 })
+        XCTAssertEqual(posts, (lone["requestsAfterSecondFlush"] as? NSNumber)?.intValue, "the second flush sends nothing")
+
+        // A direct call raises the same coded SDK error, not the codec's own.
+        XCTAssertThrowsError(try single.mutation("messages:send")) { error in
+            XCTAssertEqual((error as? LunoraAPIError)?.code, code)
+        }
+    }
+
+    /// ONE predicate for both replay paths: a coded envelope by its code alone
+    /// (a coded 5xx is a verdict), an envelope-less reply by its status.
+    func caseOfflineFlushClassifiesSingleAndBatchAlike() throws {
+        let block = try scenario("offlineQueue", "replayClassification")
+        let paths = try XCTUnwrap(block["paths"] as? [String: Any])
+
+        for testCase in try XCTUnwrap(block["cases"] as? [[String: Any]]) {
+            let name = testCase["name"] as? String ?? "?"
+            let status = try XCTUnwrap((testCase["status"] as? NSNumber)?.intValue)
+            let text = testCase["body"].map { Wire.stableStringify($0) } ?? (testCase["rawBody"] as? String ?? "")
+
+            for path in ["single", "batch"] {
+                let queued = ids(paths[path]).compactMap { $0 }
+                var settled: [LunoraMutationSettled] = []
+                let client = LunoraClient(url: "https://app.example", post: { _, _, _ in (status, Data(text.utf8)) })
+
+                client.onMutationSettled { settled.append($0) }
+
+                for id in queued {
+                    client.offlineQueue.enqueue(entry(id))
+                }
+
+                let report = client.flushOfflineQueue()
+                let label = "\(name) via \(path)"
+
+                if testCase["outcome"] as? String == "rejected" {
+                    XCTAssertEqual(report.rejected, queued, label)
+                    XCTAssertTrue(report.requeued.isEmpty, label)
+                    XCTAssertEqual(settledWith(testCase["code"] as? String, settled), queued, label)
+                    XCTAssertEqual(queuedIDs(client.offlineQueue), [], label)
+                } else {
+                    XCTAssertEqual(report.requeued, queued, label)
+                    XCTAssertTrue(report.rejected.isEmpty, label)
+                    XCTAssertEqual(queuedIDs(client.offlineQueue), queued, label)
+                }
+            }
+        }
+    }
+
+    /// Any 413 splits a batch — an edge's HTML refusal as much as the worker's
+    /// coded one — and a lone write still refused settles `PAYLOAD_TOO_LARGE`
+    /// rather than re-queuing into the identical refusal forever.
+    func caseOfflineFlushBatchSplitsOnEnvelopeless413() throws {
+        let block = try scenario("offlineQueue", "envelopelessPayloadTooLarge")
+        let refusal = Data(try XCTUnwrap(block["rawBody"] as? String).utf8)
+        let code = block["code"] as? String
+
+        for name in ["split", "alwaysRefused", "lone"] {
+            let spec = try XCTUnwrap(block[name] as? [String: Any])
+            let limit = (spec["refuseCallsAbove"] as? NSNumber)?.intValue ?? 0
+            var settled: [LunoraMutationSettled] = []
+            let client = LunoraClient(
+                url: "https://app.example",
+                post: { _, _, body in
+                    guard max(1, batchCalls(body).count) <= limit else { return (413, refusal) }
+
+                    return (200, echoBatchSlots(body, commitCursor: 1))
+                }
+            )
+
+            client.onMutationSettled { settled.append($0) }
+
+            for id in ids(spec["queued"]) {
+                client.offlineQueue.enqueue(entry(try XCTUnwrap(id)))
+            }
+
+            let report = client.flushOfflineQueue()
+            let rejected = ids(spec["rejected"]).compactMap { $0 }
+
+            XCTAssertEqual(report.committed, ids(spec["committed"]).compactMap { $0 }, name)
+            XCTAssertEqual(report.rejected, rejected, name)
+            XCTAssertEqual(queuedIDs(client.offlineQueue), ids(spec["queuedAfterFlush"]), name)
+            XCTAssertEqual(settledWith(code, settled), rejected, "\(name): settled with the 413's code")
+        }
+    }
+
+    /// A write refused for its CREDENTIAL is held, and replays under the next
+    /// token set for the same identity. This port's flushes are always the
+    /// app's call, so the case flushes again after the refresh, as an app does.
+    func caseOfflineWriteHeldForCredentialReplaysAfterTokenRefresh() throws {
+        let block = try scenario("offlineQueue", "credentialRefresh")
+        let identity = try XCTUnwrap(block["identity"] as? String)
+        let stale = "Bearer " + (try XCTUnwrap(block["staleToken"] as? String))
+        let refusal = try XCTUnwrap(block["refusal"] as? [String: Any])
+        let refused = Data(Wire.stableStringify(refusal["body"]).utf8)
+        let status = try XCTUnwrap((refusal["status"] as? NSNumber)?.intValue)
+        let store = MemoryPersistence()
+        var headers: [String?] = []
+        var settled: [LunoraMutationSettled] = []
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, sent, _ in
+                headers.append(sent["authorization"])
+
+                return sent["authorization"] == stale ? (status, refused) : (200, Data(#"{"result":null}"#.utf8))
+            },
+            authToken: block["staleToken"] as? String
+        )
+
+        client.identity = identity
+        client.offlineQueue = LunoraOfflineQueue(persistence: store)
+        client.onMutationSettled { settled.append($0) }
+
+        for id in ids(block["queued"]) {
+            let write = entry(try XCTUnwrap(id))
+
+            write.identity = .subject(identity)
+            client.offlineQueue.enqueue(write)
+        }
+
+        let afterRefusal = try XCTUnwrap(block["afterRefusal"] as? [String: Any])
+        var report = client.flushOfflineQueue()
+
+        XCTAssertEqual(report.committed, ids(afterRefusal["committed"]).compactMap { $0 })
+        XCTAssertEqual(report.rejected, ids(afterRefusal["rejected"]).compactMap { $0 })
+        XCTAssertEqual(queuedIDs(client.offlineQueue), ids(afterRefusal["queuedAfterFlush"]), "the refused write is held")
+        XCTAssertTrue(settled.isEmpty && store.removed.isEmpty, "held: unsettled and still persisted")
+
+        let afterRefresh = try XCTUnwrap(block["afterRefresh"] as? [String: Any])
+
+        client.authToken = block["freshToken"] as? String
+        report = client.flushOfflineQueue()
+
+        XCTAssertEqual(report.committed, ids(afterRefresh["committed"]).compactMap { $0 })
+        XCTAssertEqual(report.rejected, ids(afterRefresh["rejected"]).compactMap { $0 })
+        XCTAssertEqual(queuedIDs(client.offlineQueue), ids(afterRefresh["queuedAfterFlush"]))
+        XCTAssertEqual(headers, ids(block["authorizationHeaders"]), "the replay carries the token current when it is sent")
+    }
+
+    /// A client with no poster has a configuration gap, not a verdict on the
+    /// write: a lone write and a batch both stay durably queued, and the report
+    /// says so. The lone one used to be REJECTED while a batch was re-queued.
+    func testAMissingPosterRequeuesALoneWriteAndABatchAlike() {
+        var settled: [LunoraMutationSettled] = []
+        let store = MemoryPersistence()
+        let client = LunoraClient(url: "https://app.example")
+
+        client.offlineQueue = LunoraOfflineQueue(persistence: store)
+        client.onMutationSettled { settled.append($0) }
+        client.offlineQueue.enqueue(entry("m1"))
+
+        let lone = client.flushOfflineQueue()
+
+        XCTAssertEqual(lone.requeued, ["m1"], "a lone write is re-queued")
+        XCTAssertEqual(lone.rejected, [])
+
+        client.offlineQueue.enqueue(entry("m2"))
+
+        let batch = client.flushOfflineQueue()
+
+        XCTAssertEqual(batch.requeued, ["m1", "m2"], "and so is a batch")
+        XCTAssertEqual(queuedIDs(client.offlineQueue), ["m1", "m2"])
+        XCTAssertTrue(settled.isEmpty, "nothing settles")
+        XCTAssertEqual(store.removed, [], "and nothing durable is dropped")
+    }
+
+    /// A poster that fails with a raw, non-SDK error partway through a flush —
+    /// after a split's first half committed — loses no drained write: the rest
+    /// are back on the queue, in order, with their durable records.
+    ///
+    /// No `defer` guard is needed for it: the replay loops are non-throwing, and
+    /// every throwing call inside them (the poster, the codec) is caught where it
+    /// is made, so control cannot leave a loop with a write drained and unsettled.
+    func testARawPosterFailureMidFlushLosesNoDrainedWrite() {
+        var calls = 0
+        let store = MemoryPersistence()
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, body in
+                calls += 1
+
+                switch calls {
+                case 1: return (413, Data("{\"error\":{\"code\":\"PAYLOAD_TOO_LARGE\",\"message\":\"too big\"}}".utf8))
+                case 2: return (200, echoBatchSlots(body, commitCursor: 1))
+                default: throw URLError(.networkConnectionLost)
+                }
+            }
+        )
+
+        client.offlineQueue = LunoraOfflineQueue(persistence: store)
+
+        for id in ["m0", "m1", "m2", "m3"] {
+            client.offlineQueue.enqueue(entry(id))
+        }
+
+        let report = client.flushOfflineQueue()
+
+        XCTAssertEqual(report.committed, ["m0", "m1"])
+        XCTAssertEqual(report.requeued, ["m2", "m3"])
+        XCTAssertEqual(queuedIDs(client.offlineQueue), ["m2", "m3"])
+        XCTAssertEqual(store.removed, ["m0", "m1"], "only the settled writes lose their durable record")
+    }
 }
 
 /// A value outside the wire codec — neither a JSON primitive, a collection, nor
@@ -1336,5 +1671,165 @@ final class MemoryPersistence: LunoraPersistenceAdapter {
     func clear() throws {
         cleared += 1
         records = []
+    }
+}
+
+// MARK: - Online-only writes
+
+/// A credential-shaped argument: nothing that reaches the persistence adapter may hold it.
+private let onlineOnlySecret = "sentinel-secret-7731"
+
+private func onlineOnlyWrite() -> LunoraSubmitOptions {
+    LunoraSubmitOptions(functionPath: "auth:setPassword", args: ["token": onlineOnlySecret], onlineOnly: true)
+}
+
+extension ConformanceTests {
+    /// With the socket down, an online-only write is refused before anything is
+    /// queued, persisted or sent.
+    func caseOfflineOnlineOnlyRefusedWhenDisconnected() throws {
+        let store = MemoryPersistence()
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in
+                XCTFail("a refused write reached the wire")
+
+                return (200, Data("{}".utf8))
+            }
+        )
+        client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: true, persistence: store)
+
+        // A subscription on the write's own path and args, primed with a server value,
+        // so an overlay the write applied would be displayed.
+        var seen: [Any] = []
+
+        client.attachSocket { _ in }
+        _ = client.subscribe("auth:setPassword", args: ["token": onlineOnlySecret], onData: { seen.append($0) })
+        _ = client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+        client.detachSocket()
+
+        var options = onlineOnlyWrite()
+        options.optimistic = appender("c")
+
+        XCTAssertThrowsError(try client.submit(options)) { error in
+            XCTAssertEqual((error as? LunoraAPIError)?.code, LunoraOfflineCode.notQueued)
+        }
+        XCTAssertEqual(client.pendingMutationCount, 0)
+        XCTAssertTrue(store.appended.isEmpty, "the persistence adapter must never see the write")
+
+        for value in seen {
+            XCTAssertNotEqual(canonical(value), canonical(["a", "c"]), "a refused write's overlay was displayed")
+        }
+
+        let persisted = try JSONSerialization.data(withJSONObject: store.records)
+
+        XCTAssertFalse(String(decoding: persisted, as: UTF8.self).contains(onlineOnlySecret))
+    }
+
+    /// With the socket up, an online-only write is sent normally and commits.
+    func caseOfflineOnlineOnlySendsWhenConnected() throws {
+        let store = MemoryPersistence()
+        var sent: [Data] = []
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, body in
+                sent.append(body)
+
+                return (200, Data("{\"commitCursor\":3,\"result\":{\"ok\":true}}".utf8))
+            }
+        )
+        client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: true, persistence: store)
+        client.attachSocket { _ in }
+
+        let outcome = try client.submit(onlineOnlyWrite())
+
+        XCTAssertEqual(outcome.status, .committed)
+        XCTAssertEqual(sent.count, 1, "one request for the write")
+        XCTAssertTrue(String(decoding: sent[0], as: UTF8.self).contains(onlineOnlySecret), "the arguments go out on the wire")
+        XCTAssertTrue(store.appended.isEmpty, "a sent write is not persisted")
+    }
+
+    /// A normal write made with the socket down still queues beside an online-only one.
+    func caseOfflineOnlineOnlyLeavesNormalWritesQueued() throws {
+        let store = MemoryPersistence()
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in
+                XCTFail("a queued write reached the wire")
+
+                return (200, Data("{}".utf8))
+            }
+        )
+        client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: true, persistence: store)
+
+        let outcome = try client.submit(LunoraSubmitOptions(functionPath: "messages:send", args: ["text": "hi"]))
+
+        XCTAssertEqual(outcome.status, .queued)
+        XCTAssertEqual(client.pendingMutationCount, 1)
+        XCTAssertEqual(store.appended.count, 1)
+    }
+
+    /// An online-only write sent directly to a shard that never connected, whose request
+    /// got no reply, is refused as a queued write would be: nothing queued or persisted,
+    /// the overlay rolled back, the transport error kept as `underlying`. A coded rejection
+    /// surfaces as itself, and a failure while the socket is up surfaces unchanged.
+    func caseOfflineOnlineOnlyTransportFailureRefused() throws {
+        struct Unreachable: Error {}
+
+        let store = MemoryPersistence()
+        var sends = 0
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in
+                sends += 1
+
+                throw Unreachable()
+            }
+        )
+        client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: false, persistence: store)
+
+        // Primed with the server value ["a"] and no socket attached, so the write takes the direct path.
+        var seen: [Any] = []
+
+        _ = client.subscribe("auth:setPassword", args: ["token": onlineOnlySecret], onData: { seen.append($0) })
+        _ = client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+
+        var options = onlineOnlyWrite()
+        options.optimistic = appender("c")
+
+        XCTAssertThrowsError(try client.submit(options)) { error in
+            let apiError = error as? LunoraAPIError
+
+            XCTAssertEqual(apiError?.code, LunoraOfflineCode.notQueued)
+            XCTAssertNotNil(apiError?.underlying as? Unreachable, "the transport error is the cause, got \(error)")
+        }
+        XCTAssertEqual(sends, 1, "one direct send, not a queued one")
+        XCTAssertEqual(client.pendingMutationCount, 0)
+        XCTAssertTrue(store.appended.isEmpty, "the persistence adapter must never see the write")
+        XCTAssertTrue(
+            seen.contains { canonical($0) == canonical(["a", "c"]) },
+            "the overlay was never shown, so its rollback proves nothing"
+        )
+        XCTAssertEqual(canonical(seen.last), canonical(["a"]), "the overlay is rolled back")
+
+        let codedClient = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in (403, Data(#"{"error":{"code":"PERMISSION_DENIED","message":"not allowed"}}"#.utf8)) }
+        )
+        codedClient.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: false, persistence: MemoryPersistence())
+
+        XCTAssertThrowsError(try codedClient.submit(onlineOnlyWrite())) { error in
+            let apiError = error as? LunoraAPIError
+
+            XCTAssertEqual(apiError?.code, "PERMISSION_DENIED", "a coded rejection surfaces as itself, got \(error)")
+            XCTAssertNil(apiError?.underlying)
+        }
+
+        let connectedClient = LunoraClient(url: "https://app.example", post: { _, _, _ in throw Unreachable() })
+        connectedClient.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: false, persistence: MemoryPersistence())
+        connectedClient.attachSocket { _ in }
+
+        XCTAssertThrowsError(try connectedClient.submit(onlineOnlyWrite())) { error in
+            XCTAssertTrue(error is Unreachable, "a failure while connected surfaces unchanged, got \(error)")
+        }
     }
 }

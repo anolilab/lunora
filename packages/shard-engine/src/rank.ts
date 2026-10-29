@@ -91,7 +91,7 @@ const encodePartitionKey = (partitionBy: ReadonlyArray<string>, source: Record<s
 /**
  * The implicit final tiebreak appended to every rank sort so the order is
  * total and `rank()` returns a deterministic position — same role the `_id`
- * tiebreak plays in `compileOrderBySql`/`buildSeekWhere`.
+ * tiebreak plays in `compileOrderByText`/`buildSeekWhere`.
  */
 const RANK_TIEBREAK = "__id__";
 
@@ -249,17 +249,3 @@ export { encodePartitionKey, RANK_TIEBREAK, rankKeyFromDocument as rankKeyFromDo
 // `{ eq }` only) — the identical check aggregates use, aliased for the rank seam.
 // Typed const (not a bare re-export) so the declaration renders under this name.
 export const matchesRankStaticWhere: (document: Record<string, unknown>, predicate: Record<string, unknown>) => boolean = matchesStaticWhere;
-export {
-    type RankBeforeOptions,
-    type RankBeforeResult,
-    type RankDirection,
-    type RankIndexDefinitionLike,
-    type RankOptions,
-    type RankPage,
-    type RankPageOptions,
-    type RankPageRow,
-    type RankPageRowKey,
-    type RankResult,
-    type RankSortKeyLike,
-    type ShardRankPageResult,
-} from "./schema-types";

@@ -1,11 +1,11 @@
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { stableWireKey } from "@lunora/wire";
 import type { Readable } from "svelte/store";
 import { derived, get, readable, writable } from "svelte/store";
 
 import { isBrowser } from "../../../shared/is-browser";
-import { stableWireKey } from "../../../shared/wire-key";
 import { getLunoraClient } from "./context";
 import { isFunctionReference } from "./is-function-reference";
 import { isReadableStore } from "./is-readable-store";

@@ -22,8 +22,6 @@ export type { AuthState } from "./auth-state";
 export { useAuthState } from "./auth-state";
 export type { LunoraProviderProps } from "./lunora-provider";
 export { LunoraProvider, useLunora } from "./lunora-provider";
-export type { LunoraQueryOptions } from "./query-options";
-export { lunoraQueryOptions } from "./query-options";
 export type {
     ArgsOf,
     AuthImpersonation,
@@ -94,7 +92,10 @@ export type {
 export { useAuthSessions, useAuthUsers, useImpersonate, useOrganizations, useSignUpInvitations } from "./use-admin-auth";
 export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions, UseAgentResult } from "./use-agent";
 export { useAgent } from "./use-agent";
+export type { PendingApproval, UseAgentApprovalsApi, UseAgentApprovalsOptions, UseAgentApprovalsResult } from "./use-agent-approvals";
+export { useAgentApprovals } from "./use-agent-approvals";
 export type {
+    AgentApprovalGrant,
     AgentChatMessage,
     AgentLiveEvent,
     AgentProgressEvent,
@@ -116,6 +117,8 @@ export { useFlag, useFlags } from "./use-flag";
 export type { UseHttpStreamOptions, UseHttpStreamResult } from "./use-http-stream";
 export { useHttpStream } from "./use-http-stream";
 export { default as useInfiniteQuery } from "./use-infinite-query";
+export type { UseLiveTopicOptions, UseLiveTopicResult } from "./use-live-topic";
+export { useLiveTopic } from "./use-live-topic";
 export type { MutationHook } from "./use-mutation";
 export { useMutation } from "./use-mutation";
 export type { MutatorHandle, MutatorHook, MutatorTransaction } from "./use-mutator";
@@ -131,6 +134,7 @@ export { useRateLimit } from "./use-rate-limit";
 export type { UseStreamOptions, UseStreamResult, UseStreamStatus } from "./use-stream";
 export { useStream } from "./use-stream";
 export { default as useSubscription } from "./use-subscription";
+export { default as useSuspenseQuery } from "./use-suspense-query";
 export type { UseVoiceAgentOptions, UseVoiceAgentResult, VoiceAudioFormat, VoiceReference, VoiceStatus } from "./use-voice-agent";
 export { useVoiceAgent } from "./use-voice-agent";
 
@@ -143,3 +147,8 @@ export { getErrorCode, getRetryAfterMs, isConflictError, isForbiddenError, isRat
 // re-exported so a React-only user imports everything from one package.
 export type { ClientQueryRef } from "@lunora/client";
 export { createClientQuery } from "@lunora/client";
+
+// The TanStack options factory, for driving a Lunora query through TanStack's
+// own hooks (`useSuspenseQuery`, `useQueries`, `ensureQueryData`).
+export type { LunoraQueryOptions } from "@lunora/client/query";
+export { lunoraQueryOptions } from "@lunora/client/query";

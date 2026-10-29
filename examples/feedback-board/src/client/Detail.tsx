@@ -2,9 +2,24 @@ import { useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
-import type { Doc, Id } from "../../lunora/_generated/dataModel.js";
+import type { Id } from "../../lunora/_generated/dataModel.js";
 import type { Status } from "./status.js";
-import { STATUSES, StatusBadge } from "./status.js";
+import { STATUSES } from "./status.js";
+import { StatusBadge } from "./StatusBadge.js";
+
+/**
+ * One text field out of a `FormData`.
+ *
+ * `FormData.get` is typed `string | File | null`, so `String(form.get(name) ?? "")`
+ * stringifies a `File` to `"[object File]"` — a file input sharing a text field's
+ * name would submit that verbatim. Narrowing instead yields `""` for anything
+ * that is not text.
+ */
+const textField = (form: FormData, name: string): string => {
+    const value = form.get(name);
+
+    return typeof value === "string" ? value : "";
+};
 
 interface DetailProperties {
     id: Id<"feedback">;
@@ -50,9 +65,15 @@ export const Detail = ({ id, onBack, voterEmail }: DetailProperties): ReactEleme
                 </p>
                 <p>{post.description}</p>
 
-                <label>
+                <label htmlFor="detail-field1">
                     Status
-                    <select onChange={(event) => void setStatus({ id, status: event.target.value as Status })} value={post.status}>
+                    <select
+                        id="detail-field1"
+                        onChange={(event) => {
+                            void setStatus({ id, status: event.target.value as Status });
+                        }}
+                        value={post.status}
+                    >
                         {STATUSES.map((value) => (
                             <option key={value} value={value}>
                                 {value}
@@ -67,7 +88,7 @@ export const Detail = ({ id, onBack, voterEmail }: DetailProperties): ReactEleme
 
                 <ul className="list">
                     {(comments ?? []).map((comment) => (
-                        <li key={comment._id} className="comment">
+                        <li className="comment" key={comment._id}>
                             <strong>{comment.authorName}</strong>
                             {comment.isOfficial && <span className="badge badge-official">team</span>}
                             <p>{comment.content}</p>
@@ -80,7 +101,7 @@ export const Detail = ({ id, onBack, voterEmail }: DetailProperties): ReactEleme
                         event.preventDefault();
 
                         const form = new FormData(event.currentTarget);
-                        const content = String(form.get("content") ?? "").trim();
+                        const content = textField(form, "content").trim();
 
                         if (!content) {
                             return;
@@ -90,7 +111,7 @@ export const Detail = ({ id, onBack, voterEmail }: DetailProperties): ReactEleme
                         event.currentTarget.reset();
                     }}
                 >
-                    <textarea required aria-label="Add a comment" name="content" placeholder="Add a comment" rows={2} />
+                    <textarea aria-label="Add a comment" name="content" placeholder="Add a comment" required rows={2} />
                     <button className="primary" type="submit">
                         Comment
                     </button>

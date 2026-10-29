@@ -93,7 +93,7 @@ Declare recurring jobs in `lunora/crons.ts` — codegen lifts them into
 ```ts
 import { cronJobs } from "@lunora/scheduler";
 
-import { internal } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 const crons = cronJobs();
 

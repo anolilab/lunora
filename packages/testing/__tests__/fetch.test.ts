@@ -2,6 +2,7 @@ import { defineSchema, defineTable, initLunora, v } from "@lunora/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraTest } from "../src/index";
+import trackHarnesses from "./harness-tracker";
 
 const { action } = initLunora.dataModel().create();
 
@@ -28,21 +29,19 @@ const pingNoInject = action.input({ url: v.string() }).action(async ({ args, ctx
     return { status: response.status };
 });
 
-const open: ReturnType<typeof lunoraTest>[] = [];
+const harnesses = trackHarnesses();
 
 const start = (options?: Parameters<typeof lunoraTest>[1]): ReturnType<typeof lunoraTest> => {
     const t = lunoraTest(schema, options);
 
-    open.push(t);
+    harnesses.track(t);
 
     return t;
 };
 
 describe("injectable action fetch", () => {
     afterEach(() => {
-        while (open.length > 0) {
-            open.pop()?.close();
-        }
+        harnesses.closeAll();
     });
 
     it("uses the injected fetch when provided and action calls ctx.fetch", async () => {

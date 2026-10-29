@@ -11,10 +11,14 @@
  * (no full AST parse) — it collapses adjacent whitespace and replaces
  * quoted strings, numeric literals, and hex literals with `?` placeholders.
  *
- * `rows_read` is the result set size for SELECT statements (rows the caller
- * iterated via `.toArray()` / `.one()`). `rows_written` is always 0 in this
- * module; callers that know a DML statement affected rows can pass the count
- * explicitly. The tracked set is capped at {@link QUERY_METRICS_MAX_STATEMENTS}
+ * `rows_read` is the count of rows the statement SCANNED, and `rows_written`
+ * the count it WROTE, as reported by the storage cursor's own counters — not
+ * the size of the result set. The distinction is the point of the leaderboard:
+ * a query filtering on an unindexed column scans the whole table to return a
+ * handful of rows, so its result-set size stays flat while its real cost grows
+ * with the table, and ranking on rows returned would hide precisely the queries
+ * worth finding. On a host that exposes no counters the recorder falls back to
+ * the result-set size. The tracked set is capped at {@link QUERY_METRICS_MAX_STATEMENTS}
  * entries — new statements beyond the cap are refused (see `admitStatement`),
  * protecting the already-tracked leaderboard from a flood of one-off shapes;
  * `readQueryInsights`'s `capped` is the read-side signal for this.
@@ -88,9 +92,9 @@ interface QueryStatEntry {
     execCount: number;
     /** Normalised SQL text (literals stripped, truncated). */
     normalizedSql: string;
-    /** Total rows read across all executions (SELECT result sizes). */
+    /** Total rows SCANNED across all executions (the billed number, not the result-set size). */
     rowsRead: number;
-    /** Total rows written across all executions. */
+    /** Total rows WRITTEN across all executions. */
     rowsWritten: number;
     /** Total wall-clock milliseconds across all executions. */
     totalDurationMs: number;
@@ -101,18 +105,27 @@ interface QueryStatEntry {
  * numeric literals, and hex literals, replacing them with `?`, then truncating.
  * The result is used as the primary key of `__lunora_metrics_queries`, so two
  * executions of the same parameterised query collapse to one row regardless of
- * argument values. Single-quoted strings and hex literals become `?`; numeric
- * literals preceded by `=`, `(`, `,`, or whitespace become `?`; double-quoted
- * SQLite identifiers are kept as-is.
+ * argument values. Blob literals (`X'AB'`), single-quoted strings and hex
+ * literals become `?`; a numeric literal — signed, fractional or with an
+ * exponent (`-7`, `1.5`, `1e5`) — becomes `?` wherever it is not part of an
+ * identifier or a numbered parameter, so `age>42` collapses like `age = 42`.
+ * Double-quoted text is kept: Lunora's own SQL double-quotes every identifier,
+ * so stripping it would fold every table's statements into one row.
  */
 const normalizeSql = (sql: string): string => {
     let normalized = sql
+        // Strip blob literals first, or the string rule leaves a stray `X?`.
+        .replaceAll(/\bx'[\da-f]*'/gi, "?")
         // Strip single-quoted string literals (may contain escaped quotes '').
         .replaceAll(/'(?:[^']|'')*'/g, "?")
         // Strip hex literals.
         .replaceAll(/\b0x[\da-f]+\b/gi, "?")
-        // Strip standalone numeric literals (integer or float).
-        .replaceAll(/(?<=[=,([\s])\d+(?:\.\d+)?/g, "?")
+        // Strip standalone numeric literals. The lookbehind keeps digits inside
+        // identifiers (`t1`, `"col2"`) and numbered parameters (`?1`, `:2`)
+        // intact; a sign is taken only where the digit run starts a literal.
+        .replaceAll(/(?<![\w$.?:@"])-?\d+(?:\.\d*)?(?:e[+-]?\d+)?(?![\w.])/gi, "?")
+        // A leading-decimal literal (`.5`), which the rule above cannot start on.
+        .replaceAll(/(?<![\w$?:@"])-?\.\d+(?:e[+-]?\d+)?(?![\w.])/gi, "?")
         // Collapse whitespace.
         .replaceAll(/\s+/g, " ")
         .trim();
@@ -126,8 +139,8 @@ const normalizeSql = (sql: string): string => {
 
 /**
  * SQL handles whose reserved tables have already been ensured this instance.
- * `recordQueryMetric` runs once per instrumented statement — potentially many
- * times per dispatch — so without memoizing, a query-in-a-loop handler re-ran
+ * `recordQueryMetric` runs once per distinct statement per flush (the DO folds
+ * repeats and coalesces dispatches, see `LUNORA_METRICS_FLUSH_EVERY`) — so without memoizing, a query-in-a-loop handler re-ran
  * `CREATE TABLE IF NOT EXISTS` (twice, counting the bucket table) on every
  * single execution. A `WeakSet` so a torn-down shard's handle is collectable;
  * a fresh handle (a new isolate after hibernation) re-ensures, which is
@@ -586,23 +599,15 @@ const readQueryMetrics = (sql: SqlExec): QueryStatEntry[] => {
 };
 
 export {
-    ensureQueryBucketsTable,
-    ensureQueryMetricsTable,
-    hashStatement,
-    LATENCY_BUCKET_EDGES,
     latencyBucketIndex,
     normalizeSql,
-    percentileFrom,
     pruneQueryBuckets,
-    QUERY_BUCKET_MS,
     QUERY_BUCKET_RETENTION,
-    QUERY_BUCKETS_TABLE,
     QUERY_METRICS_MAX_SQL_LEN,
     QUERY_METRICS_MAX_STATEMENTS,
     QUERY_METRICS_TABLE,
     readQueryInsights,
     readQueryMetrics,
-    recordQueryBucket,
     recordQueryMetric,
 };
 export type { QueryInsightBucket, QueryInsightEntry, QueryInsightsResult, QueryStatEntry };

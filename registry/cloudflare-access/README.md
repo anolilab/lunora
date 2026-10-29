@@ -51,7 +51,7 @@ export const resolveIdentity = createAccessResolver({
 Wire it into your Worker entry:
 
 ```ts
-import { createWorker } from "#lunora/_generated/worker.js";
+import { createWorker } from "lunorash/runtime";
 import { resolveIdentity } from "./lunora/access/index.js";
 
 export default createWorker({

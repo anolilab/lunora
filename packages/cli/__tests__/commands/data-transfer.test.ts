@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { runExportCommand, runImportCommand } from "../../src/commands/data-transfer";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 /** Decode a request body for assertions — the fetch shim also carries blob bytes. */
@@ -23,6 +24,21 @@ const silentLogger = (): Logger => {
         info: () => {},
         success: () => {},
         warn: () => {},
+    };
+};
+
+/** A `dryRun` POST is the check that runs before a real import. It writes and records nothing, so the fakes below answer it without counting. */
+const isCheck = (url: string): boolean => new URL(url).searchParams.get("dryRun") === "true";
+
+const checkResponse = () => {
+    return {
+        body: null,
+        json: async () => {
+            return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
+        },
+        ok: true,
+        status: 200,
+        text: async () => "",
     };
 };
 
@@ -71,7 +87,7 @@ describe("lunora data-transfer", () => {
             try {
                 const result = await runExportCommand({ logger: silentLogger() });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.AUTH);
             } finally {
                 if (previous !== undefined) {
                     process.env["LUNORA_ADMIN_TOKEN"] = previous;
@@ -172,6 +188,33 @@ describe("lunora data-transfer", () => {
             expect(readFileSync(outPath, "utf8")).toBe(yesterday);
         });
 
+        it("leaves no staged .partial behind once a mid-stream failure has been reported", async () => {
+            expect.assertions(2);
+
+            const outPath = join(workDir, "dump.ndjson");
+            // Errors before the stream's lazy open can finish: the case where an
+            // unlink issued straight after destroy() ran ahead of the file's creation.
+            const failingBody = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    controller.error(new Error("connection reset"));
+                },
+            });
+            const fetchImpl: StreamingFetchLike = async () => {
+                return { body: failingBody, json: async () => undefined, ok: true, status: 200, text: async () => "" };
+            };
+
+            await expect(runExportCommand({ fetchImpl, logger: silentLogger(), out: outPath, token: "t", url: "http://localhost:8787" })).rejects.toThrow(
+                "connection reset",
+            );
+
+            // Give a still-pending open the chance to land before looking.
+            await new Promise((resolve) => {
+                setTimeout(resolve, 50);
+            });
+
+            expect(readdirSync(workDir).filter((entry) => entry.endsWith(".partial"))).toStrictEqual([]);
+        });
+
         it("discards the staged dump when the commit rename fails", async () => {
             expect.assertions(2);
 
@@ -226,7 +269,7 @@ describe("lunora data-transfer", () => {
                 token: "t",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
         });
     });
 
@@ -240,7 +283,7 @@ describe("lunora data-transfer", () => {
                 token: "t",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
         });
 
         it("refuses a remote --url without --yes even when --prod is not passed", async () => {
@@ -274,7 +317,7 @@ describe("lunora data-transfer", () => {
                 url: "https://prod.example.invalid",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(errors.join("\n")).toContain("--yes");
         });
@@ -297,6 +340,10 @@ describe("lunora data-transfer", () => {
             const calls: { body: string; url: string }[] = [];
 
             const fetchImpl: StreamingFetchLike = async (url, init) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
                 calls.push({ body: bodyText(init?.body), url });
 
                 const rows = bodyText(init?.body)
@@ -338,7 +385,11 @@ describe("lunora data-transfer", () => {
 
             const captured: { body: string }[] = [];
 
-            const fetchImpl: StreamingFetchLike = async (_url, init) => {
+            const fetchImpl: StreamingFetchLike = async (url, init) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
                 captured.push({ body: bodyText(init?.body) });
 
                 return {
@@ -396,7 +447,11 @@ describe("lunora data-transfer", () => {
 
             const captured: string[] = [];
 
-            const fetchImpl: StreamingFetchLike = async (_url, init) => {
+            const fetchImpl: StreamingFetchLike = async (url, init) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
                 captured.push(bodyText(init?.body));
 
                 return {
@@ -448,7 +503,7 @@ describe("lunora data-transfer", () => {
 
             const result = await runImportCommand({ fetchImpl, file: join(workDir, "not-an-export"), logger: silentLogger(), token: "t" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
         });
 
         it("refuses --table alongside a Convex export directory", async () => {
@@ -476,7 +531,7 @@ describe("lunora data-transfer", () => {
 
             const result = await runImportCommand({ fetchImpl, file: workDir, logger: silentLogger(), table: "other", token: "t" });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(called).toBe(false);
         });
 
@@ -511,7 +566,7 @@ describe("lunora data-transfer", () => {
                 url: "https://app.example.com",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
         });
 
@@ -524,6 +579,10 @@ describe("lunora data-transfer", () => {
 
             const calls: string[] = [];
             const fetchImpl: StreamingFetchLike = async (url) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
                 calls.push(url);
 
                 return {

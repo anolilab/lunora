@@ -69,7 +69,7 @@ WebSocket within ~10 ms locally.
 
 ## Studio demo walkthrough
 
-The admin UI is served alongside the app at **<http://localhost:5173/__lunora>**.
+The admin UI is served alongside the app at **<http://localhost:5173/__lunora>** in the main checkout (other worktrees print their own port at startup).
 `demoRecords` is the table it is meant to be opened against — seed it first, or
 the data browser has nothing to draw:
 
@@ -164,5 +164,3 @@ operator and do not ship with the app.
 ## Deferred for v0.2
 
 - Real auth route handler wiring (the `Login.tsx` form posts to a stub).
-- Generated `api.*` references — the client uses `anyApi` until codegen
-  produces typed references for this project.

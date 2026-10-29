@@ -126,6 +126,18 @@ a replica that diverges stays diverged, and every read in that region pays a
 wasted hop to it before falling back for as long as the deployment lives. Reads
 stay correct throughout; they just stop being local, and nothing announces it.
 
+A **point-in-time rollback** is the one fork a replica cannot detect on the epoch
+alone. A restore reverts the owner's whole database, the epoch included, so it
+comes back identical while the log underneath it is a different timeline. What is
+left is the owner's high-watermark sitting below the replica's applied position,
+and that proof expires: once the owner has written back past it, neither side can
+tell, and the replica replays a second timeline's changes over a first one's
+rows. Anything else on the shard that recognises the fork first — a reconnecting
+subscriber, a refused change-feed consumer, the changelog archive — re-mints the
+epoch, and the next pull then lands every follower in the first bullet above. But
+that is a race, not a guarantee, so treat a restore as covering the replicas too:
+see [Backups](/docs/concepts/backups).
+
 ### Cost
 
 Each replica is another Durable Object holding a full copy of the shard: storage

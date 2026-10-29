@@ -1,9 +1,9 @@
-import { LunoraError } from "lunorash/server";
 import { rateLimit } from "lunorash/ratelimit";
+import { LunoraError } from "lunorash/server";
 
-import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { Id, MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
  * Everyone posting here is signed in, so the limit keys on the user — one
@@ -61,7 +61,7 @@ export const list = query.query(async ({ ctx }): Promise<MessageRow[]> => {
     // past the page we keep.
     const rows = await ctx.db.query("messages").withIndex("by_created").order("desc").take(PAGE_SIZE);
 
-    return rows.reverse();
+    return rows.toReversed();
 });
 
 /**

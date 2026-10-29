@@ -192,5 +192,4 @@ const writeSourceCursor = (sql: SqlExec, table: string, shardKey: string, state:
     );
 };
 
-export { cursorAfter, deserializeCursor, maxCursorValue, migrateSourceCursor, readSourceCursor, serializeCursor, SOURCE_CURSOR_TABLE, writeSourceCursor };
-export type { CursorValue, SourceCursorState };
+export { cursorAfter, deserializeCursor, maxCursorValue, migrateSourceCursor, readSourceCursor, serializeCursor, writeSourceCursor };

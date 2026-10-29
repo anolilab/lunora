@@ -1,12 +1,15 @@
 import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { isSearchLanguage, isSearchStrategy, SEARCH_LANGUAGES, SEARCH_STRATEGIES } from "@lunora/search-core";
-import type { Validator } from "@lunora/values";
+import type { ColumnValidator, Validator } from "@lunora/values";
 import { v } from "@lunora/values";
 
 import { effectiveKind } from "../../../shared/effective-kind";
+import { globalTtlMessage } from "../../../shared/global-ttl";
+import { globalVectorIndexMessage } from "../../../shared/global-vector-index";
 import type { PrefixedTables, SchemaExtension } from "./plugin";
 import { mergeSchemaExtension } from "./plugin";
+import validateThroughRelations from "./schema-through";
 import type {
     AggregateIndexDefinition,
     AggregateOp,
@@ -15,10 +18,12 @@ import type {
     GeoIndexDefinition,
     GlobalBackend,
     IndexDefinition,
+    KeyedRelationDefinition,
     OnDeleteAction,
     RankIndexDefinition,
     RankSortKey,
     RelationDefinition,
+    RelationThrough,
     Schema,
     SearchIndexDefinition,
     SearchLanguage,
@@ -26,6 +31,7 @@ import type {
     ShardMode,
     TableDefinition,
     TableVectorIndex,
+    ThroughRelationDefinition,
     TriggerBuilder,
     TriggerDefinition,
     TriggerEvent,
@@ -55,24 +61,45 @@ interface VectorizeOptions<Shape extends Record<string, Validator> = Record<stri
     /** Fields mirrored into Vectorize metadata for filtering. */
     metadata?: ReadonlyArray<keyof Shape & string>;
     metric: VectorMetric;
+
+    /**
+     * Identifier of the model `embed` calls, e.g. `"@cf/baai/bge-base-en-v1.5"`.
+     * `embed` is a function Lunora cannot inspect, so this string is how a model
+     * swap becomes visible: the `backfillVectors` admin op records it and
+     * re-embeds the table when it changes. Omit it and a model change goes
+     * unnoticed until the backfill is run with `restart: true`.
+     */
+    model?: string;
 }
 
 /** A `one` (many-to-one) relation descriptor; phantom `Target` carries the target table name. */
-interface OneRelation<Target extends string = string> extends RelationDefinition {
+interface OneRelation<Target extends string = string> extends KeyedRelationDefinition {
     readonly __target?: Target;
     readonly kind: "one";
 }
 
 /** A `many` (one-to-many) relation descriptor; phantom `Target` carries the target table name. */
-interface ManyRelation<Target extends string = string> extends RelationDefinition {
+interface ManyRelation<Target extends string = string> extends KeyedRelationDefinition {
     readonly __target?: Target;
     readonly kind: "many";
 }
 
+/** A `many` relation through a join table (many-to-many); phantom `Target` carries the target table name. */
+interface ThroughManyRelation<Target extends string = string> extends ThroughRelationDefinition {
+    readonly __target?: Target;
+}
+
 /** The `r` argument passed to `.relations((r) => …)`. */
 interface RelationBuilder {
-    /** One-to-many: the FK `field` lives on the target table, matching this table's `references` (default `_id`). */
-    many: <Target extends string>(table: Target, options: { field: string; references?: string }) => ManyRelation<Target>;
+    /**
+     * One-to-many (`field`): the FK `field` lives on the target table, matching this table's `references` (default `_id`).
+     * Many-to-many (`through`): `through.table` holds one row per linked pair, `through.from` pointing at this table's
+     * `_id` and `through.to` at the target's `_id`.
+     */
+    many: {
+        <Target extends string>(table: Target, options: { field: string; references?: string }): ManyRelation<Target>;
+        <Target extends string>(table: Target, options: { through: RelationThrough }): ThroughManyRelation<Target>;
+    };
     /** Many-to-one: the FK `field` lives on this table, pointing at `table`.`references` (default `_id`). */
     one: <Target extends string>(table: Target, options: { field: string; onDelete?: OnDeleteAction; references?: string }) => OneRelation<Target>;
 }
@@ -144,6 +171,51 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     commitOrdered: () => TableBuilder<Shape>;
 
     /**
+     * Drop a `patch` whose fields have MOVED since the caller last saw the row,
+     * instead of letting it clobber the newer value.
+     *
+     * The case this exists for is the one every offline-capable app hits. Two
+     * clients edit the same row; one is offline, so its write replays later and
+     * wins on arrival order rather than on authorship. The newer edit is gone with
+     * nothing to show it existed.
+     *
+     * With this flag the shard compares the fields a patch writes against the row
+     * as the caller last saw it — its CDC baseline, stamped by the client at call
+     * time and replayed verbatim from its offline queue. If any of those fields
+     * changed in between, the whole patch is dropped.
+     *
+     * ```ts
+     * documents: defineTable({ title: v.string(), body: v.string() }).dropStalePatches(),
+     * ```
+     *
+     * Two clients editing DIFFERENT fields of one row both win, which is the point.
+     * Two editing the SAME field means the later-composed write survives and the
+     * stale one is discarded.
+     *
+     * **The whole patch is dropped, never part of it.** Applying the fresh half and
+     * discarding the stale half would produce a row no mutation ever wrote —
+     * `status: "shipped"` landing while `shippedAt` is thrown away — and a
+     * handler's invariants live across the fields of one `patch` call.
+     *
+     * **A drop is silent to the caller.** No row change, no CDC entry, no
+     * broadcast, no triggers: indistinguishable from a patch that was never
+     * issued. The shard logs each one (table, row, fields) so it is traceable, but
+     * the mutation still resolves successfully. Do not use this where the caller
+     * must be told its write did not land — throw from the handler after comparing
+     * yourself instead.
+     *
+     * **Requires CDC** (the changelog is where the baseline comes from) and it
+     * fails OPEN: no baseline, no changelog entry at or below it (retention
+     * trimmed it, or the row is newer than the caller's cursor), or CDC off, and
+     * the write applies exactly as it would without this flag. Discarding writes
+     * because retention ran would trade a rare lost edit for a common one.
+     *
+     * Shard-local only — a `.global()` table has no per-shard changelog to
+     * establish a baseline from.
+     */
+    dropStalePatches: () => TableBuilder<Shape>;
+
+    /**
      * Mark this table as written outside Lunora's discoverable insert path —
      * by an adapter, a migration, or framework middleware (e.g. `@lunora/auth`'s
      * better-auth tables, `@lunora/ratelimit`'s store). Advisor insert-path lints
@@ -167,7 +239,12 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      * table stays reactive — live queries re-run on write.
      */
     global: (options?: { backend?: GlobalBackend }) => TableBuilder<Shape>;
-    /** Add a secondary index. */
+
+    /**
+     * Add a secondary index. `fields` are top-level columns (plus the system
+     * fields) — a dotted path into a `v.object()` column is not accepted;
+     * denormalise the field you query. See `concepts/indexes` for why.
+     */
     index: (
         name: string,
         fields: ReadonlyArray<(keyof Shape & string) | (typeof SYSTEM_INDEX_FIELDS)[number]>,
@@ -285,6 +362,28 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      */
     source: (definition: ExternalSourceDefinition) => TableBuilder<Shape>;
 
+    /**
+     * Track when a row last changed. Adds an epoch-millisecond column
+     * (`options.field`, default `updatedAt`) that is stamped on insert and
+     * restamped on every update (any `patch` or `replace`, including a soft delete
+     * and `restore()`) unless the write sets it explicitly. Shorthand for
+     * `v.timestamp().defaultNow().$onUpdateFn(() => Date.now())`. Creation time is
+     * already on every row as `_creationTime`.
+     *
+     * A column of the same name that you declare yourself is kept only if it already
+     * recomputes on update (`$onUpdateFn`); otherwise this throws, since a plain
+     * column of that name would make the call do nothing. It also throws when called
+     * twice, or on the field `.softDelete()` uses.
+     *
+     * Call it **before** `.index()` / `.ttl()` to reference the column there
+     * (`.timestamps().index("by_updated", ["updatedAt"])`): the chain's types only
+     * know the columns added so far. Rows written before the column existed read back
+     * without it until their next write.
+     */
+    timestamps: <Field extends string = "updatedAt">(options?: {
+        field?: Field;
+    }) => TableBuilder<string extends Field ? Shape : Field extends keyof Shape ? Shape : Record<Field, ColumnValidator<number, number | undefined>> & Shape>;
+
     /** Declare named lifecycle triggers fired inline within the write path. */
     triggers: (build: (t: TriggerBuilder<Shape>) => Record<string, TriggerDefinition>) => TableBuilder<Shape>;
 
@@ -294,18 +393,28 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      * `.softDelete()`s). `field` is an epoch-millisecond column; without
      * `options.after` its value is the absolute expiry instant, with `after` the
      * row expires `after` ms past `field` (`field + after`). Coarse, cheap,
-     * table-level — for per-row schedules use `@lunora/scheduler`.
+     * table-level — for per-row schedules use `@lunora/scheduler`. Rejected on a
+     * `.global()` table, whose rows live outside every shard's alarm.
      */
     ttl: (field: keyof Shape & string, options?: { after?: number }) => TableBuilder<Shape>;
     /** Declare a vector index over a single text field on this table. */
     vectorize: (field: keyof Shape & string, options: VectorizeOptions<Shape>) => TableBuilder<Shape>;
 }
 
-/** Shared relation builder — `one`/`many` produce {@link RelationDefinition}s, defaulting `references` to `_id`. */
+/** `r.many`: one-to-many by `field`, or many-to-many by `through`. */
+function manyRelation<Target extends string>(table: Target, options: { field: string; references?: string }): ManyRelation<Target>;
+function manyRelation<Target extends string>(table: Target, options: { through: RelationThrough }): ThroughManyRelation<Target>;
+function manyRelation(table: string, options: { field: string; references?: string } | { through: RelationThrough }): RelationDefinition {
+    if ("through" in options) {
+        return { kind: "many", table, through: { ...options.through } };
+    }
+
+    return { field: options.field, kind: "many", references: options.references ?? "_id", table };
+}
+
+/** The `r` passed to `.relations((r) => …)`: `one`/`many` produce {@link RelationDefinition}s, defaulting `references` to `_id`. */
 const relationBuilder: RelationBuilder = {
-    many: (table, options) => {
-        return { field: options.field, kind: "many", references: options.references ?? "_id", table };
-    },
+    many: manyRelation,
     one: (table, options) => {
         return { field: options.field, kind: "one", onDelete: options.onDelete, references: options.references ?? "_id", table };
     },
@@ -356,6 +465,16 @@ interface VectorIndexOptions {
     /** Optional projection of the source row into Vectorize metadata. */
     metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
     metric: VectorMetric;
+
+    /**
+     * Identifier of the model `embed` calls, e.g. `"@cf/baai/bge-base-en-v1.5"`.
+     * `embed` is a function Lunora cannot inspect, so this string is how a model
+     * swap becomes visible: the `backfillVectors` admin op records it and
+     * re-embeds the table when it changes. Omit it and a model change goes
+     * unnoticed, as does a change to `select` or `metadata`, until the backfill
+     * is run with `restart: true`.
+     */
+    model?: string;
     /** The vector source: which table, and how to derive the embedded text. */
     source: { select: (row: Record<string, unknown>) => string; table: string };
 }
@@ -365,8 +484,8 @@ interface VectorIndexOptions {
  * `defineSchema`) and a fluent builder for indexes + sharding metadata.
  */
 const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape): TableBuilder<Shape> => {
-    // Work on a shallow copy so `.softDelete()` can inject its marker column
-    // without mutating the caller's object literal.
+    // Work on a shallow copy so `.softDelete()` and `.timestamps()` can inject their
+    // columns without mutating the caller's object literal.
     const shape = { ...inputShape };
 
     const aggregateIndexes: AggregateIndexDefinition[] = [];
@@ -380,13 +499,48 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
     const vectorIndexes: TableVectorIndex[] = [];
     let shardMode: ShardMode = { kind: "root" };
     let isCommitOrdered = false;
+    let dropsStalePatches = false;
     let isExternallyManaged = false;
     let isMemory = false;
     let isPublic = false;
     let ownerField: string | undefined;
     let softDelete: { field: string } | undefined;
+    let timestampsField: string | undefined;
+
+    /** Add a column the author did not write. A column of the same name that the author declared wins. */
+    const injectColumn = (field: string, validator: Validator): void => {
+        if (!(field in shape)) {
+            (shape as Record<string, Validator>)[field] = validator;
+        }
+    };
     let ttl: TtlDefinition | undefined;
     let externalSource: ExternalSourceDefinition | undefined;
+
+    /**
+     * Write the table's shard tier, refusing a second, contradicting one.
+     * `.shardBy()` and `.global()` both own `shardMode`, so chaining them let
+     * the later call silently discard the earlier — the table landed on a tier
+     * the author never chose, losing either per-shard isolation or replicated
+     * edge reads, with nothing visible at build time or runtime.
+     *
+     * Unlike the `.source()` contradictions below, this one cannot be deferred
+     * to `defineSchema`: the whole-table validators see only the survivor, so
+     * by then the collision has left no trace. The chain is the only place it
+     * is still observable.
+     */
+    const setShardMode = (next: ShardMode): void => {
+        // Two non-root kinds exist, so "already set and different" is exactly
+        // the `.shardBy()`/`.global()` collision. Re-stating the same tier is
+        // redundant, not contradictory, and stays allowed.
+        if (shardMode.kind !== "root" && shardMode.kind !== next.kind) {
+            throw new LunoraError(
+                "INTERNAL",
+                "shardBy/global: a table cannot be both .shardBy(key) and .global() — pick one. .shardBy(key) puts the rows in one Durable Object per key (isolation, poke-live reactivity); .global() puts them in a single replicated backend read from the edge.",
+            );
+        }
+
+        shardMode = next;
+    };
 
     const builder: TableBuilder<Shape> = {
         aggregateIndex(name, options) {
@@ -424,6 +578,14 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
         get commitOrderedMode() {
             return isCommitOrdered;
         },
+        dropStalePatches() {
+            dropsStalePatches = true;
+
+            return builder;
+        },
+        get dropStalePatchesMode() {
+            return dropsStalePatches;
+        },
         externallyManaged() {
             isExternallyManaged = true;
 
@@ -438,7 +600,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
             return geoIndexes;
         },
         global(options?: { backend?: GlobalBackend }) {
-            shardMode = { backend: options?.backend ?? "d1", kind: "global" };
+            setShardMode({ backend: options?.backend ?? "d1", kind: "global" });
 
             return builder;
         },
@@ -548,7 +710,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
         },
         shape,
         shardBy(field) {
-            shardMode = { field, kind: "shardBy" };
+            setShardMode({ field, kind: "shardBy" });
 
             return builder;
         },
@@ -590,11 +752,57 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
             // and nullable so `restore()` can clear it with `patch({ [field]: null })`;
             // set to `Date.now()` on soft delete. Idempotent — if the user already
             // declared the column, their validator wins.
-            if (!(field in shape)) {
-                (shape as Record<string, Validator>)[field] = v.optional(v.number().nullable());
+            if (field === timestampsField) {
+                throw new LunoraError("INTERNAL", `defineTable: .softDelete() and .timestamps() both use "${field}"; give one of them another field`);
             }
 
+            injectColumn(field, v.optional(v.number().nullable()));
+
             return builder;
+        },
+        timestamps(options) {
+            const field = options?.field ?? "updatedAt";
+
+            if (timestampsField !== undefined) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineTable: .timestamps() was called twice ("${timestampsField}" and "${field}"); one table tracks one last-change column`,
+                );
+            }
+
+            if (field === softDelete?.field) {
+                throw new LunoraError("INTERNAL", `defineTable: .softDelete() and .timestamps() both use "${field}"; give one of them another field`);
+            }
+
+            // A column the author declared is kept, but only if it already honours the contract `.timestamps()`
+            // promises: epoch milliseconds, stamped on insert and restamped on every update. Anything less would make
+            // this call silently do nothing, or stamp a column of the wrong type.
+            const declared = (
+                shape as Record<string, { _meta?: { column?: { defaultFn?: unknown; defaultValue?: unknown; onUpdateFn?: unknown } }; kind?: string }>
+            )[field];
+            const column = declared?._meta?.column;
+
+            if (
+                declared !== undefined &&
+                (declared.kind !== "timestamp" || column?.onUpdateFn === undefined || (column.defaultFn === undefined && column.defaultValue === undefined))
+            ) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineTable: .timestamps() would add "${field}", but the table already declares it as something other than v.timestamp().defaultNow().$onUpdateFn(() => Date.now()); remove the column or declare it that way`,
+                );
+            }
+
+            timestampsField = field;
+            injectColumn(
+                field,
+                v
+                    .timestamp()
+                    .defaultNow()
+                    .$onUpdateFn(() => Date.now()),
+            );
+
+            // The widened return type adds the column to `Shape`; the runtime object is the same builder.
+            return builder as never;
         },
         get triggerMap() {
             return triggers;
@@ -622,6 +830,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
                 field,
                 metadata: options.metadata,
                 metric: options.metric,
+                model: options.model,
                 name: options.index,
             });
 
@@ -644,6 +853,7 @@ const defineVectorIndex = (options: VectorIndexOptions): VectorIndexDefinition =
         kind: "vectorIndex",
         metadata: options.metadata,
         metric: options.metric,
+        model: options.model,
         select: options.source.select,
         table: options.source.table,
     };
@@ -743,11 +953,19 @@ type ExtendableSchema<T extends Record<string, TableDefinition>> = {
      * into the new one.
      *
      * Note: this pins **DO-backed** state only. D1-backed state — `.global()`
-     * tables and `@lunora/auth` sessions alike — is governed by D1's own location
+     * tables and D1-mode `@lunora/auth` — is governed by D1's own location
      * settings, not this option.
+     *
+     * DO-backed auth (`.auth({ namespace })`) is pinned only with
+     * `{ pinAuth: true }`, and codegen refuses a project that has it without
+     * the option. It was unpinned before, so pinning it resolves every user,
+     * account and session to a new, empty object: the option is the explicit
+     * "I will copy that data across, or have none" acknowledgement. See the
+     * data-residency docs for the copy. Voice sessions are pinned without it:
+     * they store nothing, and their transcripts are shard rows, pinned already.
      * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
      */
-    jurisdiction: (jurisdiction: DurableObjectJurisdiction) => ExtendableSchema<T>;
+    jurisdiction: (jurisdiction: DurableObjectJurisdiction, options?: { pinAuth?: boolean }) => ExtendableSchema<T>;
 
     /**
      * Turn on secure-by-default RLS for the whole schema. Every table is then
@@ -767,7 +985,7 @@ const withExtend = <T extends Record<string, TableDefinition>>(schema: Schema<T>
         ): ExtendableSchema<PrefixedTables<X, Key> & T> {
             return withExtend(mergeSchemaExtension(schema, extension));
         },
-        jurisdiction(_jurisdiction: DurableObjectJurisdiction): ExtendableSchema<T> {
+        jurisdiction(_jurisdiction: DurableObjectJurisdiction, _options?: { pinAuth?: boolean }): ExtendableSchema<T> {
             // Authoring-time, type-checked declaration only. The jurisdiction is
             // a worker-side residency concern: codegen reads the literal off the
             // schema AST and emits it into the generated `createWorker({ jurisdiction })`
@@ -970,6 +1188,15 @@ const SYSTEM_INDEX_FIELDS_SET = new Set<string>(SYSTEM_INDEX_FIELDS);
 const assertFieldInShape = (tableName: string, indexName: string, field: string, table: TableDefinition): void => {
     if (SYSTEM_INDEX_FIELDS_SET.has(field) || field in table.shape) {
         return;
+    }
+
+    // A dotted path would reach the DDL as one quoted identifier: `node:sqlite` rejects it, while workerd's SQLite
+    // (and so D1) reads an unknown double-quoted name as a string literal and would index that constant instead.
+    if (field.includes(".")) {
+        throw new LunoraError(
+            "INDEX_FIELD_NESTED_PATH",
+            `defineSchema: table "${tableName}" index "${indexName}" indexes the nested path ${JSON.stringify(field)}, but indexes cover top-level columns only. Denormalise the value into its own column and index that instead.`,
+        );
     }
 
     throw new LunoraError("INTERNAL", `defineSchema: table "${tableName}" index "${indexName}" names column "${field}" which is not in the table's shape`);
@@ -1290,6 +1517,68 @@ const validateGlobalBigint = (tables: Record<string, TableDefinition>): void => 
     }
 };
 
+/**
+ * `.dropStalePatches()` needs a per-shard changelog to read the caller's baseline
+ * out of, and a `.global()` table has none — its rows live in D1, outside any
+ * shard's `__cdc_log`. The flag would be silently inert there, which is exactly
+ * the failure this rejects: a table that looks protected and is not.
+ */
+const validateDropStalePatches = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (table.dropStalePatchesMode === true && table.shardMode.kind === "global") {
+            throw new LunoraError(
+                "INTERNAL",
+                `defineSchema: table "${tableName}" is both .global() and .dropStalePatches(). The stale check reads the caller's baseline out of the shard's \`__cdc_log\`, which a global (D1/Hyperdrive) table has no entries in — so every patch would read as "no baseline" and apply unchanged. Drop one of the two.`,
+            );
+        }
+    }
+};
+
+/**
+ * Reject `.ttl()` on a `.global()` table.
+ *
+ * The sweep is a shard's alarm deleting rows from its own SQLite. A `.global()`
+ * table's rows live in D1 (or Hyperdrive), which no shard owns, so no alarm ever
+ * visited them: the table accepted `.ttl()`, documented expiry, and kept every
+ * expired row forever. Refusing is the same call `.dropStalePatches()` makes —
+ * a policy that looks enforced and is not is worse than one that will not build.
+ */
+const validateGlobalTtl = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (table.ttlPolicy !== undefined && table.shardMode.kind === "global") {
+            throw new LunoraError("INTERNAL", `defineSchema: ${globalTtlMessage(tableName)}`);
+        }
+    }
+};
+
+/**
+ * Reject a vector index on a `.global()` table — inline `.vectorize()` or a
+ * standalone `defineVectorIndex()` whose `source.table` is one.
+ *
+ * Vector sync is the shard write path's post-commit hook, and a `.global()`
+ * table's writes go to the SQL tier (D1/Hyperdrive), which has no such hook: the
+ * combination deployed, took writes, and indexed none of them. Nothing orders
+ * those writes either — two shards writing one global row would race their
+ * embeds — so wiring a hook there would trade "never indexed" for "sometimes
+ * stale". Keep the vectorized table shard-local, or maintain the index yourself
+ * with `ctx.vectors.upsert` / `deleteByIds` next to the write.
+ *
+ * Exported package-internally so `./plugin`'s merge re-runs it over the tables
+ * and indexes an extension contributes.
+ */
+const validateGlobalVectors = (tables: Record<string, TableDefinition>, vectorIndexes: Record<string, VectorIndexDefinition>): void => {
+    const sources: [string, string][] = [
+        ...Object.entries(tables).flatMap(([tableName, table]) => table.vectorIndexes.map((index): [string, string] => [tableName, index.name])),
+        ...Object.entries(vectorIndexes).map(([indexName, index]): [string, string] => [index.table, indexName]),
+    ];
+
+    for (const [tableName, indexName] of sources) {
+        if (tables[tableName]?.shardMode.kind === "global") {
+            throw new LunoraError("INTERNAL", `defineSchema: ${globalVectorIndexMessage(tableName, indexName)}`);
+        }
+    }
+};
+
 const validateCommitOrdered = (tables: Record<string, TableDefinition>): void => {
     for (const [tableName, table] of Object.entries(tables)) {
         if (table.commitOrderedMode) {
@@ -1320,6 +1609,22 @@ const validateCommitOrdered = (tables: Record<string, TableDefinition>): void =>
     }
 };
 
+/**
+ * The per-table mode conflicts: each rejects a combination (`.global()` with
+ * `.ttl()`, `.commitOrdered()`, `.dropStalePatches()`, a `v.bigint()` column;
+ * `.memory()` with a companion it cannot clear) whose promise the backend it
+ * lands on cannot keep. Run by `defineSchema` and again by
+ * `mergeSchemaExtension` over the merged set, so a table an `.extend()` or a
+ * plugin contributes is held to the same rules as one the app declared.
+ */
+const validateTableModes = (tables: Record<string, TableDefinition>): void => {
+    validateCommitOrdered(tables);
+    validateDropStalePatches(tables);
+    validateGlobalBigint(tables);
+    validateGlobalTtl(tables);
+    validateMemoryTables(tables);
+};
+
 const defineSchema = <T extends Record<string, TableDefinition>>(
     tables: T,
     vectorIndexes: Record<string, VectorIndexDefinition> = {},
@@ -1329,21 +1634,32 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
     fillIndexTableNames(tables);
     attachStandaloneIndexes(tables, aggregateIndexes, rankIndexes);
     validateExternalSources(tables);
-    validateCommitOrdered(tables);
-    validateGlobalBigint(tables);
-    validateMemoryTables(tables);
+    validateTableModes(tables);
+    validateGlobalVectors(tables, vectorIndexes);
     validateIndexFields(tables);
+    validateThroughRelations(tables);
 
     return withExtend({ tables, vectorIndexes });
 };
 
-// `validateIndexFields` is exported package-internally (not re-exported from
+// `validateIndexFields` (and `validateTableModes`, for the same reason) is
+// exported package-internally (not re-exported from
 // `./index`, so it stays outside the public API surface) so `./plugin`'s
 // `mergeSchemaExtension` can re-run it against the merged table set — the
 // seam that closes the "extension-contributed bad index never validated" gap
 // (plan 258 §1). Both `mergeSchemaExtension` callers (`withExtend.extend()`
 // here and `installPlugins` in `./plugin`) get the re-validation for free.
-export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, indexFieldsFromSchema, validateIndexFields };
+export {
+    defineAggregateIndex,
+    defineRankIndex,
+    defineSchema,
+    defineTable,
+    defineVectorIndex,
+    indexFieldsFromSchema,
+    validateGlobalVectors,
+    validateIndexFields,
+    validateTableModes,
+};
 
 export type {
     AggregateIndexOptions,
@@ -1356,6 +1672,7 @@ export type {
     RankIndexOptions,
     RelationBuilder,
     TableBuilder,
+    ThroughManyRelation,
     VectorIndexOptions,
     VectorizeOptions,
 };

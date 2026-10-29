@@ -16,11 +16,11 @@
  *
  * The envelope literals below are the same ones `packages/do`'s
  * `shard-do.dispatch-result-wire.test.ts` asserts a real shard emits, and both
- * sides run the payload through the same `shared/wire-codec` — that is the join.
+ * sides run the payload through the same `packages/wire/src/wire-codec` — that is the join.
  */
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { createDispatchRunner } from "../src/create-dispatch-runner";
 import type { FunctionReference } from "../src/types";
 

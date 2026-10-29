@@ -8,7 +8,7 @@
  * Node-safe (structural binding types only) so it's unit-testable with
  * plain-object env doubles.
  */
-import createQueues from "./create-queues";
+import { createQueues, resolveQueueBinding } from "./create-queues";
 import type { QueueBindingLike, QueueBindingSpec, Queues } from "./types";
 
 /**
@@ -19,16 +19,16 @@ import type { QueueBindingLike, QueueBindingSpec, Queues } from "./types";
  * the missing queue is actually used.
  */
 // eslint-disable-next-line import/prefer-default-export -- named export by package convention; the index re-exports it
-export const createQueueContext = (env: Record<string, unknown>, specs: ReadonlyArray<QueueBindingSpec>): Queues => {
+export const createQueueContext = <Name extends string>(env: Record<string, unknown>, specs: ReadonlyArray<QueueBindingSpec<Name>>): Queues<Name> => {
     const bindings: Record<string, QueueBindingLike> = {};
 
     for (const spec of specs) {
-        const binding = env[spec.binding] as QueueBindingLike | undefined;
+        const binding = resolveQueueBinding(env, spec.binding);
 
-        if (binding && typeof binding.send === "function" && typeof binding.sendBatch === "function") {
+        if (binding) {
             bindings[spec.exportName] = binding;
         }
     }
 
-    return createQueues({ bindings });
+    return createQueues<Name>({ bindings });
 };

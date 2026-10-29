@@ -25,21 +25,25 @@
  * hot path, enable better-auth's `session.cookieCache` so most requests are served
  * from the signed cookie instead of a round-trip in here — at the cost of a
  * staleness window on revocation, which is the trade to make deliberately.
- * @experimental
  */
 import { getAuthTablesWithResolvedIndexes } from "@better-auth/core/db/internal";
+import { toErrorBody } from "@lunora/errors";
 
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { lunoraDoAdapter } from "./adapter";
 import type { AuthAuditEntry, ReadAuthAuditOptions } from "./audit";
-import { createAuthAuditReader, ensureAuthAuditTable } from "./audit";
+import { AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable } from "./audit";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
+import { handleAuthDiscoveryRequest } from "./discovery";
 import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
 import { doExecutor } from "./do-store";
 import { handleAuthRequest } from "./handler";
+import type { MoveOrder } from "./jurisdiction-move";
+import { handleMoveRequest, MOVE_PATH } from "./jurisdiction-move";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
+import type { SqlExecutor } from "./sql-store";
 
 /**
  * The Durable Object state slice this class needs — structural so unit tests can
@@ -105,12 +109,8 @@ const parseReadAuditOptions = (parsed: unknown): { error: string } | { options: 
 
 /**
  * Options for the auth DO, beyond the better-auth options themselves.
- * @experimental
  */
 interface AuthDoOptions {
-    /** Base path the auth routes are served under. Must match the worker's. */
-    basePath?: string;
-
     /**
      * Shared secret authenticating the worker on {@link RESOLVE_SESSION_PATH}.
      *
@@ -138,9 +138,20 @@ interface AuthDoOptions {
  *     }
  * }
  * ```
- * @experimental
  */
 class LunoraAuthDO {
+    /**
+     * One executor for the object's lifetime, not one per request.
+     *
+     * `ensureAuthAuditTable` single-flights its DDL in a `WeakMap` keyed on the
+     * executor object, so a fresh `doExecutor(this.#storage)` per read is a
+     * fresh key every time: the cache never hits and every audit read re-runs
+     * `CREATE TABLE IF NOT EXISTS` plus an `ALTER TABLE` that always throws and
+     * is swallowed. The executor is a stateless pair of closures over `storage`,
+     * so sharing it is free.
+     */
+    #auditExecutor: SqlExecutor;
+
     readonly #options: AuthDoOptions;
 
     readonly #optionsFactory: () => LunoraAuthOptions;
@@ -151,6 +162,9 @@ class LunoraAuthDO {
 
     #schemaApplied = false;
 
+    /** Physical table names that decide the jurisdiction copy's order, known once `#ensureReady` has run. */
+    #moveOrder: MoveOrder = { first: ["user"], last: [] };
+
     /**
      * @param state The Durable Object state — its `storage` becomes better-auth's database.
      * @param optionsFactory Builds the better-auth options. Called once, lazily, on the first request.
@@ -158,6 +172,7 @@ class LunoraAuthDO {
      */
     public constructor(state: AuthDoState, optionsFactory: () => LunoraAuthOptions, options: AuthDoOptions = {}) {
         this.#storage = state.storage;
+        this.#auditExecutor = doExecutor(state.storage);
         this.#optionsFactory = optionsFactory;
         this.#options = options;
     }
@@ -175,19 +190,26 @@ class LunoraAuthDO {
         }
 
         const options = this.#optionsFactory();
+        // Through `resolveAuthOptions`, for the same reason the D1 migration path
+        // does: `createAuth` defaults rate limiting to `storage: "database"`, and
+        // that table only appears in `getAuthTables` once the option is set. Deriving
+        // from the raw options would omit it and the limiter's first read would fail
+        // on a missing table.
+        const resolved = resolveAuthOptions(options);
+
+        const { tables } = getAuthTablesWithResolvedIndexes(resolved);
+
+        // The copy into a pinned object goes `user`, `account`, `session` first, and the
+        // unbounded audit and rate-limit tables last.
+        this.#moveOrder = {
+            first: [tables["user"]?.modelName ?? "user", tables["account"]?.modelName ?? "account", tables["session"]?.modelName ?? "session"],
+            last: [AUTH_AUDIT_TABLE, tables["rateLimit"]?.modelName ?? "rateLimit"],
+        };
 
         if (!this.#schemaApplied) {
             // better-auth's migrator is kysely-only and this storage is not a kysely
             // dialect, so the schema is derived from better-auth's own resolved
             // tables instead. Every statement is IF NOT EXISTS.
-            //
-            // Through `resolveAuthOptions`, for the same reason the D1 migration path
-            // does: `createAuth` defaults rate limiting to `storage: "database"`, and
-            // that table only appears in `getAuthTables` once the option is set. Deriving
-            // from the raw options would omit it and the limiter's first read would fail
-            // on a missing table.
-            const resolved = resolveAuthOptions(options);
-
             for (const statement of authDoSchemaStatements(resolved)) {
                 // The cursor is lazy in workerd — iterating is what runs the statement.
                 [...this.#storage.sql.exec(statement)];
@@ -275,7 +297,10 @@ class LunoraAuthDO {
             }
         } catch (error) {
             // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
-            console.error("@lunora/auth: could not drop the reverted `account.issuer` column; sign-ups will fail until it is removed.", error);
+            console.error(
+                "@lunora/auth: could not drop the reverted `account.issuer` column; if it is still present, sign-ups will fail until it is removed.",
+                error,
+            );
         }
     }
 
@@ -285,6 +310,10 @@ class LunoraAuthDO {
      * `AuthAuditEntry` is entirely JSON-safe (`ts` and `seq` are numbers, there are no
      * `Date` values), so proxying it over HTTP is lossless rather than a lossy
      * serialisation the studio would have to compensate for.
+     *
+     * Ordering comes from the reader: newest-first without a cursor, oldest-first
+     * when the body carries `sinceSeq`, so a caller walking the cursor forward
+     * reaches every row rather than re-reading the head of the log.
      *
      * The body is parsed and validated defensively (plan 280 §5 S3): a
      * malformed body (not JSON at all) previously threw an unhandled exception
@@ -314,16 +343,63 @@ class LunoraAuthDO {
             return Response.json({ error: parsed.error }, { status: 400 });
         }
 
-        const executor = doExecutor(this.#storage);
-
         // The audit table is not part of `authTables`, so the schema pass does not
         // create it. Ensuring it here (rather than on every cold start) keeps it off
-        // the request path for apps that never read the log.
-        await ensureAuthAuditTable(executor);
+        // the request path for apps that never read the log; the shared executor is
+        // what lets the single-flight cache actually hit after the first read.
+        await ensureAuthAuditTable(this.#auditExecutor);
 
-        const entries = await createAuthAuditReader(executor).read(parsed.options);
+        const entries = await createAuthAuditReader(this.#auditExecutor).read(parsed.options);
 
         return Response.json({ entries } satisfies { entries: AuthAuditEntry[] });
+    }
+
+    /**
+     * Serve one half of a jurisdiction move (see `jurisdiction-move.ts`): this object is
+     * either the un-pinned source or the pinned target. Same secret as the other
+     * internal routes — it reads and writes every auth table.
+     */
+    async #move(request: Request): Promise<Response> {
+        if (request.method !== "POST" || !this.#isTrustedCaller(request)) {
+            return Response.json({ error: "unauthorized" }, { status: 401 });
+        }
+
+        try {
+            const body: Record<string, unknown> = await request.json();
+            const result = await handleMoveRequest(this.#storage, body, {
+                // The tables are gone: materialise them again on the next request rather
+                // than serve it from a schema this instance still believes is applied.
+                onPurge: () => {
+                    this.#schemaApplied = false;
+                    this.#auth = undefined;
+                    // A fresh executor, so the audit table's single-flight "already created"
+                    // cache (keyed on the executor) does not outlive the table.
+                    this.#auditExecutor = doExecutor(this.#storage);
+                },
+                order: () => this.#moveOrder,
+                prepare: () => {
+                    this.#ensureReady();
+                },
+                userTable: () => this.#moveOrder.first[0] ?? "user",
+            });
+
+            return Response.json(result);
+        } catch (error) {
+            // `data` is plain JSON the move built (counts, table names, a SQLite error class),
+            // so it passes through for the worker to hand the admin caller.
+            const { body, redacted, status } = toErrorBody(error, {
+                encodeData: (data) => data,
+                fallbackCode: "AUTH_MOVE_FAILED",
+                redactedMessage: "auth move failed",
+            });
+
+            if (redacted) {
+                // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+                console.error("@lunora/auth: auth move failed", error);
+            }
+
+            return Response.json({ error: body }, { status });
+        }
     }
 
     /**
@@ -392,8 +468,13 @@ class LunoraAuthDO {
     }
 
     /**
-     * Serve an auth request. Routes under `basePath` go to better-auth; the internal
-     * session route is handled here; anything else is a 404.
+     * Serve an auth request. Routes under `/api/auth` go to better-auth, and so do
+     * the OAuth discovery documents its options configure (`./discovery`); the
+     * internal session route is handled here; anything else is a 404.
+     *
+     * The base path is not configurable. The worker half only ever forwards
+     * `/api/auth/*` (`createDoAuthWiring`, which codegen calls with no base path),
+     * so a second knob here could only ever disagree with it.
      */
     public async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
@@ -406,8 +487,14 @@ class LunoraAuthDO {
             return this.#readAudit(request);
         }
 
+        if (url.pathname === MOVE_PATH) {
+            return this.#move(request);
+        }
+
         const auth = this.#ensureReady();
-        const response = await handleAuthRequest(auth, request, this.#options.basePath);
+        // The worker already filtered discovery requests to the derived paths; the object
+        // re-checks against its own options on purpose (defence in depth).
+        const response = (await handleAuthRequest(auth, request)) ?? (await handleAuthDiscoveryRequest(auth, request));
 
         return response ?? Response.json({ error: "not an auth route" }, { status: 404 });
     }

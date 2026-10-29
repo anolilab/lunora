@@ -4,6 +4,7 @@ import type { FunctionReference, OptimisticMessage, SubscriptionErrorCallback } 
 import { maxSeq, reconcileOptimistic } from "@lunora/client";
 import { useRef, useState } from "react";
 
+import { useLunora } from "./lunora-provider";
 import type { AgentThreadRecord, AgentThreadStatus } from "./use-agent";
 import { useMutation } from "./use-mutation";
 import { useStream } from "./use-stream";
@@ -27,8 +28,8 @@ interface AgentChatMessage {
     optimistic?: boolean;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
-    /** Approval lifecycle marker on a human-in-the-loop tool message. */
-    status?: "approved" | "awaiting_approval" | "rejected";
+    /** Approval or secret-request lifecycle marker on a human-in-the-loop tool message. */
+    status?: "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
     toolCallId?: string;
     toolCalls?: ReadonlyArray<{ id: string; input: unknown; name: string }>;
     toolName?: string;
@@ -81,12 +82,30 @@ type AgentMessagesReference = FunctionReference<"query", { key: string; limit?: 
 /** The `agents:agentResolveApproval` reference — resolves a human-in-the-loop tool approval. */
 type AgentApprovalReference = FunctionReference<
     "mutation",
-    { decision: "approve" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string },
+    { decision: "approve" | "approve_for_thread" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string },
     { resolved: boolean }
 >;
 
+/** The `agents:agentSupplySecret` reference — stores a person's value for a paused `requestSecretTool` call. */
+type AgentSupplySecretReference = FunctionReference<"mutation", { secret: string; threadKey: string; toolCallId: string }, { resolved: boolean }>;
+
+/** The `agents:agentDeclineSecret` reference — refuses a paused `requestSecretTool` call. */
+type AgentDeclineSecretReference = FunctionReference<"mutation", { threadKey: string; toolCallId: string }, { resolved: boolean }>;
+
 /** The `agents:agentThread` reference — live thread status + in-flight `instanceId`. */
 type AgentThreadReference = FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;
+
+/** A tool approved for the rest of a thread, as `agents:agentApprovalGrants` lists it. */
+interface AgentApprovalGrant {
+    createdAt: number;
+    toolName: string;
+}
+
+/** The `agents:agentApprovalGrants` reference — live thread-scoped approval grants. */
+type AgentApprovalGrantsReference = FunctionReference<"query", { key: string }, ReadonlyArray<AgentApprovalGrant>>;
+
+/** The `agents:agentRevokeApprovalGrant` reference — removes a thread-scoped approval grant. */
+type AgentRevokeApprovalGrantReference = FunctionReference<"mutation", { threadKey: string; toolName: string }, { revoked: boolean }>;
 
 /**
  * An app stream reference that tees the agent's in-flight live events, keyed by
@@ -101,8 +120,12 @@ type AgentTokenStreamReference = FunctionReference<"stream", { key: string }, Ag
  */
 interface UseAgentChatApi {
     agents: {
+        agentApprovalGrants: AgentApprovalGrantsReference;
+        agentDeclineSecret: AgentDeclineSecretReference;
         agentMessages: AgentMessagesReference;
         agentResolveApproval: AgentApprovalReference;
+        agentRevokeApprovalGrant: AgentRevokeApprovalGrantReference;
+        agentSupplySecret: AgentSupplySecretReference;
         agentThread: AgentThreadReference;
     };
 }
@@ -122,7 +145,7 @@ interface UseAgentChatOptions {
     limit?: number;
 
     /**
-     * Called when the live history or thread subscription reports an error (a
+     * Called when the live history, thread, or grants subscription reports an error (a
      * session expiry, an RLS denial). Without it — and without reading `error` —
      * such a failure is invisible and `messages` / `status` freeze at their last
      * value.
@@ -149,26 +172,48 @@ interface UseAgentChatOptions {
 }
 
 interface UseAgentChatResult {
+    /** The tools approved for the rest of this thread, live. Empty until the grants subscription answers. */
+    approvalGrants: ReadonlyArray<AgentApprovalGrant>;
+
     /** Approve a paused human-in-the-loop tool call (optionally with a note). */
     approve: (toolCallId: string, note?: string) => Promise<void>;
+
+    /**
+     * Approve a paused tool call and grant that tool for the rest of the thread, so
+     * later calls to it run without pausing. Undo with {@link UseAgentChatResult.revokeGrant}.
+     */
+    approveForThread: (toolCallId: string, note?: string) => Promise<void>;
 
     /**
      * Terminate the in-flight run and mark its thread `"cancelled"`. Resolves as a
      * no-op when no `cancel` mutation was supplied or no run is in flight.
      */
     cancel: () => Promise<void>;
-    /** The history or thread subscription's last error, or `undefined`. */
+    /** Refuse a paused `requestSecretTool` call: the run resumes with a "declined" result. */
+    declineSecret: (toolCallId: string) => Promise<void>;
+    /** The history, thread, or grants subscription's last error, or `undefined`. */
     error: Error | undefined;
     /** Durable thread history (oldest first) plus any un-acknowledged optimistic user turns. */
     messages: ReadonlyArray<AgentChatMessage>;
     /** Reject a paused human-in-the-loop tool call (optionally with a reason). */
     reject: (toolCallId: string, note?: string) => Promise<void>;
+    /** Remove a thread-scoped approval grant so the tool's gate applies again to later calls. */
+    revokeGrant: (toolName: string) => Promise<void>;
     /** Start (or continue) a run with a user message; extra args merge over `sendArgs`. Appends an optimistic user turn. */
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
+
     /** The live thread status, or `undefined` before the thread exists. */
     status: AgentThreadStatus | undefined;
     /** The in-flight turn's streamed text — live-only, empty once the turn persists to `messages`. */
     streamingText: string;
+
+    /**
+     * Give a paused `requestSecretTool` call its value. Always sent online-only: the
+     * value is never queued, persisted or replayed, and the call rejects with
+     * `OFFLINE_NOT_QUEUED` while the connection is down. The hook keeps no copy; a
+     * failure rethrows the original error.
+     */
+    supplySecret: (toolCallId: string, secret: string) => Promise<void>;
 }
 
 /**
@@ -189,9 +234,12 @@ const NO_STREAM_REF: AgentTokenStreamReference = { __lunoraRef: "" };
 /** Stable empty history so the un-loaded subscription doesn't churn the merged list identity. */
 const EMPTY_MESSAGES: ReadonlyArray<Record<string, unknown>> = [];
 
+/** Stable empty grant list for the same reason as {@link EMPTY_MESSAGES}. */
+const EMPTY_GRANTS: ReadonlyArray<AgentApprovalGrant> = [];
+
 /**
  * A first-class agent chat surface: live durable history + in-flight token
- * streaming + the send / approve / reject / cancel writes, keyed by `threadKey`.
+ * streaming + the send / approve / reject / secret / cancel writes, keyed by `threadKey`.
  *
  * It composes the existing primitives rather than adding transport:
  * `useSubscription(api.agents.agentMessages)` for durable history,
@@ -214,6 +262,7 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
     const messagesArguments = limit === undefined ? { key: threadKey } : { key: threadKey, limit };
     const { data: history, error: historyError } = useSubscription(api.agents.agentMessages, messagesArguments, { onError });
     const { data: threadData, error: threadError } = useSubscription(api.agents.agentThread, { key: threadKey }, { onError });
+    const { data: grantsData, error: grantsError } = useSubscription(api.agents.agentApprovalGrants, { key: threadKey }, { onError });
 
     // The token stream is optional: with no reference we pass the sentinel + "skip"
     // so `useStream` never opens a stream (and `streamingText` stays empty).
@@ -223,6 +272,9 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
     const sendMutation = useMutation(sendReference);
     const cancelMutation = useMutation(cancelReference ?? NO_MUTATION_REF);
     const approvalMutation = useMutation(api.agents.agentResolveApproval);
+    const revokeMutation = useMutation(api.agents.agentRevokeApprovalGrant);
+    const declineMutation = useMutation(api.agents.agentDeclineSecret);
+    const client = useLunora();
 
     const [optimistic, setOptimistic] = useState<ReadonlyArray<OptimisticMessage>>([]);
     // A monotonic id source for optimistic rows — client-side only (the
@@ -288,6 +340,8 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
     const { mutate: sendMutate } = sendMutation;
     const { mutate: cancelMutate } = cancelMutation;
     const { mutate: resolveMutate } = approvalMutation;
+    const { mutate: revokeMutate } = revokeMutation;
+    const { mutate: declineMutate } = declineMutation;
 
     const send = async (input: string, args?: Record<string, unknown>): Promise<void> => {
         const id = nextIdRef.current;
@@ -315,7 +369,7 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
         }
     };
 
-    const resolve = async (decision: "approve" | "reject", toolCallId: string, note?: string): Promise<void> => {
+    const resolve = async (decision: "approve" | "approve_for_thread" | "reject", toolCallId: string, note?: string): Promise<void> => {
         if (instanceId === undefined) {
             throw new Error(`useAgentChat: cannot ${decision} — no in-flight run (thread has no instanceId)`);
         }
@@ -325,7 +379,25 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
 
     const approve = (toolCallId: string, note?: string): Promise<void> => resolve("approve", toolCallId, note);
 
+    const approveForThread = (toolCallId: string, note?: string): Promise<void> => resolve("approve_for_thread", toolCallId, note);
+
     const reject = (toolCallId: string, note?: string): Promise<void> => resolve("reject", toolCallId, note);
+
+    // No optimistic delete: the grants subscription re-pushes the list once the revoke commits.
+    const revokeGrant = async (toolName: string): Promise<void> => {
+        await revokeMutate({ threadKey, toolName });
+    };
+
+    const supplySecret = async (toolCallId: string, secret: string): Promise<void> => {
+        // Straight through the client, not `useMutation`: that wrapper keeps each
+        // call's variables (this secret) in TanStack's mutation cache, and it holds
+        // a call until the browser is online, where `onlineOnly` must refuse it.
+        await client.mutation(api.agents.agentSupplySecret, { secret, threadKey, toolCallId }, { onlineOnly: true });
+    };
+
+    const declineSecret = async (toolCallId: string): Promise<void> => {
+        await declineMutate({ threadKey, toolCallId });
+    };
 
     const cancel = async (): Promise<void> => {
         // No cancel path, or no run to cancel — nothing to terminate.
@@ -337,8 +409,31 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
     };
 
     // History is the surface the user reads, so its failure wins when both fail.
-    return { approve, cancel, error: historyError ?? threadError, messages, reject, send, status, streamingText };
+    return {
+        approvalGrants: grantsData ?? EMPTY_GRANTS,
+        approve,
+        approveForThread,
+        cancel,
+        declineSecret,
+        error: historyError ?? threadError ?? grantsError,
+        messages,
+        reject,
+        revokeGrant,
+        send,
+        status,
+        streamingText,
+        supplySecret,
+    };
 };
 
-export type { AgentChatMessage, AgentLiveEvent, AgentProgressEvent, AgentTokenDelta, UseAgentChatApi, UseAgentChatOptions, UseAgentChatResult };
+export type {
+    AgentApprovalGrant,
+    AgentChatMessage,
+    AgentLiveEvent,
+    AgentProgressEvent,
+    AgentTokenDelta,
+    UseAgentChatApi,
+    UseAgentChatOptions,
+    UseAgentChatResult,
+};
 export { useAgentChat };

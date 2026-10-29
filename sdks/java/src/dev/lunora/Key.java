@@ -182,7 +182,13 @@ public final class Key {
 
     /**
      * Quotes a string the way {@code JSON.stringify} does: {@code <}, {@code >}, {@code &}, U+2028
-     * and U+2029 all stay raw.
+     * and U+2029 all stay raw, a well-formed surrogate pair stays raw, and a LONE surrogate is
+     * written as a lowercase {@code \\udXXX} escape.
+     *
+     * <p>The lone surrogate cannot stay raw: the transport UTF-8-encodes this text, and the JDK's
+     * encoder replaces an unpaired surrogate with {@code ?}, so the wire and the stable key carried
+     * a different string from the one the caller wrote — and every lone surrogate collided with a
+     * literal question mark.
      */
     static String jsonString(String value) {
         StringBuilder out = new StringBuilder(value.length() + 2);
@@ -201,7 +207,11 @@ public final class Key {
                 case '\b' -> out.append("\\b");
                 case '\f' -> out.append("\\f");
                 default -> {
-                    if (character < 0x20) {
+                    if (Character.isHighSurrogate(character)
+                            && index + 1 < value.length()
+                            && Character.isLowSurrogate(value.charAt(index + 1))) {
+                        out.append(character).append(value.charAt(++index));
+                    } else if (character < 0x20 || Character.isSurrogate(character)) {
                         out.append(String.format(Locale.ROOT, "\\u%04x", (int) character));
                     } else {
                         out.append(character);

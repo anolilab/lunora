@@ -36,7 +36,7 @@ export const send = mutation.input({ channelId: v.id("channels"), text: v.string
         throw new LunoraError("UNAUTHORIZED", "Sign in to post");
     }
 
-    const channel = await ctx.db.get(args.channelId);
+    const channel = await ctx.db.get("channels", args.channelId);
 
     if (!channel) {
         throw new LunoraError("NOT_FOUND", "That channel no longer exists");
@@ -153,9 +153,23 @@ rollback code; a rejected mutation leaves the UI as it was.
 ```tsx
 const { mutate: send } = useMutation(api.messages.send);
 
-await send({ channelId, text }, { optimistic: (current) => [...(current ?? []), draft] });
+await send(
+    { channelId, text },
+    {
+        optimisticUpdate: (store, args) => {
+            const current = store.getQuery(api.messages.list, { channelId: args.channelId }) ?? [];
+
+            store.setQuery(api.messages.list, { channelId: args.channelId }, [...current, draft]);
+        },
+    },
+);
 // If this rejects, `draft` is removed from the list automatically.
 ```
+
+`optimisticUpdate` is what names the query a write patches. (The per-call
+`optimistic: (current) => next` shortcut targets only the subscription registered
+under the mutation's own reference and args — a counter or a document by id, not
+a `send` updating a `list`.)
 
 The rollback is conservative: it only restores when no newer server delta has
 superseded the optimistic write and no later optimistic write has stacked on top

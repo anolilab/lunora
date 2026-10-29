@@ -127,7 +127,7 @@ export const worker = defineContainer({
 
 ### Secrets and Secrets Store
 
-`secrets` forwards plain Worker secrets into the container env; `secretsStore` maps a _container env-var name → Cloudflare [Secrets Store](https://developers.cloudflare.com/secrets-store/) binding name_ and resolves each with its async `.get()` at first start (memoised). A collision with `env`/`secrets` is rejected at authoring time; a missing binding fails the start — the same fail-closed stance as `secrets`. Like `env`/`secrets`, these injected values only apply to implicit starts or a bare `start()`; a per-instance `start({ envVars })` replaces the env set wholesale (and skips Secrets Store resolution entirely).
+`secrets` forwards plain Worker secrets into the container env; `secretsStore` maps a _container env-var name → Cloudflare [Secrets Store](https://developers.cloudflare.com/secrets-store/) binding name_ and resolves each with its async `.get()` at first start (memoised). A collision with `env`/`secrets` is rejected at authoring time; a missing binding fails the start — the same fail-closed stance as `secrets`. A per-instance `start({ envVars })` replaces the env set wholesale (and skips Secrets Store resolution entirely), and is persisted for that instance: later starts, including implicit restarts, reuse it until `destroy()`. The override cannot change while the container is running or still starting: a differing `start({ envVars })` is rejected with `CONFLICT` in either case, so `stop()` it (and let any start in flight finish) first.
 
 ```ts
 export const worker = defineContainer({
@@ -179,6 +179,23 @@ export const job = defineContainer({
     image: "./containers/job",
     hardTimeout: "1h", // stopped after an hour, busy or not
 });
+```
+
+### Per-instance images and snapshots
+
+`schedulingPolicy: "durable_object"` (Cloudflare public beta) lets each instance pick its image and size at start, and save and restore its filesystem:
+
+```ts
+export const agentComputer = defineContainer({
+    schedulingPolicy: "durable_object",
+    images: { base: "./containers/base" },
+    image: "base",
+});
+
+const computer = ctx.containers.agentComputer.get(taskId);
+await computer.start({ image: "base", instanceType: "standard-2" });
+const saved = await computer.snapshot();
+await ctx.containers.agentComputer.get(otherId).start({ snapshot: saved });
 ```
 
 ### Calling Lunora from inside a container

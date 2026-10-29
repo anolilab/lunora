@@ -10,6 +10,10 @@ identity off `ctx.auth` (the same shape inside a `query`, a `mutation`, and an
 `action`) and use it to authorize work. Nothing else in a handler needs to know
 _how_ the caller proved who they are.
 
+`@lunora/auth` is one way to fill `ctx.auth`, not the only one. If Clerk, WorkOS,
+Auth0, Supabase or another OIDC provider already owns your sessions, verify its
+token instead. See [External auth](/docs/concepts/external-auth).
+
 ```ts
 import { mutation, v } from "@/lunora/_generated/server";
 
@@ -63,9 +67,11 @@ box that gives you:
   [`@lunora/auth/plugins`](/docs/packages/auth/plugins), so you don't chase deep
   import paths.
 - **Invite-only sign-up**: `inviteOnly()` closes self-serve registration to
-  addresses an administrator invited, on every path that mints a user — read the
-  security section before you rely on it, because an invitation is keyed by
-  email address and carries no secret token. See
+  addresses an administrator invited, on every path that mints a user. The
+  invitation carries a 256-bit secret token, so read the security section before
+  you rely on it: the link is a bearer credential anyone who receives it can
+  spend, and without `requireEmailVerification` whoever spends it holds a session
+  immediately. See
   [invite-only sign-up](/docs/packages/auth/plugins#invite-only-sign-up).
 
 ```ts
@@ -92,6 +98,38 @@ with real transactions. The full configuration surface (providers, rate
 limiting, migrations, the studio user dashboard) is in the
 [package reference](/docs/packages/auth).
 
+### Side effects on your own tables
+
+better-auth's `databaseHooks` receive the row and better-auth's own context —
+never a Lunora `MutationCtx`, and there is no seam to add one. The hook runs
+inside better-auth's write path, and a ctx is per-request state that `createAuth`
+(called once, at worker setup) does not have.
+
+So a side effect on an app table is a **separate write**, dispatched as an
+internal mutation over the shard client. That is the part worth designing for: a
+failure between the auth write and yours must leave a state the next attempt can
+repair, so key the mutation on the user id and make re-running it a no-op rather
+than assuming it runs exactly once.
+
+```ts
+databaseHooks: {
+    user: {
+        create: {
+            after: async (user) => {
+                // Idempotent by construction: upsert on the user id, never insert.
+                // `shard` is a createShardClient(env.SHARD).forShard(user.id) handle.
+                await shard.call(internal.profiles.ensureForUser, { userId: user.id });
+            },
+        },
+    },
+},
+```
+
+`lunoraDoAdapter` is the only configuration where the auth writes are themselves
+transactional (a Durable Object has real transactions; D1 does not) — and even
+there your app-table write sits outside that transaction, so the idempotency
+requirement does not go away.
+
 ## Routing `/api/auth/*`
 
 `handleAuthRequest(auth, request)` is the single entry point that routes every
@@ -102,7 +140,8 @@ so you fall through to the Lunora worker for everything else:
 
 ```ts
 // src/server/index.ts
-import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { handleAuthRequest } from "@lunora/auth";
+import { ensureMigrated } from "@lunora/auth/migrate";
 
 import { buildAuth } from "../../lunora/auth";
 
@@ -156,25 +195,159 @@ In React, [`@lunora/react`](/docs/packages/react)'s `useAuth` wraps this:
 import { useAuth } from "@lunora/react";
 
 function Account() {
-    const { user, token, setToken } = useAuth();
+    const { setToken, status, user } = useAuth();
 
-    if (!user) return <SignInForm onToken={setToken} />;
+    if (status === "loading") return <Spinner />;
+    if (status === "unauthenticated") return <SignInForm onToken={setToken} />;
     return (
         <div>
-            <span>{user.email}</span>
+            <span>{user?.email}</span>
             <button onClick={() => setToken(null)}>Sign out</button>
         </div>
     );
 }
 ```
 
-`setToken(jwt)` makes every later query/mutation/subscription authenticate as
-that user; `setToken(null)` signs out. `user` is resolved from better-auth's
+**Branch on `status`, not on whether `user` is null.** `user` is null both when
+there is no session and when a credential is held whose identity has not
+resolved — a reload while offline, or the window while a cookie session
+resolves. Gating on `user` renders the sign-in form to a signed-in user in both
+cases. The four states and what each one means are tabulated in the
+[`@lunora/client` reference](/docs/packages/client); `unreachable` is the one
+worth knowing about, and it gates as **authenticated**.
+
+`setToken(jwt)` stamps the bearer on every later **query, mutation and action**;
+`setToken(null)` signs out. A socket is authenticated once, at upgrade. In a
+browser the session cookie authenticates it by default. On React Native the
+session bearer rides the upgrade's `Authorization` header. A browser client
+created with `authTokenOnUpgrade: true` offers the bearer as a
+`Sec-WebSocket-Protocol` entry instead, which is how an
+[external identity provider](/docs/concepts/external-auth)'s token reaches a
+live query. `setAuthToken` always reconnects the sockets when a credential
+replaces another user's. When the bearer rides the upgrade, it also reconnects
+them when a bearer arrives on a signed-out client. A same-user refresh is handed
+to the open sockets in place, and bounces them warm only when the server refuses it. A cookie-session browser socket is left as it is.
+`client.setWsToken(token)` sends its value in the next `connect` frame and closes
+the shard sockets to force a reconnect. A server gated by `LUNORA_WS_BEARER`
+accepts only its one shared value there, so a per-user session needs an ungated
+server; the [React Native guide](/docs/frameworks/react-native) explains why. `user` is resolved from better-auth's
 `get-session` endpoint and refetched whenever the token changes. The value is
 shared across every mounted `useAuth`, so a sign-in in one component re-renders
 the rest. Outside React, the underlying primitives are
 `client.setAuthToken(token)` / `getAuthToken()` / `onAuthTokenChange(fn)` on the
 `LunoraClient`.
+
+### Cookie sessions: how the client learns the session changed
+
+With a cookie session (better-auth's default, and what `@lunora/auth-ui` uses)
+the client holds no token, so signing out or signing in as someone else changes
+nothing it can see. It learns who is signed in from the server: from
+`/get-session`, and from the `identity` frame every socket sends when it
+connects. Any change it hears about (a sign-out, a sign-in after a sign-out, a
+different user) retires the previous session. Every live query is blanked, the
+sockets reconnect on the new cookie, and `@lunora/react` clears its query cache.
+
+A sign-in or sign-out **in place**, without a reload, is reported for you:
+
+- `@lunora/auth-ui`'s flows tell every `LunoraClient` in the page themselves.
+- `createLunoraAuthClient` installs `lunoraSessionSync()`, a better-auth client
+  plugin that does the same after every auth request that can change the
+  session. If you call `createAuthClient` yourself, add it:
+
+```ts
+import { lunoraSessionSync } from "@lunora/auth/plugins/client";
+import { createAuthClient } from "better-auth/react";
+
+export const authClient = createAuthClient({ plugins: [lunoraSessionSync()] });
+```
+
+The report also reaches the browser's other tabs **on the same origin**. Each
+one re-checks the session without reloading, and retires the previous user's
+rows the same way. A sign-out made through better-auth's own client in another
+same-origin tab is picked up even without the plugin.
+
+A tab on a different origin that shares the cookie (for example
+`admin.example.com` beside `app.example.com` under a parent-domain cookie) is
+not told: browsers scope cross-tab messages to one origin. It switches identity
+when its socket next reconnects. Its offline writes stay safe meanwhile,
+because the worker refuses a replay whose cookie now belongs to someone else.
+The same applies to a session changed any other way, such as a custom endpoint.
+Call `notifyLunoraSessionChange()` from `@lunora/auth/plugins/client` to report
+it sooner.
+
+`/get-session` answering `401` or with no user counts as signed out. Any other
+failure, including a `403` from a WAF or bot challenge in front of the auth
+route, is not a verdict on anyone. The client keeps the identity it has.
+
+**Offline writes cannot change hands.** A write replayed under a cookie session
+names the user who queued it (`x-lunora-expect-subject`), and the worker
+refuses it with `409 IDENTITY_MISMATCH` when the cookie now belongs to someone
+else. For that check to work, your worker's `resolveIdentity` must return the
+**same `userId` as better-auth's `user.id`**, and RPC requests must carry the
+session cookie (a cross-origin client needs `credentials: "include"`).
+Otherwise every replay is refused, and the client logs a one-time warning that
+names this cause.
+
+If you set `security.cors.allowedHeaders`, your list is added to the headers the
+client sends on its own. It no longer replaces them, so a list written before a
+new client header existed cannot block that header.
+
+### Expired credentials
+
+When the identity your `resolveIdentity` returns carries an `exp` (JWT epoch
+seconds) or `expiresAtMs` (epoch milliseconds) that has already passed, the
+worker answers `401 TOKEN_EXPIRED` and nothing runs. This covers `/_lunora/rpc`,
+`/_lunora/rpc-batch`, the REST surface and `serverQuery`. A live subscription
+gets the same code as a socket close (`4001`) once its credential lapses.
+`@lunora/client` treats the code as a refusal of the credential, not of the
+write: a queued offline write stays queued, `onTokenExpired` fires, and the
+write is sent again after `setAuthToken`.
+
+The held write survives the refresh only if the identity is keyed on a
+`subject`. Pass the user id with the new token (or have passed it before; the
+subject is sticky):
+
+```ts
+client.onTokenExpired(async () => {
+    const { token, userId } = await refreshSession();
+
+    client.setAuthToken(token, userId); // same subject: the held writes are kept
+});
+```
+
+Without a subject the identity is a hash of the token, so a refresh looks the
+same as switching accounts, and the held writes are rejected
+`OFFLINE_IDENTITY_CHANGED` rather than sent as someone else. The client logs a
+warning when this happens right after a refusal.
+
+A cookie session, such as a Cloudflare Access edge, has no token to
+replace. Renew the cookie, and the held write is sent again on a backoff with
+whatever cookie the browser then holds. In `@lunora/db` that backoff runs for
+the same one-minute window a bearer refresh gets.
+
+The worker can only answer this if your resolver tells it the credential
+expired. Returning `null` for an expired token makes the call anonymous, and
+the `UNAUTHORIZED` your own check then throws reads to the client as a verdict
+on the write. For a token you verified that has only expired, do one of these:
+
+```ts
+// Return the identity with its past expiry: the worker refuses it.
+return { exp: payload.exp, userId: payload.sub };
+
+// Or refuse it yourself.
+throw new LunoraError("token expired", { code: "TOKEN_EXPIRED", status: 401 });
+```
+
+`@lunora/cloudflare-access` already does the first for a correctly signed
+Access JWT whose only fault is its `exp`. The better-auth session resolvers
+cannot tell an expired session from no session (`getSession` answers `null`
+for both), so a lapsed cookie session still reads as signed out.
+
+An `httpRouter` route does not get the refusal, because its context is built
+for every page, including the sign-in page. There a lapsed identity reads as
+anonymous (`auth.userId` is `null`), and a route that needs a caller answers
+its own `401`. The admin routes ignore the user's expiry, because the admin
+credential authorizes them.
 
 ## Feeding row-level security
 
@@ -202,5 +375,7 @@ re-evaluate the policy under the socket's verified identity on each push.
 - [Row-level security](/docs/concepts/rls): turning `ctx.auth` into per-row
   authorization.
 - [Real-time](/docs/concepts/realtime): how identity is stamped on a live socket.
+- [External auth](/docs/concepts/external-auth): Clerk, WorkOS, Auth0, Supabase
+  or any OIDC JWT feeding `ctx.auth` without better-auth.
 - [@lunora/auth](/docs/packages/auth): full server configuration.
 - [@lunora/auth plugins](/docs/packages/auth/plugins): passkeys, org, admin, 2FA, and more.

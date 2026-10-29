@@ -1,5 +1,4 @@
 import type { ScheduleRecord } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
@@ -9,6 +8,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
 
@@ -39,7 +39,7 @@ const sortByDue = (records: ScheduleRecord[]): ScheduleRecord[] => records.toSor
 
 /** How to cancel a job, or `undefined` when the panel is read-only: the host's canceller wins; otherwise the client can cancel what it also lists. A custom loader without a canceller stays read-only. */
 const jobCanceller = (
-    client: ReturnType<typeof useLunora>,
+    client: ReturnType<typeof useStudioClient>,
     cancelJob: ScheduledJobsProps["cancelJob"],
     loadJobs: ScheduledJobsProps["loadJobs"],
 ): ((id: string) => Promise<{ cancelled: boolean }>) | undefined => {
@@ -60,7 +60,7 @@ const jobCanceller = (
  * {@link ScheduledJobsProps.cancelJob} to override the transport.
  */
 export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     // Live updates, always on. When the panel sources jobs from the client (no
@@ -95,9 +95,7 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
     }, [livePush, client]);
 
     // Polling fallback for the custom-loader case (no WS to subscribe to).
-    useAutoRefresh(() => {
-        jobsQuery.refetch();
-    }, !livePush);
+    useAutoRefresh(() => jobsQuery.poll(), !livePush);
 
     // Cancelling is available when the host supplies a canceller, or when the
     // panel is sourcing jobs from the client (then the client can cancel too).

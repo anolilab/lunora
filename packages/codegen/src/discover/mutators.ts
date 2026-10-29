@@ -1,13 +1,28 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import type { CallExpression, Identifier, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
+import type {
+    ArrowFunction,
+    CallExpression,
+    FunctionDeclaration,
+    FunctionExpression,
+    Identifier,
+    MethodDeclaration,
+    Node as TsNode,
+    ObjectLiteralExpression,
+    Project,
+    SourceFile,
+    ts,
+    VariableDeclaration,
+} from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { MutatorIR, ValidatorIR } from "../ir";
 import { isServerSurfaceModule } from "../module-specifiers";
 import { parseObjectShape } from "../parse-validator";
+import { findObjectProperty, isConstDeclaration, unwrapExpression } from "./ast";
+import { declarationOf, exportedNameOf, exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
 import unwrapHandlerReturn from "./functions/unwrap-handler-return";
 
 /** The only file custom mutators may be declared in — mirrors `lunora/queues.ts`. */
@@ -105,6 +120,97 @@ const mutatorLiteral = (call: CallExpression): ObjectLiteralExpression | undefin
     return first && Node.isObjectLiteralExpression(first) ? first : undefined;
 };
 
+/** The function forms a mutator's authoritative `server` impl is statically readable in. */
+type MutatorServerImpl = ArrowFunction | FunctionDeclaration | FunctionExpression | MethodDeclaration;
+
+/** Per-declaration {@link isReferencedOnce} verdicts, keyed on the compiler node so a re-parse recomputes. */
+const REFERENCED_ONCE_CACHE = new WeakMap<ts.Node, boolean>();
+
+/**
+ * Whether the top-level binding `declaration` creates is referenced exactly
+ * once in its file — by the `server:` member that hands it to `defineMutator`.
+ * Any other reference (a second mutator, a direct call, a recursive call) or
+ * an export could run the impl with an `args` `applyOwnerScope` never verified.
+ */
+const isReferencedOnce = (declaration: FunctionDeclaration | VariableDeclaration): boolean => {
+    let verdict = REFERENCED_ONCE_CACHE.get(declaration.compilerNode);
+
+    if (verdict === undefined) {
+        const nameNode = declaration.getNameNode();
+        const name = nameNode?.getText();
+        const references = declaration
+            .getSourceFile()
+            .getDescendantsOfKind(SyntaxKind.Identifier)
+            .filter(
+                (identifier) =>
+                    identifier !== nameNode && identifier.getText() === name && declarationOf(identifier)?.compilerNode === declaration.compilerNode,
+            );
+
+        // An exported impl can be imported and called by any other module.
+        verdict = references.length === 1 && exportedNameOf(declaration) === undefined;
+        REFERENCED_ONCE_CACHE.set(declaration.compilerNode, verdict);
+    }
+
+    return verdict;
+};
+
+/**
+ * The impl a `server: impl` / `{ server }` reference names: a top-level
+ * `function` declaration or `const` arrow / function expression of the same
+ * file, referenced nowhere but there ({@link isReferencedOnce}).
+ */
+const referencedServerImplOf = (reference: TsNode | undefined): MutatorServerImpl | undefined => {
+    const declaration = Node.isIdentifier(reference) ? declarationOf(reference) : undefined;
+    const isTopLevel = Node.isSourceFile(declaration?.getParent()) || Node.isSourceFile(declaration?.getParent()?.getParent()?.getParent());
+
+    if (declaration === undefined || declaration.getSourceFile() !== reference?.getSourceFile() || !isTopLevel) {
+        return undefined;
+    }
+
+    if (Node.isFunctionDeclaration(declaration)) {
+        return declaration.hasBody() && isReferencedOnce(declaration) ? declaration : undefined;
+    }
+
+    const initializer = isConstDeclaration(declaration) ? unwrapExpression(declaration.getInitializer()) : undefined;
+    const isFunction = Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer);
+
+    return isFunction && Node.isVariableDeclaration(declaration) && isReferencedOnce(declaration) ? initializer : undefined;
+};
+
+/**
+ * The `server` impl of the mutator `declaration` binds
+ * (`const x = defineMutator({ server })`), resolved DOWN from that declaration
+ * so it is always this declaration's own impl, never a same-named nested one.
+ * Reads `server: (ctx, args) => …`, `server: function (ctx, args) {…}`, the
+ * method shorthand `server(ctx, args) {…}`, and `server: impl` / `{ server }`
+ * naming a same-file function used nowhere else ({@link referencedServerImplOf};
+ * the runtime wraps `.server` itself, so the mutator is the only way in), seen
+ * through `(…)`, `as` and `satisfies`. `undefined` for anything else — an
+ * import, an impl also called elsewhere, or a higher-order `server: wrap(fn)`
+ * whose wrapper could hand `fn` different arguments — so callers fail closed.
+ */
+const mutatorServerImplOf = (declaration: VariableDeclaration): MutatorServerImpl | undefined => {
+    const call = declaration.getInitializer();
+
+    if (!Node.isCallExpression(call) || !isDefineMutatorCallee(call.getExpression())) {
+        return undefined;
+    }
+
+    const property = findObjectProperty(mutatorLiteral(call), "server");
+
+    if (Node.isMethodDeclaration(property)) {
+        return property;
+    }
+
+    if (Node.isShorthandPropertyAssignment(property)) {
+        return referencedServerImplOf(property.getNameNode());
+    }
+
+    const impl = Node.isPropertyAssignment(property) ? unwrapExpression(property.getInitializer()) : undefined;
+
+    return Node.isArrowFunction(impl) || Node.isFunctionExpression(impl) ? impl : referencedServerImplOf(impl);
+};
+
 /**
  * The mutator's `args` validator map, parsed with the same `parseObjectShape` a
  * procedure's `args` goes through so `api.mutators.<name>` and `api.<file>.<fn>`
@@ -112,7 +218,7 @@ const mutatorLiteral = (call: CallExpression): ObjectLiteralExpression | undefin
  * parameterless mutator) or isn't an inline object literal.
  */
 const argsFromMutator = (literal: ObjectLiteralExpression | undefined): Record<string, ValidatorIR> => {
-    const argsProperty = literal?.getProperty("args");
+    const argsProperty = findObjectProperty(literal, "args");
 
     if (!argsProperty || !Node.isPropertyAssignment(argsProperty)) {
         return {};
@@ -130,7 +236,7 @@ const argsFromMutator = (literal: ObjectLiteralExpression | undefined): Record<s
  * `unknown`. `"unknown"` when `server` isn't an inline function.
  */
 const returnTypeFromMutator = (literal: ObjectLiteralExpression | undefined): string => {
-    const serverProperty = literal?.getProperty("server");
+    const serverProperty = findObjectProperty(literal, "server");
 
     if (!serverProperty || !Node.isPropertyAssignment(serverProperty)) {
         return "unknown";
@@ -143,6 +249,24 @@ const returnTypeFromMutator = (literal: ObjectLiteralExpression | undefined): st
     }
 
     return unwrapHandlerReturn(initializer);
+};
+
+/**
+ * The ownership column a `defineMutator({ owner: "…" })` declares, or `undefined`
+ * when it declares none (or names it with something other than a string literal —
+ * a computed value cannot be resolved here, and guessing would both suppress a
+ * real `owner_field_from_args_not_auth` finding and fake a clean owner scope).
+ */
+const ownerFromMutator = (literal: ObjectLiteralExpression | undefined): string | undefined => {
+    const property = findObjectProperty(literal, "owner");
+
+    if (!property || !Node.isPropertyAssignment(property)) {
+        return undefined;
+    }
+
+    const initializer = property.getInitializer();
+
+    return initializer && Node.isStringLiteral(initializer) ? initializer.getLiteralValue() : undefined;
 };
 
 /** Collect exported `defineMutator` declarations from one source file. */
@@ -175,12 +299,17 @@ const mutatorsFromSource = (source: SourceFile): MutatorIR[] => {
 
         const literal = mutatorLiteral(call);
 
-        mutators.push({
-            args: argsFromMutator(literal),
-            exportName: nameNode.getText(),
-            filePath: "mutators",
-            returnType: returnTypeFromMutator(literal),
-        });
+        // Under every name the module exports it as; the dispatch table reads it off the namespace by name.
+        for (const exportName of exportNamesOfDeclaration(declaration).filter((name) => isAddressableExportName(name))) {
+            mutators.push({
+                args: argsFromMutator(literal),
+                exportName,
+                filePath: "mutators",
+                line: call.getStartLineNumber(),
+                owner: ownerFromMutator(literal),
+                returnType: returnTypeFromMutator(literal),
+            });
+        }
     }
 
     return mutators;
@@ -210,4 +339,5 @@ const discoverMutators = (project: Project, lunoraDirectory: string): MutatorIR[
     return mutators;
 };
 
-export { discoverMutators, isDefineMutatorCallee, MUTATORS_FILENAME };
+export { discoverMutators, isDefineMutatorCallee, mutatorLiteral, MUTATORS_FILENAME, mutatorServerImplOf };
+export type { MutatorServerImpl };

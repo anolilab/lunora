@@ -13,7 +13,7 @@
 // `LunoraClient` surface, yet returns fixed data synchronously — so a blanket
 // require-await disable is intentional here, not a smell.
 /* eslint-disable @typescript-eslint/require-await -- mock implements an async client interface with synchronous fixtures */
-import type { LunoraClient } from "@lunora/studio";
+import type { LunoraAdminClient } from "@lunora/studio";
 import { ADMIN_FUNCTIONS } from "@lunora/studio";
 
 interface Ref {
@@ -496,6 +496,17 @@ const dataFor = (reference: string, args: unknown): unknown => {
             // though it seeds only a handful of representative waterfalls.
             return { total: 63, traces: TRACES };
         }
+        case ADMIN_FUNCTIONS.listQueues: {
+            // One plain queue and a topic with two subscriptions, so the Queues
+            // page shows its topic grouping and the topic send target.
+            return {
+                queues: [
+                    { binding: "QUEUE_EMAIL", exportName: "email", mode: "push", name: "email" },
+                    { binding: "QUEUE_AUDIT_SIGNUP", exportName: "auditSignup", mode: "push", name: "audit-signup", topic: "signups" },
+                    { binding: "QUEUE_WELCOME_EMAIL", exportName: "welcomeEmail", mode: "push", name: "welcome-email", topic: "signups" },
+                ],
+            };
+        }
         case ADMIN_FUNCTIONS.listSubscriptions: {
             return {
                 connections: [
@@ -527,8 +538,8 @@ const dataFor = (reference: string, args: unknown): unknown => {
         case ADMIN_FUNCTIONS.listWorkflows: {
             return {
                 workflows: [
-                    { binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
-                    { binding: "WORKFLOW_WELCOME_EMAIL", className: "WelcomeEmailWorkflow", exportName: "welcomeEmail", name: "welcome-email" },
+                    { className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
+                    { className: "WelcomeEmailWorkflow", exportName: "welcomeEmail", name: "welcome-email" },
                 ],
             };
         }
@@ -589,8 +600,8 @@ const dataFor = (reference: string, args: unknown): unknown => {
 
 const noop = (): void => {};
 
-/** A plain mock client cast to {@link LunoraClient}, for the dev harness only. */
-const createDevMockClient = (): LunoraClient =>
+/** A plain mock client cast to {@link LunoraAdminClient}, for the dev harness only. */
+const createDevMockClient = (): LunoraAdminClient =>
     ({
         action: async (): Promise<unknown> => {
             return {};
@@ -671,6 +682,34 @@ const createDevMockClient = (): LunoraClient =>
                     },
                 ],
                 total: 42,
+            };
+        },
+        // Scopes the admin-query cache per client (`use-admin-query`); a fixed id is
+        // all a single mock client needs.
+        clientIdentifier: (): string => "dev-mock-client",
+        fetchArchitecture: async (): Promise<unknown> => {
+            // A two-module sample so the Architecture tab renders lanes, a
+            // cross-module call, a table write and one unresolved call site.
+            return {
+                edges: [
+                    { from: "function:chat_messages:send", kind: "call", to: "function:accounts_users:me" },
+                    { from: "function:chat_messages:send", kind: "write", to: "table:messages" },
+                    { from: "function:chat_messages:list", kind: "read", to: "table:messages" },
+                    { from: "function:accounts_users:me", kind: "read", to: "table:users" },
+                ],
+                nodes: [
+                    { detail: "query", id: "function:accounts_users:me", kind: "function", name: "accounts_users.me", module: "accounts" },
+                    { detail: "query", id: "function:chat_messages:list", kind: "function", name: "chat_messages.list", module: "chat" },
+                    { detail: "mutation", id: "function:chat_messages:send", kind: "function", name: "chat_messages.send", module: "chat" },
+                    { id: "table:messages", kind: "table", name: "messages", module: "chat" },
+                    { id: "table:users", kind: "table", name: "users", module: "accounts" },
+                ],
+                modules: [
+                    { name: "accounts", tables: ["users"] },
+                    { description: "Channels and messages", name: "chat", tables: ["messages"] },
+                ],
+                unresolved: [{ file: "chat/messages", kind: "call", line: 42, reason: "the function reference is not a static api.* / internal.* chain" }],
+                version: 1,
             };
         },
         fetchOpenApi: async (): Promise<unknown> => {
@@ -863,6 +902,10 @@ const createDevMockClient = (): LunoraClient =>
         updateAuthUser: async (input: { userId: string }): Promise<unknown> => {
             return { id: input.userId };
         },
+        // The dev mock has one fixed identity, so nothing ever retires it.
+        onIdentityChange: (): (() => void) => noop,
+        // Writes resolve in memory, so the hook never needs to hold one for the network.
+        canQueueOffline: (): boolean => true,
         subscribe: (function_: Ref, args: unknown, callback: (value: unknown) => void): (() => void) => {
             // Emit once on the next tick so the panel paints with data, the same
             // shape its `query` path would return.
@@ -879,6 +922,6 @@ const createDevMockClient = (): LunoraClient =>
 
             return noop;
         },
-    }) as unknown as LunoraClient;
+    }) as unknown as LunoraAdminClient;
 
 export default createDevMockClient;

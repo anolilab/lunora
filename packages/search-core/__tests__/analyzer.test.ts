@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createSearchAnalyzer, MAX_TOKEN_LENGTH } from "../src/analyzer";
-import { planSearchBackfillPass } from "../src/backfill";
+import { planBackfillPass } from "../src/backfill";
 import { SEARCH_LANGUAGES } from "../src/languages";
 
 /**
@@ -226,13 +226,13 @@ describe("search analyzer", () => {
  * owned a copy they disagreed about exactly the two cases below, so these lock
  * the decisions rather than either implementation.
  */
-describe(planSearchBackfillPass, () => {
+describe(planBackfillPass, () => {
     it("starts a fresh index from the beginning without wiping anything", () => {
         expect.assertions(1);
 
         // Nothing recorded and nothing stored: a DELETE here would be a wasted
         // statement per index per deploy.
-        expect(planSearchBackfillPass({ cursor: undefined, done: false, profile: undefined }, "en-v1")).toStrictEqual({
+        expect(planBackfillPass({ cursor: undefined, done: false, profile: undefined }, "en-v1")).toStrictEqual({
             cursor: undefined,
             finished: false,
             wipe: false,
@@ -242,7 +242,7 @@ describe(planSearchBackfillPass, () => {
     it("resumes from the recorded cursor under the same profile", () => {
         expect.assertions(1);
 
-        expect(planSearchBackfillPass({ cursor: "d0042", done: false, profile: "en-v1" }, "en-v1")).toStrictEqual({
+        expect(planBackfillPass({ cursor: "d0042", done: false, profile: "en-v1" }, "en-v1")).toStrictEqual({
             cursor: "d0042",
             finished: false,
             wipe: false,
@@ -252,15 +252,15 @@ describe(planSearchBackfillPass, () => {
     it("reports finished only under the same profile", () => {
         expect.assertions(2);
 
-        expect(planSearchBackfillPass({ cursor: "d9999", done: true, profile: "en-v1" }, "en-v1").finished).toBe(true);
+        expect(planBackfillPass({ cursor: "d9999", done: true, profile: "en-v1" }, "en-v1").finished).toBe(true);
         // A completed index whose analysis changed is not finished — it is stale.
-        expect(planSearchBackfillPass({ cursor: "d9999", done: true, profile: "none-v1" }, "en-v1").finished).toBe(false);
+        expect(planBackfillPass({ cursor: "d9999", done: true, profile: "none-v1" }, "en-v1").finished).toBe(false);
     });
 
     it("wipes and restarts when the profile changed", () => {
         expect.assertions(1);
 
-        expect(planSearchBackfillPass({ cursor: "d0042", done: false, profile: "none-v1" }, "en-v1")).toStrictEqual({
+        expect(planBackfillPass({ cursor: "d0042", done: false, profile: "none-v1" }, "en-v1")).toStrictEqual({
             cursor: undefined,
             finished: false,
             wipe: true,
@@ -272,7 +272,7 @@ describe(planSearchBackfillPass, () => {
 
         // Predates profile tracking: nothing says what analyzed those rows, so
         // resuming on top of them would leave the index half-analyzed forever.
-        expect(planSearchBackfillPass({ cursor: "d0042", done: false, profile: undefined }, "none-v1")).toStrictEqual({
+        expect(planBackfillPass({ cursor: "d0042", done: false, profile: undefined }, "none-v1")).toStrictEqual({
             cursor: undefined,
             finished: false,
             wipe: true,

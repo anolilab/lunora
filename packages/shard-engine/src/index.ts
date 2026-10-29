@@ -13,6 +13,7 @@ export type {
     ExportRow,
     ExportShardAdminArgs,
     ExportShardArgs,
+    ImportConflictMode,
     ImportError,
     ImportShardAdminArgs,
     ImportShardArgs,
@@ -45,12 +46,14 @@ export type {
 export {
     applyCdcChanges,
     assertNoExplicitUndefined,
+    assertStorableRowId,
     assertValidClientId,
     backfillAggregateIndexes,
     backfillRankIndexes,
     backfillSearchIndexes,
     CDC_LOG_TABLE,
     cdcCanVouchFor,
+    cdcForkedError,
     cdcSeqLeavingRows,
     cdcTouchesTables,
     cdcTrimmedError,
@@ -63,6 +66,7 @@ export {
     readCdcChangeKeys,
     readCdcChanges,
     runShardMigrations,
+    stripReservedPatchFields,
     trimCdcChanges,
 } from "./ctx-db";
 export { backfillSearchIndexesForTable } from "./ctx-db-backfill";
@@ -78,9 +82,10 @@ export {
     readCdcEpoch,
 } from "./ctx-db-cdc";
 export type { CdcArchiveScope } from "./ctx-db-cdc-archive";
-export { archiveCdcSegment, readArchivedCdcChanges, readCdcArchivedThrough, writeCdcArchivedThrough } from "./ctx-db-cdc-archive";
+export { archiveCdcSegment, cdcArchiveRewound, readArchivedCdcChanges, readCdcArchivedThrough, writeCdcArchivedThrough } from "./ctx-db-cdc-archive";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
 export { allocateCommitSeq, COMMIT_SEQ_FIELD, COMMIT_SEQ_TABLE, migrateCommitSeq, readCommitSeq } from "./ctx-db-commit-seq";
+export { clearCompanionSignatures, CompanionMemo } from "./ctx-db-companion-state";
 export type { CompanionSync, CompanionSyncDeps } from "./ctx-db-companions";
 export { createCompanionSync } from "./ctx-db-companions";
 export {
@@ -96,6 +101,18 @@ export { IDEMPOTENCY_TABLE, migrateIdempotency, readIdempotent, trimIdempotent, 
 export { clearMemoryTables, isMemoryTable, memoryTableNames } from "./ctx-db-memory";
 export type { RankPageComputation, RankPageDeps } from "./ctx-db-rank-page";
 export { computeRankPage, resolveRankSeekTuple } from "./ctx-db-rank-page";
+export type { ScheduleOutbox, ScheduleOutboxEnvelope, ScheduleOutboxRow } from "./ctx-db-schedule-outbox";
+export {
+    deferScheduleOutbox,
+    forgetScheduleOutbox,
+    migrateScheduleOutbox,
+    parkScheduleOutbox,
+    probeScheduleOutbox,
+    readDueScheduleOutbox,
+    recordScheduleOutbox,
+    SCHEDULE_OUTBOX_TABLE,
+    trimScheduleOutbox,
+} from "./ctx-db-schedule-outbox";
 export { migrateSearchState, readSearchBackfillState, SEARCH_STATE_TABLE, writeSearchBackfillState } from "./ctx-db-search-state";
 export type { ShapePokeCursorRow } from "./ctx-db-shape-poke-cursor";
 export {
@@ -143,7 +160,7 @@ export {
     tryRowToDocument,
 } from "./do-sql";
 export type { RenderedSql, SqlEngine } from "./drizzle";
-export { param, renderSql, sqliteInList, unionAll } from "./drizzle";
+export { param, renderSql, sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
 export type { DurableStreamRun } from "./durable-stream";
 export {
     appendStreamChunk,
@@ -165,6 +182,8 @@ export type { IncrementalMaterializeResult, MaterializeResult } from "./external
 export { materializeExternalRows, materializeExternalRowsIncremental, readExternalSourceBaseline, runExternalSourceTick } from "./external-source-materialize";
 export type { ExternalSourceLike, SourceClientLike, SourceCursorLike, SourceRefresh } from "./external-source-pull";
 export { isSoftDeleted, isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "./external-source-pull";
+export type { FtsWriteOptions } from "./fts-companion";
+export { ftsCompanionDdl, ftsPurgeDocument, ftsRowidMapName, ftsUnmappedPage, ftsWriteDocument, groupUnmappedRows } from "./fts-companion";
 export type { GeoBoundingBox, GeoPoint } from "./geo";
 export { boundingBoxCenter, boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
 export { default as GlobalPollTick } from "./global-poll-tick";
@@ -234,6 +253,8 @@ export {
     ADMIN_FUNCTIONS,
     facetColumn,
     FLAGS_FUNCTION_PREFIX,
+    isInternalTableName,
+    isVacuousFilterClause,
     listTables,
     readTablePage,
     RELATION_FUNCTION_PREFIX,
@@ -255,6 +276,7 @@ export {
 export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";
 export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 export { NotFoundError } from "./not-found-error";
+export { assertPatchAllowed, operatorFields, patchDependsOnRow, readPatchField, resolvePatch } from "./patch-operators";
 export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
 export { armRestore, readBookmark } from "./pitr";
 export {
@@ -266,6 +288,8 @@ export {
     encodeCursor,
     equalityPinnedFields,
     normalizeOrderKeys,
+    nullsFirstOf,
+    nullsOrderSuffix,
     type OrderKeyConstraints,
     softDeleteScope,
     tiebreakDirectionFor,
@@ -295,23 +319,34 @@ export type { ReadFootprint } from "./read-footprint";
 export { createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP } from "./read-footprint";
 export type { IndexKeyEntry, KeyRange } from "./read-write-set";
 export { buildIndexRange, indexKeysForRow, keysTouchRanges } from "./read-write-set";
+export type { WhereFilter } from "./reader-where-filter";
+export { isPushableWhere, whereFilter, whereOfFilter } from "./reader-where-filter";
+export type { RelationGraphReader } from "./relation-graph";
+export { deriveRelationEdges, findRelated, RELATED_DEFAULT_LIMIT, RELATED_DEPTH_DECAY, RELATED_MAX_DEPTH, RELATED_MAX_LIMIT } from "./relation-graph";
 export type { RelationExistsMarker, ResolveRelationPredicatesOptions } from "./relation-predicates";
 export {
     assertFlatPredicate,
     assertShapeShardable,
+    composeReadPredicate,
     containsRelationPredicate,
     DEFAULT_MAX_RELATION_KEYS,
     isRelationPredicate,
     resolveRelationPredicates,
 } from "./relation-predicates";
-export { applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
+export type { KeyedRelationWriteInfo, RelationWriteInfo, RelationWriteMap, ThroughRelationWriteInfo } from "./relation-writes";
+export { describeRelationWrites } from "./relation-writes";
+export type { ApplyOnDeleteOptions } from "./relations";
+export { applyInsertDefaults, applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
 export type {
+    LiveSocketControlCall,
     OwnerRelayFrame,
     PromotionState,
     PromotionThresholds,
     RelayAttach,
     RelayDetach,
     RelayFrame,
+    RelayRoomEvent,
+    RelayRoomVerdict,
     RelayShapePoke,
     RelayShapeSeed,
     RelayShapeSubscribe,
@@ -337,7 +372,6 @@ export type {
     AggregateOp,
     AggregateOptions,
     AggregateResult,
-    ApplyOnDeleteOptions,
     BroadcastDelta,
     ColumnMetaLike,
     CrossShardReadArgs,
@@ -352,12 +386,16 @@ export type {
     IndexDefinitionLike,
     IndexRangeBuilderLike,
     NestedWith,
+    NullPlacement,
     OnDeleteActionLike,
     OrderByInput,
     OrderKey,
     PaginationOptions,
+    PatchVerifier,
+    PatchWriteOptions,
     QueryArgs,
     QueryPage,
+    QueryPlan,
     RankBeforeOptions,
     RankBeforeResult,
     RankDirection,
@@ -370,7 +408,14 @@ export type {
     RankResult,
     RankSortKeyLike,
     ReadHook,
+    RelatedDirection,
+    RelatedNode,
+    RelatedOptions,
+    RelatedPage,
+    RelatedStart,
+    RelatedStartReference,
     RelationDefinitionLike,
+    RelationEdge,
     ResolveWithOptions,
     ResolveWithResult,
     RestrictableQueryOptions,
@@ -395,13 +440,15 @@ export type {
     WithInput,
 } from "./schema-types";
 export { serializeSqlValue } from "./serialize-sql";
-export { buildSettings, isDevEnvironment } from "./settings";
+export { buildSettings, isDevEnvironment, readDeployInfo } from "./settings";
 export { buildShapeDiff } from "./shape-diff";
 export { createShapeDiffCache, globalShapeReadKey, ShapeDiffCache } from "./shape-diff-cache";
 export type { PokeFrameMeta, ShapePokePart, ShapeRowOp } from "./shape-global-diff";
 export { buildPokeFrames, diffGlobalMembership, encodeRowsPatch, projectColumns } from "./shape-global-diff";
 export type { ShardRunnerOptions } from "./shard-runner";
 export { ShardRunner } from "./shard-runner";
+export { stubByName } from "./sibling-channel";
+export { RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody, verifySiblingBody } from "./sibling-channel";
 export { runSocketPool } from "./socket-pool";
 export type { SqlConsoleResult } from "./sql-console";
 export type { SqlLintResult } from "./sql-console";
@@ -435,7 +482,7 @@ export { DEFAULT_TRANSACTION_LIMITS, TransactionHeadroomTracker } from "./transa
 export type { RunTriggersOptions } from "./triggers";
 export { hasTrigger, runTriggers } from "./triggers";
 export type { TtlSweepSpec } from "./ttl-sweep";
-export { selectExpiredIds } from "./ttl-sweep";
+export { nextTtlExpiry, selectExpiredIds } from "./ttl-sweep";
 export type {
     LifecycleDispatchInfo,
     LifecycleEvent,
@@ -449,7 +496,9 @@ export type {
     SubscriptionIdentity,
     SubscriptionQuery,
 } from "./types";
-export type { WhereSqlStrategy } from "./where-sql";
-export { compileWhereSql, literalInList } from "./where-sql";
+export type { VectorBackfillProgress } from "./vector-backfill";
+export { backfillVectorIndexes, VECTOR_BACKFILL_MAX_PAGES } from "./vector-backfill";
+export type { RangeOperandType, WhereSqlStrategy } from "./where-sql";
+export { compileWhereSql, serverInList } from "./where-sql";
 export type { FieldOperators, WhereInput } from "./where-types";
 export { RELATION_EXISTS_KEY } from "./where-types";

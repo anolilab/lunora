@@ -23,8 +23,9 @@ import { join, relative, sep } from "node:path";
 import type { SdkTarget } from "@lunora/codegen";
 import { LunoraError } from "@lunora/errors";
 
+import { resolveCliVersion } from "../../util/cli-manifest";
 import type { Logger } from "../../util/logger";
-import { resolveCliVersion, resolveCliVersionRef, resolvePinnedSourceRef } from "../../util/source-ref";
+import { resolveCliVersionRef, resolvePinnedSourceRef } from "../../util/source-ref";
 import { resolveItemDirectory } from "../registry/resolve";
 import type { AddCommandOptions } from "../registry/types";
 
@@ -316,4 +317,3 @@ const writeStamp = (outputDirectory: string, language: string, result: VendorRes
 };
 
 export { STAMP_FILE, vendorTransport, writeStamp };
-export type { VendorResult };

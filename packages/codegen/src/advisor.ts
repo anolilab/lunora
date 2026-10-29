@@ -2,8 +2,10 @@ import type {
     AdvisorExportSink,
     AdvisorGeoIndexUsage,
     AdvisorIndex,
+    AdvisorMutatorDeclaration,
     AdvisorNotifyCall,
     AdvisorNotifyConfig,
+    AdvisorRelation,
     AdvisorSchema,
     AdvisorShape,
     Finding,
@@ -20,11 +22,14 @@ import type {
     AuthApiCallIR,
     AuthConfigIR,
     BrowserUrlAccessIR,
+    CallEdgeIR,
     ConfigCallIR,
     ContainerIR,
     ContainerKeyAccessIR,
     ContainerOverrideIR,
     ContextPropertyCallIR,
+    CountReadIR,
+    CronJobIR,
     FailOpenGuardIR,
     FlagReadIR,
     FlagSecurityDefaultIR,
@@ -37,6 +42,8 @@ import type {
     MailRecipientAccessIR,
     MaskProcedureIR,
     MaskStrategyIR,
+    ModuleIR,
+    MutatorIR,
     MutatorWriteIR,
     NondeterministicCallIR,
     NormalizeIdAuthorizationIR,
@@ -50,6 +57,7 @@ import type {
     RawRowReturnIR,
     RelationLoadIR,
     RlsProcedureIR,
+    RowEffectIR,
     SchemaIR,
     SecretLiteralIR,
     ShapeIR,
@@ -59,6 +67,8 @@ import type {
     StorageKeyAccessIR,
     StorageUploadIR,
     TableIR,
+    TableWriteIR,
+    UnboundedLoopIR,
     UnrestrictedWhereBranchIR,
     VectorNamespaceAccessIR,
     WorkflowCallIR,
@@ -132,7 +142,11 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                 indexes: flattenIndexes(table),
                 isPublic: table.isPublic ?? false,
                 name: table.name,
-                relations: table.relations.map((relation) => {
+                relations: table.relations.map((relation): AdvisorRelation => {
+                    if (relation.through !== undefined) {
+                        return { kind: "many", name: relation.name, table: relation.table, through: { ...relation.through } };
+                    }
+
                     return {
                         field: relation.field,
                         kind: relation.kind,
@@ -163,6 +177,21 @@ const toAdvisorShapes = (shapes: ReadonlyArray<ShapeIR>): AdvisorShape[] =>
     });
 
 /**
+ * Map discovered {@link MutatorIR}s to the advisor's
+ * {@link AdvisorMutatorDeclaration} evidence — the `mutator_without_owner_scope`
+ * lint input. Only the export name, source position and declared `owner` cross
+ * the boundary; `args` and the return type serve the emitters, not the lint.
+ *
+ * Not a straight pass-through like {@link MutatorWriteIR}: `filePath` is the
+ * `lunora/`-relative stem the emitters import by (`"mutators"`), and a finding
+ * has to name an openable path.
+ */
+const toAdvisorMutators = (mutators: ReadonlyArray<MutatorIR>): AdvisorMutatorDeclaration[] =>
+    mutators.map((mutator) => {
+        return { exportName: mutator.exportName, file: `lunora/${mutator.filePath}.ts`, line: mutator.line, owner: mutator.owner };
+    });
+
+/**
  * Named inputs for {@link lintSchema}. Every feeder is a discrete key rather than
  * a positional argument: the feeder list grows every few releases and many IR
  * types are structurally similar (`{file, exportName, line}`-shaped evidence),
@@ -180,10 +209,14 @@ interface LintSchemaOptions {
     authApiCalls?: ReadonlyArray<AuthApiCallIR>;
     authConfigs?: ReadonlyArray<AuthConfigIR>;
     browserUrlAccesses?: ReadonlyArray<BrowserUrlAccessIR>;
+    callEdges?: ReadonlyArray<CallEdgeIR>;
     configCalls?: ReadonlyArray<ConfigCallIR>;
     containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>;
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
     containers?: ReadonlyArray<ContainerIR>;
+    countReads?: ReadonlyArray<CountReadIR>;
+    crons?: ReadonlyArray<CronJobIR>;
+    cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;
     flagReads?: ReadonlyArray<FlagReadIR>;
@@ -199,6 +232,8 @@ interface LintSchemaOptions {
     mailRecipientAccesses?: ReadonlyArray<MailRecipientAccessIR>;
     maskProcedures?: ReadonlyArray<MaskProcedureIR>;
     maskStrategies?: ReadonlyArray<MaskStrategyIR>;
+    modules?: ReadonlyArray<ModuleIR>;
+    mutators?: ReadonlyArray<MutatorIR>;
     mutatorWrites?: ReadonlyArray<MutatorWriteIR>;
     nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>;
     normalizeIdAuthorizations?: ReadonlyArray<NormalizeIdAuthorizationIR>;
@@ -215,6 +250,7 @@ interface LintSchemaOptions {
     rawRowReturns?: ReadonlyArray<RawRowReturnIR>;
     relationLoads?: ReadonlyArray<RelationLoadIR>;
     rlsProcedures?: ReadonlyArray<RlsProcedureIR>;
+    rowEffects?: ReadonlyArray<RowEffectIR>;
     schema: SchemaIR;
     secretLiterals?: ReadonlyArray<SecretLiteralIR>;
     shapes?: ReadonlyArray<ShapeIR>;
@@ -223,6 +259,8 @@ interface LintSchemaOptions {
     staleMigrationImports?: ReadonlyArray<StaleMigrationImportIR>;
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
+    tableWrites?: ReadonlyArray<TableWriteIR>;
+    unboundedLoops?: ReadonlyArray<UnboundedLoopIR>;
     unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
     workflowCalls?: ReadonlyArray<WorkflowCallIR>;
@@ -246,11 +284,12 @@ interface LintSchemaOptions {
  * ```
  */
 const toAdvisorContext = (options: LintSchemaOptions): LintContext => {
-    const { argumentValidators, queries, schema, shapes, ...rest } = options;
+    const { argumentValidators, mutators, queries, schema, shapes, ...rest } = options;
 
     return {
         ...rest,
         argValidators: argumentValidators,
+        mutators: mutators === undefined ? undefined : toAdvisorMutators(mutators),
         queries: queries ?? [],
         schema: toAdvisorSchema(schema),
         shapes: shapes === undefined ? undefined : toAdvisorShapes(shapes),

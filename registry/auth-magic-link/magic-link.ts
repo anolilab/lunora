@@ -38,6 +38,7 @@
  * await authClient.signIn.magicLink({ email, callbackURL: "/" });
  * ```
  */
+import { isDevEnvironment } from "@lunora/auth";
 import { magicLink } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
 
@@ -47,18 +48,6 @@ export interface MagicLinkEnv {
     MAIL_FROM?: string;
     [key: string]: unknown;
 }
-
-/**
- * Env-name values that mark a development deployment. `lunora dev` sets
- * `WORKER_ENV=development`; a real deploy that sets none of these stays
- * production (fail closed), so the dev-only console fallback below never leaks
- * live sign-in links into production Worker logs.
- */
-const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
-const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as const;
-
-const isDevEnvironment = (env: Record<string, unknown>): boolean =>
-    ENVIRONMENT_VARS.some((key) => typeof env[key] === "string" && DEV_ENVIRONMENT_PATTERN.test(env[key] as string));
 
 /**
  * Deliver an auth email through `@lunora/mail` — the SAME transport selection as
@@ -93,19 +82,14 @@ const sendPluginEmail = async (env: MagicLinkEnv, message: { subject: string; te
 
     const cloudflareSend = async (from: string, to: string, raw: string): Promise<void> => {
         const { EmailMessage } = await import("cloudflare:email");
-        const binding = fullEnv["SEND_EMAIL"] as { send: (m: InstanceType<typeof EmailMessage>) => Promise<void> } | undefined;
-
-        if (binding === undefined) {
-            throw new Error("auth: no SEND_EMAIL binding to deliver mail — run `lunora add email` or set RESEND_API_KEY.");
-        }
+        const binding = fullEnv["SEND_EMAIL"] as { send: (m: InstanceType<typeof EmailMessage>) => Promise<void> };
 
         await binding.send(new EmailMessage(from, to, raw));
     };
 
-    // Only hand over `cloudflareSend` when the binding exists: `createMailerFromEnv`
-    // prefers it over `RESEND_API_KEY`, so passing it unconditionally would break a
-    // Resend-only deployment.
-    await createMailerFromEnv(fullEnv, fullEnv["SEND_EMAIL"] === undefined ? {} : { cloudflareSend }).send(message);
+    // `createMailerFromEnv` uses `cloudflareSend` only when `SEND_EMAIL` is bound,
+    // falling back to `RESEND_API_KEY` otherwise.
+    await createMailerFromEnv(fullEnv, { cloudflareSend }).send(message);
 };
 
 /**

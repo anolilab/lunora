@@ -10,7 +10,6 @@ import { emitApi, emitFunctions } from "../src/emit";
 import type { AgentIR, FunctionIR, HttpRouteIR, WorkflowIR } from "../src/ir";
 
 const SUPPORT_AGENT: AgentIR = {
-    bindingName: "AGENT_SUPPORT",
     className: "SupportAgentWorkflow",
     exportName: "support",
     name: "agent-support",
@@ -44,7 +43,7 @@ describe("emitApi", () => {
         // Typed reference carries AgentRunInput.
         expect(rendered).toContain("support: WorkflowReference<AgentRunInput>;");
         // Runtime object carries the AGENT_* binding + stable name.
-        expect(rendered).toContain('support: { isLunoraWorkflow: true, binding: "AGENT_SUPPORT", name: "agent-support" },');
+        expect(rendered).toContain('support: { isLunoraWorkflow: true, className: "SupportAgentWorkflow", name: "agent-support" },');
         expect(rendered).toContain("export interface AgentsRef {");
         expect(rendered).toContain("export const agents: AgentsRef = {");
     });
@@ -76,7 +75,7 @@ describe("emitApi", () => {
         expect.assertions(4);
 
         const workflows: ReadonlyArray<WorkflowIR> = [
-            { bindingName: "WORKFLOW_DIGEST_PIPELINE", className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
+            { className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
         ];
 
         const rendered = emitApi({ agents: [SUPPORT_AGENT], functions: [], workflows });
@@ -94,7 +93,7 @@ describe("emitApi", () => {
         expect.assertions(5);
 
         const workflows: ReadonlyArray<WorkflowIR> = [
-            { bindingName: "WORKFLOW_DIGEST_PIPELINE", className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
+            { className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
         ];
 
         const rendered = emitApi({ functions: [], workflows });
@@ -105,7 +104,7 @@ describe("emitApi", () => {
         // eslint-disable-next-line no-secrets/no-secrets -- generated TS generic, not a credential
         expect(rendered).toContain("digestPipeline: WorkflowReference<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.digestPipeline>>;");
         // Runtime object carries the WORKFLOW_* binding + name.
-        expect(rendered).toContain('digestPipeline: { isLunoraWorkflow: true, binding: "WORKFLOW_DIGEST_PIPELINE", name: "digestPipeline" },');
+        expect(rendered).toContain('digestPipeline: { isLunoraWorkflow: true, className: "DigestPipelineWorkflow", name: "digestPipeline" },');
         expect(rendered).toContain("export const workflows: WorkflowsRef = {");
         expect(rendered).toContain("export interface WorkflowsRef {");
     });
@@ -177,6 +176,105 @@ describe("emitApi", () => {
         expect(rendered).toContain("b?: number");
         expect(rendered).toContain("required: string");
         expect(rendered).toContain("limit?: number");
+    });
+
+    it("renders `v.any()` as an optional property, matching what the runtime parses and `Infer` types (issue #688)", () => {
+        expect.assertions(5);
+
+        // `v.any()`'s parser returns its input unchanged, so an absent arg parses
+        // and `@lunora/values` types the key `data?: unknown`. Emitting the
+        // REQUIRED `data: unknown` made a handler's own `args` unassignable to
+        // the generated reference of a procedure declaring the identical
+        // validator: "Property 'data' is optional in type 'ObjectShapeType<…>'
+        // but required in type '{ data: unknown; id: string; }'".
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {
+                    // Nested under the `v.optional(v.object(...))` of the report.
+                    shape: {
+                        inner: {
+                            kind: "object",
+                            shape: { data: { kind: "any" }, id: { kind: "string" } },
+                        },
+                        kind: "optional",
+                    },
+                    // Top level — the same rule, asserted so the two stay in step.
+                    blob: { kind: "any" },
+                    // A sibling with no `undefined` in its type stays required.
+                    name: { kind: "string" },
+                },
+                exportName: "probeSink",
+                filePath: "probes",
+                kind: "mutation",
+                returnType: "null",
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("shape?: { data?: unknown; id: string }");
+        expect(rendered).toContain("blob?: unknown");
+        expect(rendered).toContain("name: string");
+        expect(rendered).not.toContain("data: unknown");
+        expect(rendered).not.toContain("blob: unknown");
+    });
+
+    it("keeps a validator the IR could not resolve REQUIRED, even though it is recorded as `any`", () => {
+        expect.assertions(3);
+
+        // An expression the AST→IR step cannot follow is recorded as
+        // `{ kind: "any", sourceText }`. It is not a `v.any()` — the validator it
+        // stands for is very likely required — so it must NOT pick up the
+        // absent-tolerant treatment a genuine `v.any()` gets, at any depth.
+        // Otherwise an unreadable validator would silently let callers omit an
+        // argument the runtime rejects.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {
+                    hoisted: { kind: "any", sourceText: "sharedValidator" },
+                    inUnion: { kind: "union", members: [{ kind: "string" }, { kind: "any", sourceText: "sharedValidator" }] },
+                    nested: { kind: "object", shape: { field: { kind: "any", sourceText: "sharedValidator" } } },
+                },
+                exportName: "probeUnresolved",
+                filePath: "probes",
+                kind: "mutation",
+                returnType: "null",
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("hoisted: unknown");
+        expect(rendered).toContain("inUnion: string | unknown");
+        expect(rendered).toContain("nested: { field: unknown }");
+    });
+
+    it("renders a `v.union()` with an absent-tolerant member as an optional property (issue #688)", () => {
+        expect.assertions(3);
+
+        // A union tries its members, so one that accepts `undefined` — `v.any()`
+        // or a `v.optional(...)` — makes the whole field absent-tolerant. The
+        // same rule `toJsonSchema`'s `required` list has always applied.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {
+                    loose: { kind: "union", members: [{ kind: "string" }, { kind: "any" }] },
+                    nullable: { kind: "union", members: [{ kind: "string" }, { kind: "null" }] },
+                    partial: { kind: "union", members: [{ kind: "string" }, { inner: { kind: "number" }, kind: "optional" }] },
+                },
+                exportName: "probeUnions",
+                filePath: "probes",
+                kind: "mutation",
+                returnType: "null",
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("loose?: string | unknown");
+        expect(rendered).toContain("partial?: string | number | undefined");
+        // `v.null()` admits `null`, never an absent field — the key stays required.
+        expect(rendered).toContain("nullable: string | null");
     });
 
     it("renders a `v.optional()` nested inside `v.array(v.object(...))` as an optional property", () => {
@@ -513,8 +611,8 @@ describe("emitApi", () => {
         const rendered = emitApi({
             functions: [],
             mutators: [
-                { args: { text: { kind: "string" } }, exportName: "setText", filePath: "mutators", returnType: "{ ok: boolean }" },
-                { args: {}, exportName: "clear", filePath: "mutators", returnType: "void" },
+                { args: { text: { kind: "string" } }, exportName: "setText", filePath: "mutators", line: 1, returnType: "{ ok: boolean }" },
+                { args: {}, exportName: "clear", filePath: "mutators", line: 2, returnType: "void" },
             ],
         });
 
@@ -532,7 +630,7 @@ describe("emitApi", () => {
         // member is invalid TS, so the discovered function is authoritative.
         const rendered = emitApi({
             functions: [{ args: {}, exportName: "setText", filePath: "mutators", kind: "query", returnType: "string" }],
-            mutators: [{ args: { text: { kind: "string" } }, exportName: "setText", filePath: "mutators", returnType: "void" }],
+            mutators: [{ args: { text: { kind: "string" } }, exportName: "setText", filePath: "mutators", line: 1, returnType: "void" }],
         });
 
         expect(rendered).toContain('setText: FunctionReference<"query", {}, string>;');
@@ -569,7 +667,7 @@ describe("emitApi", () => {
         // A file `lunora/2fa.ts` sanitizes to namespace `2fa` — a valid
         // `__lunoraRef` string but NOT a bare TS object key. The interface key
         // must be quoted (`"2fa": {...}`), while the runtime dispatch ref keeps
-        // the raw `2fa:...` value (built by the `anyApi` proxy from the access
+        // the raw `2fa:...` value (the reference's `__lunoraRef`
         // path), so type and runtime still agree.
         const functions: ReadonlyArray<FunctionIR> = [
             {
@@ -587,6 +685,47 @@ describe("emitApi", () => {
         expect(rendered).toContain('verify: FunctionReference<"mutation"');
         // Never emit `2fa` as a bare (invalid) object key.
         expect(rendered).not.toContain("    2fa: {");
+    });
+
+    it("nests a folder's files under the folder's key, beside a same-named file's exports", () => {
+        expect.assertions(3);
+
+        const functions: ReadonlyArray<FunctionIR> = [
+            { args: {}, exportName: "pay", filePath: "billing", kind: "mutation", returnType: "void" },
+            { args: {}, exportName: "create", filePath: "billing/invoices", kind: "mutation", returnType: "void" },
+            { args: {}, exportName: "list", filePath: "billing/invoices", kind: "query", returnType: "void" },
+        ];
+
+        expect(emitApi({ functions })).toContain(
+            [
+                "export interface ApiTypes {",
+                "    billing: {",
+                '        pay: FunctionReference<"mutation", {}, void>;',
+                "        invoices: {",
+                '            create: FunctionReference<"mutation", {}, void>;',
+                '            list: FunctionReference<"query", {}, void>;',
+                "        };",
+                "    };",
+                "}",
+            ].join("\n"),
+        );
+
+        const rendered = emitFunctions({ functions });
+
+        // The caller nests the same way; the dispatch key stays the `_`-joined namespace.
+        expect(rendered).toContain("        invoices: {\n            create: (args?: {}) => Promise<void>;");
+        expect(rendered).toContain('create: (args) => callRegistered(context, "billing_invoices:create", args),');
+    });
+
+    it("rejects an export and a folder's file that claim the same nested api path", () => {
+        expect.assertions(1);
+
+        const functions: ReadonlyArray<FunctionIR> = [
+            { args: {}, exportName: "list", filePath: "billing", kind: "query", returnType: "void" },
+            { args: {}, exportName: "all", filePath: "billing/list", kind: "query", returnType: "void" },
+        ];
+
+        expect(() => emitApi({ functions })).toThrow('the export "list" of "billing" and "billing/list" both resolve to api.billing.list');
     });
 
     it("emits a typed `httpStreams.*` reference block for `.stream()` routes", () => {
@@ -622,9 +761,7 @@ describe("emitApi", () => {
         expect(rendered).not.toContain("HttpStreamsRef");
         expect(rendered).not.toContain("HttpStreamRef");
         // Nothing left to import as a TYPE from the client package, so that line
-        // goes away rather than dangling (`noUnusedLocals` would flag it). The
-        // `anyApi` value import stays — it is always needed, and it comes from
-        // the client package so a sibling consumer needs no server runtime.
+        // goes away rather than dangling (`noUnusedLocals` would flag it).
         expect(rendered).not.toContain('import type { } from "@lunora/client"');
         expect(rendered).not.toContain("FunctionReference");
     });

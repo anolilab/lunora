@@ -10,15 +10,13 @@
  * permanently. Progress is therefore recorded explicitly, one row per
  * companion, in a reserved table beside the other `__lunora_*` bookkeeping.
  *
- * The table is a plain `key → {cursor, done, profile}` map and is shared with the
- * one other paged migration that needs the same bookkeeping — `ctx-db.ts`'s
- * bigint re-encoding pass, under a `bigint-rewrite:<table>` key. Its name is
- * historical; renaming it would be a migration of its own for no behavioural gain.
+ * The table is a plain `companion → {cursor, done, profile, covered}` map, one
+ * row per search companion, keyed by the companion's table name.
  */
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search-state" mirrors its parent "ctx-db.ts", the established module name in this package. */
 
-import type { SearchBackfillState } from "@lunora/search-core";
+import type { BackfillState } from "@lunora/search-core";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { searchCoverageSurvives } from "@lunora/search-core";
 import { sql } from "drizzle-orm";
@@ -114,7 +112,7 @@ const clearSearchBackfillState = async (exec: SqlCtxExec, dialect: SqlDialect, c
 };
 
 /** Read a companion's progress. An unknown companion has done nothing yet. */
-const readSearchBackfillState = async (exec: SqlCtxExec, dialect: SqlDialect, companion: string): Promise<SearchBackfillState> => {
+const readSearchBackfillState = async (exec: SqlCtxExec, dialect: SqlDialect, companion: string): Promise<BackfillState> => {
     const rows = await queryAll(
         exec,
         dialect,

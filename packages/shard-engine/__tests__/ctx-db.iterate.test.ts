@@ -144,11 +144,11 @@ describe("ctx.db reader — lazy iteration", () => {
     it("stays linear when the chain carries a .filter()", async () => {
         expect.assertions(2);
 
-        // `paginate` must return a FULL page of surviving rows, so with
-        // in-memory filters it drops the SQL LIMIT and scans the whole
-        // remainder — which made iteration quadratic. Counting predicate calls
-        // is the cheap proxy for rows decoded: with 2,000 rows and a 128-row
-        // page, the quadratic form ran the predicate ~16,000 times.
+        // `paginate` must return a FULL page of surviving rows; with in-memory
+        // filters it once dropped the SQL LIMIT and scanned the whole remainder,
+        // which made iteration quadratic. Counting predicate calls is the cheap
+        // proxy for rows decoded: with 2,000 rows and a 128-row page, the
+        // quadratic form ran the predicate ~16,000 times.
         const database = setupWriter();
 
         await seed(database, 2000);
@@ -168,8 +168,46 @@ describe("ctx.db reader — lazy iteration", () => {
         }
 
         expect(yieldedSeqs).toHaveLength(1000);
-        // Exactly once per row — never re-scanned. The old behaviour was ~8x this.
-        expect(predicateCalls).toBe(2000);
+        // About once per row. Each page reads up to its one-past-the-page probe
+        // row, and the next page starts after the last row it RETURNED, so the
+        // rows between the two are read twice — a row or two per page (16
+        // pages), never a rescan. The quadratic behaviour was ~8x this.
+        expect(predicateCalls).toBeLessThan(2000 + 16 * 3);
+    });
+
+    it("yields every row exactly once when the reader is re-ordered between next() calls", async () => {
+        expect.assertions(4);
+
+        const database = setupWriter();
+
+        // 300 rows is three internal pages, so the re-order lands between pages.
+        await seed(database, 300);
+
+        const reader = database.query("todos").withIndex("by_seq");
+        const iterator = reader[Symbol.asyncIterator]();
+        const seqs: number[] = [];
+
+        for (;;) {
+            // eslint-disable-next-line no-await-in-loop -- the re-order has to land between two pulls
+            const step = await iterator.next();
+
+            if (step.done === true) {
+                break;
+            }
+
+            seqs.push(step.value["seq"] as number);
+            // Re-ordering the SAME reader mid-walk must not reach the iterator's pages.
+            reader.order("desc");
+        }
+
+        expect(seqs).toHaveLength(300);
+        expect(new Set(seqs).size).toBe(300);
+        expect(seqs).toStrictEqual(Array.from({ length: 300 }, (_, index) => index));
+
+        // The reader itself did take the last order it was given.
+        const last = await reader.first();
+
+        expect(last?.["seq"]).toBe(299);
     });
 
     it("yields nothing for an empty table", async () => {

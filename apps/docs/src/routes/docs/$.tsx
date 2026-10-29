@@ -1,5 +1,6 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { staticFunctionMiddleware } from "@tanstack/start-static-server-functions";
 import type * as PageTree from "fumadocs-core/page-tree";
 import browserCollections from "fumadocs-mdx:collections/browser";
 import { Step, Steps } from "fumadocs-ui/components/steps";
@@ -43,7 +44,16 @@ export const Route = createFileRoute("/docs/$")({
     component: () => <Page />,
     loader: async ({ params }): Promise<LoaderData> => {
         const slugs = params._splat?.split("/") ?? [];
-        const data = await serverLoader({ data: slugs });
+        // In the browser the loader reads the result the build prerendered for this
+        // path. Every docs page is prerendered, so a path with no result is a page
+        // that does not exist: show the not-found page, not a load error.
+        const data = await serverLoader({ data: slugs }).catch((error: unknown) => {
+            if (import.meta.env.SSR) {
+                throw error;
+            }
+
+            return null;
+        });
 
         if (!data?.path) {
             throw notFound();
@@ -134,6 +144,7 @@ const serverLoader = createServerFn({
     // skip the strict output check rather than reshape the framework's type.
     strict: { output: false },
 })
+    .middleware([staticFunctionMiddleware])
     .inputValidator((slugs: string[]) => slugs)
     .handler(async ({ data: slugs }) => {
         const page = source.getPage(slugs);

@@ -1,5 +1,5 @@
-import type { Cell, ColumnDef, Header, OnChangeFn, Row, RowSelectionState, SortingState, Table, VisibilityState } from "@tanstack/react-table";
-import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table";
+import type { Cell, ColumnDef, ColumnVisibilityState, Header, OnChangeFn, Row, RowSelectionState, SortingState, Table } from "@tanstack/react-table";
+import { flexRender, useTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -14,6 +14,8 @@ import { cn } from "../../lib/utils";
 import flooredRectObserver from "../../lib/virtual-rect";
 import { columnWindow, pinnedOffsets } from "./column-window";
 import { CellValue, GridContainer } from "./data-grid";
+import type { GridTableFeatures } from "./grid-table-features";
+import { gridTableFeatures } from "./grid-table-features";
 import type { StagedEditsModel } from "./staged-edits";
 import { coerceCellValue } from "./staged-edits";
 
@@ -460,7 +462,7 @@ interface GridEdit {
     editable: boolean;
     editableColumn: (column: string) => boolean;
     editingCell: null | { column: string; rowId: string };
-    onExpandCell: (column: string, value: unknown) => void;
+    onExpandCell: (column: string, value: unknown, storedValue: unknown) => void;
     stage: StagedEditsModel["stage"];
     stagedValue: StagedEditsModel["stagedValue"];
     startEdit: (rowId: string, column: string) => void;
@@ -501,14 +503,17 @@ const EXPAND_BTN =
 const CellExpandButton = ({
     column,
     onExpand,
+    storedValue,
     value,
 }: {
     column: string;
-    onExpand: (column: string, value: unknown) => void;
+    onExpand: (column: string, value: unknown, storedValue: unknown) => void;
+    /** The value as the server holds it — what a "filter by this value" click must match, which can differ from `value` while an edit is staged. */
+    storedValue: unknown;
     value: unknown;
 }): ReactElement => {
     const onClick = (): void => {
-        onExpand(column, value);
+        onExpand(column, value, storedValue);
     };
 
     return (
@@ -594,7 +599,7 @@ const EditableCell = ({
     mask,
     refs,
 }: {
-    cell: Cell<TableRow, unknown>;
+    cell: Cell<GridTableFeatures, TableRow>;
     edit: GridEdit;
     /** Active row-search term, highlighted inside matching cells. */
     highlight?: string;
@@ -641,7 +646,7 @@ const EditableCell = ({
         return (
             <>
                 <CellValue value={rawValue} />
-                <CellExpandButton column={column} onExpand={edit.onExpandCell} value={rawValue} />
+                <CellExpandButton column={column} onExpand={edit.onExpandCell} storedValue={rawValue} value={rawValue} />
             </>
         );
     }
@@ -685,7 +690,7 @@ const EditableCell = ({
             <span className={cellClass} data-testid={`db-cell-${id}-${column}`} onDoubleClick={onDoubleClick}>
                 <CellValue highlight={cellHighlight(highlight, mask, column)} value={display} />
             </span>
-            <CellExpandButton column={column} onExpand={edit.onExpandCell} value={display} />
+            <CellExpandButton column={column} onExpand={edit.onExpandCell} storedValue={rawValue} value={display} />
         </>
     );
 };
@@ -736,14 +741,14 @@ const GridHeaderCell = ({
     /** The column's declared type, when the schema describes it. */
     declaredType?: string;
     draggedRef: React.RefObject<null | string>;
-    header: Header<TableRow, unknown>;
+    header: Header<GridTableFeatures, TableRow>;
     /** Show a "masked" chip: this column is covered by a `.use(mask(...))` policy (static annotation, independent of the toggle). */
     masked?: boolean;
     /** Freeze this header at the left edge (the primary-key column) during horizontal scroll. */
     onTogglePin: (columnId: string) => void;
     /** Summed width of the pinned columns before this one, or `undefined` when unpinned. */
     pinnedOffset?: number;
-    table: Table<TableRow>;
+    table: Table<GridTableFeatures, TableRow>;
 }): ReactElement => {
     const onDragStart = (): void => {
         // eslint-disable-next-line no-param-reassign -- a ref's `.current` is mutable by design; it carries the drag source across handlers
@@ -763,7 +768,11 @@ const GridHeaderCell = ({
 
         // TanStack's columnOrder starts empty (default order); seed from the live
         // leaf columns so "drop before target" places `from` correctly on the first drag.
-        const current = table.getState().columnOrder;
+        //
+        // `atoms.<slice>.get()`, not `table.state`: this component is handed the core
+        // `Table`, and `state` lives on the `ReactTable` the hook returns. A snapshot
+        // read is what this wants anyway — it runs in a drop handler, not in render.
+        const current = table.atoms.columnOrder.get();
         const base = current.length > 0 ? current : table.getAllLeafColumns().map((column) => column.id);
         const order = base.filter((id) => id !== from);
         const insertAt = order.indexOf(to);
@@ -775,6 +784,7 @@ const GridHeaderCell = ({
     return (
         <th
             className={cn("group/head text-start text-xs font-medium text-muted-foreground", pinnedOffset !== undefined && "border-e border-border bg-muted")}
+            data-testid={`db-head-${header.column.id}`}
             draggable
             onDragOver={onDragOver}
             onDragStart={onDragStart}
@@ -838,7 +848,7 @@ const GridHeaderCell = ({
  * The leading select-all checkbox in the header. Toggles every row on the loaded
  * page; shows an indeterminate state when only some rows are selected.
  */
-const SelectAllHeaderCell = ({ table }: { table: Table<TableRow> }): ReactElement => {
+const SelectAllHeaderCell = ({ table }: { table: Table<GridTableFeatures, TableRow> }): ReactElement => {
     const t = useT();
 
     const onCheckedChange = (checked: boolean): void => {
@@ -863,7 +873,7 @@ const SelectAllHeaderCell = ({ table }: { table: Table<TableRow> }): ReactElemen
  * addressed for a bulk delete). Binds its own toggle so the row map stays free of
  * inline closures.
  */
-const RowSelectCell = ({ row }: { row: Row<TableRow> }): ReactElement => {
+const RowSelectCell = ({ row }: { row: Row<GridTableFeatures, TableRow> }): ReactElement => {
     const t = useT();
     const id = rowId(row.original);
 
@@ -1068,7 +1078,7 @@ const DataBrowserTableView = ({
     );
 
     const renderRow = (virtualRow: { index: number; size: number; start: number }): ReactElement => {
-        const tableRow = tableRows[virtualRow.index] as Row<TableRow>;
+        const tableRow = tableRows[virtualRow.index] as Row<GridTableFeatures, TableRow>;
         const { original } = tableRow;
         const id = rowId(original);
         const key = rowKey(original, virtualRow.index);
@@ -1218,8 +1228,8 @@ interface DataBrowserTableModel {
     /** Horizontal scroll offset, driving the column window. */
     scrollLeft: number;
     scrollToIndex: (index: number) => void;
-    table: Table<TableRow>;
-    tableRows: Row<TableRow>[];
+    table: Table<GridTableFeatures, TableRow>;
+    tableRows: Row<GridTableFeatures, TableRow>[];
     tbodyStyle: CSSProperties;
     viewportWidth: number;
     virtualRows: { index: number; size: number; start: number }[];
@@ -1246,7 +1256,7 @@ const useDataBrowserTable = (
     // column by name off the ORIGINAL row object; the cell renderer reuses
     // `formatCell` so the markup matches the JSON view's text. Foreign-key
     // columns (in `refs`) render their value as a link to the target table.
-    const columnDefs = useMemo<ColumnDef<TableRow>[]>(() => {
+    const columnDefs = useMemo<ColumnDef<GridTableFeatures, TableRow>[]>(() => {
         if (columns === undefined) {
             return [];
         }
@@ -1254,7 +1264,7 @@ const useDataBrowserTable = (
         // No `cell` renderer: every body cell is rendered by EditableCell (see
         // renderRow), which owns the foreign-key/value/edit branching. The column
         // def only needs the accessor (for sorting), the header, and the id.
-        const defs: ColumnDef<TableRow>[] = columns.map((column) => {
+        const defs: ColumnDef<GridTableFeatures, TableRow>[] = columns.map((column) => {
             return {
                 accessorFn: (row: TableRow) => row[column],
                 header: references?.[column] === undefined ? column : `${column} →`,
@@ -1295,7 +1305,7 @@ const useDataBrowserTable = (
     // name, so it persists across pages and harmlessly ignores names from a table
     // that's since been switched away from.
     const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
-    const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+    const [columnVisibility, setColumnVisibility] = useState<ColumnVisibilityState>({});
 
     // Search is server-side (see the debounced `search` effect); the table model
     // owns page-local sorting over the already-filtered page. Column order
@@ -1303,16 +1313,18 @@ const useDataBrowserTable = (
     // TanStack — a stale order referencing a previous table's columns is simply
     // ignored, so the columns fall back to default order on a fresh table.
     // react-doctor-disable-next-line react-hooks-js/incompatible-library -- TanStack Table returns functions the compiler refuses to memoize; the alternative is not using the library
-    const table = useReactTable<TableRow>({
+    const table = useTable<GridTableFeatures, TableRow>({
         columnResizeMode: "onChange",
         columns: columnDefs,
         data,
         defaultColumn: { minSize: 80, size: 200 },
         enableColumnResizing: true,
         enableRowSelection: (row) => rowId(row.original) !== null,
-        getCoreRowModel: getCoreRowModel(),
+        // Row models and the feature set they belong to are registered once in
+        // `gridTableFeatures`; v8's `getCoreRowModel()` / `getSortedRowModel()`
+        // table options are gone.
+        features: gridTableFeatures,
         getRowId: (row, index) => rowId(row) ?? `row-${index.toString()}`,
-        getSortedRowModel: getSortedRowModel(),
         // Sorting is server-side: the page arrives already ordered, so the table
         // must not re-sort it. The header still toggles `sorting`, which the data
         // browser forwards to `readTablePage` as `orderBy`.

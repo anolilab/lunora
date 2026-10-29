@@ -47,6 +47,16 @@ describe("resolveTraceAnchor", () => {
         expect(anchor.traceId).not.toBe(resolveTraceAnchor(undefined).traceId);
     });
 
+    it("carries the forwarded cloudflare ray id, and only a well-formed one", () => {
+        expect.assertions(4);
+
+        expect(resolveTraceAnchor(`00-${TRACE_ID}-${PARENT_SPAN_ID}-01`, "8f2a1b3c4d5e6f70").rayId).toBe("8f2a1b3c4d5e6f70");
+        // Absent off the edge, where the runtime forwards none.
+        expect(resolveTraceAnchor(`00-${TRACE_ID}-${PARENT_SPAN_ID}-01`, null)).not.toHaveProperty("rayId");
+        expect(resolveTraceAnchor(undefined)).not.toHaveProperty("rayId");
+        expect(resolveTraceAnchor(undefined, "not a ray id")).not.toHaveProperty("rayId");
+    });
+
     it("falls back to a fresh trace when the inbound header is malformed", () => {
         expect.assertions(2);
 

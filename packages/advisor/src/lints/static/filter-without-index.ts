@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { queryReadLocation, shardKindsByTable } from "../helpers";
+import { callSiteFields, queryReadLocation, shardKindsByTable } from "../helpers";
 
 /**
  * Flags a query read that calls `.filter()` without first narrowing with
@@ -33,7 +33,7 @@ const filterWithoutIndex: Lint = {
             }
 
             // A primary-key filter is reported by `filter_on_primary_key`, whose
-            // remediation is `ctx.db.get(id)` — not an index. Two findings on
+            // remediation is `ctx.db.get(table, id)` — not an index. Two findings on
             // one read, pointing at different fixes, is worse than one.
             if (read.filtersPrimaryKey === true) {
                 continue;
@@ -41,7 +41,7 @@ const filterWithoutIndex: Lint = {
 
             const location = queryReadLocation(read);
             const shardKind = shardKindByTable.get(read.table);
-            const metadata = { exportName: read.exportName, file: read.file, line: read.line, shardKind: shardKind ?? "unknown", table: read.table };
+            const metadata = { ...callSiteFields(read), shardKind: shardKind ?? "unknown", table: read.table };
             const cacheKey = `filter_without_index:${read.file}:${read.line.toString()}:${read.table}`;
 
             // A `.shardBy()` table's rows are partitioned across Durable Objects

@@ -31,6 +31,68 @@ import type { OptimisticLayer, SubscriptionState } from "./subscription";
  */
 
 /**
+ * How many optimistic writes have been acknowledged with a commit cursor in this
+ * process. Only its order matters: a poll samples it before sending, and any
+ * layer acknowledged at or below the sample is already in the snapshot the poll
+ * returns. Module-wide rather than per client because an order shared by every
+ * client is still an order.
+ */
+let acknowledgements = 0;
+
+/**
+ * What moved inside {@link withDeferredNotifications}, in order: a subscription whose value
+ * moved (once, however often it moved) or another held notification, such as a checkpoint.
+ */
+let deferredNotifications: Set<SubscriptionState | (() => void)> | undefined;
+
+/** Every callback gets `value`, the one that moved: a listener that writes optimistically must not change what the next one hears. */
+const fanValue = (callbacks: Iterable<(value: unknown) => void>, value: unknown): void => {
+    for (const callback of callbacks) {
+        try {
+            callback(value);
+        } catch {
+            /* user callback threw — ignore */
+        }
+    }
+};
+
+/**
+ * A held value notification, its callbacks and value taken now: one an earlier callback subscribes
+ * already has the value from the subscribe's replay, and one it unsubscribes must not hear it.
+ * Each callback is checked as it comes: once an earlier one has moved the value on (an optimistic
+ * write, a sign-out blanking it), the newer value has already reached every listener, and the
+ * batch's would land after it as a stale one.
+ */
+const heldValueNotification = (state: SubscriptionState): (() => void) => {
+    const callbacks = [...state.callbacks];
+    const value = state.lastValue;
+
+    return () => {
+        for (const callback of callbacks) {
+            if (state.lastValue !== value) {
+                return;
+            }
+
+            if (state.callbacks.has(callback)) {
+                fanValue([callback], value);
+            }
+        }
+    };
+};
+
+/** Run `notify` now, or with the rest of the batch when inside {@link withDeferredNotifications}. */
+export const deferNotification = (notify: () => void): void => {
+    if (deferredNotifications === undefined) {
+        notify();
+    } else {
+        deferredNotifications.add(notify);
+    }
+};
+
+/** The latest acknowledgement, sampled by a poll before it sends. */
+export const acknowledgementMark = (): number => acknowledgements;
+
+/**
  * Fold the authoritative `base` value through an ordered list of optimistic
  * layers, returning the displayed value. A layer whose transform throws is
  * skipped (its mutation surfaces the error on settle) rather than aborting the
@@ -64,13 +126,52 @@ export const notifySubscription = (state: SubscriptionState, value: unknown): vo
     // eslint-disable-next-line no-param-reassign -- in-place update of the shared subscription state
     state.lastValue = value;
 
-    for (const callback of state.callbacks) {
-        try {
-            callback(value);
-        } catch {
-            /* user callback threw — ignore */
+    if (deferredNotifications === undefined) {
+        fanValue(state.callbacks, value);
+    } else {
+        deferredNotifications.add(state);
+    }
+};
+
+/**
+ * Run `apply` with value callbacks held, then notify each subscription whose value
+ * moved — once, with its final value. Every value is committed before any callback
+ * runs, so a listener reading a sibling query never sees it a frame behind.
+ */
+export const withDeferredNotifications = (apply: () => void, live: () => boolean = () => true): void => {
+    const moved = new Set<SubscriptionState | (() => void)>();
+
+    deferredNotifications = moved;
+
+    try {
+        apply();
+    } finally {
+        deferredNotifications = undefined;
+
+        const pending = [...moved].map((item) => (typeof item === "function" ? item : heldValueNotification(item)));
+
+        for (const notify of pending) {
+            // A callback that closed the client ends the batch, as a closed socket ends a stream of frames.
+            if (!live()) {
+                break;
+            }
+
+            try {
+                notify();
+            } catch {
+                /* user callback threw — ignore */
+            }
         }
     }
+};
+
+/**
+ * Display `base` through the subscription's pending optimistic layers. The caller names the
+ * base, so a frame that has just committed its payload folds that payload, not whatever
+ * `serverBase` holds now.
+ */
+export const refoldSubscription = (state: SubscriptionState, base: unknown): void => {
+    notifySubscription(state, foldOptimistic(base, state.optimisticLayers));
 };
 
 /** The settle handle returned by {@link applyOptimisticLayer}. */
@@ -83,7 +184,15 @@ export interface OptimisticLayerHandle {
      * the degraded fallback to one-shot behaviour.
      */
     confirm: (commitCursor: number | undefined) => void;
-    /** Failure: remove the layer and re-fold the remainder so the bad value disappears. */
+
+    /**
+     * Failure: remove the layer and re-fold the remainder so the bad value
+     * disappears. Idempotent, and it re-folds even when the layer is already
+     * gone — a write handed to a durable outbox has its layer dropped
+     * (`confirm(undefined)`) at enqueue time while the value stays on screen, so
+     * the later rejection has nothing left to remove and the re-fold is the only
+     * thing that takes the rejected value off the screen.
+     */
     rollback: () => void;
 }
 
@@ -104,6 +213,7 @@ export const applyOptimisticLayer = (state: SubscriptionState, optimistic: (curr
     }
 
     const layer: OptimisticLayer = { id: Symbol("optimistic"), transform: optimistic };
+    let rolledBack = false;
 
     state.optimisticLayers.push(layer);
     notifySubscription(state, next);
@@ -121,9 +231,7 @@ export const applyOptimisticLayer = (state: SubscriptionState, optimistic: (curr
     };
 
     const refold = (): void => {
-        // Re-derive the displayed value from the authoritative base through the
-        // remaining layers. `notifySubscription` no-ops if it's unchanged.
-        notifySubscription(state, foldOptimistic(state.serverBase, state.optimisticLayers));
+        refoldSubscription(state, state.serverBase);
     };
 
     return {
@@ -142,6 +250,8 @@ export const applyOptimisticLayer = (state: SubscriptionState, optimistic: (curr
             }
 
             layer.commitCursor = commitCursor;
+            acknowledgements += 1;
+            layer.acknowledgedAt = acknowledgements;
 
             // A confirming (or later) frame already advanced past the commit cursor,
             // so the write is already in `serverBase` — drop the overlay now.
@@ -150,9 +260,17 @@ export const applyOptimisticLayer = (state: SubscriptionState, optimistic: (curr
             }
         },
         rollback: () => {
-            if (remove()) {
-                refold();
+            if (rolledBack) {
+                return;
             }
+
+            rolledBack = true;
+            remove();
+            // Unconditional: `remove()` returning false means the layer was
+            // already dropped (a confirming frame, or the outbox's enqueue-time
+            // `confirm(undefined)`) while its value is still what the subscriber
+            // sees. Re-folding from `serverBase` is what actually reverts it.
+            refold();
         },
     };
 };
@@ -174,4 +292,31 @@ export const dropConfirmedLayers = (state: SubscriptionState, cursor: number | u
     state.optimisticLayers = state.optimisticLayers.filter((layer) => layer.commitCursor === undefined || layer.commitCursor > cursor);
 
     return state.optimisticLayers.length !== before;
+};
+
+/**
+ * On a polled snapshot, drop every layer whose write was acknowledged at or
+ * before `mark`, the acknowledgement sampled before the poll was sent. A poll
+ * carries no cursor for {@link dropConfirmedLayers} to compare, but a snapshot
+ * read after the RPC resolved includes the write. A layer acknowledged after the
+ * send is kept: the snapshot may predate its commit.
+ */
+export const dropAcknowledgedLayers = (state: SubscriptionState, mark: number): void => {
+    if (state.optimisticLayers.length === 0) {
+        return;
+    }
+
+    // eslint-disable-next-line no-param-reassign -- in-place update of the shared subscription state
+    state.optimisticLayers = state.optimisticLayers.filter((layer) => layer.acknowledgedAt === undefined || layer.acknowledgedAt > mark);
+};
+
+/**
+ * Unwind a LIFO stack of optimistic-update rollbacks, most-recent first, so a
+ * stacked update on the same subscription restores the immediately-prior value
+ * rather than clobbering a newer still-pending optimistic value.
+ */
+export const rollbackOptimistic = (optimisticRollbacks: (() => void)[]): void => {
+    for (let index = optimisticRollbacks.length - 1; index >= 0; index -= 1) {
+        optimisticRollbacks[index]?.();
+    }
 };

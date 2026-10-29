@@ -3,14 +3,16 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { singleHopInitializer } from "../argument-taint";
 import type { RawRowReturnIR } from "../ir";
-import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath, unwrapExpression } from "./ast";
+import { descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath, unwrapExpression } from "./ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { chainHasStep, chainUsesWrappedCall } from "./builder-chain";
+import { isDatabaseAccessor } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 import type { InspectableHandler } from "./functions/handler";
 import { procedureHandler } from "./functions/handler";
 
-/** `ctx.db` read methods that hand back a whole row (or array of rows): the by-id `get` and the `findFirst`/`findMany` family. */
-const ROW_READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get"]);
+/** `ctx.db` read methods that hand back a whole row (or array of rows): the by-id `get` and the `findFirst`/`findMany`/`findUnique` family. */
+const ROW_READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "findUnique", "get"]);
 
 /**
  * The table a direct `ctx.db` row read addresses, or `undefined` when `call` isn't
@@ -134,7 +136,7 @@ const handlerReturnExpressions = (handler: InspectableHandler): TsNode[] => {
 
     const expressions: TsNode[] = [];
 
-    for (const statement of handler.getDescendantsOfKind(SyntaxKind.ReturnStatement)) {
+    for (const statement of descendantsOfKind(handler, SyntaxKind.ReturnStatement)) {
         const enclosing = statement.getFirstAncestor(
             (ancestor) => Node.isArrowFunction(ancestor) || Node.isFunctionExpression(ancestor) || Node.isFunctionDeclaration(ancestor),
         );
@@ -189,7 +191,7 @@ const rawRowReturnsInDeclaration = (declaration: TsNode, relativePath: string): 
 
         seen.add(table);
         rows.push({
-            exportName: declaration.getName(),
+            exportName: exportedNameOf(declaration) ?? declaration.getName(),
             file: relativePath,
             line: expression.getStartLineNumber(),
             table,
@@ -222,14 +224,8 @@ const discoverRawRowReturns = (project: Project, lunoraDirectory: string): RawRo
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        for (const statement of sourceFile.getVariableStatements()) {
-            if (!statement.isExported()) {
-                continue;
-            }
-
-            for (const declaration of statement.getDeclarations()) {
-                rows.push(...rawRowReturnsInDeclaration(declaration, relativePath));
-            }
+        for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+            rows.push(...rawRowReturnsInDeclaration(declaration, relativePath));
         }
     }
 

@@ -23,7 +23,9 @@ import 'key_cases.dart';
 import 'model_cases.dart';
 import 'offline_cases.dart';
 import 'optimistic_cases.dart';
+import 'replay_cases.dart';
 import 'rpc_cases.dart';
+import 'socket_cases.dart';
 import 'wire_cases.dart';
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
@@ -57,6 +59,7 @@ Future<void> main() async {
   await run(caseSubscriptionStreamYieldsFrameValuesInOrder);
   await run(caseShapeSubscribeFrame);
   await run(caseShapeSubscriptionsResendAfterReconnect);
+  await run(caseDetachedSubscriptionIsHeldUntilReattach);
   await run(caseRefusedPayloadReachesTheSubscriptionNotTheReadLoop);
   await run(casePokeSequenceMaterialisesRows);
   await run(casePokePartsDoNotApplyBeforePokeEnd);
@@ -102,6 +105,24 @@ Future<void> main() async {
   await run(caseLoneQueuedWriteSurvivesAnEnvelopeLess502);
   await run(caseRateLimitedReplayRequeuesAndDefers);
   await run(caseRateLimitedBatchSlotIsTransient);
+  await run(caseTransientRefusalOnAHealthySocketIsRetried);
+  await run(caseRetryFlushIsGatedOnTheToken);
+  await run(caseRetryTimerIsCancelledOnDisconnectAndClose);
+  await run(caseCancelledRetryDoesNotSkipTheRateLimitWindow);
+  await run(caseEmptyShardKeyRoutesToDefault);
+  await run(caseUndecodableResultSettlesCommitted);
+  await run(caseReplayClassifiesSingleAndBatchAlike);
+  await run(caseBatchSplitsOnEnvelopelessPayloadTooLarge);
+  await run(caseHeldWriteReplaysAfterTokenRefresh);
+  await run(caseTokenChangeGatesHeldWrites);
+  await run(caseHeldWritesAreReported);
+  await run(caseUnexpectedFailureRequeuesUnsettledWrites);
+  await run(caseShapePokeWithUndecodableRowIsRefusedWhole);
+  await run(caseMalformedFramesAreIgnoredWithoutRaising);
+  await run(caseRpcUnreadableSuccessBodyRaisesSdkError);
+  await run(caseSubscriptionStreamEndsOnClose);
+  await run(caseIdentityChangeEvictsPreviousSession);
+  await run(caseAuthTokenRedactedWhenPrinted);
 
   await run(caseOptimisticLayerRebasesOntoAServerFrame);
   await run(caseOptimisticLayerDropsOnItsCommitCursor);
@@ -120,11 +141,29 @@ Future<void> main() async {
   await run(caseBatchMissingSlotIsRetried);
   await run(caseWholeBatchRejectionIsTerminal);
   await run(casePreconditionFailureDiscardsBeforeReplay);
+  await run(caseOnlineOnlyRefusedWhenDisconnected);
+  await run(caseOnlineOnlyRefusedWhenDisconnectedInCallback);
+  await run(caseOnlineOnlySendsWhenConnected);
+  await run(caseOnlineOnlyTransportFailureRefused);
+  await run(caseOnlineOnlyLeavesNormalWritesQueued);
   await run(caseHydrateRestoresAheadOfThisSession);
   await run(caseIdentityChangeDiscardsQueuedWrites);
   await run(caseTokenDigestMatchesTheReferenceClient);
   await run(caseReconnectDuringAFlushIsNotLost);
   await run(caseCloseRejectsPendingWrites);
+
+  await run(caseConnectFrameFirstAndCarriesSessionToken);
+  await run(caseWsUrlCarriesOnlyTheAdminTicket);
+  await run(caseAttachSocketCarriesConnectionContext);
+  await run(caseCloseCodesDriveTokenExpiry);
+  await run(caseWhisperFramesJoinSendAndDeliver);
+  await run(caseWhisperTopicsRejoinAfterReconnect);
+  await run(caseClosedRoomRefusesSends);
+  await run(caseThrowingWhisperListenerDoesNotEndDispatch);
+  await run(caseFailedConnectLeavesTheClientOffline);
+  await run(caseSupersededAttachWritesNoMoreJoins);
+  await run(caseTopicRegisteredDuringConnectIsJoined);
+  await run(caseCloseDuringConnectLeavesTheClientClosed);
 
   // The after-all hook. Adding a name to protocol/conformance-cases.json turns
   // this leg red until a case actually executes under it — the evidence is the
@@ -141,7 +180,11 @@ Future<void> main() async {
   if (failures.isEmpty) {
     exitCode = 0;
     stdout.writeln('PASS  $executed cases, covering all ${required.length} in the shared manifest');
-    return;
+    await stdout.flush();
+    // Explicitly, rather than falling off the end: a case that leaves a client
+    // connected with a write the server keeps refusing leaves its retry timer
+    // armed, exactly as it would in an app, and a live Timer keeps the VM up.
+    exit(0);
   }
 
   for (final failure in failures) {

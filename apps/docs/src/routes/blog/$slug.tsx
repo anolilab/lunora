@@ -1,6 +1,7 @@
 import { executeMdxSync } from "@fumadocs/mdx-remote/client";
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { staticFunctionMiddleware } from "@tanstack/start-static-server-functions";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import type { ComponentProps } from "react";
 
@@ -117,6 +118,7 @@ const buildPost = async (slug: string) => {
 };
 
 const loadPost = createServerFn({ method: "GET" })
+    .middleware([staticFunctionMiddleware])
     .inputValidator((slug: string) => slug)
     .handler(({ data: slug }) => buildPost(slug));
 
@@ -147,7 +149,15 @@ export const Route = createFileRoute("/blog/$slug")({
     // blog-source), so don't re-run the loader on client-side navigation.
     staleTime: Number.POSITIVE_INFINITY,
     loader: async ({ params }) => {
-        const data = await loadPost({ data: params.slug });
+        // In the browser this reads the prerendered result for the slug; every post
+        // is prerendered, so a missing one means the post does not exist.
+        const data = await loadPost({ data: params.slug }).catch((error: unknown) => {
+            if (import.meta.env.SSR) {
+                throw error;
+            }
+
+            return null;
+        });
 
         if (!data) {
             throw notFound();

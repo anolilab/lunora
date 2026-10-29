@@ -3,7 +3,10 @@ import { lunora } from "@lunora/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
+
+import type { DevPorts } from "../../shared/dev-ports";
+import { devPortsFor, shiftedPort } from "../../shared/dev-ports";
 
 /**
  * Tells the SSR loader which origin to call Lunora on.
@@ -14,7 +17,7 @@ import { defineConfig } from "vite";
  * example on the same machine, a preview deploy. Reading Vite's *resolved* port
  * covers all of those, and an explicit `VITE_LUNORA_URL` still wins.
  */
-const ssrOrigin = (): Plugin => ({
+const ssrOrigin = (ports: DevPorts): Plugin => ({
     config(userConfig) {
         if (process.env.VITE_LUNORA_URL) {
             return undefined;
@@ -22,7 +25,7 @@ const ssrOrigin = (): Plugin => ({
 
         // `--port` is merged into the config before plugin `config` hooks run,
         // so this is the port the server will actually bind.
-        const port = userConfig.server?.port ?? 5173;
+        const port = userConfig.server?.port ?? ports.playground;
 
         return { define: { "import.meta.env.VITE_LUNORA_URL": JSON.stringify(`http://localhost:${port}`) } };
     },
@@ -44,10 +47,25 @@ const ssrOrigin = (): Plugin => ({
  * plugin resolves into a worker that routes `/_lunora/*` to Lunora and
  * everything else to the TanStack Start SSR handler.
  */
-export default defineConfig({
-    plugins: [cloudflare({ inspectorPort: 9233, viteEnvironment: { name: "ssr" } }), tanstackStart(), react(), lunora({ cloudflare: false }), ssrOrigin()],
-    resolve: {
-        // Vite 8 resolves tsconfig paths natively.
-        tsconfigPaths: true,
-    },
+export default defineConfig(({ mode }) => {
+    const ports = devPortsFor(loadEnv(mode, process.cwd(), ""));
+
+    return {
+        plugins: [
+            cloudflare({ inspectorPort: shiftedPort(9233, ports), viteEnvironment: { name: "ssr" } }),
+            tanstackStart(),
+            react(),
+            lunora({ cloudflare: false }),
+            ssrOrigin(ports),
+        ],
+        server: {
+            // Pinned, and strict, so the SSR origin above never disagrees with the port the server binds.
+            port: ports.playground,
+            strictPort: true,
+        },
+        resolve: {
+            // Vite 8 resolves tsconfig paths natively.
+            tsconfigPaths: true,
+        },
+    };
 });

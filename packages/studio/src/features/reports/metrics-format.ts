@@ -1,5 +1,5 @@
 /**
- * How the metrics surfaces render a duration and a hit rate.
+ * How the metrics surfaces render a duration, a hit rate, a USD amount and a token count.
  *
  * Its own module so the formatting is testable without a render — these are pure
  * branch tables, and asserting `999μs` vs `1.0ms` through a component was the
@@ -50,4 +50,21 @@ const formatLatency = (ms: number): string => {
     return `${(ms / 1000).toFixed(2)}s`;
 };
 
-export { formatElapsed, formatLatency, hitRate };
+/**
+ * USD for display, in `locale` (default: the renderer's, like the rest of
+ * Studio's `toLocaleString()` formatting). Per-call LLM spend is routinely a
+ * fraction of a cent, so values under a dollar keep three significant digits
+ * (`$0.00042`) instead of rounding to a misleading `$0.00`.
+ */
+const formatUsd = (value: number, locale?: string): string =>
+    new Intl.NumberFormat(
+        locale,
+        value === 0 || Math.abs(value) >= 1
+            ? { currency: "USD", maximumFractionDigits: 2, minimumFractionDigits: 2, style: "currency" }
+            : { currency: "USD", maximumSignificantDigits: 3, style: "currency" },
+    ).format(value);
+
+/** Token counts with thousands separators, in `locale` (default: the renderer's). */
+const formatTokens = (value: number, locale?: string): string => new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(value);
+
+export { formatElapsed, formatLatency, formatTokens, formatUsd, hitRate };

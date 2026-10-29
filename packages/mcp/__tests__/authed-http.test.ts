@@ -1,15 +1,16 @@
-import type { LunoraClient } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { describe, expect, it, vi } from "vitest";
 
 import type { McpAccessTokenClaims, McpAuthProtect } from "../src/authed-http";
 import { createAuthedMcpFetchHandler, mcpTokenScopes } from "../src/authed-http";
 import { DEFAULT_MAX_REQUEST_BYTES } from "../src/serve-stateless";
+import type { LunoraMcpServerOptions } from "../src/server";
 
 /** Minimal mock exposing only the methods the tools touch. */
-const mockClient = (): LunoraClient =>
+const mockClient = (): LunoraAdminClient =>
     ({
         listFunctions: vi.fn<() => Promise<{ kind: string; path: string }[]>>(async () => [{ kind: "query", path: "messages:list" }]),
-    }) as unknown as LunoraClient;
+    }) as unknown as LunoraAdminClient;
 
 /** A Streamable-HTTP client POSTs one JSON-RPC message and accepts JSON or SSE. */
 const mcpRequest = (body: unknown): Request =>
@@ -97,7 +98,7 @@ describe("createAuthedMcpFetchHandler", () => {
     it("refuses an unauthorized request with the RFC 9728 challenge, without building a server", async () => {
         expect.assertions(3);
 
-        const server = vi.fn<() => { client: LunoraClient }>(() => {
+        const server = vi.fn<() => { client: LunoraAdminClient }>(() => {
             return { client: mockClient() };
         });
         const handle = createAuthedMcpFetchHandler({ protect: fakeProtect(undefined), server });
@@ -106,7 +107,7 @@ describe("createAuthedMcpFetchHandler", () => {
         expect(response.status).toBe(401);
         expect(response.headers.get("www-authenticate")).toContain("resource_metadata=");
         // The load-bearing assertion: the gate short-circuits BEFORE the server
-        // factory runs, so an unauthenticated caller never causes a `LunoraClient`
+        // factory runs, so an unauthenticated caller never causes a `LunoraAdminClient`
         // holding the deployment's admin bearer to be constructed.
         expect(server).not.toHaveBeenCalled();
     });
@@ -131,7 +132,7 @@ describe("createAuthedMcpFetchHandler", () => {
         expect.assertions(1);
 
         const claims = { scope: "lunora:read", sub: "user_1" };
-        const server = vi.fn<() => { client: LunoraClient }>(() => {
+        const server = vi.fn<() => { client: LunoraAdminClient }>(() => {
             return { client: mockClient() };
         });
         const handle = createAuthedMcpFetchHandler({ protect: fakeProtect(claims), server });
@@ -162,7 +163,7 @@ describe("createAuthedMcpFetchHandler", () => {
     it("scopes write-tool exposure to the token's own scopes", async () => {
         expect.assertions(4);
 
-        const byScope = (claims: McpAccessTokenClaims): { allowWrites: boolean; client: LunoraClient } => {
+        const byScope = (claims: McpAccessTokenClaims): { allowWrites: boolean; client: LunoraAdminClient } => {
             return { allowWrites: mcpTokenScopes(claims).has("lunora:write"), client: mockClient() };
         };
 
@@ -210,5 +211,116 @@ describe("createAuthedMcpFetchHandler", () => {
 
         expect(response.status).toBe(413);
         await expect(response.text()).resolves.toContain("exceeds");
+    });
+
+    describe("data-read and observability scopes", () => {
+        const logsCall = { id: 3, jsonrpc: "2.0", method: "tools/call", params: { arguments: {}, name: "lunora_get_logs" } } as const;
+        const findRelatedCall = { id: 3, jsonrpc: "2.0", method: "tools/call", params: { arguments: {}, name: "lunora_find_related" } } as const;
+        const adminServer = (flags: { allowDataReads?: boolean; allowObservability?: boolean } = {}): LunoraMcpServerOptions => {
+            return { ...flags, client: mockClient(), token: "admin-token" };
+        };
+
+        it("omits the gated families from tools/list when the token lacks their scopes", async () => {
+            expect.assertions(3);
+
+            const handle = createAuthedMcpFetchHandler({
+                protect: fakeProtect({ scope: "lunora:read" }),
+                server: adminServer({ allowDataReads: true, allowObservability: true }),
+            });
+            const names = await toolNames(await handle(mcpRequest(listToolsBody)));
+
+            expect(names).toContain("lunora_list_functions");
+            expect(names).not.toContain("lunora_get_logs");
+            expect(names).not.toContain("lunora_find_related");
+        });
+
+        it("keeps the constructor opt-in as the outer gate even with the scopes", async () => {
+            expect.assertions(4);
+
+            const scoped = { scope: "lunora:read lunora:data-read lunora:observability" };
+            const optedOut = createAuthedMcpFetchHandler({ protect: fakeProtect(scoped), server: adminServer() });
+            const optedIn = createAuthedMcpFetchHandler({
+                protect: fakeProtect(scoped),
+                server: adminServer({ allowDataReads: true, allowObservability: true }),
+            });
+            const withoutOptIn = await toolNames(await optedOut(mcpRequest(listToolsBody)));
+            const withOptIn = await toolNames(await optedIn(mcpRequest(listToolsBody)));
+
+            expect(withoutOptIn).not.toContain("lunora_get_logs");
+            expect(withoutOptIn).not.toContain("lunora_find_related");
+            expect(withOptIn).toContain("lunora_get_logs");
+            expect(withOptIn).toContain("lunora_find_related");
+        });
+
+        it("challenges an observability call with the scope the token lacks", async () => {
+            expect.assertions(2);
+
+            const challenge = vi.fn<(scopes: string[]) => Error>((scopes) => new Error(`insufficient_scope: ${scopes.join(" ")}`));
+            const handle = createAuthedMcpFetchHandler({
+                protect: fakeProtect({ scope: "lunora:read" }),
+                server: adminServer({ allowObservability: true }),
+                stepUp: { challenge, scope: "lunora:write" },
+            });
+
+            await expect(handle(mcpRequest(logsCall))).rejects.toThrow("insufficient_scope: lunora:observability");
+            expect(challenge).toHaveBeenCalledWith(["lunora:observability"]);
+        });
+
+        it("does not challenge an observability call while the family is closed on the server", async () => {
+            expect.assertions(2);
+
+            const challenge = vi.fn<(scopes: string[]) => Error>((scopes) => new Error(`insufficient_scope: ${scopes.join(" ")}`));
+            const handle = createAuthedMcpFetchHandler({
+                protect: fakeProtect({ scope: "lunora:read" }),
+                server: adminServer(),
+                stepUp: { challenge, scope: "lunora:write" },
+            });
+            const response = await handle(mcpRequest(logsCall));
+
+            expect(challenge).not.toHaveBeenCalled();
+            expect(response.status).toBe(200);
+        });
+
+        it("challenges a row-read call with the data-read scope, not the observability one", async () => {
+            expect.assertions(2);
+
+            const challenge = vi.fn<(scopes: string[]) => Error>((scopes) => new Error(`insufficient_scope: ${scopes.join(" ")}`));
+            const handle = createAuthedMcpFetchHandler({
+                protect: fakeProtect({ scope: "lunora:read lunora:observability" }),
+                server: adminServer({ allowDataReads: true, allowObservability: true }),
+                stepUp: { challenge, scope: "lunora:write" },
+            });
+
+            await expect(handle(mcpRequest(findRelatedCall))).rejects.toThrow("insufficient_scope: lunora:data-read");
+            expect(challenge).toHaveBeenCalledWith(["lunora:data-read"]);
+        });
+
+        it("lets a call through the challenge once the token carries the scope", async () => {
+            expect.assertions(2);
+
+            const challenge = vi.fn<(scopes: string[]) => Error>((scopes) => new Error(`insufficient_scope: ${scopes.join(" ")}`));
+            const handle = createAuthedMcpFetchHandler({
+                protect: fakeProtect({ scope: "lunora:read lunora:observability" }),
+                server: adminServer({ allowObservability: true }),
+                stepUp: { challenge, scope: "lunora:write" },
+            });
+            const response = await handle(mcpRequest(logsCall));
+
+            expect(challenge).not.toHaveBeenCalled();
+            expect(response.status).toBe(200);
+        });
+
+        it("refuses the call as a tool error when there is no stepUp and no scope", async () => {
+            expect.assertions(1);
+
+            const handle = createAuthedMcpFetchHandler({
+                protect: fakeProtect({ scope: "lunora:read" }),
+                server: adminServer({ allowObservability: true }),
+            });
+            const response = await handle(mcpRequest(logsCall));
+            const payload = (await response.json()) as { result: { isError?: boolean } };
+
+            expect(payload.result.isError).toBe(true);
+        });
     });
 });

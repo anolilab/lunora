@@ -28,7 +28,11 @@
  *
  * **Still missing:** a dev server. There is no `lunora dev --target node`, and
  * nothing here owns a timer, so queue delivery is driven by an explicit
- * `poll()`. Also absent are the Cloudflare product bindings with no local
+ * `poll()`. What exists is the listener a dev server would sit on:
+ * `createNodeHttpServer` serves an app worker's `fetch` over `node:http`,
+ * streaming the response body, and `createNodeShardNamespace` presents the
+ * registry as the `shardDO` namespace that worker routes to. Also absent are
+ * the Cloudflare product bindings with no local
  * equivalent — Vectorize, Workers AI, Browser Rendering, Containers, Analytics
  * Engine, Pipelines, Secrets Store, Hyperdrive.
  *
@@ -40,11 +44,17 @@
  * `plans/234-node-host-findings.md`.
  */
 
+export type { NodeDispatchInvocation, NodeDispatchRouteOptions } from "./node-dispatch-route";
+export { createNodeDispatchRoute, NODE_SCHEDULER_DISPATCH_PATH } from "./node-dispatch-route";
 export type { NodeGlobalContextDatabaseOptions, NodeGlobalStore, NodeGlobalStoreOptions } from "./node-global-store";
 export { createNodeGlobalStore, createNodeSqlExec } from "./node-global-store";
+export type { NodeHttpServer, NodeHttpServerOptions } from "./node-http-server";
+export { createNodeHttpServer } from "./node-http-server";
 export { createNodeShardKvStore } from "./node-kv-store";
-export type { NodePlatform, NodePlatformOptions } from "./node-platform";
+export type { NodePlatform, NodePlatformDispatchOptions, NodePlatformOptions } from "./node-platform";
 export { createNodePlatform } from "./node-platform";
+export type { NodeProfileHandler, NodeProfileHandlerOptions } from "./node-profile-handler";
+export { createNodeProfileHandler } from "./node-profile-handler";
 export type { NodeQueueHost, NodeQueueHostOptions } from "./node-queue-host";
 export { createNodeQueueHost } from "./node-queue-host";
 export type { NodeR2BucketOptions } from "./node-r2-bucket";
@@ -53,10 +63,11 @@ export type { NodeSchedulerHost, NodeSchedulerHostOptions } from "./node-schedul
 export { createNodeSchedulerHost } from "./node-scheduler-host";
 export type { NodeShardHostOptions } from "./node-shard-host";
 export { createNodeShardHost } from "./node-shard-host";
+export { createNodeShardNamespace } from "./node-shard-namespace";
 export type { NodeShard, NodeShardRegistry, NodeShardRegistryOptions } from "./node-shard-registry";
 export { createNodeShardRegistry } from "./node-shard-registry";
-export type { NodeShardState } from "./node-shard-state";
-export { createNodeShardState } from "./node-shard-state";
+export type { NodeShardState, ShardSocketHooks } from "./node-shard-state";
+export { bindShardSockets, createNodeShardState } from "./node-shard-state";
 export type { NodeSocketHost } from "./node-socket-host";
 export { createNodeSocketHost } from "./node-socket-host";
 export type { NodeWorkflowHost, NodeWorkflowHostOptions } from "./node-workflow-host";

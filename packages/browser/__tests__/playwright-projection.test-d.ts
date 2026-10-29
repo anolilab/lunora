@@ -31,7 +31,7 @@
  */
 import type { Browser, BrowserContext, connect, launch, Page, sessions } from "@cloudflare/playwright";
 
-import type { BrowserConnectLike, BrowserContextLike, BrowserLaunchLike, BrowserLike, BrowserSessionsLike, PageLike } from "../src/types";
+import type { BrowserBindingLike, BrowserConnectLike, BrowserContextLike, BrowserLaunchLike, BrowserLike, BrowserSessionsLike, PageLike } from "../src/types";
 
 declare const realPage: Page;
 declare const realContext: BrowserContext;
@@ -58,3 +58,10 @@ export const launchConforms = (real: typeof launch): BrowserLaunchLike => real;
 export const connectConforms = (real: typeof connect): BrowserConnectLike => real;
 
 export const sessionsConforms = (real: typeof sessions): BrowserSessionsLike => real;
+
+/**
+ * The real binding (`BrowserRun`, one `quickAction` overload per action) must
+ * satisfy the marker, `quickAction` included — the reason that member is
+ * declared with method syntax.
+ */
+export const bindingConforms = (real: BrowserRun): BrowserBindingLike => real;

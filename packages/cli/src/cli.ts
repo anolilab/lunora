@@ -1,7 +1,3 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { findSolutionByMessage, isLunoraError } from "@lunora/errors";
 import type { Command } from "@visulima/cerebro";
 import { createCerebro } from "@visulima/cerebro";
@@ -13,10 +9,9 @@ import { advisorCommand } from "./commands/advisor";
 import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
 import { buildCommand } from "./commands/build";
+import { cloudflareCommand } from "./commands/cloudflare";
 import { codegenCommand } from "./commands/codegen";
-import { containersCommand } from "./commands/containers";
 import { deployCommand } from "./commands/deploy";
-import { deploymentsCommand } from "./commands/deployments";
 import { devCommand } from "./commands/dev";
 import documentationCommand from "./commands/docs";
 import { doctorCommand } from "./commands/doctor";
@@ -33,16 +28,22 @@ import { logsCommand } from "./commands/logs";
 import { mcpCommand } from "./commands/mcp";
 import { migrateCommand } from "./commands/migrate";
 import { prepareCommand } from "./commands/prepare";
+import { profileCommand } from "./commands/profile";
 import { registryCommand } from "./commands/registry/command";
 import { resetCommand } from "./commands/reset";
 import { rulesCommand } from "./commands/rules";
 import { runCommand } from "./commands/run";
 import { sdkCommand } from "./commands/sdk";
 import { seedCommand } from "./commands/seed";
+import { shardsCommand } from "./commands/shards";
 import { verifyCommand } from "./commands/verify";
 import viewCommand from "./commands/view";
+import { workflowCommand } from "./commands/workflow";
+import { resolveCliVersion } from "./util/cli-manifest";
 import { detectPackageManager } from "./util/detect-package-manager";
-import { createLogger } from "./util/logger";
+import { EXIT_CODE, exitCodeForError } from "./util/exit-code";
+import type { Logger } from "./util/logger";
+import { createLogger, setCommandLogger } from "./util/logger";
 import { renderLunoraError } from "./util/render-lunora-error";
 import { closestMatch } from "./util/suggest";
 import { maybeNotifyUpdate } from "./util/update-notifier";
@@ -55,18 +56,19 @@ const COMMANDS = [
     "codegen",
     "build",
     "deploy",
-    "containers",
     "prepare",
     "link",
-    "deployments",
+    "cloudflare",
     "logs",
     "run",
     "insights",
+    "profile",
     "reset",
     "migrate",
     "export",
     "import",
     "seed",
+    "shards",
     "backup",
     "eval",
     "verify",
@@ -79,64 +81,12 @@ const COMMANDS = [
     "registry",
     "rules",
     "mcp",
+    "workflow",
 ] as const;
 
 type CommandName = (typeof COMMANDS)[number];
 
-/**
- * How far up to look before giving up. Deep enough for the worst real layout —
- * a nested `dist/packem_shared/` chunk inside a hoisted `node_modules` — and
- * shallow enough to stop rather than walk to the filesystem root.
- */
-const PACKAGE_JSON_SEARCH_DEPTH = 8;
-
-/**
- * The CLI version, read from the package's own `package.json` at load time.
- *
- * It walks up for the manifest rather than resolving a fixed `../package.json`,
- * because this module's depth is not fixed: from `src/` under vitest the
- * manifest is one level up, but packem hoists the built module into a hashed
- * `dist/packem_shared/` chunk where it is two — so the fixed path resolved to a
- * nonexistent `dist/package.json` and every published build reported `0.0.0`.
- *
- * The name check matters: without it the walk would accept the first
- * `package.json` it met, which in a nested install is some dependency's.
- *
- * Falls back to the `0.0.0` dev sentinel, which also keeps the update notifier
- * quiet rather than comparing against a bogus version.
- */
-const readCliVersion = (): string => {
-    try {
-        let directory = dirname(fileURLToPath(import.meta.url));
-
-        for (let depth = 0; depth < PACKAGE_JSON_SEARCH_DEPTH; depth += 1) {
-            try {
-                const parsed: unknown = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
-                const manifest = parsed !== null && typeof parsed === "object" ? (parsed as { name?: unknown; version?: unknown }) : undefined;
-
-                if (manifest?.name === "@lunora/cli" && typeof manifest.version === "string" && manifest.version.length > 0) {
-                    return manifest.version;
-                }
-            } catch {
-                // No (or unreadable) package.json at this level — keep climbing.
-            }
-
-            const parent = dirname(directory);
-
-            if (parent === directory) {
-                break;
-            }
-
-            directory = parent;
-        }
-    } catch {
-        // Fall through to the sentinel below.
-    }
-
-    return "0.0.0";
-};
-
-const VERSION: string = readCliVersion();
+const VERSION: string = resolveCliVersion();
 
 /** The command objects, in display order; each lazy-loads its handler. */
 const CLI_COMMANDS = [
@@ -147,18 +97,19 @@ const CLI_COMMANDS = [
     advisorCommand,
     buildCommand,
     deployCommand,
-    containersCommand,
     prepareCommand,
     linkCommand,
-    deploymentsCommand,
+    cloudflareCommand,
     logsCommand,
     runCommand,
     insightsCommand,
+    profileCommand,
     resetCommand,
     migrateCommand,
     exportCommand,
     importCommand,
     seedCommand,
+    shardsCommand,
     introspectCommand,
     backupCommand,
     evalCommand,
@@ -173,6 +124,7 @@ const CLI_COMMANDS = [
     rulesCommand,
     mcpCommand,
     sdkCommand,
+    workflowCommand,
 ];
 
 /**
@@ -256,8 +208,9 @@ interface RunCliOptions {
 
     /**
      * Inject a console-like logger so callers (tests) can capture cerebro's
-     * help / version / usage rendering. Omitted in production, where cerebro
-     * uses its default stdout/stderr logger.
+     * help / version / usage rendering AND the commands' own output. Omitted in
+     * production, where cerebro uses its default stdout/stderr logger and the
+     * commands log through the shared pail.
      */
     logger?: Console;
 }
@@ -300,12 +253,111 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
 /** cerebro's unknown-command error wording — `Command "x" not found`. */
 const UNKNOWN_COMMAND = /Command "(?<name>[^"]+)" not found/u;
 
+/** A command that moved: where it went, and an old subcommand word the new one no longer takes. */
+interface MovedCommand {
+    absorbs?: string;
+    to: string;
+}
+
 /**
- * Log a failed `cli.run`. For an unknown command, upgrade cerebro's bare
- * "not found" into a "did you mean …?" suggestion plus a help/docs pointer; any
- * other error is logged verbatim.
+ * Commands that moved, keyed by their old first word. Consulted only once
+ * cerebro has refused the name (or for `lunora help <name>`), so an old
+ * spelling is an error that says where the command went — never an alias that
+ * runs it. `absorbs`: `ai gateway` became one tool, `ai-gateway`.
  */
-const reportRunError = (error: unknown): void => {
+const MOVED_COMMANDS: Readonly<Record<string, MovedCommand>> = {
+    ai: { absorbs: "gateway", to: "cloudflare ai-gateway" },
+    alerts: { to: "cloudflare alerts" },
+    containers: { to: "cloudflare containers" },
+    deployments: { to: "cloudflare deployments" },
+};
+
+/**
+ * The options of `lunora cloudflare` that take a value, so the word after one
+ * is read as that value and not as a positional (`--id gateway`).
+ */
+const VALUE_FLAGS: ReadonlySet<string> = new Set(
+    (cloudflareCommand.options ?? []).filter((option) => option.type !== Boolean).map((option) => `--${option.name}`),
+);
+
+/** Arguments a POSIX shell passes through unchanged when left unquoted. */
+const SHELL_SAFE = /^[\w@%+=:,./-]+$/u;
+
+/**
+ * Quote `value` for a POSIX shell so a printed command pastes back as the same
+ * argv: anything beyond a conservative safe set is single-quoted, with an
+ * embedded `'` written as `'\''`. Without it, `--message 'bad deploy'` came
+ * back as `--message bad deploy` — a live rollback with a truncated message.
+ */
+const shellQuote = (value: string): string => (SHELL_SAFE.test(value) ? value : `'${value.replaceAll("'", String.raw`'\''`)}'`);
+
+/** `list` without its first `value`. */
+const withoutFirst = (list: ReadonlyArray<string>, value: string): string[] => {
+    const index = list.indexOf(value);
+
+    return index === -1 ? [...list] : [...list.slice(0, index), ...list.slice(index + 1)];
+};
+
+/** The index of the first positional `value` in `argv` — not a flag, and not a value-taking flag's value. */
+const positionalIndex = (argv: ReadonlyArray<string>, value: string): number =>
+    argv.findIndex((token, index) => token === value && (index === 0 || !VALUE_FLAGS.has(argv[index - 1] ?? "")));
+
+/**
+ * The moved command a typed word names, exactly or as a typo of it. A typo
+ * resolves with the same distance rule as "did you mean", against the real
+ * commands too, so a word nearer a real command is left to that suggestion.
+ */
+const movedCommandFor = (typed: string): string | undefined => {
+    const match = closestMatch(typed, [...COMMANDS, ...Object.keys(MOVED_COMMANDS)]);
+
+    return match !== undefined && Object.hasOwn(MOVED_COMMANDS, match) ? match : undefined;
+};
+
+/**
+ * The "moved to" message when the command word `typed` is (or is a typo of) a
+ * moved command, or `undefined`. `argv` is everything after `typed`; the
+ * suggested command keeps all of it, shell-quoted, so it re-runs as printed
+ * (cerebro's error carries only the positionals, so the argv is read instead).
+ * `runInstead` replaces that suggestion — `lunora help <moved>` points at the
+ * group's help rather than at a run.
+ */
+const movedCommandMessage = (typed: string, argv: ReadonlyArray<string>, runInstead?: string): string | undefined => {
+    const name = movedCommandFor(typed);
+    const moved = name === undefined ? undefined : MOVED_COMMANDS[name];
+
+    if (name === undefined || moved === undefined) {
+        return undefined;
+    }
+
+    const typo = typed === name ? "" : `\`lunora ${typed}\` is not a command. `;
+    let rest = [...argv];
+
+    if (moved.absorbs !== undefined) {
+        const index = positionalIndex(rest, moved.absorbs);
+
+        // Without the old subcommand there is nothing to translate: bare
+        // `lunora ai` was a usage error, and the tool it would map to creates a
+        // gateway and edits wrangler.jsonc — not something to hand over ready to run.
+        if (index === -1 && runInstead === undefined) {
+            return `${typo}\`lunora ${name}\` had one subcommand, \`${moved.absorbs}\`; it moved to \`lunora ${moved.to}\`.`;
+        }
+
+        rest = index === -1 ? rest : [...rest.slice(0, index), ...rest.slice(index + 1)];
+    }
+
+    const old = moved.absorbs === undefined ? name : `${name} ${moved.absorbs}`;
+    const run = runInstead ?? ["lunora", moved.to, ...rest.map((argument) => shellQuote(argument))].join(" ");
+
+    return `${typo}\`lunora ${old}\` moved to \`lunora ${moved.to}\`. Run: ${run}`;
+};
+
+/**
+ * Log a failed `cli.run` and resolve the exit code it should carry. For an
+ * unknown command, say where a moved command went, or else upgrade cerebro's
+ * bare "not found" into a "did you mean …?" suggestion plus a help/docs
+ * pointer; any other error is logged verbatim.
+ */
+const reportRunError = (error: unknown, argv: ReadonlyArray<string>): number => {
     const logger = createLogger();
     const message = error instanceof Error ? error.message : String(error);
     const unknown = UNKNOWN_COMMAND.exec(message);
@@ -320,14 +372,51 @@ const reportRunError = (error: unknown): void => {
             logger.error(message);
         }
 
-        return;
+        return exitCodeForError(error);
     }
 
     const name = unknown.groups.name ?? "";
+    const typed = name.split(" ")[0] ?? "";
+    const moved = movedCommandMessage(typed, withoutFirst(argv, typed));
+
+    if (moved !== undefined) {
+        logger.error(moved);
+
+        return EXIT_CODE.USAGE;
+    }
+
     const suggestion = closestMatch(name, COMMANDS);
 
     logger.error(`Unknown command "${name}".${suggestion === undefined ? "" : ` Did you mean "${suggestion}"?`}`);
     logger.info("Run `lunora --help` to list commands, or `lunora docs` to open the documentation.");
+
+    // A name the CLI does not have is bad usage, not a failed run.
+    return EXIT_CODE.USAGE;
+};
+
+/**
+ * Adapt an injected `Console` to the commands' {@link Logger} shape. `success`
+ * has no Console equivalent, so it lands on `info` — the channel a Console-based
+ * caller already reads for it.
+ */
+const asCommandLogger = (console_: Console): Logger => {
+    return {
+        debug: (message) => {
+            console_.debug(message);
+        },
+        error: (message) => {
+            console_.error(message);
+        },
+        info: (message) => {
+            console_.info(message);
+        },
+        success: (message) => {
+            console_.info(message);
+        },
+        warn: (message) => {
+            console_.warn(message);
+        },
+    };
 };
 
 /**
@@ -339,12 +428,33 @@ const reportRunError = (error: unknown): void => {
 const runCli = async (options: RunCliOptions = {}): Promise<number> => {
     const { cli, exitCode } = buildCli(options);
 
+    // An injected logger has to reach the command bodies too, not just cerebro's
+    // own rendering: they log through the shared pail, so without this a
+    // command's output went to the real stdout/stderr regardless — unassertable,
+    // and interleaved with the caller's own output. Cleared afterwards so one
+    // call cannot leave the override installed for the next.
+    if (options.logger !== undefined) {
+        setCommandLogger(asCommandLogger(options.logger));
+    }
+
+    const argv = options.argv ?? process.argv.slice(2);
+
     try {
+        // cerebro's `help` answers an unknown name with "not found" and exit 0,
+        // so `lunora help containers` would tell nobody where it went.
+        const helpMoved = argv[0] === "help" && argv[1] !== undefined ? movedCommandMessage(argv[1], argv.slice(2), "lunora help cloudflare") : undefined;
+
+        if (helpMoved !== undefined) {
+            createLogger().error(helpMoved);
+
+            return EXIT_CODE.USAGE;
+        }
+
         await cli.run({ shouldExitProcess: false });
     } catch (error: unknown) {
-        reportRunError(error);
-
-        return 1;
+        return reportRunError(error, argv);
+    } finally {
+        setCommandLogger(undefined);
     }
 
     // Best-effort "update available" notice. A no-op for the unpublished dev

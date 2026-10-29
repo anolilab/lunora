@@ -6,6 +6,8 @@
  */
 import { fromBase64, toBase64 } from "../../../shared/base64";
 import { constantTimeEqual as sharedConstantTimeEqual } from "../../../shared/constant-time-equal";
+import { importHmacKey } from "../../../shared/hmac-key";
+import { memoizePromise } from "../../../shared/promise-memo";
 import { LunoraPaymentError } from "./errors";
 
 const encoder = new TextEncoder();
@@ -14,12 +16,45 @@ const toHex = (buffer: ArrayBuffer): string => [...new Uint8Array(buffer)].map((
 
 const SYMMETRIC_PREFIX = "whsec_";
 
-const hmacSha256Base64 = async (keyBytes: BufferSource, payload: string): Promise<string> => {
-    const key = await crypto.subtle.importKey("raw", keyBytes, { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
+const hmacSha256Base64 = async (key: CryptoKey, payload: string): Promise<string> => {
     const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
 
     return toBase64(new Uint8Array(signature));
 };
+
+/** The Standard Webhooks key: `whsec_` dropped, the remainder base64-decoded. */
+const standardWebhookKey = (secret: string): ReturnType<typeof fromBase64> => {
+    const rawSecret = secret.startsWith(SYMMETRIC_PREFIX) ? secret.slice(SYMMETRIC_PREFIX.length) : secret;
+    let keyBytes: ReturnType<typeof fromBase64>;
+
+    try {
+        keyBytes = fromBase64(rawSecret);
+    } catch {
+        // A secret that is not base64 is a configuration error, not a bad delivery: surfacing
+        // the decoder's `Invalid character` as a 400 sent operators hunting for a forged request.
+        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret is not base64 (expected whsec_<base64>)");
+    }
+
+    if (keyBytes.length === 0) {
+        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
+    }
+
+    return keyBytes;
+};
+
+// Webhook secrets are static and verified on every delivery, so imported keys are cached per secret.
+// The UTF-8 form shares shared/hmac-key's cache; the base64 form decodes to different key bytes, so it
+// needs its own, bounded the same way. A decode failure rejects inside `memoizePromise` and is evicted.
+const BASE64_KEY_CACHE_MAX = 64;
+const base64KeyCache = new Map<string, Promise<CryptoKey>>();
+
+const importStandardWebhookKey = async (secret: string): Promise<CryptoKey> =>
+    memoizePromise(
+        base64KeyCache,
+        secret,
+        async () => crypto.subtle.importKey("raw", standardWebhookKey(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]),
+        BASE64_KEY_CACHE_MAX,
+    );
 
 /**
  * Fail closed on an empty/missing webhook secret. A zero-length HMAC key is attacker-known, so a
@@ -52,18 +87,29 @@ export const constantTimeEqual: (a: string, b: string) => boolean = sharedConsta
  * webhook verifiers.
  */
 export const hmacSha256Hex = async (secret: string, payload: string): Promise<string> => {
-    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
-    const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
+    const signature = await crypto.subtle.sign("HMAC", await importHmacKey(secret), encoder.encode(payload));
 
     return toHex(signature);
 };
 
 export interface VerifyStandardWebhookInput {
+    /**
+     * How `secret` becomes the HMAC key.
+     *
+     * `"base64"` (default) is the Standard Webhooks convention: an optional `whsec_` prefix is
+     * dropped and the remainder is base64-decoded. Dodo Payments, Autumn and svix issue secrets in
+     * this form.
+     *
+     * `"utf8"` uses the secret's UTF-8 bytes verbatim, prefix included. Polar signs this way: its
+     * SDK base64-ENCODES the secret before handing it to the Standard Webhooks verifier, which
+     * decodes it straight back, so the key is the secret as typed (`polar_whs_…` included).
+     */
+    readonly keyEncoding?: "base64" | "utf8";
     /** Injectable clock (ms since epoch) for tests. */
     readonly now?: number;
     /** Raw request body, exactly as received. */
     readonly payload: string;
-    /** Endpoint secret, optionally `whsec_`-prefixed; the remainder is base64-decoded to the key. */
+    /** Endpoint secret; turned into the HMAC key per {@link VerifyStandardWebhookInput.keyEncoding}. */
     readonly secret: string;
     /** Whole-second tolerance for the signed timestamp (default 300). */
     readonly toleranceSeconds?: number;
@@ -95,19 +141,9 @@ export const verifyStandardWebhook = async (input: VerifyStandardWebhookInput): 
         throw new LunoraPaymentError("WEBHOOK_TIMESTAMP_INVALID", "signature timestamp outside tolerance");
     }
 
-    const rawSecret = input.secret.startsWith(SYMMETRIC_PREFIX) ? input.secret.slice(SYMMETRIC_PREFIX.length) : input.secret;
+    const key = input.keyEncoding === "utf8" ? await importHmacKey(input.secret) : await importStandardWebhookKey(input.secret);
 
-    if (!rawSecret) {
-        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
-    }
-
-    const keyBytes = fromBase64(rawSecret);
-
-    if (keyBytes.length === 0) {
-        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
-    }
-
-    const expected = await hmacSha256Base64(keyBytes, `${input.webhookId}.${input.webhookTimestamp}.${input.payload}`);
+    const expected = await hmacSha256Base64(key, `${input.webhookId}.${input.webhookTimestamp}.${input.payload}`);
     const provided = input.webhookSignature
         .split(" ")
         .map((entry) => {

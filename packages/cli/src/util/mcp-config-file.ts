@@ -30,15 +30,18 @@ import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
  *
  * Two things the naive temp-then-rename gets wrong, both silent:
  *
- * - **Mode.** A fresh temp file is `0666 & ~umask`, normally `0644`. Renaming it
+ * - **Mode.** A temp file created without a mode is `0666 & ~umask`, normally `0644`. Renaming it
  * over a `0600` config — which is what Zed's `settings.json` and Claude
  * Desktop's are, because they hold `env` blocks full of API tokens — makes
  * those secrets world-readable. Carry the original mode across.
  * - **Symlinks.** `rename` replaces the *link*, not its target, so a config
  * managed by stow/chezmoi silently becomes a regular file and the dotfiles repo
  * keeps a stale copy that still reads as clean. Resolve first.
+ *
+ * Accepts text or bytes, so the profile commands reuse it for their gzip output.
+ * Throws on any failure, including creating the parent directory.
  */
-const writeAtomic = (path: string, contents: string): void => {
+const writeAtomic = (path: string, contents: string | Uint8Array): void => {
     // Resolve through any symlink so both the mode we copy and the file we
     // replace are the real one.
     let target = path;
@@ -57,11 +60,13 @@ const writeAtomic = (path: string, contents: string): void => {
     const temporaryPath = `${target}.lunora-${Math.random().toString(36).slice(2, 10)}.tmp`;
 
     try {
-        writeFileSync(temporaryPath, contents, "utf8");
-
-        if (mode !== undefined) {
-            chmodSync(temporaryPath, mode);
-        }
+        // Inside the try, so a failure to create the directory is thrown to the caller like any other write error.
+        mkdirSync(dirname(target), { recursive: true });
+        // Created with its final mode, so the secrets in `env` blocks are never
+        // readable through a umask-default `0644` window. `rename` keeps it.
+        writeFileSync(temporaryPath, contents, { encoding: "utf8", mode: mode ?? 0o600 });
+        // `mode` on create is masked by the umask, and `rename` would carry that mode onto the target.
+        chmodSync(temporaryPath, mode ?? 0o600);
 
         renameSync(temporaryPath, target);
     } catch (error: unknown) {
@@ -289,5 +294,5 @@ const removeMcpEntry = (options: { key: string; name: string; path: string }): R
     return spliceError === undefined ? { action: "removed", path } : { action: "invalid", error: spliceError, path };
 };
 
-export type { RemoveAction, RemoveMcpEntryResult, UpsertAction, UpsertMcpEntryOptions, UpsertMcpEntryResult };
-export { hasMcpEntry, inspectMcpEntry, removeMcpEntry, upsertMcpEntry };
+export type { RemoveAction, UpsertAction };
+export { hasMcpEntry, inspectMcpEntry, removeMcpEntry, upsertMcpEntry, writeAtomic };

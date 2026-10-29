@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "../argument-taint";
 import type { FailOpenGuardIR } from "../ir";
-import { collectCallRows, limitNameOf } from "./ast";
+import { collectCallRows, findObjectProperty, limitNameOf, optionsObjectLiteral } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
 
 /**
@@ -26,16 +26,21 @@ const RATE_LIMIT_CALLEES = new Set(["dbRateLimit", "rateLimit"]);
 
 /**
  * Whether the options-object argument sets `failOpen: true` as a boolean
- * literal. A missing argument, a non-object argument, an absent `failOpen`, or a
- * non-literal initializer (`failOpen: cfg.x`) is conservatively treated as
- * fail-closed — the lint only ever fires on a provable `failOpen: true`.
+ * literal. The argument may be written inline or hoisted into a module-scope
+ * `const` (the spelling every example in this repo uses) — see
+ * {@link optionsObjectLiteral}. A missing argument, an unresolvable one, an
+ * absent `failOpen`, or a non-literal initializer (`failOpen: cfg.x`) is
+ * conservatively treated as fail-closed — the lint only ever fires on a
+ * provable `failOpen: true`.
  */
 const setsFailOpenTrue = (options: TsNode | undefined): boolean => {
-    if (!options || !Node.isObjectLiteralExpression(options)) {
+    const literal = optionsObjectLiteral(options);
+
+    if (!literal) {
         return false;
     }
 
-    const property = options.getProperty("failOpen");
+    const property = findObjectProperty(literal, "failOpen");
 
     return property !== undefined && Node.isPropertyAssignment(property) && property.getInitializer()?.getKind() === SyntaxKind.TrueKeyword;
 };
@@ -56,7 +61,7 @@ const failOpenGuardInCall = (call: CallExpression, relativePath: string): FailOp
 
     return {
         callee,
-        exportName: enclosingExportName(call),
+        scope: callSiteScopeOf(call),
         failOpen: setsFailOpenTrue(call.getArguments()[optionsIndex]),
         file: relativePath,
         limitName: RATE_LIMIT_CALLEES.has(callee) ? limitNameOf(call) : "",

@@ -3,7 +3,6 @@ import { Project, SyntaxKind } from "ts-morph";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
-    enclosingExportName,
     isArgumentDerived,
     isRequestInputDerived,
     isScopedByContext,
@@ -12,6 +11,7 @@ import {
     referencesRequestInput,
     singleHopInitializer,
 } from "../src/argument-taint";
+import { callSiteScopeOf } from "../src/discover/attribution";
 import { calleeName } from "../src/discover/callee";
 
 let project: Project;
@@ -79,6 +79,20 @@ describe("argument-taint", () => {
             expect(referencesArgs(sinkArgument(`SINK({ args });`))).toBe(true);
             expect(referencesArgs(sinkArgument(`SINK({ args: 1 });`))).toBe(false);
             expect(referencesArgs(sinkArgument(`SINK(payload.args);`))).toBe(false);
+        });
+
+        it("follows a destructured `args` parameter — the spelling every handler here is written in", () => {
+            expect.assertions(5);
+
+            expect(referencesArgs(sinkArgument(`SINK(url);`, "{ args: { url }, ctx }"))).toBe(true);
+            // Renamed, and nested one level deeper.
+            expect(referencesArgs(sinkArgument(`SINK(target);`, "{ args: { url: target }, ctx }"))).toBe(true);
+            expect(referencesArgs(sinkArgument(`SINK(id);`, "{ args: { page: { id } }, ctx }"))).toBe(true);
+            // A rest element holds what is left of the SAME object, so it is
+            // tainted too — no special case, the chain walk reaches `args` anyway.
+            expect(referencesArgs(sinkArgument(`SINK(rest);`, "{ args: { url, ...rest }, ctx }"))).toBe(true);
+            // A sibling binding off a different property is not `args`.
+            expect(referencesArgs(sinkArgument(`SINK(userId);`, "{ args, ctx: { userId } }"))).toBe(false);
         });
     });
 
@@ -153,6 +167,15 @@ describe("argument-taint", () => {
             expect(isScopedByContext(unscoped)).toBe(false);
             expect(isArgumentDerived(unscoped)).toBe(true);
         });
+
+        it("stays symmetric when the handler destructures both halves of its parameter", () => {
+            expect.assertions(2);
+
+            const scoped = sinkArgument(`SINK(\`\${userId}/\${name}\`);`, "{ args: { name }, ctx: { auth: { userId } } }");
+
+            expect(isScopedByContext(scoped)).toBe(true);
+            expect(isArgumentDerived(scoped)).toBe(true);
+        });
     });
 
     describe("request-rooted taint", () => {
@@ -181,15 +204,15 @@ describe("argument-taint", () => {
         });
     });
 
-    describe("enclosingExportName", () => {
+    describe("callSiteScopeOf", () => {
         it("attributes a sink to the exported declaration, walking past local bindings", () => {
             expect.assertions(2);
 
-            expect(enclosingExportName(sinkArgument(`const result = SINK(args.key);`))).toBe("handler");
+            expect(callSiteScopeOf(sinkArgument(`const result = SINK(args.key);`))).toStrictEqual({ kind: "export", name: "handler" });
 
             const inline = project.createSourceFile("inline.ts", `router.route("/x", async () => { SINK(1); });\n`, { overwrite: true });
 
-            expect(enclosingExportName(findSink(inline))).toBe("<module>");
+            expect(callSiteScopeOf(findSink(inline))).toStrictEqual({ kind: "module" });
         });
     });
 });

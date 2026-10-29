@@ -54,21 +54,63 @@ Each of these shipped on the alpha channel as a `BREAKING CHANGE` (or a
 deliberate surface cut) on the road to 1.0. If your app started on an early
 alpha, work through them in order.
 
+### `@lunora/server`: `RelationDefinition` is a union
+
+`r.many(target, { through })` adds a many-to-many relation, which has no `field`, `references` or `onDelete`
+of its own. `RelationDefinition` (and the matching `RelationDefinitionLike`, `RelationIR` and `AdvisorRelation`
+types) is therefore a union of the single-key relation and the through relation, so code that reads
+`relation.field` off a relation map has to narrow on `relation.through` first. Apps that only declare
+relations with `r.one` and `r.many({ field })` are unaffected.
+
+### `@lunora/ratelimit`: `shards` option removed
+
+`RateLimitConfig.shards` split a limit into N sub-buckets that each held
+`rate / shards`, and routed every key to exactly one of them, so a limit
+enforced `rate / shards` rather than `rate` (a `rate: 10_000, shards: 16` limit
+admitted 625 per period). Every sub-bucket lived in the same store, so the split
+relieved no contention either.
+
+**Migration:** delete `shards` from every limit config. The limit then enforces
+the `rate` it declares, which is what `useRateLimit` already predicted. If you
+tuned `rate` upward to compensate for the split, set it back to the real limit —
+a `rate` raised 16× for a 16-way split now admits 16× the traffic. A config that
+still carries `shards` throws at `new RateLimiter(...)`, so a missed one fails
+at startup instead of silently enforcing a different limit.
+
+**Stored state does not carry over.** A sharded limit stored each key's state
+under `<name>:<key>#<shard>`; the unsharded limit reads `<name>:<key>`. After the
+upgrade:
+
+- every previously sharded key starts fresh, so a caller at its limit gets a new
+  budget once, and any `tokenBudget` debt recorded against it is forgiven;
+- the old `#<shard>` rows are never read again, and `reset()` does not remove
+  them. With `createMemoryStore` they vanish on the next restart; with
+  `createSqlStore` / `createDbStore` they stay until you delete them, for
+  example every key ending in `#` followed by digits in the limiter's table.
+
+```ts
+// Before
+ingest: { kind: "token bucket", period: 1_000, rate: 10_000, shards: 16 },
+
+// After
+ingest: { kind: "token bucket", period: 1_000, rate: 10_000 },
+```
+
 ### `@lunora/ratelimit`: `random` option removed
 
-The deprecated `RateLimiterOptions.random` shard-selection hook is gone. Shard
-selection has been a deterministic hash of the storage key since the option
-was deprecated, so the hook was already unused.
+The deprecated `RateLimiterOptions.random` shard-selection hook is gone. It was
+already unused when it was removed, and `shards` itself is now gone too (see
+above).
 
 **Migration:** remove any `random` property from `new RateLimiter({ ... })`
 calls. No behavioral replacement is needed.
 
 ```ts
 // Before
-const limiter = new RateLimiter({ limits, random: Math.random, shards: 8 });
+const limiter = new RateLimiter({ config, random: Math.random });
 
 // After
-const limiter = new RateLimiter({ limits, shards: 8 });
+const limiter = new RateLimiter({ config });
 ```
 
 ### `@lunora/runtime`: `authIntrospector` removed
@@ -117,6 +159,170 @@ table (offering the tables declared in `lunora/schema.ts`); non-interactively
 ```bash
 lunora migrate create backfill_read_by --table messages
 ```
+
+### `@lunora/cli`: Cloudflare-only commands moved under `lunora cloudflare`
+
+Lunora deploys to Cloudflare, celld and Node, and three commands only ever
+drove Cloudflare. They now live in the `lunora cloudflare` group, keep their
+subcommands and flags, and refuse on a celld or Node project (the target comes
+from `--target`, then `target` in `lunora.config.*`, then Cloudflare):
+
+| Before                                 | After                                             |
+| -------------------------------------- | ------------------------------------------------- |
+| `lunora containers <subcommand> …`     | `lunora cloudflare containers <subcommand> …`     |
+| `lunora deployments <subcommand> …`    | `lunora cloudflare deployments <subcommand> …`    |
+| `lunora ai gateway [--id] [--no-logs]` | `lunora cloudflare ai-gateway [--id] [--no-logs]` |
+
+The old names are not aliases. They exit `2` without running anything and print
+the command to use instead, with the rest of your arguments carried over:
+
+```text
+`lunora containers` moved to `lunora cloudflare containers`. Run: lunora cloudflare containers images list
+```
+
+`lunora cloudflare` on its own lists the tools.
+
+`lunora logs` also resolves its target from `lunora.config.*` now. It read only
+`--target`, so a celld project that omitted the flag ran `wrangler tail`; it now
+refuses, since celld and Node have no log tail.
+
+**Migration:** replace the old command names in scripts and CI jobs as in the
+table above.
+
+### `@lunora/payment`: store tables moved to `payment_*`
+
+The payment store now reads and writes the tables of `paymentExtension`, which
+`.extend()` prefixes with its key: `payment_customers`, `payment_events`,
+`payment_sessions`, `payment_subscriptions` and `payment_usageEvents`. An app
+that declared the store tables itself under the bare names (`customers`,
+`events`, `paymentSessions`, `subscriptions`, `usageEvents`) still typechecks,
+then fails on every store access with `unknown table: payment_subscriptions`.
+
+**Migration:** extend the schema with `paymentExtension`:
+
+```ts
+// lunora/schema.ts
+import { paymentExtension } from "@lunora/payment";
+
+export default defineSchema({
+    // …your tables, plus the old payment tables until the move below finishes
+}).extend(paymentExtension);
+```
+
+The store does not read the old tables, and nothing moves their rows for you.
+Copy any rows you need into the `payment_*` tables, then delete the old tables
+from the schema.
+
+### `@lunora/payment`: money columns are numbers
+
+`amountMinor`, `capturedMinor` and `refundedMinor` on `payment_sessions` are
+`v.number()` instead of `v.bigint()`, so the tables can also be declared
+`.global()`. `Money.minorUnits` is still a `bigint`; the store converts at the
+row and throws a `VALIDATION_ERROR` for an amount outside ±(2^53 − 1) instead of
+rounding it.
+
+**Migration:** a deploy that changes these columns from `bigint` to `number` is
+blocked by the schema-drift check until one of two things is true: a
+`payment_sessions` migration covers the change, or the schema baseline is
+re-blessed with `--update-schema-baseline`. Rows written before the upgrade still
+hold `bigint` values. The store reads them, but code that reads the columns
+directly gets a `number` for new rows and a `bigint` for old ones, so arithmetic
+that mixes the two throws. `where` filters on these columns do not match the old
+rows either. Convert or backfill those rows before you rely on the columns outside
+the store.
+
+### `@lunora/codegen`: `api.*` nests by folder
+
+A function file in a folder used to be one underscore-joined key:
+`lunora/billing/invoices.ts` was `api.billing_invoices.*`. The generated
+`api`, `internal`, `httpStreams` and `createCaller` now nest by folder, so it is
+`api.billing.invoices.*`, the same shape as Convex. A trailing `index.ts` still
+collapses into its folder (`lunora/ratelimit/index.ts` stays `api.ratelimit.*`).
+
+Nothing changes at runtime: the dispatch key is still `billing_invoices:create`,
+so OpenAPI operation IDs, the wire protocol and the non-JS SDKs are unaffected.
+TypeScript flags every old reference after `lunora codegen`.
+
+**Migration:** replace each `api.<folder>_<file>.` / `internal.<folder>_<file>.`
+with `api.<folder>.<file>.` / `internal.<folder>.<file>.`. A file that exports a
+function named like a file in its sibling folder (`billing.ts` exporting
+`invoices` next to `billing/invoices.ts`) is now a codegen error, because both
+would be `api.billing.invoices`. Rename one of them. A cron job's reference
+must be written on the generated `api` / `internal` object itself; an aliased
+import (`import { internal as i }`) is no longer resolved.
+
+### `@lunora/codegen`: `internal` moved to `_generated/internal.ts`
+
+`internal` (and its `InternalApiTypes`) now lives in its own generated module,
+so a client bundle that imports `api` never carries internal function names.
+`api` and `internal` are plain objects of `{ __lunoraRef }` references rather
+than a proxy, which also means a reference can be stored, cloned and sent
+between Workers. `anyApi` and the `AnyApi` type are removed from
+`@lunora/server` and `@lunora/client`.
+
+**Migration:** import `internal` from the new module:
+
+```ts
+// before
+import { api, internal } from "./_generated/api";
+
+// after
+import { api } from "./_generated/api";
+import { internal } from "./_generated/internal";
+```
+
+Code that used `anyApi` to build a reference by hand can pass the dispatch
+key instead: `{ __lunoraRef: "billing_invoices:create" }`.
+
+### `@lunora/x402`: rail internals no longer exported
+
+`@lunora/x402` graduated to the Stable-adapter tier with a smaller surface. The
+pieces `createX402Pay` and `createChargeMiddleware` assemble internally are no
+longer exported, because exporting them would put `@x402/core`'s policy and hook
+types (`PaymentPolicy`, `BeforePaymentCreationHook`, …) under Lunora's SemVer
+promise:
+
+- from `@lunora/x402/pay`: `createPayFetch`, `registerWallet`,
+  `resolveEvmAccount`, `resolveSvmSigner`, `buildSpendPolicy`,
+  `buildPaymentGuard`, `releaseSpendOnFailure`, `assertBoundedPolicy`,
+  `createSpendState`, and the `SpendState` and `WalletDeps` types;
+- from `@lunora/x402/charge`: `createFacilitatorClient` and `toReceipt`.
+
+`SpendPolicy.decimals`, which already threw when set, is gone. Network and
+recipient misconfiguration (`Unknown x402 network`, `needs recipient.evm set`)
+now throws a `LunoraError` with code `ENV_INVALID` instead of a plain `Error`.
+A facilitator that fails rather than declines (unreachable at start-up, a
+malformed or timed-out `/verify` or `/settle` answer) throws
+`X402_FACILITATOR_ERROR` (502) instead of passing `@x402/core`'s error through
+as a 500. `ctx.x402` is no longer emitted on targets that rate `secrets`
+unsupported (`node`, `celld`); call `createX402Pay` directly there. `maxPerRun`
+was always per rail, which for `ctx.x402` means per function invocation; the
+docs no longer call it a wallet lifetime.
+
+**Migration:** build the pay rail with `createX402Pay(config, deps)` (or
+`lazyX402Pay`); it runs the same policy checks, wallet resolution and hooks. For
+a custom signer, pass it as `signer: { type: "signer", signer }`. A receipt is
+already normalized when it reaches your `onReceipt` sink, so `toReceipt` has no
+caller left. The `getSecret` field moved onto `X402PayDeps` itself, so code that
+typed its deps as `WalletDeps` should use `X402PayDeps`.
+
+### `@lunora/browser`: the SSRF guard moved to the context
+
+The redirect guard used `page.route`, which Playwright never calls for a
+redirect hop, so a public URL could 302 the browser to a private address. The
+guard now sits on the context (`context.route`), fetches each navigation itself
+without following redirects, and checks every `Location` before it is
+requested. It also covers the browsers `launch` and `connect` hand to your code.
+
+The structural projections changed with it: `BrowserContextLike` requires
+`route`, `PageLike` drops `route` and gains an optional `mainFrame`, and
+`RouteLike` gains `fetch` and `fulfill`. A `launch` keepAlive session whose
+callback throws is now closed. A DoH answer with no address (empty, SERVFAIL,
+NXDOMAIN) is refused instead of treated as public.
+
+**Migration:** test doubles passed as `launch` / `connect` need a context with
+`route`. The real `@cloudflare/playwright` exports satisfy the new shapes
+unchanged.
 
 ## Recommended (non-breaking) follow-ups
 

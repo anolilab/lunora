@@ -6,8 +6,9 @@ import { describe, expect, it } from "vitest";
  * Registration-time guard for partial-replication shapes. A live shape pokes
  * only from its OWN shard Durable Object, so an `effectiveWhere` that joins to a
  * `.shardBy()` table (rows that live in another DO) is rejected the moment the
- * generated `resolveShape` compiles it. A join to a `root` (same DO) or
- * `.global()` (D1) table is allowed.
+ * generated `resolveShape` compiles it. So is any relation predicate on a shard-local table, even to a `root` (same
+ * DO) or `.global()` (D1) table: the shape's seed and probe never resolve it. A `.global()` shape itself is read
+ * through the store's `findMany`, which does, and is allowed.
  */
 
 // `messages` is sharded by room; `members` is sharded by tenant (a DIFFERENT DO);
@@ -67,22 +68,30 @@ describe("assertShapeShardable", () => {
         ).toBeUndefined();
     });
 
-    it("allows a join to a root (same-DO) table", () => {
-        expect.assertions(1);
+    it.each([
+        ["root (same-DO)", { flag: { is: { value: "on" } } }],
+        [".global() (D1)", { country: { is: { name: "DE" } } }],
+    ])("rejects a relation predicate to a %s table, which the shard-local shape cannot resolve", (_label, where) => {
+        expect.assertions(2);
 
-        expect(
-            thrownBy(() => {
-                assertShapeShardable({ flag: { is: { value: "on" } } }, schema, "messages");
-            }),
-        ).toBeUndefined();
+        const error = thrownBy(() => {
+            assertShapeShardable(where, schema, "messages");
+        });
+
+        expect((error as { code?: string }).code).toBe("SHAPE_RELATION_PREDICATE");
+        expect((error as Error).message).toContain(".global()");
     });
 
-    it("allows a join to a .global() (D1) table", () => {
+    it("allows a relation predicate on a .global() table's own shape", () => {
         expect.assertions(1);
+
+        const globalOwner = {
+            tables: { ...schema.tables, messages: { ...schema.tables["messages"], shardMode: { kind: "global" } } },
+        } as unknown as SchemaLike;
 
         expect(
             thrownBy(() => {
-                assertShapeShardable({ country: { is: { name: "DE" } } }, schema, "messages");
+                assertShapeShardable({ flag: { is: { value: "on" } } }, globalOwner, "messages");
             }),
         ).toBeUndefined();
     });

@@ -8,7 +8,7 @@
  * It runs **stateless**: each request builds a fresh `Server` + transport (no
  * session id, buffered JSON responses), which suits a short-lived RPC proxy and
  * needs no cross-request session store. This HTTP boundary is also the seam paid
- * MCP tools gate on — an HTTP request can carry `X-PAYMENT`, which stdio cannot.
+ * MCP tools gate on — an HTTP request can carry `PAYMENT-SIGNATURE`, which stdio cannot.
  *
  * The transport plumbing itself lives in `./serve-stateless`, which this module
  * re-exports unchanged; keeping it there lets the Workers-safe `./docs` surface

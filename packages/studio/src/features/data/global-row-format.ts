@@ -4,6 +4,7 @@
  * Its own module because the browser and its extracted page surface both need
  * them, and neither touches React — so they are unit-testable directly.
  */
+import { formatCell } from "../../lib/internal";
 
 /**
  * A stable React key for a global-table row. `.global()` docs carry an `_id`
@@ -25,12 +26,9 @@ const chipValue = (value: unknown): string => {
         return "(empty)";
     }
 
-    if (typeof value === "object") {
-        return JSON.stringify(value);
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- non-object primitives stringify meaningfully; objects are handled above.
-    return String(value);
+    // `formatCell`, not `JSON.stringify`: a `v.bytes()` chip value is an
+    // ArrayBuffer, which JSON renders as `{}`.
+    return formatCell(value);
 };
 
 export { chipValue, rowKey };

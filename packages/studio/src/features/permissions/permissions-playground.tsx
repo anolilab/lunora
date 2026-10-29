@@ -1,7 +1,8 @@
-import { useLunora } from "@lunora/react";
+import { decodeWire } from "@lunora/wire";
 import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
+import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -9,8 +10,9 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Textarea } from "../../components/ui/textarea";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget } from "../../lib/internal";
+import { errorMessage, fireAndForget, jsonRowReplacer } from "../../lib/internal";
 import type { FunctionDescriptor } from "../../lib/types";
 import type { ProbeOutcome } from "./use-run-as-probe";
 import useRunAsProbe from "./use-run-as-probe";
@@ -39,7 +41,106 @@ interface PermissionsPlaygroundProps {
     readonly runAsIdentity?: boolean;
 }
 
-const formatValue = (value: unknown): string => (value === undefined ? "undefined" : JSON.stringify(value, null, 2));
+const formatValue = (value: unknown): string => (value === undefined ? "undefined" : JSON.stringify(value, jsonRowReplacer, 2));
+
+/** A probe's verdict: allowed (with the result), denied, not run, or an error that is no access verdict. */
+const ProbeOutcomeView = ({ outcome }: { readonly outcome: ProbeOutcome }): ReactElement => {
+    const t = useT();
+
+    if (outcome.kind === "allowed") {
+        return (
+            <div className="flex flex-col gap-2" data-testid="pp-outcome-allowed">
+                <Badge variant="secondary">{t("Allowed")}</Badge>
+                <pre className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs" data-testid="pp-result">
+                    {formatValue(outcome.value)}
+                </pre>
+            </div>
+        );
+    }
+
+    if (outcome.kind === "denied") {
+        return (
+            <div className="flex flex-col gap-2" data-testid="pp-outcome-denied">
+                <Badge variant="destructive">{t("Denied")}</Badge>
+                <pre
+                    className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs text-destructive"
+                    data-testid="pp-denied"
+                    role="alert"
+                >
+                    {outcome.message}
+                </pre>
+            </div>
+        );
+    }
+
+    if (outcome.kind === "errored") {
+        return (
+            <div className="flex flex-col gap-2" data-testid="pp-outcome-errored">
+                <Badge variant="outline">{t("Errored")}</Badge>
+                <p className="text-sm text-muted-foreground">
+                    {t("The call failed for a reason that is not an access verdict, so it says nothing about the policy.")}
+                </p>
+                <pre className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs" data-testid="pp-errored" role="alert">
+                    {outcome.message}
+                </pre>
+            </div>
+        );
+    }
+
+    return (
+        <div className="flex flex-col gap-2" data-testid="pp-outcome-invalid">
+            <Badge variant="outline">{t("Not run")}</Badge>
+            <p className="text-sm text-muted-foreground" data-testid="pp-invalid" role="status">
+                {outcome.message}
+            </p>
+        </div>
+    );
+};
+
+/** The run button — behind a confirmation when the function writes — and the identity it runs as. */
+const ProbeRunControls = ({
+    disabled,
+    executesWrites,
+    functionPath,
+    onRun,
+    running,
+    userId,
+}: {
+    readonly disabled: boolean;
+    readonly executesWrites: boolean;
+    readonly functionPath: string;
+    readonly onRun: () => void;
+    readonly running: boolean;
+    readonly userId: string;
+}): ReactElement => {
+    const t = useT();
+    const label = running ? t("Probing…") : t("Run probe");
+
+    return (
+        <div className="flex items-center gap-2">
+            {executesWrites ? (
+                // A mutation or action really executes under the forged identity — guard it.
+                <ConfirmButton
+                    confirmLabel={t("This will execute `{functionPath}` as user `{userId}`.", { functionPath, userId })}
+                    disabled={disabled}
+                    onConfirm={onRun}
+                    testId="pp-run"
+                >
+                    {label}
+                </ConfirmButton>
+            ) : (
+                <Button data-testid="pp-run" disabled={disabled} onClick={onRun} type="button">
+                    {label}
+                </Button>
+            )}
+            {userId !== "" && (
+                <Badge data-testid="pp-as-badge" variant="secondary">
+                    {t("as {userId}", { userId })}
+                </Badge>
+            )}
+        </div>
+    );
+};
 
 /**
  * The Permissions Playground — pick a registered function and an identity
@@ -53,7 +154,7 @@ const formatValue = (value: unknown): string => (value === undefined ? "undefine
  * still renders but the run button is disabled.
  */
 export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAsIdentity = false }: PermissionsPlaygroundProps = {}): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const probe = useRunAsProbe();
 
@@ -69,9 +170,15 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
     const [running, setRunning] = useState<boolean>(false);
     const [outcome, setOutcome] = useState<ProbeOutcome | null>(null);
     const [argsError, setArgsError] = useState<null | string>(null);
+    // A probe runs the function for real, so a mutation or action would write as that user: offer them only on request.
+    const [includeWrites, setIncludeWrites] = useState<boolean>(false);
     // The last prefill nonce applied, so a given matrix "Probe this" click seeds
     // the form at most once even though `prefill` stays referentially set.
     const appliedNonce = useRef<number>(-1);
+    // Bumped by every run and every prefill: a prefill selects another function
+    // and clears the outcome, so a probe still in flight for the previous one
+    // must not paint its verdict back in.
+    const probeSeq = useRef(0);
 
     useEffect(() => {
         if (functionsProp !== undefined) {
@@ -111,6 +218,7 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
         }
 
         appliedNonce.current = prefill.nonce;
+        probeSeq.current += 1;
         const target = prefill.functionPath;
 
         queueMicrotask(() => {
@@ -120,7 +228,12 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
         /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
     }, [prefill]);
 
-    const effectivePath = selectedPath === "" ? (functions[0]?.path ?? "") : selectedPath;
+    // A matrix prefill may select a non-query; keep it listed so the select shows what will run.
+    const listed = includeWrites ? functions : functions.filter((descriptor) => descriptor.kind === "query" || descriptor.path === selectedPath);
+    const effectivePath = selectedPath === "" ? (listed[0]?.path ?? "") : selectedPath;
+    // A path the list has not resolved (the list is still loading, or failed) is treated as a write: a probe runs the function for real.
+    const selectedDescriptor = functions.find((descriptor) => descriptor.path === effectivePath);
+    const executesWrites = effectivePath !== "" && selectedDescriptor?.kind !== "query";
 
     const run = async (): Promise<void> => {
         if (effectivePath === "") {
@@ -130,13 +243,17 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
         let parsedArgs: Record<string, unknown>;
 
         try {
-            parsedArgs = argsText.trim() === "" ? {} : (JSON.parse(argsText) as Record<string, unknown>);
+            // Wire-decoded like the row editor, so a `v.bigint()` / `v.bytes()` arg can be sent in its tagged form.
+            parsedArgs = argsText.trim() === "" ? {} : (decodeWire(JSON.parse(argsText)) as Record<string, unknown>);
         } catch (parseError) {
             setArgsError(t("Invalid JSON args: {message}", { message: (parseError as Error).message }));
             setOutcome(null);
 
             return;
         }
+
+        probeSeq.current += 1;
+        const seq = probeSeq.current;
 
         setArgsError(null);
         setRunning(true);
@@ -145,7 +262,9 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
         try {
             const result = await probe({ args: parsedArgs, functionPath: effectivePath, shardKey: shardKey.trim(), userId: runAsUserId.trim() });
 
-            setOutcome(result);
+            if (seq === probeSeq.current) {
+                setOutcome(result);
+            }
         } finally {
             setRunning(false);
         }
@@ -166,6 +285,17 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
     const onUserIdChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setRunAsUserId(event.target.value);
     };
+
+    const onIncludeWritesChange = (event: ChangeEvent<HTMLInputElement>): void => {
+        setIncludeWrites(event.target.checked);
+
+        // Hiding writes again must not leave one selected behind the filter.
+        if (!event.target.checked && executesWrites) {
+            setSelectedPath("");
+        }
+    };
+
+    const runDisabled = !runAsIdentity || running || effectivePath === "";
 
     return (
         <div className="flex flex-col gap-3" data-testid="lunora-permissions-playground">
@@ -194,12 +324,23 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
                         onChange={onSelectChange}
                         value={effectivePath}
                     >
-                        {functions.map((descriptor) => (
+                        {listed.map((descriptor) => (
                             <option key={descriptor.path} value={descriptor.path}>
                                 {descriptor.path} ({descriptor.kind})
                             </option>
                         ))}
                     </select>
+                    <Label className="flex items-center gap-1.5 text-xs font-normal" htmlFor="pp-include-writes">
+                        <input
+                            checked={includeWrites}
+                            className="size-4 accent-primary"
+                            data-testid="pp-include-writes"
+                            id="pp-include-writes"
+                            onChange={onIncludeWritesChange}
+                            type="checkbox"
+                        />
+                        {t("Include mutations and actions")}
+                    </Label>
                 </div>
 
                 <div className="flex flex-col gap-1.5">
@@ -229,16 +370,14 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
                     />
                 </div>
 
-                <div className="flex items-center gap-2">
-                    <Button data-testid="pp-run" disabled={!runAsIdentity || running || effectivePath === ""} onClick={runOnce} type="button">
-                        {running ? t("Probing…") : t("Run probe")}
-                    </Button>
-                    {runAsUserId.trim() !== "" && (
-                        <Badge data-testid="pp-as-badge" variant="secondary">
-                            {t("as {userId}", { userId: runAsUserId.trim() })}
-                        </Badge>
-                    )}
-                </div>
+                <ProbeRunControls
+                    disabled={runDisabled}
+                    executesWrites={executesWrites}
+                    functionPath={effectivePath}
+                    onRun={runOnce}
+                    running={running}
+                    userId={runAsUserId.trim()}
+                />
             </div>
 
             {argsError !== null && (
@@ -247,36 +386,7 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
                 </p>
             )}
 
-            {outcome !== null && outcome.kind === "allowed" && (
-                <div className="flex flex-col gap-2" data-testid="pp-outcome-allowed">
-                    <Badge variant="secondary">{t("Allowed")}</Badge>
-                    <pre className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs" data-testid="pp-result">
-                        {formatValue(outcome.value)}
-                    </pre>
-                </div>
-            )}
-
-            {outcome !== null && outcome.kind === "invalid" && (
-                <div className="flex flex-col gap-2" data-testid="pp-outcome-invalid">
-                    <Badge variant="outline">{t("Not run")}</Badge>
-                    <p className="text-sm text-muted-foreground" data-testid="pp-invalid" role="status">
-                        {outcome.message}
-                    </p>
-                </div>
-            )}
-
-            {outcome !== null && outcome.kind === "denied" && (
-                <div className="flex flex-col gap-2" data-testid="pp-outcome-denied">
-                    <Badge variant="destructive">{t("Denied")}</Badge>
-                    <pre
-                        className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs text-destructive"
-                        data-testid="pp-denied"
-                        role="alert"
-                    >
-                        {outcome.message}
-                    </pre>
-                </div>
-            )}
+            {outcome !== null && <ProbeOutcomeView outcome={outcome} />}
         </div>
     );
 };

@@ -11,12 +11,20 @@
             - "opened"
             - "closed"
 
-"permissions":
-    "contents": "read"
+# Empty at the top, scoped on the job — the shape the other shared-workflow
+# callers here use. The set mirrors what allo-allo.yml declares at the pinned SHA:
+# a caller cannot grant a called workflow more than it holds, and with only
+# `contents: read` every run was rejected before it started (startup_failure),
+# so no first-time contributor has ever actually been greeted.
+"permissions": {}
 
 "jobs":
     "allo-allo":
-        "uses": "anolilab/workflows/.github/workflows/allo-allo.yml@3c54b71af67bdd990513c4a17fa2fde078db7b74" # main
+        "permissions":
+            "contents": "read"
+            "issues": "write" # to greet a first-time issue opener
+            "pull-requests": "write" # to greet a first-time pull request
+        "uses": "anolilab/workflows/.github/workflows/allo-allo.yml@9b64c8cea7da5e06a9d9fd6c741619172607037f" # main
         "with":
             "target-repo": "anolilab/lunora"
             "onboarding-lead": "prisis"

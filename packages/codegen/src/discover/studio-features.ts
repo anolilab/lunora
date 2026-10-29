@@ -1,5 +1,6 @@
 import type { StudioFeaturesResult } from "@lunora/shard-engine";
 
+import { studioPlatformFor } from "../platform-target";
 import type { FeatureUsage } from "./feature-usage";
 
 /**
@@ -19,15 +20,13 @@ interface StudioFeatureSignals {
     dependencies: ReadonlySet<string>;
 
     /**
-     * The app declares the `@lunora/payment` store's `subscriptions` **and** `events` tables — the
-     * two the Payments panel reads — identified by their *signature columns*, not merely their
-     * (generic) names (see `hasPaymentStoreTables`). Unlike every other feature, payments has
-     * no fail-open dependency arm: the panel queries these tables directly, so merely depending on
-     * `@lunora/payment` (e.g. to reuse its pure webhook-verification / idempotency-key helpers)
-     * without hand-declaring the store's tables would show a page that errors with `unknown table:
-     * subscriptions`. Gating on the tables' presence makes the page appear exactly when it can
-     * actually render — and gating on their *shape* keeps an unrelated newsletter `subscriptions`
-     * or domain `events` table from spuriously flipping it on.
+     * The app merges the `@lunora/payment` store's `payment_subscriptions` **and** `payment_events`
+     * tables — the two the Payments panel reads — identified by name and *signature columns* (see
+     * `hasPaymentStoreTables`). Unlike every other feature, payments has no fail-open dependency
+     * arm: the panel queries these tables directly, so merely depending on `@lunora/payment` (e.g.
+     * to reuse its pure webhook-verification / idempotency-key helpers) without
+     * `.extend(paymentExtension)` would show a page that errors with `unknown table`. Gating on the
+     * tables' presence makes the page appear exactly when it can actually render.
      */
     hasPaymentTables: boolean;
     /** Number of declared queues — any `defineQueue` means the queues page is relevant. */
@@ -36,6 +35,15 @@ interface StudioFeatureSignals {
     storageColumnCount: number;
     /** Number of declared storage access rules. */
     storageRuleCount: number;
+
+    /**
+     * The resolved deploy target. Its capability matrix's `unsupported` keys ride
+     * along as `platform`, which is how a studio hosted apart from the worker
+     * learns which pages this host cannot serve. An unregistered target adds no
+     * `platform`, and the studio then gates on the flags alone.
+     */
+    target: string;
+
     /** Number of declared vector indexes. */
     vectorIndexCount: number;
 
@@ -85,15 +93,17 @@ interface StudioFeatureSignals {
  * hidden page.
  *
  * `payments` is the lone exception: it has no dependency arm. Its panel reads the
- * `subscriptions`/`events` tables directly, which the app must hand-declare in its
- * schema (codegen can't resolve `@lunora/payment`'s cross-package table spread), so
- * a dependency-only signal would fail *open into an error* rather than an empty
- * page. It gates on {@link StudioFeatureSignals.hasPaymentTables} — the store tables'
+ * `payment_subscriptions`/`payment_events` tables directly, which exist only once
+ * the app's schema merges `paymentExtension`, so a dependency-only signal would
+ * fail *open into an error* rather than an empty page. It gates on {@link StudioFeatureSignals.hasPaymentTables} — the store tables'
  * actual presence, matched by their signature columns (`hasPaymentStoreTables`)
  * — instead, so the page shows exactly when it can render.
  */
 const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals): StudioFeaturesResult => {
+    const platform = studioPlatformFor(signals.target);
+
     return {
+        ...(platform === undefined ? {} : { platform }),
         analytics: usage.analytics || signals.dependencies.has("@lunora/bindings"),
         auth: signals.dependencies.has("@lunora/auth"),
         containers: usage.container || signals.containerCount > 0 || signals.dependencies.has("@lunora/container"),
@@ -102,6 +112,7 @@ const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals)
         mail: usage.mail || signals.dependencies.has("@lunora/mail"),
         notifications: usage.notify || signals.dependencies.has("@lunora/notify"),
         payments: usage.payments || signals.hasPaymentTables,
+        privacy: signals.dependencies.has("@lunora/privacy"),
         queues: signals.queueCount > 0 || signals.dependencies.has("@lunora/queue"),
         scheduler: usage.scheduler || signals.cronCount > 0 || signals.dependencies.has("@lunora/scheduler"),
         storage: usage.storage || signals.storageRuleCount > 0 || signals.storageColumnCount > 0 || signals.dependencies.has("@lunora/storage"),

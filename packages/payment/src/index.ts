@@ -1,6 +1,6 @@
 export type { AdapterRegistry, PaymentAdapter, WebhookHeaders, WebhookInput } from "./adapter";
 export { createAdapterRegistry } from "./adapter";
-export type { LunoraDatabaseLike, PaymentContextLike, PaymentsFromContextOptions } from "./context";
+export type { AuthorizeContextReference, LunoraDatabaseLike, PaymentContextLike, PaymentsFromContextOptions } from "./context";
 export { lunoraDatabaseToPaymentDatabase, paymentsFromContext } from "./context";
 export type { AuthorizeReference, CreatePaymentOptions, LunoraPayment, WebhookOutcome } from "./create-payment";
 export { createPayment, webhookResponse } from "./create-payment";
@@ -21,6 +21,7 @@ export {
     isZeroDecimalCurrency,
     isZeroMoney,
     money,
+    moneyFromMinor,
     subtractMoney,
     toMoneyJSON,
     zeroMoney,
@@ -31,7 +32,7 @@ export type { PaymentEvent, PaymentObserver } from "./observability";
 // importing one adapter never loads the others (or their SDKs). They are NOT re-exported here.
 export type { ReconcileInput, ReconcileResult } from "./reconcile";
 export { reconcile } from "./reconcile";
-export { default as paymentTables } from "./schema";
+export { default as paymentExtension } from "./schema";
 export type { PaymentAction, SubscriptionAction } from "./state-machine";
 export {
     canTransitionPayment,

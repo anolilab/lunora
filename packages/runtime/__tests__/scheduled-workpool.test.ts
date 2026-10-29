@@ -1,7 +1,7 @@
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
 import { BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
-import { encodeWire } from "../../../shared/wire-codec";
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
@@ -345,5 +345,46 @@ describe("createWorker — scheduled workflow/agent dispatch", () => {
 
         expect(response.status).toBe(200);
         expect(created).toStrictEqual([{ id: "job-6", params: { prompt: "digest" } }]);
+    });
+});
+
+describe("createWorker — scheduled dispatch idempotency key", () => {
+    it("spends the scheduler record id as the shard's replay-dedup mutation id", async () => {
+        expect.assertions(4);
+
+        const seen: Headers[] = [];
+        const shardDO: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        seen.push(new Headers(request.headers));
+
+                        return Response.json({ result: null }, { status: 200 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const sched = schedulerSpy();
+        const worker = createWorker({ adminToken: ADMIN, schedulerDO: sched.namespace, shardDO });
+
+        await dispatch(worker, { args: {}, functionPath: "jobs:sweep", id: "job-dedupe" });
+
+        // This header IS what makes the scheduler's at-least-once contract
+        // survivable: `@lunora/do` keys `__idempotency` on
+        // `(namespace, mutationId)`, so the record id reaching the shard
+        // verbatim is what makes a re-fired mutation exactly-once and what lets
+        // a settled action short-circuit instead of running again.
+        expect(seen).toHaveLength(1);
+        expect(seen[0]?.get("x-lunora-mutation-id")).toBe("job-dedupe");
+
+        // And the namespace those ids live in. A scheduler dispatch carries no
+        // end-user identity, so `idempotencyNamespace()` answers `"system:"`
+        // only because this flag is set — an identity-less dispatch without it
+        // gets NO namespace and skips the dedup cache entirely (fail-open).
+        expect(seen[0]?.get("x-lunora-system")).toBe("1");
+        expect(seen[0]?.get("x-lunora-userid")).toBeNull();
     });
 });

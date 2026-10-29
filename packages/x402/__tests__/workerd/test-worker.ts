@@ -2,11 +2,11 @@
  * Test entry-point Worker for `@lunora/x402` workerd integration tests.
  *
  * Mounts a `withX402`-gated handler the way a Lunora HTTP action would, so the
- * charge middleware (facilitator init + the 402 challenge flow) runs inside a
- * real worker `fetch` handler. The facilitator's `/supported` endpoint is
- * mocked at the fetch boundary by the test (the worker runs in the same
- * isolate as the tests, so the stubbed global `fetch` applies to this worker's
- * outbound calls too) — no real chain, no network.
+ * charge middleware runs inside a real worker `fetch` handler: facilitator init,
+ * the 402 challenge, and (in the round-trip suite) verify, settle and the paid
+ * response. The suites stub the facilitator at the fetch boundary
+ * (`_facilitator.ts`); the worker runs in the same isolate as the tests, so the
+ * stub reaches its outbound calls too. No real chain, no network.
  */
 import { withX402 } from "../../src/charge/http-action";
 import type { X402ChargeConfig } from "../../src/config";
@@ -17,7 +17,7 @@ const chargeConfig: X402ChargeConfig = {
     recipient: { evm: "0x1111111111111111111111111111111111111111" },
 };
 
-/** The paid resource: only reachable once payment verifies (never, in this suite). */
+/** The paid resource: only reachable once the payment verifies and settles. */
 const gated = withX402(chargeConfig, () => new Response("paid-secret", { status: 200 }));
 
 const testWorker = {

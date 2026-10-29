@@ -7,13 +7,13 @@ AnalogJS owns Angular routing + SSR; Lunora provides the real-time, type-safe
 backend on Cloudflare Workers + Durable Objects. Both run in a **single
 Cloudflare Worker** via Analog's Nitro `cloudflare-module` build.
 
-## The honest caveat: no Angular adapter
+## The honest caveat: this template predates `@lunora/angular`
 
-Lunora ships framework adapters for React, Vue, Solid, and Svelte
-(`@lunora/react|vue|solid|svelte`) — **but not Angular.** So this template does
-**not** use a `useQuery`-style adapter. Instead it uses the framework-neutral
-**vanilla client** `lunorash/client` (`new LunoraClient({ url })`) and a small
-hand-written Angular bridge:
+Lunora ships framework adapters for React, Vue, Solid, Svelte and Angular
+(`@lunora/react|vue|solid|svelte|angular`) — **but this template was written
+before the Angular one.** So it does **not** use a `useQuery`-style adapter.
+Instead it uses the framework-neutral **vanilla client** `lunorash/client`
+(`new LunoraClient({ url })`) and a small hand-written Angular bridge:
 
 - **`src/app/lunora.service.ts`** — an `@Injectable` `LunoraService` that owns
   one `LunoraClient` and exposes:
@@ -26,9 +26,9 @@ hand-written Angular bridge:
   `lunora.mutate(api.messages.send, …)`.
 
 This is the minimal "one component lists `messages` via a `LunoraClient`
-subscription into an Angular signal" demo. Swap `LunoraService` for a real
-`@lunora/angular` adapter once one ships — the component API (a `signal` + a
-`mutate` call) is deliberately small so the migration is mechanical.
+subscription into an Angular signal" demo. Swap `LunoraService` for the
+`@lunora/angular` adapter (see the note below) — the component API (a `signal` +
+a `mutate` call) is deliberately small so the migration is mechanical.
 
 > **`@lunora/angular` exists today** and covers `liveQuery` / `mutate` /
 > `connectionStatus`, plus a server half for SSR data loading:

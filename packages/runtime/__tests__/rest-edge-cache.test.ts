@@ -129,7 +129,9 @@ describe("the shareable exchange", () => {
         expect(entries.size).toBe(0);
     });
 
-    it("treats an x402 payment as the credential it is, so a paid response is never shared", async () => {
+    // x402 v2 (what `@x402/core` reads and `@x402/fetch` sends) is `PAYMENT-SIGNATURE`;
+    // v1's `X-PAYMENT` stays fenced for a client still sending the old name.
+    it.each(["payment-signature", "x-payment"])("treats an x402 payment (%s) as the credential it is, so a paid response is never shared", async (header) => {
         expect.assertions(3);
 
         const { cache, entries } = fakeCache();
@@ -137,7 +139,7 @@ describe("the shareable exchange", () => {
         const edge = restEdgeCacheFor(publicCache, cache);
         // A payer's request: the charge gate runs INSIDE the dispatch, so a stored
         // response would be replayed to callers who never paid.
-        const paid = get({ headers: { "x-payment": "signed-payload" } });
+        const paid = get({ headers: { [header]: "signed-payload" } });
         const answered = applyRestCache(Response.json({ premium: true }), publicCache, paid, context);
 
         // The header path agrees: a paid exchange is caller-specific.
@@ -151,7 +153,7 @@ describe("the shareable exchange", () => {
         await expect(edge?.lookup(get(), context)).resolves.toBeUndefined();
     });
 
-    it("does not store a settlement receipt even if one reaches it", async () => {
+    it.each(["payment-response", "x-payment-response"])("does not store a settlement receipt (%s) even if one reaches it", async (header) => {
         expect.assertions(1);
 
         const { cache, entries } = fakeCache();
@@ -159,7 +161,7 @@ describe("the shareable exchange", () => {
         const edge = restEdgeCacheFor(publicCache, cache);
         const request = get();
 
-        edge?.store(Response.json({ premium: true }, { headers: { "x-payment-response": "settled" } }), request, context);
+        edge?.store(Response.json({ premium: true }, { headers: { [header]: "settled" } }), request, context);
         await settled();
 
         expect(entries.size).toBe(0);

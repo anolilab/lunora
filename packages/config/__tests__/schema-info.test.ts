@@ -78,6 +78,32 @@ describe("schema info", () => {
             ]);
         });
 
+        it("indexes an optional or nullable metadata column as its inner kind (#1033)", () => {
+            expect.assertions(1);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        docs: defineTable({
+            body: v.string(),
+            userId: v.optional(v.string()),
+            score: v.optional(v.number()),
+            tag: v.union(v.string(), v.null()),
+            status: v.optional(v.union(v.literal("draft"), v.literal("live"))),
+        }).vectorize("body", { dimensions: 1024, embed, index: "docs-body", metadata: ["userId", "score", "tag", "status"], metric: "cosine" }),
+    });
+    `);
+
+            // Metadata columns are usually optional (not every row has the value);
+            // reading the wrapper's kind dropped their index, so every filter on
+            // them silently matched nothing.
+            expect(discoverSchemaInfo(workdir, "lunora").info?.vectorMetadata).toStrictEqual([
+                { index: "docs-body", kind: "string", property: "userId" },
+                { index: "docs-body", kind: "number", property: "score" },
+                { index: "docs-body", kind: "string", property: "tag" },
+                { index: "docs-body", kind: "literal", property: "status" },
+            ]);
+        });
+
         it("reports a metadata property that names no column, rather than dropping it", () => {
             expect.assertions(1);
 
@@ -121,7 +147,7 @@ describe("schema info", () => {
     });
     `);
 
-            expect(discoverSchemaInfo(workdir, "lunora").info?.hasGlobalTable).toBe(false);
+            expect(discoverSchemaInfo(workdir, "lunora").info?.hasD1GlobalTable).toBe(false);
 
             seedSchema(`${SCHEMA_HEADER}
     export const schema = defineSchema({
@@ -129,7 +155,55 @@ describe("schema info", () => {
     });
     `);
 
-            expect(discoverSchemaInfo(workdir, "lunora").info?.hasGlobalTable).toBe(true);
+            expect(discoverSchemaInfo(workdir, "lunora").info?.hasD1GlobalTable).toBe(true);
+        });
+
+        it("separates a Hyperdrive-backed global from a D1-backed one — they need different bindings and different chains", () => {
+            expect.assertions(4);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        users: defineTable({ email: v.string() }).global({ backend: "hyperdrive" }),
+    });
+    `);
+
+            const hyperdrive = discoverSchemaInfo(workdir, "lunora").info;
+
+            // No D1 database is involved, so demanding a `DB` binding (or the
+            // app's `.global({ d1 })` chain) would block a correctly wired project.
+            expect(hyperdrive?.hasD1GlobalTable).toBe(false);
+            expect(hyperdrive?.hasHyperdriveGlobalTable).toBe(true);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        users: defineTable({ email: v.string() }).global(),
+    });
+    `);
+
+            const d1 = discoverSchemaInfo(workdir, "lunora").info;
+
+            expect(d1?.hasD1GlobalTable).toBe(true);
+            expect(d1?.hasHyperdriveGlobalTable).toBe(false);
+        });
+
+        it("reports the schema's data-residency jurisdiction, and none when it declares none", () => {
+            expect.assertions(2);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        messages: defineTable({ text: v.string() }),
+    }).jurisdiction("eu");
+    `);
+
+            expect(discoverSchemaInfo(workdir, "lunora").info?.jurisdiction).toBe("eu");
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        messages: defineTable({ text: v.string() }),
+    });
+    `);
+
+            expect(discoverSchemaInfo(workdir, "lunora").info).not.toHaveProperty("jurisdiction");
         });
 
         it("degrades to empty information on a schema it cannot make sense of, rather than throwing", () => {
@@ -145,7 +219,7 @@ describe("schema info", () => {
             // `lint:types`' and codegen's to report, not this one's.
             expect(result.error).toBeUndefined();
             expect(result.info?.vectorMetadata).toStrictEqual([]);
-            expect(result.info?.hasGlobalTable).toBe(false);
+            expect(result.info?.hasD1GlobalTable).toBe(false);
         });
     });
 });

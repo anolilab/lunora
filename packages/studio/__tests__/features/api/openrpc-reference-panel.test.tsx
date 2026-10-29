@@ -77,6 +77,22 @@ describe("openRpcReferencePanel", () => {
         await expect(screen.findByTestId("openrpc-reference-empty")).resolves.toBeDefined();
     });
 
+    it("shows the not-configured empty state for a spec whose only functions are streams", async () => {
+        expect.assertions(1);
+
+        // A stream opens a WebSocket, so it has no operation to browse: a streams-only app has nothing to document.
+        const streamsOnly = {
+            info: { title: "Lunora RPC", version: "0.0.0" },
+            methods: [{ name: "feed:tail", "x-lunora-function-kind": "stream", params: [], result: { name: "result", schema: {} } }],
+            openrpc: "1.3.2",
+        };
+        const mock = createMockClient({ fetchOpenRpc: () => streamsOnly });
+
+        render(renderPanel(mock));
+
+        await expect(screen.findByTestId("openrpc-reference-empty")).resolves.toBeDefined();
+    });
+
     it("shows an error state when the fetch fails", async () => {
         expect.hasAssertions();
 

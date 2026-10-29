@@ -10,13 +10,13 @@ const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: 
 
 const rows: AdvisorFailOpenGuard[] = [
     // fail-open rateLimit on a sign-in flow (sensitive by limitName) → flagged.
-    { callee: "rateLimit", exportName: "signIn", failOpen: true, file: "signin", limitName: "signin", line: 3 },
+    { callee: "rateLimit", scope: { kind: "export", name: "signIn" }, failOpen: true, file: "signin", limitName: "signin", line: 3 },
     // fail-open Turnstile guard on a sensitive export name (register) → flagged.
-    { callee: "verifyTurnstileMiddleware", exportName: "registerUser", failOpen: true, file: "register", limitName: "", line: 5 },
+    { callee: "verifyTurnstileMiddleware", scope: { kind: "export", name: "registerUser" }, failOpen: true, file: "register", limitName: "", line: 5 },
     // fail-open guard on a NON-sensitive procedure → not flagged (narrow subset).
-    { callee: "rateLimit", exportName: "listPosts", failOpen: true, file: "posts", limitName: "list", line: 7 },
+    { callee: "rateLimit", scope: { kind: "export", name: "listPosts" }, failOpen: true, file: "posts", limitName: "list", line: 7 },
     // sensitive procedure but fail-CLOSED (default) → not flagged.
-    { callee: "rateLimit", exportName: "signInStrict", failOpen: false, file: "signin", limitName: "signin", line: 9 },
+    { callee: "rateLimit", scope: { kind: "export", name: "signInStrict" }, failOpen: false, file: "signin", limitName: "signin", line: 9 },
 ];
 
 describe("ratelimit_middleware_fail_open", () => {
@@ -39,7 +39,16 @@ describe("ratelimit_middleware_fail_open", () => {
         expect.assertions(1);
 
         const findings = ratelimitMiddlewareFailOpen.run({
-            failOpenGuards: [{ callee: "verifyTurnstileMiddleware", exportName: "resetPassword", failOpen: true, file: "reset", limitName: "", line: 1 }],
+            failOpenGuards: [
+                {
+                    callee: "verifyTurnstileMiddleware",
+                    scope: { kind: "export", name: "resetPassword" },
+                    failOpen: true,
+                    file: "reset",
+                    limitName: "",
+                    line: 1,
+                },
+            ],
             schema: schema(),
         });
 
@@ -54,9 +63,9 @@ describe("ratelimit_middleware_fail_open", () => {
         // lint documenting itself as high-precision must not claim they are.
         const findings = ratelimitMiddlewareFailOpen.run({
             failOpenGuards: [
-                { callee: "rateLimit", exportName: "updatePresets", failOpen: true, file: "presets", limitName: "presets", line: 1 },
-                { callee: "rateLimit", exportName: "snapshotPrune", failOpen: true, file: "snapshots", limitName: "snapshots", line: 2 },
-                { callee: "rateLimit", exportName: "listSlotProfiles", failOpen: true, file: "slots", limitName: "slots", line: 3 },
+                { callee: "rateLimit", scope: { kind: "export", name: "updatePresets" }, failOpen: true, file: "presets", limitName: "presets", line: 1 },
+                { callee: "rateLimit", scope: { kind: "export", name: "snapshotPrune" }, failOpen: true, file: "snapshots", limitName: "snapshots", line: 2 },
+                { callee: "rateLimit", scope: { kind: "export", name: "listSlotProfiles" }, failOpen: true, file: "slots", limitName: "slots", line: 3 },
             ],
             schema: schema(),
         });
@@ -69,10 +78,10 @@ describe("ratelimit_middleware_fail_open", () => {
 
         const findings = ratelimitMiddlewareFailOpen.run({
             failOpenGuards: [
-                { callee: "rateLimit", exportName: "signInWithEmail", failOpen: true, file: "auth", limitName: "", line: 1 },
-                { callee: "rateLimit", exportName: "loginHandler", failOpen: true, file: "auth", limitName: "", line: 2 },
-                { callee: "rateLimit", exportName: "createCheckoutSession", failOpen: true, file: "billing", limitName: "", line: 3 },
-                { callee: "rateLimit", exportName: "start", failOpen: true, file: "auth", limitName: "otp-start", line: 4 },
+                { callee: "rateLimit", scope: { kind: "export", name: "signInWithEmail" }, failOpen: true, file: "auth", limitName: "", line: 1 },
+                { callee: "rateLimit", scope: { kind: "export", name: "loginHandler" }, failOpen: true, file: "auth", limitName: "", line: 2 },
+                { callee: "rateLimit", scope: { kind: "export", name: "createCheckoutSession" }, failOpen: true, file: "billing", limitName: "", line: 3 },
+                { callee: "rateLimit", scope: { kind: "export", name: "start" }, failOpen: true, file: "auth", limitName: "otp-start", line: 4 },
             ],
             schema: schema(),
         });

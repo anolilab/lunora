@@ -79,10 +79,12 @@ const memoryVectors = (): { queryCalls: RagVectorQueryInput[]; store: Map<string
     const dot = (a: ReadonlyArray<number>, b: ReadonlyArray<number>): number => a.reduce((sum, value, index) => sum + value * (b[index] as number), 0);
 
     const vectors: RagVectors = {
-        deleteByIds: async (_indexName, ids) => {
+        deleteByIds: async (_indexName, ids, _namespace, _operation, afterDelete) => {
             for (const id of ids) {
                 store.delete(id);
             }
+
+            await afterDelete?.();
         },
         getByIds: async (_indexName, ids) =>
             ids.flatMap((id) => {
@@ -1377,9 +1379,9 @@ describe(defineRag, () => {
             });
 
             expect(calls).toStrictEqual([
-                { chunkIndex: 0, id: "doc-1#0", total: 3 },
                 { chunkIndex: 1, id: "doc-1#1", total: 3 },
                 { chunkIndex: 2, id: "doc-1#2", total: 3 },
+                { chunkIndex: 0, id: "doc-1#0", total: 3 },
             ]);
         });
 
@@ -1707,6 +1709,31 @@ describe("defineRag ctx.trace instrumentation", () => {
             expect(span.attributes["gen_ai.usage.cost"]).toBeGreaterThan(0);
             expect(span.attributes["lunora.usage.cost.source"]).toBe("estimated");
         }
+    });
+
+    it("counts each embed's usage into ctx.metrics, like a model call", async () => {
+        expect.hasAssertions();
+
+        const { vectors } = memoryVectors();
+        const counts: [string, number | undefined, Record<string, unknown> | undefined][] = [];
+        const ctx = {
+            ...tracingCtx(vectors),
+            metrics: {
+                count: (name: string, value?: number, attributes?: Record<string, unknown>) => {
+                    counts.push([name, value, attributes]);
+                },
+            },
+        };
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
+
+        await docs(ctx).retrieve("hello");
+
+        expect(counts).toContainEqual([
+            "gen_ai.usage.cost",
+            0.0002,
+            { "gen_ai.request.model": "@cf/baai/bge-base-en-v1.5", "lunora.usage.cost.source": "provider" },
+        ]);
+        expect(counts.some(([name]) => name === "gen_ai.usage.input_tokens")).toBe(true);
     });
 
     it("embeds untraced when the context has no `trace` (a hand-built ctx)", async () => {

@@ -417,6 +417,17 @@ fn decode_at(value: &Value, depth: usize) -> WireResult<WireValue> {
     })
 }
 
+/// A signed zero stored as `+0`, as `Set.prototype.add` and `Map.prototype.set`
+/// do on INSERT — so a lone `-0` member or key re-encodes (and keys, per §3's
+/// bare `-0` token) as `0` in the reference, not only when it collides.
+fn positive_zero(value: WireValue) -> WireValue {
+    match value {
+        // `+ 0.0` clears the sign of a zero and changes every other number not at all.
+        WireValue::Number(number) => WireValue::Number(number + 0.0),
+        other => other,
+    }
+}
+
 /// A map key's collapse identity, or `None` when it never collapses.
 ///
 /// The reference's `Map` compares keys by SameValueZero: primitives by value
@@ -526,7 +537,7 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
                     return Err(WireError::Malformed("map entry"));
                 };
 
-                let key = decode_at(key, depth + 1)?;
+                let key = positive_zero(decode_at(key, depth + 1)?);
                 let item = decode_at(item, depth + 1)?;
 
                 // Last write wins, at the FIRST occurrence's position — the
@@ -562,7 +573,7 @@ fn decode_tagged(items: &[Value], depth: usize) -> WireResult<WireValue> {
             // rule as a Map's keys, so the same identity helper decides it.
             // Carrying both copies re-encoded a set the reference never emits.
             for item in raw {
-                let item = decode_at(item, depth + 1)?;
+                let item = positive_zero(decode_at(item, depth + 1)?);
 
                 if let Some(identity) = map_key_identity(&item) {
                     if !seen.insert(identity) {

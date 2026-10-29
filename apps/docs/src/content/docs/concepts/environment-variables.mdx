@@ -115,7 +115,7 @@ import { createAuth } from "@lunora/auth";
 const auth = createAuth({
     secret: env.AUTH_SECRET, // a secret from `wrangler secret put`
     baseURL: env.AUTH_URL, // a var from wrangler.jsonc
-    providers: [providers.github({ clientId: env.GH_CLIENT_ID, clientSecret: env.GH_CLIENT_SECRET })],
+    socialProviders: { github: { clientId: env.GH_CLIENT_ID, clientSecret: env.GH_CLIENT_SECRET } },
 });
 ```
 

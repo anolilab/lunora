@@ -24,8 +24,13 @@ type AgentThreadStatus = "awaiting_input" | "cancelled" | "error" | "idle" | "ru
  */
 interface AgentThreadRecord {
     createdAt?: number;
-    /** The failure message when `status === "error"`. */
-    error?: string;
+
+    /**
+     * The failure message when `status === "error"`, `null` once a later run
+     * cleared it, absent on a thread that has never failed. Read it for
+     * truthiness — `null` and absent both mean "no error".
+     */
+    error?: null | string;
     /** The workflow instance id of the in-flight run — the handle `cancel` targets. */
     instanceId?: string;
     messageCount?: number;
@@ -55,8 +60,8 @@ interface AgentChatMessage {
     optimistic?: boolean;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
-    /** Approval lifecycle marker on a human-in-the-loop tool message. */
-    status?: "approved" | "awaiting_approval" | "rejected";
+    /** Approval or secret-request lifecycle marker on a human-in-the-loop tool message. */
+    status?: "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
     toolCallId?: string;
     toolCalls?: ReadonlyArray<{ id: string; input: unknown; name: string }>;
     toolName?: string;

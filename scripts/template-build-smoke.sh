@@ -69,9 +69,11 @@ export ASTRO_TELEMETRY_DISABLED=1
 # The Next template's `app/providers.tsx` throws when NEXT_PUBLIC_LUNORA_URL is
 # unset in a production build — deliberately, so a deployed bundle can never
 # point at whatever localhost the developer happened to have. `next build`
-# prerenders every route, so that throw aborts the build. Supply the value the
-# two-worker split expects; harmless for every other template, which ignores it.
-export NEXT_PUBLIC_LUNORA_URL="http://localhost:8787"
+# prerenders every route, so that throw aborts the build. Supply a deployed-looking
+# origin, as a real production build would: the value is baked into the client
+# bundle, and the loopback scan in run_deploy_dryrun would rightly reject a
+# localhost one. Harmless for every other template, which ignores it.
+export NEXT_PUBLIC_LUNORA_URL="https://lunora.example.com"
 
 # In-place `sed` is not portable: GNU (Linux/CI) takes `-i` with an OPTIONAL
 # suffix attached to the flag, BSD (macOS) requires the suffix as a separate
@@ -128,12 +130,6 @@ ONLY_TEMPLATE="${1:-}"
 # Any template IN this list that passes build is an XPASS (also a failure —
 # remove it from the list when the fix lands).
 # ---------------------------------------------------------------------------
-# (This used to record react-router and solid-start as removed for supporting only
-# Vite <=7. Both are back: `templates/react-router` and
-# `templates/tanstack-start-solid` exist, pin `vite ^8.0.16`, and pass the matrix.
-# The note is kept as history because the removal is in the git log and a reader
-# finding no trace of it is worse than a dated sentence.)
-#
 # Currently empty: every template builds. It stays as a mechanism because the
 # XPASS branch makes it self-cleaning — an entry that starts passing fails the
 # run, so a fix can never quietly leave a stale exemption behind. That is how
@@ -143,22 +139,36 @@ XFAIL_BUILD=()
 
 # ---------------------------------------------------------------------------
 # Templates excluded from this worker-toolchain smoke matrix.
-# The Expo template is a React Native (Metro) app, not a Vite/workerd project:
-# its `pnpm install` pulls a different, largely-native toolchain (react-native,
-# expo) that isn't represented by the allowBuilds list below, and it has no
-# `pnpm run build` step.
 #
-# NOTHING ELSE COVERS IT. This comment used to claim a CLI init smoke test
-# validated it separately; there is no such test — `packages/cli/__tests__`
-# never mentions expo, `scripts/clean-machine-smoke.sh` scaffolds only
-# tanstack-start-react, and that script is in no workflow either. The template
-# declares `lint:types` (`lunora codegen && tsc --noEmit`) and nothing invokes
-# it, so a breaking `@lunora/*` change reaches templates/expo with every gate
-# green. Closing this means either an expo leg here (its `lint:types` is exactly
-# the no-build path below, once the native toolchain is affordable in CI) or a
-# workflow that runs `test:clean-machine` against it.
+# EMPTY, deliberately. `expo` used to sit here, and the note explaining why
+# ended "NOTHING ELSE COVERS IT": the template declares `lint:types`
+# (`lunora codegen && tsc --noEmit`) and no workflow invoked it, so a breaking
+# `@lunora/*` change reached the scaffold `lunora init` serves with every gate
+# green. It shipped two defects that way.
+#
+# The fear was its toolchain, but the cost never applied: the matrix only
+# TYPECHECKS a template with no `build` script (see the no-build path below,
+# which runs `pnpm run codegen` then the per-template checker) and typechecking
+# needs no native toolchain — no Xcode, no Android SDK, just the JS graph. The
+# react-native/expo postinstalls it does pull are named in `allowBuilds` below.
+#
+# So a template is excluded only if it cannot be scaffolded or installed at all.
+# Add one here with a reason, never as a way to dodge a failure.
+#
+# `SMOKE_SKIP_TEMPLATES` (space- or comma-separated) adds to this list for one
+# run. That is a SCHEDULING knob, not an exemption: CI uses it to split the
+# matrix into legs with different path filters, so a template whose install is
+# expensive only runs when something that could break it changed. Every template
+# still runs somewhere — see `.github/workflows/test.yml`.
 # ---------------------------------------------------------------------------
-SKIP_TEMPLATES=("expo")
+SKIP_TEMPLATES=()
+
+if [[ -n "${SMOKE_SKIP_TEMPLATES:-}" ]]; then
+    # Split on commas and whitespace alike, so both spellings work from YAML.
+    read -r -a _extra_skips <<< "${SMOKE_SKIP_TEMPLATES//,/ }"
+    SKIP_TEMPLATES+=("${_extra_skips[@]+"${_extra_skips[@]}"}")
+    echo "==> SMOKE_SKIP_TEMPLATES: also skipping ${_extra_skips[*]+"${_extra_skips[*]}"}"
+fi
 
 is_skipped() {
     local name="$1"
@@ -259,17 +269,6 @@ set_typecheck() {
             # but never which files, and a count cannot say whether the payload
             # was among them.
             COVERAGE_MODE="canary"
-            ;;
-        react-router)
-            # `react-router typegen` writes `.react-router/types/**` — the route
-            # module types every route imports as `./+types/<route>`, resolved through
-            # the tsconfig's `rootDirs`. This is what the template's own `typecheck`
-            # script runs and what React Router documents for CI; without it every
-            # route fails on `Cannot find module './+types/root'`.
-            TYPECHECK_PREP=(pnpm exec react-router typegen)
-            TYPECHECK_CMD=(pnpm exec tsc --noEmit)
-            AUTHUI_RE='^lunora/auth-ui/'
-            ERROR_RE='error TS'
             ;;
         *)
             TYPECHECK_CMD=(pnpm exec tsc --noEmit)
@@ -468,6 +467,51 @@ run_deploy_dryrun() {
         return 1
     fi
 
+    # 4. The client bundle must not carry a loopback origin. A dev-only value that
+    #    leaks into a PRODUCTION build (a Vite `define` without `apply: "serve"`)
+    #    makes every deployed browser connect to its own machine — and nothing
+    #    fails: the build, the typecheck and every step above pass, because the
+    #    bundle is valid JavaScript pointing at the wrong host.
+    #
+    #    Scans exactly what the deploy uploads: the directories wrangler printed
+    #    in step 2. Code only — `.map` files embed the SOURCE, whose dev
+    #    fallbacks are not in the shipped code. The pattern needs a scheme, a
+    #    loopback host AND an explicit port: every dev origin carries one (5173,
+    #    3000, 8787…), while a bare `http://localhost` is what routers legitimately
+    #    ship as a dummy base for `new URL(path, base)` parsing — React Router's
+    #    runtime does, twice. A plain word "localhost" never matches. There is
+    #    deliberately no allowance for a `typeof window` guarded fallback: a
+    #    server-only literal belongs behind `import.meta.env.SSR`, which the client
+    #    build drops, so any occurrence here is code the browser can reach.
+    if [[ "$expect_assets" == "yes" ]]; then
+        local assets_dir leaks
+        local -a asset_dirs=()
+
+        while IFS= read -r assets_dir; do
+            [[ "$assets_dir" == /* ]] || assets_dir="$scaffold_dir/$assets_dir"
+            asset_dirs+=("$assets_dir")
+        done < <(sed -nE 's/.*Read [0-9]+ files? from the assets directory (.+)$/\1/p' "$log")
+
+        for assets_dir in "${asset_dirs[@]+"${asset_dirs[@]}"}"; do
+            if [[ ! -d "$assets_dir" ]]; then
+                echo "  FAIL: $tname's assets directory \`$assets_dir\` (from the deploy log) does not exist, so the loopback scan has nothing to read"
+                return 1
+            fi
+
+            leaks="$(grep -rEo --include='*.js' --include='*.mjs' --include='*.cjs' --include='*.html' \
+                ".{0,60}(https?|wss?)://(localhost|127\.0\.0\.1|\[::1\]):[0-9]+.{0,20}" "$assets_dir" 2> /dev/null | head -5 || true)"
+
+            if [[ -n "$leaks" ]]; then
+                echo "  FAIL: $tname's production client bundle contains a loopback origin:"
+                echo "$leaks" | sed "s|$assets_dir/|    |"
+                echo "        A deployed browser would connect to its own machine. A dev-only origin injected through"
+                echo "        Vite's \`define\` needs \`apply: \"serve\"\`; a server-only fallback belongs behind"
+                echo "        \`import.meta.env.SSR\`, which the client build eliminates."
+                return 1
+            fi
+        done
+    fi
+
     echo "  ==> deploy dry run OK ($(grep -c 'env\.' "$log" || true) binding line(s) across ${#DEPLOY_DRYRUN_CMDS[@]} command(s))"
 
     return 0
@@ -572,6 +616,13 @@ authui_file_re() {
 # ---------------------------------------------------------------------------
 # Discover templates (dynamic, so adding a new dir is automatically included).
 # ---------------------------------------------------------------------------
+# A name that is not a template directory would match nothing below and report PASS over zero templates. The pattern rules out
+# `.`, `..` and path separators, which would name a directory without naming a template.
+if [[ -n "$ONLY_TEMPLATE" ]] && { [[ ! "$ONLY_TEMPLATE" =~ ^[a-z0-9][a-z0-9-]*$ ]] || [[ ! -d "$REPO_ROOT/templates/$ONLY_TEMPLATE" ]]; }; then
+    echo "FAILED — '$ONLY_TEMPLATE' is not a template name under templates/"
+    exit 1
+fi
+
 TEMPLATES=()
 SKIPPED=()
 for t_dir in "$REPO_ROOT/templates"/*/; do
@@ -587,6 +638,16 @@ done
 if [[ ${#TEMPLATES[@]} -eq 0 ]]; then
     echo "ERROR: no template directories found under $REPO_ROOT/templates/" >&2
     exit 1
+fi
+
+# A requested template that the skip list removed would leave nothing to test, and the run would still pass. Fail it instead.
+if [[ -n "$ONLY_TEMPLATE" ]]; then
+    only_found=0
+    for t in "${TEMPLATES[@]}"; do [[ "$t" == "$ONLY_TEMPLATE" ]] && only_found=1; done
+    if [[ $only_found -eq 0 ]]; then
+        echo "FAILED — '$ONLY_TEMPLATE' was requested but is in the skip list (SMOKE_SKIP_TEMPLATES); nothing would be tested" >&2
+        exit 1
+    fi
 fi
 
 echo "==> Discovered ${#TEMPLATES[@]} templates: ${TEMPLATES[*]}"
@@ -890,6 +951,20 @@ for tname in "${TEMPLATES[@]}"; do
         continue
     fi
 
+    # One app, one definition. A template whose dev and deploy entries each type
+    # their own `defineApp<Env>()…` chain drifts the day someone adds `.auth()`
+    # or a shard gate to one of them — dev is locked down, production is open.
+    # Export the builder once and finish it in each entry (see sveltekit's
+    # `lunora/app.ts`). Source files only: a README may quote the call.
+    define_sites="$(grep -rnE 'defineApp<' "$scaffold_dir" --include='*.ts' --include='*.tsx' --include='*.mts' --exclude-dir=node_modules --exclude-dir=_generated || true)"
+    # Count occurrences, not lines: two calls on one line are still two definitions.
+    if [[ "$(printf '%s' "$define_sites" | grep -o 'defineApp<' | grep -c . || true)" -gt 1 ]]; then
+        echo "  FAIL: $tname has more than one \`defineApp<\` call site — export one builder and import it:"
+        echo "$define_sites" | sed "s|$scaffold_dir/|    |"
+        FAIL+=("$tname(duplicate-defineApp)")
+        continue
+    fi
+
     # -- Inject overrides ---------------------------------------------------
     inject_overrides "$scaffold_dir"
     inject_peer_deps "$scaffold_dir"
@@ -935,7 +1010,7 @@ for tname in "${TEMPLATES[@]}"; do
     authui_detect_status=0
     authui_view="$(node -e "
         const p = require('$scaffold_dir/package.json');
-        const d = { ...p.dependencies, ...p.devDependencies };
+        const d = { ...p.devDependencies, ...p.dependencies };
         const has = (n) => Object.hasOwn(d, n);
         // Mirrors \`minimumMajor\`: the lowest major the range admits, not its
         // first digit — \`>1\` floors at 2 and \`2 || 1\` floors at 1.
@@ -1323,11 +1398,12 @@ for tname in "${TEMPLATES[@]}"; do
         # templates": that floor is a whole-run tripwire, so widening it makes
         # every verdict depend on the full matrix, while this fires per template
         # exactly where the coverage is lost. It is unreachable for the templates
-        # on disk — `standalone` is the only one in this matrix that resolves no
-        # view, and it ships no `build` script, so it takes the codegen +
-        # typecheck path above (`expo` also resolves none, and is skipped before
-        # it ever gets here). That is what makes this a guard and not a behaviour
-        # change.
+        # on disk — `standalone` and `expo` are the only two in this matrix that
+        # resolve no view, and NEITHER ships a `build` script, so both take the
+        # codegen + typecheck path above. That is what makes this a guard and not
+        # a behaviour change. (It is the reachability of that path, not the old
+        # `SKIP_TEMPLATES` entry, that keeps expo out of here — un-skipping it
+        # changed nothing for this branch.)
         echo "  FAIL: $tname resolved no auth-ui view, so nothing typechecked its source"
         echo "        \`pnpm run build\` bundles only what a build entry reaches, and this run's only"
         echo "        typechecker is gated on that view — so $tname would have recorded PASS with no"
@@ -1403,11 +1479,20 @@ for t in "${TEMPLATES[@]}"; do
     printf "%-20s  %s\n" "$t" "$result"
 done
 echo ""
-# A skipped template is not scaffolded, installed, built or typechecked by this
-# run — and, for `expo`, by nothing else either (see SKIP_TEMPLATES). It never
-# enters the table above, so without this line a green summary reads as coverage
-# of every template in `templates/`, which it is not.
-echo "  NOT COVERED: ${#SKIPPED[@]}   (${SKIPPED[*]+${SKIPPED[*]}}) — excluded from this matrix and gated by nothing else"
+# A skipped template is not scaffolded, installed, built or typechecked by THIS
+# run. It never enters the table above, so without this line a green summary
+# reads as coverage of every template in `templates/`, which it is not.
+#
+# Two different reasons land here and they are not equally bad, so say which:
+# `SKIP_TEMPLATES` is a standing exclusion covered by nothing anywhere, while
+# `SMOKE_SKIP_TEMPLATES` is CI splitting the matrix into legs — that template
+# runs, just in another job. Printing one message for both is how "NOT COVERED"
+# would come to mean nothing.
+if [[ -n "${SMOKE_SKIP_TEMPLATES:-}" ]]; then
+    echo "  OTHER LEG  : ${#SKIPPED[@]}   (${SKIPPED[*]+${SKIPPED[*]}}) — skipped HERE via SMOKE_SKIP_TEMPLATES; covered by its own job"
+else
+    echo "  NOT COVERED: ${#SKIPPED[@]}   (${SKIPPED[*]+${SKIPPED[*]}}) — excluded from this matrix and gated by nothing else"
+fi
 echo "  PASS     : ${#PASS[@]}   (${PASS[*]+${PASS[*]}})"
 # A codegen+typecheck-only template is a weaker result than a built one — no
 # bundler ever ran — and the table above renders both as plain PASS. Printed
@@ -1431,7 +1516,14 @@ echo "  XPASS    : ${#XPASS[@]}  (${XPASS[*]+${XPASS[*]}})"
 # read if the detector broke for a reason that is the same for all of them (a
 # moved `semver`, a renamed dependency, a typo in the mirror of
 # `detectAuthUiItem`). A green summary must not be able to mean that.
-if [[ ${#AUTHUI_RESOLVED[@]} -eq 0 ]]; then
+#
+# Scoped to a FULL matrix run. The floor asks "did the detector break for
+# everyone", which only has an answer when everyone ran. A single-template run
+# (`$0 <name>`, which CI uses for the split legs) can legitimately resolve no
+# view at all — `expo` and `standalone` ship none, and the per-template guard
+# above is what covers the templates where a missing view IS the bug — so
+# applying it there would fail every such leg by construction.
+if [[ -z "$ONLY_TEMPLATE" && ${#AUTHUI_RESOLVED[@]} -eq 0 ]]; then
     echo ""
     echo "FAILED — no template resolved an auth-ui view, so 'lunora add auth-ui', the payload"
     echo "         assertions, the per-template typecheck and its canary ran for none of them."
@@ -1439,7 +1531,10 @@ if [[ ${#AUTHUI_RESOLVED[@]} -eq 0 ]]; then
     exit 1
 fi
 
-echo "  auth-ui view resolved for ${#AUTHUI_RESOLVED[@]} of ${#TEMPLATES[@]} templates: ${AUTHUI_RESOLVED[*]}"
+# `${arr[@]+...}` guard, as everywhere else in this script: a single-template leg
+# can legitimately resolve none (see the floor above), and `set -u` rejects `[*]`
+# on an empty array — which would abort the run AFTER the summary printed PASS.
+echo "  auth-ui view resolved for ${#AUTHUI_RESOLVED[@]} of ${#TEMPLATES[@]} templates: ${AUTHUI_RESOLVED[*]+"${AUTHUI_RESOLVED[*]}"}"
 
 if [[ ${#FAIL[@]} -gt 0 ]]; then
     echo ""

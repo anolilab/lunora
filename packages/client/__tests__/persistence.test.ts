@@ -318,4 +318,79 @@ describe("createAsyncStoragePersistence", () => {
 
         await expect(adapter.load()).resolves.toEqual([]);
     });
+
+    it("round-trips a bigint arg instead of rejecting the append", async () => {
+        expect.assertions(1);
+
+        const adapter = createAsyncStoragePersistence({ storage: createFakeAsyncStorage() });
+
+        await adapter.append(mutation("a", { args: { amount: 1n } }));
+
+        const [loaded] = await adapter.load();
+
+        expect(loaded?.args.amount).toBe(1n);
+    });
+
+    it("round-trips a Date arg as a Date, not a string", async () => {
+        expect.assertions(1);
+
+        const adapter = createAsyncStoragePersistence({ storage: createFakeAsyncStorage() });
+
+        await adapter.append(mutation("a", { args: { when: new Date(0) } }));
+
+        const [loaded] = await adapter.load();
+
+        expect(loaded?.args.when).toStrictEqual(new Date(0));
+    });
+
+    it("loads a plain-JSON blob written by an earlier version unchanged", async () => {
+        expect.assertions(1);
+
+        const storage = createFakeAsyncStorage();
+        const legacy = mutation("a", { clientId: "c1", identity: "user-1", shardKey: "s", version: "v3" });
+
+        await storage.setItem("lunora:offline-mutations", JSON.stringify([legacy]));
+
+        await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([legacy]);
+    });
+
+    it("loads empty from an undecodable blob but refuses to overwrite it", async () => {
+        expect.assertions(4);
+
+        const storage = createFakeAsyncStorage();
+        const corrupt = JSON.stringify(["$lunora.wire$", "date", "not-a-number"]);
+
+        await storage.setItem("lunora:offline-mutations", corrupt);
+
+        const adapter = createAsyncStoragePersistence({ storage });
+
+        await expect(adapter.load()).resolves.toEqual([]);
+        await expect(adapter.append(mutation("a"))).rejects.toThrow(/can't be decoded/);
+        await expect(adapter.remove("a")).rejects.toThrow(/can't be decoded/);
+        await expect(storage.getItem("lunora:offline-mutations")).resolves.toBe(corrupt);
+    });
+
+    it("rejects an over-long bigint at append instead of writing a blob it can't read back", async () => {
+        expect.assertions(2);
+
+        const adapter = createAsyncStoragePersistence({ storage: createFakeAsyncStorage() });
+
+        await adapter.append(mutation("a"));
+
+        await expect(adapter.append(mutation("b", { args: { huge: 10n ** 1100n } }))).rejects.toThrow(
+            /cannot encode args for 'posts:create' — wire-codec: over-long bigint/,
+        );
+        await expect(adapter.load()).resolves.toEqual([mutation("a")]);
+    });
+
+    it("rejects a non-encodable arg at append and leaves the queued mutations intact", async () => {
+        expect.assertions(2);
+
+        const adapter = createAsyncStoragePersistence({ storage: createFakeAsyncStorage() });
+
+        await adapter.append(mutation("a"));
+
+        await expect(adapter.append(mutation("b", { args: { re: /x/ } }))).rejects.toThrow(/RegExp/);
+        await expect(adapter.load()).resolves.toEqual([mutation("a")]);
+    });
 });

@@ -1,0 +1,194 @@
+---
+title: Modules
+description: Group lunora/ folders into modules and get a module catalog and an architecture diagram from codegen.
+related:
+    - to: /docs/concepts/advisors
+      note: "the `cross_module_table_write` lint"
+    - to: /docs/concepts/internal-functions
+      note: "calling another module's functions"
+---
+
+A **module** is a folder under `lunora/` that holds a `module.ts` whose
+default export is `defineModule(...)`. Every file beneath that folder belongs
+to the module, and the folder path is its name.
+
+```ts
+// lunora/billing/module.ts
+import { defineModule } from "@lunora/server";
+
+export default defineModule({
+    description: "Invoices, payments and dunning",
+    tables: ["invoices", "payments"], // optional: tables this module owns
+});
+```
+
+Modules are metadata. They change no `api.*` path and nothing at runtime, and the
+whole app still deploys as one Worker. `lunora/billing/invoices.ts` is
+`api.billing.invoices.*` whether or not `billing/` is a module. Codegen reads `description` and `tables`
+without running the file, so write them inline.
+
+Modules do not nest: a `module.ts` inside another module's folder is a codegen
+error, because a file would then belong to two modules. Files outside every
+module folder are shown as "outside any module".
+
+## Queues and topics
+
+A module can declare its own [queues](/docs/packages/queue), topics and
+subscriptions in a `queues.ts` directly inside its folder, next to
+`module.ts`. Codegen reads it alongside `lunora/queues.ts`, so the queues deploy,
+reconcile into `wrangler.jsonc` and dispatch exactly like root ones, and the
+Architecture view draws them in the module's lane.
+
+```ts
+// lunora/billing/queues.ts
+import { defineQueue, defineSubscription } from "@lunora/queue";
+
+import { signups } from "../queues"; // a topic declared in lunora/queues.ts
+
+export const invoiceEmails = defineQueue({ handler: async (ctx, batch) => {} });
+export const openAccount = defineSubscription(signups, { handler: async (ctx, batch) => {} });
+```
+
+Names stay app-wide: `ctx.queues.invoiceEmails`, not `ctx.queues.billing.…`. Two
+queues files exporting the same name is a codegen error that points at the
+second one. A `queues.ts` in a folder that is not a module is not read.
+
+## What you get
+
+Once the app declares a module, codegen writes `_generated/architecture.json`
+(and an inlined `architecture.ts` the generated app passes to the worker). The
+manifest lists every function, HTTP route, table, queue, topic, workflow, cron and
+service,
+the module each belongs to, and the edges between them:
+
+| Edge        | From → to                | Read from                                                                                                                                                      |
+| ----------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `call`      | function → function      | `ctx.runQuery/runMutation/runAction(api.x.y, …)`, a queue's `message.run(…)`                                                                                   |
+| `schedule`  | function → function      | `ctx.scheduler.runAfter/runAt(…, api.x.y)`                                                                                                                     |
+| `read`      | function → table         | `ctx.db.query("table")`                                                                                                                                        |
+| `write`     | function → table         | `ctx.db.insert("table", …)`, `ctx.db.patch/replace/delete(id, …)` (table read off the id's `Id<"table">` type), batch writes, `ctx.db.<table>.*` facade writes |
+| `enqueue`   | function → queue         | `ctx.queues.<name>.send/sendBatch`                                                                                                                             |
+| `publish`   | function → topic         | `ctx.topics.<name>.publish/publishBatch`                                                                                                                       |
+| `subscribe` | topic → subscription     | `defineSubscription(topic, …)`                                                                                                                                 |
+| `start`     | function → workflow      | `ctx.workflows.get("name")`                                                                                                                                    |
+| `trigger`   | cron → function/workflow | `cronJobs()`                                                                                                                                                   |
+| `invoke`    | function → service       | `ctx.services.<name>.<member>`, called or passed on (a destructured `ctx.services` is not seen) — see [Services](/docs/concepts/services)                      |
+
+The Studio's **Functions → Architecture** page renders it: a catalog of modules
+with their descriptions, owned tables and function counts, and a diagram with one
+lane per module that you can filter by module and edge kind. Click a node to
+open it: a table opens its rows in the data browser, a function the Functions
+page, a queue or topic the Queues page. The canvas exports to PNG, SVG or JSON. The worker serves
+the manifest at the admin-gated `GET /_lunora/admin/architecture`.
+
+The graph is static, read from source by codegen, so it is complete before the
+first deploy and diffable in review. A call site is drawn from the exported
+function it sits in. A call inside a non-exported helper in the same file is
+drawn from every exported function that calls the helper, directly or through
+other helpers. A write in `const openInvoice = (ctx) => ctx.db.insert(…)` is
+therefore a `write` edge of each mutation that calls `openInvoice(ctx)`. A helper
+handed on as a value (`run(openInvoice)`, `{ openInvoice }`) counts as called; a
+type-only mention (`typeof openInvoice`) does not.
+
+A queue or workflow `handler:` imported from another file
+(`defineWorkflow({ handler: onboard })`, with `onboard` exported from
+`lunora/onboarding/flow.ts`) is followed too, so its calls are drawn from the
+queue or workflow node — from every one of them when several share the handler.
+
+The graph does not guess. These are listed under "call sites could not be drawn"
+instead:
+
+- an edge whose target is held in a variable;
+- a call inside a helper that no exported function in its file calls, or at
+  module scope;
+- a write through an untyped id (a plain `string` rather than `Id<"table">`).
+
+An exported function that is not a registered function (a plain
+`export const openInvoice = …` helper) has no node of its own, so its call sites
+are listed as `"openInvoice" is not a registered function`.
+
+## Table ownership
+
+`tables` declares which tables a module owns. The `cross_module_table_write`
+advisor lint reports a function in another module, or outside every module, that
+writes to an owned table. Every kind of write counts:
+
+- `ctx.db.insert`;
+- by-id `patch` / `replace` / `delete`, with the table read off the id's
+  `Id<"table">` type (each table of an `Id<"a"> | Id<"b">` union);
+- batch writes and `ctx.db.<table>.*` facade writes.
+
+A write inside a same-file helper is reported once, named by the helper and
+listing the exported functions that call it, so moving a write into a helper
+does not hide it. A write in a helper no exported function calls is still
+reported.
+
+To fix it, move the write into the owning module. Two shapes work.
+
+**An owner-module helper** keeps the write in the caller's invocation. Export a
+plain function from the billing folder that takes the caller's `ctx`, and call
+it with that `ctx`:
+
+```ts
+// lunora/billing/invoices.ts — owned by the billing module
+import type { MutationCtx } from "../_generated/server";
+
+export const openInvoice = async (ctx: MutationCtx, userId: string) => ctx.db.insert("invoices", { amount: 0, userId });
+```
+
+```ts
+// lunora/accounts/signup.ts — not the billing module
+import { mutation, v } from "../_generated/server";
+import { openInvoice } from "../billing/invoices";
+
+export const signup = mutation.input({ userId: v.string() }).mutation(async ({ args, ctx }) => {
+    await openInvoice(ctx, args.userId);
+});
+```
+
+The write now lives in the owner's file, so the lint is satisfied. The table's
+shape and invariants stay inside the billing module. Because `openInvoice` is
+not a registered function, the Architecture view lists its write under "call
+sites could not be drawn" as `"openInvoice" is not a registered function`.
+
+**A registered owner mutation** runs through `ctx.runMutation`, which is
+available inside a mutation:
+
+```ts
+// lunora/accounts/signup.ts — not the billing module
+await ctx.runMutation(internal.billing.invoices.open, { userId });
+```
+
+`ctx.runMutation` composes the submutation in-process. It runs the handler
+directly, with no fresh Durable Object RPC, and reuses the calling mutation's
+`db` writer. Every mutation runs in a transaction that rolls back on a throw,
+and a submutation joins its caller's: the two commit or roll back together, the
+same as with the owner-module helper. The call becomes a drawn `call` edge to
+the owner's function.
+
+A table can have one owner, and it must exist in `lunora/schema.ts`; codegen
+rejects either mistake. A module that declares no `tables` opts out of the lint.
+
+The OpenAPI and OpenRPC specs tag each operation with its module (falling back
+to its file namespace), so generated API docs group by module too.
+
+## Installed components
+
+Every installed [component](/docs/concepts/components) (a schema extension
+merged with `.extend(...)`) counts as a module named after its key, with no
+`module.ts` needed. It owns its prefixed tables (`voting_votes`). A component
+installed as a [registry item](/docs/concepts/registry-items) also owns the
+`lunora/<key>/` folder its code is copied into; one installed from npm owns no
+folder, since its code lives in `node_modules`. So:
+
+- the Architecture view gives it its own lane, marked as a component;
+- `cross_module_table_write` warns when your code writes straight to a
+  component's table instead of calling the function the component exports.
+
+The lint applies whether or not you declare any modules yourself; the
+Architecture view appears once you declare one. Code inside a copied-in
+component's folder may write its tables freely. A module you declare inside a
+component's folder is a codegen error, as with any nested module. To take over a component's
+tables, declare a module with the same name, or list the table in your own
+module's `tables`; a declared claim wins. The component's code in `node_modules`
+is not scanned, so its internal calls and writes are not drawn.

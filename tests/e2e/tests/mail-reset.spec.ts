@@ -1,6 +1,7 @@
 import { extractLink, waitForMail } from "@lunora/mail/testing";
 
 import { expect, test } from "../fixtures/lunora.js";
+import { BASE_URL } from "../origin";
 
 /**
  * Forgot-password E2E through the dev mail catcher.
@@ -12,7 +13,6 @@ import { expect, test } from "../fixtures/lunora.js";
  * reset → read the captured mail over the admin RPC (`@lunora/mail/testing`) →
  * follow the link's token → set a new password → sign in with it.
  */
-const WORKER_URL = process.env.LUNORA_E2E_WORKER_URL ?? "http://localhost:5173";
 /** Must match `LUNORA_ADMIN_TOKEN` written into the E2E `.dev.vars` by `globalSetup.ts`. */
 const ADMIN_TOKEN = "e2e-deterministic-admin-token";
 
@@ -25,9 +25,9 @@ test("forgot-password email is captured and its reset link sets a new password",
     const password = "test-password-1234"; // gitleaks:allow
 
     // Create the account.
-    const signup = await page.request.post(`${WORKER_URL}/api/auth/sign-up/email`, {
+    const signup = await page.request.post(`${BASE_URL}/api/auth/sign-up/email`, {
         data: { email, name: email, password },
-        headers: { Origin: WORKER_URL },
+        headers: { Origin: BASE_URL },
     });
 
     expect(signup.status()).toBe(200);
@@ -37,18 +37,18 @@ test("forgot-password email is captured and its reset link sets a new password",
     // better-auth ≥1.6 serves this at `/request-password-reset` (the old
     // `/forget-password` path was removed and 404s — see
     // packages/auth/__tests__/forget-password-route.test.ts).
-    const forgot = await page.request.post(`${WORKER_URL}/api/auth/request-password-reset`, {
-        data: { email, redirectTo: `${WORKER_URL}/reset` },
-        headers: { Origin: WORKER_URL },
+    const forgot = await page.request.post(`${BASE_URL}/api/auth/request-password-reset`, {
+        data: { email, redirectTo: `${BASE_URL}/reset` },
+        headers: { Origin: BASE_URL },
     });
 
     expect(forgot.status()).toBe(200);
 
     // Read the captured reset email from the studio inbox over the admin RPC.
-    const mail = await waitForMail({ adminToken: ADMIN_TOKEN, baseUrl: WORKER_URL, subjectMatch: "Reset", timeoutMs: 15_000, to: email });
+    const mail = await waitForMail({ adminToken: ADMIN_TOKEN, baseUrl: BASE_URL, subjectMatch: "Reset", timeoutMs: 15_000, to: email });
     const resetLink = extractLink(mail);
 
-    expect(resetLink).toContain(WORKER_URL);
+    expect(resetLink).toContain(BASE_URL);
 
     // Pull the token out (handles both `?token=…` and `/reset-password/<token>` link shapes).
     const token = new URL(resetLink).searchParams.get("token") ?? resetLink.split("?")[0]?.split("/").pop();
@@ -57,16 +57,16 @@ test("forgot-password email is captured and its reset link sets a new password",
 
     // Complete the reset, then confirm the new password authenticates.
     const newPassword = "new-password-5678"; // gitleaks:allow
-    const reset = await page.request.post(`${WORKER_URL}/api/auth/reset-password`, {
+    const reset = await page.request.post(`${BASE_URL}/api/auth/reset-password`, {
         data: { newPassword, token },
-        headers: { Origin: WORKER_URL },
+        headers: { Origin: BASE_URL },
     });
 
     expect(reset.status()).toBe(200);
 
-    const signin = await page.request.post(`${WORKER_URL}/api/auth/sign-in/email`, {
+    const signin = await page.request.post(`${BASE_URL}/api/auth/sign-in/email`, {
         data: { email, password: newPassword },
-        headers: { Origin: WORKER_URL },
+        headers: { Origin: BASE_URL },
     });
 
     expect(signin.status()).toBe(200);

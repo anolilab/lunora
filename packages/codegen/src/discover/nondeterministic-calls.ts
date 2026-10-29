@@ -2,7 +2,8 @@ import type { CallExpression, NewExpression, Node as TsNode, Project, SourceFile
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { NondeterministicCallIR } from "../ir";
-import { handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { descendantsOfKind, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
@@ -150,15 +151,16 @@ const exportedProcedureHandler = (declaration: VariableDeclaration): ResolvedPro
 
     const handler = handlerOf(initializer, classified.receiver);
 
-    return handler ? { exportName: declaration.getName(), handler, kind: classified.kind } : undefined;
+    return handler ? { exportName: exportedNameOf(declaration) ?? declaration.getName(), handler, kind: classified.kind } : undefined;
 };
 
 /** Non-deterministic call IRs lexically inside one resolved procedure handler. */
 const callsInHandler = (procedure: ResolvedProcedure, file: string): NondeterministicCallIR[] => {
     const found: NondeterministicCallIR[] = [];
 
-    for (const callNode of procedure.handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const callee = nondeterministicCalleeOf(callNode);
+    for (const callNode of descendantsOfKind(procedure.handler, SyntaxKind.CallExpression)) {
+        // A query's `ctx.random()` is an unkeyed `Math.random()` draw, so a live re-run can differ. A mutation's draw is replay-stable.
+        const callee = procedure.kind === "query" && callNode.getExpression().getText() === "ctx.random" ? "ctx.random" : nondeterministicCalleeOf(callNode);
 
         if (callee !== undefined) {
             found.push({ callee, exportName: procedure.exportName, file, kind: procedure.kind, line: callNode.getStartLineNumber() });
@@ -167,7 +169,7 @@ const callsInHandler = (procedure: ResolvedProcedure, file: string): Nondetermin
 
     // `new Date()` is a NewExpression, not a CallExpression — traverse it too so
     // wall-clock reads via the constructor are caught alongside `Date.now()`.
-    for (const newNode of procedure.handler.getDescendantsOfKind(SyntaxKind.NewExpression)) {
+    for (const newNode of descendantsOfKind(procedure.handler, SyntaxKind.NewExpression)) {
         const callee = nondeterministicNewOf(newNode);
 
         if (callee !== undefined) {
@@ -182,17 +184,11 @@ const callsInHandler = (procedure: ResolvedProcedure, file: string): Nondetermin
 const callsInSourceFile = (sourceFile: SourceFile, relativePath: string): NondeterministicCallIR[] => {
     const found: NondeterministicCallIR[] = [];
 
-    for (const statement of sourceFile.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
+    for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+        const procedure = exportedProcedureHandler(declaration);
 
-        for (const declaration of statement.getDeclarations()) {
-            const procedure = exportedProcedureHandler(declaration);
-
-            if (procedure) {
-                found.push(...callsInHandler(procedure, relativePath));
-            }
+        if (procedure) {
+            found.push(...callsInHandler(procedure, relativePath));
         }
     }
 

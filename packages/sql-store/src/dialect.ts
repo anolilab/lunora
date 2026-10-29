@@ -13,6 +13,7 @@
  *
  * Pure — no runtime dependency on `@lunora/do` or a SQL driver.
  */
+import type { RenderedSql } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 
 /** Outcome of a non-`SELECT` statement: the row count it changed (for MySQL OCC, which lacks `RETURNING`). */
@@ -30,9 +31,11 @@ export interface SqlRunResult {
  * write and reports `rowsAffected` — the matched-rows count that drives the
  * MySQL optimistic-concurrency guard (which has no `RETURNING`).
  *
- * Note: companion writes (aggregate/rank/FTS/CDC) run as separate sequential
- * statements after the row write on every engine, so they share D1's
- * at-least-once caveat — there is no cross-statement transaction here.
+ * Note: companion writes (aggregate/rank/FTS/CDC) run after the row write, not
+ * in its transaction, so they share D1's at-least-once caveat. Where the
+ * executor provides `batch`, a write's aggregate/rank/CDC statements go out as
+ * one ordered batch; without it they run as sequential statements, and a failure
+ * partway through leaves the earlier ones applied.
  */
 export interface SqlExec {
     all: (sql: string, params: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
@@ -57,6 +60,11 @@ export interface SqlExec {
      * longer serialized one full RTT at a time, and with no ordering between
      * elements. Safe only for statements whose effects don't depend on each
      * other (distinct-keyed rows), which is what every current caller batches.
+     *
+     * The one exception is the `sqlite` dialect, whose engines ship FTS5: there
+     * an implementation MUST run the array in order, as one transaction, as
+     * D1's does. The FTS5 search companion's writes are ordered statement
+     * lists that must not interleave with another writer's (`runInOrder`).
      */
     batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
     run: (sql: string, params: ReadonlyArray<unknown>) => Promise<SqlRunResult>;
@@ -140,7 +148,7 @@ export interface SqlDialect {
      */
     maxTableColumns?: number;
 
-    /** A short engine tag for diagnostics/branching (`"sqlite" | "postgres" | "mysql"`). The store core selects drizzle's matching dialect for rendering off this. */
+    /** A short engine tag for diagnostics/branching (`"sqlite" | "postgres" | "mysql"`). */
     readonly name: "mysql" | "postgres" | "sqlite";
 
     /**
@@ -167,13 +175,30 @@ export interface SqlDialect {
         createCompanion: (companion: string, keyType: string) => SQL;
         /** DDL for the indexes that make the match fast. */
         createIndexes: (companion: string) => SQL[];
-        /** Replace one document's row, given its already-analyzed token stream. */
-        indexDocument: (companion: string, id: string, analyzed: string) => SQL;
+
+        /**
+         * Replace one document's row, given its already-analyzed token stream,
+         * only where `guard` holds. One idempotent statement: two writers of one
+         * id converge on one row, never raise a key conflict, and a writer whose
+         * `guard` fails writes nothing.
+         */
+        indexDocument: (companion: string, id: string, analyzed: string, guard: SQL) => SQL;
         /** The `WHERE` predicate matching a query's analyzed terms, final term as a prefix. */
         matches: (companion: string, terms: ReadonlyArray<string>) => SQL;
         /** The `ORDER BY` expression, best first. */
         rank: (companion: string, terms: ReadonlyArray<string>) => SQL;
     };
+
+    /** Render a composable drizzle `SQL` to this engine's `{ sql, params }`. Each dialect imports only its own drizzle dialect, so a bundle carries one engine's renderer. */
+    render: (query: SQL) => RenderedSql;
+
+    /**
+     * How an operator completes a search index that is still backfilling on
+     * this backend, in words, for the refusal a read against it raises: each
+     * backend's entry point differs. Absent, the refusal says only to retry
+     * once the backfill finishes.
+     */
+    searchBackfillHint?: string;
 
     /**
      * True when the engine ships SQLite's FTS5 module, which decides whether a

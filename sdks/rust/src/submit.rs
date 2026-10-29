@@ -11,12 +11,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use crate::client::{ApiError, Client, ClientError, Subscription};
+use crate::client::{envelopeless_error, ApiError, Client, ClientError, Subscription, TransportError};
 use crate::key::stable_wire_key;
 use crate::offline::{
-    identity_allows_replay, random_id, same_shard, Discarded, Identity, Precondition, QueuedMutation, SettledHandler, CODE_CLIENT_CLOSED,
-    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE, MAX_BATCH_BYTES, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS,
-    RATE_LIMIT_ERROR_CODES, TRANSIENT_ERROR_CODES,
+    random_id, replay_identity_verdict, same_shard, Discarded, Precondition, QueuedMutation, ReplayVerdict, SettledHandler, AUTH_REPLAY_ERROR_CODES,
+    CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_NOT_QUEUED, CODE_OFFLINE_WRITE_UNENCODABLE, CODE_PAYLOAD_TOO_LARGE,
+    CODE_WIRE_DECODE_FAILED, MAX_BATCH_BYTES, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS, RATE_LIMIT_ERROR_CODES, TRANSIENT_ERROR_CODES,
 };
 use crate::optimistic::{apply_layer, confirm_layer, constant, rollback_layer, shared, SharedTransform};
 use crate::wire::{decode_wire, encode_wire, WireValue};
@@ -48,6 +48,10 @@ pub struct MutationOutcome {
     pub mutation_id: String,
     pub value: WireValue,
     pub commit_cursor: Option<i64>,
+    /// `WIRE_DECODE_FAILED` when the write COMMITTED but its result does not
+    /// decode (`value` is then `Null`); `None` otherwise. The same report a
+    /// replayed write's settled event carries.
+    pub error: Option<ApiError>,
 }
 
 /// The terminal verdict on a queued write, once it replays.
@@ -118,6 +122,14 @@ pub struct SubmitOptions {
     /// Re-evaluated just before a QUEUED write replays; `false` drops it rather
     /// than replaying a write that can only fail.
     pub precondition: Option<Precondition>,
+    /// Never queued, persisted or replayed. Where a normal write would be queued,
+    /// `submit` fails with `CODE_OFFLINE_NOT_QUEUED` before any optimistic layer
+    /// is installed, so the arguments never reach the queue or the persistence
+    /// adapter. A send that gets no reply while the socket is down fails the same
+    /// way, with the transport error as its source. It does not wait for a queue
+    /// flush or queue behind pending writes, so it may overtake them. For a
+    /// credential or a one-time token.
+    pub online_only: bool,
     /// Reports the eventual verdict on a queued write.
     pub on_settled: Option<SettledHandler>,
 }
@@ -131,6 +143,7 @@ impl SubmitOptions {
             mutation_id: None,
             on_settled: None,
             optimistic: None,
+            online_only: false,
             optimistic_queries: Vec::new(),
             precondition: None,
             shard_key: None,
@@ -167,7 +180,20 @@ fn coded(code: &str, message: &str) -> ApiError {
         data: None,
         message: message.to_string(),
         transient: false,
+        source: None,
     }
+}
+
+/// The refusal of an online-only write that would be queued. `cause` is the
+/// transport failure when the write was sent and got no reply, `None` when it was
+/// refused before anything was sent.
+fn not_queued(function_path: &str, cause: Option<TransportError>) -> ClientError {
+    let message = format!("'{function_path}' is online-only and the connection is not live, so it was not queued");
+
+    ClientError::Api(Box::new(ApiError {
+        source: cause,
+        ..coded(CODE_OFFLINE_NOT_QUEUED, &message)
+    }))
 }
 
 impl Client {
@@ -190,33 +216,72 @@ impl Client {
         }
 
         let write_id = options.mutation_id.clone().unwrap_or_else(random_id);
-        let layers = self.apply_optimistic(&options);
         let queue_it = self.send.is_none() && (self.was_ever_connected || self.offline_queue.queue_before_first_connect);
 
-        if queue_it {
+        // Refused before anything is installed, so no overlay outlives the call.
+        if queue_it && options.online_only {
+            return Err(not_queued(&options.function_path, None));
+        }
+
+        let layers = self.apply_optimistic(&options);
+
+        // The optimistic transforms are user code and may drop the socket, so the decision above can be
+        // stale. It is taken again now: an online-only write that would queue is refused, and its overlay
+        // is rolled back, rather than sent or queued.
+        let queue_now = self.send.is_none() && (self.was_ever_connected || self.offline_queue.queue_before_first_connect);
+
+        if queue_now && options.online_only {
+            self.rollback_layers(&layers);
+
+            return Err(not_queued(&options.function_path, None));
+        }
+
+        if queue_now {
             self.enqueue_write(options, write_id.clone(), layers);
 
             return Ok(MutationOutcome {
                 commit_cursor: None,
+                error: None,
                 mutation_id: write_id,
                 status: MutationStatus::Queued,
                 value: WireValue::Null,
             });
         }
 
-        match self.rpc_full(&options.function_path, &options.args, options.shard_key.as_deref(), Some(&write_id), None) {
-            Ok((value, commit_cursor)) => {
+        match self.rpc_raw(
+            &options.function_path,
+            &options.args,
+            options.shard_key.as_deref(),
+            Some(&write_id),
+            None,
+            self.auth_token(),
+        ) {
+            Ok((result, commit_cursor)) => {
                 // Confirmed against the write's COMMITTED cursor, so the overlay
                 // drops when (or once) a frame at that cursor lands — never on
-                // this call's return, which races the socket broadcast.
+                // this call's return, which races the socket broadcast. A result
+                // that does not decode still committed, so it is reported beside
+                // the committed outcome rather than as a failed call.
                 self.confirm_layers(&layers, commit_cursor);
+
+                let (value, error) = decode_committed(&result);
 
                 Ok(MutationOutcome {
                     commit_cursor,
+                    error,
                     mutation_id: write_id,
                     status: MutationStatus::Committed,
                     value,
                 })
+            }
+            // An online-only write that got no reply while the socket is down is refused
+            // as a queued write would have been, the transport failure as its cause. A
+            // missing poster is also a `Transport` error, but nothing was attempted, so
+            // it is not one; a coded reply and any failure while connected surface as is.
+            Err(ClientError::Transport(cause)) if options.online_only && self.send.is_none() && self.has_poster() => {
+                self.rollback_layers(&layers);
+
+                Err(not_queued(&options.function_path, Some(TransportError(cause))))
             }
             Err(error) => {
                 self.rollback_layers(&layers);
@@ -292,15 +357,30 @@ impl Client {
         }
 
         // Gated against ONE identity snapshot: a flush is a single authenticated
-        // burst, so every write in it necessarily runs under one identity.
-        let current = self.identity.clone();
+        // burst, so every write in it runs under one identity — and is SENT with
+        // the token snapshotted beside it, never whichever is held when its
+        // request goes out. A write whose owner cannot be told (nobody signed in)
+        // is HELD: back on the queue in its place, still persisted, unsettled —
+        // the reference's "unknown" verdict.
+        let current = self.identity_fingerprint();
+        let token = self.auth_token().map(str::to_string);
+        let order: HashMap<String, usize> = drained.iter().enumerate().map(|(index, entry)| (entry.id.clone(), index)).collect();
+        let mut held = Vec::new();
         let mut sendable = Vec::with_capacity(drained.len());
 
         for entry in drained {
-            if identity_allows_replay(&entry.identity, current.as_deref()) {
-                sendable.push(entry);
+            match replay_identity_verdict(&entry.identity, &current, token.as_deref()) {
+                ReplayVerdict::Match => {
+                    sendable.push(entry);
 
-                continue;
+                    continue;
+                }
+                ReplayVerdict::Unknown => {
+                    held.push(entry);
+
+                    continue;
+                }
+                ReplayVerdict::Mismatch => {}
             }
 
             self.offline_queue.unpersist(&entry.id);
@@ -313,8 +393,17 @@ impl Client {
         }
 
         let encodable = self.encodable_or_settle_terminal(sendable, &mut report);
+        let mut leftover = self.replay(encodable, &mut report, token.as_deref());
 
-        self.replay(encodable, &mut report);
+        // Every write that did not settle goes back to the FRONT once, in the
+        // order it was drained, so a held write keeps its place in line.
+        leftover.append(&mut held);
+        leftover.sort_by_key(|entry| order.get(&entry.id).copied());
+
+        if !leftover.is_empty() {
+            report.requeued.extend(leftover.iter().map(|item| item.id.clone()));
+            self.offline_queue.requeue(leftover);
+        }
 
         report
     }
@@ -353,14 +442,14 @@ impl Client {
         encodable
     }
 
-    fn replay(&mut self, sendable: Vec<QueuedMutation>, report: &mut FlushReport) {
+    /// Replays the gated writes with `token`, returning the ones to re-queue, in
+    /// order. Re-queuing is the caller's, once, beside the held writes.
+    fn replay(&mut self, sendable: Vec<QueuedMutation>, report: &mut FlushReport, token: Option<&str>) -> Vec<QueuedMutation> {
         // A lone write rides the single-call path, which is the proven one. Two
         // or more coalesce into batch round trips — the flaky-reconnect win,
         // where N queued writes cost a handful of hops instead of N.
         if sendable.len() < 2 {
-            self.replay_sequential(sendable, report);
-
-            return;
+            return self.replay_sequential(sendable, report, token);
         }
 
         let mut to_requeue: Vec<QueuedMutation> = Vec::new();
@@ -378,41 +467,32 @@ impl Client {
 
             // Chunks replay sequentially, which is what preserves FIFO across a
             // flush longer than one batch.
-            let (requeue, stop) = self.replay_batched(chunk, report);
+            let (requeue, stop) = self.replay_batched(chunk, report, token);
 
             to_requeue.extend(requeue);
             stopped = stop;
         }
 
-        if !to_requeue.is_empty() {
-            report.requeued.extend(to_requeue.iter().map(|item| item.id.clone()));
-            self.offline_queue.requeue(to_requeue);
-        }
+        to_requeue
     }
 
     /// Replays writes one at a time. FIFO is preserved by the loop itself.
-    fn replay_sequential(&mut self, sendable: Vec<QueuedMutation>, report: &mut FlushReport) {
+    /// Returns the write that failed transiently and every one after it.
+    fn replay_sequential(&mut self, sendable: Vec<QueuedMutation>, report: &mut FlushReport, token: Option<&str>) -> Vec<QueuedMutation> {
         let mut pending = sendable.into_iter();
 
         while let Some(entry) = pending.next() {
-            let outcome = self.rpc_full(
+            let outcome = self.rpc_raw(
                 &entry.function_path,
                 &entry.args,
                 entry.shard_key.as_deref(),
                 Some(&entry.id),
                 entry.client_id.as_deref(),
+                token,
             );
 
             match outcome {
-                Ok((value, commit_cursor)) => {
-                    self.offline_queue.unpersist(&entry.id);
-                    // The overlay is confirmed BEFORE the caller is told, so the
-                    // gapless drop is already in place when the confirming frame
-                    // lands.
-                    self.confirm_layers(&entry.layers, commit_cursor);
-                    report.committed.push(entry.id.clone());
-                    self.emit_settled(&entry, MutationStatus::Committed, value, None);
-                }
+                Ok((result, commit_cursor)) => self.settle_committed(&entry, &result, commit_cursor, report),
                 Err(error) if is_transient(&error) => {
                     if let ClientError::Api(inner) = &error {
                         self.note_retry_after(report, inner);
@@ -424,10 +504,8 @@ impl Client {
                     let mut requeue = vec![entry];
 
                     requeue.extend(pending);
-                    report.requeued.extend(requeue.iter().map(|item| item.id.clone()));
-                    self.offline_queue.requeue(requeue);
 
-                    return;
+                    return requeue;
                 }
                 Err(error) => {
                     self.offline_queue.unpersist(&entry.id);
@@ -443,6 +521,8 @@ impl Client {
                 }
             }
         }
+
+        Vec::new()
     }
 
     /// Replays one chunk over `POST /_lunora/rpc-batch`.
@@ -455,7 +535,7 @@ impl Client {
     /// Returns the writes to put back and whether the caller should STOP because
     /// the whole chunk failed at the transport level. Re-queuing is the
     /// caller's, once and in order, so a write cannot land twice in the queue.
-    fn replay_batched(&mut self, items: Vec<QueuedMutation>, report: &mut FlushReport) -> (Vec<QueuedMutation>, bool) {
+    fn replay_batched(&mut self, items: Vec<QueuedMutation>, report: &mut FlushReport, token: Option<&str>) -> (Vec<QueuedMutation>, bool) {
         let mut calls = Vec::with_capacity(items.len());
 
         for (index, item) in items.iter().enumerate() {
@@ -486,7 +566,7 @@ impl Client {
             calls.push(call);
         }
 
-        let Ok(body) = self.rpc_batch(calls) else {
+        let Ok((status, body)) = self.rpc_batch(calls, token) else {
             // Transport failure — nothing committed, so retry everything.
             return (items, true);
         };
@@ -497,23 +577,25 @@ impl Client {
             return (self.settle_batch_slots(items, &results, report), false);
         }
 
-        // No per-slot results. A coded envelope is a verdict on the WHOLE batch —
-        // a bad request, an authorization denial — and therefore terminal for
-        // every entry; anything else is transport, and transient.
-        let Some(envelope) = body.get("error").filter(|value| value.is_object()) else {
-            return (items, true);
+        // No per-slot results: ONE verdict on the whole batch, reached by the
+        // rule the single-call path uses. A coded envelope is classified by its
+        // code alone, whatever the status; an envelope-less reply by its status
+        // (`envelopeless_error`), so a proxy's HTML 413 is the same
+        // PAYLOAD_TOO_LARGE the worker's coded one is.
+        let error = match body.get("error").filter(|value| value.is_object()) {
+            Some(envelope) => batch_slot_error(envelope, "batch rejected"),
+            None => envelopeless_error(status),
         };
-
-        let error = batch_slot_error(envelope, "batch rejected");
 
         // The body was too big, not wrong — every entry in it would have
         // committed alone. Halve and retry; the estimate `chunk_batches` used
         // cannot see the framing the worker actually measured, and only the
-        // answer can.
+        // answer can. A chunk halved down to one write falls through to the
+        // terminal verdict below: splitting cannot help it.
         if error.code == CODE_PAYLOAD_TOO_LARGE && items.len() > 1 {
             let mut left = items;
             let right = left.split_off(left.len() / 2);
-            let (mut requeue, stop) = self.replay_batched(left, report);
+            let (mut requeue, stop) = self.replay_batched(left, report, token);
 
             if stop {
                 // The left half stopped the flush, so the right half is put back
@@ -523,16 +605,16 @@ impl Client {
                 return (requeue, true);
             }
 
-            let (right_requeue, stop) = self.replay_batched(right, report);
+            let (right_requeue, stop) = self.replay_batched(right, report, token);
 
             requeue.extend(right_requeue);
 
             return (requeue, stop);
         }
 
-        // A shard blip or a rate limit is not a verdict on the batch's contents.
-        // Requeue it whole and stop the flush, exactly as the single-call path
-        // does for the same codes.
+        // A shard blip, a rate limit or a reply with no envelope is not a verdict
+        // on the batch's contents. Requeue it whole and stop the flush, exactly
+        // as the single-call path does for the same answers.
         if api_is_transient(&error) {
             self.note_retry_after(report, &error);
 
@@ -572,6 +654,19 @@ impl Client {
                 continue;
             };
 
+            if slot.get("error").is_some_and(|value| !value.is_object()) {
+                // An `error` key holding a string, a null, an array or a number
+                // is no envelope (§4.2), and a slot carries no HTTP status of
+                // its own to classify it by — so nothing readable came back
+                // about this entry, which is exactly the position of a slot the
+                // server never returned. §4.3 retries that one. Falling through
+                // to the commit branch below settled a durable write COMMITTED
+                // with a null result and un-persisted it.
+                requeue.push(entry);
+
+                continue;
+            }
+
             if let Some(envelope) = slot.get("error").filter(|value| value.is_object()) {
                 let error = batch_slot_error(envelope, "request failed");
 
@@ -598,17 +693,29 @@ impl Client {
             }
 
             let commit_cursor = slot.get("commitCursor").and_then(Value::as_i64);
-            let value = slot.get("result").map_or(WireValue::Null, |raw| decode_wire(raw).unwrap_or(WireValue::Null));
 
-            self.offline_queue.unpersist(&entry.id);
-            // The overlay is confirmed BEFORE the caller is told, so the gapless
-            // drop is already in place when the confirming frame lands.
-            self.confirm_layers(&entry.layers, commit_cursor);
-            report.committed.push(entry.id.clone());
-            self.emit_settled(&entry, MutationStatus::Committed, value, None);
+            self.settle_committed(&entry, slot.get("result").unwrap_or(&Value::Null), commit_cursor, report);
         }
 
         requeue
+    }
+
+    /// Settles a write the server COMMITTED, on either replay path.
+    ///
+    /// The result is decoded FIRST, and a result that does not decode changes
+    /// nothing about the verdict: the write committed, and replaying it could
+    /// only return the same result, so retrying parks the head of the queue
+    /// forever. It settles committed with no value and the decode error attached
+    /// (`WIRE_DECODE_FAILED`). Then, in order: the durable record goes, and the
+    /// overlay is confirmed BEFORE the caller is told, so the gapless drop is
+    /// already in place when the confirming frame lands.
+    fn settle_committed(&mut self, entry: &QueuedMutation, result: &Value, commit_cursor: Option<i64>, report: &mut FlushReport) {
+        let (value, error) = decode_committed(result);
+
+        self.offline_queue.unpersist(&entry.id);
+        self.confirm_layers(&entry.layers, commit_cursor);
+        report.committed.push(entry.id.clone());
+        self.emit_settled(entry, MutationStatus::Committed, value, error);
     }
 
     /// Registers both optimistic paths' layers, returning `(subscription id,
@@ -709,7 +816,7 @@ impl Client {
     fn enqueue_write(&mut self, options: SubmitOptions, write_id: String, layers: Vec<(String, u64)>) {
         // Bound at enqueue time, so the write can only ever replay as whoever
         // made it.
-        let identity = Identity::stamp(self.identity.clone());
+        let identity = self.identity_fingerprint();
         // Never a substitute value: a record persisted as `args: null` hydrates
         // after a restart as a write that replays SUCCESSFULLY with empty args,
         // which is corruption rather than failure. The queue reports the failed
@@ -780,6 +887,19 @@ impl Client {
     }
 }
 
+/// A committed write's result, or — when THIS client cannot decode it — no value
+/// and the coded `WIRE_DECODE_FAILED`. Decided by where the failure arose, never
+/// by a code string: a server that answers `WIRE_DECODE_FAILED` refused the write.
+fn decode_committed(result: &Value) -> (WireValue, Option<ApiError>) {
+    match decode_wire(result) {
+        Ok(value) => (value, None),
+        Err(error) => (
+            WireValue::Null,
+            Some(coded(CODE_WIRE_DECODE_FAILED, &format!("committed, but its result does not decode: {error}"))),
+        ),
+    }
+}
+
 /// Rebuilds an [`ApiError`] from a slot's or a batch's error envelope,
 /// defaulting the way `parse_rpc_response` does.
 fn batch_slot_error(envelope: &Value, fallback: &str) -> ApiError {
@@ -787,10 +907,10 @@ fn batch_slot_error(envelope: &Value, fallback: &str) -> ApiError {
         code: envelope.get("code").and_then(Value::as_str).unwrap_or("INTERNAL").to_string(),
         data: envelope.get("data").filter(|value| !value.is_null()).and_then(|value| decode_wire(value).ok()),
         message: envelope.get("message").and_then(Value::as_str).unwrap_or(fallback).to_string(),
-        // The batch transport reads the body, not the status: an entry-less
-        // envelope that is transport rather than a verdict arrives here as a
-        // parse failure instead, already classified transient.
+        // A coded envelope is a verdict: its code alone decides a replay, as
+        // on the single-call path (`crate::client::rpc_result`).
         transient: false,
+        source: None,
     }
 }
 
@@ -863,9 +983,13 @@ pub fn retry_after_ms(error: &ApiError) -> Option<i64> {
     })
 }
 
-/// Whether a coded server answer left the write still worth replaying.
+/// Whether a coded server answer left the write still worth replaying: a shard
+/// blip, a rate limit, a refused credential (held for the next token), or a
+/// reply with no envelope at all.
 fn api_is_transient(error: &ApiError) -> bool {
-    error.transient || TRANSIENT_ERROR_CODES.contains(&error.code.as_str()) || RATE_LIMIT_ERROR_CODES.contains(&error.code.as_str())
+    let code = error.code.as_str();
+
+    error.transient || TRANSIENT_ERROR_CODES.contains(&code) || RATE_LIMIT_ERROR_CODES.contains(&code) || AUTH_REPLAY_ERROR_CODES.contains(&code)
 }
 
 /// Whether a failed replay may be retried rather than dropped.
@@ -875,8 +999,7 @@ fn api_is_transient(error: &ApiError) -> bool {
 /// encoded now and will not encode any better on the next reconnect, so retrying
 /// it is a poison loop that also blocks every write behind it. (The flush already
 /// weeds those out before the replay loop; this keeps the classification honest
-/// for anything the encode pass could not see, such as a response that fails to
-/// decode.)
+/// for anything the encode pass could not see.)
 pub fn is_transient(error: &ClientError) -> bool {
     match error {
         ClientError::Api(inner) => api_is_transient(inner),

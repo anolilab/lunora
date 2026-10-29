@@ -1,6 +1,7 @@
 import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import { createSignal } from "solid-js";
 
+import { assertPresenceInterval } from "../../../shared/presence-interval";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./context";
 import { onMounted } from "./solid-compat";
@@ -72,6 +73,8 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
     const client = useLunora();
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
+    assertPresenceInterval(intervalMs);
+
     const sessionId = options.sessionId ?? randomSessionId();
 
     const [present, setPresent] = createSignal<ReturnOf<L> | undefined>(undefined);
@@ -80,6 +83,8 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
     // Latest awareness data — updated by `setData`; read at heartbeat time so
     // changing data never resets the interval or closes the subscription.
     let latestData: Record<string, unknown> | undefined = options.data;
+    // True only between mount and teardown; `setData` must not heartbeat before then.
+    let mounted = false;
 
     const sendHeartbeat = (): void => {
         const args = {
@@ -93,10 +98,15 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
 
     const setData = (next: Record<string, unknown> | undefined): void => {
         latestData = next;
-        sendHeartbeat();
+
+        if (mounted) {
+            sendHeartbeat();
+        }
     };
 
     onMounted(() => {
+        mounted = true;
+
         // Heartbeat immediately on mount.
         sendHeartbeat();
 
@@ -139,6 +149,7 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         );
 
         return () => {
+            mounted = false;
             clearInterval(intervalHandle);
 
             if (typeof document !== "undefined") {

@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One query read discovered in a function body — the input the
  * `filter_without_index` / `filter_on_primary_key` / `unbounded_collect` lints
@@ -6,18 +8,14 @@
  * find nothing there.
  */
 export interface AdvisorQueryRead {
-    /**
-     * The exported procedure the read sits in, when the feeder could resolve one.
-     * Carried so the advisor map can attribute the finding to that procedure's row
-     * rather than to the project bucket; a read outside any export (module scope)
-     * legitimately has none.
-     *
-     * Optional so a feeder predating this field still typechecks — such a run
-     * simply attributes project-wide, exactly as before.
-     */
-    exportName?: string;
     /** Source file the read appears in (relative to the lunora dir, no extension). */
     file: string;
+
+    /**
+     * The fields the `.filter(...)` predicate reads off its row parameter. `undefined`
+     * when there is no filter or the predicate is not a function literal.
+     */
+    filterFields?: string[];
 
     /**
      * True when the chain's `.filter()` predicate compares `_id`
@@ -26,12 +24,23 @@ export interface AdvisorQueryRead {
      * typechecks; absent is treated as "not a primary-key filter".
      */
     filtersPrimaryKey?: boolean;
+
     /** True when the chain calls `.filter(...)`. */
     hasFilter: boolean;
     /** True when the chain narrows with `.withIndex(...)` or `.withSearchIndex(...)`. */
     hasIndex: boolean;
+
+    /**
+     * The chain's `.withIndex(...)`, present exactly when the chain has one. `name` is
+     * the literal index name, or `undefined` when it is not a string literal. `bounds`
+     * are the comparators its range callback calls: `[]` for a bare `.withIndex(name)`
+     * (an open range), `undefined` when the callback cannot be read.
+     */
+    index?: { bounds?: string[]; name?: string };
     /** 1-based line of the `query(...)` call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
     /** The queried table; empty when the `query(...)` argument is not a string literal. */
     table: string;
 
@@ -47,4 +56,11 @@ export interface AdvisorQueryRead {
      * rather than guessing a terminal.
      */
     terminal?: string;
+
+    /**
+     * Visibility of the procedure the read runs on behalf of: `internal` when every
+     * caller is internal, `public` when any caller is public. `undefined` when the
+     * feeder could not read the registered functions.
+     */
+    visibility?: "internal" | "public";
 }

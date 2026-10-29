@@ -1,16 +1,18 @@
+import { jsonSchema, tool } from "@ai-sdk/provider-utils";
 import { isLunoraError, LunoraError } from "@lunora/errors";
-import type { EmbeddingModel } from "ai";
-import { embed as aiEmbed, embedMany as aiEmbedMany, jsonSchema, tool } from "ai";
-
-// Repo-root inlined helper (see shared/stable-key.ts) — the canonical
+// Repo-root inlined helper (see packages/wire/src/stable-key.ts) — the canonical
 // code-point-stable, recursively-sorted encoder, used here to give a source's
 // `metadata` one canonical form to hash (see `sourceIdentity`).
-import { stableStringify } from "../../../../shared/stable-key";
-import { estimateModelCost } from "../pricing";
+import { stableStringify } from "@lunora/wire";
+import type { EmbeddingModel } from "ai";
+
+import type { AiMetrics, AiSpan, AiTracer } from "../types";
+import { modelIdOf, recordUsage } from "../usage";
 import fixedWindowChunks from "./chunk";
 import { concurrentMap, INDEX_CONCURRENCY } from "./concurrent";
 import { contentHash } from "./helpers";
-import hybridRank from "./hybrid-rank";
+import type { FusionLeg } from "./hybrid-rank";
+import { hybridRank } from "./hybrid-rank";
 import type {
     IndexInput,
     IndexResult,
@@ -19,6 +21,7 @@ import type {
     RagContext,
     RagSource,
     RagToolOptions,
+    RagVectorUpsertInput,
     RemoveInput,
     RetrievedChunk,
     RetrieveOptions,
@@ -31,6 +34,9 @@ const DEFAULT_CHUNK_SIZE = 1000;
 
 const DEFAULT_CHUNK_OVERLAP = 200;
 const DEFAULT_TOP_K = 5;
+
+/** Chunks per `upsertMany` call: Vectorize's hard ceiling on one batch. */
+const UPSERT_BATCH = 1000;
 
 /**
  * Default candidate-pool multiplier when fusion or reranking is active:
@@ -78,6 +84,55 @@ const IMPORTANCE_KEY = "__ragImportance";
 const MODEL_KEY = "__ragModel";
 
 const INTERNAL_KEYS = new Set([CHUNK_INDEX_KEY, COUNT_KEY, HASH_KEY, IMPORTANCE_KEY, MODEL_KEY, SOURCE_KEY, TEXT_KEY]);
+
+/**
+ * Write chunk records, chunk #0 LAST. Chunk #0 carries the document's
+ * bookkeeping (hash, chunk count, model tag), so writing it first would let a
+ * failed later write leave a partial index that claims to be complete, and a
+ * retry would take the `unchanged` shortcut. Chunks 1..n go first: `upsertMany`
+ * in {@link UPSERT_BATCH}-sized calls when the store has it (one subrequest per
+ * batch instead of per chunk), else one bounded-concurrent `upsert` per chunk.
+ * Then chunk #0 alone (a one-element `upsertMany` on the batch path).
+ * `notify` fires after each chunk's write; chunk #0's comes last.
+ * ponytail: batches run sequentially so `notify` keeps index order; add bounded concurrency if a document needs >10k chunks.
+ */
+const writeRecords = async (
+    store: RagVectorStore,
+    records: ReadonlyArray<RagVectorUpsertInput>,
+    notify: (chunkIndex: number) => void,
+    operation: object,
+): Promise<void> => {
+    if (records.length === 0) {
+        return;
+    }
+
+    const rest = records.slice(1);
+
+    if (!store.upsertMany) {
+        await concurrentMap(rest, INDEX_CONCURRENCY, async (record, restIndex) => {
+            await store.upsert(record, operation);
+            notify(restIndex + 1);
+        });
+        await store.upsert(records[0] as RagVectorUpsertInput, operation);
+        notify(0);
+
+        return;
+    }
+
+    for (let start = 0; start < rest.length; start += UPSERT_BATCH) {
+        const end = Math.min(start + UPSERT_BATCH, rest.length);
+
+        // eslint-disable-next-line no-await-in-loop -- sequential by design, see above
+        await store.upsertMany(rest.slice(start, end), operation);
+
+        for (let restIndex = start; restIndex < end; restIndex += 1) {
+            notify(restIndex + 1);
+        }
+    }
+
+    await store.upsertMany([records[0] as RagVectorUpsertInput], operation);
+    notify(0);
+};
 
 /**
  * Refuse a metadata object over Vectorize's ceiling, naming what breached it.
@@ -231,6 +286,15 @@ const partitionByScore = (chunks: ReadonlyArray<RetrievedChunk>, minScore: numbe
     return { kept, rejectedIds };
 };
 
+/**
+ * Whether a retrieval is actually scoped by anything.
+ *
+ * An empty object narrows nothing, so it must not count: treating `{}` as a
+ * filter would skip the graph leg on every unscoped retrieval of an app that
+ * merely declares an `rlsFilter` returning `{}` for an admin.
+ */
+const hasFilter = (filter: Record<string, unknown> | undefined): boolean => filter !== undefined && Object.keys(filter).length > 0;
+
 /** Split stored metadata into the caller's fields (internal `__rag*` keys stripped). */
 const userMetadataOf = (metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
     if (!metadata) {
@@ -325,59 +389,6 @@ const resolveEmbeddingModel = (input: RagConfig["embeddingModel"], ai: RagContex
  */
 
 /**
- * Structural slice of the span handle `ctx.trace` hands its body (see the server
- * `SpanHandle`) — enough to attach an embed's post-hoc usage/cost. Declared here
- * rather than imported so `@lunora/ai/rag` takes no dependency on `@lunora/server`
- * or `@lunora/do`; the real handle is assignable to it.
- */
-interface EmbedSpan {
-    setAttribute: (key: string, value: unknown) => void;
-    setAttributes: (fields: Record<string, unknown>) => void;
-}
-
-/**
- * Structural slice of `ctx.trace` (see the server `LunoraTracer`) — enough to
- * wrap one embed. The body receives the enclosing span's {@link EmbedSpan} as its
- * second argument, so it can attach token usage / cost that are only known after
- * the embed call resolves. Declared here rather than imported so `@lunora/ai/rag`
- * takes no dependency on `@lunora/server`; the real tracer is assignable to it.
- */
-type EmbedTracer = <T>(name: string, function_: (trace: EmbedTracer, span: EmbedSpan) => Promise<T> | T, attributes?: Record<string, unknown>) => Promise<T>;
-
-/** Read an AI SDK model's stable id for the `gen_ai.request.model` attribute, defensively. */
-const modelIdOf = (model: EmbeddingModel): string | undefined => {
-    const id = (model as { modelId?: unknown }).modelId;
-
-    return typeof id === "string" && id.length > 0 ? id : undefined;
-};
-
-/**
- * Read an embed's dollar cost from AI SDK `providerMetadata`, defensively. AI
- * Gateway surfaces per-request cost there (under a provider bag's `cost` field,
- * e.g. the `cf-aig-*` / gateway metadata) once cost routing is enabled; until
- * then it is absent and this returns `undefined`, so the `gen_ai.usage.cost`
- * attribute is simply omitted. Probing rather than hard-depending keeps the embed
- * span correct with or without a gateway in front.
- */
-const embedCostOf = (providerMetadata: unknown): number | undefined => {
-    if (typeof providerMetadata !== "object" || providerMetadata === null) {
-        return undefined;
-    }
-
-    for (const bag of Object.values(providerMetadata as Record<string, unknown>)) {
-        if (typeof bag === "object" && bag !== null) {
-            const { cost } = bag as { cost?: unknown };
-
-            if (typeof cost === "number" && Number.isFinite(cost)) {
-                return cost;
-            }
-        }
-    }
-
-    return undefined;
-};
-
-/**
  * The bound context's Vectorize facade, or a directed error. `vectors` is
  * optional on {@link RagContext} because a configured `store` never reads it;
  * without one it is the store, and its absence is a wiring mistake worth
@@ -393,6 +404,23 @@ const requireVectors = (vectors: RagContext["vectors"]): NonNullable<RagContext[
     }
 
     return vectors;
+};
+
+/**
+ * The `ai` root is a ~720 KB barrel: load it on the first embed, once, rather
+ * than at module load. A rejected import clears the memo so a later embed can
+ * retry instead of being pinned to the first failure for the isolate's life.
+ */
+let aiRoot: Promise<typeof import("ai")> | undefined;
+
+const loadAi = async (): Promise<typeof import("ai")> => {
+    aiRoot ??= import("ai").catch((error: unknown) => {
+        aiRoot = undefined;
+
+        throw error;
+    });
+
+    return aiRoot;
 };
 
 const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
@@ -504,7 +532,10 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         // A `ctx.trace` on the bound context (present on a real ActionCtx) turns
         // each embed into a `generation` span; absent (a test / hand-built ctx),
         // embeds run untraced. Narrowed from `unknown` — see `RagContext.trace`.
-        const tracer = typeof context.trace === "function" ? (context.trace as EmbedTracer) : undefined;
+        const tracer = typeof context.trace === "function" ? (context.trace as AiTracer) : undefined;
+        // `ctx.metrics` likewise turns each embed's usage into the durable
+        // `gen_ai.usage.*` counters Studio's AI usage view reads.
+        const metrics = typeof (context.metrics as Partial<AiMetrics> | undefined)?.count === "function" ? (context.metrics as AiMetrics) : undefined;
 
         // The dimension check runs on the FIRST embedding this bound context
         // produces, then never again: a model's dimensionality is fixed, so
@@ -584,38 +615,14 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // `span` is present only on the traced path (post-hoc attributes). The
             // model id is stamped at span start; token usage / cost are known only
             // after the call resolves, so they are attached through the handle.
-            const run = async (span?: EmbedSpan): Promise<ReadonlyArray<number>> => {
-                const { embedding, providerMetadata, usage } = await aiEmbed({ model: resolvedModel, value: text });
+            const run = async (span?: AiSpan): Promise<ReadonlyArray<number>> => {
+                const ai = await loadAi();
+                const { embedding, providerMetadata, usage } = await ai.embed({ model: resolvedModel, value: text });
 
                 assertDimensionsFit(embedding.length, resolvedModel);
-
-                if (span !== undefined) {
-                    // `usage.tokens` is typed non-optional by the AI SDK; the
-                    // typeof/finite guard stays defensive against a provider that
-                    // returns a non-numeric value at runtime.
-                    const inputTokens: unknown = usage.tokens;
-
-                    if (typeof inputTokens === "number" && Number.isFinite(inputTokens)) {
-                        span.setAttribute("gen_ai.usage.input_tokens", inputTokens);
-                    }
-
-                    // A provider-reported cost always wins. Falling back to an
-                    // estimate is what keeps spend visible without an AI
-                    // Gateway — but the two are never conflated: the source is
-                    // stamped alongside, so a dashboard can tell a measured
-                    // cost from a derived one.
-                    const reported = embedCostOf(providerMetadata);
-                    const cost =
-                        reported ??
-                        estimateModelCost(modelIdOf(resolvedModel), {
-                            inputTokens: typeof inputTokens === "number" ? inputTokens : undefined,
-                        });
-
-                    if (cost !== undefined) {
-                        span.setAttribute("gen_ai.usage.cost", cost);
-                        span.setAttribute("lunora.usage.cost.source", reported === undefined ? "estimated" : "provider");
-                    }
-                }
+                recordUsage(modelIdOf(resolvedModel), { providerMetadata, usage: { inputTokens: { total: usage.tokens } } }, span, metrics, {
+                    expectsOutput: false,
+                });
 
                 rememberEmbedding(text, embedding);
 
@@ -690,7 +697,14 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
 
             try {
-                const { embeddings } = await aiEmbedMany({ model, values: pending });
+                // Inside the try: a rejected `import("ai")` is a provider failure like any other and
+                // must fall back to per-chunk embeds, as the docstring promises.
+                const ai = await loadAi();
+                const { embeddings, providerMetadata, usage } = await ai.embedMany({ model, values: pending });
+
+                recordUsage(modelIdOf(model), { providerMetadata, usage: { inputTokens: { total: usage.tokens } } }, undefined, metrics, {
+                    expectsOutput: false,
+                });
 
                 if (embeddings.length !== pending.length) {
                     return batch;
@@ -764,16 +778,30 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             };
         };
 
-        const deleteChunkRange = async (sourceId: string, from: number, to: number, namespace: string | undefined): Promise<void> => {
+        const deleteChunkRange = async (sourceId: string, from: number, to: number, namespace: string | undefined, operation?: object): Promise<void> => {
             const ids = Array.from({ length: to - from }, (_, offset) => chunkVectorId(namespace, sourceId, from + offset));
 
             if (ids.length === 0) {
                 return;
             }
 
-            await store.deleteByIds(ids, namespace);
-            await textStore?.remove?.(ids, { namespace });
-            await config.lexicalStore?.remove?.(ids, { namespace });
+            const removeText = async (): Promise<void> => {
+                await textStore?.remove?.(ids, { namespace });
+                await config.lexicalStore?.remove?.(ids, { namespace });
+            };
+
+            // With a token, on a store that declares `deferredDelete`, the text
+            // removals ride the (possibly deferred) vector delete, so a skipped delete
+            // never strands vectors without their text. Otherwise the order is delete
+            // then remove, inline.
+            if (operation === undefined || !store.capabilities.deferredDelete) {
+                await store.deleteByIds(ids, namespace);
+                await removeText();
+
+                return;
+            }
+
+            await store.deleteByIds(ids, namespace, operation, removeText);
         };
 
         const index = async (input: IndexInput): Promise<IndexResult> => {
@@ -861,7 +889,9 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // `index()` on the same bound Rag can neither read it nor drop it.
             const embedChunk = async (text: string): Promise<ReadonlyArray<number>> => batch.get(text) ?? (await embedText(text));
 
-            await concurrentMap(pieces, INDEX_CONCURRENCY, async (piece, chunkIndex) => {
+            // Every record is built (and its metadata size-checked) before the
+            // first write, so an oversized chunk fails the call with nothing written.
+            const records = pieces.map((piece, chunkIndex) => {
                 const id = ids[chunkIndex] as string;
                 const metadata: Record<string, unknown> = {
                     ...input.metadata,
@@ -890,25 +920,26 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
                 assertMetadataFits(metadata, chunkIndex, input.id, store.capabilities.maxMetadataBytes);
 
-                // Vector upsert
-                await store.upsert({
-                    embed: embedChunk,
-                    id,
-                    input: piece,
-                    metadata,
-                    namespace: effectiveNamespace,
-                });
-
-                // Progress callback — fires after the upsert so callers see a
-                // consistent state when the callback runs.
-                input.onChunk?.({ chunkIndex, id, text: piece, total: pieces.length });
+                return { embed: embedChunk, id, input: piece, metadata, namespace: effectiveNamespace };
             });
+
+            // Progress callback — fires after the write so callers see a
+            // consistent state when the callback runs.
+            const notify = (chunkIndex: number): void => {
+                input.onChunk?.({ chunkIndex, id: ids[chunkIndex] as string, text: pieces[chunkIndex] as string, total: pieces.length });
+            };
+
+            // One token per call: a deferred facade skips this call's remaining writes (chunk #0 last) once one fails.
+            const operation = {};
+
+            await writeRecords(store, records, notify, operation);
 
             // A shrinking re-index leaves stale trailing chunks behind — delete
             // them so they cannot keep matching. New chunks are already written,
-            // so retrieval never observes a gap.
+            // so retrieval never observes a gap. Carries the call's token so a
+            // deferred facade queues it after chunk #0 and skips it if a write failed.
             if (previous.chunks !== undefined && previous.chunks > pieces.length) {
-                await deleteChunkRange(input.id, pieces.length, previous.chunks, effectiveNamespace);
+                await deleteChunkRange(input.id, pieces.length, previous.chunks, effectiveNamespace, operation);
             }
 
             return { chunks: pieces.length, ids, unchanged: false };
@@ -1113,6 +1144,46 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             });
         };
 
+        /**
+         * Turn a NON-vector leg's `{ id, score, text }` matches into
+         * `RetrievedChunk`s ready for fusion. Shared by the lexical and graph
+         * legs, which differ only in what their `score` means.
+         *
+         * `importance` and the caller `metadata` live on the VECTOR record —
+         * neither leg carries them, and `StoredRagChunk.metadata` deliberately
+         * excludes the internal `__rag*` keys that hold importance. Hard-coding
+         * `importance: 1` gave a source demoted to `importance: 0` full weight on
+         * every keyword hit (the case hybrid retrieval exists to create) and
+         * blanked `sources[].metadata`. One `getByIds` over the ids the vector
+         * leg did NOT already return recovers both from the single source of
+         * truth; ids it did return need no round trip.
+         */
+        const hydrateFusionLeg = async (
+            matches: ReadonlyArray<{ id: string; score: number; text: string }>,
+            alreadyFused: ReadonlySet<string>,
+            namespace: string | undefined,
+        ): Promise<RetrievedChunk[]> => {
+            const unhydratedIds = matches.map((match) => match.id).filter((id) => !alreadyFused.has(id));
+            const records = unhydratedIds.length === 0 ? [] : await store.getByIds(unhydratedIds, namespace);
+            const metadataById = new Map(records.map((record) => [record.id, record.metadata]));
+
+            return matches.map((match) => {
+                const parsed = parseChunkVectorId(match.id, namespace);
+                const fullMetadata = metadataById.get(match.id);
+                const rawImportance = fullMetadata?.[IMPORTANCE_KEY];
+
+                return {
+                    chunkIndex: parsed.chunkIndex,
+                    id: match.id,
+                    importance: typeof rawImportance === "number" && rawImportance >= 0 && rawImportance <= 1 ? rawImportance : 1,
+                    metadata: userMetadataOf(fullMetadata),
+                    score: match.score,
+                    sourceId: parsed.sourceId,
+                    text: match.text,
+                };
+            });
+        };
+
         const retrieve = async (query: string, options?: RetrieveOptions): Promise<RetrieveResult> => {
             checkNamespace(options?.namespace);
 
@@ -1140,7 +1211,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // lexical leg entirely: its job is to surface a chunk the vector leg
             // ranked below `topK`.
             const rerankActive = reranker !== undefined && options?.rerank !== false;
-            const widenPool = rerankActive || config.lexicalStore !== undefined || searchQueries.length > 1;
+            const widenPool = rerankActive || config.lexicalStore !== undefined || config.graphStore !== undefined || searchQueries.length > 1;
             const candidateK = widenPool ? Math.min(config.candidates ?? topK * CANDIDATE_POOL_FACTOR, topKCeiling) : topK;
 
             const minScore = options?.minScore;
@@ -1188,19 +1259,31 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 return kept;
             };
 
-            // Multi-query expansion: each rewrite is its own ranking, fused by
-            // RRF. Sequential rather than concurrent on purpose — each leg
-            // embeds and queries, and a Worker's subrequest budget is the
-            // binding constraint on a fan-out the caller controls the width of.
-            let chunks = await runVectorLeg(primaryQuery);
+            // Every ranked list that will be fused, in leg order. They are
+            // COLLECTED and fused once at the end rather than folded in one at a
+            // time: `hybridRank` multiplies each chunk's `importance` into the
+            // score it returns, so feeding a fused list back in as a leg makes
+            // the next pass derive its ranks from an ordering importance already
+            // weighted — and then weight it again. A source demoted to
+            // importance 0.1 lost a further ~5% per extra pass that way, with
+            // the penalty growing in the number of passes rather than staying
+            // the one multiplication the weighting is defined as.
+            //
+            // Leg 0 is the primary vector ranking, which is also `hybridRank`'s
+            // tie-break ordering.
+            const legs: FusionLeg[] = [{ chunks: await runVectorLeg(primaryQuery) }];
 
+            // Multi-query expansion: each rewrite is its own ranking. Sequential
+            // rather than concurrent on purpose — each leg embeds and queries,
+            // and a Worker's subrequest budget is the binding constraint on a
+            // fan-out the caller controls the width of.
             for (const extraQuery of searchQueries.slice(1)) {
                 // eslint-disable-next-line no-await-in-loop -- bounded, caller-sized fan-out over a subrequest budget
-                chunks = [...hybridRank(chunks, await runVectorLeg(extraQuery))];
+                legs.push({ chunks: await runVectorLeg(extraQuery) });
             }
 
-            // Hybrid search: also rank via the lexical (BM25) leg and fuse the
-            // two rankings with RRF — recovering exact-term matches the embedding
+            // Hybrid search: also rank via the lexical (BM25) leg and fuse it
+            // into the same RRF — recovering exact-term matches the embedding
             // misses. A hit shared with the vector leg keeps the (richer) vector
             // chunk in RRF; a lexical-only hit is hydrated below.
             if (config.lexicalStore) {
@@ -1210,45 +1293,71 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                     topK: config.lexicalTopK ?? candidateK,
                 });
 
-                const fusedIds = new Set(chunks.map((chunk) => chunk.id));
+                const fusedIds = new Set(legs.flatMap((leg) => leg.chunks).map((chunk) => chunk.id));
                 // A chunk the vector leg rejected for `minScore` stays rejected —
-                // unless another leg kept it, in which case it is already in
-                // `chunks` and this is only an RRF boost. See `belowMinScore`.
+                // unless another leg kept it, in which case it is already in a
+                // leg and this is only an RRF boost. See `belowMinScore`.
                 const admissible = lexicalMatches.filter((match) => !belowMinScore.has(match.id) || fusedIds.has(match.id));
 
-                // `importance` and the caller `metadata` live on the VECTOR record —
-                // `LexicalMatch` carries neither, and `StoredRagChunk.metadata`
-                // deliberately excludes the internal `__rag*` keys that hold
-                // importance. Hard-coding `importance: 1, metadata: undefined` gave a
-                // source demoted to `importance: 0` full weight on every keyword hit
-                // (the case hybrid retrieval exists to create) and blanked
-                // `sources[].metadata`. One `getByIds` over the lexical-only ids
-                // recovers both from the single source of truth; ids the vector leg
-                // already returned need no round trip.
-                const unhydratedIds = admissible.map((match) => match.id).filter((id) => !fusedIds.has(id));
-                const lexicalRecords = unhydratedIds.length === 0 ? [] : await store.getByIds(unhydratedIds, effectiveNamespace);
-                const metadataById = new Map(lexicalRecords.map((record) => [record.id, record.metadata]));
-
-                const lexicalChunks: RetrievedChunk[] = admissible.map((match) => {
-                    const parsed = parseChunkVectorId(match.id, effectiveNamespace);
-                    const fullMetadata = metadataById.get(match.id);
-                    const rawImportance = fullMetadata?.[IMPORTANCE_KEY];
-
-                    return {
-                        chunkIndex: parsed.chunkIndex,
-                        id: match.id,
-                        importance: typeof rawImportance === "number" && rawImportance >= 0 && rawImportance <= 1 ? rawImportance : 1,
-                        metadata: userMetadataOf(fullMetadata),
-                        score: match.score,
-                        sourceId: parsed.sourceId,
-                        text: match.text,
-                    };
-                });
-
-                chunks = [...hybridRank(chunks, lexicalChunks)];
+                legs.push({ chunks: await hydrateFusionLeg(admissible, fusedIds, effectiveNamespace) });
             }
 
+            /** Everything the search legs found — the union a fusion of them would return. */
+            const searched = legs.flatMap((leg) => [...leg.chunks]);
+
+            // Graph search: the third signal. The search legs answer "which
+            // passages look like this question"; the graph answers "what is this
+            // connected to" — the customer's tickets, those tickets' messages —
+            // which no amount of keyword or embedding similarity can recover
+            // when the connecting fact lives in a foreign key rather than in the
+            // text. Seeded from the source documents the search legs already
+            // found, so it widens a ranking rather than replacing it, and fused
+            // by the same RRF with each hit's depth decay scaling its term.
+            //
+            // The filter reaches this leg too, and a store that does not enforce
+            // it is skipped rather than trusted. The vector and lexical legs both
+            // narrow to `effectiveFilter` (the caller's filter with `rlsFilter`
+            // merged over it); a graph leg that ignored it would hand back the
+            // neighbours of a document the caller may see even when those
+            // neighbours are another tenant's — a filter honoured by two legs and
+            // dropped by the third is not a filter. `enforcesFilter` is the
+            // store's own answer because nothing here can derive it, and the
+            // fail-closed reading of "no" is to lose the signal, not the scoping.
+            if (config.graphStore && searched.length > 0 && (config.graphStore.enforcesFilter || !hasFilter(effectiveFilter))) {
+                const seedSourceIds = [...new Set(searched.map((chunk) => chunk.sourceId))];
+                const graphMatches = await config.graphStore.related(seedSourceIds, {
+                    filter: effectiveFilter,
+                    namespace: effectiveNamespace,
+                    topK: config.graphTopK ?? candidateK,
+                });
+
+                const fusedIds = new Set(searched.map((chunk) => chunk.id));
+                // Same rule as the lexical leg: a chunk the vector leg rejected
+                // for `minScore` stays rejected unless another leg already kept
+                // it, in which case this is only an RRF boost.
+                const admissible = graphMatches.filter((match) => !belowMinScore.has(match.id) || fusedIds.has(match.id));
+
+                legs.push({ chunks: await hydrateFusionLeg(admissible, fusedIds, effectiveNamespace), weight: "proximity" });
+            }
+
+            // Fuse the legs — ONCE, so `importance` is applied exactly once. A
+            // lone leg is returned as it stands: `hybridRank` would replace its
+            // cosine scores with RRF ones, and with nothing to fuse them against
+            // that only moves `score` off the scale `minScore` is documented on.
+            // Empty legs are dropped BEFORE the decision: a lexical store that
+            // matched nothing, or an extra query that returned nothing, still
+            // pushes a leg, and counting it made a one-signal retrieval take the
+            // fusion path — replacing cosine scores with RRF ones with nothing to
+            // fuse them against, which is exactly what the single-leg path exists
+            // to avoid.
+            const scoring = legs.filter((leg) => leg.chunks.length > 0);
+            let chunks = scoring.length > 1 ? [...hybridRank(scoring)] : [...(scoring[0]?.chunks ?? [])];
+
             // Importance weighting can reorder; re-rank on the adjusted score.
+            // This is the single-leg path's sort — it carries importance-adjusted
+            // cosine scores in the order the store returned. A fused list already
+            // holds this order, and `sort` is stable, so it keeps the tie-break
+            // `hybridRank` applied rather than flattening it.
             chunks.sort((a, b) => b.score - a.score);
 
             // Reranking sees the full candidate pool and returns the final

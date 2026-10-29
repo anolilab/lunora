@@ -52,6 +52,40 @@ describe("sqlLexicalStore", () => {
         expect(matches[0]?.text).toBe("the qwerty token lives here");
     });
 
+    it("reads no metadata for a search without a filter, and still filters with one", async () => {
+        expect.assertions(3);
+
+        const { close, exec } = open();
+        const statements: string[] = [];
+
+        opened.push(close);
+
+        const lexical = sqlLexicalStore({
+            exec: (sql, parameters) => {
+                statements.push(sql);
+
+                return exec(sql, parameters);
+            },
+        });
+
+        await lexical.index([chunk("a#0", "the qwerty token lives here", { tenant: "x" }), chunk("b#0", "qwerty again", { tenant: "y" })], {});
+
+        // The postings query is the one that joins term rows to documents.
+        const postings = (): string[] => statements.filter((sql) => sql.includes("t.term IN"));
+
+        statements.length = 0;
+        await lexical.search("qwerty", { topK: 5 });
+
+        expect(postings().some((sql) => sql.includes("d.metadata"))).toBe(false);
+
+        statements.length = 0;
+
+        const filtered = await lexical.search("qwerty", { filter: { tenant: "x" }, topK: 5 });
+
+        expect(postings().some((sql) => sql.includes("d.metadata"))).toBe(true);
+        expect(filtered.map((match) => match.id)).toStrictEqual(["a#0"]);
+    });
+
     it("ranks the same way the in-memory store does", async () => {
         expect.assertions(1);
 
@@ -143,6 +177,26 @@ describe("sqlLexicalStore", () => {
         const matches = await sqlLexicalStore({ exec }).search("storm", { topK: 5 });
 
         expect(matches).toHaveLength(1);
+    });
+
+    it("searches a term with more posting rows than a call can take as arguments", async () => {
+        expect.assertions(1);
+
+        const { close, exec } = open();
+
+        opened.push(close);
+
+        // Past V8's argument limit, which `push(...rows)` would hit.
+        const postings = Array.from({ length: 200_000 }, (_, index) => {
+            return { frequency: 1, id: `doc#${String(index)}`, length: 10, term: "common" };
+        });
+        const lexical = sqlLexicalStore({
+            exec: async (sql, parameters) => (sql.includes(" t.term IN (") ? postings : exec(sql, parameters)),
+        });
+
+        await lexical.index([chunk("a#0", "common words")], {});
+
+        await expect(lexical.search("common", { topK: 5 })).resolves.toBeInstanceOf(Array);
     });
 
     it("returns nothing for a query with no usable terms", async () => {

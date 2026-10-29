@@ -1,12 +1,13 @@
 /* eslint-disable import/exports-last -- a types-heavy module: public types are declared next to the helpers they build on */
 import type { LunoraClient } from "@lunora/client";
+import { isAuthReplayFailure } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import type { Collection, Transaction } from "@tanstack/db";
 import { createTransaction } from "@tanstack/db";
 
 import type { CheckpointRegistry } from "./collection-options";
-import { getShardCheckpoints, hasCheckpointsAttached, syncShardCheckpointIdentity } from "./collection-options";
-import { runOutboxMutation } from "./internals";
+import { getShardCheckpoints, hasCheckpointsAttached, isScopeFollowingCheckpoints, scopedShardKey, syncShardCheckpointIdentity } from "./collection-options";
+import { assertSecureRandom, runOutboxMutation, toNonRetriable } from "./internals";
 
 /**
  * TanStack DB's "direct transaction" marker.
@@ -216,7 +217,18 @@ export interface BindMutatorsContext<TCollections extends CollectionMap = Collec
      */
     onWriteRejected?: (event: MutatorRejectedEvent) => void;
 
-    /** Optional shard key the mutator's server push is routed to. */
+    /**
+     * Route each call to the shard its own args name: the value of this field
+     * (the table's `.shardBy(...)` column) is the shard key, exactly as for a
+     * `scopeBy` collection's inserts — so `sendMessage({ channelId, … })` lands
+     * on that channel's shard. Required when `checkpoints` comes from a
+     * `scopeBy` collection, unless `shardKey` pins one shard; a call whose args
+     * lack the field throws.
+     * {@link BindMutatorsContext.shardKey} takes precedence.
+     */
+    scopeBy?: string;
+
+    /** Pins every push to one shard. Takes precedence over {@link BindMutatorsContext.scopeBy}. */
     shardKey?: string;
 }
 
@@ -261,12 +273,34 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
     context: BindMutatorsContext<TCollections>,
     mutators: M,
 ): BoundMutators<M> => {
+    assertSecureRandom("bindMutators");
+
     // Backstop bound on the reissue loop: the watermark is finite and each retry
     // strictly raises the sequence toward it, so this only trips on a pathological
     // server (or a same-clientId tab racing the watermark forever) — surfaced as a
     // hard error rather than an infinite loop.
     const maxReissues = 32;
-    let counter = 0;
+
+    if (context.checkpoints && isScopeFollowingCheckpoints(context.checkpoints) && context.scopeBy === undefined && context.shardKey === undefined) {
+        // Those checkpoints follow the collection's scope, and nothing here names
+        // a shard: every push would go to the default shard, which the scoped
+        // collection never syncs, so each optimistic row would hang until the
+        // fallback window, then vanish. A pinned `shardKey` is fine — each push
+        // is then gated on that shard's own registry (see `resolveCheckpoints`).
+        throw new LunoraError(
+            "BAD_REQUEST",
+            "bindMutators: `checkpoints` from a `scopeBy` collection needs the same `scopeBy` (or a pinned `shardKey`) here, so each push reaches the shard it gates on",
+        );
+    }
+
+    // The shard a call's push goes to: pinned by `shardKey`, else named by the
+    // call's own `scopeBy` value, else the default shard.
+    const shardOf = (args: Record<string, unknown>): string | undefined =>
+        context.shardKey ?? (context.scopeBy === undefined ? undefined : scopedShardKey(context.scopeBy, args, "the mutator args"));
+
+    // One sequence line per shard: each shard's DO keeps its own per-client
+    // watermark, so a sequence claimed on one must never advance another's.
+    const counters = new Map<string, number>();
     let counterIdentity = client.currentIdentity();
 
     // The server's watermark is keyed per identity, so a signed-in-user switch
@@ -287,18 +321,21 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
         const identity = client.currentIdentity();
 
         if (identity !== counterIdentity) {
-            counter = 0;
+            counters.clear();
             counterIdentity = identity;
         }
     };
 
-    // Seed `counter` from the highest watermark the server has confirmed for this
-    // shard, then claim the next sequence — keeping issuance monotonic across reloads.
-    const nextClientSeq = (): number => {
+    // Seed the shard's counter from the highest watermark the server has confirmed
+    // for it, then claim the next sequence — keeping issuance monotonic across reloads.
+    const nextClientSeq = (shardKey: string | undefined): number => {
         resetCounterForIdentity();
-        counter = Math.max(counter, client.confirmedMutationWatermark(context.shardKey)) + 1;
 
-        return counter;
+        const next = Math.max(counters.get(shardKey ?? "") ?? 0, client.confirmedMutationWatermark(shardKey)) + 1;
+
+        counters.set(shardKey ?? "", next);
+
+        return next;
     };
 
     // Per-binding FIFO push chain: every server push for this shard runs behind
@@ -309,17 +346,14 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
     // Serialize one push behind the chain, assigning + reissuing the sequence
     // inside the critical section so it tracks the live watermark. Resolves with
     // the applied `clientSeq` so the caller can await the matching checkpoint.
-    const pushSerialized = (serverRef: string, args: Record<string, unknown>): Promise<number> => {
+    const pushSerialized = (serverRef: string, args: Record<string, unknown>, shardKey: string | undefined): Promise<number> => {
         const run = pushChain.then(async () => {
             for (let attempt = 0; ; attempt += 1) {
-                const clientSeq = nextClientSeq();
+                const clientSeq = nextClientSeq(shardKey);
 
                 try {
                     // eslint-disable-next-line no-await-in-loop -- sequential by design: each reissue must observe the prior ack's watermark before claiming a fresh sequence
-                    const { applied } = await client.callMutator(serverRef, args, {
-                        clientSeq,
-                        shardKey: context.shardKey,
-                    });
+                    const { applied } = await client.callMutator(serverRef, args, { clientSeq, shardKey });
 
                     if (applied) {
                         return clientSeq;
@@ -336,7 +370,7 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
                     // claim side applies) so a rejection that raced an identity switch
                     // doesn't re-pin the counter to the previous user's watermark.
                     resetCounterForIdentity();
-                    counter = client.confirmedMutationWatermark(context.shardKey);
+                    counters.set(shardKey ?? "", client.confirmedMutationWatermark(shardKey));
 
                     throw error;
                 }
@@ -371,17 +405,19 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
     // attached a sync source to it. Without one nothing would ever advance the
     // watermark, so every write would stall for the full fallback window — worse
     // than the pre-derivation behavior of not waiting at all. An EXPLICIT registry is
-    // always honored: the caller is asserting they drive it.
-    const resolveCheckpoints = (): CheckpointRegistry | undefined => {
+    // always honored: the caller is asserting they drive it — except one that
+    // follows a collection's scope, which is derived per push instead: the write
+    // is gated on the shard it went to, which is not always the scoped one.
+    const resolveCheckpoints = (shardKey: string | undefined): CheckpointRegistry | undefined => {
         if (context.checkpoints === false) {
             return undefined;
         }
 
-        if (context.checkpoints) {
+        if (context.checkpoints && !isScopeFollowingCheckpoints(context.checkpoints)) {
             return context.checkpoints;
         }
 
-        const derived = getShardCheckpoints(client, context.shardKey);
+        const derived = getShardCheckpoints(client, shardKey);
 
         return hasCheckpointsAttached(derived) ? derived : undefined;
     };
@@ -415,6 +451,9 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
 
     for (const [name, mutator] of Object.entries(mutators)) {
         bound[name] = (args) => {
+            // Derived before the transaction exists: args without the `scopeBy`
+            // field are a caller error, thrown here like any other bad argument.
+            const shardKey = shardOf(args as Record<string, unknown>);
             const transaction = createTransaction({
                 autoCommit: true,
                 metadata: {
@@ -427,16 +466,22 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
                 mutationFn: async () => {
                     let appliedSeq = 0;
 
-                    await runOutboxMutation(async () => {
-                        appliedSeq = await pushSerialized(mutator.serverRef, args as Record<string, unknown>);
-                    });
+                    try {
+                        await runOutboxMutation(async () => {
+                            appliedSeq = await pushSerialized(mutator.serverRef, args as Record<string, unknown>, shardKey);
+                        });
+                    } catch (error) {
+                        // A direct write is never retried, so a refused credential is
+                        // as final as any other coded verdict: report it as one.
+                        throw isAuthReplayFailure(error) ? toNonRetriable(error) : error;
+                    }
 
                     // Hold the overlay until the synced row lands (the poke echoes
                     // this client's `lastMutationId`). Skipped when the caller opted
                     // out — the by-value diff converges in place. Resolved here, not
                     // at bind time, so collections created after `bindMutators` still
                     // gate this write.
-                    const checkpoints = resolveCheckpoints();
+                    const checkpoints = resolveCheckpoints(shardKey);
 
                     if (checkpoints) {
                         // Register the accepted watermark first: the write IS durable

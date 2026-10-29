@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * The two workflow-shaped inputs the `workflow_*` lints consume, produced by the
  * codegen feeder. {@link AdvisorWorkflow} is the declaration side (one per
@@ -28,6 +30,13 @@ export interface AdvisorWorkflow {
     exportName: string;
 
     /**
+     * The file declaring the handler when it is passed by reference from another
+     * file (`handler: onboard`) — the file the {@link AdvisorWorkflow.steps} lines
+     * are in. Lunora-relative inside `lunora/`, project-relative outside it.
+     */
+    handlerFile?: string;
+
+    /**
      * The durable step labels discovered in the handler body, in source order —
      * the duplicate-step-name input. Cloudflare memoizes a step by its name, so a
      * name used twice makes the second call silently return the first's cached
@@ -39,12 +48,12 @@ export interface AdvisorWorkflow {
 
 /** One `ctx.workflows.get("name")` call discovered in a function body. */
 export interface AdvisorWorkflowCall {
-    /** The exported function performing the call (e.g. `create`). */
-    exportName: string;
     /** Source file the call appears in (relative to the lunora dir, no extension). */
     file: string;
     /** 1-based line of the `get(...)` call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
     /** The referenced workflow export name; empty when the `get(...)` argument is not a string literal. */
     workflow: string;
 }

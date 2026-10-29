@@ -96,11 +96,11 @@ export type Doc<T extends keyof DataModel> = DataModel[T];
  * Used by `TableReader.withIndex()` to constrain callers to declared names.
  */
 export interface IndexNamesByTable {
-    profiles: "by_rating" | "by_user";
-    lobbies: "by_open_public" | "by_invite_code" | "by_guest" | "by_host";
-    games: "by_black" | "by_white" | "by_status";
+    profiles: "by_user" | "by_rating";
+    lobbies: "by_host" | "by_guest" | "by_invite_code" | "by_open_public";
+    games: "by_status" | "by_white" | "by_black";
     moves: "by_game_turn";
-    ratelimit_buckets: "by_key";
+    ratelimit_buckets: "by_key" | "by_ts";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
@@ -216,7 +216,8 @@ export type Insert<T extends keyof DataModel> = InsertModel[T];
  * as type parameters only — there is no runtime value — so the `with` argument
  * and its return type can be inferred from {@link Relations}.
  */
-export interface OneRelation<Target extends keyof DataModel> {
+export interface OneRelation<Target extends keyof DataModel, Field extends string> {
+    readonly __field: Field;
     readonly __relationKind: "one";
     readonly __target: Target;
 }

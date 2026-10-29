@@ -70,5 +70,4 @@ const defineSkill = (config: SkillConfig): SkillDefinition => {
 const isSkillDefinition = (value: unknown): value is SkillDefinition =>
     typeof value === "object" && value !== null && (value as { isLunoraSkill?: unknown }).isLunoraSkill === true;
 
-export type { SkillConfig, SkillDefinition } from "./types";
 export { defineSkill, isSkillDefinition, RESERVED_SKILL_NAME, SKILL_NAME_PATTERN };

@@ -29,6 +29,7 @@ export const SANDBOX_INVOKE_PATH: "sandbox:invoke" = `${SANDBOX_MODULE}:invoke`;
  */
 export const DEFAULT_AGENT_FUNCTION_PATHS: AgentFunctionPaths = {
     appendMessage: `${AGENT_MODULE}:agentAppendMessage`,
+    approvalGranted: `${AGENT_MODULE}:agentApprovalGranted`,
     completeRun: `${AGENT_MODULE}:agentCompleteRun`,
     deleteMessage: `${AGENT_MODULE}:agentDeleteMessage`,
     ensureThread: `${AGENT_MODULE}:agentEnsureThread`,
@@ -36,11 +37,16 @@ export const DEFAULT_AGENT_FUNCTION_PATHS: AgentFunctionPaths = {
     episodeUpsert: `${AGENT_MODULE}:agentEpisodeUpsert`,
     graphTraverse: `${AGENT_MODULE}:agentGraphTraverse`,
     graphUpsert: `${AGENT_MODULE}:agentGraphUpsert`,
+    history: `${AGENT_MODULE}:agentHistory`,
     listMessages: `${AGENT_MODULE}:agentMessages`,
     patchThread: `${AGENT_MODULE}:agentPatchThread`,
     run: `${AGENT_MODULE}:agentRun`,
     setState: `${AGENT_MODULE}:agentSetState`,
     state: `${AGENT_MODULE}:agentState`,
+    takeSecret: `${AGENT_MODULE}:agentTakeSecret`,
+    discardSecret: `${AGENT_MODULE}:agentDiscardSecret`,
+    openSecretRequest: `${AGENT_MODULE}:agentOpenSecretRequest`,
+    settleSecretRequest: `${AGENT_MODULE}:agentSettleSecretRequest`,
 };
 
 /**

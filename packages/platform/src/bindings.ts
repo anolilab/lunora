@@ -111,8 +111,16 @@ export interface AnalyticsEngineDataPointLike {
 export interface D1PreparedStatementLike {
     // T lets callers type result rows (e.g. `.all<{ id: string }>()`); it flows
     // from the call site into the return, so it is intentionally caller-supplied.
+    //
+    // `meta` carries D1's per-query accounting — `rows_read`, `rows_written`,
+    // `duration`. It is the only place the SCANNED row count is observable, and
+    // scanned is what D1 bills and what a missing index inflates: a query
+    // filtering on an unindexed column reads the whole table to return three
+    // rows, so the result-set size says 3 while the cost says 200k. Projected
+    // here (the real `D1Result` has always carried it) so the exec layer can
+    // record it instead of discarding it.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-    all: <T = unknown>() => Promise<{ results: T[]; success: boolean }>;
+    all: <T = unknown>() => Promise<{ meta?: Record<string, unknown>; results: T[]; success: boolean }>;
     bind: (...values: unknown[]) => D1PreparedStatementLike;
     first: <T = unknown>(column?: string) => Promise<T | null>;
     raw: <T = unknown>() => Promise<T[][]>;
@@ -238,33 +246,59 @@ export type KvNamespaceListResult<Metadata = unknown> =
     | { cacheStatus?: string | null; keys: KvListKey<Metadata>[]; list_complete: true };
 
 /**
- * Minimal structural projection of `VectorizeIndex` so unit tests can pass a
+ * Minimal structural projection of `Vectorize` so unit tests can pass a
  * plain-object double and the real Cloudflare binding satisfies the same shape.
  * Mirrors the surface documented at
  * https://developers.cloudflare.com/vectorize/reference/client-api/.
+ *
+ * **Method** syntax, not arrow properties: `ReadonlyArray` is the correct (wider)
+ * parameter type, but an arrow property makes parameters strictly contravariant
+ * under `strictFunctionTypes`, and Cloudflare declares `deleteByIds(ids: string[])`
+ * — so the real binding did not satisfy this interface at all. Methods are checked
+ * bivariantly, which admits both it and a `readonly`-clean double.
+ * `binding-assignability.test-d.ts` in `@lunora/bindings` pins that against the
+ * published types. `this: void` keeps the members usable as bare references, which
+ * is what every `expect(double.query)` assertion in those tests does.
  */
+/* eslint-disable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type -- bivariant params (Cloudflare declares mutable arrays), and `this: void` is the `allowAsThisParameter` case the repo config does not enable */
 export interface VectorizeIndexLike {
-    deleteByIds: (ids: ReadonlyArray<string>) => Promise<VectorizeDeleteMutation>;
-    describe?: () => Promise<VectorizeIndexDetails>;
-    getByIds: (ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorizeVector>>;
-    insert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
-    query: (vector: ReadonlyArray<number>, options?: VectorizeQueryOptions) => Promise<VectorizeMatches>;
-    upsert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
+    deleteByIds(this: void, ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation>;
+    describe?(this: void): Promise<VectorizeIndexDetails>;
+    getByIds(this: void, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>>;
+    insert(this: void, vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
+    query(this: void, vector: VectorValues, options?: VectorizeQueryOptions): Promise<VectorizeMatches>;
+    upsert(this: void, vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
 }
+/* eslint-enable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type */
 
 export type VectorMetric = "cosine" | "euclidean" | "dot-product";
+
+/**
+ * An embedding, as either a plain array or one of the typed arrays Vectorize
+ * accepts. The typed-array arms are not a convenience: Cloudflare's own
+ * `VectorizeVector.values` is `VectorFloatArray | number[]`, so a projection
+ * limited to `ReadonlyArray<number>` excluded every vector the real binding
+ * returns. Read one with `Array.from(...)` rather than an array method.
+ */
+export type VectorValues = Float32Array | Float64Array | ReadonlyArray<number>;
 
 export interface VectorizeVector {
     id: string;
     metadata?: Record<string, unknown>;
     namespace?: string;
-    values: ReadonlyArray<number>;
+    values: VectorValues;
 }
 
+/**
+ * Query options, kept a superset of Cloudflare's own `VectorizeQueryOptions` so
+ * the real binding satisfies {@link VectorizeIndexLike}. `returnMetadata` carries
+ * the legacy `boolean` arm for that reason - pass one of the three levels; the
+ * boolean is what Cloudflare still accepts, not what callers should write.
+ */
 export interface VectorizeQueryOptions {
     filter?: Record<string, unknown>;
     namespace?: string;
-    returnMetadata?: "none" | "indexed" | "all";
+    returnMetadata?: "none" | "indexed" | "all" | boolean;
     returnValues?: boolean;
     topK?: number;
 }
@@ -274,7 +308,7 @@ export interface VectorizeMatch {
     metadata?: Record<string, unknown>;
     namespace?: string;
     score: number;
-    values?: ReadonlyArray<number>;
+    values?: VectorValues;
 }
 
 export interface VectorizeMatches {
@@ -291,11 +325,24 @@ export interface VectorizeDeleteMutation {
     mutationId: string;
 }
 
+/**
+ * What `describe()` reports. Both spellings of the row count are optional because
+ * Cloudflare renamed it between API generations — the beta `VectorizeIndex`
+ * returns `vectorsCount`, the current `Vectorize` returns `vectorCount` — and a
+ * projection that required either one excluded a real binding. Read them as
+ * `vectorCount ?? vectorsCount`.
+ *
+ * `processedUpTo*` are typed loosely for the same reason: documented as ISO 8601
+ * strings, typed as `number` in `@cloudflare/workers-types`.
+ */
 export interface VectorizeIndexDetails {
     dimensions: number;
-    processedUpToDatetime?: string;
-    processedUpToMutation?: string;
-    vectorsCount: number;
+    processedUpToDatetime?: number | string;
+    processedUpToMutation?: number | string;
+    /** The current `Vectorize.describe()` spelling. */
+    vectorCount?: number;
+    /** The beta `VectorizeIndex.describe()` spelling. */
+    vectorsCount?: number;
 }
 
 /**
@@ -320,7 +367,8 @@ export interface R2BucketLike {
         key: string,
         options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string } },
     ) => Promise<R2MultipartUploadLike>;
-    delete: (key: string) => Promise<void>;
+    /** Delete one key, or up to 1000 in one call (R2's bulk delete). Absent keys are a no-op. */
+    delete: (keys: string | string[]) => Promise<void>;
     get: (key: string, options?: { range?: R2RangeLike }) => Promise<R2ObjectBodyLike | null>;
 
     /**
@@ -360,22 +408,45 @@ export interface R2BucketLike {
         objects: R2ObjectLike[];
         truncated?: boolean;
     }>;
-    put: (
-        key: string,
-        // `ArrayBufferView` is in the real `R2Bucket.put` signature and in this
-        // file's own `uploadPart`; it was missing here, which is the projection
-        // drifting from the binding it projects. A `Uint8Array` is the most
-        // natural thing to hand a byte store.
-        body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null,
-        // `sha256` is in the real `R2Bucket.put` signature and `@lunora/storage`'s
-        // `upload` has always passed it; the projection omitted it, which is the
-        // drift this file exists to prevent. R2 verifies the digest on write and
-        // records it, and a recorded digest is the only reason `list()`/`head()`
-        // can report `checksums.sha256` at all.
-        options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string }; sha256?: ArrayBuffer | string },
-    ) => Promise<R2ObjectLike>;
+    // Two overloads, as on the real `R2Bucket.put`: a plain put always stores
+    // and answers the object; a conditional one (`onlyIf`) answers `null` when
+    // its precondition fails and nothing was written. That `null` is what a
+    // compare-and-swap over R2 is built on.
+    put: {
+        (key: string, body: R2PutBodyLike, options: R2PutOptionsLike & { onlyIf: R2ConditionalLike }): Promise<R2ObjectLike | null>;
+        (key: string, body: R2PutBodyLike, options?: R2PutOptionsLike): Promise<R2ObjectLike>;
+    };
     /** Resume an in-progress multipart upload by id (R2 `resumeMultipartUpload`). Optional; see {@link Storage.resumeMultipartUpload}. */
     resumeMultipartUpload?: (key: string, uploadId: string) => R2MultipartUploadLike;
+}
+
+/**
+ * What `R2BucketLike.put` stores bytes from. `ArrayBufferView` is in the real
+ * `R2Bucket.put` signature and in `uploadPart`; a `Uint8Array` is the most
+ * natural thing to hand a byte store.
+ */
+export type R2PutBodyLike = ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null;
+
+/**
+ * The put options `R2BucketLike.put` accepts. `sha256` is in the real
+ * `R2Bucket.put` signature and `@lunora/storage`'s `upload` has always passed
+ * it: R2 verifies the digest on write and records it, and a recorded digest is
+ * the only reason `list()`/`head()` can report `checksums.sha256` at all.
+ */
+export interface R2PutOptionsLike {
+    customMetadata?: Record<string, string>;
+    httpMetadata?: { contentType?: string };
+    sha256?: ArrayBuffer | string;
+}
+
+/**
+ * A put precondition (R2's `R2Conditional`, the etag half). `etagMatches` is
+ * `If-Match`; `etagDoesNotMatch: "*"` is `If-None-Match: *`, "only if the key
+ * does not exist yet".
+ */
+export interface R2ConditionalLike {
+    etagDoesNotMatch?: string;
+    etagMatches?: string;
 }
 
 /** One uploaded multipart part — returned by `uploadPart`, required to `complete`. Mirrors R2's `R2UploadedPart`. */

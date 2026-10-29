@@ -53,7 +53,7 @@
             >
                 <FormBanner error={$flow.formError} success={$flow.successMessage} />
                 <Field autoComplete="email" field={$flow.email} label={t.emailLabel} name="email" onBlur={() => {}} onChange={actions.setEmail} type="email" />
-                <SubmitButton pending={$flow.status === "submitting"}>{t.emailOtp}</SubmitButton>
+                <SubmitButton availableAt={$flow.resendAvailableAt} pending={$flow.status === "submitting"}>{t.emailOtp}</SubmitButton>
             </form>
         </AuthCard>
     {/if}

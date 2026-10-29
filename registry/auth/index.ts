@@ -35,26 +35,10 @@
  * headers: request.headers })` inside it.
  */
 import type { LunoraAuth } from "@lunora/auth";
-import { createAuth, DEFAULT_AUTH_BASE_PATH, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { createAuth, DEFAULT_AUTH_BASE_PATH, handleAuthRequest, isDevEnvironment, lunoraD1Adapter } from "@lunora/auth";
+import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";
 import { uiConfig } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
-
-/**
- * Env-name values that mark a development deployment, and the vars they live in.
- * `lunora dev` sets `WORKER_ENV=development`; a real deploy that sets none of
- * these stays production (fail closed). Used to gate dev-only behaviour below —
- * console-logging auth links and running schema migrations on cold start.
- */
-const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
-const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as const;
-
-/**
- * Whether the Worker is running in development. Defaults to FALSE so a real
- * deploy that sets none of {@link ENVIRONMENT_VARS} is treated as production —
- * dev-only conveniences (logging links, auto-migrating) never leak there.
- */
-const isDevEnvironment = (env: Record<string, unknown>): boolean =>
-    ENVIRONMENT_VARS.some((key) => typeof env[key] === "string" && DEV_ENVIRONMENT_PATTERN.test(env[key] as string));
 
 /**
  * The Worker env bindings this module needs. Lunora generates a richer `Env`
@@ -111,20 +95,14 @@ const sendAuthEmail = async (env: AuthEnv, message: { html?: string; subject: st
 
     const cloudflareSend = async (from: string, to: string, raw: string): Promise<void> => {
         const { EmailMessage } = await import("cloudflare:email");
-        const binding = fullEnv["SEND_EMAIL"] as { send: (m: InstanceType<typeof EmailMessage>) => Promise<void> } | undefined;
-
-        if (binding === undefined) {
-            throw new Error("auth: no SEND_EMAIL binding to deliver mail — run `lunora add email` or set RESEND_API_KEY.");
-        }
+        const binding = fullEnv["SEND_EMAIL"] as { send: (m: InstanceType<typeof EmailMessage>) => Promise<void> };
 
         await binding.send(new EmailMessage(from, to, raw));
     };
 
-    // Only hand over `cloudflareSend` when the binding exists: `createMailerFromEnv`
-    // prefers it over `RESEND_API_KEY` whenever it is supplied, so passing it
-    // unconditionally would make a Resend-only deployment (no `SEND_EMAIL`
-    // binding) throw inside `cloudflareSend` instead of falling back to Resend.
-    await createMailerFromEnv(fullEnv, fullEnv["SEND_EMAIL"] === undefined ? {} : { cloudflareSend }).send(message);
+    // `createMailerFromEnv` uses `cloudflareSend` only when `SEND_EMAIL` is bound,
+    // falling back to `RESEND_API_KEY` otherwise.
+    await createMailerFromEnv(fullEnv, { cloudflareSend }).send(message);
 };
 
 /**
@@ -177,7 +155,7 @@ export const buildAuth = (env: AuthEnv): LunoraAuth =>
  * handling always goes through {@link buildAuth}'s adapter-backed instance.
  */
 const buildMigrationAuth = (env: AuthEnv): LunoraAuth =>
-    createAuth({
+    createMigrationAuth({
         baseURL: env.BETTER_AUTH_URL,
         // Raw D1 on purpose — the migration runner resolves Kysely itself.
         database: env.DB as never,
@@ -232,7 +210,13 @@ export const mountAuth = async (env: AuthEnv, request: Request): Promise<Respons
 
     // Dev-only auto-migrate. In production, pre-apply the schema at deploy time.
     if (isDevEnvironment(env as unknown as Record<string, unknown>)) {
-        migrated ??= ensureMigrated(buildMigrationAuth(env));
+        // A rejected migration (D1 briefly unavailable) is not cached: clear the
+        // guard so the next auth request retries instead of rethrowing forever.
+        migrated ??= ensureMigrated(buildMigrationAuth(env)).catch((error: unknown) => {
+            migrated = undefined;
+
+            throw error;
+        });
         await migrated;
     }
 

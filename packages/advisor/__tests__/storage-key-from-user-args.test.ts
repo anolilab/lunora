@@ -13,8 +13,8 @@ describe("storage_key_from_user_args", () => {
         expect.assertions(3);
 
         const storageKeyAccesses: AdvisorStorageKeyAccess[] = [
-            { exportName: "getDoc", file: "docs", line: 4, method: "get" },
-            { exportName: "removeDoc", file: "docs", line: 9, method: "delete" },
+            { scope: { kind: "export", name: "getDoc" }, file: "docs", line: 4, method: "get" },
+            { scope: { kind: "export", name: "removeDoc" }, file: "docs", line: 9, method: "delete" },
         ];
         const findings = storageKeyFromUserArgs.run({ schema: schema(), storageKeyAccesses });
 
@@ -45,8 +45,8 @@ describe("storage_key_from_user_args", () => {
         expect.assertions(5);
 
         const storageKeyAccesses: AdvisorStorageKeyAccess[] = [
-            { exportName: "extractDocumentText", file: "agent/extraction", line: 104, method: "getUrl", visibility: "internal" },
-            { exportName: "getDoc", file: "docs", line: 4, method: "get", visibility: "public" },
+            { scope: { kind: "export", name: "extractDocumentText" }, file: "agent/extraction", line: 104, method: "getUrl", visibility: "internal" },
+            { scope: { kind: "export", name: "getDoc" }, file: "docs", line: 4, method: "get", visibility: "public" },
         ];
         const findings = storageKeyFromUserArgs.run({ schema: schema(), storageKeyAccesses });
 
@@ -62,7 +62,7 @@ describe("storage_key_from_user_args", () => {
     it("keeps ERROR when the feeder could not attribute a visibility", () => {
         expect.assertions(1);
 
-        const storageKeyAccesses: AdvisorStorageKeyAccess[] = [{ exportName: "helper", file: "lib", line: 3, method: "get" }];
+        const storageKeyAccesses: AdvisorStorageKeyAccess[] = [{ scope: { kind: "export", name: "helper" }, file: "lib", line: 3, method: "get" }];
 
         expect(storageKeyFromUserArgs.run({ schema: schema(), storageKeyAccesses })[0]).toMatchObject({ level: "ERROR" });
     });

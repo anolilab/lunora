@@ -13,8 +13,8 @@ describe("ai_raw_run_escape_hatch", () => {
         expect.assertions(4);
 
         const aiRawRuns: AdvisorAiRawRun[] = [
-            { exportName: "infer", file: "chat", line: 4 },
-            { exportName: "classify", file: "chat", line: 9 },
+            { scope: { kind: "export", name: "infer" }, file: "chat", line: 4 },
+            { scope: { kind: "export", name: "classify" }, file: "chat", line: 9 },
         ];
         const findings = aiRawRunEscapeHatch.run({ aiRawRuns, schema: schema() });
 

@@ -1,4 +1,4 @@
-import type { Notification, Receipt } from "@visulima/notification";
+import type { Notification, Provider, PushPayload, Receipt } from "@visulima/notification";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createNotify } from "../src/notify";
@@ -6,8 +6,8 @@ import { routingPushProvider } from "../src/providers";
 import { d1SubscriptionStore } from "../src/subscriptions/d1-store";
 import { memorySubscriptionStore } from "../src/subscriptions/memory-store";
 import { legacyWebPushId } from "../src/subscriptions/normalize";
-import type { NotifyDefinition, SubscriptionStore } from "../src/types";
-import { fakeD1, FCM_DEAD_TOKEN_ERROR, mockChatProvider, mockEngine, mockPushProvider, mockThrowingPushProvider } from "./helpers";
+import type { NotifyDefinition, PushContent, SubscriptionStore } from "../src/types";
+import { fakeD1, FCM_DEAD_TOKEN_ERROR, mockChatProvider, mockEngine, mockFlakyPushProvider, mockPushProvider, mockThrowingPushProvider } from "./helpers";
 
 const baseDefinition = (store: SubscriptionStore, chat = false): NotifyDefinition => {
     return {
@@ -133,6 +133,28 @@ describe("ctx.push lifecycle", () => {
         const { push } = setup();
 
         await expect(push.send("nope", { body: "x" })).rejects.toThrow(/no registered subscription/u);
+    });
+
+    it("rejects a non-integer or negative ttl with BAD_REQUEST before sending", async () => {
+        expect.hasAssertions();
+
+        const { push, sends } = setup();
+        const stored = await push.register({ subscription: okSub });
+
+        await expect(push.send(stored.id, { body: "x", ttl: -1 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        await expect(push.broadcast({ body: "x", ttl: 1.5 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(sends).toHaveLength(0);
+    });
+
+    it("rejects an unknown urgency with BAD_REQUEST before sending", async () => {
+        expect.hasAssertions();
+
+        const { push, sends } = setup();
+        const stored = await push.register({ subscription: okSub });
+
+        await expect(push.send(stored.id, { body: "x", urgency: "asap" } as unknown as PushContent)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        await expect(push.broadcast({ body: "x", urgency: "asap" } as unknown as PushContent)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(sends).toHaveLength(0);
     });
 
     it("unregisters the caller's own subscription", async () => {
@@ -657,6 +679,10 @@ describe("ctx.push.broadcast fault-tolerance", () => {
         return { endpoint: `https://push.example/${suffix}`, keys: { auth: "a", p256dh: "p" } };
     };
 
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it("a throwing recipient does not abort the fan-out — others still deliver", async () => {
         expect.hasAssertions();
 
@@ -680,6 +706,20 @@ describe("ctx.push.broadcast fault-tolerance", () => {
 
     it("degrades a recipient whose channel is not configured to failed — others succeed", async () => {
         expect.hasAssertions();
+
+        // The router re-checks the web-push host over DoH; answer it with a public
+        // address so the send does not depend on the network.
+        vi.stubGlobal("fetch", async (input: string) => {
+            const type = Number(new URL(input).searchParams.get("type"));
+
+            return {
+                json: async () => {
+                    // eslint-disable-next-line sonarjs/no-hardcoded-ip -- a public IP fixture so the guard passes; no connection is made
+                    return { Answer: type === 1 ? [{ data: "93.184.216.34", type: 1 }] : [] };
+                },
+                ok: true,
+            } as unknown as Response;
+        });
 
         const store = memorySubscriptionStore();
         // Only the web-push channel is wired; an FCM target hits the router's throw.
@@ -714,6 +754,134 @@ describe("ctx.push.broadcast fault-tolerance", () => {
         const result = await push.broadcast({ body: "b" });
 
         expect(result.total).toBe(1);
+        expect(result.sent).toBe(1);
+        expect(result.failed).toBe(0);
+    });
+});
+
+describe("broadcast batches status writes per page", () => {
+    const sub = (suffix: string) => {
+        return { endpoint: `https://push.example/${suffix}`, keys: { auth: "a", p256dh: "p" } };
+    };
+
+    const setupD1 = (overrides: { batch?: () => Promise<unknown> } = {}) => {
+        const inner = fakeD1();
+        const prepared: string[] = [];
+        const batches: unknown[][] = [];
+        const database = {
+            batch: async (statements: Parameters<typeof inner.batch>[0]) => {
+                batches.push(statements);
+
+                return overrides.batch === undefined ? inner.batch(statements) : overrides.batch();
+            },
+            prepare: (sql: string) => {
+                prepared.push(sql);
+
+                return inner.prepare(sql);
+            },
+        };
+        const store = d1SubscriptionStore(database);
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        return { batches, prepared, push, store };
+    };
+
+    it("groups every failure sharing an error text into one update", async () => {
+        expect.hasAssertions();
+
+        const { batches, push, store } = setupD1();
+
+        await Promise.all(["a", "b", "c"].map(async (suffix) => push.register({ subscription: sub(suffix) })));
+
+        const registered = await store.list();
+        const [first, second, third] = registered.map((row) => row.id);
+
+        await store.applyOutcomes?.({
+            failed: [
+                { error: "503", id: first as string },
+                { error: "410", id: second as string },
+                { error: "503", id: third as string },
+            ],
+            gone: [],
+            ok: [],
+        });
+
+        const rows = await store.list();
+
+        expect(batches.at(-1)).toHaveLength(2);
+        expect(rows.map((row) => [row.id, row.lastStatus, row.lastError])).toStrictEqual([
+            [first, "failed", "503"],
+            [second, "failed", "410"],
+            [third, "failed", "503"],
+        ]);
+    });
+
+    it("writes a 250-subscription page in at most 3 batched statements, never per row", async () => {
+        expect.hasAssertions();
+
+        const { batches, prepared, push, store } = setupD1();
+
+        await Promise.all(Array.from({ length: 250 }, async (_, index) => push.register({ subscription: sub(`ok-${index.toString().padStart(3, "0")}`) })));
+
+        const result = await push.broadcast({ body: "b" });
+
+        expect(result.sent).toBe(250);
+        expect(batches).toHaveLength(1);
+        expect(batches[0]?.length).toBeLessThanOrEqual(3);
+        expect(prepared.filter((sql) => sql.startsWith("UPDATE") && sql.includes("WHERE id = ?1"))).toHaveLength(0);
+
+        const rows = await store.list();
+
+        expect(rows.every((row) => row.lastStatus === "ok")).toBe(true);
+    });
+
+    it("deletes gone ids and stores failed errors", async () => {
+        expect.hasAssertions();
+
+        const { push, store } = setupD1();
+
+        await push.register({ subscription: sub("ok-1") });
+        await push.register({ subscription: sub("gone-1") });
+        await push.register({ subscription: sub("fail-1") });
+
+        const result = await push.broadcast({ body: "b" });
+
+        expect(result.pruned).toBe(1);
+
+        const rows = await store.list();
+
+        expect(rows).toHaveLength(2);
+        expect(rows.find((row) => row.endpoint?.includes("fail-1"))).toMatchObject({ lastError: expect.stringContaining("503"), lastStatus: "failed" });
+        expect(rows.find((row) => row.endpoint?.includes("ok-1"))?.lastStatus).toBe("ok");
+    });
+
+    it("falls back to per-id calls when the store has no applyOutcomes", async () => {
+        expect.hasAssertions();
+
+        const inner = memorySubscriptionStore();
+        const markStatus = vi.fn(inner.markStatus);
+        const remove = vi.fn(inner.delete);
+        const store: SubscriptionStore = { ...inner, applyOutcomes: undefined, delete: remove, markStatus };
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await push.register({ subscription: sub("ok-1") });
+        await push.register({ subscription: sub("gone-1") });
+        await push.register({ subscription: sub("fail-1") });
+        await push.broadcast({ body: "b" });
+
+        expect(markStatus).toHaveBeenCalledTimes(2);
+        expect(remove).toHaveBeenCalledTimes(1);
+    });
+
+    it("a rejecting batch does not fail the broadcast", async () => {
+        expect.hasAssertions();
+
+        const { push } = setupD1({ batch: () => Promise.reject(new Error("d1 down")) });
+
+        await push.register({ subscription: sub("ok-1") });
+
+        const result = await push.broadcast({ body: "b" });
+
         expect(result.sent).toBe(1);
         expect(result.failed).toBe(0);
     });
@@ -1048,6 +1216,49 @@ describe("web-push send-time DNS-rebinding guard", () => {
         expect(inner.sends).toHaveLength(0);
     });
 
+    it("refuses a host whose lookup answers with no address (SERVFAIL / NXDOMAIN)", async () => {
+        expect.hasAssertions();
+
+        // An attacker's nameserver can SERVFAIL the check and answer the sender's
+        // resolver a moment later, so "no address" fails closed rather than passing.
+        vi.stubGlobal(
+            "fetch",
+            async () =>
+                ({
+                    json: async () => {
+                        return { Status: 2 };
+                    },
+                    ok: true,
+                }) as unknown as Response,
+        );
+
+        const inner = mockPushProvider();
+        const router = routingPushProvider({ webPush: inner.provider });
+
+        await expect(
+            router.send({ body: "b", to: JSON.stringify({ endpoint: "https://servfail.push.test/p/1", keys: { auth: "a", p256dh: "p" } }) }),
+        ).rejects.toThrow(/did not resolve to any address/);
+        expect(inner.sends).toHaveLength(0);
+    });
+
+    it("refuses a host whose lookup cannot be completed, instead of falling back to the string guard", async () => {
+        expect.hasAssertions();
+
+        // The endpoint's own nameserver can stall the check; a failed lookup must
+        // not wave the send through.
+        vi.stubGlobal("fetch", async () => {
+            throw new TypeError("network connection lost");
+        });
+
+        const inner = mockPushProvider();
+        const router = routingPushProvider({ webPush: inner.provider });
+
+        await expect(
+            router.send({ body: "b", to: JSON.stringify({ endpoint: "https://stalled.push.test/p/1", keys: { auth: "a", p256dh: "p" } }) }),
+        ).rejects.toThrow(/could not verify where web-push endpoint host "stalled.push.test" resolves/);
+        expect(inner.sends).toHaveLength(0);
+    });
+
     it("checks EVERY target of a multi-recipient `to`, not just the first", async () => {
         expect.hasAssertions();
 
@@ -1124,15 +1335,21 @@ describe("web-push send-time DNS-rebinding guard", () => {
 describe("mixed-kind push routing", () => {
     // `allowedPushOrigins` names the fixture origin so no DoH round-trip happens
     // and routing is the only behavior under test.
-    const origins = { allowedPushOrigins: ["https://push.example"] };
+    // `retryBaseDelay: 0` keeps the router's in-router group retry instant: these
+    // doubles fail on purpose, and the production backoff would spend ~1 s per
+    // partial proving something the delay has no bearing on.
+    const routerOptions = { allowedPushOrigins: ["https://push.example"], retryBaseDelay: 0 };
     const sub = (path: string) => JSON.stringify({ endpoint: `https://push.example/${path}`, keys: { auth: "a", p256dh: "p" } });
+
+    /** `1 + GROUP_RETRIES` in `providers.ts` — total attempts a partial's failed group gets. */
+    const GROUP_ATTEMPTS = 4;
 
     it("routes each target of a mixed `to` to its own provider", async () => {
         expect.hasAssertions();
 
         const webPush = mockPushProvider();
         const fcm = mockPushProvider();
-        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
 
         const receipt = await router.send({ body: "b", to: [sub("ok"), "device-token-1"] });
 
@@ -1150,7 +1367,7 @@ describe("mixed-kind push routing", () => {
 
         const webPush = mockPushProvider();
         const fcm = mockPushProvider();
-        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
 
         await router.send({ body: "b", to: [sub("one"), sub("two")] });
         await router.send({ body: "b", to: ["device-token-1", "device-token-2"] });
@@ -1166,7 +1383,7 @@ describe("mixed-kind push routing", () => {
 
         const webPush = mockPushProvider();
         const fcm = mockPushProvider();
-        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
 
         const receipt = await router.send({ body: "b", to: [sub("ok"), "device-token-1"] });
 
@@ -1181,7 +1398,7 @@ describe("mixed-kind push routing", () => {
 
         const webPush = mockPushProvider();
         // No `fcm` channel: the FCM half is undeliverable from the start.
-        const router = routingPushProvider({ ...origins, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, webPush: webPush.provider });
 
         await expect(router.send({ body: "b", to: [sub("ok"), "device-token-1"] })).rejects.toThrow(/no `fcm` channel is configured/);
 
@@ -1196,7 +1413,7 @@ describe("mixed-kind push routing", () => {
 
         const webPush = mockThrowingPushProvider();
         const fcm = mockPushProvider();
-        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
 
         const receipt = await router.send({ body: "b", to: [sub("throw"), "device-token-1"] });
 
@@ -1211,7 +1428,7 @@ describe("mixed-kind push routing", () => {
 
         const webPush = mockPushProvider();
         const fcm = mockPushProvider();
-        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
 
         const receipt = await router.send({ body: "b", to: [sub("fail"), "fail-token"] });
 
@@ -1224,13 +1441,258 @@ describe("mixed-kind push routing", () => {
 
         const webPush = mockPushProvider();
         const fcm = mockPushProvider();
-        const router = routingPushProvider({ ...origins, fcm: fcm.provider, webPush: webPush.provider });
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
 
-        // The web-push target succeeds; the FCM token fails (mock 503).
+        // The web-push target succeeds; the FCM token fails (mock 503) on every
+        // attempt the router gives it.
         const receipt = await router.send({ body: "b", to: [sub("ok"), "fail-token"] });
 
         expect(webPush.sends).toHaveLength(1);
+        expect(fcm.sends).toHaveLength(GROUP_ATTEMPTS);
+        expect(receipt.success).toBe(false);
+    });
+
+    it("retries only the failed group and reports success when it recovers", async () => {
+        expect.hasAssertions();
+
+        const webPush = mockPushProvider();
+        // The FCM group 503s once, then delivers.
+        const fcm = mockFlakyPushProvider(1);
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
+
+        const receipt = await router.send({ body: "b", to: [sub("ok"), "device-token-1"] });
+
+        // The whole point of retrying INSIDE the router: the narrowed payload for
+        // the failed group still exists here, so the group that already delivered
+        // is never POSTed a second time.
+        expect(webPush.sends).toHaveLength(1);
+        expect(webPush.sends[0]?.to).toBe(sub("ok"));
+        expect(fcm.sends).toHaveLength(2);
+        expect(fcm.sends.map((send) => send.to)).toStrictEqual(["device-token-1", "device-token-1"]);
+
+        // And the receipt describes what ACTUALLY happened: a success naming the
+        // delivery the SECOND FCM attempt produced, not the first one's failure.
+        expect(receipt.success).toBe(true);
+        expect((receipt.data as { messageId: string }).messageId).toBe("mock-1,flaky-2");
+    });
+
+    it("stops re-attempting the moment the failed group turns permanently gone", async () => {
+        expect.hasAssertions();
+
+        const sends: PushPayload[] = [];
+        // Transient first, then the device is unregistered between attempts —
+        // which is what makes `shouldRetry` load-bearing and not just a copy of
+        // the check made before the first re-attempt.
+        const fcm: Provider<unknown, PushPayload> = {
+            channel: "push",
+            id: "mock-turns-gone",
+            initialize: () => undefined,
+            isAvailable: () => true,
+            send: (group) => {
+                sends.push(group);
+
+                return { error: new Error(sends.length === 1 ? "503 transient upstream error" : FCM_DEAD_TOKEN_ERROR), success: false };
+            },
+        };
+        const router = routingPushProvider({ ...routerOptions, fcm, webPush: mockPushProvider().provider });
+
+        const receipt = await router.send({ body: "b", to: [sub("ok"), "device-token-1"] });
+
+        // Two attempts, not the full four: the second answered "gone", and the
+        // remaining budget would have been spent on a device already deleted.
+        expect(sends).toHaveLength(2);
+        expect(receipt.success).toBe(false);
+    });
+
+    it("does not retry a failed group whose recipients are permanently gone", async () => {
+        expect.hasAssertions();
+
+        const webPush = mockPushProvider();
+        const fcm = mockPushProvider();
+        const router = routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider });
+
+        // `gone-token` answers FCM's real dead-token phrasing. Re-POSTing a device
+        // the facade is about to delete buys nothing but subrequests.
+        const receipt = await router.send({ body: "b", to: [sub("ok"), "gone-token"] });
+
         expect(fcm.sends).toHaveLength(1);
         expect(receipt.success).toBe(false);
+    });
+});
+
+describe("mixed-kind push routing under the resilience middleware", () => {
+    // The router is ONE provider to the engine, so the retry middleware re-runs
+    // `send` with the WHOLE payload. These drive the real facade, the real router
+    // and the real `attachResilience` (through `mockEngine`) because the
+    // interaction between the three is the behaviour under test.
+    // `retryBaseDelay: 0` keeps the router's in-router group retry instant: these
+    // doubles fail on purpose, and the production backoff would spend ~1 s per
+    // partial proving something the delay has no bearing on.
+    const routerOptions = { allowedPushOrigins: ["https://push.example"], retryBaseDelay: 0 };
+    const sub = (path: string) => JSON.stringify({ endpoint: `https://push.example/${path}`, keys: { auth: "a", p256dh: "p" } });
+
+    const mixedSend = (to: ReadonlyArray<string>) => {
+        const webPush = mockPushProvider();
+        const fcm = mockPushProvider();
+        const engine = mockEngine({ push: routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider }) });
+        const { notify } = createNotify(baseDefinition(memorySubscriptionStore()), {}, { engine, silent: true });
+
+        return { fcm, send: async () => notify.send({ push: { body: "b", to: [...to] } }), webPush };
+    };
+
+    it("does not re-send to the group that already delivered when the other fails", async () => {
+        expect.hasAssertions();
+
+        // The web-push target is accepted; the FCM token answers a transient 503
+        // on every attempt.
+        const { fcm, send, webPush } = mixedSend([sub("ok"), "fail-token"]);
+        const [receipt] = await send();
+
+        // The failed group is re-attempted; the delivered one is not. Retrying at
+        // the ENGINE instead re-POSTs the accepted web-push target, delivering
+        // that notification to the device four times over.
+        expect(webPush.sends).toHaveLength(1);
+        expect(fcm.sends).toHaveLength(4);
+        expect(receipt?.successful).toBe(false);
+
+        // Retries exhausted, so this is still a partial, and the caller is told
+        // which group still needs it — the same "re-send the narrower set"
+        // contract `runRetryIds` offers.
+        const errors = receipt?.successful === false ? receipt.errorMessages.join(" ") : "";
+
+        expect(errors).toContain("partially delivered");
+        expect(errors).toContain("the fcm group failed");
+    });
+
+    it("still retries when BOTH groups fail — there is no delivery to duplicate", async () => {
+        expect.hasAssertions();
+
+        const { fcm, send, webPush } = mixedSend([sub("fail"), "fail-token"]);
+
+        await send();
+
+        // The engine's budget: the initial attempt plus three retries.
+        expect(webPush.sends).toHaveLength(4);
+        expect(fcm.sends).toHaveLength(4);
+    });
+});
+
+describe("push circuit-breaker scope", () => {
+    // The router is ONE provider to the engine, so every push send — web-push,
+    // FCM, or mixed — arrives at the breaker under the same provider id. These
+    // drive the real facade, router and `attachResilience` because the breaker's
+    // key is only observable through all three.
+    // `retryBaseDelay: 0` keeps the router's in-router group retry instant: these
+    // doubles fail on purpose, and the production backoff would spend ~1 s per
+    // partial proving something the delay has no bearing on.
+    const routerOptions = { allowedPushOrigins: ["https://push.example"], retryBaseDelay: 0 };
+    const sub = (path: string) => JSON.stringify({ endpoint: `https://push.example/${path}`, keys: { auth: "a", p256dh: "p" } });
+
+    /** `CIRCUIT_THRESHOLD` in `providers.ts` — consecutive failures that open a circuit. */
+    const THRESHOLD = 5;
+
+    const harness = () => {
+        const webPush = mockPushProvider();
+        const fcm = mockPushProvider();
+        const engine = mockEngine({ push: routingPushProvider({ ...routerOptions, fcm: fcm.provider, webPush: webPush.provider }) });
+        const { notify } = createNotify(baseDefinition(memorySubscriptionStore()), {}, { engine, silent: true });
+
+        return { fcm, notify, webPush };
+    };
+
+    it("keeps sending to web-push after enough partials have opened FCM's circuit", async () => {
+        expect.hasAssertions();
+
+        const { notify, webPush } = harness();
+
+        // Each mixed send delivers to web-push and 503s on FCM — a partial, which
+        // the sibling fix refuses to retry, so this is exactly THRESHOLD
+        // consecutive failures and no more.
+        for (let attempt = 0; attempt < THRESHOLD; attempt += 1) {
+            // eslint-disable-next-line no-await-in-loop -- the breaker counts CONSECUTIVE failures; concurrent sends would not be
+            await notify.send({ push: { body: "b", to: [sub("ok"), "fail-token"] } });
+        }
+
+        const delivered = webPush.sends.length;
+        const [receipt] = await notify.send({ push: { body: "b", to: sub("ok") } });
+
+        // FCM is down; web-push has accepted every single send. Shedding it here
+        // stops healthy browsers receiving anything at all.
+        expect(receipt?.successful).toBe(true);
+        expect(webPush.sends).toHaveLength(delivered + 1);
+    });
+
+    it("charges a partial to FCM exactly once — the circuit opens on the THRESHOLD'th partial, not before", async () => {
+        expect.hasAssertions();
+
+        /** Drive `partials` mixed sends, then report whether an FCM-only send still reaches the provider. */
+        const fcmStillReachedAfter = async (partials: number): Promise<boolean> => {
+            const { fcm, notify } = harness();
+
+            for (let attempt = 0; attempt < partials; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- the breaker counts CONSECUTIVE failures; concurrent sends would not be
+                await notify.send({ push: { body: "b", to: [sub("ok"), "fail-token"] } });
+            }
+
+            const attempted = fcm.sends.length;
+
+            await notify.send({ push: { body: "b", to: "fail-token" } });
+
+            return fcm.sends.length > attempted;
+        };
+
+        // The boundary pins the count from both sides: charging a partial to no
+        // transport would never open FCM's circuit, and charging it twice would
+        // have opened it on the third partial.
+        await expect(fcmStillReachedAfter(THRESHOLD - 1)).resolves.toBe(true);
+        await expect(fcmStillReachedAfter(THRESHOLD)).resolves.toBe(false);
+    });
+
+    /** Two FCM-only sends: each is retried, so the breaker sees four failures per send. */
+    const openFcmCircuit = async (notify: { send: (message: { push: { body: string; to: string } }) => Promise<unknown> }) => {
+        for (const attempt of [1, 2]) {
+            // eslint-disable-next-line no-await-in-loop -- the breaker counts CONSECUTIVE failures; concurrent sends would not be
+            await notify.send({ push: { body: `b${attempt.toString()}`, to: "fail-token" } });
+        }
+    };
+
+    it("still sheds FCM once FCM is the transport that is down", async () => {
+        expect.hasAssertions();
+
+        const { fcm, notify, webPush } = harness();
+
+        await openFcmCircuit(notify);
+
+        const attempted = fcm.sends.length;
+        const [shed] = await notify.send({ push: { body: "b", to: "fail-token" } });
+        const [browser] = await notify.send({ push: { body: "b", to: sub("ok") } });
+
+        // Shedding is the breaker's job and it still does it: the FCM leg never
+        // reaches the provider again. The browser leg was never measured against
+        // FCM's circuit and still delivers.
+        expect(shed?.successful).toBe(false);
+        expect(fcm.sends).toHaveLength(attempted);
+        expect(browser?.successful).toBe(true);
+        expect(webPush.sends).toHaveLength(1);
+    });
+
+    it("delivers a mixed send's web-push leg while FCM's circuit is open", async () => {
+        expect.hasAssertions();
+
+        const { notify, webPush } = harness();
+
+        await openFcmCircuit(notify);
+
+        const [receipt] = await notify.send({ push: { body: "b", to: [sub("ok"), "fail-token"] } });
+
+        // A send with one healthy transport is never shed — it has a delivery to
+        // make. The open transport's leg is still attempted and still fails, so
+        // the fold reports a partial rather than a total failure.
+        expect(webPush.sends).toHaveLength(1);
+        expect(receipt?.successful).toBe(false);
+
+        const errors = receipt?.successful === false ? receipt.errorMessages.join(" ") : "";
+
+        expect(errors).toContain("partially delivered");
     });
 });

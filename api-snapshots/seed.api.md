@@ -60,6 +60,7 @@ type SeedClient<InsertModel> = SeedClientState & {
 
 ```ts
 interface SeedClientOptions {
+    allowOrphans?: boolean;
     defaultCount?: number;
     now?: number;
     persist?: (table: string, rows: ReadonlyArray<Record<string, unknown>>) => Promise<void> | void;
@@ -77,6 +78,7 @@ type SeedCounts = Record<string, number>;
 
 ```ts
 interface SeedOptions {
+    allowOrphans?: boolean;
     counts?: SeedCounts;
     defaultCount?: number;
     existingIds?: Readonly<Record<string, ReadonlyArray<string>>>;

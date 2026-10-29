@@ -42,8 +42,72 @@ export interface WhereOperators<T> {
     notIn?: T[];
 }
 
+/**
+ * A value stored as a plain JS object: not a scalar (an `Id<T>` is a branded string, which is an `object` to
+ * TypeScript but has no keys worth offering), an array, a date, bytes, a bigint or a function.
+ */
+type IsPlainObject<V> = V extends string | number | boolean | bigint | symbol
+    ? false
+    : V extends ReadonlyArray<unknown>
+      ? false
+      : V extends Date | Uint8Array | ArrayBuffer | bigint | ((...arguments_: never[]) => unknown)
+        ? false
+        : V extends object
+          ? true
+          : false;
+
+/** The dotted paths below an object, to three steps. */
+type SubPaths<V, Depth extends unknown[]> = Depth["length"] extends 3
+    ? never
+    : [IsPlainObject<V>] extends [true]
+      ? { [K in keyof V & string]-?: K | `${K}.${SubPaths<NonNullable<V[K]>, [...Depth, 0]>}` }[keyof V & string]
+      : never;
+
+/** The type at the end of dotted path `P` below `V`. */
+type PathValue<V, P extends string> = P extends `${infer Head}.${infer Rest}`
+    ? Head extends keyof V
+        ? PathValue<NonNullable<V[Head]>, Rest>
+        : never
+    : P extends keyof V
+      ? V[P]
+      : never;
+
+/**
+ * Every dotted path into an object-valued column of `Doc` (`"profile.address.city"`), at most four segments
+ * counting the column. A column that is not a plain object contributes none.
+ */
+type ColumnPaths<Doc> = {
+    [K in keyof Doc & string]-?: [IsPlainObject<NonNullable<Doc[K]>>] extends [true] ? `${K}.${SubPaths<NonNullable<Doc[K]>, []>}` : never;
+}[keyof Doc & string];
+
+/** The type at the end of a {@link ColumnPaths} path. */
+type DocPathValue<Doc, P extends string> = P extends `${infer Column}.${infer Rest}`
+    ? Column extends keyof Doc
+        ? PathValue<NonNullable<Doc[Column]>, Rest>
+        : never
+    : never;
+
+type ScalarLeaf = boolean | number | string | null | undefined;
+
+/** The dotted paths into an object column that end at a string, number or boolean. */
+type ScalarPaths<Doc> = { [P in ColumnPaths<Doc>]: [DocPathValue<Doc, P>] extends [ScalarLeaf] ? P : never }[ColumnPaths<Doc>];
+
+/**
+ * `where` keys that reach into an object column: `{ "profile.plan": "pro" }`. Only paths that end at a string,
+ * number or boolean are offered — an object, array, date, bigint or bytes leaf has no single SQL comparison.
+ *
+ * `unknown` (the identity for `&`) when there are none, never `{}`: intersecting with an empty object type
+ * switches off the weak-type check that rejects a `where` key naming nothing.
+ */
+type PathWhere<Doc, Paths extends string = ScalarPaths<Doc>> = [Paths] extends [never]
+    ? unknown
+    : { [P in Paths]?: DocPathValue<Doc, P> | WhereOperators<DocPathValue<Doc, P>> };
+
+/** `patch` keys that set one value inside an object column, keeping its siblings: `{ "profile.plan": "pro" }`. */
+type PathPatch<Doc, Paths extends string = ColumnPaths<Doc>> = [Paths] extends [never] ? unknown : { [P in Paths]?: DocPathValue<Doc, P> };
+
 /** A typed `where` tree over a document's columns. */
-export type Where<TDocument> = {
+export type Where<TDocument> = PathWhere<TDocument> & {
     [K in keyof TDocument]?: TDocument[K] | WhereOperators<TDocument[K]>;
 } & {
     AND?: Where<TDocument>[];
@@ -51,8 +115,15 @@ export type Where<TDocument> = {
     OR?: Where<TDocument>[];
 };
 
-/** One `{ field: "asc" | "desc" }` ordering entry; `orderBy` is an ordered list. */
-export type OrderBy<TDocument> = Partial<Record<keyof TDocument, "asc" | "desc">>;
+/**
+ * One ordering entry; `orderBy` is an ordered list. `{ field: "asc" | "desc" }` sorts NULLs first
+ * ascending and last descending. `{ field: { sort: "desc", nulls: "first" } }` places them yourself.
+ *
+ * A placement other than the default can change the query plan (see Pagination in the docs), so
+ * measure a hot read. It has no effect on a column that cannot hold NULL. Keep the same `orderBy` for every page of a
+ * paginated read, as a cursor is only valid against the ordering that minted it.
+ */
+export type OrderBy<TDocument> = Partial<Record<keyof TDocument | ScalarPaths<TDocument>, "asc" | "desc" | { nulls: "first" | "last"; sort: "asc" | "desc" }>>;
 
 export interface QueryArgs<TDocument> {
     cursor?: null | string;
@@ -110,13 +181,14 @@ type RelationWhere<DM, REL extends Record<keyof DM, object>, T extends keyof DM>
  * `Where<DM[T]>` stays the column-only structural mirror for back-compat; the
  * table facade threads `REL` through this richer form.
  */
-export type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = RelationWhere<DM, REL, T> & {
-    [K in keyof DM[T]]?: DM[T][K] | WhereOperators<DM[T][K]>;
-} & {
-    AND?: WhereOf<DM, REL, T>[];
-    NOT?: WhereOf<DM, REL, T>;
-    OR?: WhereOf<DM, REL, T>[];
-};
+export type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = PathWhere<DM[T]> &
+    RelationWhere<DM, REL, T> & {
+        [K in keyof DM[T]]?: DM[T][K] | WhereOperators<DM[T][K]>;
+    } & {
+        AND?: WhereOf<DM, REL, T>[];
+        NOT?: WhereOf<DM, REL, T>;
+        OR?: WhereOf<DM, REL, T>[];
+    };
 
 /** {@link QueryArgs} with the relation-aware {@link WhereOf} `where` typing. */
 export interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> {
@@ -386,6 +458,21 @@ export interface TableReaderFacade<
 
     /** `true` when at least one row matches `where` (any row when omitted). RLS-filtered exactly like `findFirst`. */
     exists: (where?: WhereOf<DM, REL, T>) => Promise<boolean>;
+
+    /**
+     * Describe how this table would run `findMany(args)` without running it: the SQL, its bound
+     * parameters, and the database's own plan, one line per step. Use it to check that a filter is
+     * served by an index (`SEARCH … USING INDEX by_room`) rather than a scan (`SCAN …`).
+     *
+     * Honors RLS and soft delete exactly like the read, so the plan is the one your caller would get.
+     * Explaining does not subscribe a live query to this table. A relation filter in `where` is resolved
+     * first with an ordinary read of the related table, which does subscribe to that table, since the ids
+     * it matched are part of `params`. Takes no `with` or `select`: neither changes the statement.
+     *
+     * `params` carries values your RLS policies injected and, for a relation filter, the ids it matched.
+     * Keep the result on the server rather than returning it to a client.
+     */
+    explain: (args?: QueryArgsOf<DM, REL, T>) => Promise<QueryPlan>;
     findFirst: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
         args?: QueryArgsOf<DM, REL, T> & { select?: S; with?: W },
     ) => Promise<LoadWith<DM, REL, T, W, S> | null>;
@@ -395,6 +482,19 @@ export interface TableReaderFacade<
     findMany: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
         args?: QueryArgsOf<DM, REL, T> & { select?: S; with?: W },
     ) => Promise<QueryPage<LoadWith<DM, REL, T, W, S>>>;
+
+    /**
+     * The one row matching `where`, or `null` when none does — and a `NOT_UNIQUE`
+     * error when a SECOND one matches, so a broken uniqueness invariant surfaces at
+     * the read rather than as a wrong answer downstream. `findFirst` drops that
+     * assertion; this is the ORM spelling of the fluent reader's `.unique()`.
+     *
+     * `limit`/`cursor` are not accepted rather than silently ignored: paging a read
+     * that must match at most one row is the assertion being dropped again.
+     */
+    findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
+        args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "limit"> & { select?: S; with?: W },
+    ) => Promise<LoadWith<DM, REL, T, W, S> | null>;
     get: (id: Id<string & T>) => Promise<DM[T] | null>;
 
     /**
@@ -472,8 +572,8 @@ export interface TableWriterFacade<
      * instead of throwing — the return type widens to `Id | null` on that overload.
      */
     insert: {
-        (values: IM[T], options: { skipDuplicates: true }): Promise<Id<string & T> | null>;
-        (values: IM[T], options?: { skipDuplicates?: boolean }): Promise<Id<string & T>>;
+        (values: InsertValues<DM, IM, REL, T>, options: { skipDuplicates: true }): Promise<Id<string & T> | null>;
+        (values: InsertValues<DM, IM, REL, T>, options?: { skipDuplicates?: boolean }): Promise<Id<string & T>>;
     };
 
     /**
@@ -485,7 +585,7 @@ export interface TableWriterFacade<
         (values: ReadonlyArray<IM[T]>, options: { limit?: number; skipDuplicates: true }): Promise<(Id<string & T> | null)[]>;
         (values: ReadonlyArray<IM[T]>, options?: { limit?: number; skipDuplicates?: boolean }): Promise<Id<string & T>[]>;
     };
-    patch: (id: Id<string & T>, values: Partial<IM[T]>) => Promise<void>;
+    patch: (id: Id<string & T>, values: PatchValues<IM[T]> & RelationWrites<DM, REL, T>) => Promise<void>;
 
     /**
      * Patch many rows in this table. Pass an array of `{ id, values }` or
@@ -493,8 +593,8 @@ export interface TableWriterFacade<
      * the actual patched count. Atomic within a mutation.
      */
     patchMany: {
-        (patches: ReadonlyArray<{ id: Id<string & T>; values: Partial<IM[T]> }>, options?: { limit?: number }): Promise<{ patched: number }>;
-        (args: { limit?: number; values: Partial<IM[T]>; where: Partial<DM[T]> }): Promise<{ patched: number }>;
+        (patches: ReadonlyArray<{ id: Id<string & T>; values: PatchValues<IM[T]> }>, options?: { limit?: number }): Promise<{ patched: number }>;
+        (args: { limit?: number; values: PatchValues<IM[T]>; where: Partial<DM[T]> }): Promise<{ patched: number }>;
     };
     replace: (id: Id<string & T>, values: IM[T]) => Promise<void>;
 
@@ -507,17 +607,113 @@ export interface TableWriterFacade<
      * tuple) used to look it up. Returns the row id and whether it was `created`.
      * Composes `findFirst` + `insert`/`patch`, so RLS gates each step.
      */
-    upsert: (args: { create: IM[T]; target: UpsertTargetOf<DM, T>; update?: Partial<IM[T]> }) => Promise<{ created: boolean; id: Id<string & T> }>;
+    upsert: (args: {
+        create: InsertValues<DM, IM, REL, T>;
+        target: UpsertTargetOf<DM, T>;
+        update?: PatchValues<IM[T]> & RelationWrites<DM, REL, T>;
+    }) => Promise<{ created: boolean; id: Id<string & T> }>;
 
     /** Sequential {@link TableWriterFacade.upsert} over many rows sharing one `target`; one result per input row, in order. */
     upsertMany: (args: {
-        rows: ReadonlyArray<{ create: IM[T]; update?: Partial<IM[T]> }>;
+        rows: ReadonlyArray<{ create: InsertValues<DM, IM, REL, T>; update?: PatchValues<IM[T]> & RelationWrites<DM, REL, T> }>;
         target: UpsertTargetOf<DM, T>;
     }) => Promise<{ created: boolean; id: Id<string & T> }[]>;
 }
 
 /** Conflict target for `upsert`/`upsertMany`: one column of table `T`, or a tuple of them. */
 export type UpsertTargetOf<DM, T extends keyof DM> = ReadonlyArray<keyof DM[T] & string> | (keyof DM[T] & string);
+
+/**
+ * An atomic update for a number column, applied to the value the row holds when the
+ * write runs: `{ increment: 1 }`, `{ decrement: 1 }`, `{ multiply: 2 }`, `{ divide: 2 }`.
+ * The column must already hold a finite number; a result that is not finite is rejected.
+ */
+type NumberFieldOperator =
+    | { decrement: number; divide?: never; increment?: never; multiply?: never }
+    | { decrement?: never; divide: number; increment?: never; multiply?: never }
+    | { decrement?: never; divide?: never; increment: number; multiply?: never }
+    | { decrement?: never; divide?: never; increment?: never; multiply: number };
+
+/** An atomic update for a boolean column: `{ toggle: true }` flips the stored value. */
+interface BooleanFieldOperator {
+    toggle: true;
+}
+
+/**
+ * The values a `patch` accepts: any column's own type, and for a number or boolean
+ * column also an atomic operator ({@link NumberFieldOperator}, {@link BooleanFieldOperator}).
+ */
+export type PatchValues<Row> = PathPatch<Row> & {
+    [K in keyof Row]?: Row[K] | OperatorFor<NonNullable<Row[K]>>;
+};
+
+/**
+ * The operator a column of type `T` takes: arithmetic when `T` is exactly `number` (so a literal union
+ * such as `1 | 2` is out — the result could leave the set — and so is `number | string`, which the
+ * store does not treat as a number column), `{ toggle: true }` when it is exactly `boolean`.
+ */
+type OperatorFor<T> = [T] extends [number]
+    ? [number] extends [T]
+        ? NumberFieldOperator
+        : never
+    : [T] extends [boolean]
+      ? [boolean] extends [T]
+          ? BooleanFieldOperator
+          : never
+      : never;
+
+/** What `explain` returns: the SQL a read compiles to, its bound parameters, and the database's plan for it. */
+export interface QueryPlan {
+    /** The bound parameters, in order. */
+    params: unknown[];
+    /** One line per plan step, as the database reports it. */
+    plan: string[];
+    /** The statement the read compiles to. */
+    sql: string;
+}
+
+/**
+ * Nested write for a to-one relation: point the row at `Target` (`connect`), or clear the link (`disconnect`, which
+ * needs a foreign key that can be empty). One or the other, not both.
+ */
+export type ToOneRelationWrite<TargetId> = { connect: TargetId; disconnect?: never } | { connect?: never; disconnect: true };
+
+/**
+ * Nested write for a to-many relation: point `Target` rows at this one (`connect`), release them (`disconnect`, which
+ * needs a foreign key that can be empty), or replace the whole list (`set`: rows not named are released). `set`
+ * cannot be combined with the other two.
+ */
+export type ToManyRelationWrite<TargetId> =
+    | { connect?: never; disconnect?: never; set: ReadonlyArray<TargetId> }
+    | { connect?: ReadonlyArray<TargetId>; disconnect?: ReadonlyArray<TargetId>; set?: never };
+
+/**
+ * Nested relation writes accepted by `insert`, `patch` and `upsert`, keyed by relation name:
+ * `{ author: { connect: userId } }`, `{ posts: { set: [a, b] } }`. A table with no relations contributes none
+ * (`unknown`, the identity for `&`, never `{}`: an empty object type would switch off the weak-type check).
+ */
+export type RelationWrites<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = [keyof REL[T]] extends [never]
+    ? unknown
+    : {
+          [K in keyof REL[T]]?: REL[T][K] extends { __relationKind: "one"; __target: infer Target extends keyof DM }
+              ? ToOneRelationWrite<Id<string & Target>>
+              : REL[T][K] extends { __relationKind: "many"; __target: infer Target extends keyof DM }
+                ? ToManyRelationWrite<Id<string & Target>>
+                : never;
+      };
+
+/** The foreign-key columns of a table's to-one relations — the keys a nested `connect` supplies. */
+type OneRelationFields<RelT> = {
+    [K in keyof RelT]: RelT[K] extends { __field: infer Field extends string; __relationKind: "one" } ? Field : never;
+}[keyof RelT];
+
+/**
+ * What `insert` accepts: the row as it is, or the row without its to-one foreign keys plus the nested writes that
+ * supply them. Leaving a key out with no `connect` to supply it is not caught by the type — the store's own
+ * validation rejects the missing field.
+ */
+export type InsertValues<DM, IM extends Record<keyof DM, object>, REL extends Record<keyof DM, object>, T extends keyof DM> =
+    IM[T] | (Omit<IM[T], OneRelationFields<REL[T]>> & RelationWrites<DM, REL, T>);
 
 /** Per-table read facade — `ctx.db.<table>` on a `QueryCtx`. */
 export type DatabaseReaderFacade<

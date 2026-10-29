@@ -9,6 +9,7 @@ import {
     fromMoneyJSON,
     isZeroDecimalCurrency,
     money,
+    moneyFromMinor,
     subtractMoney,
     toMoneyJSON,
     zeroMoney,
@@ -131,5 +132,13 @@ describe("money", () => {
 
         expect(toMoneyJSON(big).minorUnits).toBe("123456789012345");
         expect(fromMoneyJSON(toMoneyJSON(big))).toEqual(big);
+    });
+
+    it("builds money from a provider's numeric minor units, rounding a stray fraction (moneyFromMinor)", () => {
+        expect.assertions(3);
+
+        expect(moneyFromMinor(1999, "usd")).toEqual(money(1999n, "USD"));
+        expect(moneyFromMinor(1999.6, "usd").minorUnits).toBe(2000n);
+        expect(() => moneyFromMinor(Number.NaN, "usd")).toThrow(LunoraPaymentError);
     });
 });

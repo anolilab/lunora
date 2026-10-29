@@ -13,7 +13,7 @@ hints render consistently in the CLI, the Vite error overlay, the Studio UI, and
 the client SDK.
 
 ```ts
-import { LunoraError, isLunoraError } from "@lunora/errors";
+import { LunoraError, isLunoraError, resolveHint } from "@lunora/errors";
 
 throw new LunoraError("NOT_FOUND", `no message with id ${id}`);
 
@@ -26,9 +26,15 @@ if (isLunoraError(error)) {
 
 `ERROR_CATALOG` keys the well-known codes (`BAD_REQUEST`, `FORBIDDEN`,
 `NOT_FOUND`, `CONFLICT`, `NOT_UNIQUE`, `VALIDATION_ERROR`, `TOO_MANY_REQUESTS`,
-`RLS_REQUIRED`, `INTERNAL`, …) to `{ status, title, hint?, docsUrl? }`. Passing a
-`code` to `new LunoraError(code)` fills those defaults in; explicit options
+`RLS_REQUIRED`, `INTERNAL`, …) to `{ status, title, internal? }`. Passing a
+`code` to `new LunoraError(code)` fills `status` and `title` in; explicit options
 override them.
+
+The Markdown fix for each code lives apart, in `ERROR_HINTS`, so browser bundles
+(which construct errors but never render a fix) do not carry its text. A
+`LunoraError` holds only an explicit or wire-received `hint`; call
+`resolveHint(error)` for the catalog fallback. `toErrorBody` does this for every
+envelope, so a client still receives the hint on the wire.
 
 ## Structural matching
 

@@ -1,6 +1,6 @@
 import type { LunoraErrorCodeInput } from "@lunora/errors";
+import { stableWireKey } from "@lunora/wire";
 
-import { stableWireKey } from "../../../shared/wire-key";
 import type { FunctionReference } from "./types";
 
 export type SubscriptionCallback = (data: unknown) => void;
@@ -44,7 +44,11 @@ export interface SubscriptionError {
      * so narrowing it to `LunoraErrorCode` would be a lie a newer server tells.
      */
     code?: LunoraErrorCodeInput;
+    /** The actionable fix text (Markdown), when the frame carried one. */
+    hint?: string | string[];
     message: string;
+    /** The client-visible explanation of the cause, when the frame carried one. */
+    why?: string;
 }
 
 export type SubscriptionErrorCallback = (error: SubscriptionError) => void;
@@ -61,6 +65,12 @@ export type SubscriptionErrorCallback = (error: SubscriptionError) => void;
  * in-flight (so the overlay survives unrelated deltas until confirmed).
  */
 export interface OptimisticLayer {
+    /**
+     * Where this write's RPC resolved in the process-wide acknowledgement order
+     * (see `acknowledgementMark`); `undefined` until confirmed. A polled snapshot
+     * carries no cursor, so this is what lets it drop the layer instead.
+     */
+    acknowledgedAt?: number;
     /** The committed CDC cursor (from the mutation response); `undefined` until confirmed. */
     commitCursor?: number;
     readonly id: symbol;
@@ -68,8 +78,13 @@ export interface OptimisticLayer {
 }
 
 export interface SubscriptionState {
-    /** True once the server has acked the subscription on the current socket. */
-    acked: boolean;
+    /**
+     * Where this subscription's `subscribe` frame stands on the current socket:
+     * none outstanding (`"idle"`), sent and not yet answered (`"inflight"`, so a
+     * second subscriber joins it instead of sending another), or acknowledged by
+     * the server (`"acked"`). Written only through {@link setSubscriptionAck}.
+     */
+    ack: "acked" | "idle" | "inflight";
     readonly args: Record<string, unknown>;
 
     /**
@@ -121,6 +136,14 @@ export interface SubscriptionState {
     optimisticLayers: OptimisticLayer[];
 
     /**
+     * The merged value of a delta run whose final, cursor-carrying frame has not
+     * arrived yet. Held aside so a run of k frames commits, notifies and
+     * broadcasts once. Dropped when a snapshot, a `resume`, or a new socket
+     * supersedes the run.
+     */
+    pendingDeltaRun?: { payload: unknown };
+
+    /**
      * The authoritative server value the optimistic layers fold onto — the value
      * with NO optimistic overlay. Tracks `lastValue` exactly whenever no layers
      * are active; diverges only while a per-call optimistic write is pending. A
@@ -147,6 +170,15 @@ export interface SubscriptionState {
      */
     serverEpoch?: string;
     readonly shardKey?: string;
+
+    /**
+     * Whether a poll or the leader tab has delivered a value for this subscription on the
+     * CURRENT connection. A polling connection and a follower tab see no server `ack`, so this
+     * is their only evidence of an answer, and `serverBase` cannot stand in for it: a hydrated
+     * cache sets that before anything has arrived. A WebSocket never sets it, `acked` is its
+     * evidence.
+     */
+    valueReceived: boolean;
 
     /**
      * The wire-encoded form of `args`, computed once at `subscribe` time (so an
@@ -238,3 +270,57 @@ export class SubscriptionRegistry {
         this.byId.clear();
     }
 }
+
+/**
+ * Move `state`'s {@link SubscriptionState.ack} to `next`. The one writer of the
+ * field, shared by the client and the cross-tab leadership hooks.
+ */
+export const setSubscriptionAck = (state: SubscriptionState, next: SubscriptionState["ack"]): void => {
+    // eslint-disable-next-line no-param-reassign -- the shared subscription state is advanced in place
+    state.ack = next;
+};
+
+/**
+ * Stand `state`'s outstanding `subscribe` frame down without an answer, so the
+ * next `subscribe` may send again. An acknowledged subscription stays acknowledged.
+ */
+export const releaseSubscribeFrame = (state: SubscriptionState): void => {
+    if (state.ack === "inflight") {
+        setSubscriptionAck(state, "idle");
+    }
+};
+
+/**
+ * Wrap a subscriber's callback in a fresh closure, so registering it in a
+ * `Set` gives THIS subscriber its own slot.
+ *
+ * Registering the caller's own function directly deduped two consumers that
+ * passed the SAME reference — a module-level handler, a `useCallback`-stable
+ * one — down to a single Set entry, so the first `unsubscribe()` emptied the
+ * set and tore the shared registration out from under the second consumer.
+ * Passes `undefined` through so an unset `onError`/`onCheckpoint` stays unset.
+ */
+export function wrapSubscriber<A>(callback: (argument: A) => void): (argument: A) => void;
+
+export function wrapSubscriber<A>(callback: ((argument: A) => void) | undefined): ((argument: A) => void) | undefined;
+
+export function wrapSubscriber<A>(callback: ((argument: A) => void) | undefined): ((argument: A) => void) | undefined {
+    if (callback === undefined) {
+        return undefined;
+    }
+
+    return (argument: A): void => {
+        callback(argument);
+    };
+}
+
+/** Fan an error out to every registered `onError` callback, swallowing throws so one bad listener can't starve the rest. */
+export const fanSubscriptionError = (callbacks: Iterable<SubscriptionErrorCallback>, error: SubscriptionError): void => {
+    for (const errorCallback of callbacks) {
+        try {
+            errorCallback(error);
+        } catch {
+            /* user callback threw — ignore */
+        }
+    }
+};

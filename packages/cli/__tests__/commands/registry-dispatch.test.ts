@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { runAddCommand as RunAdd, runBuildIndexCommand as RunBuildIndex, runRegistryViewCommand as RunView } from "../../src/commands/registry";
+import type { runAddCommand as RunAdd, runBuildIndexCommand as RunBuildIndex, runRegistryViewCommand as RunView } from "../../src/commands/registry/commands";
 
 const runAddCommand = vi.fn<typeof RunAdd>(async () => {
     return { bindings: [], code: 0, deps: [], skipped: [], written: [] };
@@ -22,8 +22,10 @@ const runRegistryViewCommand = vi.fn<typeof RunView>(async () => {
     return { bindings: [], code: 0, deps: [], skipped: [], written: [] };
 });
 
-vi.mock(import("../../src/commands/registry"), () => {
-    return { runAddCommand, runBuildIndexCommand, runRegistryViewCommand };
+// The module the handler imports, not the barrel it used to go through — a
+// mock aimed at the barrel no longer intercepts anything.
+vi.mock(import("../../src/commands/registry/commands"), async (importOriginal) => {
+    return { ...(await importOriginal()), runAddCommand, runBuildIndexCommand, runRegistryViewCommand };
 });
 
 const { execute } = await import("../../src/commands/registry/handler");

@@ -2,7 +2,9 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { MaskProcedureIR } from "../../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, tablesAccessedIn } from "../ast";
+import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "../attribution";
+import { tablesAccessedIn } from "../database-calls";
 import { classifyProcedureCall } from "../functions/classify-procedure-call";
 import { maskCallsInChain, memberName } from "./internal/mask-call";
 
@@ -59,8 +61,8 @@ const maskFromBuilderChain = (receiver: TsNode): { maskColumns: { column: string
 // Table-access discovery inside a function body
 // ---------------------------------------------------------------------------
 
-/** Read-access call sites masking transforms: `ctx.db.query/findMany/findFirst/findFirstOrThrow/get`. */
-const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get", "query"]);
+/** Read-access call sites masking transforms: `ctx.db.query`, `findMany`, `findFirst`, `findFirstOrThrow`, `get` and `explain`. */
+const READ_METHODS = new Set(["explain", "findFirst", "findFirstOrThrow", "findMany", "get", "query"]);
 
 /** Write-access call sites: `ctx.db.insert/patch/replace/delete` (masking never touches these — captured only for completeness). */
 const WRITE_METHODS = new Set(["delete", "insert", "patch", "replace"]);
@@ -97,7 +99,7 @@ const procedureIrFromDeclaration = (declaration: TsNode, relativePath: string): 
     const { tablesRead, tablesWritten } = tablesAccessedIn(declaration, READ_METHODS, WRITE_METHODS);
 
     return {
-        exportName: declaration.getName(),
+        exportName: exportedNameOf(declaration) ?? declaration.getName(),
         file: relativePath,
         maskColumns: chain.maskColumns,
         tablesRead,
@@ -121,17 +123,11 @@ const discoverMaskProcedures = (project: Project, lunoraDirectory: string): Mask
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        for (const statement of sourceFile.getVariableStatements()) {
-            if (!statement.isExported()) {
-                continue;
-            }
+        for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+            const ir = procedureIrFromDeclaration(declaration, relativePath);
 
-            for (const declaration of statement.getDeclarations()) {
-                const ir = procedureIrFromDeclaration(declaration, relativePath);
-
-                if (ir) {
-                    procedures.push(ir);
-                }
+            if (ir) {
+                procedures.push(ir);
             }
         }
     }

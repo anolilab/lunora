@@ -16,7 +16,7 @@ export { ACCEPT_ATTRIBUTE, ACCEPTED_TYPES, createAvatarUploadController } from "
 export type { BackupCodesField, BackupCodesHandle, BackupCodeSignInField } from "./backup-codes";
 export { createBackupCodesController, createBackupCodeSignInController } from "./backup-codes";
 export type { CaptchaProvider, RenderCaptchaOptions } from "./captcha";
-export { CAPTCHA_HEADER, PROVIDERS as CAPTCHA_PROVIDERS, captchaHeaders, renderCaptcha, setCaptchaToken } from "./captcha";
+export { CAPTCHA_HEADER, PROVIDERS as CAPTCHA_PROVIDERS, captchaHeaders, renderCaptcha, resetCaptcha, setCaptchaToken } from "./captcha";
 export type { ChangeEmailField } from "./change-email";
 export { createChangeEmailController } from "./change-email";
 export type { ChangePasswordField } from "./change-password";

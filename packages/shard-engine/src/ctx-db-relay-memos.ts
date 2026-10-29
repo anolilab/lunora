@@ -160,4 +160,4 @@ const deleteAllRelayMemos = (sql: SqlExec): void => {
 };
 
 export type { RelayMemoRow, RelayShapeMemo };
-export { deleteAllRelayMemos, deleteRelayMemo, deleteRelayMemosForConnection, migrateRelayMemos, readRelayMemos, RELAY_MEMO_TABLE, writeRelayMemos };
+export { deleteAllRelayMemos, deleteRelayMemo, deleteRelayMemosForConnection, migrateRelayMemos, readRelayMemos, writeRelayMemos };

@@ -64,6 +64,8 @@ lunora codegen    # re-emit _generated/{api,server,dataModel}.ts
 lunora deploy     # codegen + validate wrangler.jsonc + wrangler deploy
 ```
 
+Set `LUNORA_LAZY_FUNCTIONS=1` or `true` to enable lazy function imports across CLI codegen, dev, build, prepare, verify, and deploy. You can also pass `--lazy-functions` to these commands. Neither setting overrides an enabled opt-in from the other; without either, generation stays eager.
+
 The CLI also exposes a programmatic entry point:
 
 ```ts

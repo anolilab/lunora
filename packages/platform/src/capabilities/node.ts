@@ -1,0 +1,266 @@
+import type { PlatformCapabilities } from "./types";
+
+/**
+ * The Node capability matrix — `@lunora/platform-node`'s honest self-rating
+ * (plan 234).
+ *
+ * `@lunora/platform-node` implements every contract in this package
+ * (`ShardHost`, `SocketHost`, `ShardDirectory`, `ShardKvStore`,
+ * `SchedulerHost`) over `better-sqlite3` and an in-process registry, plus the
+ * `.global()` table backend via `@lunora/sql-store`. It began as a spike to run
+ * the conformance TCK against a second host; the durability gaps that spike
+ * surfaced — alarms and scheduler jobs that were persisted but never re-armed,
+ * socket attachments that lived only in memory — are closed, and each is now
+ * pinned by a restart test rather than only by a simulated recycle.
+ *
+ * `scheduler` and `shardAlarms` were rated `"unsupported"` under plan 267, on
+ * the grounds that the host stored and timed both while its timer body only
+ * cleared bookkeeping — nothing dispatched the scheduled function or woke the
+ * alarm. That rating was correct for the code it described, and the code is
+ * what changed: both now dispatch (through `onDispatch` / `onAlarm`) and both
+ * re-arm from their durable rows on construction, so `"emulated"` — built on
+ * lower-level primitives and *working* — is now the honest reading.
+ *
+ * What remains genuinely absent is everything a single Node process cannot
+ * distribute: placement across nodes, failover, and most Cloudflare-specific
+ * product bindings (Vectorize, Workers AI, Containers, Browser Rendering,
+ * Analytics Engine, Secrets Store, Hyperdrive). Workflows, object storage and
+ * queues are the three that CAN be emulated locally — `defineWorkflow` handlers
+ * compile onto the `@visulima/workflow` engine, R2 becomes a filesystem bucket,
+ * and Queues becomes a durable table with the same batch/ack/retry/dead-letter
+ * semantics — so those three are rated `"emulated"`; the rest of the Cloudflare
+ * products most `ctx.*` surfaces are built on are rated `"unsupported"` here
+ * rather than left undeclared — see `gateAgainstMatrix` in `@lunora/codegen`,
+ * whose fail-closed gate (plan 229) treats an undeclared feature as unsupported
+ * anyway, but under a different diagnostic name than an honest, explicit rating.
+ *
+ * Almost nothing here is rated `"native"`, and that is the matrix's own
+ * definition doing its job rather than a hedge: `native` means the platform
+ * itself provides the feature, and a bare Node process provides essentially
+ * none of them — Lunora builds alarms out of `setTimeout` plus a durable row,
+ * a KV store out of a SQL table, and `.global()` tables out of a second SQLite
+ * file. `localSql` is the exception, because SQLite genuinely is the platform
+ * primitive there. The ratings say who does the work; the notes say how well.
+ * Both are argued in detail in `plans/234-node-host-findings.md`.
+ */
+const NODE_CAPABILITIES: PlatformCapabilities = {
+    id: "node",
+    name: "Node",
+    features: {
+        shardedState: {
+            level: "emulated",
+            note: "One better-sqlite3 database per shard key, one process — no distributed placement or failover. Shard keys are percent-encoded into basenames with A-Z escaped, so `Tenant` and `tenant` stay two databases on a case-insensitive volume (APFS, NTFS) rather than folding into one. There is also no input gate: Cloudflare defers every other dispatch for the span of a mutation, whereas this host can only refuse — SQL issued from another task while a transaction is open throws a retryable `SHARD_UNAVAILABLE` (503) rather than reading rows that are about to roll back, so a read that merely arrived mid-mutation is retried instead of failing the request",
+        },
+        globalTables: {
+            level: "emulated",
+            note: "The @lunora/sql-store core on its own SQLite file via the reference sqliteDialect — full store semantics, but one node with no replication",
+        },
+        websocketHibernation: {
+            level: "emulated",
+            note: "Socket registry with attachments/tags persisted to SQLite, and createNodeSocketHost can rehydrate a row into a handle — but restoreSocket is not a SocketHost member and neither createNodePlatform nor createNodeShardRegistry surfaces it, so nothing composed here reassociates a reconnecting client; the conformance host is its only caller. Nothing is ever actually evicted from memory either, so this is durability without hibernation's memory saving and without its rehydration",
+        },
+        typedWebSockets: {
+            level: "emulated",
+            note: "Rooms and defineWebSocket routes take real network clients: createNodeHttpServer completes the WebSocket handshake through the worker, and the embedder binds the shard with bindShardSockets so inbound frames and closes reach the shard. The socket registry is one process, so a route's broadcast does not fan out to another process, and nothing reassociates a reconnecting client, so a room's membership does not survive a restart",
+        },
+        liveStreams: {
+            level: "emulated",
+            note: "Served in this process, by the same ShardDO live handlers Cloudflare runs: connect, subscribe and publish reach the shard through the in-process registry, and createNodeHttpServer streams the SSE body back unbuffered, so a frame reaches the client as it is published. A client that disconnects cancels the body, which drops the subscriber. ctx.live.publish from an HTTP action reaches the subscribers of the shard it names. The embedder composes it: createWorker over createNodeShardNamespace(registry.directory), with one ShardDO kept per shard for the life of the process, since a ShardDO built per request loses its subscribers. A queue consumer's ctx.live comes from the worker's queue export: createWorker's queue(batch, env, ctx) builds the publisher over the same shard forwarding the HTTP action uses, and createNodePlatform's onQueueBatch is the seam that batch is delivered through. A scheduled job's publish takes the same in-process path but is not exercised on this host. Emulated, not native, because the subscriber registry lives in one process: there is no cross-process fan-out, and no keepalive comment frame is sent, so a reverse proxy that idles out a silent stream will close it and the client reconnects",
+        },
+        durableStreams: {
+            level: "unsupported",
+            note: "The transcript store is host-neutral (@lunora/shard-engine), but the attach/produce state machine lives in @lunora/do and nothing in this host mounts it. Gate-bearing: codegen refuses an app that declares a durable stream on this target, rather than emitting one that silently behaves as an ephemeral stream",
+        },
+        commitOrderedTables: {
+            level: "emulated",
+            note: "The sequence orders commits correctly, but the serialization it depends on is Lunora's per-shard write gate rather than a platform property — one process, one better-sqlite3 handle per shard key. Correct here; not something the host guarantees the way a Durable Object does",
+        },
+        deliveryAuthorization: {
+            level: "unsupported",
+            note: "Not exercised by this host's conformance suite, and its socket registry does not reassociate a reconnecting client, so the permits a hibernated socket carries have nothing to restore into. Rate it once the suite drives an authorized RPC, a subscription and a fence install",
+        },
+        conditionalWrites: {
+            level: "native",
+            note: "SQLite decides it on both paths: shard-local in one synchronous better-sqlite3 run, .global() in one conditional UPDATE on the host's own SQLite file (one node, so nothing to replicate)",
+        },
+        objectColumnPaths: {
+            level: "native",
+            note: "json_extract on both paths, over better-sqlite3. It is the same SQLite statement the engine tests run on node:sqlite; it has not been run through better-sqlite3 itself in this host's suite",
+        },
+        queryExplain: {
+            level: "native",
+            note: "EXPLAIN QUERY PLAN on better-sqlite3 for both paths. It is the same SQLite statement the engine tests run on node:sqlite; it has not been run through better-sqlite3 itself in this host's suite",
+        },
+        localSql: { level: "native", note: "better-sqlite3 (synchronous, embedded)" },
+        serverReactors: {
+            level: "emulated",
+            note: "Same engine-level implementation as Cloudflare; the per-shard serialization it depends on is the host's own write gate rather than a platform guarantee",
+        },
+        memoryTables: {
+            level: "emulated",
+            note: "Same shape as Cloudflare and for a different reason: better-sqlite3 CAN open `:memory:`, but a shard's memory tables share the one handle its durable tables use, so they are cleared rather than never written. A host process also outlives far more than a Durable Object does, so cold starts — and therefore `onShardInit` — are much rarer here than in production on Cloudflare; do not use this target to judge how often a memory table is actually empty",
+        },
+        alarmRearmBreaker: {
+            level: "emulated",
+            note: "Lunora's own counter, not a platform primitive: the poll alarm's re-arms that are due sooner than the 2 s floor are counted in one row of the shard's SQL (ShardHost.sql) over a sliding window, and a re-arm past the budget is refused, leaves one recovery wake a window out, and is logged once per trip. Re-arms at or beyond the floor are checked against that row and never written to it, so a poll at 2 s or slower costs no SQL write. The arm it gates is ShardHost.alarms, so it runs wherever the shard has durable SQL and alarms",
+        },
+        scheduleRateBreaker: {
+            level: "emulated",
+            note: "Lunora's own counter, not a platform primitive: each ctx.scheduler target's schedules are counted per shard in one row of the shard's SQL (ShardHost.sql) over a sliding window, once per invocation, and a schedule past the budget is deferred one window instead of being refused or dropped. The schedules it defers are stored through SchedulerDO, so it runs wherever the shard has durable SQL and a scheduler",
+        },
+        shardAlarms: {
+            level: "emulated",
+            note: "setTimeout over a durable row, dispatched to onAlarm and re-armed on construction, so an alarm survives a restart and one whose time elapsed while the process was down fires late rather than never. Delivery is at-least-once as it is on workerd: a handler that throws is re-delivered with exponential backoff (6 attempts, from 100ms) and then abandoned, and an alarm set or deleted inside a transaction is armed only if that transaction commits",
+        },
+        shardPlacement: { level: "unsupported", note: "One process — every shard lives where the process does, so a location hint has nowhere to place it" },
+        shardReadReplicas: {
+            level: "unsupported",
+            note: "One process and one region: a replica here would be a second copy of a database already on the same disk",
+        },
+        crossShardFanout: {
+            level: "emulated",
+            note: "@lunora/runtime's query coordinator over the in-process shard registry; listShardKeys is seeded from the shard files on disk, and answers every shard rather than only those holding the table (a correct superset, at the cost of visiting shards with nothing to say). That registry is the host's own, so the write-time ShardRegistryDO registration a Cloudflare shard does has nothing to report to here and does not run",
+        },
+        queues: {
+            level: "emulated",
+            note: "createNodeQueueHost (@lunora/platform-node) — a QueueBindingLike producer per declared queue over a durable _lunora_queue_messages table, and a batched consumer feeding the same dispatchQueueBatch the Cloudflare host uses. delaySeconds (capped at 12h), all four content types, maxBatchSize/maxBatchTimeout assembly, per-message ack/retry with workerd's implicit-ack-on-return and retry-on-throw, retryDelay, maxRetries into a declared deadLetterQueue (or parked in place, never dropped), and a visibility window so a crash mid-handler redelivers. Delivery is driven by poll(); there is no timer, because this host has no dev server to own one. maxConcurrency is ignored: poll() delivers at most one batch per queue and settles it before moving on. Cloudflare's byte ceilings are enforced on send — 128 KiB per message and 256 KiB per sendBatch, measured over the encoded body — because @lunora/queue leaves both to the platform and this host is the only point where those bytes already exist. mode: \"pull\" queues are written but not consumed — nothing here serves the HTTP pull endpoint. message.run and ctx.run reach a Lunora function through the scheduler dispatch route, which createNodePlatform serves in-process (no HTTP listener, host-backed through the queue onBatch seam, not a provider API): the app worker's queue export takes it as queueFetchImpl (createWorker), set to platform.dispatch, and the route calls the shard through the platform's directory. The route authenticates with LUNORA_SCHEDULER_SECRET (HMAC) or LUNORA_ADMIN_TOKEN, and refuses workflow and pool targets with a 400. Gap: without queueFetchImpl the call goes to LUNORA_ORIGIN_URL, which nothing on this host answers, so the batch retries until maxRetries sends it to the deadLetterQueue or parks it",
+        },
+        workerLoaders: {
+            level: "unsupported",
+            note: "No isolate loader: Node has no V8-isolate sandbox for untrusted code, and a `node:vm` context is not a security boundary",
+        },
+        workflowRollback: {
+            level: "emulated",
+            note: "createNodeWorkflowHost unwinds each settled step's rollback in reverse declaration order when a later step fails its last attempt. The compensations are plain calls, not durable steps — a crash during the unwind leaves it half-done — and rollbackConfig is ignored",
+        },
+        workflows: {
+            level: "emulated",
+            note: "createNodeWorkflowHost (@lunora/platform-node) binds each workflow on env under its class name — the key `ctx.exports` carries on Cloudflare — and compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, create({ id }) is honoured through a durable alias row (so ctx.spawn resolves and a retried create is one run), and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). step.do's per-step retries and rollbacks are emulated by the adapter, not the engine: the attempt loop runs inside the one memoized step, so a crash mid-backoff restarts that step at attempt 1 rather than resuming the countdown, and compensations are plain calls unwound in reverse declaration order, so the adapter ignores rollbackConfig's retries and a crash mid-unwind leaves it half-done (@lunora/workflow itself still reads rollbackConfig.timeout to end a rollback's decline wait). A `retries.delay` function is awaited in that same loop and its result replaces the backoff, as on Cloudflare. defineWorkflow's limits and defaultRetention are wrangler settings this host never reads: no per-instance step cap is enforced, and a finished run's state stays until it is deleted. delete and deleteBatch (capped at 100 ids) drop a run's stored state behind the same in-process barrier as terminate, but leave no tombstone, so a deleted run's status reads `unknown`. terminate is a barrier within the process: a terminated run's writes are dropped, so an activation already in flight cannot overwrite the tombstone — it is not a barrier across processes, which would need the lease rather than a set. Gaps: step.do's config.timeout is not emulated — the callback receives no AbortSignal, so a timeout here could only reject while the work it was meant to cancel kept running. @lunora/workflow still ends a ctx.runStep decline wait 2s before the step's timeout (Cloudflare's 10-minute default when unset), so here that wait charges an attempt the host would not have ended, and the next attempt resumes it; no pause/restart; subscribe rejects NOT_IMPLEMENTED, since the engine keeps no per-instance event log to replay; ctx.run has no in-process seam on this host: createNodeWorkflowHost passes no fetchImpl to createWorkflowRunContext, so it still POSTs to LUNORA_ORIGIN_URL, which nothing here answers; ctx.parallel's synchronous join cannot interleave within one trigger activation",
+        },
+        workflowSchedules: {
+            level: "unsupported",
+            note: "createNodeWorkflowHost only runs instances something creates: nothing reads a workflow's schedules list, so a scheduled workflow would never start. Gate-bearing: codegen refuses an app that declares one here. Start it from a mutation with ctx.workflows.get(name).create() instead, re-armed through ctx.scheduler.runAt",
+        },
+        scheduler: {
+            level: "emulated",
+            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with retry backoff and a dead-letter queue. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing walks an app's DECLARED crons into that method, which is why cronTriggers is rated separately and unsupported here. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
+        },
+        relationGraph: {
+            level: "emulated",
+            note: "Identical to Cloudflare: the same engine-level traversal over the same ctx.db reads, served here by better-sqlite3 through this host's per-shard handle. One process and one disk, so a deep expansion is if anything cheaper than on workerd; what it is not is a platform feature",
+        },
+        cronTriggers: {
+            level: "unsupported",
+            note: "No runtime walks the generated LUNORA_CRONS map into SchedulerHost.cron, so the conformance suite is that method's only caller and a declared cron does not fire on this host. Gate-bearing: codegen refuses an app that declares one here rather than letting it deploy green and never run. Schedule the work explicitly with ctx.scheduler.runAfter/runAt instead",
+        },
+        authJurisdictionMove: {
+            level: "unsupported",
+            note: "Not applicable rather than missing: this host has no jurisdictions. A single process cannot restrict where state lives, so the shard registry offers no jurisdiction() and a worker built for a schema that declares one fails closed at construction. There is never a pinned auth object to copy into, so the admin ops are never wired",
+        },
+        agents: {
+            level: "unsupported",
+            note: "Nothing here mounts the generated agent classes: createNodeWorkflowHost compiles defineWorkflow handlers onto the @visulima/workflow engine, and an agent is a generated WorkflowEntrypoint resolved by its class name off `ctx.exports` or `env`, and this host binds neither. That missing mount is the whole gap: inference is not, since a model factory or AI SDK model object needs no binding and `ai` is emulated here through LUNORA_AI_PROXY_URL",
+        },
+        objectStorageBackups: {
+            level: "emulated",
+            note: "The commands work unchanged, but the bucket underneath is createNodeR2Bucket — a directory on the same machine the CLI runs on, so a bucket-backed backup here is not the separate failure domain it is on Cloudflare. The scheduled half additionally needs this host's scheduler, which exists but is not a shipping target",
+        },
+        objectStorageCdcArchive: {
+            level: "emulated",
+            note: "createNodeR2Bucket implements the `startAfter` seek the segment index needs, so the read-back behaves as it does on R2. Same caveat as the backups above: the bucket is a directory on the machine running the host, so archiving the changelog here moves it off SQLite but not off the disk that would take the shard with it",
+        },
+        objectStorage: {
+            level: "emulated",
+            note: "createNodeR2Bucket (@lunora/platform-node) — an R2BucketLike over the local filesystem (fs/promises, head/list/range). One file per object with the metadata in a trailer, so the single rename that publishes the bytes publishes their checksum and content-type with them, and a get reads body and metadata through one handle rather than reopening the path. put streams into the staged file and .body streams the requested range; .arrayBuffer()/.text() still allocate the range they return. The body is single-use, as R2's is. Keys are percent-escaped per path segment (`%`, `A-Z`, `:`, and a trailing `.` or space), so `A` and `a` stay two objects on a case-insensitive volume exactly as they are on R2, and a lowercase key containing no `%` or `:` and no segment ending in `.` or a space still maps to a byte-identical filename. The limits R2 would apply are applied here rather than left to the deploy to discover: put verifies a declared sha256 against the bytes received and stores nothing on a mismatch, and refuses customMetadata over R2's summed 2048-byte ceiling. Because R2 has no directories, neither does this bucket's behaviour — a deleted key's empty directory is pruned, so a later object may take that prefix, and delete of a key that is only a prefix is the no-op it is on R2 rather than a raw fs error. put honors R2's `onlyIf` etag preconditions (`etagMatches`, `etagDoesNotMatch`, `*`), checked and published under a per-key lock in this process, and delete takes one key or a batch. No multipart uploads and no presigned URLs, so the binding-backed resumable upload provider (`@lunora/storage/upload`) finishes only files under 5 MiB here: a larger one needs a multipart upload",
+        },
+        keyValueStore: { level: "emulated", note: "better-sqlite3 table behind the ShardKvStore API — not a dedicated KV product" },
+        vectorStore: {
+            level: "unsupported",
+            note: "No Vectorize-equivalent binding implemented, so codegen emits neither ctx.vectors nor the `backfillVectors` override; the admin op answers NOT_IMPLEMENTED, and an index's declared `model` is accepted but read by nothing",
+        },
+        ai: {
+            level: "emulated",
+            note: "No Workers AI-equivalent binding implemented, so `@cf/…` ids, `ctx.ai.run`, `ctx.ai.websearch` and the `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL env var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway, and a bring-your-own AI SDK model passes straight through. `ctx.ai.toMarkdown` and `@cf/…` image ids are unavailable (no binding); `ctx.ai.images.generate` takes `openai/<model>` slugs through the proxy, or the provider's own env key without one",
+        },
+        aiSearch: {
+            level: "unsupported",
+            note: "No AI Search-equivalent binding implemented, so codegen omits `ctx.aiSearch`. A REST-backed emulation (account id + API token over fetch) was considered and not built: the REST and binding APIs differ, and nobody on this target has asked for it",
+        },
+        browser: { level: "unsupported", note: "No headless-browser binding implemented" },
+        images: { level: "unsupported", note: "No Images-equivalent binding implemented" },
+        containerEgressPolicy: { level: "unsupported", note: "No container orchestration implemented, so there is no container egress to police" },
+        containerRuntimeScheduling: {
+            level: "unsupported",
+            note: "No container orchestration implemented, so there is no image to pick at start and no filesystem to snapshot",
+        },
+        containerSandboxTools: {
+            level: "unsupported",
+            note: "No container orchestration implemented, so there is no container filesystem to read, back up or mount a bucket into",
+        },
+        containers: {
+            level: "unsupported",
+            note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec, spawn or terminal to run a command in either",
+        },
+        analytics: { level: "unsupported", note: "No Analytics Engine-equivalent binding implemented" },
+        analyticsSql: {
+            level: "unsupported",
+            note: "No Analytics SQL-equivalent binding implemented, so codegen omits `ctx.analyticsSql`. Not rated emulated on the strength of `createAnalyticsSqlRest`: that transport queries Cloudflare's hosted analytics with an API token, so it reads data a Node host never wrote, and an app can import it directly without the ctx surface",
+        },
+        artifacts: {
+            level: "unsupported",
+            note: "No Artifacts-equivalent binding implemented: a host would need a Git server with repo-scoped tokens, which no host contract carries",
+        },
+        edgeRequestMetadata: {
+            level: "unsupported",
+            note: 'Nothing injects per-request platform metadata here — a Node request carries only what the caller wrote. Two telemetry surfaces degrade silently as a result: trustInboundTraceContext: "mtls" can never be satisfied, so it collapses to never-trust and every inbound traceparent is dropped (the runtime warns once when that actually happens, since no codegen gate can see a createWorker option), and the OTLP resource detector finds no placement attributes, so spans ship without them',
+        },
+        hostTraceFusion: {
+            level: "unsupported",
+            note: "No host-native trace tree to merge into, and cloudflare:workers is not importable here. Already capability-probed at runtime, so fuseCloudflareTraces is a no-op rather than a throw; onSpan remains the source of truth for the waterfall either way",
+        },
+        logArchive: {
+            level: "unsupported",
+            note: "createNodeR2Bucket is a directory on the local filesystem with no Iceberg catalog over it and no SQL engine to query it back, so records could be written but never read. The admin route is still registered here: it answers LOG_ARCHIVE_NOT_CONFIGURED (which the studio renders as a not-configured empty state) only while the logArchive table or the R2 SQL credentials are absent. Configure both and it stops failing closed — it builds an R2 SQL client and queries Cloudflare's API over the network, which is not this host serving the archive",
+        },
+        pipelines: { level: "unsupported", note: "No Pipelines-equivalent binding implemented" },
+        pointInTimeRecovery: {
+            level: "unsupported",
+            note: "better-sqlite3 keeps no change log to rewind, and createNodeShardState deliberately exposes no bookmark methods rather than a stub that would report a restore that never happened, so getPitrBookmark / pitrRestore answer PITR_UNAVAILABLE. Recover from `lunora backup` snapshots instead (objectStorageBackups)",
+        },
+        mail: {
+            level: "unsupported",
+            note: "The queue tier this host lacked when the rating was written now exists (createNodeQueueHost), but nothing here composes a @lunora/mail transport or the queued-send consumer, so a send would be accepted and never delivered",
+        },
+        secrets: {
+            level: "unsupported",
+            note: "No Secrets Store-equivalent binding implemented (a real host would likely map this to env vars). Gate-bearing, and it has to be: ctx.secrets is a core built-in spliced into every context, so codegen refuses an app that reads it on this target instead of emitting a surface that throws on first use",
+        },
+        secretValues: {
+            level: "unsupported",
+            note: "No store for human-supplied values. Agents are unsupported on this target (see `agents`), so nothing requests one, and no plaintext node store is built: a value written to local disk would be unencrypted",
+        },
+        services: {
+            level: "unsupported",
+            note: "No sibling-Worker host: a Node process runs one app, with nothing a service binding could point at. Gate-bearing, so codegen omits ctx.services instead of emitting bindings that resolve to nothing",
+        },
+        topics: {
+            level: "emulated",
+            note: "Each subscription is a createNodeQueueHost queue, so a publish is one durable insert per subscription into _lunora_queue_messages. A subscription handler's message.run goes through the same in-process dispatch route as the queues row, and needs the same wiring",
+        },
+        hyperdrive: { level: "unsupported", note: "No connection-pooling binding implemented" },
+        httpCache: {
+            level: "unsupported",
+            note: "Nothing sits in front of this host to cache its responses, and Node exposes no Web Cache API global — the runtime's REST edge cache finds no HttpCacheLike here and degrades to emitting Cache-Control alone, which browsers and any CDN in front still honour",
+        },
+        requestOrigin: {
+            level: "emulated",
+            note: "The same runtime code reads it off request.url, but nothing here serves HTTP: the embedding server builds that Request, usually from the Host header the caller sent. Pin the host in the proxy in front, or configure a base (publicBaseUrl / STORAGE_PUBLIC_BASE_URL), which always wins over the origin. Because the caller can choose it here, never build links delivered to OTHER people from ctx.origin (password-reset or invite emails, webhooks, notifications): that is host-header poisoning. Use a configured canonical base URL for those; a signed URL returned to the same caller is fine",
+        },
+        identityProxy: {
+            level: "unsupported",
+            note: "Nothing sits in front of this host to authenticate callers, so it never populates the execution context's access identity. @lunora/cloudflare-access still works here through its Cf-Access-Jwt-Assertion fallback, which is a plain header check and needs no host support",
+        },
+    },
+};
+
+export default NODE_CAPABILITIES;

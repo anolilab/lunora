@@ -9,9 +9,11 @@
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { createDispatchLogger, createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
+import { decodeWire } from "@lunora/wire";
 
-import { decodeWire } from "../../../shared/wire-codec";
-import { workflowBindingName } from "./define-workflow";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
+import { dedupNamespace, pinDedupId } from "./dedup-id";
+import { workflowClassName } from "./define-workflow";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
 import { raiseNonRetryable } from "./errors";
 import type { WorkflowBindingResolver } from "./fan-out";
@@ -19,11 +21,14 @@ import { createParallel, createSpawn } from "./fan-out";
 import { createRunStep } from "./run-step";
 import type { WorkflowBindingLike, WorkflowEventLike, WorkflowRunContext, WorkflowRunFunction, WorkflowStepLike } from "./types";
 import { createWaitForEvent } from "./wait-for-event";
+import { waitOutDeclines } from "./wait-out-declines";
 
 interface RunContextOptions<Params> {
     env: Record<string, unknown>;
     event: WorkflowEventLike<Params>;
     exportName: string;
+    /** The invoking context's `ctx.exports`, where Cloudflare exposes the workflows declared in wrangler `exports`. */
+    exports?: unknown;
     fetchImpl?: typeof fetch;
     /** Native `cloudflare:workflows` `NonRetryableError` — injected by `src/do`; absent in Node tests. */
     nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
@@ -40,19 +45,36 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     // dispatch is identical — only the arg type narrows — hence the cast. (The
     // `FunctionReference`/`ArgsOf` types stay per-package by design; the mirror
     // is pinned by `packages/client/__tests__/structural-mirrors.test.ts`.)
-    const run = createDispatchRunner({ env: options.env, fetchImpl: options.fetchImpl, label: "@lunora/workflow" }) as unknown as WorkflowRunFunction;
+    //
+    // Every dispatch, top-level and in-step, waits out a `DISPATCH_IN_PROGRESS`
+    // decline in place rather than throwing it into the engine's retry budget
+    // (see `wait-out-declines.ts`). `createRunStep` gets the bare runner and
+    // wraps it per attempt, because only there is the step's timeout known.
+    const runner = createDispatchRunner({ env: options.env, fetchImpl: options.fetchImpl, label: "@lunora/workflow" }) as unknown as WorkflowRunFunction;
+    const dispatch = waitOutDeclines(runner);
 
-    // Resolve a child workflow's `WORKFLOW_*` binding from its export name via the
-    // shared naming helper — the same derivation codegen and the config layer use,
-    // so no generated binding map is needed for the workflow body to spawn children.
+    // A top-level `ctx.run` is not durable — the body re-executes from the top on
+    // every activation (after a `step.sleep`, a `waitForEvent`, an eviction) — so
+    // without a replay-stable dedup id it re-applies its mutation once per
+    // activation. Pinning the counter here, per context, is what restarts it at
+    // `.1` on each replay so the second activation reproduces the first's ids.
+    // `createRunStep` gets the UNPINNED dispatcher: it pins its own per-step
+    // scopes, which must not sit inside this one's numbering. See `dedup-id.ts`,
+    // including why the namespace carries the workflow and not just the instance.
+    const namespace = dedupNamespace(options.exportName, options.event.instanceId);
+    const run = pinDedupId(dispatch, `${namespace}#body`);
+
+    // Resolve a child workflow by its export key (the generated class name) via
+    // the shared naming helper — the same derivation codegen and the config layer
+    // use, so no generated map is needed for the workflow body to spawn children.
     const resolveBinding: WorkflowBindingResolver = (workflow: string) => {
-        const bindingName = workflowBindingName(workflow);
-        const binding = options.env[bindingName] as WorkflowBindingLike | undefined;
+        const key = workflowClassName(workflow);
+        const binding = resolveWorkflowHandle<WorkflowBindingLike>(options.env, options.exports, key, ["create", "get"]);
 
-        if (!binding || typeof binding.create !== "function" || typeof binding.get !== "function") {
+        if (binding === undefined) {
             throw new LunoraError(
                 "INTERNAL",
-                `@lunora/workflow: cannot spawn child workflow "${workflow}" — no Workflow binding "${bindingName}" on env (is it declared in lunora/workflows.ts?)`,
+                `@lunora/workflow: cannot spawn child workflow "${workflow}" — no "${key}" on ctx.exports or env (is it declared in lunora/workflows.ts?)`,
             );
         }
 
@@ -70,13 +92,22 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     // — `boundInstanceId` in `fan-out.ts` — so both `ctx.parallel` and `ctx.spawn`
     // fold through one place and neither this allocator nor any other
     // `nextChildId` implementation has to restate the rule.
+    //
+    // The parent's export name sits in the id for the reason it sits in the
+    // dedup namespace: an instance id is unique only within its own workflow, so
+    // two parents of different workflows running as `order-42` would both mint
+    // `order-42-c0` on the SAME child binding, and `createOrAttach` would take
+    // the second create's "already exists" as its own earlier attempt and attach
+    // to the other parent's child. Anything outside the engine's id alphabet is
+    // folded to `_` so a `$` in an export name cannot make the id uncreatable.
+    const childScope = options.exportName.replaceAll(/\W/gu, "_");
     let childCounter = 0;
     const nextChildId = (explicit?: string): string => {
         if (explicit !== undefined) {
             return explicit;
         }
 
-        const id = `${options.event.instanceId}-c${String(childCounter)}`;
+        const id = `${options.event.instanceId}-${childScope}-c${String(childCounter)}`;
         childCounter += 1;
 
         return id;
@@ -84,10 +115,11 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
 
     const fanOutDeps = {
         env: options.env,
+        exports: options.exports,
         instanceId: options.event.instanceId,
         log,
         nextChildId,
-        parentBinding: workflowBindingName(options.exportName),
+        parentClassName: workflowClassName(options.exportName),
         resolveBinding,
         step: options.step,
     };
@@ -120,12 +152,25 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
 
     return {
         env: options.env,
+        exports: options.exports,
         event: options.event,
+        // Re-exposed, not just consumed: a body that builds its own dispatcher
+        // (the agent loop does) must dispatch through the same implementation
+        // this context's `run` uses. Omitted when absent — the key's presence
+        // would otherwise read as "the host injected `undefined`".
+        ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
         log,
         parallel: createParallel(fanOutDeps),
         params,
         run,
-        runStep: createRunStep({ env: options.env, log, nonRetryableErrorClass: options.nonRetryableErrorClass, run, step: options.step }),
+        runStep: createRunStep({
+            dedupNamespace: namespace,
+            env: options.env,
+            log,
+            nonRetryableErrorClass: options.nonRetryableErrorClass,
+            run: runner,
+            step: options.step,
+        }),
         spawn: createSpawn(fanOutDeps),
         step: options.step,
         waitForEvent: createWaitForEvent({ nonRetryableErrorClass: options.nonRetryableErrorClass, step: options.step }),

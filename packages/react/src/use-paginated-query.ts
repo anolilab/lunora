@@ -36,6 +36,12 @@ type PageItemOf<F> = ReturnOf<F> extends { page: (infer T)[] } ? T : unknown;
  * Changing `fn`, the base `args`, `initialNumItems`, or `shardKey` resets the
  * feed to its first page. The public return shape (`results` / `status` /
  * `loadMore`) is unchanged from the legacy keyset implementation.
+ *
+ * There is no total-row count here, and deliberately not: `paginate()` never
+ * counts the tail, which is what keeps a page O(page) rather than O(table). For
+ * a "42 of 1,203" label, subscribe to a `ctx.db.<table>.count(where)` query with
+ * the same filter args via `useQuery` — it is live, so it moves with the
+ * list. See the pagination concept page.
  */
 const usePaginatedQuery = <F extends FunctionReference>(
     function_: F,

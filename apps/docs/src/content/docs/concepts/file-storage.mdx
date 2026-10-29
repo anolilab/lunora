@@ -34,17 +34,19 @@ The split is enforced by **TypeScript**, not by the runtime: one object is built
 per context and the type is what narrows it, so a `mutation` that casts past its
 type still reaches `delete`. Where you need the narrowing to hold against more
 than a compiler, add [`storageRules(...)`](/docs/packages/server) — it rebuilds
-`ctx.storage` as an allowlist of the gated surface and drops every ungated
-sibling, so nothing can route around a rule.
+`ctx.storage` as an allowlist of the gated surface and refuses the members no
+rule can gate (`getPresignedUrl`, `list`), so nothing can route around a rule.
 
-| Operation                           | Query | Mutation | Action |
-| ----------------------------------- | :---: | :------: | :----: |
-| `download` / `getMetadata` / `head` |   ✓   |    ✓     |   ✓    |
-| `getUrl` / `getSignedUrl`           |   ✓   |    ✓     |   ✓    |
-| `deleteAfterCommit`                 |   —   |    ✓     |   —    |
-| `generateUploadUrl`                 |   —   |    —     |   ✓    |
-| `store`                             |   —   |    —     |   ✓    |
-| `delete`                            |   —   |    —     |   ✓    |
+| Operation                                         | Query | Mutation | Action |
+| ------------------------------------------------- | :---: | :------: | :----: |
+| `download` / `getMetadata` / `head`               |   ✓   |    ✓     |   ✓    |
+| `getUrl` / `getSignedUrl`                         |   ✓   |    ✓     |   ✓    |
+| `deleteAfterCommit`                               |   —   |    ✓     |   —    |
+| `generateUploadUrl` / `getPresignedUrl`           |   —   |    —     |   ✓    |
+| `store` / `upload`                                |   —   |    —     |   ✓    |
+| `createMultipartUpload` / `resumeMultipartUpload` |   —   |    —     |   ✓    |
+| `list`                                            |   —   |    —     |   ✓    |
+| `delete`                                          |   —   |    —     |   ✓    |
 
 In short: serve and inspect files from anywhere; mint an **upload** URL or
 write and delete bytes only from an action. A mutation is not typed to delete
@@ -52,6 +54,18 @@ bytes, but it can **queue** a delete that runs once its transaction commits —
 see [Deleting](#deleting).
 
 ## Uploading
+
+### Choosing an upload path
+
+| Path                                                                                | Use it for                                                        | Requests          | Progress, pause/resume  |
+| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------- | ----------------------- |
+| Signed upload URL (`generateUploadUrl`)                                             | Small files from the browser: an avatar, an attachment            | One `PUT`         | No                      |
+| [Resumable uploads](#resumable-uploads-from-the-browser) (`@lunora/storage/upload`) | Large files from the browser, flaky connections, a progress bar   | One per chunk     | Yes (TUS, chunked REST) |
+| `store`                                                                             | Bytes the server already holds: fetched, generated or transformed | None (in-process) | —                       |
+| [Multipart](#large-objects-through-the-worker)                                      | Streaming a body above `store`'s 16 MiB stream cap into R2        | One per part      | Resumable by `uploadId` |
+| [Presigned S3 URL](#uploading-straight-to-r2)                                       | Large objects that should never pass through the Worker           | One `PUT`         | No                      |
+
+### Signed upload URL
 
 The browser-friendly pattern is a **signed upload URL**: an action mints a
 short-lived `PUT` URL, the browser uploads to it without holding any bucket
@@ -74,6 +88,8 @@ export const requestUpload = action.input({ key: v.string(), contentType: v.stri
 });
 ```
 
+### Server-side `store`
+
 When the bytes already live server-side (fetched in the same action, generated,
 or transformed), upload them directly with `store`, which also enforces optional
 `maxSize` / `allowedContentTypes` guards:
@@ -92,8 +108,311 @@ credentials (`s3: { accountId, accessKeyId, secretAccessKey, bucket }`) on the
 storage instance; without them the call throws. Because such a URL is a
 self-contained bearer credential that never touches your Worker, it cannot be
 gated by your app's storage rules and is deliberately absent from the
-rule-enforced `ctx.storage` surface. For very large uploads,
-`createMultipartUpload` wraps R2's native multipart API.
+rule-enforced `ctx.storage` surface.
+
+### Large objects through the Worker
+
+`store` buffers a streamed body under its `maxSize` cap, so a stream uploaded
+with `maxSize` is capped at 16 MiB. Above that, stream the body into R2 with a **multipart upload** from
+an action: `createMultipartUpload` wraps R2's native multipart API, and every
+part except the last must be at least 5 MiB and the same size. Persist
+`uploadId` and pick the upload back up in a later request with
+`resumeMultipartUpload(key, uploadId)`.
+
+```ts
+import { action, v } from "@/lunora/_generated/server";
+
+export const importVideo = action.input({ url: v.string() }).action(async ({ ctx, args: { url } }) => {
+    const upload = await ctx.storage.createMultipartUpload("videos/clip.mp4", { contentType: "video/mp4" });
+
+    try {
+        const parts = [];
+        let partNumber = 1;
+
+        for await (const chunk of fiveMiBChunks(url)) {
+            parts.push(await upload.uploadPart(partNumber++, chunk));
+        }
+
+        return (await upload.complete(parts)).key;
+    } catch (error) {
+        await upload.abort();
+        throw error;
+    }
+});
+```
+
+`fiveMiBChunks` stands for your own code that re-chunks a source into 5 MiB
+pieces. `list(prefix, { cursor, limit })` is action-only too. Use it to sweep
+staging objects an abandoned upload left behind, and paginate on `truncated`:
+
+```ts
+let cursor: string | undefined;
+
+do {
+    const page = await ctx.storage.list("staging/", { cursor, limit: 100 });
+
+    await Promise.all(page.objects.map(async (object) => ctx.storage.delete(object.key)));
+    cursor = page.truncated ? page.cursor : undefined;
+} while (cursor);
+```
+
+Under a procedure guarded by `storageRules(...)`, `createMultipartUpload` and
+`resumeMultipartUpload` are checked against the bucket's `write` rules like
+`store`. `list` enumerates keys no `read` rule has vetted, so it rejects with
+`FORBIDDEN` there; the rule-scoped enumeration is
+`ctx.db.system.query("_storage")`.
+
+### Resumable uploads from the browser
+
+For large files, or anything that needs a progress bar or has to survive a
+dropped connection, mount the upload handler from `@lunora/storage/upload` on an
+HTTP route and drive it from the client with `useUpload`. The handler wraps
+`@visulima/storage`'s handlers, and the client hooks re-export
+`@visulima/storage-client`, so Lunora does not hand-roll the wire protocol.
+
+The subpath statically imports `node:async_hooks` for the grant scope, and the
+R2 providers it re-exports import `node:stream`, so the Worker needs Node.js
+compatibility for the module to load at all. A `compatibility_date` of
+`2026-08-04` or later has `nodejs_compat` on by default; earlier ones need
+`nodejs_compat` in `compatibility_flags` (`nodejs_als` alone covers
+`AsyncLocalStorage`, but not `node:stream`). Without it the import fails when
+the module loads — the subpath never reaches `createUploadHandler`, so making
+its `AsyncLocalStorage` lazy would not help.
+
+One handler speaks one protocol:
+
+- `"tus"` (the default): resumable. The client can pause, resume, and continue
+  after a dropped connection from the last acknowledged byte.
+- `"chunked-rest"`: plain REST chunks, one at a time and in order, which is how
+  the bundled client sends them. Not resumable mid-chunk the way TUS is.
+- `"multipart"`: one `multipart/form-data` request per file. Not resumable.
+
+#### Mount the handler
+
+`authorize` is the gate. It runs on every request of an upload: `POST` creates
+it, `PATCH` sends a chunk, `HEAD` asks where to resume, and on TUS `DELETE`
+cancels one in progress. It allows the request only when it returns exactly
+`true` or a grant from `createUploadContext` (below); anything else, or a throw,
+answers `403`. Return a `Response` to refuse with it instead, say a `429` with
+`Retry-After` for a caller over its rate limit: it is passed through as it is,
+plus `Tus-Resumable` on a TUS route. On TUS and chunked REST a
+request that declares a size over `maxFileSize` is answered `413` before the gate
+runs. The route is write-only: `GET`, and any other method the protocol does not
+upload with, answers `405` before the gate runs, so the upload route never serves
+a stored file. A finished upload cannot be deleted through the route at all: TUS
+refuses to terminate one, and the chunked-REST and multipart routes answer
+`DELETE` with `405`. Removing a stored file is `ctx.storage.delete` in your own
+code.
+
+The gate has two jobs. On `POST` it decides who may start an upload. On every
+other method it must check that the upload in the URL belongs to the caller,
+because anyone who learns an upload's id could otherwise append to it, or cancel
+it. So record the owner when the upload is created. In an
+[HTTP action](/docs/concepts/http-endpoints) the caller is already resolved on
+`ctx.auth`:
+
+```ts
+// lunora/http.ts
+import { createR2BindingUploadStorage, createUploadHandler } from "@lunora/storage/upload";
+import { httpAction, httpRouter } from "lunorash/server";
+import { env } from "cloudflare:workers";
+import { internal } from "@/lunora/_generated/internal";
+
+// Writes through the Worker's R2 binding (`UPLOADS` in wrangler.jsonc): no S3
+// credentials, and the same under `lunora dev` / miniflare as in production.
+// Needs `nodejs_compat`.
+const storage = createR2BindingUploadStorage(env.UPLOADS);
+
+const MiB = 1024 * 1024;
+
+/** The upload id in `/uploads/<id>`. */
+const uploadId = (url: URL) => url.pathname.split("/").pop() ?? "";
+
+const upload = httpAction(async (ctx, request) => {
+    const { userId } = ctx.auth;
+
+    if (userId === null) {
+        return new Response("Unauthorized", { status: 401 });
+    }
+
+    const handler = createUploadHandler({
+        storage,
+        maxFileSize: 2048 * MiB, // 2 GiB, the ceiling for any upload
+        // Lower it per upload from the type the client declares.
+        maxFileSizeFor: ({ contentType }) => (contentType.startsWith("image/") ? 10 * MiB : undefined),
+        authorize: async ({ method, url }) => method === "POST" || (await ctx.runQuery(internal.uploads.isOwner, { uploadId: uploadId(url), userId })),
+    });
+    const response = await handler.fetch(request);
+
+    // The new upload's URL comes back in `Location`: record who owns it.
+    const location = response.headers.get("location");
+
+    if (request.method === "POST" && response.ok && location !== null) {
+        await ctx.runMutation(internal.uploads.claim, { uploadId: uploadId(new URL(location, request.url)), userId });
+    }
+
+    return response;
+});
+
+const app = httpRouter();
+
+// The create request goes to `/uploads`, every later one to `/uploads/<id>`.
+app.all("/uploads", upload);
+app.all("/uploads/*", upload);
+
+export default app;
+```
+
+`internal.uploads.claim` and `internal.uploads.isOwner` are your own
+[internal functions](/docs/concepts/internal-functions) over an `uploads` table:
+one inserts `{ uploadId, userId }`, the other reports whether that row exists.
+The same table is where you check ownership before you serve the file.
+
+An upload's progress lives in the bucket, not in the Worker: one small state
+object per upload under `_lunora/uploads/`, written with conditional puts, so a
+chunk can land on any isolate and two requests for the same upload cannot both
+write it (the second gets a `409`, and the client re-reads its offset and
+continues). Building the handler per request is therefore fine, and it is what
+lets the gate see this request's `ctx.auth`. The provider stays one module-level
+instance: to put each user's uploads under their own key prefix, create an
+upload context, have the gate answer `caller.grant({ userId })` instead of
+`true`, and read it back in the provider's `filename` with `caller.get()`:
+
+```ts
+import { createR2BindingUploadStorage, createUploadContext } from "@lunora/storage/upload";
+
+const caller = createUploadContext<{ userId: string }>();
+
+const storage = createR2BindingUploadStorage(env.UPLOADS, {
+    filename: (file) => `uploads/${caller.get().userId}/${file.id}`,
+});
+```
+
+`caller.get()` throws when the request was not admitted with one of its grants.
+`maxFileSizeFor` gets the granted value as `granted`.
+
+The key prefix does not replace the ownership check: the gate still has to
+confirm, on every request after the create, that the upload belongs to the
+caller.
+
+The state objects stay after an upload finishes (so `HEAD` still reports it
+complete), and so do those of uploads that were abandoned. Add an R2 object
+lifecycle rule that deletes objects under `_lunora/uploads/` after a few days,
+longer than any upload should take.
+
+`maxFileSizeFor` caps one upload below `maxFileSize`, from the MIME type and
+metadata its create request declares. It runs after `authorize`, on creates
+only: TUS and chunked REST fix the total when the upload starts, and a chunk
+past it is refused. What the client declares is not proof of what it sends, so
+pair a type-based cap with `allowMIME` on the provider
+(`createR2BindingUploadStorage(env.UPLOADS, { allowMIME: ["image/*", "video/*"] })`).
+
+`createR2UploadStorage` is the other R2 provider: it writes over R2's S3 API
+with S3 credentials and no binding. Prefer `createR2BindingUploadStorage`: it
+needs no credentials and runs under `wrangler dev`.
+
+#### Upload from the client
+
+```tsx
+import { useUpload } from "@lunora/react/upload";
+
+export function VideoUpload({ token }: { token: string }) {
+    const { upload, progress, isUploading, isPaused, pause, resume, error } = useUpload({
+        endpointTus: "/uploads",
+        method: "tus",
+        // Sent on every request, so the route's `ctx.auth` resolves the caller.
+        headers: { authorization: `Bearer ${token}` },
+        restrictions: { allowedFileTypes: ["video/*"], maxFileSize: 2 * 1024 * 1024 * 1024 },
+        onSuccess: (file) => console.log("uploaded", file.id),
+    });
+
+    return (
+        <>
+            <input type="file" onChange={(event) => event.target.files?.[0] && void upload(event.target.files[0])} />
+            {isUploading ? <progress value={progress} max={100} /> : null}
+            {isUploading ? <button onClick={() => (isPaused ? void resume?.() : pause?.())}>{isPaused ? "Resume" : "Pause"}</button> : null}
+            {error ? <p role="alert">{error.message}</p> : null}
+        </>
+    );
+}
+```
+
+Pass `method` so the protocol is always the one your route speaks. Without it,
+`useUpload` uses the only endpoint you give it, or, given several, picks one by
+file size against `tusThreshold` (10 MB by default). Each handler speaks one
+protocol, so each endpoint needs its own route, such as a TUS handler on
+`/uploads` and a `protocol: "multipart"` handler on `/uploads-form`. Client
+`restrictions` reject a file before any request is sent. They are a convenience,
+not a check: the server's `maxFileSize` and `authorize` are what hold.
+
+A failed upload surfaces on `error` as a plain `Error` whose message carries the
+HTTP status (`Upload failed: 403`). A file the client-side `restrictions` reject
+throws a `RestrictionError`.
+
+The other clients ship the same uploader under their own names:
+
+| Package                  | Entry point                                    | Notes                                                                                  |
+| ------------------------ | ---------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `@lunora/react/upload`   | `useUpload`, `useTusUpload`, `useFileInput`, … | As above.                                                                              |
+| `@lunora/vue/upload`     | `useUpload`, `useTusUpload`, `useFileInput`, … | Same options as React.                                                                 |
+| `@lunora/svelte/upload`  | `createUpload`, `createTusUpload`, …           | Same options as React.                                                                 |
+| `@lunora/solid/upload`   | `createUpload`, `createTusUpload`, …           | Same options as React.                                                                 |
+| `@lunora/angular/upload` | `upload(options)`                              | TUS or chunked REST only (`protocol`); no size-based selection.                        |
+| `@lunora/client/upload`  | `createUpload(options)`, `createTusAdapter`, … | Framework-free; one `endpoint` plus a `protocol` (default `"tus"`), no size selection. |
+
+#### Authenticating the upload route
+
+Send the caller's credential in a header (`headers` on the hook, a static object
+or an async function) or as the session cookie your auth setup already uses. The
+route's `ctx.auth` resolves it the same way it does for any other HTTP action.
+Never put a token in the upload URL: TUS clients store and reuse upload URLs to
+resume, and a URL ends up in logs and `Referer` headers.
+
+Serving the result is a separate route; the upload route answers `GET` with
+`405`. Register the upload routes on their own
+prefix, so a `GET` route that streams stored objects with
+`serveStorageObject(ctx, key, request, authorize)`, or that checks a signed URL,
+cannot shadow them. Each route keeps its own gate: the upload `authorize` decides
+who may write, the serving route's `authorize` who may read. `serveStorageObject`
+reads through the Worker's `.storage()` R2 binding, so pass the upload provider
+the binding of that same bucket.
+
+#### Limits
+
+- **Request body size.** Every request passes through the Worker, so each one
+  must fit [Cloudflare's request body limit](https://developers.cloudflare.com/workers/platform/limits/#request-limits)
+  for your plan (100 MB on Free and Pro). TUS and chunked REST send the file as
+  chunks of `chunkSize` bytes, one request each. A multipart upload is a single
+  request, so the whole file has to fit.
+- **R2 part size.** R2 requires every multipart part but the last to be at
+  least 5 MiB and all of them the same size. `createR2BindingUploadStorage`
+  coalesces chunks of any size into 5 MiB parts, so the client's `chunkSize` is
+  free. Over `createR2UploadStorage` each chunk becomes one part, so
+  `chunkSize` has to be the same 5 MiB or more on every chunk (the TUS client's
+  default is 5 MiB).
+- **Unsupported TUS extensions.** The binding provider does not offer
+  `creation-defer-length`, `concatenation` (parallel uploads) or `checksum`. A
+  request that sends `Upload-Checksum` anyway gets a `400` before its body is
+  read.
+- **Method overrides.** A request carrying `X-HTTP-Method-Override` (or
+  `X-HTTP-Method`, `X-Method-Override`) gets a `405`, so no request can pass the
+  write gate as one method and run as another.
+- **Chunked REST** over either R2 provider takes one chunk at a time and in
+  order: a chunk at any other offset is a `409` and is not stored, and over the
+  binding provider so is one sent while another is streaming. The bundled client
+  sends one chunk at a time, so its uploads complete;
+  [@lunora/storage](/docs/packages/storage#chunked-rest) has the details.
+- **`maxFileSize`** defaults to 100 MiB, has no unlimited setting, and must be a
+  finite, non-negative number. Uploads over it get a `413`.
+  [@lunora/storage](/docs/packages/storage#end-user-uploads-rls-gated) covers how
+  each protocol declares its size.
+- **No `authorize`** mounts an open, writable endpoint and logs a warning when
+  the handler is built. Pass `public: true` only for a bucket that is meant to be
+  open.
+
+In tests, back the handler with `@visulima/storage`'s memory provider
+(`@visulima/storage/provider/memory`) to run whole uploads, including pause and
+resume, without a bucket.
 
 ## Serving files
 
@@ -185,11 +504,12 @@ the object (logged with its key) rather than failing a mutation that already
 committed. `ctx.storage.bucket("avatars").deleteAfterCommit(key)` queues against
 that bucket.
 
-The pairing holds for a **top-level mutation**. Queue a delete inside a mutation
-an action called through `ctx.runMutation` and the flush waits until the action
-returns — so an action that throws afterwards leaves the row deleted (it
-committed on its own) and the object in place, with nothing logged. See
-[@lunora/storage](/docs/packages/storage) for the full treatment.
+The pairing holds through composition too: a mutation an action calls through
+`ctx.runMutation` opens its own transaction, so its queued deletes are flushed
+when **that mutation** commits and dropped when it rolls back — even where the
+action swallows the failure and returns normally. See
+[@lunora/storage](/docs/packages/storage) for the full treatment, including the
+one case that can still orphan an object.
 
 ## See also
 

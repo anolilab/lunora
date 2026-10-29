@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runResetCommand } from "../../src/commands/reset/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -87,7 +88,7 @@ describe("lunora reset", () => {
                 logger: silentLogger(),
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.CANCELLED);
             expect(result.removed).toEqual([]);
             expect(existsSync(stateDir)).toBe(true);
         });
@@ -144,7 +145,7 @@ describe("lunora reset", () => {
                 logger: { ...silentLogger(), error: (message) => errors.push(message) },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(errors.some((line) => line.includes("--yes"))).toBe(true);
             expect(existsSync(stateDir)).toBe(true);
         });

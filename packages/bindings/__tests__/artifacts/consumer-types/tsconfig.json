@@ -1,0 +1,16 @@
+{
+    // An app on the templates' setup: ES2024 + workers-types, no `@types/node`
+    // and no `lib.esnext.disposable`, so `Symbol.dispose` is not declared.
+    "compilerOptions": {
+        "target": "ES2024",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "lib": ["ES2024"],
+        "types": ["@cloudflare/workers-types"],
+        "strict": true,
+        "skipLibCheck": true,
+        "isolatedModules": true,
+        "noEmit": true
+    },
+    "files": ["consumer.ts"]
+}

@@ -1,6 +1,6 @@
+import { stableWireKey } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { stableWireKey } from "../../../shared/wire-key";
 import type { SubscriptionState } from "../src/subscription";
 import { SubscriptionRegistry } from "../src/subscription";
 
@@ -15,7 +15,7 @@ const makeState = (id: string, fn: string, args: Record<string, unknown>, shardK
 
 /**
  * `SubscriptionRegistry.key` routes `args` through the shared `stableWireKey`
- * encoder (`shared/wire-key.ts`) so duplicate subscriptions collapse to one
+ * encoder (`packages/wire/src/wire-key.ts`) so duplicate subscriptions collapse to one
  * server-side registration — byte-identical to the old `stableStringify` keys
  * for pure-JSON args, distinct stable tokens for wire-typed args. These tests
  * pin the now-shared semantics — key-order stability, `undefined`-field

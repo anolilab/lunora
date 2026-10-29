@@ -8,6 +8,7 @@ import type { ContainerIR } from "@lunora/codegen";
 import { CONTAINERS_FILENAME, discoverContainers } from "@lunora/codegen";
 
 import { discoverIr } from "./discover-info";
+import type { DiscoveryCache } from "./discovery-cache";
 
 interface DiscoverContainerInfoResult {
     /** Discovered container definitions; `[]` when none are declared or parsing failed. */
@@ -23,7 +24,7 @@ interface DiscoverContainerInfoResult {
  * parsed — callers decide whether that is a warning (validator) or ignorable
  * (inference).
  */
-const discoverContainerInfo = (projectRoot: string, schemaDirectory: string): DiscoverContainerInfoResult => {
+const parseContainerInfo = (projectRoot: string, schemaDirectory: string): DiscoverContainerInfoResult => {
     // skipFileDependencyResolution: container discovery only AST-walks
     // containers.ts and resolves the local `defineContainer` import specifier
     // (which lives in this file). Without this flag ts-morph eagerly loads the
@@ -34,6 +35,12 @@ const discoverContainerInfo = (projectRoot: string, schemaDirectory: string): Di
 
     return error === undefined ? { containers: value ?? [] } : { containers: [], error };
 };
+
+/** Discover the container facts, memoised on `cache` when one is given. */
+const discoverContainerInfo = (projectRoot: string, schemaDirectory: string, cache?: DiscoveryCache): DiscoverContainerInfoResult =>
+    cache === undefined
+        ? parseContainerInfo(projectRoot, schemaDirectory)
+        : cache.memo(`containers:${projectRoot}:${schemaDirectory}`, () => parseContainerInfo(projectRoot, schemaDirectory));
 
 export type { DiscoverContainerInfoResult };
 export { discoverContainerInfo };

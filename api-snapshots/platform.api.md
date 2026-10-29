@@ -37,6 +37,12 @@ interface AnalyticsEngineDatasetLike {
 }
 ```
 
+### `CELLD_CAPABILITIES` (const)
+
+```ts
+const CELLD_CAPABILITIES: PlatformCapabilities;
+```
+
 ### `CLOUDFLARE_CAPABILITIES` (const)
 
 ```ts
@@ -73,6 +79,7 @@ interface D1DatabaseLike {
 ```ts
 interface D1PreparedStatementLike {
     all: <T = unknown>() => Promise<{
+        meta?: Record<string, unknown>;
         results: T[];
         success: boolean;
     }>;
@@ -119,6 +126,7 @@ interface ExecutionContextLike {
             tags?: string[];
         }) => Promise<unknown>;
     };
+    exports?: unknown;
     passThroughOnException?: () => void;
     waitUntil?: (promise: Promise<unknown>) => void;
 }
@@ -217,6 +225,12 @@ type KvValue = ReadableStream | ArrayBuffer | ArrayBufferView | string;
 type KvValueType = "text" | "json" | "arrayBuffer" | "stream";
 ```
 
+### `LUNORA_ROLE_PREFIX` (const)
+
+```ts
+const LUNORA_ROLE_PREFIX = "__lunora_do__:";
+```
+
 ### `MessageBatchLike` (interface)
 
 ```ts
@@ -270,37 +284,64 @@ interface PlatformCapabilities {
     features: {
         agents?: Capability;
         ai?: Capability;
+        aiSearch?: Capability;
+        alarmRearmBreaker?: Capability;
         analytics?: Capability;
+        analyticsSql?: Capability;
+        artifacts?: Capability;
+        authJurisdictionMove?: Capability;
         browser?: Capability;
         commitOrderedTables?: Capability;
+        conditionalWrites?: Capability;
+        containerEgressPolicy?: Capability;
+        containerRuntimeScheduling?: Capability;
         containers?: Capability;
+        containerSandboxTools?: Capability;
         cronTriggers?: Capability;
         crossShardFanout?: Capability;
+        deliveryAuthorization?: Capability;
         durableStreams?: Capability;
+        edgeRequestMetadata?: Capability;
         globalTables?: Capability;
+        hostTraceFusion?: Capability;
         httpCache?: Capability;
         hyperdrive?: Capability;
         identityProxy?: Capability;
         images?: Capability;
         keyValueStore?: Capability;
+        liveStreams?: Capability;
         localSql?: Capability;
+        logArchive?: Capability;
         mail?: Capability;
         memoryTables?: Capability;
+        objectColumnPaths?: Capability;
         objectStorage?: Capability;
         objectStorageBackups?: Capability;
         objectStorageCdcArchive?: Capability;
         pipelines?: Capability;
+        pointInTimeRecovery?: Capability;
+        queryExplain?: Capability;
         queues?: Capability;
+        relationGraph?: Capability;
+        requestOrigin?: Capability;
         scheduler?: Capability;
+        scheduleRateBreaker?: Capability;
         secrets?: Capability;
+        secretValues?: Capability;
         serverReactors?: Capability;
+        services?: Capability;
         shardAlarms?: Capability;
         shardedState?: Capability;
         shardPlacement?: Capability;
         shardReadReplicas?: Capability;
+        topics?: Capability;
+        typedWebSockets?: Capability;
         vectorStore?: Capability;
         websocketHibernation?: Capability;
+        workerLoaders?: Capability;
+        workflowRollback?: Capability;
         workflows?: Capability;
+        workflowSchedules?: Capability;
     };
     id: string;
     name: string;
@@ -389,7 +430,7 @@ interface R2BucketLike {
             contentType?: string;
         };
     }) => Promise<R2MultipartUploadLike>;
-    delete: (key: string) => Promise<void>;
+    delete: (keys: string | string[]) => Promise<void>;
     get: (key: string, options?: {
         range?: R2RangeLike;
     }) => Promise<R2ObjectBodyLike | null>;
@@ -407,14 +448,22 @@ interface R2BucketLike {
         objects: R2ObjectLike[];
         truncated?: boolean;
     }>;
-    put: (key: string, body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null, options?: {
-        customMetadata?: Record<string, string>;
-        httpMetadata?: {
-            contentType?: string;
-        };
-        sha256?: ArrayBuffer | string;
-    }) => Promise<R2ObjectLike>;
+    put: {
+        (key: string, body: R2PutBodyLike, options: R2PutOptionsLike & {
+            onlyIf: R2ConditionalLike;
+        }): Promise<R2ObjectLike | null>;
+        (key: string, body: R2PutBodyLike, options?: R2PutOptionsLike): Promise<R2ObjectLike>;
+    };
     resumeMultipartUpload?: (key: string, uploadId: string) => R2MultipartUploadLike;
+}
+```
+
+### `R2ConditionalLike` (interface)
+
+```ts
+interface R2ConditionalLike {
+    etagDoesNotMatch?: string;
+    etagMatches?: string;
 }
 ```
 
@@ -461,6 +510,24 @@ interface R2ObjectLike {
 }
 ```
 
+### `R2PutBodyLike` (type)
+
+```ts
+type R2PutBodyLike = ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null;
+```
+
+### `R2PutOptionsLike` (interface)
+
+```ts
+interface R2PutOptionsLike {
+    customMetadata?: Record<string, string>;
+    httpMetadata?: {
+        contentType?: string;
+    };
+    sha256?: ArrayBuffer | string;
+}
+```
+
 ### `R2RangeLike` (type)
 
 ```ts
@@ -482,6 +549,27 @@ interface R2UploadedPartLike {
     etag: string;
     partNumber: number;
 }
+```
+
+### `SECRET_VALUE_MAX_BYTES` (const)
+
+```ts
+const SECRET_VALUE_MAX_BYTES: number;
+```
+
+### `SECRET_VALUE_MAX_TTL_MS` (const)
+
+```ts
+const SECRET_VALUE_MAX_TTL_MS: number;
+```
+
+### `SOCKET_TAG_BUDGET` (const)
+
+```ts
+const SOCKET_TAG_BUDGET: {
+    readonly maxTagLength: 256;
+    readonly usableTags: 9;
+};
 ```
 
 ### `ScheduleOptions` (interface)
@@ -530,6 +618,71 @@ interface SchedulerHost {
     };
     list?: () => Promise<ScheduledJobStatus[]>;
     schedule: (functionPath: string, args: Record<string, unknown>, options?: ScheduleOptions) => Promise<ScheduledJob>;
+}
+```
+
+### `SecretValueHost` (interface)
+
+```ts
+interface SecretValueHost {
+    discard: (ref: string) => Promise<boolean>;
+    put: (value: string, options: SecretValuePutOptions) => Promise<string>;
+    take: (ref: string, options: SecretValueTakeOptions) => Promise<string | undefined>;
+}
+```
+
+### `SecretValueKeyError` (class)
+
+```ts
+class SecretValueKeyError extends Error {
+    readonly code = "SECRET_VALUE_KEY_UNAVAILABLE";
+    constructor(reason: "missing" | "malformed");
+}
+```
+
+### `SecretValueKeyOptions` (interface)
+
+```ts
+interface SecretValueKeyOptions {
+    key: string | undefined;
+    previousKey?: string;
+}
+```
+
+### `SecretValuePutOptions` (interface)
+
+```ts
+interface SecretValuePutOptions {
+    scope: string;
+    ttlMs: number;
+}
+```
+
+### `SecretValueStore` (interface)
+
+```ts
+interface SecretValueStore {
+    discard: (ref: string) => Promise<boolean>;
+    put: (seal: (ref: string) => Promise<string>, options: SecretValuePutOptions) => Promise<string>;
+    take: (ref: string, options: SecretValueTakeOptions, open: (stored: string) => Promise<string | undefined>) => Promise<string | undefined>;
+}
+```
+
+### `SecretValueTakeOptions` (interface)
+
+```ts
+interface SecretValueTakeOptions {
+    claimant: string;
+    scope: string;
+}
+```
+
+### `SecretValueTooLargeError` (class)
+
+```ts
+class SecretValueTooLargeError extends Error {
+    readonly code = "SECRET_VALUE_TOO_LARGE";
+    constructor(bytes: number);
 }
 ```
 
@@ -597,7 +750,9 @@ type ShardRegionHint = RegionHint;
 
 ```ts
 interface ShardSqlCursor<Row = SqlRow> extends Iterable<Row> {
+    readonly columnNames?: string[];
     one: () => Row;
+    raw?: () => IterableIterator<unknown[]>;
     toArray: () => Row[];
 }
 ```
@@ -639,8 +794,13 @@ interface SocketHost {
     getSockets: (tag?: string) => SocketHandle[];
     handleFor: (socket: unknown) => SocketHandle | undefined;
     idFor: (socket: SocketHandle) => string;
+    newPair: () => {
+        client: unknown;
+        server: unknown;
+    };
     removeTag?: (socket: SocketHandle, tag?: string) => void;
     setTag?: (socket: SocketHandle, tag: string) => void;
+    upgradeResponse: (client: unknown) => Response;
 }
 ```
 
@@ -687,6 +847,12 @@ interface VectorRecordLike {
 }
 ```
 
+### `VectorValues` (type)
+
+```ts
+type VectorValues = Float32Array | Float64Array | ReadonlyArray<number>;
+```
+
 ### `VectorizeDeleteMutation` (interface)
 
 ```ts
@@ -701,9 +867,10 @@ interface VectorizeDeleteMutation {
 ```ts
 interface VectorizeIndexDetails {
     dimensions: number;
-    processedUpToDatetime?: string;
-    processedUpToMutation?: string;
-    vectorsCount: number;
+    processedUpToDatetime?: number | string;
+    processedUpToMutation?: number | string;
+    vectorCount?: number;
+    vectorsCount?: number;
 }
 ```
 
@@ -711,12 +878,12 @@ interface VectorizeIndexDetails {
 
 ```ts
 interface VectorizeIndexLike {
-    deleteByIds: (ids: ReadonlyArray<string>) => Promise<VectorizeDeleteMutation>;
-    describe?: () => Promise<VectorizeIndexDetails>;
-    getByIds: (ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorizeVector>>;
-    insert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
-    query: (vector: ReadonlyArray<number>, options?: VectorizeQueryOptions) => Promise<VectorizeMatches>;
-    upsert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
+    deleteByIds(this: void, ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation>;
+    describe?(this: void): Promise<VectorizeIndexDetails>;
+    getByIds(this: void, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>>;
+    insert(this: void, vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
+    query(this: void, vector: VectorValues, options?: VectorizeQueryOptions): Promise<VectorizeMatches>;
+    upsert(this: void, vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
 }
 ```
 
@@ -728,7 +895,7 @@ interface VectorizeMatch {
     metadata?: Record<string, unknown>;
     namespace?: string;
     score: number;
-    values?: ReadonlyArray<number>;
+    values?: VectorValues;
 }
 ```
 
@@ -747,7 +914,7 @@ interface VectorizeMatches {
 interface VectorizeQueryOptions {
     filter?: Record<string, unknown>;
     namespace?: string;
-    returnMetadata?: "none" | "indexed" | "all";
+    returnMetadata?: "none" | "indexed" | "all" | boolean;
     returnValues?: boolean;
     topK?: number;
 }
@@ -768,8 +935,32 @@ interface VectorizeVector {
     id: string;
     metadata?: Record<string, unknown>;
     namespace?: string;
-    values: ReadonlyArray<number>;
+    values: VectorValues;
 }
+```
+
+### `assertSecretValueSize` (const)
+
+```ts
+const assertSecretValueSize: (value: string) => void;
+```
+
+### `clampSecretValueTtl` (const)
+
+```ts
+const clampSecretValueTtl: (ttlMs: number) => number;
+```
+
+### `encryptingSecretValueHost` (const)
+
+```ts
+const encryptingSecretValueHost: (raw: SecretValueStore, options: SecretValueKeyOptions) => SecretValueHost;
+```
+
+### `findSocketTagBudgetViolation` (const)
+
+```ts
+const findSocketTagBudgetViolation: (tags?: ReadonlyArray<string>) => string | undefined;
 ```
 
 ### `resolveShard` (const)
@@ -784,8 +975,10 @@ const resolveShard: (directory: ShardDirectory, name: string, locationHint?: Sha
 
 ```ts
 interface ConformanceHost {
+    advanceClock?: (ms: number) => void;
     awaitAlarmFired?: (target: number) => Promise<void>;
     awaitJobDispatched?: (id: string) => Promise<boolean>;
+    capabilities?: PlatformCapabilities;
     cleanup?: () => void;
     createSocket?: () => unknown;
     cronTicks?: (functionPath: string) => number;
@@ -796,6 +989,19 @@ interface ConformanceHost {
     readFrames?: (socket: SocketHandle) => string[];
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
     scheduler?: SchedulerHost;
+    secretValues?: SecretValueHost;
+    secretValueStore?: {
+        dump: () => Promise<string>;
+        peek: (ref: string) => Promise<{
+            scope: string;
+            value: string;
+        } | undefined>;
+        poke: (ref: string, fields: {
+            scope?: string;
+            value?: string;
+        }) => Promise<void>;
+        store: SecretValueStore;
+    };
     shard: ShardHost;
     simulateDeadLetter?: (id: string) => Promise<boolean>;
     simulateRecycle?: () => void;

@@ -10,6 +10,7 @@
  * arrive, not only from the header. Each reader aborts with a 413 the moment
  * cumulative bytes exceed the budget, before the oversized payload is buffered.
  */
+import { readBodyTextCapped } from "../../../shared/read-body-text-capped";
 import { LunoraError } from "./errors";
 
 /**
@@ -45,41 +46,11 @@ const isPlainObject = (x: unknown): x is Record<string, unknown> => typeof x ===
  * A `null` body (GET-style request with no body) decodes to `""`.
  */
 const readBodyTextWithLimit = async (request: Request, limit: number = MAX_BODY_BYTES): Promise<string> => {
-    if (!request.body) {
-        return "";
+    const text = await readBodyTextCapped(request, limit);
+
+    if (text === null) {
+        throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
     }
-
-    const reader = request.body.getReader();
-    const decoder = new TextDecoder();
-    let total = 0;
-    let text = "";
-
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- drain the body stream until the reader signals `done`
-    while (true) {
-        // eslint-disable-next-line no-await-in-loop -- stream reads are inherently sequential; each chunk depends on the prior read
-        const { done, value } = await reader.read();
-
-        if (done) {
-            break;
-        }
-
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- a stream read can yield `done: false` with an undefined `value`; guard before reading byteLength
-        if (value) {
-            total += value.byteLength;
-
-            if (total > limit) {
-                // Stop pulling more bytes; release the underlying stream.
-                // eslint-disable-next-line no-await-in-loop -- one-shot cleanup on the over-budget abort path before throwing
-                await reader.cancel().catch(() => {});
-
-                throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
-            }
-
-            text += decoder.decode(value, { stream: true });
-        }
-    }
-
-    text += decoder.decode();
 
     return text;
 };
@@ -136,6 +107,71 @@ const readBodyBytesWithLimit = async (request: Request, limit: number = MAX_BODY
 };
 
 /**
+ * A copy of `request` — same method, URL and headers — whose body is the
+ * original streamed through the same byte budget the readers above apply, for
+ * a handler the runtime hands the request to rather than reading it itself (the
+ * auth plane). Nothing is buffered: chunks pass through as the handler pulls
+ * them, and the stream errors with a 413 `LunoraError` the moment cumulative
+ * bytes exceed `limit`. `overflowed()` reports whether that happened, so the
+ * caller can answer 413 even when the handler caught the read error and
+ * answered on its own.
+ *
+ * The original body is only locked once the copy's is first read, so a handler
+ * that declines without touching the body leaves `request` usable for the
+ * routing that follows. A bodiless request is returned as-is.
+ */
+const withBodyLimit = (request: Request, limit: number = MAX_BODY_BYTES): { overflowed: () => boolean; request: Request } => {
+    const source = request.body;
+    let overflowed = false;
+
+    if (source === null) {
+        return { overflowed: () => overflowed, request };
+    }
+
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let total = 0;
+
+    const body = new ReadableStream<Uint8Array>(
+        {
+            cancel: async (reason) => {
+                await (reader ?? source).cancel(reason);
+            },
+            pull: async (controller) => {
+                reader ??= source.getReader();
+
+                const { done, value } = await reader.read();
+
+                if (done) {
+                    controller.close();
+
+                    return;
+                }
+
+                total += value.byteLength;
+
+                if (total > limit) {
+                    overflowed = true;
+                    // Error first: a source whose cancel never settles must not hold
+                    // the handler's pending read open.
+                    controller.error(new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 }));
+                    reader.cancel().catch(() => {});
+
+                    return;
+                }
+
+                controller.enqueue(value);
+            },
+            // No read-ahead: the default high-water mark of 1 would pull (and lock the
+            // original body) as soon as the stream is built.
+        },
+        { highWaterMark: 0 },
+    );
+
+    // `duplex` is required by Node's fetch for a streamed body; workerd ignores it.
+    return { overflowed: () => overflowed, request: new Request(request, { body, duplex: "half" } as RequestInit) };
+};
+
+/**
  * Drain + parse a JSON body under the byte cap (defaults to the authoritative
  * {@link MAX_BODY_BYTES}; pass a larger `limit` for endpoints whose payloads
  * legitimately exceed 1 MiB), tolerating an empty body (`{}`) and a non-object
@@ -176,4 +212,4 @@ const readJsonBodyWithLimit = async (request: Request, limit: number = MAX_BODY_
     return body;
 };
 
-export { isPlainObject, MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit, readLooseJsonBody };
+export { isPlainObject, MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit, readLooseJsonBody, withBodyLimit };

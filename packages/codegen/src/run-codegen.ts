@@ -1,82 +1,48 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 
-import type { Finding, LintContext } from "@lunora/advisor";
 import { runAdvisor } from "@lunora/advisor";
 import { LunoraError } from "@lunora/errors";
-import { Project } from "ts-morph";
+import type { Project } from "ts-morph";
 
-import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
-import { toAdvisorContext } from "./advisor";
+import { advisorEvidenceOf } from "./advisor-evidence";
+import { applyAdvisorPolicy } from "./advisor-floor";
+import type { CallSites } from "./architecture";
+import { buildArchitecture, emitArchitectureModule } from "./architecture";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
+import { createCodegenProject } from "./codegen-project";
 import { buildDeclarationSurface } from "./declaration-surface";
-import discoverAdminRoutes from "./discover/admin-routes";
-import discoverAiRawRuns from "./discover/ai-raw-runs";
-import discoverAiToolSideEffects from "./discover/ai-tool-side-effects";
-import discoverArgumentDerivedFetches from "./discover/argument-derived-fetches";
-import discoverArgumentValidators from "./discover/argument-validators";
-import { listLunoraSourceFiles } from "./discover/ast";
-import discoverAuthConfig from "./discover/auth-config";
-import discoverAuthApiCalls from "./discover/authapi-calls";
-import discoverBrowserUrlAccesses from "./discover/browser-url-accesses";
-import discoverConfigCalls from "./discover/config-calls";
-import discoverContainerKeyAccesses from "./discover/container-key-accesses";
-import discoverContainerOverrides from "./discover/container-overrides";
-import discoverExportSinks from "./discover/export-sinks";
-import discoverFailOpenGuards from "./discover/fail-open-guards";
+import { withSourceListMemo } from "./discover/ast";
+import discoverCallEdges from "./discover/call-edges";
+import type { ErasedReturn } from "./discover/erased-returns";
+import { collectErasures, erasedReturnFindings } from "./discover/erased-returns";
 import { discoverFlagKeys } from "./discover/flag-keys";
-import discoverFlagReads from "./discover/flag-reads";
-import discoverFlagSecurityDefaults from "./discover/flag-security-defaults";
 import discoverFunctions from "./discover/functions";
 import resolveStandardSchemaType from "./discover/functions/resolve-standard-schema-type";
-import discoverGeoIndexUsages from "./discover/geo-index-usages";
-import discoverHttpActionGuards from "./discover/http-action-guards";
-import discoverHttpHeaderWrites from "./discover/http-header-writes";
 import discoverHttpRoutes from "./discover/http-routes";
-import discoverHyperdriveCalls from "./discover/hyperdrive-calls";
-import discoverIdentityClaimReads from "./discover/identity-claim-reads";
-import discoverImageDeliveryUrlAccesses from "./discover/image-delivery-url-accesses";
 import discoverInserts from "./discover/inserts";
-import discoverKvKeyAccesses from "./discover/kv-key-accesses";
-import discoverMailRecipientAccesses from "./discover/mail-recipient-accesses";
-import discoverMaskProcedures from "./discover/mask-procedures";
+import { assertJurisdictionMoveAcknowledged, findDoAuthDeclaration } from "./discover/jurisdiction-move";
+import discoverLiveStreams from "./discover/live-streams";
 import discoverMaskHasNonLiteralPolicy from "./discover/mask-procedures/has-non-literal-policy";
 import discoverMaskMetadata from "./discover/mask-procedures/metadata";
-import discoverMaskStrategies from "./discover/mask-procedures/strategies";
 import discoverMigrations from "./discover/migrations";
-import discoverMutatorWrites from "./discover/mutator-writes";
+import { discoverModules, resolveModules } from "./discover/modules";
 import { discoverMutators } from "./discover/mutators";
-import discoverNondeterministicCalls from "./discover/nondeterministic-calls";
-import discoverNormalizeIdAuthorization from "./discover/normalize-id-authorization";
-import { discoverNotifyCalls, discoverNotifyConfig } from "./discover/notify";
-import discoverOwnerFieldWrites from "./discover/owner-field-writes";
+import readPackageDependencies from "./discover/package-dependencies";
 import hasPaymentStoreTables from "./discover/payment-store-tables";
-import discoverPaymentWebhooks from "./discover/payment-webhooks";
-import discoverPrivilegedDispatches from "./discover/privileged-dispatches";
-import discoverProcedureMiddleware from "./discover/procedure-middleware";
+import { assertPrivacyCoverage, discoverPrivacyCoverage } from "./discover/privacy-coverage";
 import discoverQueries from "./discover/queries";
-import discoverR2sqlCalls from "./discover/r2sql-calls";
-import discoverRatelimitKeySelectors from "./discover/ratelimit-key-selectors";
-import discoverRawRowReturns from "./discover/raw-row-returns";
-import discoverRelationLoads from "./discover/relation-loads";
-import discoverRlsProcedures from "./discover/rls-procedures";
 import discoverRlsMetadata from "./discover/rls-procedures/metadata";
 import discoverSchema from "./discover/schema";
-import discoverSecrets from "./discover/secrets";
 import { discoverShapes } from "./discover/shapes";
-import discoverSoftDeleteReads from "./discover/soft-delete-reads";
-import discoverSqlInterpolation from "./discover/sql-interpolation";
-import discoverStaleMigrationImports from "./discover/stale-migration-imports";
-import discoverStorageKeyAccesses from "./discover/storage-key-accesses";
-import discoverStorageUploads from "./discover/storage-uploads";
 import { buildStudioFeatures } from "./discover/studio-features";
+import discoverTableWrites from "./discover/table-writes";
 import discoverUnreadableArguments from "./discover/unreadable-arguments";
 import discoverUnregisteredProcedures from "./discover/unregistered-procedures";
-import discoverUnrestrictedWhereBranches from "./discover/unrestricted-where-branches";
-import discoverVectorNamespaceAccesses from "./discover/vector-namespace-accesses";
 import discoverWorkflowCalls from "./discover/workflow-calls";
+import discoverWorkflowEvents from "./discover/workflow-events";
 import {
     buildStorageColumns,
     emitAgents,
@@ -85,33 +51,34 @@ import {
     emitContainers,
     emitCrons,
     emitDrizzleSchema,
+    emitDurableObjects,
     emitFunctions,
+    emitInternalApi,
+    emitLazyFunctionModules,
+    emitLive,
     emitQueues,
+    emitScheduler,
     emitSeed,
     emitShard,
+    emitShardRegistry,
     emitVectors,
     emitWorkflows,
     emitWranglerCronTriggers,
+    LAZY_FUNCTION_DIRECTORY,
+    queueAliasFindings,
 } from "./emit";
-import { emitApp } from "./emit-app";
-import type {
-    AgentIR,
-    ContainerIR,
-    FunctionIR,
-    HttpRouteIR,
-    MaskMetadataIR,
-    MigrationIR,
-    MutatorIR,
-    QueueIR,
-    ShapeIR,
-    WorkflowIR,
-    WranglerVariableIR,
-} from "./ir";
-import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
-import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
+import { emitServiceDeclarations } from "./emit/service-declarations";
+import { isSensitiveFunction } from "./emit/shared";
+import { emitApp, emitAuthModule } from "./emit-app";
+import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
+import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, MutatorIR, ShapeIR, WorkflowIR } from "./ir";
 import { setStandardTypeResolver } from "./parse-validator";
-import type { PlatformDiagnostic } from "./platform-target";
+import { platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
+import { readMergeDurableObjects } from "./project-config-file";
+import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
+import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
 import { buildSchemaSnapshot } from "./schema-drift";
+import { buildSpecArtifacts } from "./spec-artifacts";
 
 /**
  * Committed, tracked baseline file holding the blessed structural schema
@@ -120,67 +87,6 @@ import { buildSchemaSnapshot } from "./schema-drift";
  * dot keeps it tucked away next to the schema it describes.
  */
 const SCHEMA_SNAPSHOT_FILENAME = ".lunora-schema.json";
-
-const writeIfChanged = (filePath: string, content: string): void => {
-    // Avoid spurious writes (and downstream HMR reloads) when the rendered
-    // content is identical to what's on disk.
-    if (existsSync(filePath)) {
-        const existing = readFileSync(filePath, "utf8");
-
-        if (existing === content) {
-            return;
-        }
-    }
-
-    writeFileSync(filePath, content, "utf8");
-};
-
-/**
- * Write a conditionally-emitted `_generated/` file, or **delete a stale one**.
- * When `content` is the empty string (the convention `emit*` helpers use to mean
- * "not applicable") the feature is not in use, so any file left at `filePath`
- * from a prior run — when the feature WAS in use — is removed. Without this, a
- * removed feature (last container/workflow/queue deleted, `@lunora/db` /
- * `@lunora/seed` uninstalled) would leave a lingering `_generated/<feature>.ts`
- * that imports a now-absent package and breaks the build. `force: true` no-ops
- * when the file never existed. Only ever called for the known conditional set
- * (containers/workflows/queues/seed/collections and the openapi/openrpc spec
- * artifacts), so it never touches an unrelated file. Keeps the per-feature gating
- * out of `runCodegen`'s control flow.
- */
-const writeIfPresent = (filePath: string, content: string): void => {
-    if (content === "") {
-        rmSync(filePath, { force: true });
-
-        return;
-    }
-
-    writeIfChanged(filePath, content);
-};
-
-/**
- * Read the `version` field from the `package.json` at `projectRoot`.
- *
- * Returns the version string when present and parseable, or `undefined` when
- * the manifest is absent, malformed, or carries no `version` field. The
- * `?? "0.0.0"` fallback in the spec emitters then applies, so a missing
- * package.json never breaks codegen.
- */
-const readProjectVersion = (projectRoot: string): string | undefined => {
-    const manifestPath = join(projectRoot, "package.json");
-
-    if (!existsSync(manifestPath)) {
-        return undefined;
-    }
-
-    try {
-        const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
-
-        return typeof manifest["version"] === "string" && manifest["version"] !== "" ? manifest["version"] : undefined;
-    } catch {
-        return undefined;
-    }
-};
 
 /**
  * Whether opt-in codegen timing is enabled. Gated on a truthy
@@ -195,38 +101,11 @@ const isTimingEnabled = (): boolean => {
 };
 
 /**
- * Walk up from `startPath` until we find a `tsconfig.json` or hit the file
- * system root. Returns the absolute path to the tsconfig, or `undefined`.
- *
- * Exported (see the bottom-of-file `export { findTsconfig }`) so a long-lived
- * caller (the Vite dev-loop's cached-Project invalidation) can ask "which
- * tsconfig would {@link createCodegenProject} resolve right now?" without
- * duplicating the walk — recomputing it per call is a handful of `existsSync`
- * checks, negligible next to a Project rebuild.
- */
-const findTsconfig = (startPath: string): string | undefined => {
-    let directory = existsSync(startPath) ? startPath : dirname(startPath);
-
-    while (directory && directory !== dirname(directory)) {
-        const candidate = join(directory, "tsconfig.json");
-
-        if (existsSync(candidate)) {
-            return candidate;
-        }
-
-        directory = dirname(directory);
-    }
-
-    return undefined;
-};
-
-/**
  * Normalise a path to POSIX (forward-slash) separators. ts-morph's
  * `SourceFile.getFilePath()` always returns forward slashes regardless of
  * platform, so any path compared against it must be normalised first or the
  * comparison silently fails on Windows.
  */
-const toPosixPath = (path: string): string => path.replaceAll("\\", "/");
 
 /* eslint-disable jsdoc/check-indentation, no-secrets/no-secrets -- intentional nested bullet list; the `discoverMaskHasNonLiteralPolicy` back-tick reference isn't a credential */
 
@@ -325,37 +204,6 @@ const assertNoMaskedShapeTable = (shapes: ReadonlyArray<ShapeIR>, maskMetadata: 
 };
 
 /**
- * Point `project`'s copy of `filePath` at `content`, without disturbing a file
- * that already matches. Absent, `createSourceFile` adds it (the cold-start
- * case). Present and identical, it is left untouched — every warm run of an
- * unchanged project, where doing nothing keeps the fully-resolved program the
- * Project was constructed with.
- *
- * Present but stale, it is rewritten IN PLACE with `replaceWithText`.
- * `createSourceFile` with the overwrite option looks equivalent and is not: it
- * swaps in a NEW SourceFile, so every already-loaded handler module still points
- * at the old, now-orphaned one and its `dataModel` type import stops resolving.
- */
-const syncProjectFile = (project: Project, filePath: string, content: string): void => {
-    const existing = project.getSourceFile(filePath);
-
-    if (existing === undefined) {
-        project.createSourceFile(filePath, content, { overwrite: true });
-
-        return;
-    }
-
-    if (existing.getFullText() === content) {
-        return;
-    }
-
-    existing.replaceWithText(content);
-};
-
-/** Whether `project` already holds `filePath` with exactly `content`. */
-const projectFileMatches = (project: Project, filePath: string, content: string): boolean => project.getSourceFile(filePath)?.getFullText() === content;
-
-/**
  * Ceiling on the infer → render → re-infer loop below. Cold trees were measured
  * converging on the fourth pass, so the cap sits above that with room. It is a spin guard, not a correctness guarantee — see
  * {@link inferToFixpoint} for what happens when it is reached.
@@ -399,29 +247,62 @@ const inferToFixpoint = (options: {
     agents: ReadonlyArray<AgentIR>;
     apiPath: string;
     generatedFunctionsPath: string;
+    internalPath: string;
+    lazyFunctions: boolean;
     lunoraDirectory: string;
     migrations: ReadonlyArray<MigrationIR>;
     project: Project;
+    roomsSupported: boolean;
     shapes: ReadonlyArray<ShapeIR>;
     usesSandbox: boolean;
     useUmbrella: boolean;
     workflows: ReadonlyArray<WorkflowIR>;
 }): {
     apiContent: string;
+    erased: ReadonlyArray<ErasedReturn>;
+    functionModulesContent: Record<string, string>;
     functions: ReadonlyArray<FunctionIR>;
     functionsContent: string;
     httpRoutes: ReadonlyArray<HttpRouteIR>;
+    internalContent: string;
     mutators: ReadonlyArray<MutatorIR>;
 } => {
-    const { agents, apiPath, generatedFunctionsPath, lunoraDirectory, migrations, project, shapes, usesSandbox, useUmbrella, workflows } = options;
+    const {
+        agents,
+        apiPath,
+        generatedFunctionsPath,
+        internalPath,
+        lazyFunctions,
+        lunoraDirectory,
+        migrations,
+        project,
+        roomsSupported,
+        shapes,
+        usesSandbox,
+        useUmbrella,
+        workflows,
+    } = options;
 
     // The three discoverers that read an inferred return type through
     // `unwrapHandlerReturn`, and therefore the three that have to be re-run when
     // the files those types resolve against change. Everything else in the
     // pipeline reads syntax, not inference, and stays outside.
-    let functions = discoverFunctions(project, lunoraDirectory);
-    let mutators = discoverMutators(project, lunoraDirectory);
-    let httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
+    //
+    // Each pass collects its own erasures, and only the pass whose render is
+    // returned is reported: an earlier pass's are stale, since a later one may
+    // render the same return.
+    const discover = () =>
+        collectErasures(() => {
+            const functions = discoverFunctions(project, lunoraDirectory, { lazyFunctions });
+            const mutators = discoverMutators(project, lunoraDirectory);
+
+            return { functions, httpRoutes: discoverHttpRoutes(project, lunoraDirectory), mutators };
+        });
+
+    let {
+        erased,
+        value: { functions, httpRoutes, mutators },
+    } = discover();
 
     // Two files whose sanitized namespaces collide (`a-b.ts` + `a_b.ts`) would
     // emit the same key twice into `_generated/api.ts` — a TS2300 inside
@@ -437,145 +318,71 @@ const inferToFixpoint = (options: {
         "http-stream",
     );
 
+    // A target that rejects `typedWebSockets` gets no room surface: its room registrations are not emitted.
     for (let pass = 1; ; pass += 1) {
-        const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
-        const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella, usesSandbox });
+        // Recomputed each pass: the inference refines `functions`, and the emit must see that.
+        const emittedFunctions = roomsSupported
+            ? functions
+            : functions.filter((definition) => definition.channel?.kind !== "room" && definition.lifecycle !== "socket");
+
+        const apiContent = emitApi({ agents, functions: emittedFunctions, httpRoutes, mutators, useUmbrella, workflows });
+        const functionsOptions = {
+            agents,
+            functions: emittedFunctions,
+            lazyFunctions,
+            migrations,
+            mutators,
+            shapes,
+            useUmbrella,
+            usesSandbox,
+        };
+        const functionsContent = emitFunctions(functionsOptions);
+        const functionModulesContent = emitLazyFunctionModules(functionsOptions);
+        const internalContent = emitInternalApi({ functions, useUmbrella });
+
+        const shimDirectory = join(lunoraDirectory, "_generated", LAZY_FUNCTION_DIRECTORY);
+        const rendered: [string, string][] = [
+            [apiPath, apiContent],
+            [internalPath, internalContent],
+            [generatedFunctionsPath, functionsContent],
+            ...Object.entries(functionModulesContent).map(([name, content]): [string, string] => [join(shimDirectory, name), content]),
+        ];
 
         // Converged, or out of budget — either way this render is the answer, and
         // the budget check sits HERE so the final pass's re-inference is never
         // computed and then discarded.
-        if (
-            pass >= MAX_INFERENCE_PASSES ||
-            (projectFileMatches(project, apiPath, apiContent) && projectFileMatches(project, generatedFunctionsPath, functionsContent))
-        ) {
-            return { apiContent, functions, functionsContent, httpRoutes, mutators };
+        if (pass >= MAX_INFERENCE_PASSES || rendered.every(([path, content]) => projectFileMatches(project, path, content))) {
+            return {
+                apiContent,
+                erased,
+                functions,
+                functionModulesContent,
+                functionsContent,
+                httpRoutes,
+                internalContent,
+                mutators,
+            };
         }
 
-        syncProjectFile(project, apiPath, apiContent);
-        syncProjectFile(project, generatedFunctionsPath, functionsContent);
+        for (const [path, content] of rendered) {
+            syncProjectFile(project, path, content);
+        }
 
-        functions = discoverFunctions(project, lunoraDirectory);
-        mutators = discoverMutators(project, lunoraDirectory);
-        httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
+        ({
+            erased,
+            value: { functions, httpRoutes, mutators },
+        } = discover());
     }
 };
 
-/**
- * Construct the ts-morph `Project` codegen discovers over. Prefers the user's
- * `tsconfig.json` (when one is found walking up from `lunoraDirectory`) so
- * cross-file type resolution and path aliases work; falls back to an isolated
- * project otherwise. This is the exact construction {@link runCodegen} uses
- * when no `project` is injected — exported so a long-lived caller (the Vite
- * dev-loop) can build one once and reuse it across runs via
- * {@link refreshCodegenProject} instead of re-parsing the user's whole TS
- * program on every save.
- */
-export const createCodegenProject = (lunoraDirectory: string): Project => {
-    const tsconfigPath = findTsconfig(lunoraDirectory);
-
-    return tsconfigPath
-        ? new Project({ skipAddingFilesFromTsConfig: false, tsConfigFilePath: tsconfigPath, useInMemoryFileSystem: false })
-        : new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-};
-
-/**
- * Synchronise a reused {@link createCodegenProject} Project with the current
- * on-disk state of `lunoraDirectory`, so the next {@link runCodegen} sees the
- * same files a freshly-constructed Project would — without re-parsing the whole
- * TS program. Adds any on-disk source file the Project doesn't yet have, and
- * `refreshFromFileSystemSync()`es the ones it does (picking up edits); then
- * removes Project source files under `lunoraDirectory` that no longer exist on
- * disk (the classic stale-deleted-file cache bug).
- *
- * Files outside `lunoraDirectory` — e.g. a shared validator or type pulled in
- * via the user's tsconfig — are also `refreshFromFileSystemSync()`ed, but only
- * the ones already loaded into the Project; none are added. `resolveValidatorAlias`
- * (parse-validator.ts) follows `getAliasedSymbol()` across module boundaries, so a
- * validator defined outside `lunoraDirectory` is genuinely read from whatever
- * source the Project currently holds — leaving those files stale made a reused
- * Project (the Vite dev loop) silently disagree with a fresh one (`lunora
- * codegen`) about the same source. `node_modules` is excluded: its `.d.ts` set
- * dominates the file count and never changes mid dev-loop, so refreshing it would
- * reinstate close to the full re-parse cost this cache exists to avoid.
- */
-export const refreshCodegenProject = (project: Project, lunoraDirectory: string): void => {
-    // The exact set discovery reads: every non-`schema.ts` source file (the
-    // canonical `listLunoraSourceFiles`, shared with function/migration
-    // discovery) plus `schema.ts`, which `discoverSchema` loads separately.
-    // Reusing the canonical walker keeps the reused Project's file set in
-    // lockstep with a freshly-constructed one instead of forking the rules.
-    const diskPaths = listLunoraSourceFiles(lunoraDirectory);
-    const schemaPath = join(lunoraDirectory, "schema.ts");
-
-    if (existsSync(schemaPath)) {
-        diskPaths.push(schemaPath);
-    }
-
-    for (const path of diskPaths) {
-        const existing = project.getSourceFile(path);
-
-        if (existing === undefined) {
-            project.addSourceFileAtPath(path);
-        } else {
-            existing.refreshFromFileSystemSync();
-        }
-    }
-
-    // Drop source files under the lunora directory that vanished from disk, so a
-    // deleted query/table never lingers in the reused Project's discovery set.
-    // `getFilePath()` is always POSIX while `diskPaths` carry the OS separator —
-    // normalise both sides or the removal silently never fires on Windows.
-    const onDisk = new Set(diskPaths.map((path) => toPosixPath(path)));
-    const lunoraRoot = toPosixPath(lunoraDirectory);
-    const lunoraPrefix = `${lunoraRoot}/`;
-
-    for (const sourceFile of project.getSourceFiles()) {
-        const filePath = sourceFile.getFilePath();
-
-        if ((filePath === lunoraRoot || filePath.startsWith(lunoraPrefix)) && !onDisk.has(filePath)) {
-            project.removeSourceFile(sourceFile);
-        }
-    }
-
-    // Second pass: resync everything else the Project already has loaded (type
-    // resolution reached past `lunoraDirectory` — a shared validator, a type
-    // alias, whatever the user's tsconfig program pulled in). `node_modules` is
-    // skipped on purpose (see docblock); a file under it never changes here.
-    for (const sourceFile of project.getSourceFiles()) {
-        const filePath = sourceFile.getFilePath();
-
-        if (filePath === lunoraRoot || filePath.startsWith(lunoraPrefix) || filePath.includes("/node_modules/")) {
-            continue;
-        }
-
-        try {
-            sourceFile.refreshFromFileSystemSync();
-        } catch {
-            // Deleted (or unreadable) since it was loaded — drop it rather than
-            // let a throw here wedge the dev loop. `refreshFromFileSystemSync`
-            // already forgets a genuinely-deleted file on its own; this guard is
-            // for the rarer I/O-error case (e.g. a permission change).
-            project.removeSourceFile(sourceFile);
-        }
-    }
-};
-
-/**
- * Top-level codegen entry. Parses `<projectRoot>/lunora/schema.ts` and every
- * function file under `<projectRoot>/lunora/`, then writes
- * `_generated/{api,server,dataModel}.ts` next to them.
- *
- * When `LUNORA_CODEGEN_TIMING` is set (truthy), a single diagnostic summary
- * line is written to stderr with the total wall time and the discovery-vs-emit
- * split — opt-in instrumentation that is otherwise zero-cost and side-effect-free
- * on the returned {@link CodegenResult}.
- */
+/** The codegen pipeline proper; {@link runCodegen} is its public entry. */
 // eslint-disable-next-line sonarjs/cognitive-complexity -- top-level codegen orchestrator; splitting further would obscure the linear pipeline
-export const runCodegen = (options: CodegenOptions): CodegenResult => {
+const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const timingEnabled = isTimingEnabled();
     const startedAt = timingEnabled ? performance.now() : 0;
 
     const lunoraDirectory = join(options.projectRoot, options.lunoraDirectory ?? "lunora");
+    const lazyFunctions = options.lazyFunctions === true;
     const schemaPath = join(lunoraDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {
@@ -598,6 +405,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     const schema = discoverSchema(project, schemaPath, options.projectRoot);
 
+    // Plan 468 WS H: a table that holds user data must be covered by a privacy dataset or excluded.
+    assertPrivacyCoverage(schema.tables, discoverPrivacyCoverage(project, lunoraDirectory, readPackageDependencies(options.projectRoot)));
+
     // Phase 1 — everything that must be resolved and RENDERED before a single
     // handler's type is inferred against it. See `declaration-surface.ts` for why
     // that ordering is load-bearing; the short version is that a handler's type
@@ -605,6 +415,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // pass 1 infer against the previous run's declarations.
     const {
         agents,
+        capabilities,
         containers,
         crons,
         dataModelContent,
@@ -618,16 +429,24 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         platformGate,
         queues,
         serverContent,
+        services,
         storageRulesMetadata,
+        topics,
         usesSandbox,
         useUmbrella,
         workflows,
     } = buildDeclarationSurface({ lunoraDirectory, project, projectRoot: options.projectRoot, schema, target: options.target });
 
+    // Before anything is written: pinning DO-backed auth that was unpinned
+    // before would start it out empty, and nothing else about the upgrade
+    // changes the schema, so this is the one place that can stop it.
+    assertJurisdictionMoveAcknowledged(schema, schema.jurisdiction === undefined ? undefined : findDoAuthDeclaration(project, lunoraDirectory));
+
     const outputDirectory = join(lunoraDirectory, "_generated");
     const dataModelPath = join(outputDirectory, "dataModel.ts");
     const serverPath = join(outputDirectory, "server.ts");
     const apiPath = join(outputDirectory, "api.ts");
+    const internalPath = join(outputDirectory, "internal.ts");
     const generatedFunctionsPath = join(outputDirectory, "functions.ts");
 
     // In MEMORY only — the disk write waits for the write phase with everything
@@ -644,6 +463,18 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     syncProjectFile(project, dataModelPath, dataModelContent);
     syncProjectFile(project, serverPath, serverContent);
 
+    // `server.ts` types each RPC service from its declaration snapshot, so the
+    // snapshots join the Project before any handler's type is inferred through them.
+    const serviceDeclarations: Record<string, string> = Object.fromEntries(
+        services
+            .filter((service) => service.rpcEntrypoint !== undefined)
+            .flatMap((service) => Object.entries(emitServiceDeclarations(service, outputDirectory))),
+    );
+
+    for (const [path, content] of Object.entries(serviceDeclarations)) {
+        syncProjectFile(project, join(outputDirectory, path), content);
+    }
+
     const migrations = discoverMigrations(project, lunoraDirectory);
 
     // Local-first sync engine (Phase 7): replication shapes (`lunora/shapes.ts`)
@@ -656,10 +487,16 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // fixpoint below — unlike `discoverHttpRoutes`, which does.
     const shapes = discoverShapes(project, lunoraDirectory);
 
-    const { apiContent, functions, functionsContent, httpRoutes, mutators } = inferToFixpoint({
+    // Rooms and socket routes ride hibernated shard sockets: a target that rejects `typedWebSockets`
+    // gets neither surface. The gate has already reported the rejection as `platform_unsupported_feature`.
+    const roomsSupported = platformGate.signals.typedWebSockets !== false;
+    const { apiContent, erased, functions, functionModulesContent, functionsContent, httpRoutes, internalContent, mutators } = inferToFixpoint({
         agents,
         apiPath,
         generatedFunctionsPath,
+        internalPath,
+        lazyFunctions,
+        roomsSupported,
         lunoraDirectory,
         migrations,
         project,
@@ -668,6 +505,32 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         usesSandbox,
         workflows,
     });
+
+    // Modules (a `lunora/<dir>/module.ts`, plus every installed component) feed
+    // the cross-module advisor lint for every app. Only a DECLARED module turns on
+    // the architecture manifest and module-tagged specs, so an app that declares
+    // none keeps byte-identical output.
+    const declaredModules = discoverModules(project, lunoraDirectory);
+    const modules = resolveModules(
+        declaredModules,
+        schema,
+        [...functions, ...httpRoutes].map((entry) => entry.filePath),
+    );
+    const wantsArchitecture = declaredModules.length > 0;
+
+    // The call-edge/query/insert/workflow-call walks feed both the advisor and the
+    // architecture manifest, so they run once when either needs them — and not
+    // at all on a `lint: false` run of an app with no declared module.
+    const callSites: CallSites | undefined =
+        options.lint === false && !wantsArchitecture
+            ? undefined
+            : {
+                  callEdges: discoverCallEdges(project, lunoraDirectory),
+                  inserts: discoverInserts(project, lunoraDirectory),
+                  queries: discoverQueries(project, lunoraDirectory, functions),
+                  tableWrites: discoverTableWrites(project, lunoraDirectory),
+                  workflowCalls: discoverWorkflowCalls(project, lunoraDirectory),
+              };
 
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
     // fields, filter-without-index, …). Cheap, derived from the schema + the
@@ -681,63 +544,19 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // never describe different evidence. Built lazily — the ternary keeps every
     // discover* call out of a `lint: false` run.
     const advisorContext =
-        options.lint === false
+        options.lint === false || callSites === undefined
             ? undefined
-            : toAdvisorContext({
-                  adminRoutes: discoverAdminRoutes(project, lunoraDirectory),
-                  aiRawRuns: discoverAiRawRuns(project, lunoraDirectory),
-                  aiToolSideEffects: discoverAiToolSideEffects(project, lunoraDirectory),
-                  argumentDerivedFetches: discoverArgumentDerivedFetches(project, lunoraDirectory),
-                  argumentValidators: discoverArgumentValidators(project, lunoraDirectory),
-                  authApiCalls: discoverAuthApiCalls(project, lunoraDirectory),
-                  authConfigs: discoverAuthConfig(project, lunoraDirectory),
-                  browserUrlAccesses: discoverBrowserUrlAccesses(project, lunoraDirectory),
-                  configCalls: discoverConfigCalls(project, lunoraDirectory),
-                  containerKeyAccesses: discoverContainerKeyAccesses(project, lunoraDirectory),
-                  containerOverrides: discoverContainerOverrides(project, lunoraDirectory),
+            : advisorEvidenceOf(project, lunoraDirectory, {
+                  agents,
+                  callSites,
                   containers,
-                  exportSinks: discoverExportSinks(project, lunoraDirectory),
-                  staleMigrationImports: discoverStaleMigrationImports(project, lunoraDirectory),
-                  failOpenGuards: discoverFailOpenGuards(project, lunoraDirectory),
-                  flagReads: discoverFlagReads(project, lunoraDirectory),
-                  flagSecurityDefaults: discoverFlagSecurityDefaults(project, lunoraDirectory),
-                  geoIndexUsages: discoverGeoIndexUsages(project, lunoraDirectory),
-                  httpActionGuards: discoverHttpActionGuards(project, lunoraDirectory),
-                  httpHeaderWrites: discoverHttpHeaderWrites(project, lunoraDirectory),
-                  hyperdriveCalls: discoverHyperdriveCalls(project, lunoraDirectory),
-                  identityClaimReads: discoverIdentityClaimReads(project, lunoraDirectory),
-                  imageDeliveryUrlAccesses: discoverImageDeliveryUrlAccesses(project, lunoraDirectory),
-                  inserts: discoverInserts(project, lunoraDirectory),
-                  kvKeyAccesses: discoverKvKeyAccesses(project, lunoraDirectory, functions),
-                  mailRecipientAccesses: discoverMailRecipientAccesses(project, lunoraDirectory),
-                  maskProcedures: discoverMaskProcedures(project, lunoraDirectory),
-                  maskStrategies: discoverMaskStrategies(project, lunoraDirectory),
-                  mutatorWrites: discoverMutatorWrites(project, lunoraDirectory),
-                  nondeterministicCalls: discoverNondeterministicCalls(project, lunoraDirectory),
-                  normalizeIdAuthorizations: discoverNormalizeIdAuthorization(project, lunoraDirectory),
-                  notifyCalls: discoverNotifyCalls(project, lunoraDirectory),
-                  notifyConfig: discoverNotifyConfig(project, lunoraDirectory),
-                  ownerFieldWrites: discoverOwnerFieldWrites(project, lunoraDirectory, functions),
-                  unrestrictedWhereBranches: discoverUnrestrictedWhereBranches(project, lunoraDirectory),
-                  paymentWebhooks: discoverPaymentWebhooks(project, lunoraDirectory),
-                  privilegedDispatches: discoverPrivilegedDispatches(project, lunoraDirectory),
-                  procedureProtections: discoverProcedureMiddleware(project, lunoraDirectory),
-                  queries: discoverQueries(project, lunoraDirectory),
+                  crons,
+                  functions,
+                  modules,
+                  mutators,
                   queues,
-                  r2sqlCalls: discoverR2sqlCalls(project, lunoraDirectory),
-                  ratelimitKeySelectors: discoverRatelimitKeySelectors(project, lunoraDirectory),
-                  rawRowReturns: discoverRawRowReturns(project, lunoraDirectory),
-                  relationLoads: discoverRelationLoads(project, lunoraDirectory),
-                  rlsProcedures: discoverRlsProcedures(project, lunoraDirectory),
                   schema,
-                  secretLiterals: discoverSecrets(project, lunoraDirectory),
                   shapes,
-                  softDeleteReads: discoverSoftDeleteReads(project, lunoraDirectory),
-                  sqlInterpolations: discoverSqlInterpolation(project, lunoraDirectory),
-                  storageKeyAccesses: discoverStorageKeyAccesses(project, lunoraDirectory, functions),
-                  storageUploads: discoverStorageUploads(project, lunoraDirectory),
-                  vectorNamespaceAccesses: discoverVectorNamespaceAccesses(project, lunoraDirectory),
-                  workflowCalls: discoverWorkflowCalls(project, lunoraDirectory),
                   workflows,
                   wranglerVariables: options.wranglerVariables,
               });
@@ -748,14 +567,33 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // procedure but which never reached `api.ts` at all (dropped by the
     // syntactic scan), and one that did reach it carrying fewer arguments than
     // the runtime enforces (an argument record codegen could not read).
+    //
+    // `advisor.minSeverity` in `lunora.config.*` drops findings below that level
+    // from everything downstream (the result, and so the terminal, and the
+    // emitted shard) but never an ERROR, so the blocking gate is unaffected.
     const advisories =
         advisorContext === undefined
             ? []
-            : [
+            : applyAdvisorPolicy(options.projectRoot, [
                   ...runAdvisor(advisorContext, { source: "static" }),
-                  ...discoverUnregisteredProcedures(project, lunoraDirectory, functions),
+                  ...discoverUnregisteredProcedures(project, lunoraDirectory, {
+                      // Workflows, queues, agents and containers record no file in
+                      // their IR — their `name` is the addressable identity — so
+                      // they key on the export name alone.
+                      byName: new Set([...workflows, ...queues, ...agents, ...containers].map((entry) => entry.exportName)),
+                      byPath: new Set([...functions, ...mutators, ...shapes, ...migrations].map((entry) => `${entry.filePath}:${entry.exportName}`)),
+                  }),
                   ...discoverUnreadableArguments(project, lunoraDirectory),
-              ];
+                  // The third, and the output-side twin of the second: a return
+                  // type codegen could render as neither a name nor a structure,
+                  // so `api.ts` says `unknown` where the runtime returns a shape.
+                  // Collected by the discovery pass above — the signal
+                  // ("expansion produced nothing") exists only at the moment of
+                  // the fallback, so it cannot be re-derived here.
+                  ...erasedReturnFindings(erased, lunoraDirectory),
+                  // A wrangler.jsonc queue rename the registry cannot route as written.
+                  ...queueAliasFindings(queues, options.wranglerQueueProducers),
+              ]);
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
     // emitted into the generated ShardDO's `rlsMetadata()` override. Statically
@@ -789,6 +627,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // that three-state comparison out per call site is what let one of them —
     // the studio nav — keep advertising the feature the other two withheld.
     const vectorStoreSupported = platformGate.signals.vectorStore !== false;
+    // Judged on the matrix, not the usage: the builder method is emitted whether
+    // or not the app calls it, so a host that cannot back it withholds it anyway.
+    const deliveryAuthorizationSupported = platformFeatureAvailable(resolveCodegenTarget(options.projectRoot, options.target), "deliveryAuthorization");
 
     // Which optional features the studio should show a nav page for.
     // `buildStudioFeatures` OR's the code-usage flags with the schema/project
@@ -809,14 +650,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         dependencies,
         // Payments gates on the store tables the panel reads being declared, not on a
         // bare `@lunora/payment` dependency (which may be present only to reuse the
-        // package's pure webhook helpers). Matched by the tables' *signature columns*
-        // (not their generic names), so an unrelated `subscriptions`/`events` table
-        // does not spuriously show the page — see `hasPaymentStoreTables`.
+        // package's pure webhook helpers) — see `hasPaymentStoreTables`.
         hasPaymentTables: hasPaymentStoreTables(schema.tables),
         queueCount: queues.length,
         storageColumnCount: Object.keys(buildStorageColumns(schema)).length,
         storageRuleCount: storageRulesMetadata.rules.length,
         vectorIndexCount: schema.vectorIndexes.length,
+        target: resolveCodegenTarget(options.projectRoot, options.target),
         vectorStoreSupported,
         workflowCount: workflows.length,
     });
@@ -845,32 +685,46 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // in its `__lunora_schema_history` ledger on cold start (plan 200). One
     // builder feeds both the deploy gate and the Studio's schema history, so the
     // two can never describe different shapes.
+    // The literal-only read of each exported `defineLiveStream`. Not gated on the platform verdict: the typed references are
+    // client-side data with no host dependency, so a user module importing `_generated/live.ts` keeps resolving. Only the shard's
+    // publish check and `ctx.live` follow the verdict (`liveStreams` below).
+    const liveStreams = discoverLiveStreams(project, lunoraDirectory);
     const shardContent = emitShard({
-        advisories,
+        // `_generated/shard.ts` is committed, and this finding is a fact about
+        // the machine codegen ran on rather than about the app — regenerating
+        // against a stale `dist/` would write it into a tracked file, so the
+        // diff would differ per developer. It still reaches the terminal through
+        // `CodegenResult.advisories`, which is where a fact about this run
+        // belongs. (`procedure_not_registered` is embedded like every other
+        // finding, and it is resolution-dependent too — a cold `dist/` drops it
+        // from the emitted list. That is the pre-existing cost of embedding
+        // advisories at all, not something this filter can fix.)
+        advisories: advisories.filter((advisory) => advisory.name !== "procedure_type_check_unavailable"),
         advisorProcedures: advisorContext?.procedureProtections ?? [],
         agents,
+        capabilities,
         containers,
         env,
         flagKeys,
-        hasAccessFacade: featureUsage.access,
-        hasAi: featureUsage.ai,
-        hasAnalytics: featureUsage.analytics,
-        hasBrowser: featureUsage.browser,
         hasFlags,
-        hasHyperdrive: featureUsage.hyperdrive,
-        hasImages: featureUsage.images,
-        hasKv: featureUsage.kv,
         hasNotify,
-        hasPayments: featureUsage.payments,
-        hasPipelines: featureUsage.pipelines,
-        hasR2sql: featureUsage.r2sql,
+        hasRooms: roomsSupported && functions.some((definition) => definition.channel?.kind === "room"),
+        hasSensitiveArgs: agents.length > 0 || functions.some((definition) => isSensitiveFunction(definition)),
+        // The gate's verdict on the app-declared `requestSecretTool` import. `true` only
+        // when the import exists AND the target rates `secretValues` supported.
+        hasSecretValues: platformGate.signals.secretValues === true,
+        hasSockets: roomsSupported && functions.some((definition) => definition.lifecycle === "socket"),
+        lazyFunctions,
         // The gate's verdict, exactly as `emitServer`/`emitApp` receive it. The
         // shard emitter recomputed the flag from `schema.vectorIndexes` instead,
         // so the DO kept the whole Vectorize wiring on a host rating
         // `vectorStore: "unsupported"` — a `generated.shard` byte-identical to
         // the Cloudflare one while the type surface was withheld.
         hasVectors: vectorStoreSupported,
-        hasX402: featureUsage.x402,
+        // Declared AND not rejected by the gate: a target without live streams gets
+        // no `ctx.live` on its action ctx, and the gate has already reported why.
+        liveStreamDeclarations: liveStreams,
+        liveStreams: platformGate.signals.liveStreams === true,
         maskMetadata,
         mutators,
         queues,
@@ -878,9 +732,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         schema,
         schemaSnapshot,
         shapes,
+        services,
         storageRules: storageRulesMetadata,
         studioFeatures,
+        topics,
         useUmbrella,
+        workflowEvents: discoverWorkflowEvents(project, lunoraDirectory),
         workflows,
     });
     // `_generated/collections.ts` — one TanStack DB collection factory per shape.
@@ -891,8 +748,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const containersContent = emitContainers(containers, schema.jurisdiction);
     const workflowsContent = emitWorkflows(workflows);
     const agentsContent = emitAgents(agents);
-    const queuesContent = emitQueues(queues);
+    const queuesContent = emitQueues(queues, options.wranglerQueueProducers);
+    const liveContent = emitLive(liveStreams, useUmbrella);
     const cronsContent = emitCrons(crons);
+    const schedulerContent = emitScheduler(studioFeatures.scheduler);
+    const shardRegistryContent = emitShardRegistry(schema.tables, useUmbrella, schema.jurisdiction);
+    const durableObjectsContent = readMergeDurableObjects(options.projectRoot) ? emitDurableObjects(useUmbrella) : "";
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema, useUmbrella);
     // Only emit the project-bound seed client when `@lunora/seed` is a declared
@@ -911,53 +772,65 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // each fanned into both the DO-side `createShardDO` factory and the worker-side
     // `createWorker` options. Lives in generated code (not the dependency-free
     // `@lunora/runtime`) so it can import the add-on packages the app installed.
+    const authModuleContent = emitAuthModule(dependencies.has("@lunora/auth"));
     const appContent = emitApp({
+        // Usage-only, never a dependency signal: each long-tail method's
+        // parameter type reads `ShardConfig[configKey]` (e.g. `.kv()` reads
+        // `ShardConfig["kv"]`), and the shard emits that config field on the
+        // same usage set — so the method can never reference a missing type.
+        capabilities,
         // Inbound-email agents (`defineAgent({ onEmail })`) → wire the worker's
-        // top-level `email()` handler to each agent's `AGENT_*` Workflow binding so
+        // top-level `email()` handler to each agent's exported workflow so
         // received mail starts a durable run. Empty for email-free (and agent-free)
         // projects, so the emitted app.ts stays byte-identical.
         emailAgents: agents
             .filter((agent) => agent.onEmail === true)
             .map((agent) => {
-                return { bindingName: agent.bindingName, exportName: agent.exportName };
+                return { className: agent.className, exportName: agent.exportName };
             }),
         hasAccess: dependencies.has("@lunora/cloudflare-access"),
-        hasAi: featureUsage.ai,
-        hasAnalytics: featureUsage.analytics,
         hasAuth: dependencies.has("@lunora/auth"),
-        hasBrowser: featureUsage.browser,
         // Worker-composition framework adapters expose a `withLunora` over
         // `withFrameworkWorker`; when one is installed, surface `.buildFrameworkWorker()`.
-        hasFramework: dependencies.has("@lunora/astro") || dependencies.has("@lunora/svelte") || dependencies.has("@lunora/vue"),
+        // So does a hand-composed entry — an app that folds its framework's SSR
+        // handler in itself, as the Rsbuild TanStack Start template does, with no
+        // adapter to depend on. The path is `@lunora/config`'s
+        // `COMPOSED_WORKER_ENTRY`, the file `lunora deploy` bundles in place of
+        // `main`; spelled out because `@lunora/config` depends on this package.
+        hasFramework:
+            dependencies.has("@lunora/astro") ||
+            dependencies.has("@lunora/svelte") ||
+            dependencies.has("@lunora/vue") ||
+            existsSync(join(options.projectRoot, "src", "worker.ts")),
         // `hasGlobal` means **D1-backed** global tables (the `.global()` / D1
         // app-builder wiring); Hyperdrive-backed globals are gated separately by
         // `hasHyperdriveGlobal` so an app picks the right binding+package.
-        hasGlobal: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend !== "hyperdrive"),
-        hasHyperdrive: featureUsage.hyperdrive,
-        hasHyperdriveGlobal: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend === "hyperdrive"),
-        hasImages: featureUsage.images,
-        // The `.kv()` builder's parameter type reads `ShardConfig["kv"]`, and that
-        // config field is emitted on the usage signal — so this MUST stay
-        // usage-only or the emitted method references a type that is not there.
-        hasKv: featureUsage.kv,
+        hasGlobal: schema.tables.some((table) => isD1GlobalTable(table)),
+        hasHyperdriveGlobal: schema.tables.some((table) => isHyperdriveGlobalTable(table)),
         // Auto-wire the studio's KV introspector on the SAME condition the nav
         // gates its tab on (`studioFeatures.kv` = ctx.kv usage OR a declared
         // `@lunora/bindings` dep), so a visible KV tab always has a working
         // backend — never the reverse.
         hasKvIntrospector: studioFeatures.kv,
         hasNotify,
-        hasPayments: featureUsage.payments,
-        hasR2sql: featureUsage.r2sql,
         hasQueue: queues.some((queue) => queue.mode === "push"),
+        // Declared AND not rejected by the gate, as on the shard's action ctx.
+        liveStreams: platformGate.signals.liveStreams === true,
+        liveStreamsWithheld: platformGate.liveStreamsWithheld,
+        liveStreamDeclarations: liveStreams,
         hasScheduler: studioFeatures.scheduler,
+        // The same schema signal `emitShard` gates the shard config's source-client
+        // field and the ingest poll on, so the builder method and the config field
+        // it writes to are emitted together or not at all.
+        hasSourcedTables: schema.tables.some((table) => table.externalSource !== undefined),
         hasStorage: studioFeatures.storage,
         // The gate's verdict, on the same convention `emitServer`/`emitShard`
         // take it: the emitter AND's it with the declaration itself. This call
         // site used to pass the CONJUNCTION under the same prop name, so the one
         // flag meant two different things depending on which emitter read it.
+        hasDeliveryAuthorization: deliveryAuthorizationSupported,
         hasVectors: vectorStoreSupported,
         hasWorkflow: workflows.length > 0,
-        hasX402: featureUsage.x402,
         // The single `defineIdentity(...)` contract (Plan 080). Wires
         // `options.identity` so the runtime trust boundary validates every
         // resolved identity before it becomes `ctx.auth`; `undefined` keeps the
@@ -965,11 +838,15 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         identity,
         // Schema `.jurisdiction("…")` → pin the generated worker's DOs to the region.
         jurisdiction: schema.jurisdiction,
-        // Drives the emitted `listSchemaTables` — export's seed for "every table".
-        tableNames: schema.tables.map((table) => table.name),
+        // `{ pinAuth: true }` — only then is DO-backed auth pinned too.
+        jurisdictionPinsAuth: schema.jurisdictionPinsAuth === true,
+        // Drives the emitted `listSchemaTables` and `resolveTableSharding`.
+        tables: schema.tables.map((table) => {
+            return { name: table.name, shardMode: table.shardMode };
+        }),
         useUmbrella,
         // The app's own declaration, which `emitApp` AND's with `hasVectors`.
-        // `emitApp` takes no schema (it takes the table NAMES), so the count it
+        // `emitApp` takes no schema (only the table list), so the count it
         // needs to make the same decision its siblings make has to come in.
         vectorIndexCount: schema.vectorIndexes.length,
         // Voice-enabled agents (`defineAgent({ voice: … })`) → wire the worker's
@@ -981,77 +858,109 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             .map((agent) => {
                 return { bindingName: agent.voiceBindingName as string, exportName: agent.exportName };
             }),
+        wantsArchitecture,
         wantsOpenApi,
         wantsOpenRpc,
     });
 
-    // Build each spec document once, then derive both artifacts from the same
-    // object so the portable `.json` and the worker-importable `.ts` are
-    // identical content and can never drift. Both are computed regardless of
-    // `apiSpec` (cheap, pure) so `CodegenResult` can carry whichever the caller
-    // asked for; only the requested file(s) are written.
-    const projectVersion = readProjectVersion(options.projectRoot);
-    const openApiDocument = buildOpenApiDocument({ functions, httpRoutes, version: projectVersion });
-    const openRpcDocument = buildOpenRpcDocument({ functions, version: projectVersion });
+    // Both spec documents, each as its `.json` and `.ts` artifact. See `buildSpecArtifacts`.
+    const { openApiContent, openApiModuleContent, openRpcContent, openRpcModuleContent } = buildSpecArtifacts({
+        functions,
+        httpRoutes,
+        modules,
+        projectRoot: options.projectRoot,
+        wantsArchitecture,
+    });
 
-    const openApiContent = `${JSON.stringify(openApiDocument, undefined, 2)}\n`;
-    const openRpcContent = `${JSON.stringify(openRpcDocument, undefined, 2)}\n`;
-    const openApiModuleContent = emitOpenApiModule(openApiDocument);
-    const openRpcModuleContent = emitOpenRpcModule(openRpcDocument);
-
+    // The architecture manifest (module catalog + call graph) is emitted only
+    // once the app declares a module, so an app without one keeps byte-identical
+    // output.
+    const architectureDocument =
+        wantsArchitecture && callSites !== undefined
+            ? buildArchitecture({
+                  ...callSites,
+                  crons,
+                  functions,
+                  httpRoutes,
+                  modules,
+                  queues,
+                  schema,
+                  services,
+                  topics,
+                  workflows,
+              })
+            : undefined;
     const schemaSnapshotPath = join(lunoraDirectory, SCHEMA_SNAPSHOT_FILENAME);
     const schemaSnapshotExists = existsSync(schemaSnapshotPath);
 
-    if (!options.dryRun) {
-        if (!existsSync(outputDirectory)) {
-            mkdirSync(outputDirectory, { recursive: true });
-        }
+    // The `_generated/` files this run emits, in write order. Which files those
+    // are depends on the project (conditional features, `apiSpec`), so it is
+    // recorded here rather than restated by each caller — the CLI used to print
+    // a hardcoded three-file list that had been wrong since the fourth file was
+    // added, and nothing could have caught it.
+    const writtenFiles = options.dryRun
+        ? []
+        : writeGeneratedFiles(outputDirectory, [
+              { content: appContent, kind: "always", name: "app.ts" },
+              { content: dataModelContent, kind: "always", name: "dataModel.ts" },
+              { content: apiContent, kind: "always", name: "api.ts" },
+              { content: internalContent, kind: "always", name: "internal.ts" },
+              { content: serverContent, kind: "always", name: "server.ts" },
+              { content: functionsContent, kind: "always", name: "functions.ts" },
+              { files: functionModulesContent, kind: "directory", name: LAZY_FUNCTION_DIRECTORY },
+              { content: shardContent, kind: "always", name: "shard.ts" },
+              { content: cronsContent, kind: "always", name: "crons.ts" },
+              { content: vectorsContent, kind: "always", name: "vectors.ts" },
+              { content: drizzleFiles.global, kind: "always", name: "drizzle.global.ts" },
+              { content: drizzleFiles.shard, kind: "always", name: "drizzle.shard.ts" },
+              // Conditionally-emitted files: each is written only when its feature is in use
+              // (the `emit*` helper returns `""` otherwise), so projects that don't use them
+              // keep a clean `_generated/` and never import the package.
+              //   - containers.ts  → `@lunora/container`, when containers are declared
+              //   - workflows.ts   → `@lunora/workflow`, when workflows are declared
+              //   - agents.ts      → `@lunora/agent`, when agents are declared
+              //   - seed.ts        → `@lunora/seed`, when it's a declared dependency
+              //   - collections.ts → `@lunora/db`, when the project declares shapes
+              { content: containersContent, kind: "optional", name: "containers.ts" },
+              { content: workflowsContent, kind: "optional", name: "workflows.ts" },
+              { content: agentsContent, kind: "optional", name: "agents.ts" },
+              { content: queuesContent, kind: "optional", name: "queues.ts" },
+              { content: liveContent, kind: "optional", name: "live.ts" },
+              { content: schedulerContent, kind: "optional", name: "scheduler.ts" },
+              { content: shardRegistryContent, kind: "optional", name: "shardRegistry.ts" },
+              { content: durableObjectsContent, kind: "optional", name: "durableObjects.ts" },
+              { content: seedContent, kind: "optional", name: "seed.ts" },
+              // The `@lunora/auth` exports `app.ts` loads with `import()` on the first event.
+              { content: authModuleContent, kind: "optional", name: "authModule.ts" },
+              { content: collectionsContent, kind: "optional", name: "collections.ts" },
+              { files: serviceDeclarations, kind: "services" },
+              // The `.json` is the portable artifact for external tooling; the `.ts` (same
+              // document, inlined) is what the worker imports and passes to `createWorker({
+              // openApiSpec })`. Both are gated on the same `apiSpec` choice so they regenerate
+              // together, and an unselected format is removed rather than left stale.
+              { content: wantsOpenApi ? openApiContent : "", kind: "optional", name: "openapi.json" },
+              { content: wantsOpenApi ? openApiModuleContent : "", kind: "optional", name: "openapi.ts" },
+              { content: wantsOpenRpc ? openRpcContent : "", kind: "optional", name: "openrpc.json" },
+              { content: wantsOpenRpc ? openRpcModuleContent : "", kind: "optional", name: "openrpc.ts" },
+              // Same pairing as the specs: the `.json` for tooling, the `.ts` for `createWorker({ architecture })`,
+              // both removed when the last module goes.
+              {
+                  content: architectureDocument === undefined ? "" : `${JSON.stringify(architectureDocument, undefined, 2)}\n`,
+                  kind: "optional",
+                  name: "architecture.json",
+              },
+              {
+                  content: architectureDocument === undefined ? "" : emitArchitectureModule(architectureDocument),
+                  kind: "optional",
+                  name: "architecture.ts",
+              },
+          ]);
 
-        writeIfChanged(join(outputDirectory, "app.ts"), appContent);
-        writeIfChanged(dataModelPath, dataModelContent);
-        writeIfChanged(join(outputDirectory, "api.ts"), apiContent);
-        writeIfChanged(serverPath, serverContent);
-        writeIfChanged(join(outputDirectory, "functions.ts"), functionsContent);
-        writeIfChanged(join(outputDirectory, "shard.ts"), shardContent);
-        writeIfChanged(join(outputDirectory, "crons.ts"), cronsContent);
-        writeIfChanged(join(outputDirectory, "vectors.ts"), vectorsContent);
-        writeIfChanged(join(outputDirectory, "drizzle.global.ts"), drizzleFiles.global);
-        writeIfChanged(join(outputDirectory, "drizzle.shard.ts"), drizzleFiles.shard);
-
-        // Conditionally-emitted files: each is written only when its feature is
-        // in use (the `emit*` helper returns `""` otherwise), so projects that
-        // don't use them keep a clean `_generated/` and never import the package.
-        //   - containers.ts  → `@lunora/container`, when containers are declared
-        //   - workflows.ts   → `@lunora/workflow`, when workflows are declared
-        //   - seed.ts        → `@lunora/seed`, when it's a declared dependency
-        writeIfPresent(join(outputDirectory, "containers.ts"), containersContent);
-        writeIfPresent(join(outputDirectory, "workflows.ts"), workflowsContent);
-        //   - agents.ts      → `@lunora/agent`, when agents are declared
-        writeIfPresent(join(outputDirectory, "agents.ts"), agentsContent);
-        writeIfPresent(join(outputDirectory, "queues.ts"), queuesContent);
-        writeIfPresent(join(outputDirectory, "seed.ts"), seedContent);
-        //   - collections.ts → `@lunora/db`, when the project declares shapes
-        writeIfPresent(join(outputDirectory, "collections.ts"), collectionsContent);
-
-        // The `.json` is the portable artifact for external tooling; the `.ts`
-        // (same document, inlined) is what the worker imports and passes to
-        // `createWorker({ openApiSpec })`. Both are gated on the same `apiSpec`
-        // choice so they regenerate together — and routed through `writeIfPresent`
-        // (empty content when the mode is off) so switching `apiSpec` away from a
-        // format also DELETES its now-stale spec files instead of leaving a
-        // portable artifact that documents endpoints/args that no longer exist.
-        writeIfPresent(join(outputDirectory, "openapi.json"), wantsOpenApi ? openApiContent : "");
-        writeIfPresent(join(outputDirectory, "openapi.ts"), wantsOpenApi ? openApiModuleContent : "");
-        writeIfPresent(join(outputDirectory, "openrpc.json"), wantsOpenRpc ? openRpcContent : "");
-        writeIfPresent(join(outputDirectory, "openrpc.ts"), wantsOpenRpc ? openRpcModuleContent : "");
-
-        // Bless the schema baseline on first capture (so a project gets a
-        // committed snapshot the moment it runs codegen) or when explicitly
-        // asked to refresh it. The CLI gate reads the existing baseline BEFORE
-        // calling codegen, so re-blessing here never hides drift from that run.
-        if (!schemaSnapshotExists || options.updateSchemaBaseline === true) {
-            writeIfChanged(schemaSnapshotPath, serializeSchemaSnapshot(schemaSnapshot));
-        }
+    // Bless the schema baseline on first capture (so a project gets a committed snapshot the
+    // moment it runs codegen) or when explicitly asked to refresh it. The CLI gate reads the
+    // existing baseline BEFORE calling codegen, so re-blessing here never hides drift from that run.
+    if (!options.dryRun && (!schemaSnapshotExists || options.updateSchemaBaseline === true)) {
+        writeIfChanged(schemaSnapshotPath, serializeSchemaSnapshot(schemaSnapshot));
     }
 
     if (timingEnabled) {
@@ -1069,6 +978,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         advisories,
         advisorContext,
         agents,
+        architecture: architectureDocument,
         containers,
         // Declared jobs plus the schedules `createWorker` is configured with
         // directly (`backupCron`, `crons` keys). Both need a wrangler trigger to
@@ -1079,13 +989,17 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             agents: agentsContent,
             api: apiContent,
             app: appContent,
+            authModule: authModuleContent,
             collections: collectionsContent,
             containers: containersContent,
             crons: cronsContent,
             dataModel: dataModelContent,
             drizzleGlobal: drizzleFiles.global,
             drizzleShard: drizzleFiles.shard,
+            functionModules: functionModulesContent,
             functions: functionsContent,
+            internal: internalContent,
+            live: liveContent,
             openApi: openApiContent,
             openApiModule: openApiModuleContent,
             openRpc: openRpcContent,
@@ -1104,222 +1018,26 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         schemaSnapshot,
         schemaSnapshotPath,
         workflows,
+        writtenFiles,
     };
 };
 
-export interface CodegenOptions {
-    /**
-     * Which machine-readable API spec(s) to emit into `_generated/`.
-     *
-     * `"openapi"` (the default) writes only `openapi.json` (OpenAPI 3.1; covers
-     * both the RPC functions and `httpRouter()` REST routes). `"openrpc"` writes
-     * only `openrpc.json` (OpenRPC 1.x; the RPC functions only — OpenRPC cannot
-     * represent REST routes). `"both"` writes both files; `"none"` writes neither.
-     *
-     * Regardless of the choice, `CodegenResult.generated.openApi` and `.openRpc`
-     * always carry the rendered string (computation is cheap and pure); only the
-     * on-disk write is gated by this option.
-     */
-    apiSpec?: "both" | "none" | "openapi" | "openrpc";
-
-    /**
-     * When true, run discovery + emit (so any schema/function parse error
-     * surfaces) but skip writing files to `_generated/`. The returned
-     * `outputDirectory` is still the path that *would* have been written.
-     */
-    dryRun?: boolean;
-
-    /**
-     * Run the static schema advisor (unindexed FKs, …) during codegen.
-     * Defaults to `true`. When `false`, `CodegenResult.advisories` is empty.
-     * Computed regardless of `dryRun`; codegen never prints them — see
-     * {@link CodegenResult.advisories}.
-     */
-    lint?: boolean;
-
-    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
-    lunoraDirectory?: string;
-
-    /**
-     * Reuse a previously-constructed ts-morph {@link Project} instead of building
-     * a fresh one each run. The caller owns refreshing its source files from disk
-     * (see {@link refreshCodegenProject}) — codegen does not re-read changed files
-     * off an injected Project. Built via {@link createCodegenProject} when absent.
-     * Used by the Vite dev-loop to avoid re-parsing the whole TS program on every
-     * save; omit it (CLI one-shot path) to get the default fresh-Project behaviour.
-     */
-    project?: Project;
-
-    /** Project root containing the `lunora/` directory. */
-    projectRoot: string;
-
-    /**
-     * The deploy target codegen tailors the emitted `ctx.*` surface to.
-     * Defaults to `"cloudflare"` — whose capability matrix marks every feature
-     * native or emulated, so the default output is unchanged (byte-identical
-     * goldens). A target that marks a used feature unsupported omits its
-     * `ctx.*` surface and reports it in {@link CodegenResult.platformDiagnostics}.
-     * Only `"cloudflare"` is registered until other per-target `@lunora/platform`
-     * matrices land; an unknown target emits the full surface un-gated and a
-     * `platform_unknown_target` diagnostic.
-     */
-    target?: string;
-
-    /**
-     * Re-bless the committed schema-drift baseline (`lunora/.lunora-schema.json`)
-     * with the current structural snapshot. The baseline is ALWAYS written on
-     * first capture (when the file is absent); set this to overwrite an existing
-     * one — e.g. after the developer has added the data migration that justifies
-     * a breaking change. Ignored when `dryRun` is true.
-     */
-    updateSchemaBaseline?: boolean;
-
-    /**
-     * Committed `wrangler.jsonc` `vars` entries that hold plaintext secrets — the
-     * `plaintext_secret_in_wrangler_vars` lint input. Produced by `@lunora/config`
-     * (which reads `wrangler.jsonc`) and threaded through by the CLI / Vite plugin;
-     * codegen only forwards it to the advisor. Absent when no wrangler config is
-     * present or the caller doesn't scan it.
-     */
-    wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
-}
-
-export interface CodegenResult {
-    /**
-     * The normalized advisor evidence the findings were produced from, so a
-     * caller can score it into a health map (`scoreAdvisor`) without re-running
-     * discovery. `undefined` under `lint: false`.
-     *
-     * Deliberately not scored here: the map carries a `generatedAt` stamp, and
-     * codegen's result stays a pure function of the sources.
-     */
-    advisorContext?: LintContext;
-
-    /**
-     * Static schema advisor findings (e.g. unindexed foreign keys) produced
-     * this run. Empty when `lint` is `false` or the schema is clean. Codegen
-     * does not print these itself — each caller presents them through its own
-     * channel (the CLI logger, the vite overlay, the studio Advisors table).
-     * `formatAdvisories` is exported for a plain multi-line rendering.
-     */
-    advisories: ReadonlyArray<Finding>;
-
-    /**
-     * Agents discovered from `defineAgent` exports in `lunora/agents.ts` — the
-     * list the config layer reconciles into wrangler's `workflows[]` array (an
-     * agent compiles onto a Cloudflare Workflow). Agents are NOT Durable Objects,
-     * so this adds no binding or migration. Empty when the project declares none.
-     */
-    agents: ReadonlyArray<AgentIR>;
-
-    /**
-     * Containers discovered from `defineContainer` exports in
-     * `lunora/containers.ts` — the list the config layer reconciles into
-     * wrangler's `containers[]`, `CONTAINER_*` Durable Object bindings, and
-     * migration classes. Empty when the project declares no containers.
-     */
-    containers: ReadonlyArray<ContainerIR>;
-
-    /**
-     * Deduplicated cron schedules discovered from `cronJobs()` definitions —
-     * the array the vite plugin reconciles into `wrangler.jsonc`'s
-     * `triggers.crons`. Empty when the project declares no crons.
-     */
-    cronTriggers: ReadonlyArray<string>;
-
-    generated: {
-        /** WorkflowEntrypoint classes for declared agents (`_generated/agents.ts`); `""` (and not written) when no agents are declared. */
-        agents: string;
-        api: string;
-        /** Fluent worker-composition builder (`_generated/app.ts`) — `defineApp()`. Always written. */
-        app: string;
-        /** Partial-replication collection factories (`_generated/collections.ts`); `""` (and not written) unless the project declares shapes and installs `@lunora/db`. */
-        collections: string;
-        /** Container DO classes (`_generated/containers.ts`); `""` (and not written) when no containers are declared. */
-        containers: string;
-        crons: string;
-        dataModel: string;
-        drizzleGlobal: string;
-        drizzleShard: string;
-        functions: string;
-        /** OpenAPI 3.1.0 document (`_generated/openapi.json`), pretty-printed JSON. */
-        openApi: string;
-
-        /**
-         * OpenAPI document as an importable TS module (`_generated/openapi.ts`) —
-         * `export const openApiSpec`, the worker imports it for
-         * `createWorker({ openApiSpec })`. Same document as `openApi`. Written
-         * alongside `openapi.json` whenever `apiSpec` includes `openapi`.
-         */
-        openApiModule: string;
-        /** OpenRPC 1.x document (`_generated/openrpc.json`), pretty-printed JSON. Always computed; written only when `apiSpec` includes `openrpc`. */
-        openRpc: string;
-
-        /**
-         * OpenRPC document as an importable TS module (`_generated/openrpc.ts`) —
-         * `export const openRpcSpec`, for `createWorker({ openRpcSpec })`. Same
-         * document as `openRpc`. Written alongside `openrpc.json` whenever
-         * `apiSpec` includes `openrpc`.
-         */
-        openRpcModule: string;
-        /** Push-consumer queue registry (`_generated/queues.ts`); `""` (and not written) when no push queues are declared. */
-        queues: string;
-        /** Project-bound seed client (`_generated/seed.ts`); `""` (and not written) when `@lunora/seed` is not a declared dependency. */
-        seed: string;
-        server: string;
-        shard: string;
-        /** Static vector-index registry (`_generated/vectors.ts`) — `LUNORA_VECTOR_INDEXES`. Empty array body when the schema declares none. */
-        vectors: string;
-        /** WorkflowEntrypoint classes (`_generated/workflows.ts`); `""` (and not written) when no workflows are declared. */
-        workflows: string;
-    };
-
-    /**
-     * Data migrations discovered from `defineMigration` exports under `lunora/`,
-     * each with the table it iterates. The drift gate matches a NEW id against
-     * its table so a backfill only excuses breaking drift on the table it
-     * actually visits. Empty when the project declares none.
-     */
-    migrations: ReadonlyArray<MigrationIR>;
-    outputDirectory: string;
-
-    /**
-     * Portability diagnostics for the requested {@link CodegenOptions.target}:
-     * `ctx.*` features the app uses that the target does not support (omitted
-     * from the emitted surface), or an unknown target. Empty for a
-     * fully-supported app on the default Cloudflare target. Presentation is the
-     * caller's job, like {@link CodegenResult.advisories}.
-     */
-    platformDiagnostics: ReadonlyArray<PlatformDiagnostic>;
-
-    /**
-     * Queues discovered from `defineQueue` exports in `lunora/queues.ts` — the
-     * list the config layer reconciles into wrangler's `queues.producers[]` /
-     * `queues.consumers[]`. Queues are NOT Durable Objects, so this adds no
-     * binding or migration. Empty when the project declares no queues.
-     */
-    queues: ReadonlyArray<QueueIR>;
-
-    /**
-     * The CURRENT structural schema snapshot computed this run (tables + field
-     * kinds/optionality + indexes/relations/shard mode + declared migration ids).
-     * The pre-deploy drift gate diffs this against the committed baseline read
-     * from {@link CodegenResult.schemaSnapshotPath}. Always present, even on a
-     * `dryRun`.
-     */
-    schemaSnapshot: SchemaSnapshot;
-
-    /** Absolute path of the committed baseline file (`lunora/.lunora-schema.json`). */
-    schemaSnapshotPath: string;
-
-    /**
-     * Workflows discovered from `defineWorkflow` exports in
-     * `lunora/workflows.ts` — the list the config layer reconciles into
-     * wrangler's `workflows[]` array. Workflows are NOT Durable Objects, so this
-     * adds no binding or migration. Empty when the project declares no workflows.
-     */
-    workflows: ReadonlyArray<WorkflowIR>;
-}
+/**
+ * Top-level codegen entry. Parses `<projectRoot>/lunora/schema.ts` and every
+ * function file under `<projectRoot>/lunora/`, then writes
+ * `_generated/{api,server,dataModel}.ts` next to them.
+ *
+ * When `LUNORA_CODEGEN_TIMING` is set (truthy), a single diagnostic summary
+ * line is written to stderr with the total wall time and the discovery-vs-emit
+ * split — opt-in instrumentation that is otherwise zero-cost and side-effect-free
+ * on the returned {@link CodegenResult}.
+ *
+ * One walk of the source tree is shared by every discoverer for the run (see
+ * `withSourceListMemo`).
+ */
+export const runCodegen = (options: CodegenOptions): CodegenResult => withSourceListMemo(() => runCodegenUnmemoized(options));
 
 // Exports kept at end-of-file per the package's `import/exports-last` rule.
-export { findTsconfig, SCHEMA_SNAPSHOT_FILENAME };
+export { createCodegenProject, findTsconfig, refreshCodegenProject, tsconfigFingerprint } from "./codegen-project";
+export type { CodegenOptions, CodegenResult } from "./run-codegen-types";
+export { SCHEMA_SNAPSHOT_FILENAME };

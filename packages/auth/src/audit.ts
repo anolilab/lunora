@@ -13,8 +13,10 @@
  * plan calls for. First, retention is configurable and NOT capped at 1000:
  * compliance use wants a long (often unbounded) trail, so it is an explicit
  * option and omitting it keeps every row. Second, the free-form `detail` payload
- * is scrubbed with `@visulima/redact` before it is persisted, so a token or
- * password that leaks into an event's context never reaches the durable table.
+ * is scrubbed before it is persisted — credential keys and `name=value` pairs
+ * by `shared/credential-redaction` (the same masking the request log uses), then
+ * `@visulima/redact`'s standard and PII rules — so a token or password that
+ * leaks into an event's context never reaches the durable table.
  *
  * Persistence rides the same {@link SqlExecutor} seam better-auth's store uses
  * (`./sql-store`), so it lands in the same D1 database as the auth tables — no
@@ -23,6 +25,7 @@
 
 import { piiRules, redact, standardRules } from "@visulima/redact";
 
+import { maskCredentials } from "../../../shared/credential-redaction";
 import type { SqlExecutor } from "./sql-store";
 
 /** Reserved append-only table backing the Studio "Security / audit" page. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -129,7 +132,12 @@ interface ReadAuthAuditOptions {
     event?: string;
     /** Max rows to return, clamped to [1, 10000]. Defaults to 1000. */
     limit?: number;
-    /** Return only events with `seq` strictly greater than this (forward paging). */
+
+    /**
+     * Return only events with `seq` strictly greater than this. Supplying it
+     * switches the page to oldest-first so the cursor walks forward; omit it for
+     * the newest-first feed.
+     */
     sinceSeq?: number;
 }
 
@@ -245,7 +253,7 @@ const appendAuthAuditEntry = async (
     let detail: Record<string, unknown> | undefined;
 
     if (entry.detail !== undefined) {
-        detail = options.redactDetail === false ? entry.detail : redact(entry.detail, AUDIT_REDACT_RULES);
+        detail = options.redactDetail === false ? entry.detail : redact(maskCredentials(entry.detail) as Record<string, unknown>, AUDIT_REDACT_RULES);
     }
 
     await executor.run(
@@ -274,10 +282,17 @@ const appendAuthAuditEntry = async (
 };
 
 /**
- * Read audit events newest-first, optionally filtered by `actorId` / `event` and
- * paged past `sinceSeq`, up to `limit` (clamped to [1, 10000]). Parses each row's
- * `detail` JSON back into an object. Creates the table first so reads on a
- * never-audited database return `[]` instead of throwing.
+ * Read audit events, optionally filtered by `actorId` / `event` and paged past
+ * `sinceSeq`, up to `limit` (clamped to [1, 10000]). Parses each row's `detail`
+ * JSON back into an object. Creates the table first so reads on a never-audited
+ * database return `[]` instead of throwing.
+ *
+ * Ordering follows the cursor: **without** `sinceSeq` the page is newest-first
+ * (`seq DESC`) — the feed the studio's Security panel renders. **With**
+ * `sinceSeq` it is oldest-first (`seq ASC`), because a lower bound is a forward
+ * walk: a descending page above the bound would hand back the newest rows and
+ * leave everything between the cursor and them unreachable once the caller
+ * advanced past it.
  *
  * `limit` is NaN-safe: a non-finite/non-number value (e.g. a caller passing
  * `Number.NaN`, or an upstream boundary that failed to reject one) falls back
@@ -293,6 +308,12 @@ const readAuthAuditLog = async (executor: SqlExecutor, options: ReadAuthAuditOpt
     const limit = Number.isFinite(options.limit) ? Math.max(1, Math.min(options.limit as number, MAX_READ_LIMIT)) : DEFAULT_READ_LIMIT;
     const clauses: string[] = ["seq > ?"];
     const parameters: unknown[] = [options.sinceSeq ?? 0];
+    // A `sinceSeq` cursor is a FORWARD walk, so the page it returns has to be the
+    // rows just above the cursor — ascending. Combined with `DESC` the lower bound
+    // returns the NEWEST rows instead, and advancing the cursor to the highest
+    // `seq` seen skips every older row, silently, after one page. Without a cursor
+    // the read stays newest-first, which is what the studio's panel renders.
+    const direction = options.sinceSeq === undefined ? "DESC" : "ASC";
 
     if (options.actorId !== undefined) {
         clauses.push("actor_id = ?");
@@ -307,7 +328,7 @@ const readAuthAuditLog = async (executor: SqlExecutor, options: ReadAuthAuditOpt
     parameters.push(limit);
 
     const rows = await executor.all(
-        `SELECT seq, ts, event, outcome, actor_id, actor_email, target_email, ip, user_agent, detail FROM "${AUTH_AUDIT_TABLE}" WHERE ${clauses.join(" AND ")} ORDER BY seq DESC LIMIT ?`,
+        `SELECT seq, ts, event, outcome, actor_id, actor_email, target_email, ip, user_agent, detail FROM "${AUTH_AUDIT_TABLE}" WHERE ${clauses.join(" AND ")} ORDER BY seq ${direction} LIMIT ?`,
         parameters,
     );
 

@@ -14,7 +14,10 @@
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
-        "bindings": [{ "name": "CONTAINER_SMOKE", "class_name": "SmokeContainer" }],
+        "bindings": [
+            { "name": "CONTAINER_SMOKE", "class_name": "SmokeContainer" },
+            { "name": "CONTAINER_EXEC_PROBE", "class_name": "ExecProbe" },
+        ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SmokeContainer"] }],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SmokeContainer", "ExecProbe"] }],
 }

@@ -10,6 +10,7 @@
  * coincidentally compatible, and gives the level union + its severity ordering a
  * single source of truth. Keep genuinely zero-dependency so inlining stays sound.
  */
+import type { ErrorDetail } from "./error-detail";
 import type { LogFields } from "./log-fields";
 
 /**
@@ -52,6 +53,14 @@ export interface LogEvent {
     /** Raw arguments passed to the `ctx.log.*` call, in order. */
     args: unknown[];
     /**
+     * The first `Error` the call was handed, as an argument
+     * (`ctx.log.error("failed", err)`) or a fields value (`{ err }`): its `name`,
+     * unredacted `message`, `stack`, and `code` when it carries one. Absent when
+     * the line logged no `Error`. An error tracker reads this rather than parsing
+     * the rendered `message`.
+     */
+    error?: ErrorDetail;
+    /**
      * OTel `LogRecord.eventName` — set when the line was emitted as a **structured
      * event** via `ctx.log.event(name, fields)` rather than as a human-readable
      * log line.
@@ -78,6 +87,12 @@ export interface LogEvent {
     level: ContextLogLevel;
     /** Display string — the message, or the console-style args rendered and space-joined. */
     message: string;
+    /**
+     * Cloudflare Ray ID of the request this line was emitted under (see
+     * `shared/ray-id.ts`) — search Cloudflare Traces by it. Absent off the edge
+     * and for dispatches no HTTP request started (an alarm, a subscription re-run).
+     */
+    rayId?: string;
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey?: string;
     /** Span id of the RPC this line was emitted under (trace correlation), or absent. */

@@ -42,6 +42,27 @@ export default defineSchema({
 `{ unique: true }` additionally enforces that no two rows share the indexed
 value.
 
+### Fields are top-level columns
+
+An index names columns of the row, not paths inside them — `"user.settings.theme"`
+is not accepted. A `v.object()` column is stored as one JSON value, so indexing
+inside it would mean an expression index over `json_extract(...)` on every engine
+_plus_ a `where` DSL that can route a dotted key to it. Half of that is worse than
+none: a predicate that missed the route would read as a silent full table scan
+rather than an error, which is the exact problem the index was declared to avoid.
+
+Denormalise the field you query onto the row and keep the copy current in the
+mutation that writes the nested value:
+
+```ts
+// lunora/schema.ts
+users: defineTable({
+    settings: v.object({ theme: v.string() }),
+    // Written alongside `settings.theme` on every update; this is the indexed one.
+    theme: v.string(),
+}).index("by_theme", ["theme"]),
+```
+
 ## Querying with `withIndex`
 
 `q.withIndex(name, q => …)` selects the index and builds a range over its
@@ -86,6 +107,33 @@ at build time and surface these in the Studio:
 
 At runtime, **`index_utilization`** flags a dead index (zero recorded reads) and
 a hot unindexed scan (a table full-scanned many times with no index).
+
+## Checking a read with `explain`
+
+`ctx.db.<table>.explain(args)` takes the same arguments as `findMany` and reports how the
+database would run it, without running it:
+
+```ts
+const { sql, params, plan } = await ctx.db.messages.explain({ where: { room: "lobby" } });
+// plan: ["SEARCH messages USING INDEX by_room (room=?)"]
+```
+
+An index serves the read when the plan says `SEARCH … USING INDEX`; `SCAN` means every row is
+read. `sql` and `params` are the exact statement and bound values. `explain` honors RLS and
+soft delete like the read does, so the plan is the one your caller would get. Explaining does not
+subscribe a live query to the table. A relation filter in `where` is resolved first with an ordinary
+read of the related table, which does subscribe to that table, because the ids it matched end up in
+`params`. `limit: n` shows as `LIMIT n + 1`, the over-fetch `findMany` uses to learn whether another
+page exists.
+
+`params` includes values your RLS policies injected (a user id, a tenant), and a relation filter
+inlines the ids it matched, so keep `explain` output on the server rather than returning it to a
+client. A filter on a [masked](/docs/concepts/masking) column is refused, as it is for `findMany`.
+
+Plan lines are the database's own text: SQLite's `EXPLAIN QUERY PLAN` for shard tables and D1, and
+`EXPLAIN` on a Postgres or MySQL `.global()` backend, whose lines differ. Only SQLite and D1 are
+run against the real engine in the test suite; the Postgres and MySQL path is checked against
+canned plan rows.
 
 ## Aggregate indexes
 

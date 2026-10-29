@@ -43,9 +43,9 @@ const sessionStore: ExpoClientStorage = Platform.OS === "web" ? webStorage : Sec
 
 /**
  * better-auth React client wired for Expo. The Expo plugin persists the session
- * cookie in the store above (surviving app restarts, since React Native has no
- * cookie jar) and exposes `getCookie()`, which `src/lunora.ts` bridges into the
- * Lunora client so the live socket and RPC calls run as the signed-in user.
+ * token in the store above (surviving app restarts) and exposes `getCookie()`,
+ * which `App.tsx` bridges into the Lunora client as a bearer, so the live socket
+ * and RPC calls run as the signed-in user.
  */
 export const authClient = createAuthClient({
     baseURL: LUNORA_URL,

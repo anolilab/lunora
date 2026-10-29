@@ -1,12 +1,17 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DOCTOR_CODES, runDoctor, runDoctorCommand } from "../../src/commands/doctor/handler";
+import type { DoctorData } from "../../src/commands/doctor/handler";
+import { DOCTOR_CODES, execute, runDoctor, runDoctorCommand } from "../../src/commands/doctor/handler";
+import type { DoctorOptions } from "../../src/commands/doctor/index";
 import type { Logger } from "../../src/util/logger";
+import { setCommandLogger } from "../../src/util/logger";
+import { runExecute } from "../helpers/execute";
 
 /** Run async `body` while capturing everything written to `process.stdout`. */
 const captureStdout = async (body: () => Promise<void>): Promise<string> => {
@@ -36,12 +41,18 @@ const makeLogger = (): { lines: string[]; logger: Logger } => {
     return { lines, logger: { error: push("error: "), info: push("info: "), success: push("success: "), warn: push("warn: ") } };
 };
 
-/** A clean wrangler.jsonc: SHARD DO binding + a real-looking D1 id. */
+/**
+ * A clean wrangler.jsonc: SHARD DO binding + its migration entry + a real-looking
+ * D1 id. The migration is load-bearing — wrangler requires one per Durable Object
+ * class, and doctor now reports every validator error rather than the three it
+ * used to cherry-pick, so a fixture that omits it is not actually clean.
+ */
 const CLEAN_WRANGLER = JSON.stringify(
     {
-        compatibility_date: "2026-04-07",
+        compatibility_date: "2026-10-01",
         d1_databases: [{ binding: "DB", database_id: "11111111-2222-3333-4444-555555555555" }],
         durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+        migrations: [{ new_sqlite_classes: ["ShardDO"], tag: "v1" }],
         name: "demo",
     },
     null,
@@ -54,6 +65,7 @@ const PLACEHOLDER_WRANGLER = JSON.stringify(
         compatibility_date: "2026-04-07",
         d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>" }],
         durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+        migrations: [{ new_sqlite_classes: ["ShardDO"], tag: "v1" }],
         name: "demo",
     },
     null,
@@ -124,6 +136,148 @@ describe("runDoctor", () => {
         expect(result.code).toBe(0);
         expect(result.findings.some((finding) => finding.level === "fail")).toBe(false);
         expect(result.findings.some((finding) => finding.level === "warn")).toBe(false);
+    });
+
+    it("warns about a bound service still serving on workers.dev, per environment, but not one with a route", async () => {
+        expect.assertions(3);
+
+        seed(workdir, CLEAN_WRANGLER);
+        writeFileSync(
+            join(workdir, "lunora.config.ts"),
+            `export default { services: { parser: { dir: "./services/parser" }, gateway: { dir: "./services/gateway" } } };\n`,
+        );
+        mkdirSync(join(workdir, "services", "parser"), { recursive: true });
+        mkdirSync(join(workdir, "services", "gateway"), { recursive: true });
+        writeFileSync(
+            join(workdir, "services", "parser", "wrangler.jsonc"),
+            `{ "name": "parser", "main": "src/index.ts", "env": { "production": { "workers_dev": false } } }\n`,
+        );
+        writeFileSync(
+            join(workdir, "services", "gateway", "wrangler.jsonc"),
+            `{ "name": "gateway", "main": "src/index.ts", "routes": [{ "pattern": "llm.example.com", "custom_domain": true }], "env": { "staging": { "routes": [] } } }\n`,
+        );
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.findings.filter((finding) => finding.code === "service-workers-dev").map((finding) => finding.message)).toStrictEqual([
+            "service gateway (gateway) has no route in its wrangler config and still serves on workers.dev (env.staging); a custom domain set elsewhere would also be public.",
+            "service parser (parser) has no route in its wrangler config and still serves on workers.dev; a custom domain set elsewhere would also be public.",
+        ]);
+
+        // A custom domain can sit outside the wrangler file, so the advice must
+        // never tell the author to drop internal auth.
+        const fixes = result.findings.filter((finding) => finding.code === "service-workers-dev").map((finding) => finding.fix ?? "");
+
+        expect(fixes.every((fix) => !fix.includes("internal auth (HMAC) can go"))).toBe(true);
+        expect(fixes.every((fix) => fix.includes("Keep its internal auth"))).toBe(true);
+    });
+
+    describe("blast-radius guardrails", () => {
+        it("prompts for a CPU cap when none is set, without failing the run", async () => {
+            expect.assertions(3);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = result.findings.find((entry) => entry.code === "cpu-limit-missing");
+
+            expect(finding?.level).toBe("info");
+            expect(finding?.fix).toContain("cpu_ms");
+            // A guardrail prompt must not turn a healthy project red.
+            expect(result.code).toBe(0);
+        });
+
+        it("stays quiet once a CPU cap is configured", async () => {
+            expect.assertions(1);
+
+            seed(
+                workdir,
+                JSON.stringify({
+                    compatibility_date: "2026-04-07",
+                    d1_databases: [{ binding: "DB", database_id: "11111111-2222-3333-4444-555555555555" }],
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    limits: { cpu_ms: 30_000 },
+                    name: "demo",
+                }),
+            );
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(result.findings.some((entry) => entry.code === "cpu-limit-missing")).toBe(false);
+        });
+
+        it("names R2 buckets whose lifecycle rules should be checked, and stays silent without one", async () => {
+            expect.assertions(3);
+
+            seed(
+                workdir,
+                JSON.stringify({
+                    compatibility_date: "2026-04-07",
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    name: "demo",
+                    r2_buckets: [{ binding: "UPLOADS", bucket_name: "demo-uploads" }],
+                }),
+            );
+
+            const withBucket = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = withBucket.findings.find((entry) => entry.code === "r2-lifecycle-unset");
+
+            expect(finding?.message).toContain("demo-uploads");
+            expect(finding?.fix).toContain("lifecycle");
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const withoutBucket = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(withoutBucket.findings.some((entry) => entry.code === "r2-lifecycle-unset")).toBe(false);
+        });
+    });
+
+    describe("paid products", () => {
+        /** A fetch that fails the test if anything calls it: the check is config-only. */
+        const noNetwork: typeof globalThis.fetch = async () => {
+            throw new Error("paid-product check must not reach the network");
+        };
+
+        it("warns on each metered binding, naming the scope it is declared in, without any network call", async () => {
+            expect.assertions(3);
+
+            seed(
+                workdir,
+                JSON.stringify({
+                    ai: { binding: "AI" },
+                    compatibility_date: "2026-04-07",
+                    env: { prod: { browser: { binding: "BROWSER" }, images: { binding: "IMAGES" } } },
+                    name: "demo",
+                }),
+            );
+
+            const result = await runDoctor({ cwd: workdir, fetch: noNetwork, logger: makeLogger().logger });
+            const unguarded = result.findings.filter((finding) => finding.code === "paid-product-bound");
+
+            expect(unguarded.map((finding) => finding.message)).toStrictEqual([
+                expect.stringContaining("Workers AI is bound (top level)"),
+                expect.stringContaining("Browser Rendering is bound (env.prod)"),
+                expect.stringContaining("Cloudflare Images (Image Transformations) is bound (env.prod)"),
+            ]);
+            expect(unguarded.every((finding) => finding.level === "info")).toBe(true);
+            expect(unguarded[0]?.fix).toContain("budget alert");
+        });
+
+        it("raises no metered warning for a clean project, and always reports the paid products it cannot read", async () => {
+            expect.assertions(3);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const result = await runDoctor({ cwd: workdir, fetch: noNetwork, logger: makeLogger().logger });
+
+            expect(result.findings.some((finding) => finding.code === "paid-product-bound")).toBe(false);
+
+            const unknown = result.findings.find((finding) => finding.code === "paid-product-unknown");
+
+            expect(unknown?.level).toBe("info");
+            expect(unknown?.message).toContain("Argo Smart Routing and Log Explorer");
+        });
     });
 
     /**
@@ -198,6 +352,78 @@ describe("runDoctor", () => {
 
         expect(finding?.level).toBe("warn");
         expect(finding?.message).toContain("could not check");
+    });
+
+    it("fails when a declared Durable Object class is not exported by the worker entry", async () => {
+        expect.assertions(2);
+
+        // Doctor read the PURE config validator, which cannot see the entry — so
+        // the `durable_objects.bindings[].class_name` cross-check never ran here
+        // and doctor passed a tree wrangler refuses to bundle. Its own
+        // `declared-export-missing` check covers containers/workflows/agents off
+        // inference and stopped there — which is why this one has its own code
+        // rather than reusing that one: both fire for a container, and
+        // `DOCTOR_CODES` is the `--format json` contract a CI job counts.
+        seed(
+            workdir,
+            JSON.stringify({
+                compatibility_date: "2026-04-07",
+                durable_objects: {
+                    bindings: [
+                        { class_name: "ShardDO", name: "SHARD" },
+                        { class_name: "SchedulerDO", name: "SCHEDULER" },
+                    ],
+                },
+                main: "src/server.ts",
+                name: "demo",
+            }),
+        );
+        mkdirSync(join(workdir, "src"), { recursive: true });
+        writeFileSync(join(workdir, "src", "server.ts"), 'export { ShardDO } from "../lunora/_generated/shard.js";\n', "utf8");
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.code).toBe(1);
+        expect(result.findings.some((finding) => finding.code === "wrangler-class-unexported" && finding.message.includes("SchedulerDO"))).toBe(true);
+    });
+
+    it("reports wrangler errors no more specific check claimed, instead of dropping them", async () => {
+        expect.assertions(2);
+
+        // Doctor cherry-picked three findings out of the validator report and
+        // discarded the rest, so a bad `compatibility_date` (and an unchained
+        // `.vectors()`, a container image with no Dockerfile, a missing
+        // migration entry) read as a clean bill of health.
+        seed(
+            workdir,
+            JSON.stringify({
+                compatibility_date: "not-a-date",
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                name: "demo",
+            }),
+        );
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.code).toBe(1);
+        expect(result.findings.some((finding) => finding.code === "wrangler-invalid" && finding.message.includes("compatibility_date"))).toBe(true);
+    });
+
+    it("warns when a stale lunora.json is left behind", async () => {
+        expect.assertions(2);
+
+        // Nothing reads it any more, so nothing breaks — but a `target` in it used
+        // to select the provider, and after the rename the project silently gets
+        // the default one.
+        seed(workdir, CLEAN_WRANGLER);
+        writeFileSync(join(workdir, "lunora.json"), `{ "target": "node" }\n`, "utf8");
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+        const finding = result.findings.find((entry) => entry.code === "stale-lunora-json");
+
+        expect(finding?.level).toBe("warn");
+        // A warning, not a failure: the file is inert, not invalid.
+        expect(result.code).toBe(0);
     });
 
     it("reports a failure when wrangler.jsonc is missing", async () => {
@@ -481,48 +707,46 @@ describe("runDoctor", () => {
     });
 
     describe("--format json", () => {
-        it("puts one JSON document on stdout and the human report on stderr", async () => {
+        // Through `execute`, the only path that writes the envelope: the document
+        // is `defineHandler`'s, and `runDoctorCommand` is the library entry point.
+        it("puts one JSON document on stdout and the human report off it", async () => {
             expect.assertions(5);
 
             seed(workdir, PLACEHOLDER_WRANGLER);
 
-            const { logger } = makeLogger();
-            let stderr = "";
-            const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
-                stderr += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+            const { lines, logger } = makeLogger();
 
-                return true;
-            });
+            setCommandLogger(logger);
 
-            const stdout = await captureStdout(async () => {
-                await runDoctorCommand({ cwd: workdir, format: "json", logger });
-            });
+            try {
+                const { code, document } = await runExecute<DoctorOptions, DoctorData>(execute, {
+                    commandName: "doctor",
+                    cwd: workdir,
+                    options: { format: "json" },
+                });
 
-            stderrSpy.mockRestore();
-
-            const parsed = JSON.parse(stdout) as { code: number; findings: { code: string; level: string }[]; ok: boolean; summary: Record<string, number> };
-
-            expect(parsed.ok).toBe(false);
-            expect(parsed.code).toBe(1);
-            expect(parsed.findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
-            expect(parsed.summary.fail).toBe(1);
-            // The report is still rendered — on stderr, so stdout stays pipeable.
-            expect(stderr).toContain("lunora doctor — project preflight");
+                expect(code).toBe(1);
+                // No `ok`: the envelope's `code` is the verdict, and two fields
+                // answering that is how they end up disagreeing.
+                expect(document?.code).toBe(1);
+                expect(document?.data?.findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
+                expect(document?.data?.summary.fail).toBe(1);
+                // The report is still rendered, and off stdout so it stays pipeable.
+                expect(lines.join("\n")).toContain("lunora doctor — project preflight");
+            } finally {
+                setCommandLogger(undefined);
+            }
         });
 
-        it("counts every level in the summary and keeps pass findings in the document", async () => {
+        it("counts every level in the summary and keeps pass findings in the payload", async () => {
             expect.assertions(2);
 
             seed(workdir, CLEAN_WRANGLER);
 
-            const stdout = await captureStdout(async () => {
-                await runDoctorCommand({ cwd: workdir, format: "json", logger: makeLogger().logger });
-            });
+            const result = await runDoctorCommand({ cwd: workdir, format: "json", logger: makeLogger().logger });
 
-            const parsed = JSON.parse(stdout) as { findings: { level: string }[]; summary: Record<"fail" | "info" | "pass" | "warn", number> };
-
-            expect(parsed.summary.pass).toBeGreaterThan(0);
-            expect(parsed.findings.filter((finding) => finding.level === "pass")).toHaveLength(parsed.summary.pass);
+            expect(result.summary.pass).toBeGreaterThan(0);
+            expect(result.findings.filter((finding) => finding.level === "pass")).toHaveLength(result.summary.pass);
         });
 
         it("renders the human report on the caller's logger in pretty mode", async () => {
@@ -539,22 +763,610 @@ describe("runDoctor", () => {
             expect(stdout).toBe("");
             expect(lines.some((line) => line.includes("lunora doctor — project preflight"))).toBe(true);
         });
+    });
 
-        it("rejects an unknown --format the same way the other commands do", async () => {
+    describe("ai", () => {
+        /** A wrangler config: {@link CLEAN_WRANGLER} plus the given top-level keys. */
+        const wranglerWith = (extra: Record<string, unknown>): string => JSON.stringify({ ...(JSON.parse(CLEAN_WRANGLER) as object), ...extra }, null, 4);
+
+        const seedAiUsage = (dir: string): void => {
+            mkdirSync(join(dir, "lunora"), { recursive: true });
+            writeFileSync(join(dir, "lunora", "chat.ts"), `import { createAi } from "@lunora/ai";\n\nexport const ai = createAi;\n`, "utf8");
+        };
+
+        const codes = (result: Awaited<ReturnType<typeof runDoctor>>): string[] => result.findings.map((finding) => finding.code);
+
+        it("warns when ctx.ai is used without an `ai` binding, and notes the default gateway", async () => {
             expect.assertions(3);
 
             seed(workdir, CLEAN_WRANGLER);
+            seedAiUsage(workdir);
 
-            const { lines, logger } = makeLogger();
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
 
-            const stdout = await captureStdout(async () => {
-                const result = await runDoctorCommand({ cwd: workdir, format: "yaml", logger });
+            expect(result.findings.find((finding) => finding.code === "ai-binding-missing")?.level).toBe("warn");
+            expect(result.findings.find((finding) => finding.code === "ai-gateway-default")?.level).toBe("info");
+            expect(result.findings.find((finding) => finding.code === "ai-gateway-default")?.fix).toContain("lunora cloudflare ai-gateway");
+        });
 
-                expect(result.code).toBe(1);
+        it("is quiet once the binding and gateway id are configured", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ ai: { binding: "AI" }, vars: { LUNORA_AI_GATEWAY_ID: "demo" } }));
+            seedAiUsage(workdir);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(codes(result).filter((code) => code.startsWith("ai-"))).toStrictEqual([]);
+        });
+
+        it("is quiet when a self-hosted proxy replaces the binding and gateway", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ vars: { LUNORA_AI_PROXY_URL: "https://ai-proxy.internal/v1" } }));
+            seedAiUsage(workdir);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(codes(result).filter((code) => code.startsWith("ai-"))).toStrictEqual([]);
+        });
+
+        it("reads an unreadable .dev.vars as unset instead of aborting", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+            seedAiUsage(workdir);
+            // A directory where the file should be makes readFileSync throw EISDIR.
+            mkdirSync(join(workdir, ".dev.vars"));
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(codes(result)).toContain("ai-binding-missing");
+        });
+
+        it("warns that ctx.ai ignores a gateway token, even with a gateway id", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ ai: { binding: "AI" }, vars: { LUNORA_AI_GATEWAY_ID: "demo", LUNORA_AI_GATEWAY_TOKEN: "t" } }));
+            seedAiUsage(workdir);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(result.findings.find((finding) => finding.code === "ai-gateway-token-unused")?.level).toBe("warn");
+        });
+
+        it("reads the proxy and gateway vars from .dev.vars and env blocks too", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ env: { staging: { vars: { LUNORA_AI_GATEWAY_ID: "demo" } } } }));
+            seedAiUsage(workdir);
+            writeFileSync(join(workdir, ".dev.vars"), `${["LUNORA_AI_PROXY_URL", "https://ai-proxy.internal/v1"].join("=")}\n`, "utf8");
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(codes(result).filter((code) => code.startsWith("ai-"))).toStrictEqual([]);
+        });
+
+        it("reports nothing AI-related for a project that does not use ctx.ai", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(codes(result).filter((code) => code.startsWith("ai-"))).toStrictEqual([]);
+        });
+    });
+
+    describe("cimd", () => {
+        const wranglerWith = (extra: Record<string, unknown>): string => JSON.stringify({ ...(JSON.parse(CLEAN_WRANGLER) as object), ...extra }, null, 4);
+
+        const seedCimdUsage = (dir: string): void => {
+            mkdirSync(join(dir, "lunora"), { recursive: true });
+            writeFileSync(
+                join(dir, "lunora", "auth.ts"),
+                `import workersCimdFetch from "@lunora/auth/cimd/workers";\n\nexport const transport = workersCimdFetch;\n`,
+                "utf8",
+            );
+        };
+
+        const cimdFinding = (result: Awaited<ReturnType<typeof runDoctor>>) =>
+            result.findings.find((finding) => finding.code === "cimd-fetch-not-strictly-public");
+
+        it("warns when the Workers CIMD transport is imported without global_fetch_strictly_public", async () => {
+            expect.assertions(2);
+
+            seed(workdir, CLEAN_WRANGLER);
+            seedCimdUsage(workdir);
+
+            const finding = cimdFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.level).toBe("warn");
+            expect(finding?.message).toContain("the top level");
+        });
+
+        it("is quiet when the flag is set", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"] }));
+            seedCimdUsage(workdir);
+
+            expect(cimdFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+
+        // An env that declares its own `compatibility_flags` replaces the top-level
+        // list, so the flag set at the top does not reach that deploy.
+        it("names an env whose own compatibility_flags drop the flag", async () => {
+            expect.assertions(2);
+
+            seed(
+                workdir,
+                wranglerWith({
+                    compatibility_flags: ["global_fetch_strictly_public"],
+                    env: { production: { compatibility_flags: ["nodejs_compat"] }, staging: {} },
+                }),
+            );
+            seedCimdUsage(workdir);
+
+            const finding = cimdFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.message).toContain("env.production");
+            expect(finding?.message).not.toContain("env.staging");
+        });
+
+        it("says nothing for a project that does not import the transport", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            expect(cimdFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+    });
+
+    describe("cloudflare cli config", () => {
+        const cfFinding = (result: Awaited<ReturnType<typeof runDoctor>>) => result.findings.find((finding) => finding.code === "cf-config-present");
+
+        it("warns when a cloudflare.config.ts sits beside wrangler.jsonc, without failing the run", async () => {
+            expect.assertions(6);
+
+            seed(workdir, CLEAN_WRANGLER);
+            writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = cfFinding(result);
+
+            expect(finding?.level).toBe("warn");
+            expect(finding?.message).toContain("cloudflare.config.ts found next to wrangler.jsonc");
+            expect(finding?.message).toContain("Lunora manages wrangler.jsonc");
+            expect(finding?.fix).toContain("resource commands");
+            expect(finding?.fix).toContain("https://github.com/anolilab/lunora/issues/964");
+            expect(result.code).toBe(0);
+        });
+
+        it("reports every run, even after a once-per-process-tree warning was already claimed", async () => {
+            expect.assertions(2);
+
+            // What `lunora dev` / codegen / deploy leave behind once they warned.
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "1");
+
+            try {
+                seed(workdir, CLEAN_WRANGLER);
+                writeFileSync(join(workdir, "cloudflare.config.mjs"), "export default {};\n", "utf8");
+
+                expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))?.message).toContain("cloudflare.config.mjs");
+                expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeDefined();
+            } finally {
+                vi.unstubAllEnvs();
+            }
+        });
+
+        it("does not contradict wrangler-missing when there is no wrangler config", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(result.findings.some((finding) => finding.code === "wrangler-missing")).toBe(true);
+            expect(cfFinding(result)?.message).toContain("cloudflare.config.ts found in the project root.");
+            expect(cfFinding(result)?.message).not.toContain("next to");
+        });
+
+        it("says nothing for a project without one", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+    });
+
+    describe("d1 placeholder on a celld project", () => {
+        // celld's projection gives the placeholder a name-derived id, so a deploy never sees it.
+        it("does not fail a celld project for the placeholder reconcile used to write", async () => {
+            expect.assertions(1);
+
+            seed(workdir, PLACEHOLDER_WRANGLER);
+            writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+            const { findings } = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+
+            expect(findings.some((finding) => finding.code === "d1-placeholder-id")).toBe(false);
+        });
+
+        // A replace-with stand-in is unfinished too: celld would take it as the database identity.
+        it("still fails a celld project for a replace-with stand-in, but not for a real identity that starts with replace", async () => {
+            expect.assertions(2);
+
+            seed(workdir, PLACEHOLDER_WRANGLER.replace("<replace-with-d1-create-id>", "REPLACE_WITH_ID"));
+            writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+            const stand = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+
+            expect(stand.findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
+
+            seed(workdir, PLACEHOLDER_WRANGLER.replace("<replace-with-d1-create-id>", "replacement-orders"));
+
+            const identity = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+
+            expect(identity.findings.some((finding) => finding.code === "d1-placeholder-id")).toBe(false);
+        });
+
+        // The projection replaces only the exact placeholder, so any other empty id still reaches celld as a database identity.
+        it("still fails a celld project for a placeholder the projection does not replace", async () => {
+            expect.assertions(1);
+
+            seed(workdir, PLACEHOLDER_WRANGLER.replace("<replace-with-d1-create-id>", ""));
+            writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+            const { findings } = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+
+            expect(findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
+        });
+    });
+
+    describe("celld toolchain", () => {
+        // `lunora dev` and a dry-run deploy never touch the fleet bucket, so a
+        // dev-only celld project must not fail doctor for lacking one.
+        it("warns, never fails, when CELLD_BUCKET is unset", async () => {
+            expect.assertions(2);
+
+            // The probe reads the host environment too, so an inherited CELLD_BUCKET would hide the warning.
+            vi.stubEnv("CELLD_BUCKET", "");
+
+            try {
+                seed(workdir, CLEAN_WRANGLER);
+                writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+                const { findings } = await runDoctor({ cwd: workdir, environment: {}, logger: makeLogger().logger });
+                const bucket = findings.filter((finding) => finding.message.includes("CELLD_BUCKET"));
+
+                expect(bucket.map((finding) => finding.level)).toStrictEqual(["warn"]);
+                expect(bucket[0]?.code).toBe("celld-toolchain-warn");
+            } finally {
+                vi.unstubAllEnvs();
+            }
+        });
+
+        // The override carries only credentials. The tools live on the host PATH, so the probe must still find them.
+        it("finds celld and esbuild on the host PATH when the override carries credentials only", async () => {
+            expect.assertions(1);
+
+            const bin = mkdtempSync(join(tmpdir(), "doctor-celld-bin-"));
+            const hostPath = process.env["PATH"] ?? "";
+
+            try {
+                for (const tool of ["celld", "esbuild"]) {
+                    writeFileSync(join(bin, tool), "#!/bin/sh\necho 1.0.0\n", "utf8");
+                    chmodSync(join(bin, tool), 0o755);
+                }
+
+                process.env["PATH"] = `${bin}:${hostPath}`;
+                seed(workdir, CLEAN_WRANGLER);
+                writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+                const { findings } = await runDoctor({ cwd: workdir, environment: { CELLD_BUCKET: "fleet" }, logger: makeLogger().logger });
+
+                expect(findings.filter((finding) => finding.code === "celld-toolchain-missing")).toStrictEqual([]);
+            } finally {
+                process.env["PATH"] = hostPath;
+                rmSync(bin, { force: true, recursive: true });
+            }
+        });
+
+        // The bucket is read from the same merge the probe runs with, so a host-set CELLD_BUCKET is not reported unset.
+        it("reads CELLD_BUCKET from the host environment when the override carries credentials only", async () => {
+            expect.assertions(1);
+
+            const hostBucket = process.env["CELLD_BUCKET"];
+
+            try {
+                process.env["CELLD_BUCKET"] = "fleet";
+                seed(workdir, CLEAN_WRANGLER);
+                writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+                const { findings } = await runDoctor({ cwd: workdir, environment: { CELLD_ACCOUNT: "acct" }, logger: makeLogger().logger });
+
+                expect(findings.filter((finding) => finding.code === "celld-toolchain-warn")).toStrictEqual([]);
+            } finally {
+                if (hostBucket === undefined) {
+                    delete process.env["CELLD_BUCKET"];
+                } else {
+                    process.env["CELLD_BUCKET"] = hostBucket;
+                }
+            }
+        });
+    });
+
+    describe("observability sampling", () => {
+        const wranglerWith = (extra: Record<string, unknown>): string => JSON.stringify({ ...(JSON.parse(CLEAN_WRANGLER) as object), ...extra }, null, 4);
+
+        const samplingFinding = (result: Awaited<ReturnType<typeof runDoctor>>) =>
+            result.findings.find((finding) => finding.code === "observability-full-sampling");
+
+        it("informs about the pricing when the block is absent (the reconciled default samples everything)", async () => {
+            expect.assertions(5);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const finding = samplingFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.level).toBe("info");
+            expect(finding?.message).toContain("logs (top level)");
+            expect(finding?.message).toContain("2026-12-01");
+            expect(finding?.message).toContain("0.5 GB/day");
+            expect(finding?.fix).toContain("under observability.traces for traces");
+        });
+
+        it("names traces too when they are enabled at the default rate", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ observability: { enabled: true, head_sampling_rate: 1, traces: { enabled: true } } }));
+
+            const finding = samplingFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.message).toContain("logs + traces (top level)");
+        });
+
+        it("is quiet once both rates are lowered", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ observability: { enabled: true, head_sampling_rate: 0.1, traces: { enabled: true, head_sampling_rate: 0.05 } } }));
+
+            expect(samplingFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+
+        it("is quiet when observability is disabled", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ observability: { enabled: false } }));
+
+            expect(samplingFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+
+        it("names an env whose own block samples everything", async () => {
+            expect.assertions(2);
+
+            seed(
+                workdir,
+                wranglerWith({
+                    env: { production: { observability: { enabled: true, logs: { head_sampling_rate: 1 } } }, staging: {} },
+                    observability: { enabled: true, head_sampling_rate: 0.2 },
+                }),
+            );
+
+            const finding = samplingFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.message).toContain("logs (env.production)");
+            expect(finding?.message).not.toContain("top level");
+        });
+    });
+
+    describe("durable object class budget", () => {
+        /** A Cloudflare namespaces response reporting `total` classes on the account. */
+        const namespacesApi = (total: number): typeof globalThis.fetch =>
+            vi.fn<typeof globalThis.fetch>(async () => Response.json({ result: [], result_info: { total_count: total }, success: true }));
+
+        const budgetFinding = async (fetchImpl: typeof globalThis.fetch, environment: Record<string, string>) => {
+            const cwd = mkdtempSync(join(tmpdir(), "lunora-doctor-budget-"));
+
+            try {
+                const result = await runDoctor({ cwd, environment, fetch: fetchImpl, logger: makeLogger().logger });
+
+                return result.findings.find((finding) => finding.code.startsWith("do-class-budget"));
+            } finally {
+                rmSync(cwd, { force: true, recursive: true });
+            }
+        };
+
+        const credentials = { CLOUDFLARE_ACCOUNT_ID: "acc", CLOUDFLARE_API_TOKEN: "token" };
+
+        it.each([
+            [40, "do-class-budget-ok"],
+            [95, "do-class-budget-near"],
+            // Exactly the Free cap: a Free account cannot add another class.
+            [100, "do-class-budget-near"],
+            [101, "do-class-budget-ok"],
+            [250, "do-class-budget-ok"],
+            [495, "do-class-budget-near"],
+            [500, "do-class-budget-full"],
+        ])("judges %i classes as %s", async (total, code) => {
+            expect.assertions(1);
+
+            await expect(budgetFinding(namespacesApi(total), credentials)).resolves.toMatchObject({ code });
+        });
+
+        it("warns rather than fails at the Paid cap — the count is an account fact, not this project's", async () => {
+            expect.assertions(1);
+
+            await expect(budgetFinding(namespacesApi(500), credentials)).resolves.toMatchObject({ code: "do-class-budget-full", level: "warn" });
+        });
+
+        it("skips the check for a non-Cloudflare target", async () => {
+            expect.assertions(2);
+
+            const cwd = mkdtempSync(join(tmpdir(), "lunora-doctor-budget-"));
+            const fetchImpl = namespacesApi(40);
+
+            try {
+                writeFileSync(join(cwd, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+                const result = await runDoctor({ cwd, environment: credentials, fetch: fetchImpl, logger: makeLogger().logger });
+
+                expect(result.findings.some((finding) => finding.code.startsWith("do-class-budget"))).toBe(false);
+                expect(fetchImpl).not.toHaveBeenCalled();
+            } finally {
+                rmSync(cwd, { force: true, recursive: true });
+            }
+        });
+
+        it("stays offline without credentials", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = namespacesApi(0);
+
+            await expect(budgetFinding(fetchImpl, {})).resolves.toMatchObject({ code: "do-class-budget-unchecked", level: "info" });
+            expect(fetchImpl).not.toHaveBeenCalled();
+        });
+
+        it("reports a refused API call as unchecked, never as a failure", async () => {
+            expect.assertions(1);
+
+            const refused = vi.fn<typeof globalThis.fetch>(async () => Response.json({ errors: [{ message: "auth" }], success: false }, { status: 403 }));
+
+            await expect(budgetFinding(refused, credentials)).resolves.toMatchObject({ code: "do-class-budget-unchecked", level: "info" });
+        });
+
+        describe("with accounts set per environment", () => {
+            /** Run doctor over `wrangler` with only a token in the environment; returns the budget findings and the accounts the API was asked about. */
+            const tokenOnly = { CLOUDFLARE_API_TOKEN: "token" };
+
+            const budgetFindings = async (wrangler: Record<string, unknown>, environment: Record<string, string> = tokenOnly) => {
+                const fetchImpl = namespacesApi(40);
+
+                seed(workdir, JSON.stringify(wrangler));
+
+                const result = await runDoctor({ cwd: workdir, environment, fetch: fetchImpl, logger: makeLogger().logger });
+                const asked = vi
+                    .mocked(fetchImpl)
+                    .mock.calls.map(([url]) => /accounts\/([^/]+)\//u.exec(url instanceof Request ? url.url : url.toString())?.[1]);
+
+                return { asked, findings: result.findings.filter((finding) => finding.code.startsWith("do-class-budget")) };
+            };
+
+            it("checks an account that only a named environment sets", async () => {
+                expect.assertions(2);
+
+                const { asked, findings } = await budgetFindings({ env: { staging: { account_id: "staging-acc" } }, name: "app" });
+
+                expect(asked).toStrictEqual(["staging-acc"]);
+                expect(findings).toMatchObject([{ code: "do-class-budget-ok" }]);
             });
 
-            expect(stdout).toBe("");
-            expect(lines.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
+            it("checks each distinct account once, naming the blocks it came from", async () => {
+                expect.assertions(3);
+
+                const { asked, findings } = await budgetFindings({
+                    account_id: "main-acc",
+                    env: { production: { account_id: "main-acc" }, staging: { account_id: "staging-acc" } },
+                    name: "app",
+                });
+
+                expect(asked.toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(["main-acc", "staging-acc"]);
+                expect(findings.map((finding) => finding.message.split(":")[0])).toStrictEqual([
+                    "account main-acc (top level, env.production)",
+                    "account staging-acc (env.staging)",
+                ]);
+                expect(findings.every((finding) => finding.code === "do-class-budget-ok")).toBe(true);
+            });
+
+            it("checks only CLOUDFLARE_ACCOUNT_ID when it is set, as wrangler does", async () => {
+                expect.assertions(1);
+
+                const { asked } = await budgetFindings(
+                    { account_id: "main-acc", env: { staging: { account_id: "staging-acc" } }, name: "app" },
+                    { CLOUDFLARE_ACCOUNT_ID: "override-acc", CLOUDFLARE_API_TOKEN: "token" },
+                );
+
+                expect(asked).toStrictEqual(["override-acc"]);
+            });
+        });
+    });
+
+    describe("artifacts namespace jurisdiction", () => {
+        const credentials = { CLOUDFLARE_ACCOUNT_ID: "acc", CLOUDFLARE_API_TOKEN: "token" };
+
+        /** Answers the namespace lookups with `jurisdictions[namespace]` (a 404 when absent) and anything else with an empty success. */
+        const artifactsApi = (jurisdictions: Record<string, string>) =>
+            vi.fn<typeof globalThis.fetch>(async (url) => {
+                const namespace = /artifacts\/namespaces\/([^/?]+)/u.exec(url instanceof Request ? url.url : url.toString())?.[1];
+
+                if (namespace === undefined) {
+                    return Response.json({ result: [], result_info: { total_count: 0 }, success: true });
+                }
+
+                const jurisdiction = jurisdictions[namespace];
+
+                return jurisdiction === undefined
+                    ? Response.json({ errors: [{ message: "not found" }], success: false }, { status: 404 })
+                    : Response.json({ result: { jurisdiction, namespace }, success: true });
+            });
+
+        const artifactsFindings = async (wrangler: Record<string, unknown>, fetchImpl: typeof globalThis.fetch, jurisdiction?: string) => {
+            seed(workdir, JSON.stringify(wrangler));
+            seedSchema(
+                workdir,
+                `import { defineSchema, defineTable, v } from "@lunora/server";\n\nexport const schema = defineSchema({ notes: defineTable({ body: v.string() }) })${jurisdiction === undefined ? "" : `.jurisdiction("${jurisdiction}")`};\n`,
+            );
+
+            const result = await runDoctor({ cwd: workdir, environment: credentials, fetch: fetchImpl, logger: makeLogger().logger });
+
+            return result.findings.filter((finding) => finding.code.startsWith("artifacts-"));
+        };
+
+        it("passes a namespace in the schema's jurisdiction and fails one elsewhere, and passes a missing one that deploy will create", async () => {
+            expect.assertions(2);
+
+            const findings = await artifactsFindings(
+                {
+                    artifacts: [
+                        { binding: "ARTIFACTS", namespace: "eu-repos" },
+                        { binding: "OPEN", namespace: "open-repos" },
+                    ],
+                    env: { staging: { artifacts: [{ binding: "ARTIFACTS", namespace: "new-repos" }] } },
+                    name: "app",
+                },
+                artifactsApi({ "eu-repos": "eu", "open-repos": "unrestricted" }),
+                "eu",
+            );
+
+            expect(findings.map(({ code, level }) => [code, level])).toStrictEqual([
+                ["artifacts-jurisdiction-ok", "pass"],
+                ["artifacts-jurisdiction-mismatch", "fail"],
+                ["artifacts-jurisdiction-ok", "pass"],
+            ]);
+            // Said, not hidden: `lunora deploy` makes it, so doctor has no manual step to ask for.
+            expect(findings.at(-1)?.message).toContain("does not exist yet; it will be created");
+        });
+
+        it("checks nothing for a schema without a jurisdiction", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = artifactsApi({});
+            const findings = await artifactsFindings({ artifacts: [{ binding: "ARTIFACTS", namespace: "repos" }], name: "app" }, fetchImpl);
+
+            expect(findings).toStrictEqual([]);
+            expect(fetchImpl.mock.calls.some(([url]) => (url instanceof Request ? url.url : url.toString()).includes("/artifacts/"))).toBe(false);
+        });
+
+        it("skips the check for a non-Cloudflare target", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+            const findings = await artifactsFindings({ artifacts: [{ binding: "ARTIFACTS", namespace: "repos" }], name: "app" }, artifactsApi({}), "eu");
+
+            expect(findings).toStrictEqual([]);
         });
     });
 

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverWorkflows } from "../../src/discover/workflows";
 import { emitServer, emitShard, emitWorkflows } from "../../src/emit";
 import type { SchemaIR } from "../../src/ir";
+import { markerLine } from "../call-site-fixture";
 
 let workdir: string;
 
@@ -52,14 +53,12 @@ describe("discover/workflows", () => {
 
         expect(discoverWorkflows(newProject(), workdir)).toEqual([
             {
-                bindingName: "WORKFLOW_ETL",
                 className: "EtlWorkflow",
                 exportName: "etl",
                 name: "nightly-etl",
                 steps: [],
             },
             {
-                bindingName: "WORKFLOW_ORDER_PIPELINE",
                 className: "OrderPipelineWorkflow",
                 exportName: "orderPipeline",
                 name: "order-pipeline",
@@ -191,6 +190,96 @@ describe("discover/workflows", () => {
         expect(discoverWorkflows(newProject(), workdir)[0]?.steps).toEqual([{ line: 8, method: "do", name: "open" }]);
     });
 
+    it("follows a handler imported from another lunora file: its steps, its file, and its call-site key", () => {
+        expect.assertions(3);
+
+        const flow = `export const onboard = async (ctx) => {
+    await ctx.step.do("welcome", () => undefined); // @welcome
+    await ctx.step.sleep("pause", "1 day"); // @pause
+};
+`;
+
+        mkdirSync(join(workdir, "onboarding"));
+        writeFileSync(join(workdir, "onboarding", "flow.ts"), flow);
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+            import { onboard } from "./onboarding/flow";
+
+            export const onboarding = defineWorkflow({ handler: onboard });
+        `);
+
+        const [workflow] = discoverWorkflows(newProject(), workdir);
+
+        // The step lines are lines of onboarding/flow.ts, which `handlerFile` names.
+        expect(workflow?.steps).toEqual([
+            { line: markerLine(flow, "welcome"), method: "do", name: "welcome" },
+            { line: markerLine(flow, "pause"), method: "sleep", name: "pause" },
+        ]);
+        expect(workflow?.handlerFile).toBe("onboarding/flow");
+        expect(workflow?.handlerSite).toStrictEqual({ exportName: "onboard", file: "onboarding/flow" });
+    });
+
+    it("names the EXPORTED name of a handler renamed and re-exported, or default-exported", () => {
+        expect.assertions(2);
+
+        mkdirSync(join(workdir, "flow"));
+        writeFileSync(join(workdir, "flow", "impl.ts"), `const run = async (ctx) => { await ctx.step.do("x", () => 1); };\nexport { run as start };\n`);
+        writeFileSync(join(workdir, "flow", "index.ts"), `export { start } from "./impl";\n`);
+        writeFileSync(join(workdir, "dflt.ts"), `const go = async (ctx) => { await ctx.step.do("d", () => 1); };\nexport default go;\n`);
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+            import { start } from "./flow";
+            import go from "./dflt";
+
+            export const a = defineWorkflow({ handler: start });
+            export const b = defineWorkflow({ handler: go });
+        `);
+
+        const [a, b] = discoverWorkflows(newProject(), workdir);
+
+        expect(a?.handlerSite).toStrictEqual({ exportName: "start", file: "flow/impl" });
+        expect(b?.handlerSite).toStrictEqual({ exportName: "default", file: "dflt" });
+    });
+
+    it("names a handler file outside lunora/ relative to the project root, with no call-site key", () => {
+        expect.assertions(2);
+
+        const lunora = join(workdir, "lunora");
+
+        mkdirSync(join(workdir, "src"));
+        mkdirSync(lunora);
+        writeFileSync(join(workdir, "src", "flow.ts"), `export const onboard = async (ctx) => { await ctx.step.do("x", () => 1); };\n`);
+        writeFileSync(
+            join(lunora, "workflows.ts"),
+            `import { defineWorkflow } from "@lunora/workflow";\nimport { onboard } from "../src/flow";\nexport const onboarding = defineWorkflow({ handler: onboard });\n`,
+        );
+
+        const [workflow] = discoverWorkflows(newProject(), lunora);
+
+        expect(workflow?.handlerFile).toBe("src/flow");
+        expect(workflow).not.toHaveProperty("handlerSite");
+    });
+
+    it("follows a local shorthand handler for its steps without a handler file or site", () => {
+        expect.assertions(3);
+
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+
+            async function handler(ctx) {
+                await ctx.step.do("only", () => undefined);
+            }
+
+            export const local = defineWorkflow({ handler });
+        `);
+
+        const [workflow] = discoverWorkflows(newProject(), workdir);
+
+        expect(workflow?.steps).toEqual([{ line: 5, method: "do", name: "only" }]);
+        expect(workflow).not.toHaveProperty("handlerFile");
+        expect(workflow).not.toHaveProperty("handlerSite");
+    });
+
     it("ignores non-defineWorkflow exports and unexported definitions", () => {
         expect.assertions(1);
 
@@ -241,6 +330,48 @@ describe("discover/workflows", () => {
         `);
 
         expect(() => discoverWorkflows(newProject(), workdir)).toThrow("`name` must be a static string literal");
+    });
+
+    it("lifts the static deploy settings", () => {
+        expect.assertions(1);
+
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+            export const etl = defineWorkflow({
+                handler: async () => undefined,
+                schedules: ["0 * * * *", "0 9 * * MON-FRI"],
+                limits: { steps: 25_000 },
+                defaultRetention: { successRetention: "3 days" },
+            });
+        `);
+
+        const [workflow] = discoverWorkflows(newProject(), workdir);
+
+        expect([workflow?.schedules, workflow?.limits, workflow?.defaultRetention]).toStrictEqual([
+            ["0 * * * *", "0 9 * * MON-FRI"],
+            { steps: 25_000 },
+            { successRetention: "3 days" },
+        ]);
+    });
+
+    it.each([
+        [`schedules: ["not a cron"]`, `schedule "not a cron" is not a valid cron expression`],
+        [`schedules: []`, "`schedules` must be a non-empty inline array"],
+        [`limits: { steps: max }`, "`limits.steps` must be a static number literal"],
+        [`limits: { steps: 0 }`, "`limits.steps` must be a positive integer (got 0)"],
+        [`limits: { steps: 1.5 }`, "`limits.steps` must be a positive integer (got 1.5)"],
+        [`defaultRetention: retention`, "`defaultRetention` must be an inline object literal"],
+    ])("rejects a non-static or invalid setting (%s)", (setting, message) => {
+        expect.assertions(1);
+
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+            const max = 5;
+            const retention = {};
+            export const etl = defineWorkflow({ handler: async () => undefined, ${setting} });
+        `);
+
+        expect(() => discoverWorkflows(newProject(), workdir)).toThrow(message);
     });
 });
 
@@ -305,8 +436,8 @@ describe("emit (workflows)", () => {
         const shard = emitShard({ schema: EMPTY_SCHEMA, workflows: discover() });
 
         expect(shard).toContain('import { createWorkflowContext } from "@lunora/workflow";');
-        expect(shard).toContain('{ binding: "WORKFLOW_ORDER_PIPELINE", exportName: "orderPipeline" },');
-        expect(shard).toContain("const workflows = createWorkflowContext(env, LUNORA_WORKFLOWS);");
+        expect(shard).toContain('{ className: "OrderPipelineWorkflow", exportName: "orderPipeline" },');
+        expect(shard).toContain("const workflows = createWorkflowContext(env, LUNORA_WORKFLOWS, this.state.exports);");
         expect(shard).toContain("workflows,");
     });
 
@@ -329,16 +460,16 @@ describe("emit (workflows)", () => {
         expect(() => discoverWorkflows(newProject(), workdir)).toThrow(/Duplicate workflow name "shared"/u);
     });
 
-    it("rejects two workflow exports that collapse to the same binding name", () => {
+    it("rejects two workflow exports that collapse to the same generated class", () => {
         expect.assertions(1);
 
         writeWorkflows(`
             import { defineWorkflow } from "@lunora/workflow";
 
             export const myFlow = defineWorkflow({ name: "one", handler: async () => undefined });
-            export const myFLOW = defineWorkflow({ name: "two", handler: async () => undefined });
+            export const MyFlow = defineWorkflow({ name: "two", handler: async () => undefined });
         `);
 
-        expect(() => discoverWorkflows(newProject(), workdir)).toThrow(/Duplicate workflow binding "WORKFLOW_MY_FLOW"/u);
+        expect(() => discoverWorkflows(newProject(), workdir)).toThrow(/Duplicate workflow class "MyFlowWorkflow"/u);
     });
 });

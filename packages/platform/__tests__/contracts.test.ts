@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PlatformCapabilities, SchedulerHost, ShardDirectory, ShardHost, SocketHost } from "../src";
-import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES, NOOP_EXECUTION_CONTEXT, resolveShard } from "../src";
+import { CELLD_CAPABILITIES, CLOUDFLARE_CAPABILITIES, LUNORA_ROLE_PREFIX, NODE_CAPABILITIES, NOOP_EXECUTION_CONTEXT, resolveShard } from "../src";
 
 describe("@lunora/platform contracts", () => {
     it("exports the Cloudflare capability matrix", () => {
@@ -11,6 +11,39 @@ describe("@lunora/platform contracts", () => {
         expect(CLOUDFLARE_CAPABILITIES.name).toBe("Cloudflare");
         expect(CLOUDFLARE_CAPABILITIES.features.shardedState?.level).toBe("native");
         expect(CLOUDFLARE_CAPABILITIES.features.websocketHibernation?.level).toBe("native");
+    });
+
+    // Typed live topics change how a topic string is produced and checked, not what a host must provide:
+    // `ctx.live` stays backed by the shard's own SSE handlers, so no rating moves.
+    it("rates live streams native on cloudflare and celld, emulated on node", () => {
+        expect.assertions(3);
+
+        expect(CLOUDFLARE_CAPABILITIES.features.liveStreams?.level).toBe("native");
+        expect(CELLD_CAPABILITIES.features.liveStreams?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.liveStreams?.level).toBe("emulated");
+    });
+
+    // Every telemetry surface that needs a HOST primitive carries a rating, so a
+    // second host is told rather than left to discover it at runtime. The
+    // engine-level pipeline (`ctx.log` / `ctx.trace` / `ctx.span` /
+    // `ctx.metrics` / traced `ctx.fetch`) deliberately has no key: it is sink
+    // callbacks plus the `fetch` global, portable by construction.
+    it("rates the telemetry surfaces that stand on a host primitive", () => {
+        expect.assertions(6);
+
+        // `request.cf` — the mTLS trust signal and the OTLP placement detector.
+        expect(CLOUDFLARE_CAPABILITIES.features.edgeRequestMetadata?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.edgeRequestMetadata?.level).toBe("unsupported");
+
+        // The one telemetry surface that reaches past `ShardHost` into a
+        // provider API (`cloudflare:workers`' `tracing.enterSpan`).
+        expect(CLOUDFLARE_CAPABILITIES.features.hostTraceFusion?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.hostTraceFusion?.level).toBe("unsupported");
+
+        // Reading the durable `ctx.log` archive back needs an Iceberg catalog
+        // and an SQL engine over it, not just a bucket.
+        expect(CLOUDFLARE_CAPABILITIES.features.logArchive?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.logArchive?.level).toBe("unsupported");
     });
 
     // Features Lunora builds itself must not claim platform parity: codegen and
@@ -57,6 +90,15 @@ describe("@lunora/platform contracts", () => {
 
         expect(CLOUDFLARE_CAPABILITIES.features.identityProxy?.level).toBe("native");
         expect(NODE_CAPABILITIES.features.identityProxy?.level).toBe("unsupported");
+    });
+
+    // `ctx.origin` and the storage base fallback: every host fills it from
+    // `request.url`, but only an edge that routes by hostname vouches for it.
+    it("rates the request origin as vouched for on the edge and caller-shaped on node", () => {
+        expect.assertions(2);
+
+        expect(CLOUDFLARE_CAPABILITIES.features.requestOrigin?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.requestOrigin?.level).toBe("emulated");
     });
 
     it("exports the noop execution context", () => {
@@ -116,6 +158,19 @@ describe("@lunora/platform contracts", () => {
         expect(scheduler.schedule).toBeDefined();
     });
 
+    it("refuses a shard key carrying the reserved role prefix on every host", () => {
+        expect.assertions(1);
+
+        const directory: ShardDirectory = {
+            get: () => {
+                return { fetch: async () => new Response("reached") };
+            },
+            idForName: (name) => name,
+        };
+
+        expect(() => resolveShard(directory, `${LUNORA_ROLE_PREFIX}scheduler:default`)).toThrow(/reserved/u);
+    });
+
     it("structurally types a two-step shard directory", async () => {
         expect.assertions(1);
 
@@ -169,6 +224,10 @@ describe("@lunora/platform contracts", () => {
         expect.assertions(1);
 
         const socketHost: SocketHost = {
+            newPair: () => {
+                return { client: {}, server: {} };
+            },
+            upgradeResponse: () => new Response(null, { status: 200 }),
             accept: () => {
                 return {
                     close: () => {},

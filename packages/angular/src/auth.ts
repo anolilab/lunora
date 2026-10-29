@@ -1,7 +1,8 @@
 import type { Signal } from "@angular/core";
 import { computed, DestroyRef, inject, signal } from "@angular/core";
 import type { LunoraClient, User } from "@lunora/client";
-import { getIdentityStore } from "@lunora/client/auth";
+import type { AuthStatus } from "@lunora/client/auth";
+import { getIdentityStore, isAuthenticatedStatus, isLoadingStatus } from "@lunora/client/auth";
 
 import { resolveLunoraClient } from "./client";
 
@@ -24,6 +25,13 @@ export interface AuthOptions {
 export interface AuthResult {
     /** Set the auth token (sign-in / sign-out). */
     setToken: (token: string | null) => void;
+
+    /**
+     * The resolved auth state. Branch on this, not on `user() === null` — see the
+     * contract in `@lunora/client/auth`; `user` is `null` both when signed out
+     * and when a held credential's identity could not be resolved.
+     */
+    status: Signal<AuthStatus>;
 
     /** The current auth token, or `null`. */
     token: Signal<string | null>;
@@ -55,6 +63,7 @@ export const auth = (options: AuthOptions = {}): AuthResult => {
 
     const token = signal<string | null>(client.getAuthToken());
     const user = signal<User | null>(store.getUser());
+    const status = signal<AuthStatus>(store.getStatus());
 
     const unsubToken = client.onAuthTokenChange(() => {
         token.set(client.getAuthToken());
@@ -62,6 +71,7 @@ export const auth = (options: AuthOptions = {}): AuthResult => {
 
     const unsubUser = store.subscribe(() => {
         user.set(store.getUser());
+        status.set(store.getStatus());
     });
 
     destroyRef.onDestroy(() => {
@@ -73,7 +83,7 @@ export const auth = (options: AuthOptions = {}): AuthResult => {
         client.setAuthToken(next);
     };
 
-    return { setToken, token: token.asReadonly(), user: user.asReadonly() };
+    return { setToken, status: status.asReadonly(), token: token.asReadonly(), user: user.asReadonly() };
 };
 
 /**
@@ -81,10 +91,10 @@ export const auth = (options: AuthOptions = {}): AuthResult => {
  * @experimental
  */
 export interface AuthGateResult {
-    /** `true` once a token is set and the user has resolved. */
+    /** `true` once a credential is held and nothing has contradicted it. */
     isAuthenticated: Signal<boolean>;
 
-    /** `true` while a token is set but the user hasn't resolved yet. */
+    /** `true` while a credential's first identity resolve is in flight. */
     isLoading: Signal<boolean>;
 }
 
@@ -92,9 +102,11 @@ export interface AuthGateResult {
  * Derived auth-gate signals for template gating (Angular's `\@if` control
  * flow), built on {@link auth}. Angular has no JSX-style `Authenticated` slot
  * component the way React/Vue/Solid do, so this exposes the same three-state
- * logic as two booleans instead: a token with no resolved user yet is
- * `isLoading`; a token with a resolved user is `isAuthenticated`; no token is
- * neither (the signed-out state a template checks for with a plain `\@else`).
+ * logic as two booleans instead, mapped from the shared `AuthStatus` contract in
+ * `@lunora/client/auth`: a credential whose first identity resolve is in flight
+ * is `isLoading`; a credential nothing has contradicted — including one whose
+ * identity endpoint is unreachable — is `isAuthenticated`; no session is neither
+ * (the signed-out state a template checks for with a plain `\@else`).
  *
  * Call from an injection context (component/service field or constructor):
  * ```ts
@@ -104,10 +116,10 @@ export interface AuthGateResult {
  * @experimental
  */
 export const authGate = (options: AuthOptions = {}): AuthGateResult => {
-    const { token, user } = auth(options);
+    const { status } = auth(options);
 
-    const isLoading = computed(() => token() !== null && user() === null);
-    const isAuthenticated = computed(() => token() !== null && user() !== null);
+    const isLoading = computed(() => isLoadingStatus(status()));
+    const isAuthenticated = computed(() => isAuthenticatedStatus(status()));
 
     return { isAuthenticated, isLoading };
 };

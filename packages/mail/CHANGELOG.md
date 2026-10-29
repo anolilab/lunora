@@ -1,3 +1,406 @@
+## @lunora/mail [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.128...@lunora/mail@1.0.0-alpha.129) (2026-10-28)
+
+### Performance Improvements
+
+* single-pass email render, cached scheduler hmac key, linear notify grouping ([#1382](https://github.com/anolilab/lunora/issues/1382)) ([7ac5bb2](https://github.com/anolilab/lunora/commit/7ac5bb2bb9e839ed4da1c2667031c880531cc02e))
+
+## @lunora/mail [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.127...@lunora/mail@1.0.0-alpha.128) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.74
+
+## @lunora/mail [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.126...@lunora/mail@1.0.0-alpha.127) (2026-10-27)
+
+### Build System
+
+* **deps:** Bump postal-mime from 3.0.1 to 4.0.8 ([#1328](https://github.com/anolilab/lunora/issues/1328)) ([343ef6a](https://github.com/anolilab/lunora/commit/343ef6ad63cd9bddee47193dfee64f5c3eb8c5c1))
+
+
+### Dependencies
+
+* **postal-mime:** 3.0.1 → 4.0.8
+
+## @lunora/mail [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.125...@lunora/mail@1.0.0-alpha.126) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+
+## @lunora/mail [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.124...@lunora/mail@1.0.0-alpha.125) (2026-10-26)
+
+
+### Dependencies
+
+* **@visulima/email:** 3.0.28 → 4.2.0
+
+## @lunora/mail [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.123...@lunora/mail@1.0.0-alpha.124) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+
+## @lunora/mail [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.122...@lunora/mail@1.0.0-alpha.123) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+
+## @lunora/mail [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.121...@lunora/mail@1.0.0-alpha.122) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+
+## @lunora/mail [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.120...@lunora/mail@1.0.0-alpha.121) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+
+## @lunora/mail [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.119...@lunora/mail@1.0.0-alpha.120) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+
+## @lunora/mail [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.118...@lunora/mail@1.0.0-alpha.119) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+
+## @lunora/mail [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.117...@lunora/mail@1.0.0-alpha.118) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+
+## @lunora/mail [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.116...@lunora/mail@1.0.0-alpha.117) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+
+## @lunora/mail [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.115...@lunora/mail@1.0.0-alpha.116) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+
+## @lunora/mail [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.114...@lunora/mail@1.0.0-alpha.115) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+
+## @lunora/mail [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.113...@lunora/mail@1.0.0-alpha.114) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+
+## @lunora/mail [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.112...@lunora/mail@1.0.0-alpha.113) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+
+## @lunora/mail [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.111...@lunora/mail@1.0.0-alpha.112) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+
+## @lunora/mail [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.110...@lunora/mail@1.0.0-alpha.111) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+
+## @lunora/mail [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.109...@lunora/mail@1.0.0-alpha.110) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+
+## @lunora/mail [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.108...@lunora/mail@1.0.0-alpha.109) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.57
+
+## @lunora/mail [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.107...@lunora/mail@1.0.0-alpha.108) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.56
+
+## @lunora/mail [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.106...@lunora/mail@1.0.0-alpha.107) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+
+## @lunora/mail [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.105...@lunora/mail@1.0.0-alpha.106) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+
+## @lunora/mail [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.104...@lunora/mail@1.0.0-alpha.105) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+
+## @lunora/mail [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.103...@lunora/mail@1.0.0-alpha.104) (2026-10-09)
+
+### Bug Fixes
+
+* **mail:** honour an explicitly passed cloudflareSend whatever the binding is named ([#1059](https://github.com/anolilab/lunora/issues/1059)) ([1471003](https://github.com/anolilab/lunora/commit/147100333f66809a7159ccd05ae97c8cf51cdafb))
+
+## @lunora/mail [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.102...@lunora/mail@1.0.0-alpha.103) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+
+## @lunora/mail [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.101...@lunora/mail@1.0.0-alpha.102) (2026-10-08)
+
+### Bug Fixes
+
+* **mail:** lazy renderer, queue without transport, README fix ([#1042](https://github.com/anolilab/lunora/issues/1042)) ([36f883d](https://github.com/anolilab/lunora/commit/36f883d798e22127bc30e48f4f673bc443b7917c))
+
+
+### Dependencies
+
+* **@visulima/email:** 3.0.26 → 3.0.28
+
+## @lunora/mail [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.100...@lunora/mail@1.0.0-alpha.101) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.51
+
+## @lunora/mail [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.99...@lunora/mail@1.0.0-alpha.100) (2026-10-06)
+
+### Bug Fixes
+
+* **mail:** fix extractLink, waitForMail, queue and capture detection ([#1004](https://github.com/anolilab/lunora/issues/1004)) ([f01e4ff](https://github.com/anolilab/lunora/commit/f01e4ff55da15f8bcef232f4c9b237487f7798aa))
+
+## @lunora/mail [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.98...@lunora/mail@1.0.0-alpha.99) (2026-10-05)
+
+
+### Dependencies
+
+* **@visulima/email:** 3.0.17 → 3.0.26
+* **postal-mime:** 3.0.0 → 3.0.1
+
+## @lunora/mail [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.97...@lunora/mail@1.0.0-alpha.98) (2026-10-05)
+
+## @lunora/mail [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.96...@lunora/mail@1.0.0-alpha.97) (2026-10-04)
+
+## @lunora/mail [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.95...@lunora/mail@1.0.0-alpha.96) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+
+## @lunora/mail [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.94...@lunora/mail@1.0.0-alpha.95) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+
+## @lunora/mail [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.93...@lunora/mail@1.0.0-alpha.94) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+
+## @lunora/mail [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.92...@lunora/mail@1.0.0-alpha.93) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.47
+
+## @lunora/mail [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.91...@lunora/mail@1.0.0-alpha.92) (2026-09-27)
+
+### Code Refactoring
+
+* stop exporting unused internals in add-on packages ([#875](https://github.com/anolilab/lunora/issues/875)) ([4c0ee9c](https://github.com/anolilab/lunora/commit/4c0ee9cda669e8d09c457ea8b875d29d398e39f1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+
+## @lunora/mail [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.90...@lunora/mail@1.0.0-alpha.91) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+
+## @lunora/mail [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.89...@lunora/mail@1.0.0-alpha.90) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **mail:** in an app declaring `.jurisdiction(...)`, `@lunora/mail` now resolves the
+pinned shard with no option passed, and an explicit mail `jurisdiction` that differs from
+the schema's throws.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(mail): fail a captured send on a jurisdiction misconfiguration
+
+The capture sink resolved the jurisdiction inside its best-effort catch, so an
+explicit `jurisdiction` contradicting the schema's, or a binding that cannot be
+pinned, was logged and answered `{ id: "uncaptured" }`: a success-shaped result
+for mail nobody recorded. Both callers now scope the namespace with
+`applyJurisdiction` themselves and hand `postShardRpc` the scoped view; the
+capture sink does it before the catch, so that error reaches the sender while a
+failed RPC stays best-effort.
+
+Test (fails without the change): a contradicting jurisdiction rejects the
+captured send and makes no RPC.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### security
+
+* **mail:** pin mail's shard RPC to the schema's jurisdiction ([#848](https://github.com/anolilab/lunora/issues/848)) ([0191eee](https://github.com/anolilab/lunora/commit/0191eeeb7b504cb234bf01880929e9572966b71b))
+
+## @lunora/mail [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.88...@lunora/mail@1.0.0-alpha.89) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+
+## @lunora/mail [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.87...@lunora/mail@1.0.0-alpha.88) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+
+## @lunora/mail [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.86...@lunora/mail@1.0.0-alpha.87) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+
+## @lunora/mail [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.85...@lunora/mail@1.0.0-alpha.86) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+
+## @lunora/mail [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.84...@lunora/mail@1.0.0-alpha.85) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+
+## @lunora/mail [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.83...@lunora/mail@1.0.0-alpha.84) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/mail [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.82...@lunora/mail@1.0.0-alpha.83) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/mail [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.81...@lunora/mail@1.0.0-alpha.82) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/mail [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.80...@lunora/mail@1.0.0-alpha.81) (2026-09-12)
+
+### Bug Fixes
+
+* **mail:** correct empty recipient list handling ([#743](https://github.com/anolilab/lunora/issues/743)) ([e1e8c94](https://github.com/anolilab/lunora/commit/e1e8c944248ef5a0bb7fe10f6a6a741b4ac04ece))
+
+## @lunora/mail [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.79...@lunora/mail@1.0.0-alpha.80) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+
+## @lunora/mail [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.78...@lunora/mail@1.0.0-alpha.79) (2026-09-12)
+
+## @lunora/mail [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.77...@lunora/mail@1.0.0-alpha.78) (2026-09-11)
+
+## @lunora/mail [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.76...@lunora/mail@1.0.0-alpha.77) (2026-09-11)
+
+## @lunora/mail [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.75...@lunora/mail@1.0.0-alpha.76) (2026-09-10)
+
+## @lunora/mail [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.74...@lunora/mail@1.0.0-alpha.75) (2026-09-10)
+
+## @lunora/mail [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.73...@lunora/mail@1.0.0-alpha.74) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.72...@lunora/mail@1.0.0-alpha.73) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.71...@lunora/mail@1.0.0-alpha.72) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.70...@lunora/mail@1.0.0-alpha.71) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.69...@lunora/mail@1.0.0-alpha.70) (2026-09-08)
+
+## @lunora/mail [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.68...@lunora/mail@1.0.0-alpha.69) (2026-09-08)
+
 ## @lunora/mail [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.67...@lunora/mail@1.0.0-alpha.68) (2026-09-07)
 
 ## @lunora/mail [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.66...@lunora/mail@1.0.0-alpha.67) (2026-09-07)

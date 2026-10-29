@@ -79,18 +79,18 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
 let indexedWriter: DatabaseWriterLike;
 let scanWriter: DatabaseWriterLike;
 
-describe("d1 count() — indexed vs scan", () => {
-    // Build + seed in beforeAll: CodSpeed's instrumented runner does not pick up
-    // module-top-level await state (async migrations + seed writes), so the
-    // benches would otherwise hit an empty DB. beforeAll is honored by both the
-    // plain `vitest bench` runner and CodSpeed's analysis runner.
-    beforeAll(async () => {
-        indexedWriter = await createWriter(makeSchema(byProject, total));
-        await seed(indexedWriter);
-        scanWriter = await createWriter(makeSchema());
-        await seed(scanWriter);
-    });
+// Build + seed in a file-level beforeAll. CodSpeed's instrumented runner does not pick up module-top-level await
+// state, and vitest's own bench runner skips hooks registered inside a `describe` (its `runBenchmarkSuite` recurses
+// into sub-suites without running their hooks), which left every arm here throwing on an undefined writer and
+// recording no samples. A file-level hook runs under both.
+beforeAll(async () => {
+    indexedWriter = await createWriter(makeSchema(byProject, total));
+    await seed(indexedWriter);
+    scanWriter = await createWriter(makeSchema());
+    await seed(scanWriter);
+});
 
+describe("d1 count() — indexed vs scan", () => {
     bench("indexed: count by projectId (companion lookup)", async () => {
         await indexedWriter.count("todos", { where: { projectId: "p5" } });
     });

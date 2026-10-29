@@ -153,14 +153,28 @@ export interface AdvisorExternalSource {
  * the holding table; for `many` it lives on the target. `name` is the accessor
  * the relation is loaded under.
  */
-export interface AdvisorRelation {
+export interface AdvisorKeyedRelation {
     field: string;
     kind: "many" | "one";
     name: string;
     onDelete?: "cascade" | "restrict" | "set null";
     references: string;
     table: string;
+    through?: never;
 }
+
+/**
+ * A many-to-many relation (`r.many(target, { through })`): the link lives in the `through.table` join table,
+ * whose `from` column points at the declaring table and `to` at `table`. It has no `field` of its own.
+ */
+export interface AdvisorThroughRelation {
+    kind: "many";
+    name: string;
+    table: string;
+    through: { from: string; table: string; to: string };
+}
+
+export type AdvisorRelation = AdvisorKeyedRelation | AdvisorThroughRelation;
 
 /**
  * Adapt the runtime `@lunora/server` {@link Schema} into an {@link AdvisorSchema}.
@@ -228,7 +242,11 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                 shardKind: table.shardMode.kind,
                 softDelete: table.softDeleteMode,
                 ttl: table.ttlPolicy,
-                relations: Object.entries(table.relationMap).map(([accessor, relation]) => {
+                relations: Object.entries(table.relationMap).map(([accessor, relation]): AdvisorRelation => {
+                    if (relation.through !== undefined) {
+                        return { kind: "many", name: accessor, table: relation.table, through: { ...relation.through } };
+                    }
+
                     return {
                         field: relation.field,
                         kind: relation.kind,

@@ -4,8 +4,9 @@ import { jsonPath, qualifiedJsonPath } from "../src/do-sql";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
- * A document holding BOTH a flat `"a.b"` key and a nested `a: { b }` — the pair
- * the unquoted `$.a.b` path conflated.
+ * A document holding BOTH a flat `"a.b"` key and a nested `a: { b }`. A dotted field name is a path into
+ * an object column (a column name is an identifier, so a dot is never part of one), which means `a.b`
+ * reads the nested value and a literal `"a.b"` key is not addressable by name.
  */
 const DOCUMENT = JSON.stringify({
     a: { b: "nested" },
@@ -49,10 +50,24 @@ describe("jsonPath", () => {
         expect(jsonPath("_creationTime")).toBe("_creationTime");
     });
 
-    it("quotes a field the bare JSON-path grammar would misparse", () => {
-        expect.assertions(4);
+    it("descends through a dotted name one quoted segment at a time", () => {
+        expect.assertions(3);
 
-        expect(jsonPath("a.b")).toBe(`json_extract(__doc__, '$."a.b"')`);
+        expect(jsonPath("a.b")).toBe("json_extract(__doc__, '$.a.b')");
+        expect(jsonPath("profile.address.city")).toBe("json_extract(__doc__, '$.profile.address.city')");
+        expect(jsonPath("a.sp ace")).toBe(`json_extract(__doc__, '$.a."sp ace"')`);
+    });
+
+    it("rejects a path with an empty segment or more than four", () => {
+        expect.assertions(2);
+
+        expect(() => jsonPath("a..b")).toThrow("non-empty");
+        expect(() => jsonPath("a.b.c.d.e")).toThrow("1 to 4");
+    });
+
+    it("quotes a field the bare JSON-path grammar would misparse", () => {
+        expect.assertions(3);
+
         expect(jsonPath("br[k]")).toBe(`json_extract(__doc__, '$."br[k]"')`);
         expect(jsonPath("sp ace")).toBe(`json_extract(__doc__, '$."sp ace"')`);
         expect(jsonPath("it's")).toBe(`json_extract(__doc__, '$."it''s"')`);
@@ -75,18 +90,18 @@ describe("qualifiedJsonPath", () => {
     });
 
     it("quotes the segment on the qualified path too (EXISTS correlation refs)", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        expect(qualifiedJsonPath("messages", "a.b")).toBe(`json_extract("messages".__doc__, '$."a.b"')`);
+        expect(qualifiedJsonPath("messages", "br[k]")).toBe(`json_extract("messages".__doc__, '$."br[k]"')`);
+        expect(qualifiedJsonPath("messages", "a.b")).toBe(`json_extract("messages".__doc__, '$.a.b')`);
     });
 });
 
 describe("jsonPath against a real SQLite build", () => {
-    it("addresses the flat key rather than traversing into the nested one", () => {
+    it("traverses into the nested object for a dotted name", () => {
         expect.assertions(2);
 
-        // The defect: `$.a.b` reads `a` then `b`, so this used to return "nested".
-        expect(readThroughPath("a.b")).toBe("flat");
+        expect(readThroughPath("a.b")).toBe("nested");
         expect(readThroughPath("a")).toBe(`{"b":"nested"}`);
     });
 

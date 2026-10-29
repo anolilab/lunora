@@ -103,4 +103,4 @@ export { generateSdk, SDK_LANGUAGES, SDK_TARGETS };
 export type { SdkFiles, SdkResult };
 export type { OpenRpcDocument, OpenRpcMethod, RuntimeVerb, SdkMethod, SdkNamespace } from "./spec";
 export { isTypedSchema } from "./spec";
-export type { SdkRenderInput, SdkTarget, SdkVendorEntry } from "./target";
+export type { SdkRenderInput, SdkTarget } from "./target";

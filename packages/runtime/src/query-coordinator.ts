@@ -23,6 +23,7 @@ import { toErrorBody } from "@lunora/errors";
 import type { RankDirection as RankPageDirection, RankPageRow, RankPageRowKey as RankPageKey, ShardRankPageResult } from "@lunora/shard-engine";
 
 import { fromBase64, toBase64 } from "../../../shared/base64";
+import type { AdminTableResolver } from "./create-worker";
 import { LunoraError } from "./errors";
 import type { ShardNamespaceInput } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
@@ -33,6 +34,8 @@ import { resolveShard } from "./resolve-shard";
  * strategy's identity (empty array for `concat`, `0` for `sum`, etc.).
  */
 interface ShardRegistry {
+    /** Drop any cached listing for `table` (every table when omitted) — a registry that caches implements it, so a prune shows up at once in this isolate. */
+    invalidate?: (table?: string) => void;
     listShardKeys: (table: string) => Promise<ReadonlyArray<string>> | ReadonlyArray<string>;
 }
 
@@ -44,6 +47,44 @@ const createStaticShardRegistry = (table_to_keys: Readonly<Record<string, Readon
     return {
         listShardKeys(table) {
             return table_to_keys[table] ?? [];
+        },
+    };
+};
+
+/**
+ * The registry a worker gets when it configures none: it answers for every
+ * table that lives on the default shard and refuses the rest.
+ *
+ * A root table (or one the schema does not declare) lives on the default shard,
+ * so that one key is the whole answer — named outright rather than left empty,
+ * because only export, CDC sync and migrations fall back to the default shard
+ * on an empty list; fan-out, rank and shard traffic would reach nothing. A
+ * `.global()` table lives in D1, on no shard. A `.shardBy(...)` table's keys are
+ * known only to a real registry, and anything less would cover the default
+ * shard alone and report success — so it throws instead. Without
+ * `resolveSharding` no table can be told apart, so every one is refused for the
+ * same reason.
+ */
+const createDefaultShardRegistry = (resolveSharding: AdminTableResolver | undefined, defaultShardKey: string): ShardRegistry => {
+    return {
+        listShardKeys(table) {
+            if (resolveSharding === undefined) {
+                throw new LunoraError(
+                    `cannot discover the shards of "${table}": the worker has no \`resolveTableSharding\` to tell a sharded table from a root one, and no shard registry is configured`,
+                    { code: "BAD_REQUEST", status: 400 },
+                );
+            }
+
+            const kind = resolveSharding(table)?.mode.kind;
+
+            if (kind === "shardBy") {
+                throw new LunoraError(
+                    `cannot discover the shards of "${table}": it is \`.shardBy()\` and the worker has no shard registry — declare \`.shardRegistry((env) => env.SHARD_REGISTRY)\` on the app builder and bind \`SHARD_REGISTRY\` to \`ShardRegistryDO\` (or pass \`queryCoordinator\` to \`createWorker\`)`,
+                    { code: "BAD_REQUEST", status: 400 },
+                );
+            }
+
+            return kind === "global" ? [] : [defaultShardKey];
         },
     };
 };
@@ -450,6 +491,16 @@ interface CdcSyncFanOutRequest {
 
     /** {@link DefaultShardKey} — the shard fallback, or `null` for none. */
     defaultShardKey: DefaultShardKey;
+
+    /**
+     * Per-shard CDC epoch the caller last saw, keyed the same way as `cursors`.
+     * Entirely optional, per shard: a shard with no entry is read with the
+     * high-watermark proof alone, which is what every caller got before the
+     * field existed. A shard whose entry no longer matches its current epoch
+     * refuses the page with `CDC_TIMELINE_FORKED`, surfacing as that shard's
+     * `error` with its prior cursor echoed.
+     */
+    epochs?: Record<string, string>;
     headers?: Record<string, string>;
     limit?: number;
     tables: ReadonlyArray<string>;
@@ -460,7 +511,26 @@ interface ShardCdcOutcome {
     changes?: ReadonlyArray<Record<string, unknown>>;
     /** New per-shard cursor; on error it echoes the shard's prior cursor so a retry resumes cleanly. */
     cursor: number;
-    error?: { message: string; timedOut: boolean };
+
+    /**
+     * The CDC epoch this shard's `cursor` belongs to, to store beside it and
+     * echo back on the next call. Absent when the shard has no changelog at all
+     * (pre-CDC), and on error it echoes the caller's prior epoch so a retry
+     * resumes from the same pair rather than dropping the timeline half.
+     */
+    epoch?: string;
+
+    /**
+     * Why this shard served no page. `code` is the shard's own verdict — see
+     * {@link ShardError.code} — and it is the half a consumer has to branch on:
+     * `CDC_TIMELINE_FORKED` means re-seed from a snapshot on the new timeline,
+     * `CDC_LOG_TRIMMED` / `CDC_PAYLOAD_COMPACTED` mean re-seed from a snapshot,
+     * and a transport code (`SHARD_TIMEOUT`, `SHARD_HTTP_ERROR`, `INTERNAL`)
+     * means retry the same cursor. Reported through `message` alone they are one
+     * indistinguishable failure, and the epoch guard's whole value is the
+     * verdict it reaches the caller with.
+     */
+    error?: { code: string; message: string; timedOut: boolean };
     shardKey: string;
 }
 
@@ -482,7 +552,11 @@ interface ImportFanOutRequest {
      * starting-line-number for error attribution is carried in `startLine`.
      */
     batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; shardKey: string; startLine?: number }>;
+    /** Check the rows and return their shape errors without writing. Off unless set: a write is the default. */
+    dryRun?: boolean;
     headers?: Record<string, string>;
+    /** `"replace"` overwrites a row whose `_id` already exists; the default `"skip"` reports it as a conflict and leaves it unchanged. */
+    onConflict?: "replace" | "skip";
 }
 
 interface ShardImportOutcome {
@@ -491,6 +565,7 @@ interface ShardImportOutcome {
         conflicts: number;
         errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
         inserted: Record<string, number>;
+        replaced: number;
     };
     shardKey: string;
 }
@@ -504,6 +579,8 @@ interface ImportFanOutResult {
     /** Per-table summed insert counts. */
     inserted: Record<string, number>;
     ok: number;
+    /** Total existing rows overwritten under `onConflict: "replace"`. */
+    replaced: number;
     shards: ReadonlyArray<ShardImportOutcome>;
 }
 
@@ -963,17 +1040,25 @@ const rollUpExport = (results: ReadonlyArray<ShardRpcOutcome>): ExportFanOutResu
     return { failed, ok, shards };
 };
 
-/** Roll up per-shard `cdcSync` outcomes, preserving each shard's prior cursor on error. */
-const rollUpCdcSync = (results: ReadonlyArray<{ outcome: ShardRpcOutcome; sinceSeq: number }>): CdcSyncFanOutResult => {
+/** Roll up per-shard `cdcSync` outcomes, preserving each shard's prior cursor (and epoch) on error. */
+const rollUpCdcSync = (results: ReadonlyArray<{ outcome: ShardRpcOutcome; sinceEpoch?: string; sinceSeq: number }>): CdcSyncFanOutResult => {
     const shards: ShardCdcOutcome[] = [];
     let ok = 0;
     let failed = 0;
 
-    for (const { outcome, sinceSeq } of results) {
+    for (const { outcome, sinceEpoch, sinceSeq } of results) {
         if (outcome.kind === "err") {
             failed += 1;
-            // Echo the prior cursor so a retry re-reads from the same point.
-            shards.push({ cursor: sinceSeq, error: { message: outcome.message, timedOut: outcome.timedOut }, shardKey: outcome.shardKey });
+            // Echo the prior cursor — and the epoch it belongs to — so a retry
+            // re-reads from the same point, on the same timeline. Dropping the
+            // epoch half here would silently downgrade the caller to the
+            // watermark-only guarantee on its next poll.
+            shards.push({
+                cursor: sinceSeq,
+                error: { code: outcome.code, message: outcome.message, timedOut: outcome.timedOut },
+                shardKey: outcome.shardKey,
+                ...(sinceEpoch === undefined ? {} : { epoch: sinceEpoch }),
+            });
             continue;
         }
 
@@ -982,11 +1067,15 @@ const rollUpCdcSync = (results: ReadonlyArray<{ outcome: ShardRpcOutcome; sinceS
         // payload is an untrusted unwrapped RPC value cast to a shape; the cast
         // claims non-nullish but a malformed shard could return anything, so
         // guard both fields (the disable silences the cast-driven false alarm).
-        const payload = unwrapResult(outcome.value) as undefined | { changes?: ReadonlyArray<Record<string, unknown>>; cursor?: number };
+        const payload = unwrapResult(outcome.value) as undefined | { changes?: ReadonlyArray<Record<string, unknown>>; cursor?: number; epoch?: unknown };
         const changes = Array.isArray(payload?.changes) ? payload.changes : [];
         const cursor = typeof payload?.cursor === "number" ? payload.cursor : sinceSeq;
+        // A pre-CDC shard reports no epoch, and so does one whose response
+        // predates the field — both leave the caller on its prior pair rather
+        // than clearing it.
+        const epoch = typeof payload?.epoch === "string" && payload.epoch.length > 0 ? payload.epoch : sinceEpoch;
 
-        shards.push({ changes, cursor, shardKey: outcome.shardKey });
+        shards.push({ changes, cursor, shardKey: outcome.shardKey, ...(epoch === undefined ? {} : { epoch }) });
     }
 
     return { failed, ok, shards };
@@ -1053,6 +1142,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
     const inserted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
     let conflicts = 0;
+    let replaced = 0;
     let ok = 0;
     let failed = 0;
 
@@ -1071,6 +1161,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
                   conflicts?: number;
                   errors?: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
                   inserted?: Record<string, number>;
+                  replaced?: number;
               };
         const shardInserted = payload?.inserted ?? {};
 
@@ -1085,18 +1176,20 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
         }
 
         conflicts += payload?.conflicts ?? 0;
+        replaced += payload?.replaced ?? 0;
 
         shards.push({
             result: {
                 conflicts: payload?.conflicts ?? 0,
                 errors: payload?.errors ?? [],
                 inserted: shardInserted,
+                replaced: payload?.replaced ?? 0,
             },
             shardKey: result.shardKey,
         });
     }
 
-    return { conflicts, errors, failed, inserted, ok, shards };
+    return { conflicts, errors, failed, inserted, ok, replaced, shards };
 };
 
 interface ShardRpcOk {
@@ -1136,6 +1229,31 @@ const prepareShardRpc = (request: ShardRpcRequest): PreparedShardRpc => {
     };
 };
 
+/**
+ * The `{ error: { code, message } }` envelope a shard puts on a non-2xx, or
+ * `undefined` when the response carries none.
+ *
+ * `undefined` is the honest answer for everything that is not a shard verdict:
+ * the DO router's bare-text 404 for an unrouted path, a platform 5xx with no
+ * body, a truncated read. Those stay `SHARD_HTTP_ERROR`, because reporting a
+ * transport failure under a shard's own error code would send a consumer
+ * re-seeding a warehouse table over a blip.
+ */
+const readShardErrorEnvelope = async (response: Response): Promise<undefined | { code: string; message: string }> => {
+    try {
+        const body: unknown = await response.json();
+        const error = (body as undefined | { error?: { code?: unknown; message?: unknown } })?.error;
+
+        if (typeof error?.code !== "string" || error.code.length === 0) {
+            return undefined;
+        }
+
+        return { code: error.code, message: typeof error.message === "string" ? error.message : "" };
+    } catch {
+        return undefined;
+    }
+};
+
 const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, prepared: PreparedShardRpc, timeoutMs: number): Promise<ShardRpcOutcome> => {
     const stub = resolveShard(namespace, shardKey);
 
@@ -1172,7 +1290,28 @@ const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, pr
             const response = await stub.fetch(forwarded);
 
             if (!response.ok) {
-                return { code: "SHARD_HTTP_ERROR", kind: "err", message: `shard "${shardKey}" returned ${String(response.status)}`, shardKey, timedOut: false };
+                // A shard's refusal is a VERDICT, and the status alone does not
+                // carry it: `CDC_TIMELINE_FORKED`, `CDC_LOG_TRIMMED` and
+                // `CDC_PAYLOAD_COMPACTED` are all 409 and demand three different
+                // things of the caller. The shard already shaped the envelope
+                // with the same `toErrorBody` this function's catch below uses
+                // (`ShardDO.errorToResponse`), so the code is catalogued and the
+                // message is redacted before it ever reaches this hop — echoing
+                // both is the documented contract of {@link ShardError.code},
+                // which read off the status alone was true on the throw path and
+                // false on this one.
+                const envelope = await readShardErrorEnvelope(response);
+                const status = `shard "${shardKey}" returned ${String(response.status)}`;
+
+                return {
+                    code: envelope?.code ?? "SHARD_HTTP_ERROR",
+                    kind: "err",
+                    // The status prefix stays ahead of the shard's own reason so a
+                    // caller matching on it still matches.
+                    message: envelope === undefined || envelope.message.length === 0 ? status : `${status}: ${envelope.message}`,
+                    shardKey,
+                    timedOut: false,
+                };
             }
 
             const value = await response.json();
@@ -1248,13 +1387,6 @@ const runBoundedJobs = async <T, R>(jobs: ReadonlyArray<T>, concurrency: number,
     return results;
 };
 
-/** Union of the live shard keys across every requested table, so a multi-table fan-out reaches each shard once. */
-const unionShardKeys = async (registry: ShardRegistry, tables: ReadonlyArray<string>): Promise<string[]> => {
-    const perTableKeys = await Promise.all(tables.map(async (table) => registry.listShardKeys(table)));
-
-    return [...new Set(perTableKeys.flat())];
-};
-
 /**
  * Resolve the shards a fan-out should reach, falling back to the default shard
  * when discovery finds nothing.
@@ -1275,6 +1407,26 @@ const unionShardKeys = async (registry: ShardRegistry, tables: ReadonlyArray<str
  */
 const withDefaultShard = (discovered: ReadonlyArray<string>, defaultShardKey: DefaultShardKey): ReadonlyArray<string> =>
     discovered.length > 0 || defaultShardKey === null ? discovered : [defaultShardKey];
+
+/**
+ * Union of the live shard keys across every requested table, so a multi-table
+ * fan-out reaches each shard once.
+ *
+ * {@link withDefaultShard} is applied PER TABLE, before the union: an empty key
+ * list is that table's "the registry cannot answer", and a root-DO table's list
+ * is always empty. Unioning first and falling back only on an empty union
+ * answered the question once for the whole request, so a single registered
+ * `.shardBy(...)` key was enough to drop the default shard — and with it every
+ * root-table row — from a whole-deployment export.
+ *
+ * The caller still wraps the result: with no tables at all there is nothing to
+ * ask per table, and the fallback is the whole answer.
+ */
+const unionShardKeys = async (registry: ShardRegistry, tables: ReadonlyArray<string>, defaultShardKey: DefaultShardKey): Promise<string[]> => {
+    const perTableKeys = await Promise.all(tables.map(async (table) => withDefaultShard(await registry.listShardKeys(table), defaultShardKey)));
+
+    return [...new Set(perTableKeys.flat())];
+};
 
 const runBoundedFanOut = async (
     namespace: ShardNamespaceInput,
@@ -1454,8 +1606,56 @@ const mergeRank = (values: ReadonlyArray<unknown>): RankMergeResult => {
     return { position: before + 1, total };
 };
 
+interface ScoredRow {
+    row: Record<string, unknown>;
+    score: number;
+}
+
+/** Index of the first row in `sorted` that `entry` must rank strictly before. Binary search, O(log k). */
+const insertionPoint = (sorted: ReadonlyArray<ScoredRow>, entry: ScoredRow, compare: (a: ScoredRow, b: ScoredRow) => number): number => {
+    let lo = 0;
+    let hi = sorted.length;
+
+    while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        const current = sorted[mid];
+
+        if (current !== undefined && compare(entry, current) < 0) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+
+    return lo;
+};
+
+/**
+ * Keep the k best rows without sorting all of them. `best` stays sorted and
+ * never grows past k. A row lands after every row that already ranks equal to
+ * it, the same tie order the stable full sort produced. Cost: O(N log k)
+ * comparisons, plus an O(k) splice for each row that enters the buffer.
+ */
+const selectTopK = (collected: ReadonlyArray<ScoredRow>, k: number, compare: (a: ScoredRow, b: ScoredRow) => number): ScoredRow[] => {
+    const best: ScoredRow[] = [];
+
+    for (const entry of collected) {
+        const at = insertionPoint(best, entry, compare);
+
+        if (at < k) {
+            best.splice(at, 0, entry);
+
+            if (best.length > k) {
+                best.pop();
+            }
+        }
+    }
+
+    return best;
+};
+
 const mergeTopK = (values: ReadonlyArray<unknown>, strategy: { by: string; direction?: "asc" | "desc"; k: number }): ReadonlyArray<Record<string, unknown>> => {
-    const collected: { row: Record<string, unknown>; score: number }[] = [];
+    const collected: ScoredRow[] = [];
 
     for (const v of values) {
         if (!Array.isArray(v)) {
@@ -1475,10 +1675,21 @@ const mergeTopK = (values: ReadonlyArray<unknown>, strategy: { by: string; direc
     }
 
     const direction = strategy.direction ?? "desc";
+    // Negative when `a` belongs before `b` in the output.
+    const compare = (a: ScoredRow, b: ScoredRow): number => (direction === "asc" ? compareAsc(a.score, b.score) : compareAsc(b.score, a.score));
+    const { k } = strategy;
 
-    collected.sort((a, b) => (direction === "asc" ? compareAsc(a.score, b.score) : compareAsc(b.score, a.score)));
+    // A full sort is cheaper when most rows are kept: selectTopK pays an O(k)
+    // splice per row that enters the buffer, so for k near N it is O(N*k). The
+    // non-integer and negative cases are unreachable from the wire (validated in
+    // create-worker); they take this path so `slice` keeps its exact historical result.
+    if (!Number.isInteger(k) || k < 0 || 2 * k >= collected.length) {
+        collected.sort(compare);
 
-    return collected.slice(0, strategy.k).map((entry) => entry.row);
+        return collected.slice(0, k).map((entry) => entry.row);
+    }
+
+    return selectTopK(collected, k, compare).map((entry) => entry.row);
 };
 
 const mergeShardResults = (values: ReadonlyArray<unknown>, strategy: MergeStrategy): unknown => {
@@ -1526,6 +1737,108 @@ const mergeShardResults = (values: ReadonlyArray<unknown>, strategy: MergeStrate
     }
 };
 
+/** A shard-registry prune: release the named `.shardBy()` tables' shards that hold none of their rows. */
+interface ShardRegistryPruneRequest {
+    /** Report what would be released without touching the registry. */
+    dryRun?: boolean;
+    /** Must carry the admin bearer each shard's admin gate requires. */
+    headers?: Record<string, string>;
+    tables: ReadonlyArray<string>;
+}
+
+/** One `(shard, table)` registration the prune reports on. */
+interface ShardRegistration {
+    shardKey: string;
+    table: string;
+}
+
+interface ShardRegistryPruneResult {
+    /** Shards the release could not reach. Their registrations are KEPT: a key nobody checked is never dropped. */
+    failed: ReadonlyArray<{ message: string; shardKey: string; tables: ReadonlyArray<string> }>;
+    /** Registrations whose shard still holds rows of the table. */
+    kept: ReadonlyArray<ShardRegistration>;
+    /** Registrations removed (or, on a dry run, that would be). */
+    released: ReadonlyArray<ShardRegistration>;
+}
+
+/** A shard's `kept` / `released` table list as registrations, dropping anything that is not a table name. */
+const registrationsOf = (shardKey: string, tables: unknown): ShardRegistration[] =>
+    (Array.isArray(tables) ? tables : [])
+        .filter((table): table is string => typeof table === "string")
+        .map((table) => {
+            return { shardKey, table };
+        });
+
+/**
+ * Prune the shard registry: ask every shard it lists for `request.tables` to
+ * release the tables it no longer holds rows of.
+ *
+ * Each shard decides for itself (`__lunora_admin__:releaseShardRegistration`),
+ * because only the shard can order the emptiness check against its own
+ * writes; a check made here and an unregister sent later could drop a shard
+ * written in between. A shard listed for several tables gets one call naming
+ * all of them.
+ */
+const pruneShardRegistry = async (
+    registry: ShardRegistry,
+    namespace: ShardNamespaceInput,
+    request: ShardRegistryPruneRequest,
+): Promise<ShardRegistryPruneResult> => {
+    const tablesByShard = new Map<string, string[]>();
+    const listed = await Promise.all(
+        request.tables.map(async (table) => {
+            return { keys: await registry.listShardKeys(table), table };
+        }),
+    );
+
+    for (const { keys, table } of listed) {
+        for (const shardKey of keys) {
+            tablesByShard.set(shardKey, [...(tablesByShard.get(shardKey) ?? []), table]);
+        }
+    }
+
+    const outcomes = await runBoundedJobs([...tablesByShard], DEFAULT_CONCURRENCY, async ([shardKey, tables]) => {
+        const outcome = await callOneShard(
+            namespace,
+            shardKey,
+            prepareShardRpc({
+                args: { dryRun: request.dryRun === true, tables },
+                functionPath: "__lunora_admin__:releaseShardRegistration",
+                headers: request.headers,
+            }),
+            DEFAULT_TIMEOUT_MS,
+        );
+
+        return { outcome, tables };
+    });
+
+    const failed: { message: string; shardKey: string; tables: ReadonlyArray<string> }[] = [];
+    const kept: ShardRegistration[] = [];
+    const released: ShardRegistration[] = [];
+
+    for (const { outcome, tables } of outcomes) {
+        if (outcome.kind === "err") {
+            failed.push({ message: outcome.message, shardKey: outcome.shardKey, tables });
+            continue;
+        }
+
+        const payload = (unwrapResult(outcome.value) ?? {}) as { kept?: unknown; released?: unknown };
+
+        kept.push(...registrationsOf(outcome.shardKey, payload.kept));
+        released.push(...registrationsOf(outcome.shardKey, payload.released));
+    }
+
+    // The shards unregistered themselves, so a caching registry here still lists
+    // them. Other isolates catch up within their own cache TTL.
+    if (request.dryRun !== true) {
+        for (const table of new Set(released.map((registration) => registration.table))) {
+            registry.invalidate?.(table);
+        }
+    }
+
+    return { failed, kept, released };
+};
+
 const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordinator => {
     const maxConcurrency = options.maxConcurrency ?? DEFAULT_CONCURRENCY;
     const perShardTimeoutMs = options.perShardTimeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -1562,7 +1875,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // Union the shard keys across all requested shard-local tables so
             // an export of `["users","messages"]` reaches every shard that
             // holds either table. Skip globals — they live in D1, not a DO.
-            const discovered = await unionShardKeys(options.registry, request.tables);
+            const discovered = await unionShardKeys(options.registry, request.tables, request.defaultShardKey);
 
             const shardKeys = withDefaultShard(discovered, request.defaultShardKey);
 
@@ -1584,24 +1897,29 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // live shard keys. Unlike export, each shard resumes from its own
             // cursor, so (like import) we can't reuse `runBoundedFanOut`'s
             // same-args-to-all model; we drive a per-shard-args worker loop.
-            const shardKeys = withDefaultShard(await unionShardKeys(options.registry, request.tables), request.defaultShardKey);
+            const shardKeys = withDefaultShard(await unionShardKeys(options.registry, request.tables, request.defaultShardKey), request.defaultShardKey);
             const cursors = request.cursors ?? {};
+            const epochs = request.epochs ?? {};
 
             const results = await runBoundedJobs(shardKeys, maxConcurrency, async (shardKey) => {
                 const sinceSeq = cursors[shardKey] ?? 0;
+                // Absent for a caller that holds no epoch for this shard, which
+                // is every caller that has not been updated — the shard then
+                // reads exactly as it did before the field existed.
+                const sinceEpoch = epochs[shardKey];
 
                 const outcome = await callOneShard(
                     namespace,
                     shardKey,
                     prepareShardRpc({
-                        args: { limit: request.limit, sinceSeq },
+                        args: { limit: request.limit, sinceEpoch, sinceSeq },
                         functionPath: "__lunora_admin__:cdcSync",
                         headers: request.headers,
                     }),
                     perShardTimeoutMs,
                 );
 
-                return { outcome, sinceSeq };
+                return { outcome, sinceEpoch, sinceSeq };
             });
 
             return rollUpCdcSync(results);
@@ -1613,18 +1931,43 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // workers pulling jobs off a shared cursor.
             const { batches } = request;
 
-            const outcomes = await runBoundedJobs(batches, maxConcurrency, async (batch) =>
+            const importOnShard = async (shardKey: string, args: Record<string, unknown>): Promise<ShardRpcOutcome> =>
                 callOneShard(
                     namespace,
-                    batch.shardKey,
-                    prepareShardRpc({
-                        args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
-                        functionPath: "__lunora_admin__:importShard",
-                        headers: request.headers,
-                    }),
+                    shardKey,
+                    prepareShardRpc({ args, functionPath: "__lunora_admin__:importShard", headers: request.headers }),
                     perShardTimeoutMs,
-                ),
-            );
+                );
+
+            const outcomes = await runBoundedJobs(batches, maxConcurrency, async (batch) => {
+                if (request.dryRun === true) {
+                    // A shard built before the flag existed ignores it and inserts the rows, and its answer is the same body a check
+                    // returns. An empty batch is the only call that is safe to learn that from: the echo of `dryRun` is the proof, and a
+                    // shard that does not give it is never sent a row.
+                    const probe = await importOnShard(batch.shardKey, { dryRun: true, rows: [], startLine: 1 });
+
+                    if (probe.kind === "err") {
+                        return probe;
+                    }
+
+                    if ((unwrapResult(probe.value) as undefined | { dryRun?: unknown })?.dryRun !== true) {
+                        return {
+                            code: "SHARD_DRY_RUN_UNSUPPORTED",
+                            kind: "err",
+                            message: `shard "${batch.shardKey}" cannot check rows without writing them`,
+                            shardKey: batch.shardKey,
+                            timedOut: false,
+                        } satisfies ShardRpcError;
+                    }
+                }
+
+                return importOnShard(batch.shardKey, {
+                    dryRun: request.dryRun === true,
+                    onConflict: request.onConflict ?? "skip",
+                    rows: [...batch.rows],
+                    startLine: batch.startLine ?? 1,
+                });
+            });
 
             return rollUpImport(outcomes);
         },
@@ -1795,7 +2138,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
     };
 };
 
-export { createQueryCoordinator, createStaticShardRegistry };
+export { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry, pruneShardRegistry };
 export type {
     ExportFanOutRequest,
     ExportFanOutResult,
@@ -1820,6 +2163,8 @@ export type {
     ShardRankOutcome,
     ShardRankPageOutcome,
     ShardRegistry,
+    ShardRegistryPruneRequest,
+    ShardRegistryPruneResult,
     ShardTrafficEntry,
     ShardTrafficFanOutRequest,
     ShardTrafficFanOutResult,

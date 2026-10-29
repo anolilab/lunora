@@ -26,7 +26,7 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                "node_version": ["22.15", "24.11"]
+                "node_version": ["22.22", "24.11"]
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -37,13 +37,14 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
               "with":
                   "node-version": "${{ matrix.node_version }}"
                   "cache-prefix": "nightly"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -64,7 +65,31 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                "package": ["auth", "client", "container", "d1", "do", "queue", "runtime", "scheduler", "storage", "workflow", "x402"]
+                "package":
+                    [
+                        "packages/agent",
+                        "packages/auth",
+                        "packages/browser",
+                        "packages/client",
+                        "packages/container",
+                        "packages/d1",
+                        "packages/do",
+                        "packages/observability",
+                        "packages/payment",
+                        "packages/privacy",
+                        "packages/queue",
+                        "packages/ratelimit",
+                        "packages/replica",
+                        "packages/runtime",
+                        "packages/scheduler",
+                        "packages/server",
+                        "packages/shard-engine",
+                        "packages/sql-store",
+                        "packages/storage",
+                        "packages/workflow",
+                        "packages/x402",
+                        "examples/privacy",
+                    ]
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -75,48 +100,54 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "test-workerd"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The matrix is a hand-typed list of 11 packages, duplicated verbatim in
-            # test.yml and nightly.yml, with nothing tying either copy to the packages
-            # that actually declare a `workerd` vitest project. Drop a package from one
-            # and its workerd suites stop running with every check green. Each leg
-            # asserts its own package still declares the project, and that the leg count
-            # equals the number of packages that do — together that makes the matrix and
-            # the filesystem the same set, not merely the same size.
+            # The matrix is a hand-typed list of directories (21 packages, one example),
+            # duplicated verbatim in test.yml and nightly.yml, with nothing tying either
+            # copy to the packages/* and examples/* that actually declare a `workerd`
+            # vitest project. Drop one from either copy and its workerd suites stop
+            # running with every check green. Each leg asserts its own directory still
+            # declares the project, and that the leg count equals the number of
+            # directories that do — together that makes the matrix and the filesystem
+            # the same set, not merely the same size.
             - "name": "Assert the matrix matches the packages declaring a workerd project"
               "run": |
-                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts | sed 's|packages/||; s|/vitest.config.ts||' | sort)"
+                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts examples/*/vitest.config.ts | sed 's|/vitest.config.ts||' | sort)"
                   count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
                   if ! printf '%s\n' "$declared" | grep -qx "${{ matrix.package }}"; then
-                    echo "packages/${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
-                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    echo "${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
+                    echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
                     exit 1
                   fi
                   if [ "$count" != "${{ strategy.job-total }}" ]; then
                     echo "$count packages declare a workerd project but the matrix has ${{ strategy.job-total }} legs." >&2
-                    echo "Declared: $(printf '%s ' $declared)" >&2
+                    echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
                     echo "Fix the matrix in .github/workflows/test.yml AND .github/workflows/nightly.yml." >&2
                     exit 1
                   fi
 
             - "name": "Build package and dependencies"
               "run": |
-                  pnpm exec vis run build --query "project=${{ matrix.package }}"
+                  project="$(node -p "require('./${{ matrix.package }}/project.json').name")"
+                  case "${{ matrix.package }}" in
+                    examples/*) pnpm exec vis run build --filter "${project}^..." ;;
+                    *) pnpm exec vis run build --query "project=${project}" ;;
+                  esac
 
             - "name": "Run workerd suites"
               "env":
                   "LUNORA_WORKERD_TESTS": "1"
               "run": |
-                  pnpm --filter "@lunora/${{ matrix.package }}" run test --project workerd
+                  pnpm --filter "$(node -p "require('./${{ matrix.package }}/package.json').name")" run test --project workerd
 
     # test.yml's `e2e` without the paths-filter gate.
     "e2e":
@@ -133,13 +164,14 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "e2e"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -198,14 +230,18 @@
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
+            # Same pin as the PR template job: Astro refuses to run below Node 22.23.4 and its check exits
+            # without a diagnostic on 22.22.
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.23.4"
                   "cache-prefix": "nightly-templates"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "enable-vis-cache": "true"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 

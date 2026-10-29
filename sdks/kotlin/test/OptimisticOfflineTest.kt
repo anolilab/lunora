@@ -327,6 +327,178 @@ private fun optimisticCursorlessFramePreservesCursor() {
     check(live.state().layers.size == count(case["layersAfterConfirm"]), "so the reply's commit cursor can still drop the overlay")
 }
 
+/** The credential-shaped argument an online-only write carries; it must never reach storage. */
+private const val ONLINE_ONLY_SECRET = "sentinel-secret-7731"
+
+private fun onlineOnlyWrite(): SubmitOptions =
+    SubmitOptions("auth:setPassword", WireValue.Obj(listOf("token" to WireValue.Text(ONLINE_ONLY_SECRET)))).apply { onlineOnly = true }
+
+/** With the socket down, an online-only write is refused before anything is queued or sent. */
+private fun onlineOnlyWriteWhoseCallbackDropsTheSocketIsRefused() {
+    covers("offline_online_only_refused_when_disconnected_in_callback")
+    var posts = 0
+    val client = Client("https://app.example", { _, _, _ ->
+        posts++
+
+        HttpResponse(200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}")
+    })
+
+    client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true, persistence = MemoryStore())
+
+    // The subscriber sees the overlay, and the connection goes down inside its notification.
+    val args = WireValue.Obj(listOf("token" to WireValue.Text(ONLINE_ONLY_SECRET)))
+    val overlayMark = WireValue.Text("c")
+
+    client.attachSocket { }
+    client.subscribe("auth:setPassword", args, { value ->
+        if (value is WireValue.Arr && value.items.any { item -> item == overlayMark }) client.detachSocket()
+    })
+    client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+
+    val write = SubmitOptions("auth:setPassword", args).apply {
+        onlineOnly = true
+        optimistic = { current -> WireValue.Arr(((current as? WireValue.Arr)?.items ?: emptyList()) + overlayMark) }
+    }
+    val refused = runCatching { client.submit(write) }.exceptionOrNull() as? OfflineException
+
+    check(refused?.code == OFFLINE_NOT_QUEUED, "an online-only write whose callback drops the socket is refused with OFFLINE_NOT_QUEUED")
+    check(posts == 0, "and a refused write never reaches the wire")
+}
+
+private fun onlineOnlyWriteIsRefusedWhenDisconnected() {
+    covers("offline_online_only_refused_when_disconnected")
+    var posts = 0
+    val store = MemoryStore()
+    val client = Client("https://app.example", { _, _, _ ->
+        posts++
+
+        HttpResponse(200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}")
+    })
+
+    client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true, persistence = store)
+
+    // A subscription on the write's own path and args, primed with a server value, so an
+    // overlay the write applied would be displayed.
+    val args = WireValue.Obj(listOf("token" to WireValue.Text(ONLINE_ONLY_SECRET)))
+    val seen = mutableListOf<WireValue>()
+
+    client.attachSocket { }
+    client.subscribe("auth:setPassword", args, { seen.add(it) })
+    client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+    client.detachSocket()
+
+    val write = SubmitOptions("auth:setPassword", args).apply {
+        onlineOnly = true
+        optimistic = { current -> WireValue.Arr(((current as? WireValue.Arr)?.items ?: emptyList()) + WireValue.Text("c")) }
+    }
+    val refused = runCatching { client.submit(write) }.exceptionOrNull() as? OfflineException
+
+    check(refused?.code == OFFLINE_NOT_QUEUED, "an online-only write is refused with OFFLINE_NOT_QUEUED")
+    check(client.pendingMutationCount() == 0, "and nothing is queued")
+    check(store.appended.isEmpty(), "the persistence adapter never sees the write")
+    check(!Json.write(store.records).contains(ONLINE_ONLY_SECRET), "the arguments never reach storage")
+    check(posts == 0, "and a refused write never reaches the wire")
+    check(
+        seen.none { it == WireValue.Arr(listOf(WireValue.Text("a"), WireValue.Text("c"))) },
+        "and a refused write's overlay is never displayed",
+    )
+}
+
+/** With the socket up, an online-only write is sent normally and commits. */
+private fun onlineOnlyWriteIsSentWhenConnected() {
+    covers("offline_online_only_sends_when_connected")
+    val bodies = mutableListOf<String>()
+    val store = MemoryStore()
+    val client = Client("https://app.example", { _, _, body ->
+        bodies.add(String(body, Charsets.UTF_8))
+
+        HttpResponse(200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}")
+    })
+
+    client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true, persistence = store)
+    client.attachSocket { }
+
+    val outcome = client.submit(onlineOnlyWrite())
+
+    check(outcome.status == MutationStatus.COMMITTED, "a connected online-only write commits")
+    check(bodies.size == 1 && bodies[0].contains(ONLINE_ONLY_SECRET), "and goes out once, with its arguments on the wire")
+    check(store.appended.isEmpty(), "and is never persisted")
+}
+
+/**
+ * A client that never connected sends an online-only write directly, and the transport fails
+ * before any reply. That is refused as OFFLINE_NOT_QUEUED with the transport error as its cause,
+ * with the overlay rolled back. A coded reply to the same write surfaces as itself.
+ */
+private fun onlineOnlyTransportFailureIsRefused() {
+    covers("offline_online_only_transport_failure_refused")
+    val transport = IOException("connection refused")
+    var posts = 0
+    val store = MemoryStore()
+    val seen = mutableListOf<WireValue>()
+    val client = Client("https://app.example", { _, _, _ ->
+        posts++
+
+        throw transport
+    })
+
+    client.offlineQueue = OfflineQueue(persistence = store)
+
+    // No socket is ever attached, so the shard never connected and the write goes direct.
+    val args = WireValue.Obj(listOf("token" to WireValue.Text(ONLINE_ONLY_SECRET)))
+    val base = WireValue.Arr(listOf(WireValue.Text("a")))
+
+    client.subscribe("auth:setPassword", args, { seen.add(it) })
+    client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+
+    val write = SubmitOptions("auth:setPassword", args).apply {
+        onlineOnly = true
+        optimistic = { current -> WireValue.Arr(((current as? WireValue.Arr)?.items ?: emptyList()) + WireValue.Text("c")) }
+    }
+    val refused = runCatching { client.submit(write) }.exceptionOrNull() as? OfflineException
+
+    check(posts == 1, "the write reaches the wire once, on the direct path")
+    check(refused?.code == OFFLINE_NOT_QUEUED, "a transport failure is refused with OFFLINE_NOT_QUEUED")
+    check(refused?.cause === transport, "and the transport error rides along as its cause")
+    check(client.pendingMutationCount() == 0, "and nothing is queued")
+    check(store.appended.isEmpty(), "the persistence adapter never sees the write")
+    check(seen.last() == base, "the overlay is rolled back to the server value")
+    check(client.subscriptions.getValue("sub_1").state.layers.isEmpty(), "and no layer survives")
+
+    // A coded reply is the server's verdict, so it is not a transport failure, even for a
+    // transient code.
+    val rejecting = Client("https://app.example", { _, _, _ ->
+        HttpResponse(503, "{\"error\":{\"code\":\"SHARD_UNAVAILABLE\",\"message\":\"busy\"}}")
+    })
+
+    rejecting.offlineQueue = OfflineQueue(persistence = MemoryStore())
+
+    val verdict = runCatching { rejecting.submit(SubmitOptions("auth:setPassword", args).apply { onlineOnly = true }) }.exceptionOrNull()
+
+    check(verdict is ApiException && verdict.code == "SHARD_UNAVAILABLE", "a coded server rejection surfaces as itself, not as OFFLINE_NOT_QUEUED")
+}
+
+/** A normal write made with the socket down still queues beside an online-only one. */
+private fun normalWriteStillQueuesBesideAnOnlineOnlyOne() {
+    covers("offline_online_only_leaves_normal_writes_queued")
+    var posts = 0
+    val store = MemoryStore()
+    val client = Client("https://app.example", { _, _, _ ->
+        posts++
+
+        HttpResponse(200, "{\"result\":null}")
+    })
+
+    client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true, persistence = store)
+
+    val outcome = client.submit(SubmitOptions("messages:send"))
+
+    check(outcome.status == MutationStatus.QUEUED, "a normal write still queues offline")
+    check(client.pendingMutationCount() == 1, "and the queue holds it")
+    check(store.appended.size == 1, "and it is persisted")
+    check(posts == 0, "and nothing is sent")
+}
+
 /**
  * A persistence adapter that records every call.
  *
@@ -827,8 +999,10 @@ private fun offlineQueueIdentityGateRejectsReplay() {
             else -> Identity.Of(stampedRaw as String)
         }
 
+        val current = (spec["current"] as String?)?.let { Identity.Of(it) } ?: Identity.SignedOut
+
         check(
-            identityAllowsReplay(stamped, spec["current"] as String?) == spec["replays"] as Boolean,
+            (replayIdentityVerdict(stamped, current, null) == Verdict.MATCH) == spec["replays"] as Boolean,
             "identity gate: ${spec["name"]}",
         )
     }
@@ -972,9 +1146,14 @@ private fun batchEntryCapMatchesProtocol() {
  */
 private fun offlineFlushBatchesMultipleWrites() {
     covers("offline_flush_batches_multiple_writes")
+    covers("offline_flush_unreadable_slot_is_retried")
 
     val case = scenario("offlineQueue", "batchReplay")
     val slots = case["slots"] as List<*>
+    // A slot the fixture no longer describes is a case that asserts nothing.
+    val unreadable = slots.count { (it as Map<*, *>)["outcome"] == "unreadable-error" && it.containsKey("rawError") }
+
+    check(unreadable == 1, "batchReplay must carry one unreadable slot")
     val urls = mutableListOf<String>()
     val calls = mutableListOf<Map<*, *>>()
     val confirmed = mutableListOf<Long?>()
@@ -988,10 +1167,17 @@ private fun offlineFlushBatchesMultipleWrites() {
             val answers = slots.joinToString(",") { raw ->
                 val slot = raw as Map<*, *>
 
-                if (slot["outcome"] == "ok") {
-                    "{\"id\":${count(slot["id"])},\"body\":{\"commitCursor\":${count(slot["commitCursor"])},\"result\":null}}"
-                } else {
-                    "{\"id\":${count(slot["id"])},\"body\":{\"error\":{\"code\":\"${slot["code"]}\",\"message\":\"slot failed\"}}}"
+                when (slot["outcome"]) {
+                    "ok" ->
+                        "{\"id\":${count(slot["id"])},\"body\":{\"commitCursor\":${count(slot["commitCursor"])},\"result\":null}}"
+                    // An `error` key holding a NON-object: no envelope to read a
+                    // verdict out of, and no per-slot HTTP status to fall back on.
+                    // Written from the fixture's own value, so a port cannot pass
+                    // by answering itself a shape the spec does not describe.
+                    "unreadable-error" ->
+                        "{\"id\":${count(slot["id"])},\"body\":{\"error\":${Json.write(slot["rawError"])}}}"
+                    else ->
+                        "{\"id\":${count(slot["id"])},\"body\":{\"error\":{\"code\":\"${slot["code"]}\",\"message\":\"slot failed\"}}}"
                 }
             }
 
@@ -1302,6 +1488,516 @@ private fun emptyShardKeyNeverReachesTheWire() {
     check(client.wsUrl("room-1").contains("shard=room-1"), "and the socket URL")
 }
 
+/** The code a settled event's error carries, whichever SDK error type it is. */
+private fun errorCode(error: Exception?): String? = (error as? ApiException)?.code ?: (error as? OfflineException)?.code
+
+/** How many calls a request carries: its batch entries, or one for a single call. */
+private fun callCount(body: ByteArray): Int = batchCalls(body).size.takeIf { it > 0 } ?: 1
+
+/** A client over [poster] with a recording durable store and settled log. */
+private class Flush(poster: (String, Map<String, String>, ByteArray) -> HttpResponse) {
+    val store = MemoryStore()
+    val settled = mutableListOf<MutationSettled>()
+    val confirmed = mutableListOf<String>()
+    val client = Client("https://app.example", poster)
+
+    init {
+        client.offlineQueue = OfflineQueue(persistence = store)
+        client.onMutationSettled { settled.add(it) }
+    }
+
+    fun enqueue(ids: List<String?>, shardKey: String? = null) {
+        for (id in ids) {
+            val item = QueuedMutation(id!!, "messages:send", WireValue.Obj(emptyList()), shardKey)
+
+            item.onCommit = { confirmed.add(id) }
+            client.offlineQueue.enqueue(item)
+        }
+    }
+}
+
+/**
+ * An EMPTY shard key is the default shard on the wire too, on BOTH replay paths:
+ * no single-call body and no batch entry carries a `shardKey` key.
+ */
+private fun offlineFlushEmptyShardKeyRoutesToDefault() {
+    covers("offline_flush_empty_shard_key_routes_to_default")
+
+    val case = scenario("offlineQueue", "emptyShardKey")
+
+    for (path in listOf("batch", "lone")) {
+        val spec = case[path] as Map<*, *>
+        val sent = mutableListOf<Map<*, *>>()
+        val flush = Flush { _, _, body ->
+            val calls = batchCalls(body)
+
+            if (calls.isEmpty()) sent.add(Json.parse(String(body, Charsets.UTF_8)) as Map<*, *>) else sent.addAll(calls)
+
+            HttpResponse(200, echoBatchSlots(body, commitCursor = 1))
+        }
+
+        for (raw in spec["queued"] as List<*>) {
+            val queued = raw as Map<*, *>
+
+            flush.enqueue(listOf(queued["id"] as String), queued["shardKey"] as String?)
+        }
+
+        val report = flush.client.flushOfflineQueue(spec["flushShardKey"] as String?)
+
+        check(report.committed == ids(spec["committed"]), "$path: every write commits: ${report.committed}")
+        check(sent.size == (spec["queued"] as List<*>).size, "$path: one body or entry per write")
+        check(sent.none { it.containsKey("shardKey") }, "$path: no body or entry carries a shardKey: $sent")
+    }
+}
+
+/**
+ * A SUCCESS whose result does not decode is a commit: settled `COMMITTED` with the
+ * coded decode error, its record removed, never retried — and on the batch path a
+ * bad slot never takes the slots after it down.
+ */
+private fun offlineFlushUndecodableResultSettlesCommitted() {
+    covers("offline_flush_undecodable_result_settles_committed")
+
+    val case = scenario("offlineQueue", "undecodableResult")
+    val raw = Json.write(case["rawResult"])
+    val code = case["code"] as String
+    val batch = case["batch"] as Map<*, *>
+    val bad = count(batch["undecodableSlot"])
+    val batched = Flush { _, _, body ->
+        val slots = batchCalls(body).indices.joinToString(",") { index ->
+            val result = if (index == bad) raw else "\"ok\""
+
+            "{\"id\":$index,\"body\":{\"result\":$result,\"commitCursor\":${index + 1}}}"
+        }
+
+        HttpResponse(200, "{\"results\":[$slots]}")
+    }
+
+    batched.enqueue(ids(batch["queued"]))
+
+    val report = batched.client.flushOfflineQueue()
+
+    check(report.committed == ids(batch["committed"]), "batch: every slot commits: ${report.committed}")
+    check(report.rejected == ids(batch["rejected"]), "batch: nothing is rejected")
+    check(queuedIds(batched.client.offlineQueue.items()) == ids(batch["queuedAfterFlush"]), "batch: nothing stays queued")
+    check(batched.store.removed == ids(batch["persistRemoveCalls"]), "batch: every record is removed")
+    check(batched.confirmed == ids(batch["committed"]), "batch: every overlay is confirmed, the undecodable one included")
+    check(batched.settled.all { it.status == MutationStatus.COMMITTED }, "batch: all settle committed")
+    check(
+        batched.settled.filter { errorCode(it.error) == code }.map { it.mutationId } == ids(batch["decodeFailed"]),
+        "batch: only the undecodable slot carries $code",
+    )
+    check(batched.settled.first { it.error != null }.value == null, "batch: with no value")
+
+    val lone = case["lone"] as Map<*, *>
+    var requests = 0
+    val single = Flush { _, _, _ ->
+        requests++
+
+        HttpResponse(200, "{\"result\":$raw,\"commitCursor\":1}")
+    }
+
+    single.enqueue(ids(lone["queued"]))
+
+    val first = single.client.flushOfflineQueue()
+
+    single.client.flushOfflineQueue()
+
+    check(first.committed == ids(lone["committed"]), "lone: the write commits: ${first.committed} ${first.rejected} ${first.requeued}")
+    check(first.rejected == ids(lone["rejected"]), "lone: and is not rejected")
+    check(queuedIds(single.client.offlineQueue.items()) == ids(lone["queuedAfterFlush"]), "lone: nothing stays queued")
+    check(single.store.removed == ids(lone["persistRemoveCalls"]), "lone: its record is removed")
+    check(single.confirmed == ids(lone["committed"]), "lone: its overlay is confirmed")
+    check(single.settled.map { errorCode(it.error) } == listOf(code), "lone: it carries $code")
+    check(single.settled[0].status == MutationStatus.COMMITTED && single.settled[0].value == null, "lone: committed, with no value")
+    check(requests == count(lone["requestsAfterSecondFlush"]), "lone: a second flush sends nothing")
+
+    // The direct path fails with the SDK's own error, distinguishable from a
+    // transport failure, rather than the codec's exception.
+    var direct: ApiException? = null
+
+    try {
+        single.client.mutation("messages:send")
+    } catch (error: ApiException) {
+        direct = error
+    }
+
+    check(direct?.code == code && direct.transient == false, "a direct mutation throws $code: ${direct?.code}")
+
+    drainedWritesSurviveAnUnexpectedException()
+}
+
+/**
+ * A flush never loses a drained write. An `Error` escaping a consumer's settled
+ * callback after the first slot is not an `Exception` any replay catch sees, so it
+ * leaves the loop with the later slots neither settled nor requeued; the finally
+ * guard puts them back at the front, in order, with their records intact.
+ */
+private fun drainedWritesSurviveAnUnexpectedException() {
+    val flush = Flush { _, _, body -> HttpResponse(200, echoBatchSlots(body, commitCursor = 1)) }
+
+    flush.enqueue(listOf("f1", "f2", "f3"))
+    flush.client.offlineQueue.items()[0].onSettled = { throw AssertionError("a consumer bug") }
+
+    var escaped: Throwable? = null
+
+    try {
+        flush.client.flushOfflineQueue()
+    } catch (error: AssertionError) {
+        escaped = error
+    }
+
+    check(escaped?.message == "a consumer bug", "the unexpected failure still propagates")
+    check(
+        queuedIds(flush.client.offlineQueue.items()) == listOf("f2", "f3"),
+        "the unsettled writes are back in the queue, in order: ${queuedIds(flush.client.offlineQueue.items())}",
+    )
+    check(flush.store.removed == listOf("f1"), "and only the settled write's record was removed: ${flush.store.removed}")
+}
+
+/**
+ * ONE predicate for both replay paths: a coded envelope by its code alone, an
+ * envelope-less reply by its status.
+ */
+private fun offlineFlushClassifiesSingleAndBatchAlike() {
+    covers("offline_flush_classifies_single_and_batch_alike")
+
+    val case = scenario("offlineQueue", "replayClassification")
+    val paths = case["paths"] as Map<*, *>
+
+    for (raw in case["cases"] as List<*>) {
+        val spec = raw as Map<*, *>
+        val status = count(spec["status"])
+        val body = spec["rawBody"] as? String ?: Json.write(spec["body"])
+
+        for (path in listOf("single", "batch")) {
+            val queued = ids(paths[path])
+            val label = "${spec["name"]} ($path)"
+            val flush = Flush { _, _, _ -> HttpResponse(status, body) }
+
+            flush.enqueue(queued)
+
+            val report = flush.client.flushOfflineQueue()
+
+            if (spec["outcome"] == "rejected") {
+                check(report.rejected == queued, "$label: rejected, got ${report.rejected} / requeued ${report.requeued}")
+                check(flush.settled.map { errorCode(it.error) } == queued.map { spec["code"] }, "$label: with the envelope's code")
+                check(flush.client.offlineQueue.size == 0, "$label: nothing stays queued")
+            } else {
+                check(report.requeued == queued, "$label: requeued, got ${report.requeued} / rejected ${report.rejected}")
+                check(queuedIds(flush.client.offlineQueue.items()) == queued, "$label: still queued, in order")
+                check(flush.settled.isEmpty(), "$label: nothing settles")
+            }
+        }
+    }
+}
+
+/**
+ * A 413 splits a batch whatever its body, and a lone write still refused by one
+ * settles terminally with `PAYLOAD_TOO_LARGE` instead of re-queueing forever.
+ */
+private fun offlineFlushBatchSplitsOnEnvelopelessPayloadTooLarge() {
+    covers("offline_flush_batch_splits_on_envelopeless_413")
+
+    val case = scenario("offlineQueue", "envelopelessPayloadTooLarge")
+    val html = case["rawBody"] as String
+
+    for (name in listOf("split", "alwaysRefused", "lone")) {
+        val spec = case[name] as Map<*, *>
+        val limit = (spec["refuseCallsAbove"] as? Number)?.toInt() ?: -1
+        val flush = Flush { _, _, body ->
+            if (callCount(body) > limit) HttpResponse(413, html) else HttpResponse(200, echoBatchSlots(body, commitCursor = 1))
+        }
+
+        flush.enqueue(ids(spec["queued"]))
+
+        val report = flush.client.flushOfflineQueue()
+
+        check(report.committed == ids(spec["committed"]), "$name: committed ${report.committed}")
+        check(report.rejected == ids(spec["rejected"]), "$name: rejected ${report.rejected} (requeued ${report.requeued})")
+        check(queuedIds(flush.client.offlineQueue.items()) == ids(spec["queuedAfterFlush"]), "$name: queue after the flush")
+        check(flush.settled.filter { it.status == MutationStatus.REJECTED }.all { errorCode(it.error) == case["code"] }, "$name: refused with ${case["code"]}")
+    }
+}
+
+/**
+ * A write refused for its CREDENTIAL is held, and replays under the next token set
+ * for the same user — read when the replay is SENT, not when it was queued. This
+ * port never flushes on its own, so the app flushes again after the refresh.
+ */
+private fun offlineWriteHeldForCredentialReplaysAfterTokenRefresh() {
+    covers("offline_write_held_for_credential_replays_after_token_refresh")
+
+    val case = scenario("offlineQueue", "credentialRefresh")
+    val identity = case["identity"] as String
+    val staleToken = case["staleToken"] as String
+    val refusal = case["refusal"] as Map<*, *>
+    val authorizations = mutableListOf<String?>()
+    val flush = Flush { _, headers, _ ->
+        val authorization = headers["authorization"]
+
+        authorizations.add(authorization)
+
+        if (authorization == "Bearer $staleToken") {
+            HttpResponse(count(refusal["status"]), Json.write(refusal["body"]))
+        } else {
+            HttpResponse(200, "{\"result\":null}")
+        }
+    }
+
+    flush.client.authToken = staleToken
+    flush.client.identity = identity
+
+    for (id in ids(case["queued"])) {
+        val item = QueuedMutation(id!!, "messages:send", WireValue.Obj(emptyList()))
+
+        item.identity = Identity.Of(identity)
+        flush.client.offlineQueue.enqueue(item)
+    }
+
+    for ((phase, expectedRaw) in listOf("afterRefusal" to case["afterRefusal"], "afterRefresh" to case["afterRefresh"])) {
+        if (phase == "afterRefresh") {
+            flush.client.authToken = case["freshToken"] as String
+        }
+
+        val expected = expectedRaw as Map<*, *>
+        val report = flush.client.flushOfflineQueue()
+
+        check(report.committed == ids(expected["committed"]), "$phase: committed ${report.committed}")
+        check(report.rejected == ids(expected["rejected"]), "$phase: rejected ${report.rejected}")
+        check(queuedIds(flush.client.offlineQueue.items()) == ids(expected["queuedAfterFlush"]), "$phase: queue after the flush")
+
+        if (phase == "afterRefusal") {
+            check(flush.settled.isEmpty(), "a credential refusal is not a verdict: nothing settles")
+            check(flush.store.removed.isEmpty(), "and the durable record stays")
+        }
+    }
+
+    check(flush.client.identity == identity, "the refresh leaves the identity unchanged")
+    check(authorizations == ids(case["authorizationHeaders"]), "authorization headers in order: $authorizations")
+}
+
+/**
+ * A client holding ONE write submitted under [token] and [identity], a recording
+ * durable store, and every authorization header it sends.
+ */
+private class TokenQueued(token: String?, identity: String? = null) {
+    val authorizations = mutableListOf<String?>()
+    val settled = mutableListOf<MutationSettled>()
+    val store = MemoryStore()
+    val client = Client(
+        "https://app.example",
+        { _, headers, body ->
+            authorizations.add(headers["authorization"])
+            HttpResponse(200, echoBatchSlots(body))
+        },
+        authToken = token,
+        identity = identity,
+    )
+
+    init {
+        client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true, persistence = store)
+        client.onMutationSettled { settled.add(it) }
+        check(client.submit(SubmitOptions("messages:send")).status == MutationStatus.QUEUED, "the write is queued")
+    }
+}
+
+/**
+ * With no identity set, a write belongs to the token it was queued under: an
+ * account switch rejects it rather than sending user A's write with user B's
+ * bearer (a null stamp used to match a null identity), and the same token
+ * replays it.
+ */
+private fun offlineUnsetIdentityStampsTokenDigest() {
+    covers("offline_unset_identity_stamps_token_digest")
+
+    val tokenIdentity = scenario("offlineQueue", "tokenIdentity")
+
+    for (raw in tokenIdentity["digests"] as List<*>) {
+        val spec = raw as Map<*, *>
+
+        check(tokenDigest(spec["token"] as String) == spec["digest"], "digest of a ${(spec["token"] as String).length}-unit token")
+    }
+
+    val switch = tokenIdentity["accountSwitch"] as Map<*, *>
+    val queuedUnder = switch["queuedUnder"] as String
+    val switched = TokenQueued(queuedUnder)
+
+    switched.client.authToken = switch["flushedUnder"] as String
+
+    val report = switched.client.flushOfflineQueue()
+
+    check(switched.authorizations.isEmpty(), "user A's write is never sent with user B's bearer: ${switched.authorizations}")
+    check(report.rejected.size == 1 && switched.client.offlineQueue.items().isEmpty(), "the write is rejected, not held")
+    check(settledCodes(switched.settled) == listOf(scenario("offlineQueue", "identityGate")["code"]), "with the identity-changed code")
+
+    val same = TokenQueued(queuedUnder)
+    val replayed = same.client.flushOfflineQueue()
+
+    check(same.authorizations == listOf("Bearer $queuedUnder"), "the same token replays it: ${same.authorizations}")
+    check(replayed.committed.size == 1, "and it commits")
+}
+
+/** Nobody signed in, so whose write it is cannot be told: held, then replayed once the token is back. */
+private fun tokenStampedWriteIsHeldWhileNoTokenIsSet() {
+    val queued = TokenQueued("token-a")
+
+    queued.client.authToken = null
+
+    val report = queued.client.flushOfflineQueue()
+
+    check(queued.authorizations.isEmpty() && queued.settled.isEmpty() && report.rejected.isEmpty(), "held: nothing sent, nothing settled")
+    check(queued.client.offlineQueue.items().size == 1 && queued.store.removed.isEmpty(), "still queued and persisted")
+
+    queued.client.authToken = "token-a"
+    queued.client.flushOfflineQueue()
+
+    check(queued.authorizations == listOf("Bearer token-a"), "replayed once the token is back: ${queued.authorizations}")
+}
+
+/**
+ * A held write keeps its place in line: a signed-out write ahead of it that the
+ * flush re-queues on a transport failure goes back AHEAD of it, not behind.
+ */
+private fun heldWriteKeepsItsPlaceBesideARequeuedOne() {
+    val client = Client("https://app.example", { _, _, _ -> throw IOException("connection reset") })
+
+    client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true)
+    client.submit(SubmitOptions("messages:signedOut"))
+    client.authToken = "token-a"
+    client.submit(SubmitOptions("messages:tokenA"))
+    client.authToken = null
+
+    client.flushOfflineQueue()
+
+    val order = client.offlineQueue.items().map { it.functionPath }
+
+    check(order == listOf("messages:signedOut", "messages:tokenA"), "queue order after the flush: $order")
+}
+
+/** A write queued with no token and no identity is signed out, and replays signed out. */
+private fun signedOutWriteReplaysWithNoToken() {
+    val queued = TokenQueued(null)
+    val report = queued.client.flushOfflineQueue()
+
+    check(queued.authorizations == listOf<String?>(null) && report.committed.size == 1, "replayed with no bearer: ${queued.authorizations}")
+}
+
+/** An identity spelled like a token's digest never matches that token's writes, in either direction. */
+private fun identitySpelledLikeADigestNeverMatchesATokenStamp() {
+    val digest = "7:lbbjyc:1ujs3qs" // tokenIdentity's digest of "token-a"
+    val tokenWrite = TokenQueued("token-a")
+
+    tokenWrite.client.authToken = null
+    tokenWrite.client.identity = digest
+    tokenWrite.client.flushOfflineQueue()
+
+    check(tokenWrite.authorizations.isEmpty(), "a token write is not sent under an identity spelled like its digest")
+
+    val identityWrite = TokenQueued(null, identity = digest)
+
+    identityWrite.client.identity = null
+    identityWrite.client.authToken = "token-a"
+    identityWrite.client.flushOfflineQueue()
+
+    check(identityWrite.authorizations.isEmpty(), "an identity write is not sent under the token its spelling digests")
+}
+
+/** The typed stamp survives the durable record's JSON round trip. */
+private fun tokenStampSurvivesPersistence() {
+    val queued = TokenQueued("token-a")
+    val record = queued.store.records.single()
+
+    check(record["identity"] == mapOf("tokenDigest" to "7:lbbjyc:1ujs3qs"), "persisted as a typed stamp: ${record["identity"]}")
+
+    val restored =
+        Flush { _, headers, body -> HttpResponse(200, echoBatchSlots(body)).also { check(headers["authorization"] == "Bearer token-a", "sent with token-a") } }
+
+    restored.client.authToken = "token-a"
+    restored.store.records.add(record)
+    restored.client.hydrateOfflineQueue()
+
+    check(restored.client.flushOfflineQueue().committed.size == 1, "a restored token-stamped write replays under that token")
+}
+
+/** A record an earlier build stamped null is not sent under a token; an unstamped one still replays. */
+private fun legacyStampsAgainstAHeldToken() {
+    val legacyNull = Flush { _, _, body -> HttpResponse(200, echoBatchSlots(body)) }
+    val posts = AtomicInteger()
+    val legacyAbsent = Flush { _, _, body ->
+        posts.incrementAndGet()
+        HttpResponse(200, echoBatchSlots(body))
+    }
+
+    legacyNull.client.authToken = "token-b"
+    legacyNull.store.records.add(mapOf("args" to emptyMap<String, Any?>(), "functionPath" to "messages:send", "id" to "m1", "identity" to null))
+    legacyNull.client.hydrateOfflineQueue()
+    check(legacyNull.client.flushOfflineQueue().rejected == listOf("m1"), "a null stamp under a held token is a mismatch")
+
+    legacyAbsent.client.authToken = "token-b"
+    legacyAbsent.store.records.add(mapOf("args" to emptyMap<String, Any?>(), "functionPath" to "messages:send", "id" to "m2"))
+    legacyAbsent.client.hydrateOfflineQueue()
+    check(legacyAbsent.client.flushOfflineQueue().committed == listOf("m2") && posts.get() == 1, "an unstamped record replays")
+}
+
+/**
+ * The gate judged the pass against one token, so every request of that pass —
+ * each batch chunk and each 413 half — carries it, never one set mid-flush.
+ */
+private fun tokenSwappedMidFlushDoesNotCarryTheRestOfThePass() {
+    var client: Client? = null
+    val sent = mutableListOf<String?>()
+    var refused = false
+    val poster: (String, Map<String, String>, ByteArray) -> HttpResponse = { _, headers, body ->
+        sent.add(headers["authorization"])
+        client!!.authToken = "token-b"
+
+        if (!refused) {
+            refused = true
+            HttpResponse(413, "{\"error\":{\"code\":\"PAYLOAD_TOO_LARGE\",\"message\":\"too big\"}}")
+        } else {
+            HttpResponse(200, echoBatchSlots(body))
+        }
+    }
+
+    client = Client("https://app.example", poster, authToken = "token-a")
+    client.offlineQueue = OfflineQueue(MAX_BATCH_ENTRIES + 4, queueBeforeFirstConnect = true)
+
+    repeat(MAX_BATCH_ENTRIES + 4) { client.submit(SubmitOptions("messages:send")) }
+
+    val report = client.flushOfflineQueue()
+
+    check(report.committed.size == MAX_BATCH_ENTRIES + 4, "every write commits")
+    check(sent.size >= 3 && sent.all { it == "Bearer token-a" }, "every request of the pass carries token-a: $sent")
+}
+
+/** Kotlin strings are UTF-16, so a lone surrogate is a real token and is digested by code unit. */
+private fun tokenDigestWalksLoneSurrogates() {
+    check(tokenDigest("\uD800") == "1:190qvz:4zol", "a lone high surrogate")
+    check(tokenDigest("a\uDC00b") == "3:2wutaq:38auaw", "a lone low surrogate")
+}
+
+/** The three verdicts, a token stamp only ever matching a token stamp. */
+private fun replayIdentityVerdicts() {
+    val a = Identity.Token(tokenDigest("token-a"))
+    val cases = listOf(
+        Triple(Identity.Of("user-a"), Identity.Of("user-a"), null) to Verdict.MATCH,
+        Triple(Identity.Of("user-a"), Identity.Of("user-b"), null) to Verdict.MISMATCH,
+        Triple(Identity.Of("user-a"), Identity.SignedOut, null) to Verdict.UNKNOWN,
+        Triple(Identity.SignedOut, Identity.SignedOut, null) to Verdict.MATCH,
+        Triple(Identity.SignedOut, Identity.Of("user-a"), null) to Verdict.MISMATCH,
+        Triple(Identity.SignedOut, Identity.Token(tokenDigest("token-b")), "token-b") to Verdict.MISMATCH,
+        Triple(Identity.Absent, Identity.Of("user-a"), null) to Verdict.MATCH,
+        Triple(a, Identity.Of("user-a"), "token-a") to Verdict.MATCH,
+        Triple(a, Identity.Of(a.digest), null) to Verdict.MISMATCH,
+        Triple(Identity.Of(a.digest), a, "token-a") to Verdict.MISMATCH,
+    )
+
+    for ((input, verdict) in cases) {
+        check(replayIdentityVerdict(input.first, input.second, input.third) == verdict, "verdict for $input")
+    }
+}
+
 /** Runs every optimistic-layer and offline-queue case. */
 internal fun runOptimisticOfflineCases() {
     optimisticLayerRebasesOntoServerFrame()
@@ -1318,10 +2014,30 @@ internal fun runOptimisticOfflineCases() {
     offlineQueueHydrateOverflowSettlesDiscarded()
     offlineQueueIdentityGateRejectsReplay()
     offlineFlushReplaysAndConfirmsOptimistic()
+    onlineOnlyWriteIsRefusedWhenDisconnected()
+    onlineOnlyWriteWhoseCallbackDropsTheSocketIsRefused()
+    onlineOnlyWriteIsSentWhenConnected()
+    onlineOnlyTransportFailureIsRefused()
+    normalWriteStillQueuesBesideAnOnlineOnlyOne()
     offlineFlushBatchesMultipleWrites()
     batchEntryCapMatchesProtocol()
     batchSplitsOnPayloadTooLarge()
     loneQueuedWriteSurvivesAnEnvelopeLess502()
     rateLimitedReplayDefersTheNextFlush()
     offlineFlushUnencodableWriteSettlesTerminal()
+    offlineFlushEmptyShardKeyRoutesToDefault()
+    offlineFlushUndecodableResultSettlesCommitted()
+    offlineFlushClassifiesSingleAndBatchAlike()
+    offlineFlushBatchSplitsOnEnvelopelessPayloadTooLarge()
+    offlineWriteHeldForCredentialReplaysAfterTokenRefresh()
+    offlineUnsetIdentityStampsTokenDigest()
+    tokenStampedWriteIsHeldWhileNoTokenIsSet()
+    heldWriteKeepsItsPlaceBesideARequeuedOne()
+    signedOutWriteReplaysWithNoToken()
+    identitySpelledLikeADigestNeverMatchesATokenStamp()
+    tokenStampSurvivesPersistence()
+    legacyStampsAgainstAHeldToken()
+    tokenSwappedMidFlushDoesNotCarryTheRestOfThePass()
+    tokenDigestWalksLoneSurrogates()
+    replayIdentityVerdicts()
 }

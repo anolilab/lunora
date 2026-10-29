@@ -1,11 +1,11 @@
 import type { AuthCapabilities, AuthSession } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatCell, formatTimestamp } from "../../lib/internal";
 
@@ -31,7 +31,7 @@ const SectionHeading = ({ children }: { readonly children: string }): ReactEleme
  * shared `runAction` so the list (and the rest of the drawer) refetch on success.
  */
 export const UserSessionsPanel = ({ busy, runAction, userId, version }: RelatedPanelProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [sessions, setSessions] = useState<AuthSession[] | null>(null);
@@ -119,7 +119,7 @@ export const UserSessionsPanel = ({ busy, runAction, userId, version }: RelatedP
 
 /** The user's linked accounts (credential / OAuth providers), each unlinkable. Gated on `capabilities.accounts`. */
 export const UserAccountsPanel = ({ busy, runAction, userId, version }: RelatedPanelProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [accounts, setAccounts] = useState<Record<string, unknown>[] | null>(null);
@@ -211,7 +211,7 @@ export const UserSecurityPanel = ({
     userId,
     version,
 }: RelatedPanelProps & { readonly capabilities: AuthCapabilities }): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [passkeys, setPasskeys] = useState<Record<string, unknown>[] | null>(null);

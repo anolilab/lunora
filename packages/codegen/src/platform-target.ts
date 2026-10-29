@@ -19,9 +19,10 @@
  * `native` and `emulated` both emit as-is — `emulated` means Lunora builds the
  * feature on lower-level primitives, which is still a working surface.
  *
- * Cloudflare and Node are registered (their matrices live in `@lunora/platform`
- * as `CLOUDFLARE_CAPABILITIES` / `NODE_CAPABILITIES`); other hosts register
- * their matrices as their per-target `@lunora/platform-<target>` packages land.
+ * Cloudflare, Node, and celld are registered (their matrices live in
+ * `@lunora/platform` as `CLOUDFLARE_CAPABILITIES` / `NODE_CAPABILITIES` /
+ * `CELLD_CAPABILITIES`); other hosts register their matrices as their
+ * per-target `@lunora/platform-<target>` packages land.
  * An unregistered `target` is a configuration error, reported as
  * `platform_unknown_target` — and, crucially, the usage set is left untouched
  * so codegen never silently omits a surface against a matrix it does not have.
@@ -37,90 +38,159 @@
  * which is why `project-config.test.ts` keeps the relaxed assertion.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-
 import type { PlatformCapabilities } from "@lunora/platform";
-import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "@lunora/platform";
-import type { ParseError } from "jsonc-parser";
-import { parse as parseJsonc } from "jsonc-parser";
+import { CELLD_CAPABILITIES, CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "@lunora/platform";
+import type { StudioFeaturesResult } from "@lunora/shard-engine";
 
 import type { CapabilityKey } from "./capabilities";
 import type { FeatureUsage } from "./discover/feature-usage";
+import type { VectorIndexIR } from "./ir";
+import { readProjectConfigLiterals } from "./project-config-file";
 
 /** The default codegen target — today's behavior, byte-identical goldens. */
 const DEFAULT_TARGET = "cloudflare";
 
-/** The project-config file the target is declared in. Same file `@lunora/config` reads for `remote`. */
-const PROJECT_CONFIG_FILE = "lunora.json";
-
 /**
- * Read `target` from `<projectRoot>/lunora.json`.
+ * Read `target` from the project's `lunora.config.*`.
  *
- * This lives in `@lunora/codegen` rather than `@lunora/config` — where the rest
- * of the `lunora.json` reading lives — because `@lunora/config` depends on
- * `@lunora/codegen`, not the reverse. Putting it there and importing it here
- * would invert that edge, so config delegates to this instead and there is
- * still exactly one parser for the key.
- *
- * Best-effort and deliberately unvalidated: a missing file, malformed JSONC, or
- * a non-string value all collapse to `undefined`, because those are shape
- * errors rather than a name the user meant. An unrecognized *name* is returned
- * as-is so the caller's registry lookup rejects it — swallowing a typo into the
- * default would ship an app to the wrong provider.
- * @param projectRoot Directory containing `lunora.json`.
+ * Read as a LITERAL rather than by evaluating the config: `runCodegen` is
+ * synchronous and resolves the target inside itself, and `jiti`'s
+ * non-deprecated entry point is async — see `project-config-file`'s header.
+ * Best-effort and deliberately unvalidated: a missing file, a computed value, or
+ * a non-string one all collapse to `undefined`, because those are shape errors
+ * rather than a name the user meant. An unrecognized *name* is
+ * returned as-is so the caller's registry lookup rejects it — swallowing a typo
+ * into the default would ship an app to the wrong provider.
+ * @param projectRoot Directory containing `lunora.config.*`.
  * @returns the declared target, or `undefined` when none is usable.
  */
 const readProjectTarget = (projectRoot: string): string | undefined => {
-    const configPath = join(projectRoot, PROJECT_CONFIG_FILE);
+    const { target } = readProjectConfigLiterals(projectRoot);
 
-    if (!existsSync(configPath)) {
-        return undefined;
-    }
-
-    let text: string;
-
-    try {
-        text = readFileSync(configPath, "utf8");
-    } catch {
-        return undefined;
-    }
-
-    const parseErrors: ParseError[] = [];
-    const parsed: unknown = parseJsonc(text, parseErrors, { allowTrailingComma: true });
-
-    if (parseErrors.length > 0 || parsed === null || typeof parsed !== "object") {
-        return undefined;
-    }
-
-    const { target } = parsed as { target?: unknown };
-
-    return typeof target === "string" && target.length > 0 ? target : undefined;
+    return target !== undefined && target.length > 0 ? target : undefined;
 };
 
 /**
  * The target codegen should emit for: an explicit option wins, then
- * `lunora.json`, then the default.
+ * `lunora.config.*`, then the default.
  *
  * `runCodegen` applies this itself so a caller that forgets to pass a target
  * still emits the surface the project declared. That default matters more than
  * it looks: a call site that silently omits the target emits the *default*
  * surface with no diagnostic to notice, and the mismatch only shows up at
  * runtime on the deployed app.
- * @param projectRoot Directory containing `lunora.json`.
+ * @param projectRoot Directory containing `lunora.config.*`.
  * @param explicit A caller-supplied target, if any.
  * @returns the resolved target id — not guaranteed to be registered.
  */
 const resolveCodegenTarget = (projectRoot: string, explicit?: string): string => explicit ?? readProjectTarget(projectRoot) ?? DEFAULT_TARGET;
 
 /**
+ * The diagnostic for a `lunora.config.*` whose `target` the synchronous reader
+ * could not parse — a computed value, a getter, a spread, `module.exports`.
+ *
+ * Without it, "no `target` declared" and "a `target` I could not read" were the
+ * same silence, and both fell through to `cloudflare`: codegen emits the
+ * Cloudflare `ctx.*` surface and `lunora deploy` runs the wrangler toolchain for
+ * a project that asked for something else. A WARNING, not an error, because the
+ * config may legitimately declare no target at all and `--target` still wins —
+ * but a silent wrong provider is exactly what this stack refuses elsewhere.
+ *
+ * Skipped when the caller passed `--target`: the file's value is then moot.
+ */
+const readTargetDiagnostics = (projectRoot: string, explicit?: string): PlatformDiagnostic[] => {
+    if (explicit !== undefined) {
+        return [];
+    }
+
+    const { target, unreadable } = readProjectConfigLiterals(projectRoot);
+
+    if (unreadable !== true || target !== undefined) {
+        return [];
+    }
+
+    return [
+        {
+            level: "warn",
+            message: `lunora.config declares a \`target\` that codegen cannot read without evaluating it, so the "${DEFAULT_TARGET}" surface was emitted. \`runCodegen\` resolves the target synchronously, which means it reads literals only.`,
+            name: "platform_unreadable_target",
+            remediation: `Write \`target\` as a string literal on the config's default export (\`export default { target: "${DEFAULT_TARGET}" }\`), or pass \`--target\`.`,
+            target: DEFAULT_TARGET,
+        },
+    ];
+};
+
+/** Cloudflare Vectorize's per-index dimension range; `@lunora/ai/rag`'s `maxDimensions` is the same 1536. */
+const VECTORIZE_DIMENSIONS_RANGE = { max: 1536, min: 32 } as const;
+
+/**
+ * A vector index whose `dimensions` Cloudflare Vectorize would reject at index
+ * creation (`IndexInvalidConfig`), which otherwise first surfaces at deploy,
+ * after the Workers that depend on the index are already blocked.
+ *
+ * A warning, not an error: the schema does not say which store backs an index
+ * (`config.vectors(env)` does), and a `cloudflare` app can back it with
+ * pgvector, which accepts other widths. Silent off `cloudflare`: Vectorize is
+ * the only vector store a registered target backs, and the other targets
+ * already reject the index as `platform_unsupported_feature`.
+ */
+const vectorizeDimensionDiagnostics = (target: string, indexes: ReadonlyArray<Pick<VectorIndexIR, "dimensions" | "name">>): PlatformDiagnostic[] => {
+    if (target !== "cloudflare") {
+        return [];
+    }
+
+    const { max, min } = VECTORIZE_DIMENSIONS_RANGE;
+    const range = `${String(min)}-${String(max)}`;
+
+    return indexes
+        .filter(({ dimensions }) => dimensions !== undefined && (!Number.isInteger(dimensions) || dimensions < min || dimensions > max))
+        .map(({ dimensions, name }) => {
+            return {
+                level: "warn",
+                message: `Vector index "${name}" declares ${String(dimensions)} dimensions; Cloudflare Vectorize accepts ${range}, so creating a Vectorize index for it fails at deploy.`,
+                name: "platform_vector_dimensions_out_of_range",
+                remediation: `If a Vectorize index backs "${name}", use ${range} dimensions (many embedding models can truncate output to fit). Ignore this if another store, such as pgvector, backs it.`,
+                target,
+            };
+        });
+};
+
+/**
  * The capability matrices codegen can gate against, keyed by target id. One
  * entry per host package that ships a `PlatformCapabilities` — Cloudflare and
- * Node, both of which also ship a `@lunora/config` deploy driver.
+ * Node, plus celld (see `@lunora/platform-celld`); each also has a
+ * `@lunora/config` deploy driver.
  */
 const PLATFORM_MATRICES: Readonly<Record<string, PlatformCapabilities>> = {
+    celld: CELLD_CAPABILITIES,
     cloudflare: CLOUDFLARE_CAPABILITIES,
     node: NODE_CAPABILITIES,
+};
+
+/**
+ * Whether `target`'s matrix can serve `feature` at all, judged on the matrix
+ * alone rather than on the app's declarations.
+ *
+ * The signals pass answers "does the app declare it and can the host serve
+ * it", which is the right question for a declaration but the wrong one for a
+ * builder method: that method is emitted whether or not the app calls it, so a
+ * host that cannot back it must withhold it regardless. `false` for an
+ * undeclared rating (fail closed, as {@link gatePlatformFeatures} does), and
+ * `true` for an unregistered target, which is left un-gated.
+ * @param target The resolved codegen target id.
+ * @param feature The `PlatformCapabilities` feature to check.
+ * @returns whether the target's matrix rates the feature `native` or `emulated`.
+ */
+const platformFeatureAvailable = (target: string, feature: PlatformFeatureKey): boolean => {
+    const matrix = PLATFORM_MATRICES[target];
+
+    if (matrix === undefined) {
+        return true;
+    }
+
+    const level = matrix.features[feature]?.level;
+
+    return level === "native" || level === "emulated";
 };
 
 /**
@@ -152,8 +222,8 @@ type PlatformFeatureKey = keyof PlatformCapabilities["features"];
  * entry is **credential-based** (genuinely target-agnostic): it works
  * anywhere `fetch` works, given an API token, so it is never gated and
  * always emitted, on every target — feature flags (`flags`), the
- * Cloudflare-Access identity facade (`access`), payments (`payments`), and
- * x402 (`x402`). `r2sql` is deliberately unmapped for the same reason: the
+ * Cloudflare-Access identity facade (`access`) and payments (`payments`).
+ * `r2sql` is deliberately unmapped for the same reason: the
  * R2 SQL client is a plain HTTP client over an API token, not a binding.
  * `notify` is unmapped on the same criterion, and the contrast with `mail` —
  * which IS mapped — is what makes the line concrete: `@lunora/mail` holds a
@@ -183,6 +253,14 @@ type PlatformFeatureKey = keyof PlatformCapabilities["features"];
  * support. Gating the facade on the rating would drop a surface that still
  * functions.
  *
+ * `x402` maps to `secrets`, though the x402 protocol itself is plain `fetch`.
+ * The generated `ctx.x402` reads its wallet key through `ctx.secrets`
+ * (`getSecret: secrets.get`), so a target rating `secrets` unsupported would
+ * emit a rail whose raw-key and CDP custody fail on the first payment. Gating it
+ * there says so at build time instead. The `{ type: "signer" }` custody needs no
+ * secret and still works on such a target through `createX402Pay(config, deps)`
+ * called directly; it is only the codegen-wired `ctx.x402` that is withheld.
+ *
  * `shardAlarms` is deliberately unmapped here, and not because it was
  * forgotten: `CapabilityKey` is derived from `CAPABILITY_ROWS`, which
  * enumerates app-imported `ctx.*` add-on modules, and there is no such usage
@@ -196,7 +274,10 @@ const CAPABILITY_TO_FEATURE: Record<CapabilityKey, PlatformFeatureKey | null> = 
     // eslint-disable-next-line unicorn/no-null -- null is the classification "credential-based"; undefined would be indistinguishable from an unclassified key, which is what this map exists to prevent
     access: null,
     ai: "ai",
+    aiSearch: "aiSearch",
     analytics: "analytics",
+    analyticsSql: "analyticsSql",
+    artifacts: "artifacts",
     browser: "browser",
     container: "containers",
     // eslint-disable-next-line unicorn/no-null -- see `access`
@@ -216,8 +297,7 @@ const CAPABILITY_TO_FEATURE: Record<CapabilityKey, PlatformFeatureKey | null> = 
     storage: "objectStorage",
     vectors: "vectorStore",
     workflows: "workflows",
-    // eslint-disable-next-line unicorn/no-null -- see `access`
-    x402: null,
+    x402: "secrets",
 };
 
 /**
@@ -249,58 +329,125 @@ interface PlatformSignals {
     agents?: boolean;
     /** A `.commitOrdered()` table. */
     commitOrderedTables?: boolean;
+    /** A `defineContainer({ allowedHosts | deniedHosts | interceptHttps })` egress policy. */
+    containerEgressPolicy?: boolean;
+    /** A `defineContainer({ schedulingPolicy: "durable_object" })` — runtime image/size choice and snapshots. */
+    containerRuntimeScheduling?: boolean;
+    /** A `defineContainer({ sandbox: true })` — the Sandbox SDK file, backup and bucket-mount helpers. */
+    containerSandboxTools?: boolean;
     /** A `cronJobs()` registration. */
     cronTriggers?: boolean;
     /** A `.shardBy(...)` schema — clients can address non-default shards, so the coordinator can fan out across them. */
     crossShardFanout?: boolean;
+    /** A `.deliveryAuthorization(...)` call on the app builder. */
+    deliveryAuthorization?: boolean;
     /** A `.stream(handler, { durable: … })` registration. */
     durableStreams?: boolean;
     /** A `.global()` table. */
     globalTables?: boolean;
+    /** A `ctx.live` read in a handler. Judged against {@link PlatformGateResult.liveStreamsWithheld}, not a feature key of its own. */
+    liveContext?: boolean;
+    /** A `defineLiveStream` declaration: a topic SSE stream the shard serves. */
+    liveStreams?: boolean;
     /** A `defineQueue` declaration. */
     queues?: boolean;
+    /** At least one `v.id("target")` column — the schema declares a relation graph `ctx.db.related` can walk. */
+    relationGraph?: boolean;
     /** A `ctx.secrets` read. */
     secrets?: boolean;
+
+    /**
+     * A `requestSecretTool` import from `@lunora/agent` in `lunora/` — the agent
+     * tool that asks a human for a secret value and holds it for one step.
+     */
+    secretValues?: boolean;
+    /** A `lunora.config.*` `services` declaration (service bindings to sibling Workers). */
+    services?: boolean;
+    /** A `defineTopic` declaration. */
+    topics?: boolean;
+    /** A `defineWebSocket` route or `defineRoom` room — both ride hibernated shard sockets. */
+    typedWebSockets?: boolean;
     /** A `.vectorize()` / `defineVectorIndex` declaration in the schema. */
     vectorStore?: boolean;
+    /** A `jsCodeTool` import from `@lunora/agent` in `lunora/`. */
+    workerLoaders?: boolean;
+    /** A `defineStep({ rollback })` compensation. */
+    workflowRollback?: boolean;
+    /** A `defineWorkflow({ schedules })` cron list. */
+    workflowSchedules?: boolean;
 }
 
 /** The {@link PlatformSignals} keys, for the second gate loop. */
 const PLATFORM_SIGNAL_KEYS = [
     "agents",
     "commitOrderedTables",
+    "containerEgressPolicy",
+    "containerRuntimeScheduling",
+    "containerSandboxTools",
     "cronTriggers",
     "crossShardFanout",
+    "deliveryAuthorization",
     "durableStreams",
     "globalTables",
+    "liveStreams",
     "queues",
+    "relationGraph",
     "secrets",
+    "secretValues",
+    "services",
+    "topics",
+    "typedWebSockets",
     "vectorStore",
+    "workerLoaders",
+    "workflowRollback",
+    "workflowSchedules",
 ] as const;
 
 /** Human-readable name for each signal, for the diagnostic message. */
 const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = {
     agents: "durable agents (`defineAgent`)",
     commitOrderedTables: "commit-ordered tables (`.commitOrdered()`)",
+    containerEgressPolicy: "container egress policies (`defineContainer({ allowedHosts | deniedHosts | interceptHttps })`)",
+    containerRuntimeScheduling: 'per-instance container images and snapshots (`defineContainer({ schedulingPolicy: "durable_object" })`)',
+    containerSandboxTools: "container sandbox helpers — files, directory backups, bucket mounts (`defineContainer({ sandbox: true })`)",
+    deliveryAuthorization: "delivery authorization (`.deliveryAuthorization(...)` on the app builder)",
     cronTriggers: "declared cron triggers (`cronJobs()`)",
     crossShardFanout: "cross-shard fan-out queries (a `.shardBy(...)` schema)",
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
     globalTables: "global tables (`.global()`)",
+    liveContext: "the live publisher (`ctx.live`)",
+    liveStreams: "live topic streams (`defineLiveStream`)",
     queues: "queues (`defineQueue`)",
+    relationGraph: "relation-graph traversal (`ctx.db.related`, derived from `v.id(...)` columns)",
     secrets: "the secrets store (`ctx.secrets`)",
+    secretValues: "human-supplied secret values (`requestSecretTool`, held for one agent step)",
+    services: "service bindings to sibling Workers (`lunora.config` `services`)",
+    topics: "pub/sub topics (`defineTopic` / `defineSubscription`)",
+    typedWebSockets: "typed WebSocket routes and rooms (`defineWebSocket` / `defineRoom`)",
     vectorStore: "vector indexes (`.vectorize()`)",
+    workerLoaders: "sandboxed agent scripts (`jsCodeTool`, on Worker Loaders)",
+    workflowRollback: "workflow step rollback (`defineStep({ rollback })`)",
+    workflowSchedules: "scheduled workflow instances (`defineWorkflow({ schedules })`)",
 };
 
 /** An advisor-style diagnostic about a target's platform capabilities. */
 interface PlatformDiagnostic {
     /** The codegen capability this concerns, when it is feature-specific. */
     feature?: CapabilityKey;
-    /** Severity. All three names are errors — each drops or misdirects an emitted surface. */
+    /** Severity. Error when the emitted surface would be wrong; warn when codegen fell back to a default or can only suspect a deploy failure. */
     level: "error" | "warn";
     /** Human-readable explanation of the gap. */
     message: string;
-    /** The lint id: `platform_unsupported_feature`, `platform_undeclared_feature`, or `platform_unknown_target`. */
-    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unsupported_feature";
+    /** The lint id: one of the `platform_*` names in the union below. */
+    name:
+        | "platform_live_stream_delivery_authorization"
+        // eslint-disable-next-line no-secrets/no-secrets -- a diagnostic id, not a credential
+        | "platform_socket_delivery_authorization"
+        | "platform_undeclared_feature"
+        | "platform_unknown_target"
+        | "platform_unreadable_target"
+        | "platform_unsupported_feature"
+        | "platform_vector_dimensions_out_of_range";
     /** How to resolve it. */
     remediation: string;
     /** The requested deploy target. */
@@ -311,6 +458,15 @@ interface PlatformDiagnostic {
 interface PlatformGateResult {
     /** The diagnostics — empty for a fully-supported app on a known target. */
     diagnostics: PlatformDiagnostic[];
+
+    /**
+     * The target's matrix withholds live streams: it rates `liveStreams` `unsupported`, or
+     * not at all. Read by the emitter, which passes it to `createWorker` so the runtime
+     * omits `ctx.live` from the HTTP context. Unlike `signals.liveStreams`, it does not
+     * depend on the app declaring a `defineLiveStream`: the HTTP context has no such
+     * declaration to hang off. An unknown target is emitted un-gated, so it is not withheld.
+     */
+    liveStreamsWithheld: boolean;
 
     /**
      * A copy of the {@link PlatformSignals} input with every rejected signal
@@ -336,6 +492,53 @@ const unsupportedSignalDiagnostic = (key: keyof PlatformSignals, matrix: Platfor
         message: `${matrix.name} does not support ${PLATFORM_SIGNAL_LABELS[key]}, which this app declares.`,
         name: "platform_unsupported_feature",
         remediation: `Remove the declaration, or deploy to a target whose capability matrix marks "${key}" as native or emulated.`,
+        target,
+    };
+};
+
+/**
+ * The app reads `ctx.live` and the target withholds live streams, so the
+ * runtime never sets the publisher on the context: the read would throw a
+ * TypeError on first use. Refused here rather than left to fail at runtime.
+ */
+const liveContextWithheldDiagnostic = (matrix: PlatformCapabilities, target: string): PlatformDiagnostic => {
+    return {
+        level: "error",
+        message: `${matrix.name} withholds live streams, so ctx.live is not available on the "${target}" target, but this app reads ctx.live.`,
+        name: "platform_unsupported_feature",
+        remediation: `Remove the ctx.live usage, or deploy to a target whose capability matrix marks "liveStreams" as native or emulated.`,
+        target,
+    };
+};
+
+/**
+ * The app declares `defineLiveStream` topics AND `.deliveryAuthorization(...)`.
+ * The shard answers every `/_lunora/live/*` request 501 once delivery
+ * authorization is on, so the topics could never be served and `ctx.live.publish`
+ * would throw. Refused at build time on every target, not only the ones whose
+ * matrix withholds live streams.
+ */
+const liveStreamsDeliveryAuthorizationDiagnostic = (target: string): PlatformDiagnostic => {
+    return {
+        level: "error",
+        message: `This app declares defineLiveStream topics and enables delivery authorization. With delivery authorization on, the shard answers every /_lunora/live/* request with 501, so the live streams cannot be served.`,
+        name: "platform_live_stream_delivery_authorization",
+        remediation: `Remove the defineLiveStream declarations, or remove the .deliveryAuthorization(...) call. Live streams and delivery authorization cannot be combined.`,
+        target,
+    };
+};
+
+/**
+ * The app declares `defineWebSocket` routes AND `.deliveryAuthorization(...)`. The shard refuses a route's upgrade
+ * under delivery authorization (501), so the route could never be reached. Refused at build time on every target.
+ */
+const socketRoutesDeliveryAuthorizationDiagnostic = (target: string): PlatformDiagnostic => {
+    return {
+        level: "error",
+        message: `This app declares defineWebSocket routes and enables delivery authorization. With delivery authorization on, the shard answers every route upgrade with 501, so the routes cannot be served.`,
+        // eslint-disable-next-line no-secrets/no-secrets -- a diagnostic id, not a credential
+        name: "platform_socket_delivery_authorization",
+        remediation: `Remove the defineWebSocket declarations, or remove the .deliveryAuthorization(...) call. Socket routes and delivery authorization cannot be combined.`,
         target,
     };
 };
@@ -473,7 +676,14 @@ const gateAgainstMatrix = (usage: FeatureUsage, matrix: PlatformCapabilities, ta
     // output. Same fail-closed treatment of an undeclared rating as above.
     gateSignalPass({ diagnostics, gatedSignals, matrix, reported, signals, target });
 
-    return { diagnostics, signals: gatedSignals, usage: gated };
+    const liveLevel = matrix.features.liveStreams?.level;
+    const liveStreamsWithheld = liveLevel === undefined || liveLevel === "unsupported";
+
+    if (signals.liveContext === true && liveStreamsWithheld) {
+        diagnostics.push(liveContextWithheldDiagnostic(matrix, target));
+    }
+
+    return { diagnostics, liveStreamsWithheld, signals: gatedSignals, usage: gated };
 };
 
 /**
@@ -502,6 +712,7 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string, signals: Plat
                     target,
                 },
             ],
+            liveStreamsWithheld: false,
             signals: { ...signals },
             usage: { ...usage },
         };
@@ -510,14 +721,42 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string, signals: Plat
     return gateAgainstMatrix(usage, matrix, target, signals);
 };
 
+/**
+ * The target's identity plus the feature keys its matrix rates `unsupported`,
+ * for the generated `studioFeatures()` payload — how a separately-hosted studio
+ * learns which host it is talking to and which pages that host cannot serve.
+ * `undefined` for an unregistered target: there is no matrix to report, and
+ * the studio then gates on the usage flags alone, exactly as
+ * `gatePlatformFeatures` leaves the surface un-gated.
+ */
+const studioPlatformFor = (target: string): StudioFeaturesResult["platform"] => {
+    const matrix = PLATFORM_MATRICES[target];
+
+    if (matrix === undefined) {
+        return undefined;
+    }
+
+    const unsupported = Object.entries(matrix.features)
+        .filter(([, capability]) => capability.level === "unsupported")
+        .map(([key]) => key)
+        .toSorted((a, b) => a.localeCompare(b));
+
+    return { id: matrix.id, name: matrix.name, unsupported };
+};
+
 export type { PlatformDiagnostic, PlatformGateResult, PlatformSignals };
 export {
     CAPABILITY_TO_FEATURE,
     DEFAULT_TARGET,
     gateAgainstMatrix,
     gatePlatformFeatures,
+    liveStreamsDeliveryAuthorizationDiagnostic,
+    platformFeatureAvailable,
     platformMatrixIds,
-    PROJECT_CONFIG_FILE,
     readProjectTarget,
+    readTargetDiagnostics,
     resolveCodegenTarget,
+    socketRoutesDeliveryAuthorizationDiagnostic,
+    studioPlatformFor,
+    vectorizeDimensionDiagnostics,
 };

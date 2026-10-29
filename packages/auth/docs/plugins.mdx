@@ -9,8 +9,8 @@ The Lunora-specific surface is small on purpose:
 - `createAuth(options)`: `betterAuth(options)` with a clearer error when
   `secret` is missing.
 - `handleAuthRequest(auth, request)`: prefix routing for `/api/auth/*`.
-- `ensureMigrated(auth)` / `compileMigrationsSql(options)`: schema sync for
-  the configured plugins.
+- `createMigrationAuth(options)` / `ensureMigrated(auth)` / `compileMigrationsSql(options)`
+  (from `@lunora/auth/migrate`): schema sync for the configured plugins.
 - `withAuthPlugins(auth)`: middleware that mounts the plugin endpoint API
   onto `ctx.authApi`.
 
@@ -98,6 +98,35 @@ behaviour and the full option reference are better-auth's, linked per row.
 | `deviceAuthorization`                                         | OAuth 2.0 device grant for CLIs, TVs, and other input-constrained clients.                                                                                                                                                                                                                                                                                                                                        | [better-auth: device authorization](https://www.better-auth.com/docs/plugins/device-authorization) |
 | `oauthDeviceAuthorization`                                    | The device grant (RFC 8628) for third-party clients of the `oauthProvider` above. Split out of `oauthProvider` in better-auth 1.7, so a provider that does not want the device endpoints no longer serves them.                                                                                                                                                                                                   | [better-auth: OAuth provider](https://www.better-auth.com/docs/plugins/oauth-provider)             |
 | `mcp` / `requireMcpAuth` / `createMcpProtectedRequestHandler` | OAuth-protect a Model Context Protocol server. Pairs with [`@lunora/mcp`](/docs/packages/mcp), whose `createAuthedMcpFetchHandler` mounts a Lunora MCP server behind `requireMcpAuth`. `withMcpAuth` was renamed `requireMcpAuth` in better-auth 1.7; `createMcpProtectedRequestHandler` is the split-deployment form (a resource server with no auth instance) and replaced 1.7.0-rc's short-lived `mcpHandler`. | [better-auth: MCP](https://www.better-auth.com/docs/plugins/mcp)                                   |
+
+#### `iss` and `aud` of a `jwt` token
+
+A token minted by `jwt()` carries `iss` and `aud` equal to the `baseURL` you pass
+to `createAuth`, unless you set them. That is the _site_ URL of the app. When the
+app and the Lunora Worker are served from different origins, it is the app's
+origin, not the Worker's, so a verifier that pins `iss`/`aud` to the Worker
+origin rejects every token. A verifier that swallows the failure and falls back
+to the cookie, then to anonymous, makes the app look signed out with nothing
+logged.
+
+Set them explicitly to the value your verifier expects:
+
+```ts
+import { createAuth } from "@lunora/auth";
+import { jwt } from "@lunora/auth/plugins";
+
+createAuth({
+    baseURL: env.AUTH_URL,
+    plugins: [jwt({ jwt: { issuer: WORKER_ORIGIN, audience: WORKER_ORIGIN } })],
+    secret: env.AUTH_SECRET,
+});
+```
+
+A local setup where the app and the Worker share one origin (or where a dynamic
+`baseURL: { allowedHosts }` follows the request host) yields matching values by
+coincidence, so `lunora dev` may not reproduce a mismatch that appears once
+deployed. When verifying with a library such as `jose`, log the error's `code`
+(for example `ERR_JWT_CLAIM_VALIDATION_FAILED`) on failure, never the token.
 
 ### Abuse protection
 
@@ -307,12 +336,18 @@ who guesses an address holding a session immediately and holding none.
 ### What it refuses that you may not expect
 
 Plugins that mint an account from something other than a real mailbox still
-synthesize an address — `anonymous` writes `temp-<id>@<domain>`, `siwe` writes
-`<wallet>@<domain>`, and `phoneNumber`'s sign-up-on-verification writes a temp
-address of its own. None of them can match an invitation, so the gate **rejects**
-those flows — but only once a user exists. Under `allowFirstUser: true` the
-bootstrap runs before the address is ever compared, so the first anonymous session
-or wallet sign-in is what claims it. Do not combine those plugins with this one.
+synthesize an address — `siwe` writes `<wallet>@<domain>`, and `phoneNumber`'s
+sign-up-on-verification writes a temp address of its own. Neither can match an
+invitation, so the gate **rejects** those flows — but only once a user exists.
+Under `allowFirstUser: true` the bootstrap runs before the address is ever
+compared, so the first wallet sign-in is what claims it. Do not combine those
+plugins with this one.
+
+`anonymous` is the one carve-out, because anonymous sign-in is not registration.
+Its throwaway identity is admitted, and converting it into a real account is
+gated like any other sign-up — better-auth creates a second, non-anonymous row
+for that, and the gate sees it. Installing both gives you "browse anonymously,
+invitation required to keep an account".
 
 Lunora's `AuthAdmin.createUser` — the studio's create-user action — mints through
 the same internal adapter, so it is gated too. Issue an invitation first, or call
@@ -406,13 +441,6 @@ export const submit = mutation.input({ message: v.string(), turnstileToken: v.st
     /* args.message has passed the Turnstile check */
 });
 ```
-
-<Callout type="warn">
-    **`verifyTurnstileMiddleware`'s `token` selector cannot read the args.** A `.use()` middleware is handed only the context, and the builder never places the
-    parsed `args` onto it — so `token: (ctx) => ctx.turnstileToken` does not type-check, and cast past it reads `undefined` and the middleware throws
-    `FORBIDDEN "turnstile token missing"` on **every** submission. The selector is usable only for a token an earlier `.use()` already put on the context. For a
-    token that arrives in the args, use the in-handler `verifyTurnstile` call above.
-</Callout>
 
 <Callout type="warn">
     **Use the `captcha` plugin for the auth flow.** It hooks better-auth's pipeline and reads the token from the `x-captcha-response` header. The standalone
@@ -512,7 +540,7 @@ The transport that has the real headers forwards what the endpoint needs:
 // lunora/http.ts
 import { httpAction, httpRouter } from "lunorash/server";
 
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/internal";
 
 export const app = httpRouter();
 
@@ -558,7 +586,8 @@ migration-only instance for it; the adapter stays on the one serving requests:
 
 ```ts
 // src/server/index.ts
-import { createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { handleAuthRequest } from "@lunora/auth";
+import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";
 
 import { buildAuth } from "../../lunora/auth.js";
 
@@ -573,7 +602,7 @@ export default {
     async fetch(request, env, ctx) {
         const auth = buildAuth(env);
 
-        migrated ??= ensureMigrated(createAuth({ ...authOptions, database: env.DB, secret: env.AUTH_SECRET })).catch((error) => {
+        migrated ??= ensureMigrated(createMigrationAuth({ ...authOptions, database: env.DB, secret: env.AUTH_SECRET })).catch((error) => {
             migrated = null;
             throw error;
         });
@@ -596,7 +625,7 @@ you get the full schema, with no Cloudflare binding involved:
 ```bash
 node -e "
 import('node:sqlite').then(async ({ DatabaseSync }) => {
-    const { compileMigrationsSql } = await import('@lunora/auth');
+    const { compileMigrationsSql } = await import('@lunora/auth/migrate');
     const sql = await compileMigrationsSql({
         database: new DatabaseSync(':memory:'), // empty ⇒ emits the whole schema
         secret: 'placeholder',

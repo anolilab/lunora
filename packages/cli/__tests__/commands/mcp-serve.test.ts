@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { LocalMcpServerOptions } from "@lunora/mcp";
+import type { FunctionMcpServerOptions, LocalMcpServerOptions } from "@lunora/mcp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { devTools, MAX_LOG_LINES } from "../../src/commands/mcp/dev-tools";
@@ -158,6 +158,265 @@ describe("lunora mcp serve", () => {
             recordDevServer();
 
             expect((passed?.deployment as () => unknown)()).toStrictEqual({ url: "http://localhost:8787" });
+        });
+
+        it("--functions starts before the document exists, with no functions, and says how to create it", async () => {
+            expect.assertions(3);
+
+            const written: string[] = [];
+            const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(selfClosingServer);
+
+            const { code } = await runMcpServe(
+                { cwd: workdir, functions: true, url: "http://localhost:8787", version: "1.0.0", writeError: (message) => written.push(message) },
+                undefined,
+                connect,
+            );
+
+            expect(code).toBe(0);
+            expect(written.join("")).toContain("lunora codegen --api-spec openrpc");
+            expect((connect.mock.calls[0]?.[0].openRpcSpec as () => unknown)()).toStrictEqual({ methods: [], openrpc: "1.3.2" });
+        });
+
+        it("--functions reports a document that exists but does not parse, once, and keeps serving no functions", async () => {
+            expect.assertions(3);
+
+            const specPath = join(workdir, "lunora", "_generated", "openrpc.json");
+            mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+            writeFileSync(specPath, "{ not json", "utf8");
+
+            const written: string[] = [];
+            const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(selfClosingServer);
+
+            await runMcpServe(
+                { cwd: workdir, functions: true, url: "http://localhost:8787", version: "1.0.0", writeError: (message) => written.push(message) },
+                undefined,
+                connect,
+            );
+
+            const openRpcSpec = connect.mock.calls[0]?.[0].openRpcSpec as () => unknown;
+
+            expect(openRpcSpec()).toStrictEqual({ methods: [], openrpc: "1.3.2" });
+            expect(openRpcSpec()).toStrictEqual({ methods: [], openrpc: "1.3.2" });
+            expect(written.filter((message) => message.includes("did not load"))).toHaveLength(1);
+        });
+
+        it("--functions starts before lunora dev is running, and finds the deployment on a later call", async () => {
+            expect.assertions(3);
+
+            mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "_generated", "openrpc.json"), JSON.stringify({ methods: [] }), "utf8");
+            const written: string[] = [];
+            const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(selfClosingServer);
+
+            const { code } = await runMcpServe(
+                { cwd: workdir, functions: true, version: "1.0.0", writeError: (message) => written.push(message) },
+                undefined,
+                connect,
+            );
+
+            expect(code).toBe(0);
+            expect(written.join("")).toContain("no deployment yet");
+
+            recordDevServer({ url: "http://localhost:8790" });
+
+            expect((connect.mock.calls[0]?.[0].url as () => string | undefined)()).toBe("http://localhost:8790");
+        });
+
+        it("--functions serves the caller's token only, never the project's admin token", async () => {
+            expect.assertions(3);
+
+            vi.stubEnv("LUNORA_ADMIN_TOKEN", "admin-from-env");
+            mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "_generated", "openrpc.json"), JSON.stringify({ methods: [] }), "utf8");
+            const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(selfClosingServer);
+
+            const { code } = await runMcpServe(
+                { cwd: workdir, functions: true, url: "http://localhost:8787", version: "1.0.0", writeError: () => undefined },
+                undefined,
+                connect,
+            );
+
+            expect(code).toBe(0);
+            expect((connect.mock.calls[0]?.[0].openRpcSpec as () => unknown)()).toStrictEqual({ methods: [] });
+            expect(connect.mock.calls[0]?.[0]).not.toHaveProperty("token");
+        });
+
+        it("--functions announces each rewrite of the OpenRPC document, and serves the rewritten one", async () => {
+            expect.assertions(3);
+
+            const specPath = join(workdir, "lunora", "_generated", "openrpc.json");
+            mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+            writeFileSync(specPath, JSON.stringify({ methods: [] }), "utf8");
+
+            let markReady: () => void = () => undefined;
+            const ready = new Promise<void>((resolve) => {
+                markReady = resolve;
+            });
+            let announce: () => void = () => undefined;
+            const announced = new Promise<void>((resolve) => {
+                announce = resolve;
+            });
+            let closeServer: () => void = () => undefined;
+            const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(async () => {
+                const server: ClosableServer = {
+                    sendToolListChanged: async () => {
+                        announce();
+                    },
+                };
+
+                Object.defineProperty(server, "onclose", {
+                    set(handler: () => void) {
+                        closeServer = handler;
+                    },
+                });
+
+                return server;
+            });
+
+            const serving = runMcpServe(
+                {
+                    cwd: workdir,
+                    functions: true,
+                    url: "http://localhost:8787",
+                    version: "1.0.0",
+                    writeError: (message) => {
+                        if (message.includes("ready")) {
+                            markReady();
+                        }
+                    },
+                },
+                undefined,
+                connect,
+            );
+
+            // The watcher is set up right after the ready line, so a rewrite past it is seen.
+            await ready;
+            writeFileSync(specPath, JSON.stringify({ methods: [{ name: "notes:list" }] }), "utf8");
+            await announced;
+
+            expect((connect.mock.calls[0]?.[0].openRpcSpec as () => unknown)()).toStrictEqual({ methods: [{ name: "notes:list" }] });
+
+            closeServer();
+
+            await expect(serving).resolves.toStrictEqual({ code: 0, deployment: undefined });
+            expect(connect).toHaveBeenCalledTimes(1);
+        });
+
+        it("--functions announces the document when codegen creates it on a fresh checkout, with no lunora directory yet", async () => {
+            expect.assertions(2);
+
+            const specPath = join(workdir, "lunora", "_generated", "openrpc.json");
+
+            let markReady: () => void = () => undefined;
+            const ready = new Promise<void>((resolve) => {
+                markReady = resolve;
+            });
+            let announce: () => void = () => undefined;
+            const announced = new Promise<void>((resolve) => {
+                announce = resolve;
+            });
+            let closeServer: () => void = () => undefined;
+            const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(async () => {
+                const server: ClosableServer = {
+                    sendToolListChanged: async () => {
+                        announce();
+                    },
+                };
+
+                Object.defineProperty(server, "onclose", {
+                    set(handler: () => void) {
+                        closeServer = handler;
+                    },
+                });
+
+                return server;
+            });
+
+            const serving = runMcpServe(
+                {
+                    cwd: workdir,
+                    functions: true,
+                    url: "http://localhost:8787",
+                    version: "1.0.0",
+                    writeError: (message) => {
+                        if (message.includes("ready")) {
+                            markReady();
+                        }
+                    },
+                },
+                undefined,
+                connect,
+            );
+
+            await ready;
+            mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+            writeFileSync(specPath, JSON.stringify({ methods: [{ name: "notes:list" }] }), "utf8");
+            await announced;
+
+            expect((connect.mock.calls[0]?.[0].openRpcSpec as () => unknown)()).toStrictEqual({ methods: [{ name: "notes:list" }] });
+
+            closeServer();
+
+            await expect(serving).resolves.toStrictEqual({ code: 0, deployment: undefined });
+        });
+
+        it("--functions stops offering the functions of a document that codegen removed", async () => {
+            expect.assertions(2);
+
+            const specPath = join(workdir, "lunora", "_generated", "openrpc.json");
+            mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+            writeFileSync(specPath, JSON.stringify({ methods: [{ name: "notes:list" }] }), "utf8");
+
+            let markReady: () => void = () => undefined;
+            const ready = new Promise<void>((resolve) => {
+                markReady = resolve;
+            });
+            let announce: () => void = () => undefined;
+            const announced = new Promise<void>((resolve) => {
+                announce = resolve;
+            });
+            let closeServer: () => void = () => undefined;
+            const connect = vi.fn<(options: FunctionMcpServerOptions) => Promise<ClosableServer>>(async () => {
+                const server: ClosableServer = {
+                    sendToolListChanged: async () => {
+                        announce();
+                    },
+                };
+
+                Object.defineProperty(server, "onclose", {
+                    set(handler: () => void) {
+                        closeServer = handler;
+                    },
+                });
+
+                return server;
+            });
+
+            const serving = runMcpServe(
+                {
+                    cwd: workdir,
+                    functions: true,
+                    url: "http://localhost:8787",
+                    version: "1.0.0",
+                    writeError: (message) => {
+                        if (message.includes("ready")) {
+                            markReady();
+                        }
+                    },
+                },
+                undefined,
+                connect,
+            );
+
+            await ready;
+            rmSync(specPath);
+            await announced;
+
+            expect((connect.mock.calls[0]?.[0].openRpcSpec as () => unknown)()).toStrictEqual({ methods: [], openrpc: "1.3.2" });
+
+            closeServer();
+
+            await expect(serving).resolves.toStrictEqual({ code: 0, deployment: undefined });
         });
 
         it("is read-only unless --allow-writes is passed", async () => {

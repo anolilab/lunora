@@ -8,29 +8,57 @@
  * template literal cannot be unit-tested — it is only ever typechecked after
  * generation, so a wrong header name or a mis-built URL compiles cleanly and fails in
  * production. Here it is ordinary code with ordinary tests, and codegen emits a call.
- * @experimental
  */
 /* eslint-disable unicorn/no-null -- `resolveIdentity` is a runtime contract that returns `null` for an anonymous request; `undefined` would be a different signal */
+import { LunoraError } from "@lunora/errors";
+
 import type { AuthAuditEntry, AuthAuditReader } from "./audit";
 import { INTERNAL_SECRET_HEADER, READ_AUDIT_PATH, RESOLVE_SESSION_PATH } from "./auth-do";
+import { isDiscoveryRequest, unlessNotFound } from "./discovery";
 import { DEFAULT_AUTH_BASE_PATH, isAuthRoutePath } from "./handler";
+import type { AuthJurisdictionMove } from "./jurisdiction-move";
+import { createAuthJurisdictionMove, MOVE_PATH } from "./jurisdiction-move";
 
 /** The slice of a Durable Object namespace this needs — structural, so tests need no runtime. */
+/* eslint-disable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type -- bivariant params (a real `DurableObjectNamespace.get` takes a `DurableObjectId`, not `unknown`), and `this: void` is the `allowAsThisParameter` case the repo config does not enable */
 export interface AuthNamespaceLike {
-    get: (id: unknown) => { fetch: (request: Request) => Promise<Response> };
-    idFromName: (name: string) => unknown;
+    get(this: void, id: unknown): { fetch: (request: Request) => Promise<Response> };
+    idFromName(this: void, name: string): unknown;
+    /** Jurisdiction-restricted subnamespace. Optional only so older binding types still fit; {@link createDoAuthWiring} fails closed without it when a jurisdiction is set. */
+    jurisdiction?(this: void, jurisdiction: AuthJurisdiction): AuthNamespaceLike;
 }
+/* eslint-enable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type */
+
+/**
+ * Cloudflare Durable Object data-residency jurisdiction. Widening union —
+ * Cloudflare adds values over time.
+ */
+export type AuthJurisdiction = "eu" | "fedramp" | "us";
 
 /** What {@link createDoAuthWiring} needs, already resolved against `env`. */
 export interface DoAuthWiringOptions {
-    /** Base path the auth routes are served under. Defaults to `/api/auth`. */
-    basePath?: string;
+    /**
+     * The OAuth discovery paths the object serves outside `/api/auth` —
+     * `authDiscoveryPaths(options)` over the same auth options the object builds.
+     * Derived in the worker so a probe of any other path never costs a round-trip
+     * to the object. Empty or absent: nothing is forwarded.
+     */
+    discoveryPaths?: ReadonlyArray<string>;
 
     /**
      * Shared secret presented on the object's internal session route. `undefined`
      * means identity resolution fails closed — see {@link DoAuthWiring.resolveIdentity}.
      */
     internalSecret: string | undefined;
+
+    /**
+     * Pin the auth object to a data-residency jurisdiction — pass the worker's
+     * `jurisdiction`. The object holds users, sessions, and credentials, so it must
+     * live where the rest of the app's data does. The same name maps to a different
+     * object per jurisdiction, so toggling this on an existing deployment starts a
+     * fresh, empty auth object.
+     */
+    jurisdiction?: AuthJurisdiction;
 
     /** The bound namespace, or `undefined` when the binding is absent from `env`. */
     namespace: AuthNamespaceLike | undefined;
@@ -55,8 +83,29 @@ export interface DoAuthWiring {
      */
     auditReader: AuthAuditReader;
 
-    /** Forwards `/api/auth/*` to the object; `undefined` for anything else. */
+    /**
+     * Forwards `/api/auth/*` to the object; `undefined` for anything else.
+     *
+     * The base path is fixed. It was configurable on both halves of DO-backed auth
+     * and settable on neither: codegen's `AuthDeclaration` has no field for it, so
+     * the emitted `createDoAuthWiring(...)` never passed one and an `AuthDO`
+     * subclass that set its own served nothing.
+     */
     authHandler: (request: Request) => Promise<Response | undefined>;
+
+    /**
+     * Forwards a `GET`/`HEAD` for one of {@link DoAuthWiringOptions.discoveryPaths}
+     * to the object; `undefined` for anything else, and for the object's 404. The
+     * worker calls it only after the app's own routes missed.
+     */
+    discoveryHandler: (request: Request) => Promise<Response | undefined>;
+
+    /**
+     * Copy the auth tables from the un-pinned object into the pinned one, and later
+     * purge the un-pinned copy. Present only when a `jurisdiction` is set. Backs the
+     * worker's `copyAuthToJurisdiction` and `purgeUnpinnedAuth` admin ops.
+     */
+    jurisdictionMove?: AuthJurisdictionMove;
 
     /**
      * Resolves a request's identity by asking the object. `null` when anonymous,
@@ -77,12 +126,29 @@ export interface DoAuthWiring {
  * Every failure path answers "not authenticated" rather than throwing: this runs on
  * the request path for every request that touches `ctx.auth`, and a throw there would
  * turn a misconfiguration into a 500 on traffic that has nothing to do with auth.
+ * The exception is a `jurisdiction` the namespace cannot express, which throws here.
  * @param options The resolved namespace, secret, and names.
  * @returns The `authHandler` / `resolveIdentity` pair.
- * @experimental
  */
 export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring => {
-    const { basePath = DEFAULT_AUTH_BASE_PATH, internalSecret, namespace, objectName = "auth" } = options;
+    const { internalSecret, jurisdiction, objectName = "auth" } = options;
+    const discoveryPaths: ReadonlySet<string> = new Set(options.discoveryPaths);
+    const unpinned = options.namespace;
+    let { namespace } = options;
+
+    // The one throw here, and deliberately at construction: a residency pin that
+    // cannot be honoured is a deployment bug. Degrading to "not authenticated"
+    // would hide it, and falling back to the unrestricted namespace would put the
+    // auth tables outside the jurisdiction the app declared.
+    if (namespace && jurisdiction !== undefined) {
+        if (typeof namespace.jurisdiction !== "function") {
+            throw new TypeError(
+                `@lunora/auth: Durable Object namespace does not support jurisdiction("${jurisdiction}") — update @cloudflare/workers-types or remove the jurisdiction option`,
+            );
+        }
+
+        namespace = namespace.jurisdiction(jurisdiction);
+    }
 
     /** The object's stub, or `undefined` when the binding is missing. */
     const stub = (): undefined | { fetch: (request: Request) => Promise<Response> } => {
@@ -119,7 +185,32 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
         return response.ok ? response : undefined;
     };
 
+    // Only a pinned object has an un-pinned twin to copy from.
+    const pinned = namespace;
+    const jurisdictionMove =
+        unpinned && pinned && jurisdiction !== undefined
+            ? createAuthJurisdictionMove(async (side, body) => {
+                  if (!internalSecret) {
+                      throw new LunoraError(
+                          "AUTH_MOVE_NOT_CONFIGURED",
+                          "copying the auth object needs its internal secret; set the auth object's `internalSecret`",
+                      );
+                  }
+
+                  const from = side === "source" ? unpinned : pinned;
+
+                  return from.get(from.idFromName(objectName)).fetch(
+                      new Request(new URL(MOVE_PATH, "https://auth-do.invalid"), {
+                          body: JSON.stringify(body),
+                          headers: { "content-type": "application/json", [INTERNAL_SECRET_HEADER]: internalSecret },
+                          method: "POST",
+                      }),
+                  );
+              })
+            : undefined;
+
     return {
+        ...(jurisdictionMove === undefined ? {} : { jurisdictionMove }),
         auditReader: {
             read: async (readOptions) => {
                 // No request in scope here (the studio calls this out of band), so the
@@ -138,11 +229,18 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
         authHandler: async (request) => {
             // Only auth routes go to the object; everything else falls through to the
             // Lunora worker exactly as it does in D1 mode.
-            if (!isAuthRoutePath(new URL(request.url).pathname, basePath)) {
+            if (!isAuthRoutePath(new URL(request.url).pathname, DEFAULT_AUTH_BASE_PATH)) {
                 return undefined;
             }
 
             return stub()?.fetch(request);
+        },
+        discoveryHandler: async (request) => {
+            if (!isDiscoveryRequest(request, discoveryPaths)) {
+                return undefined;
+            }
+
+            return unlessNotFound(await stub()?.fetch(request));
         },
         resolveIdentity: async (request) => {
             // Fail closed on a missing secret. The object would refuse the call anyway;

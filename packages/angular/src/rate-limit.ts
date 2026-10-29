@@ -134,6 +134,3 @@ export const rateLimit = (config: RateLimitConfig, options: RateLimitOptions = {
         retryAfter: computed(() => status().retryAfter),
     };
 };
-
-// Re-export types so consumers can import everything from this module.
-export type { RateLimitConfig, RateLimitStatus, RateLimitValue } from "@lunora/ratelimit";

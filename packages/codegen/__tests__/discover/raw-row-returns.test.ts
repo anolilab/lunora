@@ -54,6 +54,18 @@ describe("discoverRawRowReturns", () => {
         expect(rowFor("getUser")).toMatchObject({ table: "users", visibility: "public" });
     });
 
+    it("records a findUnique read, like every other row-returning read", () => {
+        expect.assertions(1);
+
+        // A read method absent from `ROW_READ_METHODS` is INVISIBLE here, so a
+        // public procedure returning it escapes the mask-leak diagnostic that
+        // catches the identical `findFirst` call. Adding one to the facade means
+        // adding it to the registry in the same change.
+        write("unique.ts", `export const getBySlug = query(async ({ args, ctx }) => ctx.db.users.findUnique({ where: { slug: args.slug } }));`);
+
+        expect(rowFor("getBySlug")).toMatchObject({ table: "users", visibility: "public" });
+    });
+
     it("records a fluent ctx.db.query(...).collect() chain", () => {
         expect.assertions(1);
 
@@ -158,7 +170,7 @@ describe("discoverRawRowReturns", () => {
     it("records an empty table for a by-id get whose table isn't a string literal", () => {
         expect.assertions(1);
 
-        write("byid.ts", `export const getById = query(async ({ args, ctx }) => ctx.db.get(args.id));`);
+        write("byid.ts", `export const getById = query(async ({ args, ctx }) => ctx.db.get(args.table, args.id));`);
 
         expect(rowFor("getById")).toMatchObject({ table: "" });
     });

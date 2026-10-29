@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { LunoraError } from "../src/errors";
 import type { ExportFanOutRequest, FanOutRequest, MigrationFanOutRequest, RankFanOutRequest, ShardRegistry } from "../src/query-coordinator";
-import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
+import { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 interface ShardCall {
@@ -57,6 +57,47 @@ const buildRequest = (overrides: Partial<FanOutRequest> = {}): FanOutRequest => 
         ...overrides,
     };
 };
+
+describe("createDefaultShardRegistry", () => {
+    it("answers a root or undeclared table with the default shard itself", async () => {
+        expect.assertions(2);
+
+        const registry = createDefaultShardRegistry((table) => (table === "users" ? { mode: { kind: "root" } } : undefined), "__root__");
+
+        // Named outright: fan-out and rank have no empty-list fallback, so `[]`
+        // would reach no shard at all.
+        expect([...(await registry.listShardKeys("users"))]).toStrictEqual(["__root__"]);
+        expect([...(await registry.listShardKeys("unknown"))]).toStrictEqual(["__root__"]);
+    });
+
+    it("answers a .global() table with no shards, since it lives in D1", async () => {
+        expect.assertions(1);
+
+        const registry = createDefaultShardRegistry(() => {
+            return { mode: { kind: "global" } };
+        }, "__root__");
+
+        expect([...(await registry.listShardKeys("settings"))]).toStrictEqual([]);
+    });
+
+    it("refuses a .shardBy() table instead of covering the default shard alone", () => {
+        expect.assertions(1);
+
+        const registry = createDefaultShardRegistry(() => {
+            return { mode: { field: "channelId", kind: "shardBy" } };
+        }, "__root__");
+
+        expect(() => registry.listShardKeys("messages")).toThrow(/"messages": it is `\.shardBy\(\)` and the worker has no shard registry/u);
+    });
+
+    it("refuses every table when the worker cannot tell sharded from root", () => {
+        expect.assertions(1);
+
+        const registry = createDefaultShardRegistry(undefined, "__root__");
+
+        expect(() => registry.listShardKeys("users")).toThrow(/no `resolveTableSharding`/u);
+    });
+});
 
 describe("createStaticShardRegistry", () => {
     it("returns the configured keys for a known table", async () => {
@@ -219,6 +260,54 @@ describe("merge strategies", () => {
         );
 
         expect(result.data).toEqual([{ x: 1 }, { x: 2 }]);
+    });
+
+    it("topK — k close to N returns the same rows as a stable full sort", async () => {
+        expect.assertions(1);
+
+        const registry = createStaticShardRegistry({ messages: ["a"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        // Heavy ties (score repeats every 37 rows) so tie order is exercised too.
+        const input = Array.from({ length: 2000 }, (_, i) => {
+            return { id: String(i), score: (i * 7) % 37 };
+        });
+        const expected = input.toSorted((a, b) => b.score - a.score).slice(0, 1900);
+
+        const spy = createShardSpy(() => json(input));
+
+        const result = await coordinator.fanOut(
+            spy.namespace,
+            buildRequest({
+                fanOut: { merge: { by: "score", k: 1900, kind: "topK" }, table: "messages" },
+            }),
+        );
+
+        expect(result.data).toEqual(expected);
+    });
+
+    it("topK — ascending-score input with mid-size k matches a stable full sort", async () => {
+        expect.assertions(1);
+
+        const registry = createStaticShardRegistry({ messages: ["a", "b"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const ascending = Array.from({ length: 1000 }, (_, i) => {
+            return { id: String(i), score: Math.floor(i / 3) };
+        });
+        const shards: Record<string, unknown[]> = { a: ascending.slice(0, 500), b: ascending.slice(500) };
+        const expected = ascending.toSorted((a, b) => a.score - b.score).slice(0, 300);
+
+        const spy = createShardSpy((shardKey) => json(shards[shardKey] ?? []));
+
+        const result = await coordinator.fanOut(
+            spy.namespace,
+            buildRequest({
+                fanOut: { merge: { by: "score", direction: "asc", k: 300, kind: "topK" }, table: "messages" },
+            }),
+        );
+
+        expect(result.data).toEqual(expected);
     });
 
     it("topK — orders rows with missing/non-numeric `by` field deterministically (no NaN comparator)", async () => {
@@ -385,6 +474,26 @@ describe("error handling", () => {
         const spy = createShardSpy(() => {
             throw new LunoraError("row not found", { code: "NOT_FOUND", status: 404 });
         });
+
+        const result = await coordinator.fanOut(spy.namespace, buildRequest());
+
+        expect(result.errors[0]?.code).toBe("NOT_FOUND");
+        expect(result.errors[0]?.message).toContain("row not found");
+    });
+
+    it("echoes a catalogued LunoraError code from a shard's non-2xx response", async () => {
+        expect.assertions(2);
+
+        const registry = createStaticShardRegistry({ messages: ["a"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        // A `LunoraError` with a non-500 status leaves the shard as a non-2xx
+        // `{ error: { code, message } }` envelope rather than as a throw this
+        // coordinator catches — the same catalogued verdict, reached by the other
+        // half of the shard's error path. `ShardError.code` documents itself as
+        // carrying "a shard's own `LunoraError` code when it had one", and read
+        // off the status alone this half carried none of them.
+        const spy = createShardSpy(() => Response.json({ error: { code: "NOT_FOUND", message: "row not found" } }, { status: 404 }));
 
         const result = await coordinator.fanOut(spy.namespace, buildRequest());
 

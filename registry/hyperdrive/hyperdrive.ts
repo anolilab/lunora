@@ -10,7 +10,7 @@
  *   import postgres from "postgres";
  *
  *   const { connectionString } = createHyperdrive(env.HYPERDRIVE);
- *   const sql = fromPostgresJs(postgres(connectionString));
+ *   const sql = fromPostgresJs(postgres(connectionString, { fetch_types: false, max: 5 }));
  *   const rows = await sql.query("select id, name from users where org = $1", [orgId]);
  *
  * `fromPostgresJs` / `fromNodePg` / `fromMysql2` all return a `SqlClient`, whose
@@ -40,19 +40,31 @@
  *
  * Action-only (non-deterministic external I/O).
  */
-import { env } from "cloudflare:workers";
+import { env as workerEnv } from "cloudflare:workers";
 import postgres from "postgres";
 
 import type { HyperdriveLike, SqlClient } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import { internalAction, v } from "#lunora/_generated/server.js";
+import type { CloudflareBindings } from "#lunora/_generated/server.js";
+
+/**
+ * The Worker's bindings, narrowed so they can be looked up by name.
+ *
+ * `cloudflare:workers` types `env` as `Cloudflare.Env`, which
+ * `@cloudflare/workers-types` declares EMPTY until the project runs
+ * `wrangler types` — so reading `env["HYPERDRIVE"]` off it is a `tsc` error in a
+ * fresh scaffold. The generated `CloudflareBindings` keeps the lookup open and
+ * the value `unknown`, so the binding is still narrowed below.
+ */
+const env = workerEnv as CloudflareBindings;
 
 /**
  * Build the driver-agnostic `SqlClient` for this request. Swap `fromPostgresJs`
  * for `fromNodePg` / `fromMysql2` (and the matching driver import) to change
  * drivers — the `SqlClient` surface is identical.
  *
- * `cloudflare:workers`' `env` values are typed `unknown`, so the binding is
+ * `CloudflareBindings` values are typed `unknown`, so the binding is
  * narrowed here and fails with a clear message when it is missing rather than
  * throwing somewhere inside the driver.
  */
@@ -65,7 +77,7 @@ const connect = (): SqlClient => {
 
     const { connectionString } = createHyperdrive(binding);
 
-    return fromPostgresJs(postgres(connectionString));
+    return fromPostgresJs(postgres(connectionString, { fetch_types: false, max: 5 }));
 };
 
 /**

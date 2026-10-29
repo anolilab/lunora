@@ -82,23 +82,35 @@ describe("wranglerToAlchemy", () => {
         // these into `wrangler.jsonc` itself.
         const { unsupported } = wranglerToAlchemy({
             ...BASE,
+            ai_search: [{ binding: "BLOG_SEARCH", instance_name: "blog" }],
+            ai_search_namespaces: [{ binding: "AI_SEARCH", namespace: "default" }],
+            analytics: { binding: "ANALYTICS_SQL" },
+            artifacts: [{ binding: "ARTIFACTS", namespace: "default" }],
             assets: { directory: "./public" },
             flagship: [{ app_id: "app-abc", binding: "FLAGS" }],
+            k2: [{ binding: "EVENTS", stream: "events" }],
             queues: { consumers: [{ queue: "jobs" }], producers: [{ binding: "JOBS", queue: "jobs" }] },
             secrets_store_secrets: [{ binding: "WALLET_KEY", secret_name: "wallet", store_id: "store-1" }],
             send_email: [{ name: "MAILER" }],
             services: [{ binding: "AUTH", service: "auth-worker" }],
             tail_consumers: [{ service: "logs-worker" }],
+            worker_loaders: [{ binding: "LOADER" }],
         } as WranglerConfigShape);
 
         expect(unsupported.toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "ai_search",
+            "ai_search_namespaces",
+            "analytics",
+            "artifacts",
             "assets",
             "flagship",
+            "k2",
             "queues.consumers",
             "secrets_store_secrets",
             "send_email",
             "services",
             "tail_consumers",
+            "worker_loaders",
         ]);
     });
 

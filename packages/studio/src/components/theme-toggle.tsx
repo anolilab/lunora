@@ -1,6 +1,5 @@
-// react-doctor-disable-next-line react-doctor/use-lazy-motion -- `m` + LazyMotion needs a provider above every consumer; this package exports individual panels that hosts mount without the studio shell, so a missing provider would throw at runtime in someone else's app
-import { motion } from "motion/react";
 import type { ReactElement } from "react";
+import { lazy, Suspense, useState } from "react";
 
 import { useT } from "../i18n/i18n-context";
 import type { ThemePreference } from "../lib/theme";
@@ -54,6 +53,20 @@ const MoonIcon = (): ReactElement => (
     </svg>
 );
 
+// The animated indicator pulls in `motion` (~130 KiB), so it loads on demand
+// instead of in the static first-load closure. A failed chunk fetch resolves to
+// the plain box rather than throwing into the app-level boundary: the indicator
+// only animates between segments, so losing it costs nothing else.
+const StaticIndicator = ({ className }: { readonly className: string }): ReactElement => <span className={className} />;
+
+const ThemeIndicator = lazy(() =>
+    import("./theme-indicator").catch(() => {
+        return { default: StaticIndicator };
+    }),
+);
+
+const INDICATOR_CLASS = "absolute inset-0 rounded-md border border-muted-foreground/40 bg-background/40";
+
 const OPTIONS: ReadonlyArray<{ readonly Icon: () => ReactElement; readonly value: ThemePreference }> = [
     { Icon: MonitorIcon, value: "system" },
     { Icon: SunIcon, value: "light" },
@@ -69,6 +82,12 @@ const OPTIONS: ReadonlyArray<{ readonly Icon: () => ReactElement; readonly value
 const ThemeToggle = (): ReactElement => {
     const { theme, setTheme } = useTheme();
     const t = useT();
+    // The static box stands in until the pointer or keyboard reaches the control, so a page load does not fetch
+    // the motion chunk, yet the indicator is already mounted on the old segment when the first change lands.
+    const [isPrimed, setIsPrimed] = useState(false);
+    const prime = (): void => {
+        setIsPrimed(true);
+    };
 
     const label: Record<ThemePreference, string> = {
         dark: t("Dark theme"),
@@ -81,6 +100,8 @@ const ThemeToggle = (): ReactElement => {
             aria-label={t("Theme")}
             className="inline-flex items-center gap-0.5 overflow-hidden rounded-md border border-border bg-muted/60 p-0.5"
             data-testid="dash-app-theme"
+            onFocus={prime}
+            onPointerEnter={prime}
             role="radiogroup"
         >
             {OPTIONS.map(({ Icon, value }) => {
@@ -97,19 +118,21 @@ const ThemeToggle = (): ReactElement => {
                         data-testid={`dash-app-theme-${value}`}
                         key={value}
                         onClick={() => {
+                            prime();
                             setTheme(value);
                         }}
                         role="radio"
                         title={label[value]}
                         type="button"
                     >
-                        {active && (
-                            <motion.span
-                                className="absolute inset-0 rounded-md border border-muted-foreground/40 bg-background/40"
-                                layoutId="studio-theme-active"
-                                transition={{ bounce: 0.1, duration: 0.45, type: "spring" }}
-                            />
-                        )}
+                        {active &&
+                            (isPrimed ? (
+                                <Suspense fallback={<span className={INDICATOR_CLASS} />}>
+                                    <ThemeIndicator className={INDICATOR_CLASS} />
+                                </Suspense>
+                            ) : (
+                                <span className={INDICATOR_CLASS} />
+                            ))}
                         <span className="relative">
                             <Icon />
                         </span>

@@ -201,7 +201,7 @@ const EMITTED_EXTENSIONS = new Map([
  * `paths` does not apply to a relative specifier, and no ambient declaration
  * satisfies a qualified `import("…").T`.
  *
- * `emit.ts` rebases a relative qualifier out of `_generated/` and appends `.js`
+ * `emit/qualifiers.ts` rebases a relative qualifier out of `_generated/` and appends `.js`
  * when it carries no extension, because the generated files are consumed under
  * NodeNext where the extension is mandatory. That single suffix is right for
  * exactly one case — a `.ts` file named without an extension — and wrong for the
@@ -258,7 +258,7 @@ const emittedSpecifierFor = (handlerFile: SourceFile, importDeclaration: ImportD
  * This answers both questions the printing rule needs: whether the checker will
  * print the name BARE at `node` (it will, exactly when the module imports it),
  * and — since a bare name does not resolve from `_generated/` — which specifier
- * to qualify it with instead. `emit.ts` takes it from there: a relative
+ * to qualify it with instead. `emit/qualifiers.ts` takes it from there: a relative
  * qualifier is rebased out of the source directory, an `@lunora/*` one is mapped
  * onto the umbrella, and a bare package specifier is already correct from any
  * directory.
@@ -303,7 +303,7 @@ const importSpecifierFor = (handlerFile: SourceFile, declaration: Node, name: st
  * that imports `_generated/api.ts`, and not under a dedicated strict config for
  * generated output, which is the pattern this repo itself ships
  * (`apps/playground/tsconfig.generated.json` declares no `paths`). None of
- * `emit.ts`'s three rebasers touch it, so the alias would be written out
+ * `emit/qualifiers.ts`'s three rebasers touch it, so the alias would be written out
  * verbatim and fail to resolve exactly where `relocateUserRelativeImports`
  * exists to stop that happening.
  *
@@ -362,11 +362,54 @@ const BARE_NAMEABLE_KINDS: ReadonlySet<SyntaxKind> = new Set([
 ]);
 
 /**
+ * Whether `declaration`'s own module publishes it under a name — the condition
+ * for the checker being able to print `import("<module>").<name>` for it.
+ *
+ * `isExported()` covers all three spellings (an `export` modifier, a default
+ * export, and a later `export { X }`). The ambient-module arm is separate because
+ * a member of `declare module "spec" { … }` carries no `export` modifier and is
+ * exported all the same.
+ */
+const isExportedFromItsModule = (declaration: Node): boolean =>
+    ambientModuleSpecifier(declaration) !== undefined || (Node.isExportable(declaration) && declaration.isExported());
+
+/**
+ * Whether `printed` actually spells `name` as an identifier of its own, rather
+ * than as a fragment of a longer one (`Shape` inside `ObjectShapeType`).
+ *
+ * The question a rename answers is "does the emitted TEXT carry a name that does
+ * not resolve from `_generated/`?", and only the checker can say. It does not
+ * always print an alias it was handed: for one it has already INLINED it prints
+ * the structure instead (`{ … } & { … }`), which is self-contained and needs no
+ * renaming at all.
+ *
+ * The name is escaped before it becomes a pattern: `$` is a legal identifier
+ * character AND a regex anchor, so an unescaped `QueryPage$1` would match
+ * nothing and read as "already inlined" — the exact bare name #781 exists to
+ * catch, waved through.
+ *
+ * Errs in the safe direction only. A false positive — the name matched inside a
+ * string literal type, say — merely restores the pre-#810 answer, `expand`,
+ * which costs precision and never correctness. A false NEGATIVE is the dangerous
+ * one, since it prints a name that does not resolve. The pattern's `\w` is
+ * ASCII-only, so a non-ASCII identifier character beside the name does not count
+ * as part of it: `Shapeé` matches `Shape` — another false positive, same safe
+ * direction.
+ */
+const mentionsBareName = (printed: string, name: string): boolean =>
+    new RegExp(String.raw`(?<![$\w])${name.replaceAll(/[$()*+.?[\\\]^{|}]/gu, String.raw`\$&`)}(?![$\w])`, "u").test(printed);
+
+/**
  * Classify one declaration. {@link classifyType} lifts this to a type and
  * {@link annotationRendering} to a syntactic annotation; both defer here so the
  * rule has one statement rather than three that must agree.
+ *
+ * `printedText` is the text the checker produces at `node` for whatever is being
+ * classified — the resolved type, or the annotation's own syntax. A THUNK,
+ * because only the one branch that asks about a bare name needs it and
+ * `Type.getText` is expensive enough to matter inside a per-property recursion.
  */
-const classifyDeclaration = (declaration: Node, node: Node, handlerFilePath: string): NameRendering => {
+const classifyDeclaration = (declaration: Node, node: Node, handlerFilePath: string, printedText: () => string): NameRendering => {
     const declarationFile = declaration.getSourceFile();
 
     // A GLOBAL declaration prints bare AND resolves bare from anywhere — `Date`,
@@ -422,13 +465,102 @@ const classifyDeclaration = (declaration: Node, node: Node, handlerFilePath: str
 
     const qualified = importSpecifierFor(node.getSourceFile(), named, named.getName());
 
-    // Not imported here either, so the checker prints it as its own `import("…")`
-    // qualifier — already self-contained.
+    // Not imported here either. The checker CAN print it as its own `import("…")`
+    // qualifier — but only when the declaring module actually exports it, because
+    // that qualifier is spelled as an export access. A declaration its module keeps
+    // to itself has no such spelling, so the checker falls back to the bare name,
+    // which resolves nowhere from `_generated/` (TS2304, in both `api.ts` and
+    // `functions.ts`). Expand it instead: its structure, or `unknown`.
+    //
+    // Unless the checker did not print the name at all. An alias it has already
+    // INLINED reaches the output as its structure, which is self-contained and
+    // wants no renaming — and renaming it anyway is not free: the expander
+    // reproduces plain object types, so an alias resolving to an INTERSECTION
+    // (`v.object(...)`'s `ObjectShapeType`, hence every `Infer<v.object(…)>`)
+    // could not be rendered at all and the whole return type erased to `unknown`
+    // (issue #810). Asking the printed text restores the original rule — rename
+    // what the checker printed unqualified — rather than "expand everything
+    // unexported".
     if (qualified === undefined) {
-        return VERBATIM;
+        return isExportedFromItsModule(named) || !mentionsBareName(printedText(), named.getName()) ? VERBATIM : EXPAND;
     }
 
     return isUnresolvableSpecifier(qualified.specifier, node) ? EXPAND : { kind: "qualify", qualified };
+};
+
+/** Declarations the checker can print as `typeof <name>` — only these gate the (expensive) text check. */
+const VALUE_DECLARATION_KINDS = new Set<SyntaxKind>([
+    SyntaxKind.ClassDeclaration,
+    SyntaxKind.EnumDeclaration,
+    SyntaxKind.FunctionDeclaration,
+    SyntaxKind.ModuleDeclaration,
+]);
+
+/** Whether every declaration of `symbol` is global — the script-mode test {@link isGloballyDeclared} applies to types. */
+const isGlobalSymbol = (symbol: TsSymbol | undefined): boolean => {
+    const declarations = symbol?.getDeclarations() ?? [];
+
+    return declarations.length > 0 && declarations.every((declaration) => declaration.getSourceFile().getSymbol() === undefined);
+};
+
+/** The leftmost identifier of a computed key — `brand` in `[brand]`, `Symbol` in `[Symbol.iterator]`. */
+const computedKeyRoot = (property: TsSymbol): Node | undefined => {
+    for (const declaration of property.getDeclarations()) {
+        const name = declaration.getFirstChildByKind(SyntaxKind.ComputedPropertyName);
+
+        if (name !== undefined) {
+            let root: Node = name.getExpression();
+
+            while (Node.isPropertyAccessExpression(root)) {
+                root = root.getExpression();
+            }
+
+            return root;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * Whether the checker's text for `type` spells a module-scoped VALUE name — a
+ * `[brand]` key of a `declare const brand: unique symbol`, or the `typeof helper`
+ * it prints for a function, class, enum or namespace object.
+ *
+ * Neither resolves from `_generated/` (TS2304), and neither has a type-space
+ * spelling to qualify with — so such a type needs renaming, which ends in the
+ * `unknown` fallback because expansion declines both shapes. `unknown` compiles;
+ * the text does not. This is what made an INLINED alias unsafe to print verbatim:
+ * inlining removes the alias's own name, not the value names inside it.
+ *
+ * `[Symbol.iterator]` and a `typeof` of a global are printable from anywhere and
+ * stay verbatim.
+ */
+const spellsModuleScopedValue = (type: Type, printedText: () => string): boolean => {
+    // `__@name@id` is how the checker names a property keyed by a unique symbol.
+    const symbolKeyed = type.getProperties().some((property) => {
+        if (!property.getName().startsWith("__@")) {
+            return false;
+        }
+
+        const root = computedKeyRoot(property);
+
+        // No declaration to read the key from: nothing proves it global.
+        return root === undefined || !isGlobalSymbol(root.getSymbol());
+    });
+
+    if (symbolKeyed) {
+        return true;
+    }
+
+    const symbol = type.getSymbol();
+
+    return (
+        symbol !== undefined &&
+        symbol.getDeclarations().some((declaration) => VALUE_DECLARATION_KINDS.has(declaration.getKind())) &&
+        !isGlobalSymbol(symbol) &&
+        printedText().startsWith("typeof ")
+    );
 };
 
 /**
@@ -445,9 +577,17 @@ const classifyType = (type: Type, node: Node, handlerFilePath: string): NameRend
     const printedDeclarations = new Set<Node>((aliasSymbol ?? symbol)?.getDeclarations());
 
     let needsRenaming = false;
+    // One render for the whole loop, and only if a branch asks for it — this
+    // runs once per type in a per-property recursion.
+    let printed: string | undefined;
+    const printedText = (): string => {
+        printed ??= type.getText(node);
+
+        return printed;
+    };
 
     for (const declaration of [symbol, aliasSymbol].flatMap((candidate) => candidate?.getDeclarations() ?? [])) {
-        const rendering = classifyDeclaration(declaration, node, handlerFilePath);
+        const rendering = classifyDeclaration(declaration, node, handlerFilePath, printedText);
 
         if (rendering.kind === "qualify" && printedDeclarations.has(declaration)) {
             return rendering;
@@ -456,7 +596,7 @@ const classifyType = (type: Type, node: Node, handlerFilePath: string): NameRend
         needsRenaming ||= rendering.kind !== "verbatim";
     }
 
-    return needsRenaming ? EXPAND : VERBATIM;
+    return needsRenaming || spellsModuleScopedValue(type, printedText) ? EXPAND : VERBATIM;
 };
 
 /**
@@ -494,7 +634,10 @@ const annotationRendering = (declaration: Node, node: Node, handlerFilePath: str
         const symbol = reference.getTypeName().getSymbol();
 
         for (const referenced of (symbol?.getAliasedSymbol() ?? symbol)?.getDeclarations() ?? []) {
-            const rendering = classifyDeclaration(referenced, node, handlerFilePath);
+            // The annotation's own syntax IS what the printer reuses here, so it
+            // is the text to ask about — a reference written `AuditAction` spells
+            // the name on its face.
+            const rendering = classifyDeclaration(referenced, node, handlerFilePath, () => reference.getText());
 
             if (rendering.kind === "qualify") {
                 return rendering;

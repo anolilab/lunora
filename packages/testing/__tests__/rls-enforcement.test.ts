@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { LunoraTestOptions } from "../src/index";
 import { lunoraTest } from "../src/index";
+import trackHarnesses from "./harness-tracker";
 
 const { mutation, query } = initLunora.dataModel().create();
 
@@ -71,31 +72,29 @@ const readPublicMemos = definePolicy({
 const listGuarded = query.use(rlsForTest(definePolicies([readNotes]))).query(async ({ ctx }) => ctx.db.query("notes").collect());
 
 /**
- * The legacy iterator-style reader (`ctx.db.query(table)`) can't push a policy
- * `baseWhere` into SQL, so RLS for this read path is enforced ENTIRELY by the
- * in-memory `.filter(matchesWhere)` in `rls/middleware.ts`'s `query()`. These
- * handlers read a table that HOLDS rows the policy hides, so a reader that
- * forwards unfiltered is observable.
+ * The legacy iterator-style reader (`ctx.db.query(table)`) gets an eligible
+ * policy pushed into its SQL, and `rls/middleware.ts`'s `query()` still
+ * verifies every row with an in-memory `.filter(matchesWhere)`. These handlers
+ * read a table that HOLDS rows the policy hides, so a reader that forwards
+ * unfiltered is observable.
  */
 const listMemos = query.use(rlsForTest(definePolicies([readPublicMemos]))).query(async ({ ctx }) => ctx.db.query("memos").collect());
 const firstMemo = query.use(rlsForTest(definePolicies([readPublicMemos]))).query(async ({ ctx }) => ctx.db.query("memos").first());
 const takeMemos = query.use(rlsForTest(definePolicies([readPublicMemos]))).query(async ({ ctx }) => ctx.db.query("memos").take(10));
 
-const open: ReturnType<typeof lunoraTest>[] = [];
+const harnesses = trackHarnesses();
 
 const start = (options?: LunoraTestOptions): ReturnType<typeof lunoraTest> => {
     const t = lunoraTest(schema, options);
 
-    open.push(t);
+    harnesses.track(t);
 
     return t;
 };
 
 describe("lunoraTest — RLS enforcement", () => {
     afterEach(() => {
-        while (open.length > 0) {
-            open.pop()?.close();
-        }
+        harnesses.closeAll();
     });
 
     it("rejects a query dispatched against a protected table by a procedure that never engaged RLS", async () => {

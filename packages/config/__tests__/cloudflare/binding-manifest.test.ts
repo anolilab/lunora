@@ -29,6 +29,101 @@ describe("buildBindingManifest", () => {
         expect(manifest.version).toBe(BINDING_MANIFEST_VERSION);
     });
 
+    it("models workflows declared in exports as class-keyed requirements, and reports other export types", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            exports: {
+                OrderPipelineWorkflow: { name: "order-pipeline", type: "workflow" },
+                SomeObject: { type: "durable-object" },
+            },
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", resource: "order-pipeline", type: "workflow" },
+        ]);
+        expect(manifest.unknown).toContain("exports.SomeObject");
+    });
+
+    it("models the media, stream, VPC, and artifacts bindings and both pipeline spellings", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            artifacts: [{ binding: "ARTIFACTS", namespace: "default" }],
+            media: { binding: "MEDIA" },
+            pipelines: [
+                { binding: "EVENTS", stream: "events-stream" },
+                { binding: "LEGACY", pipeline: "legacy-stream" },
+            ],
+            secrets: { required: ["API_KEY"] },
+            stream: { binding: "STREAM" },
+            vpc_networks: [
+                { binding: "MESH", network_id: "cf1:network" },
+                { binding: "TUNNEL", tunnel_id: "tunnel-uuid" },
+            ],
+            vpc_services: [{ binding: "PRIVATE_API", service_id: "svc-id" }],
+        } as ManifestConfigShape);
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "ARTIFACTS", resource: "default", type: "artifacts" },
+            { binding: "MEDIA", type: "media" },
+            { binding: "EVENTS", resource: "events-stream", type: "pipeline" },
+            { binding: "LEGACY", resource: "legacy-stream", type: "pipeline" },
+            { binding: "STREAM", type: "stream" },
+            { binding: "MESH", resourceId: "cf1:network", type: "vpc_network" },
+            { binding: "TUNNEL", resourceId: "tunnel-uuid", type: "vpc_network" },
+            { binding: "PRIVATE_API", resourceId: "svc-id", type: "vpc_service" },
+        ]);
+        expect(manifest.unknown).toStrictEqual([]);
+    });
+
+    it("models a service binding by the Worker it calls, instead of reporting services as unknown", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            services: [
+                { binding: "SERVICE_PARSER", service: "document-parser" },
+                { binding: "SERVICE_GATEWAY", entrypoint: "Gateway", service: "llm-gateway" },
+            ],
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "SERVICE_GATEWAY", resource: "llm-gateway", type: "service" },
+            { binding: "SERVICE_PARSER", resource: "document-parser", type: "service" },
+        ]);
+        expect(manifest.unknown).toStrictEqual([]);
+    });
+
+    it("models the Analytics SQL binding apart from Analytics Engine datasets", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            analytics: { binding: "ANALYTICS_SQL" },
+            analytics_engine_datasets: [{ binding: "ANALYTICS", dataset: "ANALYTICS" }],
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "ANALYTICS", resource: "ANALYTICS", type: "analytics_engine" },
+            { binding: "ANALYTICS_SQL", type: "analytics_sql" },
+        ]);
+        expect(manifest.unknown).toStrictEqual([]);
+    });
+
+    it("models both AI Search sections instead of reporting them as unknown", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            ai_search: [{ binding: "BLOG_SEARCH", instance_name: "blog" }],
+            ai_search_namespaces: [{ binding: "AI_SEARCH", namespace: "default" }],
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "BLOG_SEARCH", resource: "blog", type: "ai_search" },
+            { binding: "AI_SEARCH", resource: "default", type: "ai_search_namespace" },
+        ]);
+        expect(manifest.unknown).toStrictEqual([]);
+    });
+
     it("marks a durable object sqlite only when this worker declares the class", () => {
         expect.assertions(1);
 
@@ -53,16 +148,18 @@ describe("buildBindingManifest", () => {
         ]);
     });
 
-    it("reports an unmodelled wrangler section instead of dropping it", () => {
+    // `k2` (K2 producer bindings, wrangler >= 4.145.0) is tracked, not supported:
+    // no runtime type or local simulator, so it is surfaced by name only.
+    it.each(["mtls_certificates", "k2"])("reports an unmodelled wrangler section (%s) instead of dropping it", (section) => {
         expect.assertions(2);
 
         // Silence here is the dangerous outcome: a consumer would under-provision
         // and find out at runtime. A binding type added to wrangler before it is
         // added here must degrade to a name, not vanish.
-        const config = { mtls_certificates: [{ binding: "CERT" }], name: "app" } as unknown as ManifestConfigShape;
+        const config = { [section]: [{ binding: "BINDING" }], name: "app" } as unknown as ManifestConfigShape;
         const manifest = buildBindingManifest(config);
 
-        expect(manifest.unknown).toStrictEqual(["mtls_certificates"]);
+        expect(manifest.unknown).toStrictEqual([section]);
         expect(manifest.bindings).toStrictEqual([]);
     });
 

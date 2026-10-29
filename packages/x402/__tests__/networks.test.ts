@@ -27,7 +27,7 @@ describe("networks", () => {
 
     it("throws on an unknown, non-CAIP-2 network", () => {
         // @ts-expect-error — exercising the runtime guard with an off-union value.
-        expect(() => toCaip2("dogecoin")).toThrow(/Unknown x402 network/);
+        expect(() => toCaip2("dogecoin")).toThrow(expect.objectContaining({ code: "ENV_INVALID", message: expect.stringMatching(/Unknown x402 network/) }));
     });
 
     it("classifies EVM vs SVM by CAIP-2 namespace", () => {

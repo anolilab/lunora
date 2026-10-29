@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
-import sanitizeNamespace from "./paths";
+import { sanitizeNamespace } from "./paths";
 
 /**
  * Reject two function files whose sanitized namespaces collide.
@@ -44,7 +44,7 @@ const assertNoNamespaceCollisions = (filePaths: Iterable<string>, surface: "api"
 
         if (previous !== filePath) {
             // "INTERNAL" is the code every other codegen-time collision uses
-            // (`agents:*` / `sandbox:invoke` in `emit.ts`) — the error catalog has
+            // (`agents:*` / `sandbox:invoke` in `emit/api.ts`) — the error catalog has
             // no codegen-authoring code, and adding one is `@lunora/errors`' call.
             const consequence =
                 surface === "api"

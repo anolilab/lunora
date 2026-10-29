@@ -13,9 +13,16 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ```ts
 interface AgentHarness {
+    awaitWait: (instanceId: string, name: string) => Promise<void>;
+    decline: (threadKey: string, toolCallId: string) => void;
+    deliver: (instanceId: string, name: string, payload: unknown) => void;
     readonly dispatches: ReadonlyArray<HarnessDispatch>;
+    expire: (instanceId: string, name: string) => void;
+    journalEntries: () => unknown[];
     messages: (threadKey: string) => AgentMessageRow[];
     run: (params: AgentRunInput, overrides?: AgentRunOverrides) => Promise<AgentRunResult>;
+    readonly secrets: SecretValueHost;
+    supply: (threadKey: string, toolCallId: string, value: string) => Promise<void>;
     thread: (threadKey: string) => HarnessThread | undefined;
 }
 ```
@@ -27,7 +34,8 @@ interface AgentHarnessOptions {
     env?: Record<string, unknown>;
     exportName?: string;
     functions?: Record<string, HarnessFunction>;
-    script: AgentGenerateResult[];
+    script?: AgentGenerateResult[];
+    secrets?: SecretValueHost;
 }
 ```
 
@@ -36,7 +44,32 @@ interface AgentHarnessOptions {
 ```ts
 interface AgentRunOverrides {
     instanceId?: string;
+    model?: LanguageModel;
+    onTokenDelta?: (delta: AgentTokenDelta) => void;
     script?: AgentGenerateResult[];
+}
+```
+
+### `ArtifactsFake` (interface)
+
+```ts
+interface ArtifactsFake {
+    binding: ArtifactsBindingLike;
+    failNext: (code: ArtifactsErrorCode) => void;
+    readonly handles: {
+        disposed: number;
+        opened: number;
+    };
+    putBlob: (repo: string, hash: string, content: Blob | string) => Blob;
+    putCommit: (repo: string, commit: ArtifactsCommitMetadata) => void;
+    putFile: (repo: string, file: {
+        content: Blob | string;
+        path: string;
+        ref: string;
+        type?: string;
+    }) => Blob;
+    putTree: (repo: string, hash: string, entries: ArtifactsTreeEntry[]) => void;
+    repoNames: () => string[];
 }
 ```
 
@@ -92,6 +125,24 @@ interface EvaluationSpanHandle {
 }
 ```
 
+### `FakeNotifyControls` (interface)
+
+```ts
+interface FakeNotifyControls {
+    clear: () => void;
+    sent: (channel?: NotifyChannel) => SentNotification[];
+}
+```
+
+### `FakeQueueControls` (interface)
+
+```ts
+interface FakeQueueControls {
+    clear: () => void;
+    sent: (queue?: string) => SentQueueMessage[];
+}
+```
+
 ### `FakeScheduledJob` (interface)
 
 ```ts
@@ -108,6 +159,23 @@ interface FakeSchedulerControls {
     failures: () => ScheduledJobFailure[];
     list: () => FakeScheduledJob[];
     runPending: (options?: SweepOptions) => Promise<number>;
+}
+```
+
+### `FakeSecretValues` (interface)
+
+```ts
+interface FakeSecretValues extends SecretValueHost {
+    advanceClock: (ms: number) => void;
+}
+```
+
+### `FakeTopicControls` (interface)
+
+```ts
+interface FakeTopicControls {
+    clear: () => void;
+    published: (topic?: string) => PublishedTopicMessage[];
 }
 ```
 
@@ -163,8 +231,18 @@ interface LunoraTestOptions {
     env?: Record<string, unknown>;
     fetch?: typeof globalThis.fetch;
     functions?: FunctionRegistry;
+    notify?: NotifyDefinition;
     now?: number;
+    queues?: ReadonlyArray<string>;
+    services?: Record<string, object>;
+    topics?: ReadonlyArray<string>;
 }
+```
+
+### `NotifyChannel` (type)
+
+```ts
+type NotifyChannel = Extract<ChannelType, "chat" | "inapp" | "push" | "webhook">;
 ```
 
 ### `ProducedOutput` (interface)
@@ -173,6 +251,17 @@ interface LunoraTestOptions {
 interface ProducedOutput {
     metadata?: Record<string, unknown>;
     output: string;
+}
+```
+
+### `PublishedTopicMessage` (interface)
+
+```ts
+interface PublishedTopicMessage {
+    body: unknown;
+    contentType?: QueueContentType;
+    delaySeconds?: number;
+    topic: string;
 }
 ```
 
@@ -185,6 +274,28 @@ interface RecordEvaluationInput {
     name: string;
     score: number;
     span?: EvaluationSpanHandle;
+}
+```
+
+### `RecordedStreamPart` (type)
+
+```ts
+type RecordedStreamPart = ModelStreamResult["stream"] extends ReadableStream<infer Part> ? Part : never;
+```
+
+### `RecordedTurn` (interface)
+
+```ts
+interface RecordedTurn {
+    error?: {
+        after: number;
+        cause: unknown;
+    };
+    parts: ReadonlyArray<RecordedStreamPart>;
+    pause?: {
+        after: number;
+        gate: StreamGate;
+    };
 }
 ```
 
@@ -237,6 +348,38 @@ interface ScorerSample {
 }
 ```
 
+### `SentNotification` (type)
+
+```ts
+type SentNotification = {
+    [C in NotifyChannel]: {
+        channel: C;
+        payload: ChannelPayloadMap[C];
+    };
+}[NotifyChannel];
+```
+
+### `SentQueueMessage` (interface)
+
+```ts
+interface SentQueueMessage {
+    body: unknown;
+    contentType?: QueueContentType;
+    delaySeconds?: number;
+    queue: string;
+}
+```
+
+### `StreamGate` (interface)
+
+```ts
+interface StreamGate {
+    readonly reached: Promise<void>;
+    release: () => void;
+    wait: () => Promise<void>;
+}
+```
+
 ### `SweepOptions` (interface)
 
 ```ts
@@ -258,16 +401,19 @@ interface TestHarness {
         <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineMutationFunction<R>): Promise<R>;
     };
+    notify: FakeNotifyControls;
     query: {
         <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineQueryFunction<R>): Promise<R>;
     };
+    queues: FakeQueueControls;
     run: <R>(function_: InlineMutationFunction<R>) => Promise<R>;
     scheduler: FakeSchedulerControls;
     subscribe: {
         <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): TestSubscription<R>;
         <R>(inline: InlineQueryFunction<R>): TestSubscription<R>;
     };
+    topics: FakeTopicControls;
     wideEvent: () => RecordedWideEvent;
     withIdentity: (identity: TestIdentity) => TestHarness;
 }
@@ -306,6 +452,26 @@ const agentHarness: (agent: AgentDefinition, options: AgentHarnessOptions) => Ag
 const containsScorer: (needle: string, options?: {
     caseSensitive?: boolean;
 }) => Scorer;
+```
+
+### `createArtifactsFake` (const)
+
+```ts
+const createArtifactsFake: (options?: {
+    namespace?: string;
+}) => ArtifactsFake;
+```
+
+### `createFakeSecretValues` (const)
+
+```ts
+const createFakeSecretValues: () => FakeSecretValues;
+```
+
+### `createStreamGate` (const)
+
+```ts
+const createStreamGate: () => StreamGate;
 ```
 
 ### `evaluate` (const)
@@ -400,6 +566,12 @@ const recallAtK: (k?: number, options?: RetrievalScorerOptions) => Scorer;
 
 ```ts
 const recordEvaluation: (input: RecordEvaluationInput) => Record<string, EvaluationAttributeValue>;
+```
+
+### `recordedModel` (const)
+
+```ts
+const recordedModel: (turns: ReadonlyArray<RecordedTurn>) => MockLanguageModelV4;
 ```
 
 ### `regexScorer` (const)
@@ -543,6 +715,12 @@ type InlineMutationFunction<R> = (context: MutationCtx) => Promise<R> | R;
 
 ```ts
 type InlineQueryFunction<R> = (context: QueryCtx) => Promise<R> | R;
+```
+
+### `ModelStreamResult` (type)
+
+```ts
+type ModelStreamResult = Awaited<ReturnType<InstanceType<typeof MockLanguageModelV4>["doStream"]>>;
 ```
 
 ### `RecordedWideEvent` (interface)

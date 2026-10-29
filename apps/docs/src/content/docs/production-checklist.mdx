@@ -20,7 +20,24 @@ containers, log drains) live in [Deployment](/docs/deployment).
       and runs `tsc --noEmit` without writing files; a stale `_generated/` or
       a mistyped binding fails here instead of at runtime.
 - [ ] `lunora doctor` is clean: it preflights the project's wrangler bindings,
-      placeholder values, and dev secrets.
+      placeholder values, and dev secrets. `lunora doctor --fix` creates the D1
+      databases the config names (reusing any that already exist) and writes
+      their ids in, and mints the local `.dev.vars` secrets. It refuses to write
+      `.dev.vars` unless git ignores it. `--fix --dry-run` prints the same
+      changes without making them. R2 buckets and queues are not created by it.
+- [ ] You know what keeps a Durable Object awake. From `compatibility_date`
+      `2026-10-01` (flag `durable_object_io_tasks_prevent_eviction`), a pending
+      timer, `waitUntil` or outbound call blocks idle eviction for up to 15
+      minutes per operation, and that time is billed. Lunora's own shards arm
+      timers only while a live stream is open. A `LunoraClient` or an
+      `EventsSync` poll created **inside** a Durable Object keeps heartbeat and
+      poll timers armed while idle, so that Durable Object never evicts. Run
+      such clients in a Worker, or opt out with
+      `durable_object_io_tasks_do_not_prevent_eviction`.
+- [ ] A single-page app calls `client.close()` when it tears the client down.
+      Unsubscribing every query releases a shard's socket after a short idle
+      window, but the default shard's socket is the client's home connection and
+      stays open (with its heartbeat) until `close()` or page unload.
 
 ## Secrets
 
@@ -32,6 +49,12 @@ Cloudflare Worker secrets, set per environment. `wrangler deploy` never pushes
 - [ ] Every key in `.dev.vars.example` has a production value:
       `wrangler secret put NAME --env production`, or push in bulk with
       `lunora env push --prod`.
+- [ ] `LUNORA_RELAY_SECRET` is set on the Worker and on every Durable Object
+      namespace whenever you run more than one shard, read replicas, an
+      `EventLogDO`, or a shard registry. It signs the internal control channel
+      between Durable Objects. Read replicas, `EventLogDO` and the shard registry
+      refuse every request without it; the relay alone falls back to trusting any
+      caller inside the Durable Object namespace.
 - [ ] Generated secrets are strong. `lunora env generate` mints 32-byte-hex
       values for everything locally generatable; provider keys (Resend,
       Stripe, …) come from the provider dashboard.
@@ -60,14 +83,18 @@ data export/import, migrations, the Studio, scheduled-job admin.
       which lands in access logs and browser history. Instead of the raw
       master token, the worker mints a short-lived (60s) HMAC-signed sub-token
       via `POST /_lunora/admin/ws-token` (itself gated by the master token in
-      the `Authorization` header). Enforcement is **on by default**: the WS
-      admin gate (worker and Durable Objects both) rejects the raw master
-      token in `?token=`; only minted sub-tokens (or the master token in the
-      `Authorization` header, which never leaks via URLs) authorize. The Studio
-      mints sub-tokens itself. Only a legacy client that still puts the master
-      token in the URL needs the opt-out (`requireEphemeralWsToken: false`, or
-      `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` set to `0` / `false` / `off` / `no` /
-      `disabled`). Verify it is _not_ set in your deployment.
+      the `Authorization` header). The worker accepts only a minted sub-token in
+      `?token=`, never the master token. It forwards the request as it arrived, and
+      the Durable Object refuses a raw master token or raw session bearer in
+      `?token=`. Only minted sub-tokens (or the master token in the `Authorization`
+      header, which never leaks via URLs) authorize. The Studio mints sub-tokens
+      itself and never falls back to the master token. There is no opt-out.
+      The sub-token itself still rides the URL for up to 60 seconds, so proxy
+      and access logs can record it.
+- [ ] **The session bearer stays out of the URL.** When `LUNORA_WS_BEARER` is set,
+      a client sends it in the `connect` frame, never in `?token=`, so it is
+      not recorded on every reconnect. A socket that does not present it is
+      closed with `4003`. See [protocol §6](https://github.com/anolilab/lunora/blob/alpha/protocol/README.md).
 
 ## Rate limiting and abuse
 
@@ -115,7 +142,8 @@ Lunora has two migration surfaces; see [Migrations](/docs/concepts/migrations).
 ## Observability
 
 - [ ] An observability sink is configured on `createWorker`: `otlpSink` to a
-      collector, `sentrySink`, `analyticsEngineSink`, or several via
+      collector, `webhookSink` to an error tracker (Sentry, PostHog, …),
+      `analyticsEngineSink`, or several via
       `combineSinks`. Without one, a deployed worker's telemetry goes nowhere.
       See [Observability](/docs/concepts/observability).
 - [ ] You know where errors surface: the Studio groups error events into

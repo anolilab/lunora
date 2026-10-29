@@ -95,6 +95,14 @@ public struct LunoraSubmitOptions {
     /// replaying a write that can only fail.
     public var precondition: (() -> Bool)?
 
+    /// Never queued, persisted or replayed. Where a normal write would be queued,
+    /// `submit` throws `LunoraOfflineCode.notQueued` before the write reaches the
+    /// queue or the persistence adapter. A send that gets no reply while the socket
+    /// is down throws the same error, with the transport error as `underlying`. It
+    /// does not wait for a queue flush or queue behind pending writes, so it may
+    /// overtake them. For a credential or a one-time token.
+    public var onlineOnly: Bool
+
     /// Reports the eventual verdict on a queued write.
     public var onSettled: ((LunoraMutationSettled) -> Void)?
 
@@ -106,6 +114,7 @@ public struct LunoraSubmitOptions {
         optimistic: LunoraOptimistic.Transform? = nil,
         optimisticUpdate: ((LunoraOptimisticLocalStore, Any?) -> Void)? = nil,
         precondition: (() -> Bool)? = nil,
+        onlineOnly: Bool = false,
         onSettled: ((LunoraMutationSettled) -> Void)? = nil
     ) {
         self.functionPath = functionPath
@@ -115,8 +124,27 @@ public struct LunoraSubmitOptions {
         self.optimistic = optimistic
         self.optimisticUpdate = optimisticUpdate
         self.precondition = precondition
+        self.onlineOnly = onlineOnly
         self.onSettled = onSettled
     }
+}
+
+/// The refusal of an online-only write that would be queued. `underlying` is the
+/// transport failure when the write was sent and got no reply, nil when it was
+/// refused before anything was sent.
+private func onlineOnlyNotQueued(_ functionPath: String, underlying: Error? = nil) -> LunoraAPIError {
+    LunoraAPIError(
+        code: LunoraOfflineCode.notQueued,
+        message: "'\(functionPath)' is online-only and the connection is not live, so it was not queued",
+        underlying: underlying
+    )
+}
+
+/// Whether a failed direct send got no HTTP reply: the injected poster threw. A
+/// coded reply and an unconfigured poster are both ``LunoraAPIError``, and
+/// arguments the codec refuses fail before anything is sent, so none of those count.
+private func isTransportFailure(_ error: Error, args: Any?) -> Bool {
+    !(error is LunoraAPIError) && (try? Wire.encode(args ?? [String: Any]())) != nil
 }
 
 // MARK: - The write path
@@ -150,6 +178,13 @@ extension LunoraClient {
             throw LunoraAPIError(code: LunoraOfflineCode.clientClosed, message: "client is closed")
         }
 
+        // Read before any overlay is applied, so a refused online-only write leaves
+        // nothing to roll back. A socket that detaches after this read is caught by
+        // the check under the lock below.
+        if options.onlineOnly, withLock({ send == nil && (wasEverConnected || storedOfflineQueue.queueBeforeFirstConnect) }) {
+            throw onlineOnlyNotQueued(options.functionPath)
+        }
+
         var deferred: LunoraOptimistic.Deferred = []
         let handles = applyOptimistic(options, &deferred)
 
@@ -171,6 +206,12 @@ extension LunoraClient {
                     return (false, [])
                 }
 
+                // Thrown inside the lock, so the catch below rolls back the overlay
+                // this call installed.
+                if options.onlineOnly {
+                    throw onlineOnlyNotQueued(options.functionPath)
+                }
+
                 return (true, storedOfflineQueue.enqueue(queuedEntryLocked(options, writeID: writeID, handles: handles)))
             }
         } catch {
@@ -186,30 +227,42 @@ extension LunoraClient {
             return LunoraMutationOutcome(status: .queued, mutationID: writeID)
         }
 
+        let reply: (result: Any, commitCursor: Int?, decodeError: LunoraAPIError?)
+
         do {
-            let reply = try rpcFull(
+            reply = try rpcFull(
                 options.functionPath,
                 args: options.args,
                 shardKey: options.shardKey,
                 mutationID: writeID
             )
-
-            // Confirmed against the write's COMMITTED cursor, so the overlay drops
-            // when (or once) a frame at that cursor lands — never on this call's
-            // return, which races the socket broadcast.
-            settleLayers(confirm: handles, rollback: [], commitCursor: reply.commitCursor)
-
-            return LunoraMutationOutcome(
-                status: .committed,
-                mutationID: writeID,
-                value: reply.result,
-                commitCursor: reply.commitCursor
-            )
         } catch {
             settleLayers(confirm: [], rollback: handles, commitCursor: nil)
 
+            // An online-only write that got no reply while the socket is down is refused
+            // as a queued write would have been, the transport failure as its cause. A
+            // coded reply, and any failure while connected, surface as they are.
+            if options.onlineOnly, !withLock({ send != nil }), isTransportFailure(error, args: options.args) {
+                throw onlineOnlyNotQueued(options.functionPath, underlying: error)
+            }
+
             throw error
         }
+
+        // Confirmed against the write's COMMITTED cursor, so the overlay drops
+        // when (or once) a frame at that cursor lands — never on this call's
+        // return, which races the socket broadcast. Confirmed even when the
+        // result is unreadable: the write committed all the same.
+        settleLayers(confirm: handles, rollback: [], commitCursor: reply.commitCursor)
+
+        if let decodeError = reply.decodeError { throw decodeError }
+
+        return LunoraMutationOutcome(
+            status: .committed,
+            mutationID: writeID,
+            value: reply.result,
+            commitCursor: reply.commitCursor
+        )
     }
 
     /// Restores writes persisted in a prior session; returns their shard keys.
@@ -240,8 +293,13 @@ extension LunoraClient {
     @discardableResult
     public func flushOfflineQueue(shardKey: String? = nil) -> LunoraFlushReport {
         var report = LunoraFlushReport()
-        let (queue, current, remaining) = withLock {
-            (storedOfflineQueue, storedIdentity, storedFlushNotBefore - ProcessInfo.processInfo.systemUptime)
+        let (queue, current, token, remaining) = withLock {
+            (
+                storedOfflineQueue,
+                identityFingerprintLocked(),
+                storedAuthToken,
+                storedFlushNotBefore - ProcessInfo.processInfo.systemUptime
+            )
         }
 
         // A server that answered "not now" gets waited out. Without this the
@@ -286,14 +344,26 @@ extension LunoraClient {
         if drained.isEmpty { return report }
 
         // Gated against ONE identity snapshot: a flush is a single authenticated
-        // burst, so every write in it necessarily runs under one identity.
+        // burst, so every write in it runs under one identity — and is SENT with
+        // the token snapshotted beside it, never the one held when its request
+        // goes out, or a token swapped mid-flush would carry the rest of the pass.
+        // A write whose owner cannot be told (nobody signed in) is HELD: back on
+        // the queue, still persisted, unsettled.
         var sendable: [LunoraQueuedMutation] = []
+        var held: [LunoraQueuedMutation] = []
 
         for entry in drained {
-            if entry.identity.allowsReplay(under: current) {
+            switch entry.identity.replayVerdict(current: current, token: token) {
+            case .match:
                 sendable.append(entry)
 
                 continue
+            case .unknown:
+                held.append(entry)
+
+                continue
+            case .mismatch:
+                break
             }
 
             withLock { queue.unpersist(entry.id) }
@@ -309,7 +379,21 @@ extension LunoraClient {
 
         let encodable = encodableOrSettleTerminal(queue, sendable, &report)
 
-        replay(queue, encodable, &report)
+        replay(queue, encodable, &report, bearer: token)
+
+        guard !held.isEmpty else { return report }
+
+        // Held writes keep their place in line: everything this pass put back
+        // goes to the front in the order it was drained.
+        let position = Dictionary(drained.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let requeued = Set(report.requeued)
+
+        withLock {
+            let back = queue.drain { requeued.contains($0.id) } + held
+
+            queue.requeue(back.sorted { position[$0.id, default: 0] < position[$1.id, default: 0] })
+        }
+        report.requeued.append(contentsOf: held.map(\.id))
 
         return report
     }
@@ -355,12 +439,19 @@ extension LunoraClient {
         return encodable
     }
 
-    private func replay(_ queue: LunoraOfflineQueue, _ sendable: [LunoraQueuedMutation], _ report: inout LunoraFlushReport) {
+    /// `bearer` is the token the pass's identity gate was judged against; every
+    /// request of the pass carries it.
+    private func replay(
+        _ queue: LunoraOfflineQueue,
+        _ sendable: [LunoraQueuedMutation],
+        _ report: inout LunoraFlushReport,
+        bearer: String?
+    ) {
         // A lone write rides the single-call path, which is the proven one. Two
         // or more coalesce into batch round trips — the flaky-reconnect win,
         // where N queued writes cost a handful of hops instead of N.
         guard sendable.count > 1 else {
-            replaySequential(queue, sendable, &report)
+            replaySequential(queue, sendable, &report, bearer: bearer)
 
             return
         }
@@ -371,7 +462,7 @@ extension LunoraClient {
         for (index, chunk) in chunks.enumerated() {
             // Chunks replay sequentially, which is what preserves FIFO across a
             // flush longer than one batch.
-            let outcome = replayBatched(queue, chunk, &report)
+            let outcome = replayBatched(queue, chunk, &report, bearer: bearer)
 
             toRequeue.append(contentsOf: outcome.requeue)
 
@@ -394,7 +485,12 @@ extension LunoraClient {
     }
 
     /// Replays writes one at a time. FIFO is preserved by the loop itself.
-    private func replaySequential(_ queue: LunoraOfflineQueue, _ sendable: [LunoraQueuedMutation], _ report: inout LunoraFlushReport) {
+    private func replaySequential(
+        _ queue: LunoraOfflineQueue,
+        _ sendable: [LunoraQueuedMutation],
+        _ report: inout LunoraFlushReport,
+        bearer: String?
+    ) {
         for (index, entry) in sendable.enumerated() {
             do {
                 let reply = try rpcFull(
@@ -402,24 +498,14 @@ extension LunoraClient {
                     args: entry.args,
                     shardKey: entry.shardKey,
                     mutationID: entry.id,
-                    issuingClientID: entry.clientID
+                    issuingClientID: entry.clientID,
+                    bearer: .some(bearer)
                 )
 
-                withLock { queue.unpersist(entry.id) }
-                // The overlay is confirmed BEFORE the caller is told, so the
-                // gapless drop is already in place when the confirming frame lands.
-                settleLayers(confirm: entry.handles, rollback: [], commitCursor: reply.commitCursor)
-                report.committed.append(entry.id)
-                emitSettled(
-                    LunoraMutationSettled(
-                        mutationID: entry.id,
-                        status: .committed,
-                        value: reply.result,
-                        error: nil,
-                        hadAwaiter: entry.liveAwaiter
-                    ),
-                    entry.onSettled
-                )
+                // The outcome — including an unreadable result, which is still a
+                // COMMIT and is never retried — is decided by the time the reply
+                // is in hand, so the durable record goes only now.
+                settleCommitted(queue, entry, value: reply.result, decodeError: reply.decodeError, reply.commitCursor, &report)
             } catch {
                 if LunoraClient.isTransient(error) {
                     noteRetryAfter(&report, error)
@@ -464,7 +550,8 @@ extension LunoraClient {
     private func replayBatched(
         _ queue: LunoraOfflineQueue,
         _ items: [LunoraQueuedMutation],
-        _ report: inout LunoraFlushReport
+        _ report: inout LunoraFlushReport,
+        bearer: String?
     ) -> (requeue: [LunoraQueuedMutation], stop: Bool) {
         var calls: [Any] = []
 
@@ -494,8 +581,13 @@ extension LunoraClient {
             calls.append(call)
         }
 
-        guard let reply = try? rpcBatch(calls) else {
-            // Transport failure — nothing committed, so retry everything.
+        let reply: (status: Int, body: [String: Any])
+
+        do {
+            reply = try rpcBatch(calls, bearer: .some(bearer))
+        } catch {
+            // Transport failure (or no poster at all) — nothing committed, so
+            // retry everything.
             return (items, true)
         }
 
@@ -504,22 +596,31 @@ extension LunoraClient {
         }
 
         // No per-slot results. A coded envelope is a verdict on the WHOLE batch —
-        // a bad request, an authorization denial — and therefore terminal for
-        // every entry; anything else is transport, and transient.
-        guard let envelope = reply.body["error"] as? [String: Any] else { return (items, true) }
+        // a bad request, an authorization denial — classified by its code alone,
+        // exactly as the single-call path classifies it. An envelope-less reply
+        // is transport, and transient — except a 413, which is a verdict on the
+        // request whatever its body.
+        let error: LunoraAPIError
 
-        let error = LunoraClient.batchSlotError(envelope, fallback: "batch rejected", transient: reply.status >= 500)
+        if let envelope = reply.body["error"] as? [String: Any] {
+            error = LunoraClient.batchSlotError(envelope, fallback: "batch rejected")
+        } else if reply.status == 413 {
+            error = LunoraClient.envelopelessError(status: 413)
+        } else {
+            return (items, true)
+        }
 
         // The body was too big, not wrong — every entry in it would have committed
         // alone. Halve and retry; the estimate the chunker used cannot see the
-        // framing the worker actually measured, and only the answer can.
+        // framing the worker actually measured, and only the answer can. A lone
+        // write still refused falls through and settles terminally below.
         if error.code == LunoraOfflineCode.payloadTooLarge, items.count > 1 {
             let middle = items.count / 2
-            let left = replayBatched(queue, Array(items[..<middle]), &report)
+            let left = replayBatched(queue, Array(items[..<middle]), &report, bearer: bearer)
 
             if left.stop { return (left.requeue + Array(items[middle...]), true) }
 
-            let right = replayBatched(queue, Array(items[middle...]), &report)
+            let right = replayBatched(queue, Array(items[middle...]), &report, bearer: bearer)
 
             return (left.requeue + right.requeue, right.stop)
         }
@@ -544,7 +645,7 @@ extension LunoraClient {
     ///
     /// The args dominate and are the only part that can be large; the constant
     /// covers the entry's fixed keys and the comma joining it to the next one.
-    /// Encoding twice (here and in ``replayBatched(_:_:_:)``) is deliberate — the
+    /// Encoding twice (here and in ``replayBatched(_:_:_:bearer:)``) is deliberate — the
     /// flush is the slow path, and carrying the encoded form through the chunker
     /// would put a second representation of every queued write in memory.
     private static func entryBytes(_ item: LunoraQueuedMutation) -> Int {
@@ -559,7 +660,7 @@ extension LunoraClient {
     /// budget and answers `413 PAYLOAD_TOO_LARGE` past it, so 500 writes carrying
     /// bytes or long text are one request the server refuses whole. A single write
     /// over the budget still forms its own chunk — splitting cannot help it, and
-    /// ``replayBatched(_:_:_:)`` settles it on the answer.
+    /// ``replayBatched(_:_:_:bearer:)`` settles it on the answer.
     private static func chunkBatches(_ items: [LunoraQueuedMutation]) -> [[LunoraQueuedMutation]] {
         var chunks: [[LunoraQueuedMutation]] = []
         var current: [LunoraQueuedMutation] = []
@@ -625,6 +726,19 @@ extension LunoraClient {
                 continue
             }
 
+            if slot.keys.contains("error"), slot["error"] as? [String: Any] == nil {
+                // An `error` key holding a string, a null, an array or a number
+                // is no envelope (§4.2), and a slot carries no HTTP status of
+                // its own to classify it by — so nothing readable came back
+                // about this entry, which is exactly the position of a slot the
+                // server never returned. §4.3 retries that one. Falling through
+                // to the commit branch below settled a durable write COMMITTED
+                // with a null result and un-persisted it.
+                requeue.append(entry)
+
+                continue
+            }
+
             if let envelope = slot["error"] as? [String: Any] {
                 let error = LunoraClient.batchSlotError(envelope, fallback: "request failed")
 
@@ -646,24 +760,51 @@ extension LunoraClient {
                 continue
             }
 
-            withLock { queue.unpersist(entry.id) }
-            // The overlay is confirmed BEFORE the caller is told, so the gapless
-            // drop is already in place when the confirming frame lands.
-            settleLayers(confirm: entry.handles, rollback: [], commitCursor: LunoraClient.parseSlotID(slot["commitCursor"]))
-            report.committed.append(entry.id)
-            emitSettled(
-                LunoraMutationSettled(
-                    mutationID: entry.id,
-                    status: .committed,
-                    value: (try? Wire.decode(slot["result"] ?? NSNull())) ?? NSNull(),
-                    error: nil,
-                    hadAwaiter: entry.liveAwaiter
-                ),
-                entry.onSettled
-            )
+            // Decoded FIRST, inside its own guard: a slot whose result does not
+            // decode is still committed, and it neither aborts the loop nor
+            // loses a sibling. Only once the outcome is decided does the durable
+            // record go.
+            var value: Any = NSNull()
+            var decodeError: LunoraAPIError?
+
+            do {
+                value = try LunoraClient.decodeResult(slot["result"])
+            } catch {
+                decodeError = error as? LunoraAPIError
+            }
+
+            settleCommitted(queue, entry, value: value, decodeError: decodeError, LunoraClient.parseSlotID(slot["commitCursor"]), &report)
         }
 
         return requeue
+    }
+
+    /// Un-persists a committed write, confirms its overlay and settles it —
+    /// carrying the ``LunoraAPIError/wireDecodeFailed`` error, with no value,
+    /// when its result did not decode.
+    private func settleCommitted(
+        _ queue: LunoraOfflineQueue,
+        _ entry: LunoraQueuedMutation,
+        value: Any,
+        decodeError: LunoraAPIError?,
+        _ commitCursor: Int?,
+        _ report: inout LunoraFlushReport
+    ) {
+        withLock { queue.unpersist(entry.id) }
+        // The overlay is confirmed BEFORE the caller is told, so the gapless drop
+        // is already in place when the confirming frame lands.
+        settleLayers(confirm: entry.handles, rollback: [], commitCursor: commitCursor)
+        report.committed.append(entry.id)
+        emitSettled(
+            LunoraMutationSettled(
+                mutationID: entry.id,
+                status: .committed,
+                value: decodeError == nil ? value : nil,
+                error: decodeError,
+                hadAwaiter: entry.liveAwaiter
+            ),
+            entry.onSettled
+        )
     }
 
     /// Un-persists a batch-rejected write, rolls its overlay back and settles it.
@@ -691,13 +832,19 @@ extension LunoraClient {
     /// Whether a failed replay may be retried rather than dropped.
     ///
     /// A raw error from the injected poster is the network, not the server: no
-    /// verdict was reached, so the write is still good.
+    /// verdict was reached, so the write is still good. A refused credential
+    /// (``LunoraOfflineCode/authRefused``) holds the write too.
+    ///
+    /// A committed-but-undecodable result never reaches here: it is told apart
+    /// by WHERE it arose (``rpcFull`` returns it beside the reply), not by its
+    /// code, so a server that answers `WIRE_DECODE_FAILED` has refused the write.
     public static func isTransient(_ error: Error) -> Bool {
         guard let api = error as? LunoraAPIError else { return true }
 
         return api.transient
             || LunoraOfflineCode.transient.contains(api.code)
             || LunoraOfflineCode.rateLimited.contains(api.code)
+            || LunoraOfflineCode.authRefused.contains(api.code)
     }
 
     /// How long a rate-limited replay asks to wait, if the envelope said.
@@ -806,7 +953,7 @@ extension LunoraClient {
         )
 
         entry.clientID = storedClientID
-        entry.identity = LunoraIdentity.stamp(storedIdentity)
+        entry.identity = identityFingerprintLocked()
         entry.liveAwaiter = true
         entry.precondition = options.precondition
         entry.handles = handles

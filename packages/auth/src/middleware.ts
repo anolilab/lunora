@@ -44,18 +44,24 @@ const callHasHeaders = (argument: unknown): boolean => {
 };
 
 /**
- * Wrap a better-auth `api` surface in a Proxy that throws
- * {@link LunoraAuthHeadersError} when any endpoint is invoked without `headers`.
+ * Wrap a better-auth `api` surface in a Proxy that synthesises the
+ * `withoutHeaders()` escape hatch and — when `enforce` is set — throws
+ * {@link LunoraAuthHeadersError} for any endpoint invoked without `headers`.
  *
  * The proxy is transparent: property reads return guarded function wrappers for
  * callable endpoints and pass everything else (non-function properties) through
  * untouched, so the wrapped surface stays structurally identical to `auth.api`.
  *
- * One synthetic property is added — `withoutHeaders()` — the explicit, loud
- * escape hatch that returns the raw, unguarded `auth.api` for the rare,
- * deliberate server-to-server call that must run unauthenticated.
+ * One synthetic property is always added — `withoutHeaders()` — the explicit,
+ * loud escape hatch that returns the raw, unguarded `auth.api` for the rare,
+ * deliberate server-to-server call that must run unauthenticated. It is
+ * synthesised even with `enforce` off, because `LunoraAuthApiContext`'s type
+ * declares it unconditionally: an app that wrote the documented
+ * `ctx.authApi.withoutHeaders().createOrganization(…)` for a cron path would
+ * otherwise start throwing `is not a function` the day it sets
+ * `enforceHeaders: false`, with tsc silent about it.
  */
-const guardAuthApi = <Api extends Record<string, unknown>>(api: Api): Api => {
+const guardAuthApi = <Api extends Record<string, unknown>>(api: Api, enforce: boolean): Api => {
     const withoutHeaders = (): Api => api;
 
     return new Proxy(api, {
@@ -78,7 +84,7 @@ const guardAuthApi = <Api extends Record<string, unknown>>(api: Api): Api => {
             const method = property;
 
             return (...arguments_: unknown[]): unknown => {
-                if (!callHasHeaders(arguments_[0])) {
+                if (enforce && !callHasHeaders(arguments_[0])) {
                     // better-auth endpoints are async, so surface the guard as a
                     // rejected promise — it composes with `await`/`.catch` the
                     // same way an endpoint error would, instead of throwing
@@ -304,9 +310,9 @@ export const withAuthPlugins = <Auth extends LunoraAuth>(auth: Auth, options: Wi
 
     // Build the surface once per middleware, not per request: the guard proxy
     // is stateless, so the same wrapped object is safe to share across calls.
-    const authApi = enforceHeaders
-        ? (guardAuthApi(auth.api as Record<string, unknown>) as LunoraAuthApiContext<Auth>["authApi"])
-        : (auth.api as LunoraAuthApiContext<Auth>["authApi"]);
+    // The wrapper goes on either way — with `enforceHeaders` off it only
+    // synthesises `withoutHeaders()` and passes every endpoint through.
+    const authApi = guardAuthApi(auth.api as Record<string, unknown>, enforceHeaders) as LunoraAuthApiContext<Auth>["authApi"];
 
     // The callable is generic over CtxIn so `next({ ctx: { authApi } })`
     // returns `CtxIn & { authApi }` — fields the upstream middleware

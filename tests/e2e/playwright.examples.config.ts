@@ -2,7 +2,7 @@ import { join } from "node:path";
 
 import { defineConfig, devices } from "@playwright/test";
 
-import { EXAMPLES, installDevVars } from "./examples-setup";
+import { CLOUDFLARE_AUTH_AVAILABLE, EXAMPLES, installDevVars } from "./examples-setup";
 
 /**
  * Browser-level smoke suite for `examples/*`.
@@ -10,8 +10,8 @@ import { EXAMPLES, installDevVars } from "./examples-setup";
  * Separate from the playground config on purpose: this one boots five apps, not
  * one, and Playwright's own `webServer` array already does the spawn/wait/kill
  * that `globalSetup.ts` hand-rolls for the playground. The only setup left is
- * writing a deterministic `.dev.vars` per example, which is why the global hooks
- * here are two lines each.
+ * writing a deterministic `.dev.vars` per example, which happens at import time
+ * below — so this config declares no `globalSetup`/`globalTeardown` at all.
  *
  * The examples ship no `/test/reset` route, so nothing wipes state between
  * runs. Every spec therefore creates its own uniquely-named rows and asserts on
@@ -48,23 +48,16 @@ const selected = process.argv.reduce<string[]>((names, argument, index) => {
 const chosen = selected.length > 0 ? EXAMPLES.filter(({ name }) => selected.includes(name)) : EXAMPLES;
 
 /**
- * Drop the examples that need a Cloudflare account when CI has no token.
+ * Which examples get a dev server.
  *
- * A runner has neither `CLOUDFLARE_API_TOKEN` nor a cached `wrangler login`, so
- * the Workers AI binding fails the whole suite at boot rather than failing one
- * project. Locally the example is left in: a developer usually is logged in,
- * and if not, the plugin's own error names the variable to set.
+ * The ones needing a Cloudflare account cannot boot without one — the Workers
+ * AI binding is proxied to Cloudflare even under `vite dev`, and a failed
+ * `webServer` fails the whole run rather than one project. So their server is
+ * left unstarted, but their PROJECT stays in the list below: the spec skips
+ * itself under the same condition, which puts the omission in the reporter's
+ * skip count instead of in a `console.warn` nothing reads.
  */
-const gated = chosen.filter((example) => !("needsCloudflareAuth" in example) || !isCI || Boolean(process.env.CLOUDFLARE_API_TOKEN));
-
-if (gated.length < chosen.length) {
-    // eslint-disable-next-line no-console
-    console.warn(
-        `[examples-e2e] skipping ${chosen.length - gated.length} example(s) that need a Cloudflare account — set CLOUDFLARE_API_TOKEN to include them.`,
-    );
-}
-
-const wanted = gated;
+const bootable = chosen.filter((example) => !("needsCloudflareAuth" in example) || CLOUDFLARE_AUTH_AVAILABLE);
 
 export default defineConfig({
     expect: { timeout: 10_000 },
@@ -73,7 +66,7 @@ export default defineConfig({
     // specs in parallel on top of that starves slower runners.
     fullyParallel: false,
     outputDir: "./test-results-examples",
-    projects: wanted.map(({ name, port }) => ({
+    projects: chosen.map(({ name, port }) => ({
         name,
         testMatch: `${name}.spec.ts`,
         use: { ...devices["Desktop Chrome"], baseURL: `http://localhost:${port}` },
@@ -85,7 +78,7 @@ export default defineConfig({
     // only the first test of each project sees it, but it can exceed 30s.
     timeout: 150_000,
     use: { actionTimeout: 10_000, navigationTimeout: 90_000, screenshot: "only-on-failure", trace: "retain-on-failure" },
-    webServer: wanted.map(({ name, port }) => ({
+    webServer: bootable.map(({ name, port }) => ({
         command: `pnpm exec vite --port ${port} --strictPort`,
         cwd: join(ROOT, "examples", name),
         reuseExistingServer: !isCI,

@@ -1,5 +1,5 @@
 import type { FunctionReference } from "@lunora/client";
-import { useLunora } from "@lunora/react";
+import { decodeDocument, decodeWire, encodeWire, isPlainObject } from "@lunora/wire";
 import type { OnChangeFn, SortingState } from "@tanstack/react-table";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -7,13 +7,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // codec the shard writer stores `__doc__` with, so display and save agree on the
 // encoding rather than studio growing a second, drifting decoder.
 import { drainBulkOp } from "../../../../../../shared/bulk-drain";
-import { decodeDocument, decodeWire, encodeWire, isPlainObject } from "../../../../../../shared/wire-codec";
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
 import useMirroredRef from "../../../hooks/use-mirrored-ref";
+import useStudioClient from "../../../hooks/use-studio-client";
 import type { BulkRowOpResult, FacetResult, FilterClause, TableInfo, TablePage, WriteRowResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
-import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
+import { adminRef, callOptions, facetFilterValue, fireAndForget, formatCell } from "../../../lib/internal";
 import type { DataView } from "../../../lib/saved-queries";
 import { recordShard } from "../../../lib/shard-history";
 import type { DataBrowserTableModel, TableRow } from "../data-browser-grid";
@@ -39,31 +39,32 @@ const toOrderBy = (sorting: SortingState): undefined | { column: string; directi
 /**
  * Coerce a clicked facet value into the string an `EditableFilter` carries (the
  * filter bar's values are strings until coerced for the wire). NULL/undefined map
- * to the empty string; objects are JSON-encoded so they don't stringify to
- * `[object Object]`.
+ * to the empty string; bytes and objects render as the grid renders them, so
+ * they don't stringify to `[object Object]` or `{}`.
  */
-const facetValueText = (value: unknown): string => {
-    if (value === null || value === undefined) {
-        return "";
-    }
-
-    if (typeof value === "object") {
-        return JSON.stringify(value);
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- non-object primitives stringify meaningfully; objects are handled above
-    return String(value);
-};
+const facetValueText = (value: unknown): string => formatCell(value);
 
 /**
  * Hydrate the filter bar from URL/saved-query {@link FilterClause}s. The inverse
- * of `toFilterClauses`: the bar's value is always a string (it re-coerces numbers
- * on the wire), so every clause value is stringified back. Objects can't appear
- * on a real clause value, but are JSON-encoded defensively.
+ * of `toFilterClauses`: the bar's value is always a string, so every clause value
+ * is stringified back for display. Objects can't appear on a real clause value,
+ * but are JSON-encoded defensively.
+ *
+ * The clause's own value is pinned as the row's `literal` so the round-trip is
+ * exact — a shared link's `zip eq "12345"` must not come back as the number
+ * `12345` just because its display text parses as one. Editing the row clears
+ * the pin (see `EditableFilter.literal`).
  */
 const toEditableFilters = (clauses: ReadonlyArray<FilterClause>): EditableFilter[] =>
     clauses.map((clause) => {
-        return { column: clause.column, operator: clause.operator, value: clause.value === undefined ? "" : facetValueText(clause.value) };
+        return {
+            column: clause.column,
+            path: (clause.path ?? []).join("."),
+            ...(clause.path === undefined || clause.path.length === 0 ? {} : { pathSegments: clause.path }),
+            ...(clause.value === undefined ? {} : { literal: [clause.value] satisfies [unknown] }),
+            operator: clause.operator,
+            value: clause.value === undefined ? "" : facetValueText(clause.value),
+        };
     });
 
 /** Translate a single-sort `orderBy` into the TanStack sorting state the grid renders. */
@@ -76,7 +77,7 @@ const fromOrderBy = (orderBy: DataView["orderBy"]): SortingState => (orderBy ===
  * blob) — serializing a tuple instead means two equal clauses always produce
  * the same string, regardless of where they came from.
  */
-const filterClauseTuple = (clause: FilterClause): [string, string, unknown] => [clause.column, clause.operator, clause.value];
+const filterClauseTuple = (clause: FilterClause): [string, string, unknown, string[]] => [clause.column, clause.operator, clause.value, clause.path ?? []];
 
 /**
  * Serialize the fields a data-browser view is keyed on (shard / search /
@@ -263,6 +264,15 @@ interface DataBrowserModel {
     /** Toggle a column into / out of the facet sidebar (fetches its summary when turned on). */
     toggleFacet: (column: string) => void;
     total: number;
+
+    /**
+     * Whether {@link DataBrowserModel.total} is the COUNT the server returned, or
+     * still the first-load lower bound derived from the loaded page. A destructive
+     * confirmation must not quote the lower bound — the page is 50 rows and the
+     * delete is the whole predicate — so the buttons drop the number until this
+     * is `true`.
+     */
+    totalKnown: boolean;
     viewMode: "json" | "table";
     writeError: null | string;
     /** Outcome line for the last completed bulk op — how many rows it actually wrote. */
@@ -404,7 +414,7 @@ const useDataBrowser = ({
     /** The table named in the URL — drives the selection so browser back/forward works. */
     tableParam: string | undefined;
 }): DataBrowserModel => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     // Rows-per-page is user-adjustable (the pagination footer's selector); the
     // prop seeds the initial value. Changing it re-fetches the first page.
@@ -584,6 +594,7 @@ const useDataBrowser = ({
         clearFacets();
         stagedEdits.clear();
         setEditingCell(null);
+        setEditing(null);
         setOffset(0);
         // Every bulk-op banner describes the view being left behind — "500 rows
         // written." over a different table reads as if it just happened — and a
@@ -644,6 +655,28 @@ const useDataBrowser = ({
     const debounceResetKey = `${tableParam ?? ""}:${seedEpoch.toString()}`;
     const search = useDebounced(filterInput.trim(), 300, debounceResetKey);
     const debouncedShard = useDebounced(shardInput.trim(), 400, debounceResetKey);
+
+    // Which view is on screen: `debounceResetKey` moves on every re-seed (table
+    // switch or applied view), `shardEdits` on every manual shard change — a
+    // counter rather than the shard value, so editing A → B → A still counts as
+    // leaving A. Work that outlives a switch compares both before writing state
+    // that describes the view it started in.
+    const viewIdentityRef = useMirroredRef(debounceResetKey);
+    const shardEdits = useRef(0);
+
+    // `changeShard` clears the staged buffer when the input changes, but writes
+    // target `debouncedShard`, which settles up to 400ms later. An edit staged
+    // inside that window was made against the old shard's rows; clear again when
+    // the shard the writes actually go to changes. Adjusted during render (the
+    // same idiom as the re-seed check above), not in an effect.
+    const [stagedForShard, setStagedForShard] = useState<string>(debouncedShard);
+
+    if (stagedForShard !== debouncedShard) {
+        setStagedForShard(debouncedShard);
+        stagedEdits.clear();
+        setEditingCell(null);
+        setEditing(null);
+    }
 
     // Mirror the emitted view — the exact payload the mirror effect far below
     // sends to the host — into `emittedViewKey`, so the render-time re-seed
@@ -775,12 +808,17 @@ const useDataBrowser = ({
 
     // Clicking a facet value adds an `eq` filter for that column/value, narrowing
     // the view to those rows. Reuses the same `EditableFilter` machinery as the
-    // filter bar (its value is a string until coerced on the wire). Replaces any
-    // existing clause for the same column so repeated clicks don't stack.
+    // filter bar, but pins the facet's OWN value as the row's literal: the text
+    // is only what the box displays, and re-deriving a value from it is what let
+    // a facet's count disagree with the rows the click returned. Replaces any
+    // existing plain clause for the same column so repeated clicks don't stack. A
+    // nested-path or `has` row on that column tests another value, so it is kept.
     const facetFilter = (column: string, value: unknown): void => {
-        const text = facetValueText(value);
+        const row: EditableFilter = { column, literal: [facetFilterValue(value)], operator: "eq", value: facetValueText(value) };
+        const replaces = (clause: EditableFilter): boolean =>
+            clause.column === column && clause.operator !== "has" && clause.pathSegments === undefined && (clause.path ?? "").trim() === "";
 
-        setFilters((current) => [...current.filter((clause) => clause.column !== column), { column, operator: "eq", value: text }]);
+        setFilters((current) => [...current.filter((clause) => !replaces(clause)), row]);
         setOffset(0);
     };
 
@@ -807,7 +845,7 @@ const useDataBrowser = ({
 
         // `refetchFacets` re-runs only the already-open facets (read off the hook's
         // ref); toggling a single facet on is handled by `toggleFacet`'s own fetch.
-        refetchFacetsRef.current(facetFetcherRef.current(debouncedShard, selectedTable, filters, search));
+        fireAndForget(refetchFacetsRef.current(facetFetcherRef.current(debouncedShard, selectedTable, filters, search)));
         // Fire on the active view; the facet callbacks are read via refs (see above).
         // react-doctor-disable-next-line react-doctor/exhaustive-deps -- the refs are `useMirroredRef` handles — stable by construction, and reading them is the whole point: the effect keys on the VIEW values so it fires when the view changes, not when a callback identity churns
         // eslint-disable-next-line react-hooks/exhaustive-deps -- same reason: `useMirroredRef` handles are stable, and listing them would say this effect depends on identities it deliberately does not
@@ -896,6 +934,21 @@ const useDataBrowser = ({
     const discardStaged = (): void => {
         stagedEdits.clear();
         setEditingCell(null);
+    };
+
+    // A manual shard switch leaves the rows the staged edits were made against.
+    // The commit writes through the CURRENT shard, so an edit staged on one
+    // shard would otherwise land on a same-id row of another — a silent
+    // overwrite. Reset exactly what a URL re-seed resets for a shard change.
+    const changeShard = (value: string): void => {
+        shardEdits.current += 1;
+        setShardKey(value);
+        stagedEdits.clear();
+        setEditingCell(null);
+        // The JSON row editor too: its save writes the draft by id to the CURRENT shard.
+        setEditing(null);
+        setOffset(0);
+        bulkResume.current = null;
     };
 
     // Resolve the staged buffer against the loaded page for the old→new diff.
@@ -996,6 +1049,14 @@ const useDataBrowser = ({
             return 0;
         }
 
+        // A drain outlives a table/shard switch. Its outcome line and offset reset
+        // describe the view it started in, so they apply only while that view is
+        // still the one on screen — otherwise "3 rows deleted." lands under the
+        // next table and bounces it back to its first page.
+        const startedIn = debounceResetKey;
+        const startedAtEdit = shardEdits.current;
+        const stillCurrent = (): boolean => viewIdentityRef.current === startedIn && shardEdits.current === startedAtEdit;
+
         setWriteError(null);
         setWriteNotice(null);
 
@@ -1028,6 +1089,10 @@ const useDataBrowser = ({
                 },
             });
 
+            if (!stillCurrent()) {
+                return written;
+            }
+
             bulkResume.current = drained.cursor === undefined ? null : { after: drained.cursor, key: resumeKey };
 
             if (drained.outcome === "cap-hit") {
@@ -1038,6 +1103,10 @@ const useDataBrowser = ({
 
             return written;
         } catch (error) {
+            if (!stillCurrent()) {
+                return written;
+            }
+
             // A throw loses the failing batch's own committed count, so this is a
             // lower bound — hence "at least". The rows before the failure are already
             // on disk, so silence here would be the worse lie.
@@ -1050,8 +1119,10 @@ const useDataBrowser = ({
             // Also on the failure path: a partial batch is committed server-side, so
             // reporting an error over a grid still showing pre-write values is worse
             // than refreshing under the message.
-            setOffset(0);
-            pageQuery.refetch();
+            if (stillCurrent()) {
+                setOffset(0);
+                pageQuery.refetch();
+            }
         }
     };
 
@@ -1093,7 +1164,9 @@ const useDataBrowser = ({
     // `offset + rows shown` — so a page with rows never briefly reads "0 of 0".
     // The count resolves alongside the page on first load and stays cached across
     // paging, so this fallback is a brief first-load transient only.
-    const total = countQuery.data?.total ?? (page === null ? 0 : offset + page.rows.length);
+    const countTotal = countQuery.data?.total;
+    const totalKnown = countTotal !== undefined;
+    const total = countTotal ?? (page === null ? 0 : offset + page.rows.length);
     const hasPrevious = offset > 0;
 
     // The predicate the bulk ops actually send — see `DataBrowserModel.hasPredicate`.
@@ -1102,7 +1175,11 @@ const useDataBrowser = ({
     // DROPPED there, so counting raw `filters.length` offered "Delete N matching"
     // over the whole table and then sent `filters: []`, which the server refuses.
     const hasPredicate = search !== "" || toFilterClauses(filters).length > 0;
-    const hasNext = page !== null && offset + page.rows.length < total;
+    // With the COUNT still pending, `total` is exactly `offset + rows.length`, so
+    // comparing against it always says "no next page" and freezes the pager on
+    // page one. A full page is the only next-page evidence available until the
+    // real count lands.
+    const hasNext = page !== null && (totalKnown ? offset + page.rows.length < total : page.rows.length === pageSize);
     const rangeStart = page === null || page.rows.length === 0 ? 0 : offset + 1;
     const rangeEnd = page === null ? 0 : offset + page.rows.length;
 
@@ -1297,7 +1374,7 @@ const useDataBrowser = ({
         selectedTable,
         selectTable,
         setEditorDocumentText,
-        setShardKey,
+        setShardKey: changeShard,
         shardKey,
         showJson,
         showTable,
@@ -1310,6 +1387,7 @@ const useDataBrowser = ({
         tablesError,
         toggleFacet,
         total,
+        totalKnown,
         viewMode,
         writeError,
         writeNotice,
@@ -1326,4 +1404,4 @@ const useDataBrowser = ({
  */
 export type { DataBrowserModel };
 export type { FacetState } from "./use-facets";
-export { useDataBrowser };
+export { serializeView, useDataBrowser };

@@ -1,0 +1,201 @@
+/**
+ * `v.sensitive(...)` as the build-time sees it: the IR records the marker, the
+ * registry and the shard carry the argument NAMES (never the value), the api
+ * reference is typed `sensitive`, and the JSON Schema is write-only. Every case
+ * uses an innocuously named argument, `value`, because the marker is what counts.
+ */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
+import { Project } from "ts-morph";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import discoverFunctions from "../src/discover/functions";
+import { emitApi, emitFunctions, emitShard } from "../src/emit";
+import type { FunctionIR, ValidatorIR } from "../src/ir";
+import { parseValidator, validatorContainsSensitive } from "../src/parse-validator";
+import { validatorIrToJsonSchema } from "../src/schema-ir";
+
+const makeFunction = (overrides: Partial<FunctionIR> = {}): FunctionIR => {
+    return {
+        args: { label: { kind: "string" }, value: { kind: "string", sensitive: true } },
+        exportName: "store",
+        filePath: "vault",
+        kind: "mutation",
+        returnType: "{ ok: boolean }",
+        ...overrides,
+    };
+};
+
+const sensitiveString: ValidatorIR = { kind: "string", sensitive: true };
+
+describe("v.sensitive in the build-time IR", () => {
+    let workdir: string;
+
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-sensitive-"));
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    const writeFunction = (relative: string, source: string): void => {
+        const full = join(workdir, relative);
+
+        mkdirSync(dirname(full), { recursive: true });
+        writeFileSync(full, source);
+    };
+
+    it("records the marker on the arg and keeps the wrapped kind", () => {
+        expect.assertions(3);
+
+        writeFunction(
+            "vault.ts",
+            `
+            import { mutation, v } from "@lunora/server";
+            export const store = mutation({
+                args: { label: v.string(), value: v.sensitive(v.string()) },
+                handler: () => ({ ok: true }),
+            });
+        `,
+        );
+
+        const [definition] = discoverFunctions(new Project({ skipAddingFilesFromTsConfig: true }), workdir);
+
+        expect(definition?.args["value"]).toStrictEqual({ kind: "string", sensitive: true });
+        expect(definition?.args["label"]).toStrictEqual({ kind: "string" });
+        expect(validatorContainsSensitive(definition?.args["value"] ?? { kind: "any" })).toBe(true);
+    });
+
+    it("sees a marker nested under an object or optional wrapper, and not on a plain tree", () => {
+        expect.assertions(2);
+
+        const nested = parseValidator(
+            new Project({ skipAddingFilesFromTsConfig: true })
+                .createSourceFile("nested.ts", "const x = v.optional(v.object({ inner: v.sensitive(v.string()) }));", { overwrite: true })
+                .getVariableDeclarationOrThrow("x")
+                .getInitializerOrThrow(),
+        );
+
+        expect(validatorContainsSensitive(nested)).toBe(true);
+        expect(validatorContainsSensitive({ kind: "object", shape: { inner: { kind: "string" } } })).toBe(false);
+    });
+
+    it("writes the arg write-only in the JSON Schema, and only that arg", () => {
+        expect.assertions(2);
+
+        expect(validatorIrToJsonSchema(sensitiveString)).toStrictEqual({ format: "password", type: "string", writeOnly: true });
+        expect(validatorIrToJsonSchema({ kind: "string" })).toStrictEqual({ type: "string" });
+    });
+});
+
+describe("emitted artifacts for a sensitive function", () => {
+    it("types the api reference as sensitive and carries the flag at runtime", () => {
+        expect.assertions(2);
+
+        const rendered = emitApi({ functions: [makeFunction()] });
+
+        expect(rendered).toContain('store: FunctionReference<"mutation", { label: string; value: string }, { ok: boolean }> & { readonly sensitive: true };');
+        expect(rendered).toContain('{ __lunoraRef: "vault:store", sensitive: true }');
+    });
+
+    it("leaves a plain function's reference untouched", () => {
+        expect.assertions(2);
+
+        const rendered = emitApi({ functions: [makeFunction({ args: { label: { kind: "string" } } })] });
+
+        expect(rendered).not.toContain("sensitive");
+        expect(rendered).toContain('{ __lunoraRef: "vault:store" }');
+    });
+
+    it("lists the sensitive argument names on a lazy stub and flags the descriptor", () => {
+        expect.assertions(3);
+
+        const emitted = emitFunctions({ functions: [makeFunction()], lazyFunctions: true });
+
+        expect(emitted).toContain('"sensitiveArgs":["value"]');
+        expect(emitted).toContain('"name":"value","optional":false,"sensitive":true');
+        expect(emitted).toContain("sensitiveArgs?: readonly string[];");
+    });
+
+    it("emits no sensitive field at all for a project without a sensitive argument", () => {
+        expect.assertions(2);
+
+        const emitted = emitFunctions({ functions: [makeFunction({ args: { label: { kind: "string" } } })], lazyFunctions: true });
+
+        expect(emitted).not.toContain("sensitive");
+        expect(emitted).not.toContain("sensitiveArgs");
+    });
+
+    it("wires the shard's sensitiveArgNames override only when a sensitive argument exists", () => {
+        expect.assertions(4);
+
+        const schema = { tables: [], vectorIndexes: [] };
+        const withSecret = emitShard({ hasSensitiveArgs: true, schema });
+        const without = emitShard({ schema });
+
+        expect(withSecret).toContain("protected override sensitiveArgNames(functionPath: string): ReadonlySet<string>");
+        expect(withSecret).toContain('import { sensitiveArgumentNames } from "@lunora/values";');
+        expect(without).not.toContain("sensitiveArgNames");
+        expect(without).not.toContain("sensitiveArgumentNames");
+    });
+
+    it("gives the shard ctx the admit hook a validator calls with a marked argument's parsed value, only when one exists", () => {
+        expect.assertions(2);
+
+        const schema = { tables: [], vectorIndexes: [] };
+
+        expect(emitShard({ hasSensitiveArgs: true, schema })).toContain(
+            '[Symbol.for("lunora.admitSensitiveArgs")]: (args: Record<string, unknown>, names: ReadonlySet<string>): void => this.admitSensitiveValues(options.sensitive, args, names),',
+        );
+        expect(emitShard({ schema })).not.toContain("lunora.admitSensitiveArgs");
+    });
+
+    /* eslint-disable no-template-curly-in-string -- the assertions are over emitted TypeScript text, whose `${name}` is not a template here */
+    it("scopes a shape's resolve to its raw args only when a shape declares a marked argument", () => {
+        expect.assertions(6);
+
+        const schema = { tables: [], vectorIndexes: [] };
+        const marked = emitShard({
+            schema,
+            shapes: [{ args: { token: sensitiveString }, exportName: "vault", filePath: "shapes", table: "vault" }],
+        });
+        const plain = emitShard({
+            schema,
+            shapes: [{ args: { label: { kind: "string" } }, exportName: "vault", filePath: "shapes", table: "vault" }],
+        });
+
+        // The predicate's transformed value is admitted into this scope by `compileWhere`, and the
+        // error it throws is scrubbed through it before the scope clears.
+        expect(marked).toContain(
+            "private resolveShapeWithScope(name: string, args: Record<string, unknown>, identity: SubscriptionIdentity | undefined, sensitive: SensitiveScope)",
+        );
+        expect(marked).toContain("const sensitive = this.openSensitiveScope(`__shape__:${name}`, args);");
+        expect(marked).toContain("throw this.maskSensitiveError(error, sensitive);");
+        expect(marked).toContain("const ctx = this.buildCtx({ functionPath: `__shape__:${name}`, identity, sensitive });");
+        expect(plain).not.toContain("resolveShapeWithScope");
+        expect(plain).toContain("const ctx = this.buildCtx({ functionPath: `__shape__:${name}`, identity });");
+    });
+    /* eslint-enable no-template-curly-in-string */
+
+    it("hands the dispatch's scope to every telemetry maker and composed call, and opens one for a dispatch that has none", () => {
+        expect.assertions(8);
+
+        const shard = emitShard({ schema: { tables: [], vectorIndexes: [] } });
+
+        // A record written on a dispatch's behalf is scrubbed only through the scope its
+        // maker receives, so each maker the generated `buildCtx` calls must get it.
+        expect(shard).toContain("this.makeLogger(logFunctionPath, observability, undefined, options.sensitive)");
+        expect(shard).toContain("this.makeDispatchSpan(traceAnchor, observability, options.sensitive)");
+        expect(shard).toContain("this.makeTracer(logFunctionPath, observability, traceAnchor, options.sensitive)");
+        expect(shard).toContain("this.makeMetrics(logFunctionPath, observability, options.sensitive)");
+        expect(shard).toContain("this.makeFetch(logFunctionPath, traceAnchor, observability, options.sensitive)");
+        expect(shard).toContain("this.instrumentDb(createShardCtxDb(");
+        expect(shard).toContain("const own = this.openSensitiveScope(functionPath, args);");
+        // Every composed call admits its callee's marked arguments, and the untracked
+        // sub-query's fresh context inherits the scope the way it inherits the caller.
+        expect(shard.split("this.admitSensitiveArgs(options.sensitive, reference.__lunoraRef, fnArgs);")).toHaveLength(4);
+    });
+});

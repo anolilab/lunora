@@ -10,7 +10,6 @@ import { consumeStream, streamReducer } from "./stream-state";
 
 /**
  * Result shape returned by {@link useHttpStream}.
- * @experimental Part of the HTTP-SSE stream surface.
  */
 interface UseHttpStreamResult<T> {
     /** Force-cancel the stream (aborts the fetch) and resolve the iterator. Safe to call multiple times. */
@@ -23,7 +22,6 @@ interface UseHttpStreamResult<T> {
 
 /**
  * Options accepted by {@link useHttpStream}.
- * @experimental Part of the HTTP-SSE stream surface.
  */
 interface UseHttpStreamOptions {
     /** Forwarded to `client.httpStream()` — caps the in-flight chunk buffer. */
@@ -41,7 +39,6 @@ interface UseHttpStreamOptions {
  *
  * Pass `"skip"` for `args` to keep the hook mounted without opening a stream
  * (mirrors `useQuery` / `useStream`).
- * @experimental Reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
  */
 const useHttpStream = <Ref extends HttpStreamRef>(
     route: Ref,

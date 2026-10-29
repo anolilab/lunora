@@ -5,7 +5,7 @@ import { agentComponent } from "../src/component";
 import { defineAgent, defineAgentTool } from "../src/define-agent";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import type { AgentFunctionReference, AgentRunFunction } from "../src/types";
-import { DurableStepJournal, finalTurn, makeIndexQuery, scriptedGenerate, toolTurn } from "./loop-harness";
+import { assertNoExplicitUndefined, DurableStepJournal, finalTurn, makeIndexQuery, scriptedGenerate, toolTurn } from "./loop-harness";
 
 interface FakeRow extends Record<string, unknown> {
     _id: string;
@@ -93,19 +93,13 @@ const ownedRuntime = (userId: string): { rows: Map<string, FakeRow[]>; run: Agen
 
             return id;
         },
-        patch: async (id: string, patch: Record<string, unknown>) => {
-            for (const tableContent of rows.values()) {
-                const row = tableContent.find((candidate) => candidate["_id"] === id);
+        patch: async (table: string, id: string, patch: Record<string, unknown>) => {
+            assertNoExplicitUndefined(patch);
 
-                if (row) {
-                    for (const [key, value] of Object.entries(patch)) {
-                        if (value === undefined) {
-                            Reflect.deleteProperty(row, key);
-                        } else {
-                            row[key] = value;
-                        }
-                    }
-                }
+            const row = tableRows(table).find((candidate) => candidate["_id"] === id);
+
+            if (row) {
+                Object.assign(row, patch);
             }
         },
         query: (table: string) => {

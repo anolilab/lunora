@@ -18,14 +18,22 @@ are inserted or deleted ahead of the cursor.
 ```ts
 import { query, v } from "@/lunora/_generated/server";
 
-export const list = query.input({ channelId: v.id("channels"), paginationOpts: v.any() }).query(async ({ ctx, args: { channelId, paginationOpts } }) => {
-    return ctx.db
-        .query("messages")
-        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
-        .order("desc")
-        .paginate(paginationOpts);
-});
+const cursor = v.optional(v.union(v.string(), v.null()));
+
+export const list = query
+    .input({ channelId: v.id("channels"), paginationOpts: v.object({ cursor, endCursor: cursor, numItems: v.number() }) })
+    .query(async ({ ctx, args: { channelId, paginationOpts } }) => {
+        return ctx.db
+            .query("messages")
+            .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+            .order("desc")
+            .paginate(paginationOpts);
+    });
 ```
+
+Declare `paginationOpts` with a real validator: `v.any()` types it `unknown`,
+which `.paginate()` rejects, and `usePaginatedQuery` also sends `endCursor`,
+which input validation strips unless it is declared.
 
 `.paginate()` composes with `.withIndex()`, `.filter()`, and `.order()`: it pages
 within the active index in the chosen direction.
@@ -72,6 +80,34 @@ do {
 } while (cursor !== null);
 ```
 
+## Ordering rows that hold NULL
+
+`orderBy` puts rows whose column is empty (`null` or absent) first when ascending and last when
+descending. To put them somewhere else, give the entry a `sort` and a `nulls`:
+
+```ts
+await ctx.db.tasks.findMany({
+    orderBy: [{ dueAt: { sort: "asc", nulls: "last" } }], // dated tasks first, undated at the end
+    limit: 20,
+});
+```
+
+Paging works with any placement: the cursor seeks past the NULL group the same way it seeks past any
+other value, including when a page boundary falls inside it. Use the same `orderBy` for every page,
+as a cursor is only valid against the ordering that minted it. The placement has no effect on a
+column that cannot hold NULL.
+
+Whether a non-default placement is still answered from an index depends on the database, so
+measure a hot read before relying on it:
+
+- **SQLite and D1** walk the index for the first page. Later pages carry an extra `OR col IS NULL`
+  arm in the seek, which drops to a scan, the same cost the default `desc` order already pays.
+- **Postgres** is always given the placement explicitly. A plain btree index is `ASC NULLS LAST`
+  (read backwards, `DESC NULLS FIRST`), so those two placements are served from it and the default
+  ones are sorted.
+- **MySQL** has no `NULLS FIRST/LAST`, so a non-default placement adds an `IS NULL` sort key that an
+  index on the column alone cannot serve.
+
 ## Load more / infinite lists on the client
 
 On the client a paginated list is the same query re-run with the next
@@ -102,3 +138,34 @@ async function loadMore() {
 Because queries are reactive, each loaded page stays live. A mutation that
 touches a row already on screen re-runs the query and pushes the delta to the
 client without re-fetching the whole list.
+
+## Total count ("42 of 1,203")
+
+A page knows how to fetch the next page, not how many rows exist — `paginate()`
+never counts the tail, which is what keeps it O(page) instead of O(table). Ask
+for the total with a separate query and subscribe to it like any other:
+
+```ts
+// lunora/messages.ts
+export const total = query.input({ channelId: v.id("channels") }).query(async (ctx, { channelId }) => ctx.db.messages.count({ channelId }));
+```
+
+```tsx
+const { results, status, loadMore } = usePaginatedQuery(api.messages.list, { channelId }, { initialNumItems: 50 });
+const total = useQuery(api.messages.total, { channelId });
+
+return (
+    <p>
+        Showing {results.length} of {total ?? "…"}
+    </p>
+);
+```
+
+It is a live query, so an insert or delete updates the count the same tick it
+updates the list — no invalidation to wire up. Pass the count query the **same
+filter args** as the list query, minus `paginationOpts`; a count over a different
+`where` is the classic way to print a total that disagrees with the rows on
+screen.
+
+`count()` scans the index, so on a large table prefer counting a filtered subset
+(an index-backed `where`) over the whole table on every keystroke.

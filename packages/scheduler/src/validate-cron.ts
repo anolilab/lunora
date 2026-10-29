@@ -4,40 +4,48 @@
  * (see `./jobs.ts`). Keeping the check in one place means the two surfaces can
  * never drift apart on what counts as a valid expression.
  *
- * Validation is delegated to `cron-parser`, so the full standard cron grammar is
- * accepted — wildcards, lists, ranges, steps, the 3-letter month/weekday names,
- * the Quartz-style `L`/`W`/`#`/`?` operators, the `@hourly`/`@daily`/… macros,
- * and both 5-field (minute…dow) and 6-field (seconds-leading) forms. We only
- * decide *well-formedness* here; out-of-platform values (Cloudflare caps the
- * number of triggers, doesn't run seconds, etc.) are still rejected downstream
- * by wrangler/Cloudflare at deploy time.
+ * Validation is `@visulima/cron-parser`'s `cloudflare` entry (which defaults to
+ * that dialect): five fields of `*`, lists, ranges, steps, month/weekday names
+ * and the `L`/`W`/`n#k` operators — the grammar Cloudflare Cron Triggers
+ * actually run. `seconds: "optional"` is the one relaxation: a 6-field,
+ * seconds-leading expression still parses here and only warns (see
+ * {@link warnIfSecondsLeading}), because the raw `.cron()` escape hatch exists
+ * so callers can hand-author grammar the platform will reject at `wrangler
+ * deploy`.
  *
- * `cron-parser` is a Node/codegen-time dependency: this module is pulled in by
- * the `cronJobs()` builder (authoring) and `@lunora/codegen` (build), never by
- * the `SchedulerDO` runtime path — so with `sideEffects: false` it tree-shakes
- * out of the Worker bundle.
+ * `@visulima/cron-parser` is a zero-dependency ESM parser, so this same module
+ * backs both the runtime builder and `@lunora/scheduler/validate` (codegen, CLI)
+ * — there is no second, looser hand-written grammar to keep in step.
  *
  * The ergonomic `crons.interval({ seconds })` form is rejected outright by
- * `compileInterval` in `./jobs.ts` before it ever reaches this validator. The
- * raw `.cron()` escape hatch is different: a 6-field, seconds-leading
- * expression is well-formed cron grammar (`cron-parser` accepts it), so it
- * passes here — but Cloudflare Cron Triggers only understand the standard
- * 5-field form and reject 6-field expressions at `wrangler deploy`. We warn
- * rather than throw for that case (see {@link warnIfSecondsLeading}): the
- * escape hatch exists precisely so callers can hand-author cron grammar this
- * module doesn't otherwise validate against a specific platform.
+ * `compileInterval` in `./jobs.ts` before it ever reaches this validator.
  */
 import { LunoraError } from "@lunora/errors";
-import { CronExpressionParser } from "cron-parser";
+import { parse } from "@visulima/cron-parser/cloudflare";
 
-/** Standard cron expression (5- or 6-field) or a supported `@macro`, per `cron-parser`. */
+/** Splits a cron expression on whitespace to count its fields. */
+const CRON_FIELD_SPLIT_PATTERN = /\s+/u;
+
+/** The `cloudflare` entry already fixes the dialect; `seconds` keeps the 6-field escape hatch. */
+const CRON_PARSE_OPTIONS = { seconds: "optional" } as const;
+
+/** True when `schedule` is a Cloudflare Cron Trigger expression (or a 6-field escape-hatch one). */
 const isValidCronExpression = (schedule: string): boolean => {
-    if (typeof schedule !== "string" || schedule.trim() === "") {
+    if (typeof schedule !== "string") {
+        return false;
+    }
+
+    const fields = schedule.trim().split(CRON_FIELD_SPLIT_PATTERN);
+
+    // The parser pads a short expression into five fields, so the count is enforced
+    // here: a Cloudflare Cron Trigger is exactly five fields, and the raw `.cron()`
+    // escape hatch adds a sixth (seconds) it warns about.
+    if (fields.length !== 5 && fields.length !== 6) {
         return false;
     }
 
     try {
-        CronExpressionParser.parse(schedule.trim());
+        parse(fields.join(" "), CRON_PARSE_OPTIONS);
 
         return true;
     } catch {
@@ -45,17 +53,14 @@ const isValidCronExpression = (schedule: string): boolean => {
     }
 };
 
-/** Splits a cron expression on whitespace to count its fields. */
-const CRON_FIELD_SPLIT_PATTERN = /\s+/u;
-
 /**
- * A 6-field (seconds-leading) cron expression is legal generic cron grammar
- * but not a Cloudflare Cron Trigger — the platform only understands the
- * 5-field, minute-granularity form and rejects the rest at `wrangler deploy`
- * with a message naming neither the job nor the file. Warn here instead of
- * staying silent, without throwing: unlike the ergonomic `.interval()` form,
- * the raw `.cron()` escape hatch is meant to accept cron grammar this module
- * doesn't otherwise second-guess.
+ * A 6-field (seconds-leading) cron expression is legal generic cron grammar but
+ * not a Cloudflare Cron Trigger — the platform only understands the 5-field,
+ * minute-granularity form and rejects the rest at `wrangler deploy` with a
+ * message naming neither the job nor the file. Warn here instead of staying
+ * silent, without throwing: unlike the ergonomic `.interval()` form, the raw
+ * `.cron()` escape hatch is meant to accept cron grammar this module doesn't
+ * otherwise second-guess.
  *
  * Exported (not module-private) because it is the ONE place this advisory is
  * written: the runtime `cronJobs()` builder reaches it via

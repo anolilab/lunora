@@ -6,7 +6,9 @@
  * admin gate, option registry, and request helpers through injected deps, so the
  * module imports no runtime values from `create-worker` (only its types).
  */
-import { decodeWire } from "../../../shared/wire-codec";
+import { decodeWire } from "@lunora/wire";
+
+import { EMPTY_ARCHITECTURE } from "../../../shared/architecture-manifest";
 import type { CronJobDispatch, CronJobInfo, FunctionDescriptor, FunctionRegistryLike, GlobalFilterClause, GlobalIntrospector } from "./create-worker";
 import { describeArguments } from "./describe-args";
 import { LunoraError } from "./errors";
@@ -14,6 +16,7 @@ import { assertMethod } from "./method-guard";
 
 const FUNCTIONS_PATH = "/_lunora/admin/functions";
 const CRON_JOBS_PATH = "/_lunora/admin/cron-jobs";
+const ARCHITECTURE_PATH = "/_lunora/admin/architecture";
 const OPENAPI_PATH = "/_lunora/admin/openapi";
 const OPENRPC_PATH = "/_lunora/admin/openrpc";
 const GLOBAL_TABLES_PATH = "/_lunora/admin/global/tables";
@@ -53,14 +56,17 @@ const parseGlobalFilters = (raw: string | undefined): GlobalFilterClause[] | und
         return undefined;
     }
 
+    // `operator` and `path` are forwarded unvalidated on purpose: the D1 compiler
+    // refuses anything but a plain eq, and dropping them here would turn a `has`
+    // or nested clause into an equality on the parent column.
     const clauses = parsed.flatMap((entry) => {
         if (typeof entry !== "object" || entry === null || typeof (entry as { column?: unknown }).column !== "string") {
             return [];
         }
 
-        const { column, value } = entry as { column: string; value?: unknown };
+        const { column, operator, path, value } = entry as { column: string; operator?: string; path?: string[]; value?: unknown };
 
-        return [{ column, value }];
+        return [{ column, value, ...(operator === undefined ? {} : { operator }), ...(path === undefined ? {} : { path }) }];
     });
 
     return clauses.length === 0 ? undefined : clauses;
@@ -100,6 +106,7 @@ interface IntrospectionAdminRouteDeps {
     /** Admin-token gate (throws 403) — used by the spec routes, which serve a default even when unconfigured. */
     assertAdmin: (request: Request) => void;
     options: {
+        architecture?: unknown;
         cronJobs?: Record<string, ReadonlyArray<CronJobDispatch>>;
         functions?: FunctionRegistryLike;
         globalIntrospector?: GlobalIntrospector;
@@ -132,7 +139,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
                     return [];
                 }
 
-                return [{ args: describeArguments(entry.args), kind: entry.kind, path }];
+                return [{ args: [...(entry.argumentDescriptors ?? describeArguments(entry.args))], kind: entry.kind, path }];
             })
             .toSorted((a, b) => a.path.localeCompare(b.path));
 
@@ -166,6 +173,16 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
             .toSorted((a, b) => a.name.localeCompare(b.name));
 
         return Response.json({ jobs }, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleArchitecture = (request: Request): Response => {
+        assertMethod(request, "GET", "Architecture");
+
+        assertAdmin(request);
+
+        // Codegen emits the manifest only once the app declares a module; until
+        // then answer an empty-but-valid one so the studio shows how to opt in.
+        return Response.json(options.architecture ?? EMPTY_ARCHITECTURE, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     const handleOpenApi = (request: Request): Response => {
@@ -252,6 +269,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
         [GLOBAL_FACET_PATH]: handleGlobalFacet,
         [GLOBAL_TABLE_PATH]: handleGlobalTablePage,
         [GLOBAL_TABLES_PATH]: handleGlobalTables,
+        [ARCHITECTURE_PATH]: handleArchitecture,
         [OPENAPI_PATH]: handleOpenApi,
         [OPENRPC_PATH]: handleOpenRpc,
     };

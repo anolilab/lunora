@@ -1,9 +1,10 @@
 import { LunoraError } from "@lunora/errors";
-import type { BetterAuthOptions } from "better-auth";
-import { betterAuth } from "better-auth";
+import type { betterAuth as fullBetterAuth, BetterAuthOptions } from "better-auth";
 import { getIP } from "better-auth/api";
+import { betterAuth } from "better-auth/minimal";
 
 import { onCloudflareEdge } from "../../../shared/on-cloudflare-edge";
+import { authDiscoveryPaths } from "./discovery";
 import { validateSessionPolicy } from "./session";
 
 /**
@@ -366,6 +367,10 @@ const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
  *
  * (Lunora can't set this for you — `ctx.waitUntil` is per-request, but
  * `createAuth` runs once at worker setup.)
+ *
+ * `databaseHooks` never receives a Lunora `MutationCtx` — the hook runs inside
+ * better-auth's own write path. A side effect on an app table is therefore a
+ * separate write and has to be idempotent; see `concepts/authentication`.
  */
 export type LunoraAuthOptions = BetterAuthOptions;
 
@@ -375,7 +380,7 @@ export type LunoraAuthOptions = BetterAuthOptions;
  * exposes the typed endpoint surface for server-side calls (e.g.
  * `auth.api.getSession({ headers })` inside a query/mutation).
  */
-export type LunoraAuth = ReturnType<typeof betterAuth>;
+export type LunoraAuth = ReturnType<typeof fullBetterAuth>;
 
 /**
  * Resolve the caller's options into the exact shape `createAuth` hands to
@@ -483,13 +488,10 @@ export const resolveAuthOptions = (options: LunoraAuthOptions): LunoraAuthOption
 };
 
 /**
- * Create the auth instance. Thin wrapper around `betterAuth` that enforces
- * the `secret` requirement at construction time so misconfigured deployments
- * fail loudly at the first fetch rather than the first sign-in attempt, then
- * hands {@link resolveAuthOptions}'s hardened, default-filled options to
- * better-auth.
+ * Validate the caller's options and resolve them to what better-auth receives.
+ * Shared by {@link createAuth} and the migration entry's `createMigrationAuth`.
  */
-export const createAuth = (options: LunoraAuthOptions): LunoraAuth => {
+export const prepareAuthOptions = (options: LunoraAuthOptions): LunoraAuthOptions => {
     // Reject missing *and* whitespace-only secrets — a value like `" "` is
     // falsy-adjacent (it slips past `!options.secret`) but is just as
     // misconfigured, so fail loudly at construction time rather than at the
@@ -511,5 +513,33 @@ export const createAuth = (options: LunoraAuthOptions): LunoraAuth => {
         validateSessionPolicy(options.session);
     }
 
-    return betterAuth(resolveAuthOptions(options));
+    // Fail at construction, not on the first discovery request, when the MCP
+    // resource of an unmarked `mcp()` plugin cannot be told apart.
+    authDiscoveryPaths(options);
+
+    return resolveAuthOptions(options);
+};
+
+/**
+ * Create the auth instance. Thin wrapper around `betterAuth` that enforces
+ * the `secret` requirement at construction time so misconfigured deployments
+ * fail loudly at the first fetch rather than the first sign-in attempt, then
+ * hands {@link resolveAuthOptions}'s hardened, default-filled options to
+ * better-auth.
+ */
+export const createAuth = (options: LunoraAuthOptions): LunoraAuth => {
+    const resolved = prepareAuthOptions(options);
+
+    // `better-auth/minimal` takes adapter factories only. The full entry statically pulls
+    // kysely and the migrator (~700 KB) into the Worker bundle, so the one caller that needs
+    // a raw `database` (the migration instance) lives behind `@lunora/auth/migrate`.
+    if (typeof (resolved as { database?: unknown }).database !== "function") {
+        throw new LunoraError(
+            "INTERNAL",
+            "@lunora/auth: `createAuth` needs an adapter factory as `database` (`lunoraD1Adapter(env.DB)` or the Durable Object wiring). " +
+                "A raw D1 binding is for the migration-only instance: build it with `createMigrationAuth` from `@lunora/auth/migrate`.",
+        );
+    }
+
+    return betterAuth(resolved);
 };

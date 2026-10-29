@@ -231,11 +231,440 @@ private fun emptyShardKeyIsOmitted() {
     val client = Client("https://app.example", null)
 
     for (absent in listOf(null, "")) {
-        check(!client.wsUrl(absent, null).contains("shard="), "shard key $absent must not name a shard on the socket")
+        check(!client.wsUrl(absent).contains("shard="), "shard key $absent must not name a shard on the socket")
     }
 
-    check(client.wsUrl("", null) == client.wsUrl(null, null), "an empty shard key is byte-identical to sending none")
-    check(client.wsUrl("room-1", null).contains("shard="), "a real shard key still rides the socket URL")
+    check(client.wsUrl("") == client.wsUrl(null), "an empty shard key is byte-identical to sending none")
+    check(client.wsUrl("room-1").contains("shard="), "a real shard key still rides the socket URL")
+}
+
+/**
+ * The session credential rides the `connect` frame and never the socket URL, which
+ * carries only the admin ticket. `connect` is what every open sends first, so a
+ * reconnect re-presents the credential resolved at that moment. Each assertion
+ * here fails if the session value is appended to the URL.
+ */
+private fun socketCredentialsStayOutOfTheUrl() {
+    var session = "session-one"
+    val client = Client("https://app.example", null)
+
+    client.wsToken = { session }
+    client.wsTicket = { "ticket-one" }
+
+    val first = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { first.add(it) }
+
+    check(first[0]["type"] == "connect", "connect must be the first frame an open sends")
+    check(first[0]["token"] == "session-one", "connect must carry the session credential as token")
+    check(first[0]["clientId"] == client.clientId, "attachSocket's connect must carry the client id")
+    check(
+        client.wsUrl("room-1") == "wss://app.example/_lunora/ws?shard=room-1&token=ticket-one",
+        "the ticket must be the only thing in the socket URL's token parameter",
+    )
+    check(!client.wsUrl("room-1").contains("session-one"), "the session credential must not appear in the socket URL on the first open")
+
+    session = "session-two"
+
+    val reconnect = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { reconnect.add(it) }
+
+    check(
+        reconnect[0]["type"] == "connect" && reconnect[0]["token"] == "session-two",
+        "a reconnect must send connect first, with the freshly resolved credential",
+    )
+    check(
+        !client.wsUrl("room-1").contains("session-two") && !client.wsUrl("room-1").contains("session-one"),
+        "the session credential must not appear in the socket URL on a reconnect",
+    )
+
+    val withContext = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket(mapOf("tenant" to "acme")) { withContext.add(it) }
+
+    check(withContext[0]["context"] == mapOf("tenant" to "acme"), "attachSocket's connect must carry the connection context")
+
+    // A detach made while a replacement socket's connect frame is going out must stand.
+    val detached = Client("https://app.example", null)
+
+    detached.attachSocket { }
+    detached.attachSocket { frame ->
+        if (frame["type"] == "connect") {
+            detached.detachSocket()
+        }
+    }
+
+    check(!detached.online(), "a detach during the replacement's connect must not be undone by that attach")
+
+    // A write made while a replacement socket's connect frame is going out must not reach the socket it replaces.
+    val replaced = mutableListOf<Map<String, Any?>>()
+    val racing = Client("https://app.example", null)
+
+    racing.attachSocket { replaced.add(it) }
+
+    val beforeReplacement = replaced.size
+
+    racing.attachSocket { frame ->
+        if (frame["type"] == "connect") {
+            racing.subscribe("messages:list", WireValue.Obj(emptyList()), null)
+        }
+    }
+
+    check(
+        replaced.size == beforeReplacement,
+        "a write during the replacement's connect must not reach the replaced socket",
+    )
+
+    val bare = Client("https://app.example", null)
+    val unset = mutableListOf<Map<String, Any?>>()
+
+    bare.attachSocket { unset.add(it) }
+
+    check(
+        unset[0]["type"] == "connect" && !unset[0].containsKey("token"),
+        "connect must omit token when no session credential is held",
+    )
+    check(bare.wsUrl(null) == "wss://app.example/_lunora/ws", "with no ticket the socket URL carries no token parameter")
+}
+
+private fun connectFrameFirstAndCarriesSessionToken() {
+    covers("connect_frame_first_and_carries_session_token")
+
+    val golden = fixture("ws-frames.json")["clientFrames"] as Map<*, *>
+    val client = Client("https://app.example", null, authToken = "rpc-bearer")
+
+    client.clientId = "client-test"
+    client.wsToken = { "session-token" }
+    client.subscribe("messages:list", WireValue.Obj(listOf("channel" to WireValue.Text("general"))), null)
+    client.whisperSubscribe("room:general") { }
+
+    val sent = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { sent.add(it) }
+    client.resendSubscriptions()
+
+    check(sent[0]["type"] == "connect", "frame 0 of an open must be connect, got ${sent[0]["type"]}")
+    check(canonical(sent[0]) == canonical(golden["connect-with-token"]), "the connect frame must match connect-with-token")
+    check(sent[1]["type"] == "whisper_subscribe", "a topic registered before attach must rejoin right after connect")
+    check(sent[2]["type"] == "subscribe" && sent[2]["id"] == "sub_1", "a subscription registered before attach must follow connect")
+    check(
+        canonical(Client.buildConnectFrame("client-test", mapOf("roomId" to "general"), "session-token")) ==
+            canonical(golden["connect-with-token-and-context"]),
+        "connect-with-token-and-context",
+    )
+    check(!client.wsUrl("room-1").contains("session-token"), "the session credential must not appear in the socket URL")
+    check(!client.wsUrl("room-1").contains("rpc-bearer"), "the RPC bearer must not appear in the socket URL")
+
+    // The RPC bearer is a different credential: with no session credential set, connect
+    // omits token rather than falling back to it.
+    val bearerOnly = Client("https://app.example", null, authToken = "rpc-bearer")
+    val bearerFrames = mutableListOf<Map<String, Any?>>()
+
+    bearerOnly.clientId = "client-test"
+    bearerOnly.attachSocket { bearerFrames.add(it) }
+
+    check(canonical(bearerFrames[0]) == canonical(golden["connect"]), "with no session credential connect must omit token")
+    check(!bearerFrames[0].containsKey("token"), "the RPC bearer must never travel as connect.token")
+}
+
+private fun wsUrlCarriesOnlyTheAdminTicket() {
+    covers("ws_url_carries_only_the_admin_ticket")
+
+    val client = Client("https://app.example", null, authToken = "rpc-bearer")
+
+    client.wsToken = { "session-token" }
+    client.wsTicket = { "ticket-one" }
+
+    val url = client.wsUrl("room-1")
+
+    check(url == "wss://app.example/_lunora/ws?shard=room-1&token=ticket-one", "the ticket is the only token parameter: $url")
+    check(!url.contains("session-token") && !url.contains("rpc-bearer"), "no other credential may reach the URL: $url")
+
+    client.wsTicket = { null }
+
+    check(client.wsUrl(null) == "wss://app.example/_lunora/ws", "with no ticket the URL carries no token parameter: ${client.wsUrl(null)}")
+}
+
+private fun attachSocketCarriesConnectionContext() {
+    covers("attach_socket_carries_connection_context")
+
+    val golden = fixture("ws-frames.json")["clientFrames"] as Map<*, *>
+    val client = Client("https://app.example")
+
+    client.clientId = "client-test"
+
+    val withContext = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket(mapOf("roomId" to "general")) { withContext.add(it) }
+
+    check(canonical(withContext[0]) == canonical(golden["connect-with-context"]), "connect must carry the context in the connect-with-context shape")
+
+    val without = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { without.add(it) }
+
+    check(canonical(without[0]) == canonical(golden["connect"]), "connect without a context must match the bare connect shape")
+    check(!without[0].containsKey("context"), "connect must omit context when none is given")
+}
+
+private fun closeCodesDriveTokenExpiry() {
+    covers("close_codes_drive_token_expiry")
+
+    val cases = (fixture("ws-frames.json")["closeSequences"] as Map<*, *>)["cases"] as List<*>
+
+    // The fixture's full set. A shorter list means cases were dropped, not that the run is faster.
+    check(cases.size == 9, "closeSequences must carry its full case set, got ${cases.size}")
+
+    var casesWithErrors = 0
+
+    for (entry in cases) {
+        val testCase = entry as Map<*, *>
+        val name = testCase["name"]
+        val client = Client("https://app.example")
+        val sent = mutableListOf<Map<String, Any?>>()
+        val errors = mutableListOf<SubscriptionError>()
+        var credential = 0
+        var notified = 0
+
+        client.wsToken = { "session-$credential" }
+
+        // Registered first: an observer that throws must neither stop the count nor break detach or frame handling.
+        client.onTokenExpired { throw IllegalStateException("a failing observer") }
+        client.onTokenExpired { notified++ }
+        client.subscribe("messages:list", WireValue.Obj(emptyList()), null, { errors.add(it) })
+
+        for (step in testCase["steps"] as List<*>) {
+            val action = step as Map<*, *>
+
+            when {
+                action.containsKey("attach") -> {
+                    val before = sent.size
+
+                    client.attachSocket { sent.add(it) }
+
+                    check(sent[before]["type"] == "connect", "an open must send connect first ($name)")
+                }
+
+                action.containsKey("close") -> {
+                    val close = action["close"] as Map<*, *>
+
+                    client.detachSocket(count(close["code"]), close["reason"] as String)
+
+                    check(!client.online(), "every close leaves the client offline ($name)")
+                }
+
+                action.containsKey("frame") -> client.handleFrame(Json.write(action["frame"]))
+
+                action.containsKey("credentialChange") -> {
+                    credential++
+                    client.wsToken = { "session-$credential" }
+                }
+
+                else -> throw AssertionError("unknown step in $name: $action")
+            }
+        }
+
+        check(notified == count(testCase["tokenExpiredNotifications"]), "token-expired notifications for $name: $notified")
+
+        if (testCase.containsKey("subscriptionErrors")) {
+            casesWithErrors++
+
+            check(errors.size == count(testCase["subscriptionErrors"]), "subscription errors for $name: ${errors.size}")
+        }
+    }
+
+    // A guard against a renamed key: without it, dropping subscriptionErrors from the fixture would pass.
+    check(casesWithErrors == 2, "closeSequences must carry two cases that assert subscriptionErrors, got $casesWithErrors")
+}
+
+private fun whisperFramesJoinSendAndDeliver() {
+    covers("whisper_frames_join_send_and_deliver")
+
+    val golden = fixture("ws-frames.json")
+    val clientFrames = golden["clientFrames"] as Map<*, *>
+    val whisper = golden["whisperFrames"] as Map<*, *>
+    val payload = WireValue.Obj(listOf("text" to WireValue.Text("hi")))
+
+    check(canonical(Client.buildWhisperSubscribeFrame("room:general")) == canonical(clientFrames["whisper-subscribe"]), "whisper-subscribe")
+    check(canonical(Client.buildWhisperUnsubscribeFrame("room:general")) == canonical(clientFrames["whisper-unsubscribe"]), "whisper-unsubscribe")
+    check(canonical(Client.buildWhisperFrame("room:general", payload)) == canonical(clientFrames["whisper-send"]), "whisper-send")
+
+    // No socket attached: a send is refused, not queued.
+    check(!Client("https://app.example").whisper("room:general", payload), "whisper must report false without a socket")
+
+    val client = Client("https://app.example")
+    val sent = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { sent.add(it) }
+
+    val leave = client.whisperSubscribe("room:general") { }
+
+    check(canonical(sent.last()) == canonical(clientFrames["whisper-subscribe"]), "joining an attached topic sends whisper_subscribe")
+
+    val room = client.connectRoom("general") { }
+
+    check(sent.count { it["type"] == "whisper_subscribe" } == 1, "a second listener on a topic must not join it again")
+    check(room.send(payload), "a room send over an attached socket must succeed")
+    check(canonical(sent.last()) == canonical(clientFrames["whisper-send"]), "a room send must match whisper-send")
+
+    room.close()
+
+    check(sent.none { it["type"] == "whisper_unsubscribe" }, "leaving while another listener remains must not unsubscribe")
+
+    leave()
+
+    check(canonical(sent.last()) == canonical(clientFrames["whisper-unsubscribe"]), "the last listener leaving sends whisper_unsubscribe")
+
+    val frameCount = sent.size
+
+    leave()
+
+    check(sent.size == frameCount, "a second leave is a no-op")
+
+    for (entry in whisper["serverFrames"] as List<*>) {
+        val testCase = entry as Map<*, *>
+        val receiver = Client("https://app.example")
+        val delivered = mutableListOf<Pair<String, WireValue>>()
+
+        receiver.attachSocket { }
+        receiver.whisperSubscribe("room:general") { delivered.add("room:general" to it) }
+        receiver.handleFrame(Json.write(testCase["frame"]))
+
+        val expected = testCase["delivered"] as List<*>
+
+        check(delivered.size == expected.size, "delivered count for ${testCase["name"]}: ${delivered.size}")
+
+        for ((index, want) in expected.withIndex()) {
+            val wanted = want as Map<*, *>
+
+            check(delivered[index].first == wanted["topic"], "delivered topic for ${testCase["name"]}")
+            check(canonical(Wire.encode(delivered[index].second)) == canonical(wanted["value"]), "delivered value for ${testCase["name"]}")
+        }
+    }
+
+    // A topic's frames reach its own listeners only.
+    val routed = Client("https://app.example")
+    val general = mutableListOf<WireValue>()
+    val other = mutableListOf<WireValue>()
+    val otherFrame = (whisper["serverFrames"] as List<*>).first { (it as Map<*, *>)["name"] == "other_topic_not_delivered" } as Map<*, *>
+
+    routed.attachSocket { }
+    routed.whisperSubscribe("room:general") { general.add(it) }
+    routed.whisperSubscribe("room:other") { other.add(it) }
+    routed.handleFrame(Json.write(otherFrame["frame"]))
+
+    check(general.isEmpty() && other.size == 1, "room:other frames must reach only room:other's listeners: ${general.size}/${other.size}")
+}
+
+private fun supersededAttachStopsWritingJoins() {
+    val sent = mutableListOf<Map<String, Any?>>()
+    val client = Client("https://app.example")
+
+    client.clientId = "client-test"
+    client.whisperSubscribe("room:a") { }
+    client.whisperSubscribe("room:b") { }
+    client.attachSocket { frame ->
+        sent.add(frame)
+
+        if (frame["type"] == "whisper_subscribe") client.detachSocket()
+    }
+
+    check(sent.count { it["type"] == "whisper_subscribe" } == 1, "a detach during the joins must stop the remaining joins")
+}
+
+private fun failedWhisperUnsubscribeCanBeRetried() {
+    val sent = mutableListOf<Map<String, Any?>>()
+    var refuse = true
+    val client = Client("https://app.example")
+
+    client.attachSocket { frame ->
+        if (frame["type"] == "whisper_unsubscribe" && refuse) {
+            refuse = false
+            throw IllegalStateException("write refused")
+        }
+
+        sent.add(frame)
+    }
+
+    val leave = client.whisperSubscribe("room:general") { }
+    val refused = runCatching { leave() }.isFailure
+
+    check(refused, "the refused unsubscribe must surface to the caller")
+
+    leave()
+
+    check(sent.any { it["type"] == "whisper_unsubscribe" }, "the retried leave must write whisper_unsubscribe")
+}
+
+private fun duplicateTokenExpiryRegistrationsUnregisterSeparately() {
+    var notified = 0
+    val listener: () -> Unit = { notified++ }
+    val client = Client("https://app.example")
+
+    val first = client.onTokenExpired(listener)
+
+    client.onTokenExpired(listener)
+    first()
+    first()
+    client.attachSocket { }
+    client.detachSocket(4001, null)
+
+    check(notified == 1, "a second registration of the same function must survive the first handle being called twice")
+}
+
+private fun closedRoomRefusesSends() {
+    val sent = mutableListOf<Map<String, Any?>>()
+    val client = Client("https://app.example")
+
+    client.clientId = "client-test"
+    client.attachSocket { sent.add(it) }
+
+    val room = client.connectRoom("general") { }
+
+    client.whisperSubscribe("room:general") { }
+    room.close()
+
+    check(!room.send(WireValue.Text("after close")), "a closed room must report its send as not sent")
+    check(sent.none { it["type"] == "whisper" }, "and must write no whisper frame after close")
+}
+
+private fun whisperTopicsRejoinAfterReconnect() {
+    covers("whisper_topics_rejoin_after_reconnect")
+
+    val rejoin = (fixture("ws-frames.json")["whisperFrames"] as Map<*, *>)["rejoinOnReconnect"] as List<*>
+    val client = Client("https://app.example")
+
+    client.whisperSubscribe("room:general") { }
+
+    val opens = mutableListOf<List<Map<String, Any?>>>()
+
+    repeat(2) {
+        val sent = mutableListOf<Map<String, Any?>>()
+
+        client.attachSocket { sent.add(it) }
+        client.detachSocket()
+        opens.add(sent)
+    }
+
+    for (sent in opens) {
+        check(sent[0]["type"] == "connect", "connect opens every socket")
+        check(
+            sent.drop(1).map { canonical(it) } == rejoin.map { canonical(Client.buildWhisperSubscribeFrame(it as String)) },
+            "every open joins each registered topic right after connect",
+        )
+    }
+
+    // A topic whose last listener left is forgotten, so the next open does not rejoin it.
+    val leave = client.whisperSubscribe("room:quiet") { }
+
+    leave()
+
+    val afterLeave = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { afterLeave.add(it) }
+
+    check(afterLeave.none { it["topic"] == "room:quiet" }, "a topic left by its last listener must not rejoin")
 }
 
 private fun depthCapEnforced() {
@@ -339,6 +768,17 @@ private fun stringEscapingMatchesJsonStringify() {
     check(Key.jsonString("a<b>&c") == "\"a<b>&c\"", "angle brackets and ampersand stay raw")
     check(Key.jsonString("  ") == "\"  \"", "line separators stay raw")
     check(Key.jsonString("tab\there") == "\"tab\\there\"", "control characters are escaped")
+
+    // A lone surrogate is escaped the way JSON.stringify writes it — in the wire
+    // BYTES and in the key — rather than reaching the UTF-8 encoder, which
+    // substitutes `?`. A well-formed pair stays raw.
+    val lone = WireValue.Obj(listOf("s" to WireValue.Text("a\uD800b"), "t" to WireValue.Text("\uDC00"), "u" to WireValue.Text("x\uD83D")))
+    val wireBytes = String(Json.write(Wire.encode(lone)).toByteArray(Charsets.UTF_8), Charsets.UTF_8)
+
+    check(wireBytes == "{\"s\":\"a\\ud800b\",\"t\":\"\\udc00\",\"u\":\"x\\ud83d\"}", "lone surrogates on the wire: $wireBytes")
+    check(Key.stableWireKey(lone) == wireBytes, "and in the stable key: ${Key.stableWireKey(lone)}")
+    check(Key.stableWireKey(WireValue.Text("a\uD800b")) != Key.stableWireKey(WireValue.Text("a?b")), "a lone surrogate does not key as '?'")
+    check(Key.jsonString("a\uD83D\uDE00b") == "\"a\uD83D\uDE00b\"", "a well-formed pair is written as-is")
 }
 
 private fun rpcRequestBodies() {
@@ -378,6 +818,9 @@ private fun rpcResponses() {
         } catch (error: ApiException) {
             check(error.code == testCase["code"], "code for ${testCase["name"]}")
             check(error.message == testCase["message"], "message for ${testCase["name"]}")
+
+            // Undecodable `data` is dropped, never the codec's exception.
+            if (testCase["dataDropped"] == true) check(error.data == null, "data dropped for ${testCase["name"]}")
         }
     }
 }
@@ -386,12 +829,25 @@ private fun non2xxWithoutEnvelopeThrows() {
     covers("non_2xx_without_error_envelope_fails")
 
     // protocol/README.md §4.2. Without the status check this returned null and
-    // threw nothing — the caller believes its mutation committed.
-    try {
-        Client.parseRpcResponse(mapOf("message" to "bad gateway"), 502)
-        check(false, "a 502 without an error envelope must throw")
-    } catch (error: ApiException) {
-        check(error.code == "INTERNAL", "the transport error is INTERNAL")
+    // threw nothing — the caller believes its mutation committed. The fixture's
+    // non-object `error` slots are the other half: a slot holding a string, a
+    // null or an array is not an envelope either, and a port reading one without
+    // a type check throws its LANGUAGE's exception rather than ApiException,
+    // escaping every handler the caller wrote.
+    for (entry in fixture("rpc.json")["responseTransportError"] as List<*>) {
+        val testCase = entry as Map<*, *>
+        val response = testCase["response"] as Map<*, *>
+        val status = (testCase["status"] as Number).toInt()
+
+        try {
+            Client.parseRpcResponse(response, status)
+            check(false, "expected an ApiException for ${testCase["name"]}")
+        } catch (error: ApiException) {
+            check(error.code == testCase["code"], "code for ${testCase["name"]}")
+            // Nothing reached the shard, so a queued write must be replayed
+            // rather than dropped — the batch path already says so.
+            check(error.transient, "transient for ${testCase["name"]}")
+        }
     }
 }
 
@@ -421,12 +877,16 @@ private fun clientFrameBuilders() {
 
 private fun serverFrameConsumer() {
     covers("server_frame_consumer")
+    covers("complete_frame_cancels_without_dropping_the_subscription")
+
+    var cancellations = 0
 
     for (entry in fixture("ws-frames.json")["serverFrames"] as List<*>) {
         val testCase = entry as Map<*, *>
         val client = Client("https://app.example")
+        val sent = mutableListOf<Map<String, Any?>>()
 
-        client.attachSocket { }
+        client.attachSocket { sent.add(it) }
 
         val seen = mutableListOf<WireValue>()
         val errors = mutableListOf<SubscriptionError>()
@@ -437,6 +897,7 @@ private fun serverFrameConsumer() {
             { seen.add(it) },
             { errors.add(it) },
         )
+        sent.clear()
 
         val kind = client.handleFrame(Json.write(testCase["frame"]))
         val expect = testCase["expect"] as Map<*, *>
@@ -452,7 +913,26 @@ private fun serverFrameConsumer() {
             check(errors.size == 1, "onError should fire once")
             check(errors[0].code == expect["code"], "error code")
         }
+
+        // Cancelled AND kept. Removing the entry takes it out of the map
+        // `resendSubscriptions` walks, which froze the query across every future
+        // reconnect with nothing reported.
+        if (expect["resendsAfterReconnect"] == true) {
+            cancellations++
+            check(errors.size == 1, "a complete frame cancels once")
+            check(errors[0].code == expect["code"], "cancellation code")
+            check(errors[0].message == expect["message"], "cancellation message")
+            client.resendSubscriptions()
+            check(
+                sent.filter { it["type"] == "subscribe" }.map { it["id"] } == listOf(expect["id"]),
+                "the cancelled subscription is resent on reconnect",
+            )
+        }
     }
+
+    // A conditional assertion that never runs is worse than none: without this,
+    // renaming the fixture key would leave every suite green.
+    check(cancellations == 1, "serverFrames must carry one cancelling case")
 }
 
 /**
@@ -529,6 +1009,7 @@ private fun shapeSubscriptionsResendAfterReconnect() {
 
     client.attachSocket { resent.add(it) }
     client.resendSubscriptions()
+    check(resent.removeAt(0)["type"] == "connect", "connect opens the socket")
 
     check(resent.map { it["type"] } == listOf("subscribe", "shape_subscribe"), "both registries resend, queries first")
     check(((resent[0]["query"] as Map<*, *>)["sinceSeq"] as Number).toInt() == 9, "the query resumes from its tracked cursor")
@@ -736,13 +1217,340 @@ private fun concurrentSubscribeAndHandleFrame() {
     workers.forEach { it.join() }
     reader.join()
 
-    // Attached only now, so the count below sees resend frames alone.
+    // Attached only now; the count is the attach's connect frame plus one subscribe per call.
     val resent = java.util.concurrent.atomic.AtomicInteger()
 
     client.attachSocket { resent.incrementAndGet() }
     client.resendSubscriptions()
 
-    check(resent.get() == threads * perThread, "every concurrent subscribe survived with a distinct id")
+    check(resent.get() == threads * perThread + 1, "every concurrent subscribe survived with a distinct id")
+}
+
+/** A frame fixture delivered as the raw text a socket read loop hands [Client.handleFrame]. */
+private fun deliver(client: Client, frames: Any?) {
+    for (frame in frames as List<*>) client.handleFrame(Json.write(frame))
+}
+
+/** The frames [Client.resendSubscriptions] sends, captured through a fresh socket. */
+private fun resent(client: Client): List<Map<String, Any?>> {
+    val frames = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { frames.add(it) }
+    client.resendSubscriptions()
+    check(frames.removeAt(0)["type"] == "connect", "connect opens the socket")
+
+    return frames
+}
+
+private fun number(value: Any?): Double? = (value as? Number)?.toDouble()
+
+/**
+ * A poke is applied whole or not at all, per shape: a row the codec refuses leaves
+ * the view, its checkpoint and its epoch exactly as they were and reaches the
+ * shape's error callback — while another shape in the same poke still applies.
+ */
+private fun shapePokeWithUndecodableRowIsRefusedWhole() {
+    covers("shape_poke_with_undecodable_row_is_refused_whole")
+
+    val shape = fixture("ws-frames.json")["shape"] as Map<*, *>
+    val client = Client("https://app.example")
+    val delivered = mutableListOf<List<WireValue>>()
+    val errors = mutableListOf<SubscriptionError>()
+    val other = mutableListOf<List<WireValue>>()
+
+    client.attachSocket { }
+    client.subscribeShape("roomMessages", WireValue.Obj(listOf("room" to WireValue.Text("general"))), { delivered.add(it) }, { errors.add(it) })
+    client.subscribeShape("other", null, { other.add(it) })
+    deliver(client, shape["pokeSequence"])
+
+    check(delivered.size == 1, "the seed applies")
+
+    // The fixture's sequence, plus a good part for a SECOND shape in the same poke.
+    val sequence = (shape["undecodableRowPokeSequence"] as List<*>).toMutableList()
+    val good = mapOf(
+        "type" to "pokePart",
+        "pokeId" to "p3",
+        "shapeId" to "shape_2",
+        "rowsPatch" to listOf(mapOf("op" to "insert", "key" to "k", "value" to "kept")),
+    )
+
+    sequence.add(sequence.size - 1, good)
+
+    try {
+        deliver(client, sequence)
+    } catch (error: RuntimeException) {
+        check(false, "a refused poke must not throw out of handleFrame: $error")
+    }
+
+    check(delivered.size == 1, "no rows callback fires for the refused shape")
+    check(errors.map { it.code } == listOf(shape["undecodableRowErrorCode"]), "its error callback hears ${shape["undecodableRowErrorCode"]} once: $errors")
+    check(other == listOf(listOf(WireValue.Text("kept"))), "the other shape in the same poke still applies")
+
+    val frame = resent(client).first { it["id"] == "shape_1" }
+
+    check(number(frame["sinceCheckpoint"]) == number(shape["undecodableRowResendCheckpoint"]), "the checkpoint does not advance: ${frame["sinceCheckpoint"]}")
+    check(frame["sinceEpoch"] == "e1", "nor the epoch")
+
+    // The view itself is untouched: an empty poke re-delivers it unchanged.
+    deliver(
+        client,
+        listOf(
+            mapOf("type" to "pokeStart", "pokeId" to "p-empty"),
+            mapOf(
+                "type" to "pokePart",
+                "pokeId" to "p-empty",
+                "shapeId" to "shape_1",
+                "rowsPatch" to emptyList<Any?>(),
+            ),
+            mapOf("type" to "pokeEnd", "pokeId" to "p-empty"),
+        ),
+    )
+
+    check(canonical(Wire.encode(WireValue.Arr(delivered.last()))) == canonical(shape["expectedRows"]), "the view is exactly the seed: ${delivered.last()}")
+
+    // The server believes the refused poke landed, so the NEXT one is based on a
+    // checkpoint this view never reached. It must re-seed, not splice.
+    val sent = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { sent.add(it) }
+
+    val before = delivered.size
+
+    deliver(client, shape["gapPokeSequence"])
+
+    check(delivered.size == before + 1, "the gap tells the rows callback once")
+    check(canonical(Wire.encode(WireValue.Arr(delivered.last()))) == canonical(shape["gapExpectedRows"]), "that the view is empty: ${delivered.last()}")
+
+    val cold = sent.filter { it["type"] == "shape_subscribe" && it["id"] == "shape_1" }
+
+    check(cold.size == 1, "a shape_subscribe for shape_1 goes out right away: $sent")
+    check(!cold[0].containsKey("sinceCheckpoint") && !cold[0].containsKey("sinceEpoch"), "and it is cold: ${cold[0]}")
+
+    val later = resent(client).first { it["id"] == "shape_1" }
+
+    check(!later.containsKey("sinceCheckpoint") && !later.containsKey("sinceEpoch"), "a later resend is cold too: $later")
+
+    // The counterweight: a poke based on the checkpoint the view IS at applies.
+    val contiguous = Client("https://app.example")
+    val applied = mutableListOf<List<WireValue>>()
+    val contiguousSent = mutableListOf<Map<String, Any?>>()
+
+    contiguous.attachSocket { contiguousSent.add(it) }
+    contiguous.subscribeShape("roomMessages", WireValue.Obj(listOf("room" to WireValue.Text("general"))), { applied.add(it) })
+    deliver(contiguous, shape["pokeSequence"])
+    contiguousSent.clear()
+    deliver(contiguous, shape["contiguousPokeSequence"])
+
+    check(
+        canonical(Wire.encode(WireValue.Arr(applied.last()))) == canonical(shape["contiguousExpectedRows"]),
+        "a contiguous poke applies: ${applied.last()}",
+    )
+    check(contiguousSent.isEmpty(), "without a re-seed: $contiguousSent")
+
+    // A based poke on a view that has NO checkpoint yet is not a gap.
+    val fresh = Client("https://app.example")
+    val seeded = mutableListOf<List<WireValue>>()
+
+    fresh.attachSocket { }
+    fresh.subscribeShape("roomMessages", null, { seeded.add(it) })
+    fresh.handleFrame("{\"type\":\"pokeStart\",\"pokeId\":\"b0\",\"baseCheckpoint\":0}")
+    fresh.handleFrame(
+        "{\"type\":\"pokePart\",\"pokeId\":\"b0\",\"shapeId\":\"shape_1\",\"rowsPatch\":[{\"op\":\"insert\",\"key\":\"a\",\"value\":1}]}",
+    )
+    fresh.handleFrame("{\"type\":\"pokeEnd\",\"pokeId\":\"b0\",\"checkpoint\":1}")
+
+    check(seeded == listOf(listOf(WireValue.Num(1.0))), "a base on an unchecked view applies: $seeded")
+}
+
+/**
+ * Frames shaped like nothing the server sends are ignored: none raises out of the
+ * handler the read loop calls, and none touches a live subscription.
+ */
+private fun malformedFramesAreIgnoredWithoutRaising() {
+    covers("malformed_frames_are_ignored_without_raising")
+
+    val case = fixture("ws-frames.json")["malformedFrames"] as Map<*, *>
+    val client = Client("https://app.example")
+    val seen = mutableListOf<WireValue>()
+    val errors = mutableListOf<SubscriptionError>()
+
+    client.attachSocket { }
+    client.subscribe("messages:list", WireValue.Obj(emptyList()), { seen.add(it) }, { errors.add(it) })
+    client.handleFrame(Json.write(case["setupFrame"]))
+    seen.clear()
+
+    for (frame in case["frames"] as List<*>) {
+        try {
+            client.handleFrame(Json.write(frame))
+        } catch (error: Throwable) {
+            check(false, "handleFrame(${Json.write(frame)}) raised $error")
+        }
+    }
+
+    check(seen.isEmpty() && errors.isEmpty(), "no frame reached sub_1: $seen $errors")
+
+    val query = resent(client).first { it["id"] == "sub_1" }["query"] as Map<*, *>
+
+    check(number(query["sinceSeq"]) == number(case["resendSinceSeq"]), "the resend still carries sinceSeq ${case["resendSinceSeq"]}: ${query["sinceSeq"]}")
+    check(query["sinceEpoch"] == case["resendSinceEpoch"], "and sinceEpoch ${case["resendSinceEpoch"]}")
+}
+
+/**
+ * A reply the call can read neither a result nor an envelope out of fails with the
+ * SDK's own error, never the JSON parser's or a cast's.
+ */
+private fun rpcUnreadableSuccessBodyRaisesSdkError() {
+    covers("rpc_unreadable_success_body_raises_sdk_error")
+
+    for (entry in fixture("rpc.json")["unreadableSuccessBody"] as List<*>) {
+        val case = entry as Map<*, *>
+        val response = HttpResponse(count(case["status"]), case["rawBody"] as String)
+        val client = Client("https://app.example", { _, _, _ -> response })
+
+        for (verb in Verb.values()) {
+            val raised = try {
+                client.call(verb, "messages:list")
+                null
+            } catch (error: Throwable) {
+                error
+            }
+
+            check(raised is ApiException && raised.code == case["code"], "${case["name"]} ($verb) raises ApiException ${case["code"]}, got $raised")
+        }
+
+        // On the offline replay the same reply is transport-shaped: re-queued.
+        client.offlineQueue.enqueue(QueuedMutation("w-${case["name"]}", "messages:send", WireValue.Obj(emptyList())))
+
+        check(client.flushOfflineQueue().requeued == listOf("w-${case["name"]}"), "${case["name"]}: a queued write is re-queued")
+    }
+
+    // `{}` stays the void result.
+    check(Client("https://app.example", { _, _, _ -> HttpResponse(200, "{}") }).query("x:y") == WireValue.Null, "{} is a void result")
+}
+
+private fun count(value: Any?): Int = (value as Number).toInt()
+
+/**
+ * With no identity set the token's digest is the identity, so a token change is a
+ * change of user for the session as it is for the queue. Only a change FROM a
+ * token evicts, as only a change from a set identity does.
+ */
+private fun tokenChangeWithoutAnIdentityEvictsPreviousSession() {
+    val case = fixture("ws-frames.json")["identityChange"] as Map<*, *>
+    val shape = fixture("ws-frames.json")["shape"] as Map<*, *>
+    val transitions = listOf(
+        listOf("token-a", "token-b", null, true),
+        listOf("token-a", null, null, true),
+        listOf("token-a", "token-a", null, false),
+        listOf(null, "token-a", null, false),
+        listOf("token-a", "token-b", "user-a", false),
+    )
+
+    for ((before, after, identity, evictsRaw) in transitions) {
+        val evicts = evictsRaw as Boolean
+        val label = "$before -> $after (identity $identity)"
+        val client = Client("https://app.example", authToken = before as String?, identity = identity as String?)
+        val rows = mutableListOf<List<WireValue>>()
+
+        client.attachSocket { }
+        client.subscribe("messages:list", WireValue.Obj(emptyList()), { })
+        client.subscribeShape("roomMessages", WireValue.Obj(listOf("room" to WireValue.Text("general"))), { rows.add(it) })
+        client.handleFrame(Json.write(case["queryFrame"]))
+        deliver(client, shape["pokeSequence"])
+
+        client.authToken = after as String?
+
+        val frames = resent(client)
+        val query = frames.first { it["id"] == "sub_1" }["query"] as Map<*, *>
+        val shapeFrame = frames.first { it["id"] == "shape_1" }
+
+        check(query.containsKey("sinceSeq") != evicts, "$label: query resume cursor kept = ${!evicts}: $query")
+        check(shapeFrame.containsKey("sinceCheckpoint") != evicts, "$label: shape checkpoint kept = ${!evicts}: $shapeFrame")
+        check(rows.last().isEmpty() == evicts, "$label: shape rows emptied = $evicts")
+    }
+}
+
+/** `close()` ends an open pull stream: the loop yields what was delivered, then returns. */
+private fun subscriptionStreamEndsOnClose() {
+    covers("subscription_stream_ends_on_close")
+
+    val client = Client("https://app.example")
+
+    client.attachSocket { }
+
+    val stream = client.stream("messages:list")
+    val yielded = java.util.Collections.synchronizedList(mutableListOf<WireValue?>())
+    val consumer = Thread { for (event in stream) yielded.add(event.value) }
+
+    consumer.isDaemon = true
+    consumer.start()
+    client.handleFrame("{\"type\":\"data\",\"id\":\"sub_1\",\"data\":1}")
+    client.close()
+    consumer.join(2000)
+
+    check(!consumer.isAlive, "the stream ends within 2 s of close() instead of blocking forever")
+    check(yielded == listOf(WireValue.Num(1.0)), "after yielding the delivered value: $yielded")
+}
+
+/**
+ * A change FROM a set identity evicts the previous session's resume cursors and
+ * shape views; a first set and a same-value set evict nothing.
+ */
+private fun identityChangeEvictsPreviousSession() {
+    covers("identity_change_evicts_previous_session")
+
+    val case = fixture("ws-frames.json")["identityChange"] as Map<*, *>
+    val shape = fixture("ws-frames.json")["shape"] as Map<*, *>
+    val retained = case["retained"] as Map<*, *>
+    val evicted = case["evicted"] as Map<*, *>
+
+    for (raw in case["transitions"] as List<*>) {
+        val transition = raw as Map<*, *>
+        val label = "${transition["from"]} -> ${transition["to"]}"
+        val client = Client("https://app.example", identity = transition["from"] as String?)
+        val rows = mutableListOf<List<WireValue>>()
+
+        client.attachSocket { }
+        client.subscribe("messages:list", WireValue.Obj(emptyList()), { })
+        client.subscribeShape("roomMessages", WireValue.Obj(listOf("room" to WireValue.Text("general"))), { rows.add(it) })
+        client.handleFrame(Json.write(case["queryFrame"]))
+        deliver(client, shape["pokeSequence"])
+
+        val before = rows.size
+
+        client.identity = transition["to"] as String?
+
+        val frames = resent(client)
+        val query = frames.first { it["id"] == "sub_1" }["query"] as Map<*, *>
+        val shapeFrame = frames.first { it["id"] == "shape_1" }
+
+        if (transition["evicts"] == true) {
+            check(!query.containsKey("sinceSeq") && !query.containsKey("sinceEpoch"), "$label: the query resubscribes cold: $query")
+            check(!shapeFrame.containsKey("sinceCheckpoint") && !shapeFrame.containsKey("sinceEpoch"), "$label: and the shape: $shapeFrame")
+            check(rows.size == before + 1, "$label: the shape callback is told")
+            check(canonical(Wire.encode(WireValue.Arr(rows.last()))) == canonical(evicted["shapeCallbackRows"]), "$label: that its view is empty")
+        } else {
+            check(
+                number(query["sinceSeq"]) == number(retained["sinceSeq"]) && query["sinceEpoch"] == retained["sinceEpoch"],
+                "$label: the query keeps its cursor: $query",
+            )
+            check(number(shapeFrame["sinceCheckpoint"]) == number(retained["sinceCheckpoint"]), "$label: the shape keeps its checkpoint: $shapeFrame")
+            check(rows.size == before && rows.last().size == count(retained["shapeRowCount"]), "$label: and its rows")
+        }
+    }
+}
+
+/** The bearer token never reaches a printed value. */
+private fun authTokenRedactedWhenPrinted() {
+    covers("auth_token_redacted_when_printed")
+
+    val token = "lunora-secret-7f3a9c"
+    val client = Client("https://app.example", authToken = token)
+    val options = SubmitOptions("messages:send")
+
+    for (rendered in listOf(client.toString(), "$client", String.format("%s", client), options.toString(), client.offlineQueue.toString())) {
+        check(!rendered.contains(token), "the token leaked into $rendered")
+    }
 }
 
 fun main() {
@@ -757,6 +1565,17 @@ fun main() {
     keyOrderMatchesUtf16()
     stringEscapingMatchesJsonStringify()
     emptyShardKeyIsOmitted()
+    socketCredentialsStayOutOfTheUrl()
+    connectFrameFirstAndCarriesSessionToken()
+    wsUrlCarriesOnlyTheAdminTicket()
+    attachSocketCarriesConnectionContext()
+    closeCodesDriveTokenExpiry()
+    whisperFramesJoinSendAndDeliver()
+    whisperTopicsRejoinAfterReconnect()
+    closedRoomRefusesSends()
+    duplicateTokenExpiryRegistrationsUnregisterSeparately()
+    failedWhisperUnsubscribeCanBeRetried()
+    supersededAttachStopsWritingJoins()
     rpcRequestBodies()
     rpcResponses()
     non2xxWithoutEnvelopeThrows()
@@ -771,6 +1590,13 @@ fun main() {
     resetPokeReplacesShapeMembership()
     pendingPokeBuffersAreBounded()
     concurrentSubscribeAndHandleFrame()
+    shapePokeWithUndecodableRowIsRefusedWhole()
+    malformedFramesAreIgnoredWithoutRaising()
+    rpcUnreadableSuccessBodyRaisesSdkError()
+    subscriptionStreamEndsOnClose()
+    identityChangeEvictsPreviousSession()
+    tokenChangeWithoutAnIdentityEvictsPreviousSession()
+    authTokenRedactedWhenPrinted()
 
     // The optimistic-layer and offline-queue cases, in their own file so this one
     // stays the wire-protocol suite it has always been.

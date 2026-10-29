@@ -84,7 +84,7 @@ describe("fromPostgresJs", () => {
         const result = await sql.query("select id from t");
 
         expect(result).toBe(rows);
-        expect(unsafe).toHaveBeenCalledWith("select id from t", []);
+        expect(unsafe).toHaveBeenCalledWith("select id from t", [], { prepare: true });
     });
 
     it("forwards explicit params positionally", async () => {
@@ -94,33 +94,36 @@ describe("fromPostgresJs", () => {
 
         await fromPostgresJs({ unsafe }).query("select id from t where org = $1", ["acme"]);
 
-        expect(unsafe).toHaveBeenCalledWith("select id from t where org = $1", ["acme"]);
+        // `prepare: true`: `.unsafe` defaults to unnamed statements, which Hyperdrive's
+        // transaction pooling does not reliably support.
+        expect(unsafe).toHaveBeenCalledWith("select id from t where org = $1", ["acme"], { prepare: true });
     });
 });
 
 describe("fromMysql2", () => {
     it("returns the first element of the [rows, fields] tuple", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const rows = [{ id: 7 }];
-        const execute = vi.fn<Mysql2Like["execute"]>().mockResolvedValue([rows, []]);
-        const connection: Mysql2Like = { execute };
+        const mysqlQuery = vi.fn<Mysql2Like["query"]>().mockResolvedValue([rows, []]);
+        const connection: Mysql2Like = { query: mysqlQuery };
 
         const sql = fromMysql2(connection);
         const result = await sql.query<{ id: number }>("select id from t where org = ?", ["acme"]);
 
         expect(result).toBe(rows);
-        expect(execute).toHaveBeenCalledWith("select id from t where org = ?", ["acme"]);
+        expect(mysqlQuery).toHaveBeenCalledWith("select id from t where org = ?", [{ toSqlString: expect.any(Function), toString: expect.any(Function) }]);
+        expect((mysqlQuery.mock.calls[0]?.[1] as [{ toSqlString: () => string }])[0].toSqlString()).toBe("'acme'");
     });
 
     it("defaults params to an empty array", async () => {
         expect.assertions(1);
 
-        const execute = vi.fn<Mysql2Like["execute"]>().mockResolvedValue([[], []]);
+        const mysqlQuery = vi.fn<Mysql2Like["query"]>().mockResolvedValue([[], []]);
 
-        await fromMysql2({ execute }).query("select 1");
+        await fromMysql2({ query: mysqlQuery }).query("select 1");
 
-        expect(execute).toHaveBeenCalledWith("select 1", []);
+        expect(mysqlQuery).toHaveBeenCalledWith("select 1", []);
     });
 
     it("yields [] for a non-SELECT ResultSetHeader (DML)", async () => {
@@ -130,11 +133,27 @@ describe("fromMysql2", () => {
         // INSERT/UPDATE/DELETE — the adapter must normalise it to [] to honour
         // the empty-array-for-non-SELECT contract.
         const header = { affectedRows: 1, fieldCount: 0, insertId: 42, warningStatus: 0 };
-        const execute = vi.fn<Mysql2Like["execute"]>().mockResolvedValue([header, undefined]);
+        const mysqlQuery = vi.fn<Mysql2Like["query"]>().mockResolvedValue([header, undefined]);
 
-        const result = await fromMysql2({ execute }).query("insert into t (id) values (?)", [42]);
+        const result = await fromMysql2({ query: mysqlQuery }).query("insert into t (id) values (?)", [42]);
 
         expect(result).toStrictEqual([]);
+    });
+});
+
+describe("adapter dbSystem stamp (read by ctx.sql auto-instrumentation)", () => {
+    it("stamps postgresql on the postgres.js and node-postgres adapters, mysql on mysql2", () => {
+        expect.assertions(3);
+
+        const unsafe = vi.fn<PostgresJsLike["unsafe"]>();
+        const query = vi.fn<NodePgLike["query"]>();
+        const mysqlQuery = vi.fn<Mysql2Like["query"]>();
+
+        // The OTel `db.system.name` values: the span's system must be the real
+        // engine, decided by which adapter built the client.
+        expect(fromPostgresJs({ unsafe }).dbSystem).toBe("postgresql");
+        expect(fromNodePg({ query }).dbSystem).toBe("postgresql");
+        expect(fromMysql2({ query: mysqlQuery }).dbSystem).toBe("mysql");
     });
 });
 
@@ -184,9 +203,7 @@ describe.skipIf(!process.env.CI)("real Hyperdrive binding (CI-only)", () => {
                 const driver = postgres(connectionString, { max: 1 });
 
                 try {
-                    // postgres.js's `unsafe` takes a narrower params type than the structural
-                    // projection; the runtime shape is exactly PostgresJsLike.
-                    const sql = fromPostgresJs(driver as unknown as PostgresJsLike);
+                    const sql = fromPostgresJs(driver);
 
                     await expect(sql.query("SELECT 1 + 1 AS sum")).resolves.toEqual([{ sum: 2 }]);
                     await expect(sql.query("SELECT title FROM todos WHERE id = $1", ["t1"])).resolves.toEqual([{ title: "ship hyperdrive" }]);
@@ -298,9 +315,12 @@ describe.skipIf(!process.env.CI)("real Hyperdrive binding (CI-only)", () => {
                     await connection.query("CREATE TABLE hyperdrive_roundtrip (id VARCHAR(16) PRIMARY KEY, title TEXT NOT NULL)");
                     await connection.query("INSERT INTO hyperdrive_roundtrip (id, title) VALUES ('m1', 'ship hyperdrive')");
 
-                    // mysql2's overloaded `execute` doesn't structurally match the
-                    // projection, but the runtime shape is exactly Mysql2Like.
-                    const sql = fromMysql2(connection as unknown as Mysql2Like);
+                    // No cast: a real mysql2 connection satisfies `Mysql2Like`
+                    // directly. This line is the assertion — if the projection
+                    // regresses to a parameter type that cannot accept
+                    // `ExecuteValues`, the suite stops compiling here rather than
+                    // passing behind an `as unknown as`.
+                    const sql = fromMysql2(connection);
 
                     await expect(sql.query("SELECT 1 + 1 AS sum")).resolves.toEqual([{ sum: 2 }]);
                     await expect(sql.query("SELECT title FROM hyperdrive_roundtrip WHERE id = ?", ["m1"])).resolves.toEqual([{ title: "ship hyperdrive" }]);

@@ -50,7 +50,7 @@ export default defineApp<Env>()
 
 > `teamDomain` and `aud` are **all-or-nothing**, and construction throws when only one is present. `aud` is the only claim that scopes a token to _your_ Access application — a token minted for any other app in the same Cloudflare team shares the issuer and JWKS — so an unset `env.CF_ACCESS_AUD` must fail loudly rather than quietly disabling the check. Omitting both is the legal "Worker-scoped policy" mode above.
 
-Either way the resolver is **fail-closed → anonymous**: no identity, or a token that fails verification, resolves to `null`, the request proceeds unauthenticated, and RLS denies.
+Either way the resolver is **fail-closed → anonymous**: no identity, or a token that fails verification, resolves to `null`, the request proceeds unauthenticated, and RLS denies. The one exception is a correctly signed JWT whose only fault is a past `exp`: it resolves to its identity with that `exp`, and the runtime refuses the request with `401 TOKEN_EXPIRED` (a socket closes with `4001`), so a client refreshes and re-sends instead of running anonymous.
 
 > **Socket expiry differs between the two.** An Access JWT always carries `exp`, which is forwarded so a live WebSocket subscription is dropped when the credential lapses. The platform-supplied identity may not, and a socket opened without one stays authenticated for as long as it stays connected — past the Access session expiring, past the user leaving the policy. If you hold long-lived subscriptions under a Worker-scoped policy, mint a bound yourself:
 >

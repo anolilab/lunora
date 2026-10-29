@@ -46,6 +46,21 @@ describe("notify_send_outside_action", () => {
         expect(run(calls)).toHaveLength(1);
     });
 
+    it("names the hazard that actually applies to each kind, and claims no OCC retry", () => {
+        expect.assertions(4);
+
+        const [query] = run([{ callee: "ctx.notify.send", exportName: "listInbox", file: "inbox", kind: "query", line: 3 }]);
+        const [mutation] = run([{ callee: "ctx.push.broadcast", exportName: "announce", file: "announce", kind: "mutation", line: 9 }]);
+
+        // A query IS re-evaluated by a live subscription — that is the duplicate-send path.
+        expect(query?.detail).toContain("live subscription re-runs this query");
+        // A mutation is not re-run; the send just cannot be rolled back with the transaction.
+        expect(mutation?.detail).toContain("transaction that can roll back");
+        // There is no internal OCC retry loop on this runtime (see `nondeterministic_query_mutation`).
+        expect(query?.detail).not.toContain("retr");
+        expect(mutation?.detail).not.toContain("retried");
+    });
+
     it("is clean for an action (the feeder omits action handlers)", () => {
         expect.assertions(1);
 

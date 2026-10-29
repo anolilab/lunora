@@ -76,7 +76,7 @@ describe("discoverAuthApiCalls", () => {
         const calls = discoverAuthApiCalls(project, join(workdir, "lunora"));
 
         expect(calls).toHaveLength(1);
-        expect(calls[0]).toMatchObject({ exportName: "a", file: "with-headers", hasHeaders: true, method: "banUser" });
+        expect(calls[0]).toMatchObject({ scope: { kind: "export", name: "a" }, file: "with-headers", hasHeaders: true, method: "banUser" });
     });
 
     it("discovers a call without headers and marks hasHeaders: false", () => {
@@ -87,7 +87,7 @@ describe("discoverAuthApiCalls", () => {
         const calls = discoverAuthApiCalls(project, join(workdir, "lunora"));
 
         expect(calls).toHaveLength(1);
-        expect(calls[0]).toMatchObject({ exportName: "b", file: "without-headers", hasHeaders: false, method: "banUser" });
+        expect(calls[0]).toMatchObject({ scope: { kind: "export", name: "b" }, file: "without-headers", hasHeaders: false, method: "banUser" });
     });
 
     it("discovers a destructured authApi call without headers and marks hasHeaders: false", () => {
@@ -98,17 +98,17 @@ describe("discoverAuthApiCalls", () => {
         const calls = discoverAuthApiCalls(project, join(workdir, "lunora"));
 
         expect(calls).toHaveLength(1);
-        expect(calls[0]).toMatchObject({ exportName: "c", file: "destructured", hasHeaders: false, method: "setRole" });
+        expect(calls[0]).toMatchObject({ scope: { kind: "export", name: "c" }, file: "destructured", hasHeaders: false, method: "setRole" });
     });
 
-    it("drops calls that are not inside an exported declaration", () => {
+    it("keeps a call in a helper no export calls, scoped to the helper", () => {
         expect.assertions(1);
 
         writeFileSync(join(workdir, "lunora", "not-exported.ts"), NOT_EXPORTED, "utf8");
 
         const calls = discoverAuthApiCalls(project, join(workdir, "lunora"));
 
-        expect(calls).toHaveLength(0);
+        expect(calls.map((call) => call.scope)).toStrictEqual([{ callers: [], kind: "helper", name: "helper" }]);
     });
 
     it("treats a non-literal argument (variable) as hasHeaders: true (conservative)", () => {
@@ -119,6 +119,6 @@ describe("discoverAuthApiCalls", () => {
         const calls = discoverAuthApiCalls(project, join(workdir, "lunora"));
 
         expect(calls).toHaveLength(1);
-        expect(calls[0]).toMatchObject({ exportName: "d", hasHeaders: true, method: "banUser" });
+        expect(calls[0]).toMatchObject({ scope: { kind: "export", name: "d" }, hasHeaders: true, method: "banUser" });
     });
 });

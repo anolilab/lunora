@@ -58,4 +58,4 @@ const bm25TermScore = (idf: number, frequency: number, documentLength: number, a
     return idf * ((frequency * (BM25_K1 + 1)) / denominator);
 };
 
-export { BM25_B, BM25_K1, bm25Idf, bm25TermScore, tokenize, tokenizeQuery };
+export { bm25Idf, bm25TermScore, tokenize, tokenizeQuery };

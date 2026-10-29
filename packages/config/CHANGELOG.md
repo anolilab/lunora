@@ -1,3 +1,2838 @@
+## @lunora/config [1.0.0-alpha.424](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.423...@lunora/config@1.0.0-alpha.424) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.369
+* **@lunora/seed:** upgraded to 1.0.0-alpha.265
+* **@lunora/studio:** upgraded to 1.0.0-alpha.354
+
+## @lunora/config [1.0.0-alpha.423](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.422...@lunora/config@1.0.0-alpha.423) (2026-10-29)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** Mysql2Like now requires query(text, params) instead of
+execute(text, params). A real mysql2/promise connection or pool has both,
+so only hand-written doubles need renaming.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind pgvector id lists and metadata as json text
+
+createPgVectorIndex broke on postgres.js, the driver its docs show. With
+fetch_types: false (Hyperdrive's recommended setting) postgres.js knows no
+array types, so the id array bound to ANY($1::text[]) went over as the
+malformed literal "a,b,c" and getByIds/deleteByIds threw. And because
+postgres.js types each parameter from the server's Describe, a bare
+$n::jsonb parameter had the already-serialised metadata JSON-encoded a
+second time: metadata was stored as a string and filters never matched.
+
+Id lists now bind as one JSON text parameter expanded with
+jsonb_array_elements_text, and every JSON parameter is cast ::text::jsonb.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind mysql2 array and object params as one value
+
+mysql2's query() interpolates values client-side and expands an array
+into a comma list and a plain object into `key = value` pairs, so since
+the switch from execute() such a param changed the statement's shape
+instead of binding one value. execute()'s binary protocol sent them as
+JSON text. fromMysql2 and buildMysqlExec now normalise every param: an
+array or object becomes its JSON text, an ArrayBuffer becomes bytes,
+scalars, dates and byte views pass through, and undefined throws, as it
+did under execute(), instead of silently binding NULL.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* perf(hyperdrive): run postgres.js statements as prepared statements
+
+fromPostgresJs called client.unsafe(text, params), and unsafe defaults to
+prepare: false. Cloudflare warns against that under Hyperdrive: its
+transaction pooling does not reliably support unnamed statements (queries
+can hang or fail), and each one pays a Parse/Describe round trip before
+Bind/Execute. The adapter now passes { prepare: true }; a client built
+with prepare: false still wins.
+
+Prepared reads are cacheable by Hyperdrive, which is safe for .global()
+only because its config now has caching disabled (the deploy and docs
+change that requires it). The docs, skills, registry item and the config
+remediation build postgres.js with Cloudflare's recommended
+{ fetch_types: false, max: 5 }, with the caveat that array params then
+need binding as JSON text, and the .global() snippets go through
+fromPostgresJs instead of calling sql.unsafe directly.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(hyperdrive): state that mysql needs backslash escapes enabled
+
+Since MySQL statements go over as text, mysql2 escapes string values
+client-side and writes a quote as \'. On a server whose sql_mode includes
+NO_BACKSLASH_ESCAPES that sequence ends the literal, so a stored string
+could break out of it. The mode is off in MySQL's default sql_mode; the
+docs, the global setup skill and the adapter JSDoc now mark it
+unsupported.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(hyperdrive): rename Mysql2Execute to Mysql2Client
+
+The mysql2 adapters call query() now, so the execute-based name no longer
+describes the type. The snapshot also picks up the multi-line formatting of
+PostgresJsLike.unsafe's options.
+* **hyperdrive:** the exported `Mysql2Execute` type from `@lunora/hyperdrive/global`
+is now `Mysql2Client`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(codegen): pass postgres.js options in hyperdrive examples
+
+The generated hyperdriveGlobal JSDoc and the ctx.sql missing-binding diagnostic
+now show postgres(cs, { fetch_types: false, max: 5 }), matching the docs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): quote mysql strings so no sql_mode can end the literal
+
+mysql2's query() escapes a quote as \', which closes the literal when the server's
+sql_mode has NO_BACKSLASH_ESCAPES and lets a bound string inject SQL. Strings (and
+the JSON text of arrays and objects) are now rendered by toMysqlParams with ''
+for a quote and \\ for a backslash, which keeps every value inside its literal
+under any mode. A hex _utf8mb4 literal was rejected: it takes the charset's
+default collation and comparing it with a plain literal fails.
+
+That mode stays unsupported because backslashes come back doubled under it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(cli): warn when a bound hyperdrive config still caches queries
+
+An app with .global({ backend: "hyperdrive" }) tables needs query caching off, but
+deploy only turned it off on configs it created or reused by name. A binding whose
+id was set by hand or by an earlier deploy kept caching on silently. With API
+credentials present, deploy now reads each such config and warns with the
+`wrangler hyperdrive update <id> --caching-disabled` command. It never changes a
+config the user picked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): keep the hyperdrive caching check from blocking a deploy
+
+The cache-status GET for an already-bound config is advisory, but a network
+failure or timeout rejected out of provisionHyperdrive and aborted the deploy.
+It now logs the same "could not check" warning and carries on.
+
+A schema that exists but can't be read used to leave caching on. Since it may
+declare .global({ backend: "hyperdrive" }) tables, configs are now set up with
+caching off and the parse error is logged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(hyperdrive): note how mysql2 reads ? and ?? in query text
+
+mysql2's client-side formatter skips a ? inside a quoted string or comment, but
+reads ?? as an identifier placeholder. A real-MySQL test pins the literal case.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind a mysql string to ?? as its identifier again
+
+mysql2's ?? escaper reads String(value) and never toSqlString, so the quoted-
+literal wrapper toMysqlParams returns for strings came out as `[object Object]`.
+The wrapper now also has toString returning the raw text.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* test(hyperdrive): pin multi-command postgres.js statements without params
+
+postgres.js sends a statement with no params over the simple protocol even with
+prepare: true, so semicolon-separated commands keep working.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(sql-store): cast search token rows ::text::json on postgres
+
+postgres.js types a bare $n::json parameter from the server and JSON-encodes the
+already-serialised token rows again, so json_to_recordset got a scalar and every
+search-indexed .global() write through fromPostgresJs failed. A postgres.js wire
+test inserts and searches such a table.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): skip the hyperdrive caching check on a dry run
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+### Bug Fixes
+
+* **hyperdrive:** safe caching, mysql text protocol, prepared postgres.js ([#1394](https://github.com/anolilab/lunora/issues/1394)) ([ad59bcf](https://github.com/anolilab/lunora/commit/ad59bcf85763e3ee9853c101fa377d00b9d0c63f))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.368
+
+## @lunora/config [1.0.0-alpha.422](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.421...@lunora/config@1.0.0-alpha.422) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.367
+* **@lunora/seed:** upgraded to 1.0.0-alpha.264
+* **@lunora/studio:** upgraded to 1.0.0-alpha.353
+
+## @lunora/config [1.0.0-alpha.421](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.420...@lunora/config@1.0.0-alpha.421) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.366
+* **@lunora/seed:** upgraded to 1.0.0-alpha.263
+* **@lunora/studio:** upgraded to 1.0.0-alpha.352
+
+## @lunora/config [1.0.0-alpha.420](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.419...@lunora/config@1.0.0-alpha.420) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.365
+* **@lunora/seed:** upgraded to 1.0.0-alpha.262
+* **@lunora/studio:** upgraded to 1.0.0-alpha.351
+
+## @lunora/config [1.0.0-alpha.419](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.418...@lunora/config@1.0.0-alpha.419) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.364
+* **@lunora/seed:** upgraded to 1.0.0-alpha.261
+* **@lunora/studio:** upgraded to 1.0.0-alpha.350
+
+## @lunora/config [1.0.0-alpha.418](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.417...@lunora/config@1.0.0-alpha.418) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.363
+* **@lunora/container:** upgraded to 1.0.0-alpha.94
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/seed:** upgraded to 1.0.0-alpha.260
+* **@lunora/studio:** upgraded to 1.0.0-alpha.349
+
+## @lunora/config [1.0.0-alpha.417](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.416...@lunora/config@1.0.0-alpha.417) (2026-10-27)
+
+### Performance Improvements
+
+* **config:** compress studio assets the dev hosts serve ([#1368](https://github.com/anolilab/lunora/issues/1368)) ([b978a84](https://github.com/anolilab/lunora/commit/b978a844e4df769d8c04f63b2b216eb2dea79fec))
+
+## @lunora/config [1.0.0-alpha.416](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.415...@lunora/config@1.0.0-alpha.416) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.348
+
+## @lunora/config [1.0.0-alpha.415](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.414...@lunora/config@1.0.0-alpha.415) (2026-10-26)
+
+### Code Refactoring
+
+* **config:** extract the relay-secret export-graph resolver ([#1361](https://github.com/anolilab/lunora/issues/1361)) ([bec9225](https://github.com/anolilab/lunora/commit/bec922505024d7f1d72592e4f27140612add3efb))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.361
+* **@lunora/seed:** upgraded to 1.0.0-alpha.259
+* **@lunora/studio:** upgraded to 1.0.0-alpha.347
+* **@visulima/colorize:** 2.1.1 → 3.0.0
+* **@visulima/fs:** 6.0.29 → 7.0.0
+* **@visulima/package:** 5.0.42 → 6.0.0
+
+## @lunora/config [1.0.0-alpha.414](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.413...@lunora/config@1.0.0-alpha.414) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.360
+
+## @lunora/config [1.0.0-alpha.413](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.412...@lunora/config@1.0.0-alpha.413) (2026-10-26)
+
+### Performance Improvements
+
+* drop unused TypeScript programs from dev startup binding scan ([#1349](https://github.com/anolilab/lunora/issues/1349)) ([8aa7725](https://github.com/anolilab/lunora/commit/8aa772521e2f101f5ad4585c49882df064ccaa8f))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.359
+
+## @lunora/config [1.0.0-alpha.412](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.411...@lunora/config@1.0.0-alpha.412) (2026-10-26)
+
+### Bug Fixes
+
+* **config:** bound the binding-scan parse cache to one project ([#1345](https://github.com/anolilab/lunora/issues/1345)) ([a2c777e](https://github.com/anolilab/lunora/commit/a2c777ed4262a5aa33df6d580552f7aa1b2e731e))
+
+### Performance Improvements
+
+* **codegen:** cheaper codegen passes, no agent/seed graphs at load ([#1346](https://github.com/anolilab/lunora/issues/1346)) ([6df95da](https://github.com/anolilab/lunora/commit/6df95da21c42b2be079a968b90d9192c3808aff2))
+* **vite:** stop repeating startup work per build pass and per save ([#1339](https://github.com/anolilab/lunora/issues/1339)) ([aaef949](https://github.com/anolilab/lunora/commit/aaef9498c186af4533789dc826d4ce84ee805691))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.358
+* **@lunora/container:** upgraded to 1.0.0-alpha.93
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/seed:** upgraded to 1.0.0-alpha.258
+* **@lunora/studio:** upgraded to 1.0.0-alpha.346
+
+## @lunora/config [1.0.0-alpha.411](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.410...@lunora/config@1.0.0-alpha.411) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.357
+* **@lunora/studio:** upgraded to 1.0.0-alpha.345
+
+## @lunora/config [1.0.0-alpha.410](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.409...@lunora/config@1.0.0-alpha.410) (2026-10-26)
+
+### Performance Improvements
+
+* **cli:** cut codegen and ts-morph from the startup path ([#1338](https://github.com/anolilab/lunora/issues/1338)) ([c4d6061](https://github.com/anolilab/lunora/commit/c4d60616455fa86a6d668e247f6223774f352db5))
+
+## @lunora/config [1.0.0-alpha.409](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.408...@lunora/config@1.0.0-alpha.409) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.355
+* **@lunora/seed:** upgraded to 1.0.0-alpha.257
+* **@lunora/studio:** upgraded to 1.0.0-alpha.344
+
+## @lunora/config [1.0.0-alpha.408](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.407...@lunora/config@1.0.0-alpha.408) (2026-10-26)
+
+### Bug Fixes
+
+* **seed:** validator bounds, unique indexes and dangling FKs ([#1284](https://github.com/anolilab/lunora/issues/1284)) ([8ede8ab](https://github.com/anolilab/lunora/commit/8ede8abc2e7434bc71443ad95388315ff4ec7dee))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.354
+* **@lunora/seed:** upgraded to 1.0.0-alpha.256
+* **@lunora/studio:** upgraded to 1.0.0-alpha.343
+
+## @lunora/config [1.0.0-alpha.407](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.406...@lunora/config@1.0.0-alpha.407) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.353
+* **@lunora/container:** upgraded to 1.0.0-alpha.92
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/seed:** upgraded to 1.0.0-alpha.255
+* **@lunora/studio:** upgraded to 1.0.0-alpha.342
+
+## @lunora/config [1.0.0-alpha.406](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.405...@lunora/config@1.0.0-alpha.406) (2026-10-25)
+
+### Bug Fixes
+
+* **config:** celld audit fixes ([#1283](https://github.com/anolilab/lunora/issues/1283)) ([6fd7854](https://github.com/anolilab/lunora/commit/6fd78547928d41d3569ba71cf94683dac7f49b94))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.352
+* **@lunora/seed:** upgraded to 1.0.0-alpha.254
+* **@lunora/studio:** upgraded to 1.0.0-alpha.341
+
+## @lunora/config [1.0.0-alpha.405](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.404...@lunora/config@1.0.0-alpha.405) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.340
+
+## @lunora/config [1.0.0-alpha.404](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.403...@lunora/config@1.0.0-alpha.404) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.351
+* **@lunora/container:** upgraded to 1.0.0-alpha.91
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/seed:** upgraded to 1.0.0-alpha.253
+* **@lunora/studio:** upgraded to 1.0.0-alpha.339
+
+## @lunora/config [1.0.0-alpha.403](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.402...@lunora/config@1.0.0-alpha.403) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.350
+* **@lunora/container:** upgraded to 1.0.0-alpha.90
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/seed:** upgraded to 1.0.0-alpha.252
+* **@lunora/studio:** upgraded to 1.0.0-alpha.338
+
+## @lunora/config [1.0.0-alpha.402](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.401...@lunora/config@1.0.0-alpha.402) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.337
+
+## @lunora/config [1.0.0-alpha.401](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.400...@lunora/config@1.0.0-alpha.401) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.349
+* **@lunora/seed:** upgraded to 1.0.0-alpha.251
+* **@lunora/studio:** upgraded to 1.0.0-alpha.336
+
+## @lunora/config [1.0.0-alpha.400](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.399...@lunora/config@1.0.0-alpha.400) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.348
+* **@lunora/seed:** upgraded to 1.0.0-alpha.250
+* **@lunora/studio:** upgraded to 1.0.0-alpha.335
+
+## @lunora/config [1.0.0-alpha.399](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.398...@lunora/config@1.0.0-alpha.399) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.347
+* **@lunora/seed:** upgraded to 1.0.0-alpha.249
+* **@lunora/studio:** upgraded to 1.0.0-alpha.334
+
+## @lunora/config [1.0.0-alpha.398](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.397...@lunora/config@1.0.0-alpha.398) (2026-10-22)
+
+### Performance Improvements
+
+* **config:** skip lib loading in the validator syntax check ([#1303](https://github.com/anolilab/lunora/issues/1303)) ([ebb62f6](https://github.com/anolilab/lunora/commit/ebb62f61520c9b60ab79c9ba2a9389f609b76172))
+
+## @lunora/config [1.0.0-alpha.397](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.396...@lunora/config@1.0.0-alpha.397) (2026-10-22)
+
+### Performance Improvements
+
+* **config:** reuse codegen project for studio edits ([#1301](https://github.com/anolilab/lunora/issues/1301)) ([a990bb3](https://github.com/anolilab/lunora/commit/a990bb3015c27921863d32a329faaa43f30601d7))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.345
+
+## @lunora/config [1.0.0-alpha.396](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.395...@lunora/config@1.0.0-alpha.396) (2026-10-22)
+
+### Performance Improvements
+
+* **codegen:** resolve relative targets with TypeScript's resolver, without a program ([#1299](https://github.com/anolilab/lunora/issues/1299)) ([d360cd8](https://github.com/anolilab/lunora/commit/d360cd814241787e9647c5d2562988b35dbebf27))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.344
+
+## @lunora/config [1.0.0-alpha.395](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.394...@lunora/config@1.0.0-alpha.395) (2026-10-22)
+
+### Bug Fixes
+
+* **config:** parse a scan's candidate files in one project ([#1298](https://github.com/anolilab/lunora/issues/1298)) ([cf7113b](https://github.com/anolilab/lunora/commit/cf7113bbcc5be6281841df3adf45944ad1dcf8f1))
+
+## @lunora/config [1.0.0-alpha.394](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.393...@lunora/config@1.0.0-alpha.394) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.343
+* **@lunora/seed:** upgraded to 1.0.0-alpha.247
+* **@lunora/studio:** upgraded to 1.0.0-alpha.332
+
+## @lunora/config [1.0.0-alpha.393](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.392...@lunora/config@1.0.0-alpha.393) (2026-10-22)
+
+### Features
+
+* **vite:** write the server bundle's metafile for lunora build ([#1290](https://github.com/anolilab/lunora/issues/1290)) ([9f88e40](https://github.com/anolilab/lunora/commit/9f88e407777daaecec07363ddf733219327c7b73))
+
+## @lunora/config [1.0.0-alpha.392](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.391...@lunora/config@1.0.0-alpha.392) (2026-10-21)
+
+### Features
+
+* **cli:** run the vite or rsbuild build before lunora build ([#1289](https://github.com/anolilab/lunora/issues/1289)) ([5a93210](https://github.com/anolilab/lunora/commit/5a9321020df6c55a50805745177e903fa90a4570))
+
+## @lunora/config [1.0.0-alpha.391](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.390...@lunora/config@1.0.0-alpha.391) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.340
+* **@lunora/container:** upgraded to 1.0.0-alpha.89
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/seed:** upgraded to 1.0.0-alpha.246
+* **@lunora/studio:** upgraded to 1.0.0-alpha.331
+
+## @lunora/config [1.0.0-alpha.390](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.389...@lunora/config@1.0.0-alpha.390) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.339
+* **@lunora/studio:** upgraded to 1.0.0-alpha.330
+
+## @lunora/config [1.0.0-alpha.389](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.388...@lunora/config@1.0.0-alpha.389) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.329
+
+## @lunora/config [1.0.0-alpha.388](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.387...@lunora/config@1.0.0-alpha.388) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.338
+* **@lunora/seed:** upgraded to 1.0.0-alpha.245
+* **@lunora/studio:** upgraded to 1.0.0-alpha.328
+
+## @lunora/config [1.0.0-alpha.387](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.386...@lunora/config@1.0.0-alpha.387) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.337
+* **@lunora/container:** upgraded to 1.0.0-alpha.88
+* **@lunora/seed:** upgraded to 1.0.0-alpha.244
+* **@lunora/studio:** upgraded to 1.0.0-alpha.327
+
+## @lunora/config [1.0.0-alpha.386](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.385...@lunora/config@1.0.0-alpha.386) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.336
+* **@lunora/container:** upgraded to 1.0.0-alpha.87
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/seed:** upgraded to 1.0.0-alpha.243
+* **@lunora/studio:** upgraded to 1.0.0-alpha.326
+
+## @lunora/config [1.0.0-alpha.385](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.384...@lunora/config@1.0.0-alpha.385) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.335
+* **@lunora/container:** upgraded to 1.0.0-alpha.86
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/seed:** upgraded to 1.0.0-alpha.242
+* **@lunora/studio:** upgraded to 1.0.0-alpha.325
+
+## @lunora/config [1.0.0-alpha.384](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.383...@lunora/config@1.0.0-alpha.384) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.324
+
+## @lunora/config [1.0.0-alpha.383](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.382...@lunora/config@1.0.0-alpha.383) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.334
+* **@lunora/container:** upgraded to 1.0.0-alpha.85
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/seed:** upgraded to 1.0.0-alpha.241
+* **@lunora/studio:** upgraded to 1.0.0-alpha.323
+
+## @lunora/config [1.0.0-alpha.382](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.381...@lunora/config@1.0.0-alpha.382) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.333
+* **@lunora/container:** upgraded to 1.0.0-alpha.84
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/seed:** upgraded to 1.0.0-alpha.240
+* **@lunora/studio:** upgraded to 1.0.0-alpha.322
+
+## @lunora/config [1.0.0-alpha.381](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.380...@lunora/config@1.0.0-alpha.381) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.331
+* **@lunora/studio:** upgraded to 1.0.0-alpha.321
+
+## @lunora/config [1.0.0-alpha.380](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.379...@lunora/config@1.0.0-alpha.380) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.330
+* **@lunora/container:** upgraded to 1.0.0-alpha.83
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/seed:** upgraded to 1.0.0-alpha.239
+* **@lunora/studio:** upgraded to 1.0.0-alpha.320
+
+## @lunora/config [1.0.0-alpha.379](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.378...@lunora/config@1.0.0-alpha.379) (2026-10-19)
+
+### Features
+
+* **cli:** add a cloudflare cost audit skill and a cron cadence lint ([#1269](https://github.com/anolilab/lunora/issues/1269)) ([365571a](https://github.com/anolilab/lunora/commit/365571a2c39e366e3ba9826ce5656ff1526d8015))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.329
+* **@lunora/studio:** upgraded to 1.0.0-alpha.319
+
+## @lunora/config [1.0.0-alpha.378](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.377...@lunora/config@1.0.0-alpha.378) (2026-10-19)
+
+### Features
+
+* **cli:** smoke-load lazy modules before deploy ([#1257](https://github.com/anolilab/lunora/issues/1257)) ([b758e17](https://github.com/anolilab/lunora/commit/b758e17a3e4fbae34f6830d1b4eee09d56e77b4e))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.328
+
+## @lunora/config [1.0.0-alpha.377](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.376...@lunora/config@1.0.0-alpha.377) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.327
+* **@lunora/seed:** upgraded to 1.0.0-alpha.238
+* **@lunora/studio:** upgraded to 1.0.0-alpha.318
+
+## @lunora/config [1.0.0-alpha.376](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.375...@lunora/config@1.0.0-alpha.376) (2026-10-18)
+
+### Bug Fixes
+
+* **config:** treat a stale wrangler login as logged out in dev ([#1256](https://github.com/anolilab/lunora/issues/1256)) ([8883eb4](https://github.com/anolilab/lunora/commit/8883eb4e90a4021395a121373afa119db6886be5))
+
+## @lunora/config [1.0.0-alpha.375](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.374...@lunora/config@1.0.0-alpha.375) (2026-10-18)
+
+### Features
+
+* **cli:** provision KV and Hyperdrive bindings, and serve Hyperdrive from PGlite in dev ([#1242](https://github.com/anolilab/lunora/issues/1242)) ([1b38891](https://github.com/anolilab/lunora/commit/1b388917c15564a88693f41d204d458bfaf0d1b0))
+* **config:** write the Artifacts binding and leave it out when logged out ([#1243](https://github.com/anolilab/lunora/issues/1243)) ([5e7f80f](https://github.com/anolilab/lunora/commit/5e7f80fb9b3f28868606455d9f48a05000e45162))
+
+
+### Dependencies
+
+* **@lunora/seed:** upgraded to 1.0.0-alpha.237
+* **@lunora/studio:** upgraded to 1.0.0-alpha.317
+
+## @lunora/config [1.0.0-alpha.374](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.373...@lunora/config@1.0.0-alpha.374) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.326
+* **@lunora/seed:** upgraded to 1.0.0-alpha.236
+* **@lunora/studio:** upgraded to 1.0.0-alpha.316
+
+## @lunora/config [1.0.0-alpha.373](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.372...@lunora/config@1.0.0-alpha.373) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.325
+* **@lunora/container:** upgraded to 1.0.0-alpha.82
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/seed:** upgraded to 1.0.0-alpha.235
+* **@lunora/studio:** upgraded to 1.0.0-alpha.315
+
+## @lunora/config [1.0.0-alpha.372](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.371...@lunora/config@1.0.0-alpha.372) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.324
+* **@lunora/container:** upgraded to 1.0.0-alpha.81
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/seed:** upgraded to 1.0.0-alpha.234
+* **@lunora/studio:** upgraded to 1.0.0-alpha.314
+
+## @lunora/config [1.0.0-alpha.371](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.370...@lunora/config@1.0.0-alpha.371) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.323
+
+## @lunora/config [1.0.0-alpha.370](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.369...@lunora/config@1.0.0-alpha.370) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.322
+* **@lunora/container:** upgraded to 1.0.0-alpha.80
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/seed:** upgraded to 1.0.0-alpha.233
+* **@lunora/studio:** upgraded to 1.0.0-alpha.313
+
+## @lunora/config [1.0.0-alpha.369](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.368...@lunora/config@1.0.0-alpha.369) (2026-10-18)
+
+### Bug Fixes
+
+* **codegen:** address review of the lazy function registry ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([#1239](https://github.com/anolilab/lunora/issues/1239)) ([424449a](https://github.com/anolilab/lunora/commit/424449a14263e4714fb19185c323cbb3892ac901))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.321
+* **@lunora/seed:** upgraded to 1.0.0-alpha.232
+* **@lunora/studio:** upgraded to 1.0.0-alpha.312
+
+## @lunora/config [1.0.0-alpha.368](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.367...@lunora/config@1.0.0-alpha.368) (2026-10-18)
+
+### Features
+
+* **codegen:** load procedure modules on demand ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([655247d](https://github.com/anolilab/lunora/commit/655247d2c806433e656aec35ec69e2fa5133071c))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.320
+* **@lunora/studio:** upgraded to 1.0.0-alpha.311
+
+## @lunora/config [1.0.0-alpha.367](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.366...@lunora/config@1.0.0-alpha.367) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.319
+* **@lunora/container:** upgraded to 1.0.0-alpha.79
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+* **@lunora/seed:** upgraded to 1.0.0-alpha.231
+* **@lunora/studio:** upgraded to 1.0.0-alpha.310
+
+## @lunora/config [1.0.0-alpha.366](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.365...@lunora/config@1.0.0-alpha.366) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.318
+
+## @lunora/config [1.0.0-alpha.365](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.364...@lunora/config@1.0.0-alpha.365) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.317
+* **@lunora/container:** upgraded to 1.0.0-alpha.78
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+* **@lunora/seed:** upgraded to 1.0.0-alpha.230
+* **@lunora/studio:** upgraded to 1.0.0-alpha.309
+
+## @lunora/config [1.0.0-alpha.364](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.363...@lunora/config@1.0.0-alpha.364) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.316
+* **@lunora/seed:** upgraded to 1.0.0-alpha.229
+* **@lunora/studio:** upgraded to 1.0.0-alpha.308
+
+## @lunora/config [1.0.0-alpha.363](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.362...@lunora/config@1.0.0-alpha.363) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.315
+* **@lunora/seed:** upgraded to 1.0.0-alpha.228
+
+## @lunora/config [1.0.0-alpha.362](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.361...@lunora/config@1.0.0-alpha.362) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.314
+* **@lunora/seed:** upgraded to 1.0.0-alpha.227
+* **@lunora/studio:** upgraded to 1.0.0-alpha.307
+
+## @lunora/config [1.0.0-alpha.361](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.360...@lunora/config@1.0.0-alpha.361) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.306
+
+## @lunora/config [1.0.0-alpha.360](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.359...@lunora/config@1.0.0-alpha.360) (2026-10-16)
+
+### Performance Improvements
+
+* **cli:** load commands on demand and keep ts-morph off the light import path ([#1224](https://github.com/anolilab/lunora/issues/1224)) ([695a17d](https://github.com/anolilab/lunora/commit/695a17d5255c650ff20d8618ff92d06ee729de9a))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.313
+
+## @lunora/config [1.0.0-alpha.359](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.358...@lunora/config@1.0.0-alpha.359) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.312
+* **@lunora/seed:** upgraded to 1.0.0-alpha.226
+* **@lunora/studio:** upgraded to 1.0.0-alpha.305
+
+## @lunora/config [1.0.0-alpha.358](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.357...@lunora/config@1.0.0-alpha.358) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.311
+* **@lunora/seed:** upgraded to 1.0.0-alpha.225
+* **@lunora/studio:** upgraded to 1.0.0-alpha.304
+
+## @lunora/config [1.0.0-alpha.357](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.356...@lunora/config@1.0.0-alpha.357) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.310
+* **@lunora/seed:** upgraded to 1.0.0-alpha.224
+* **@lunora/studio:** upgraded to 1.0.0-alpha.303
+
+## @lunora/config [1.0.0-alpha.356](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.355...@lunora/config@1.0.0-alpha.356) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.309
+* **@lunora/seed:** upgraded to 1.0.0-alpha.223
+* **@lunora/studio:** upgraded to 1.0.0-alpha.302
+
+## @lunora/config [1.0.0-alpha.355](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.354...@lunora/config@1.0.0-alpha.355) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.308
+* **@lunora/container:** upgraded to 1.0.0-alpha.76
+* **@lunora/errors:** upgraded to 1.0.0-alpha.56
+* **@lunora/seed:** upgraded to 1.0.0-alpha.222
+* **@lunora/studio:** upgraded to 1.0.0-alpha.301
+
+## @lunora/config [1.0.0-alpha.354](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.353...@lunora/config@1.0.0-alpha.354) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.307
+* **@lunora/seed:** upgraded to 1.0.0-alpha.221
+
+## @lunora/config [1.0.0-alpha.353](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.352...@lunora/config@1.0.0-alpha.353) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.306
+* **@lunora/studio:** upgraded to 1.0.0-alpha.300
+
+## @lunora/config [1.0.0-alpha.352](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.351...@lunora/config@1.0.0-alpha.352) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.304
+* **@lunora/seed:** upgraded to 1.0.0-alpha.220
+* **@lunora/studio:** upgraded to 1.0.0-alpha.299
+
+## @lunora/config [1.0.0-alpha.351](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.350...@lunora/config@1.0.0-alpha.351) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.303
+* **@lunora/seed:** upgraded to 1.0.0-alpha.219
+* **@lunora/studio:** upgraded to 1.0.0-alpha.298
+
+## @lunora/config [1.0.0-alpha.350](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.349...@lunora/config@1.0.0-alpha.350) (2026-10-15)
+
+### Performance Improvements
+
+* **cli:** memoise discovery and push secrets in one call ([#1196](https://github.com/anolilab/lunora/issues/1196)) ([94925fc](https://github.com/anolilab/lunora/commit/94925fcdb86d6f8c13c3208e4b2903e6102e20b2))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.302
+* **@lunora/container:** upgraded to 1.0.0-alpha.75
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+* **@lunora/seed:** upgraded to 1.0.0-alpha.218
+* **@lunora/studio:** upgraded to 1.0.0-alpha.297
+
+## @lunora/config [1.0.0-alpha.349](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.348...@lunora/config@1.0.0-alpha.349) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.296
+
+## @lunora/config [1.0.0-alpha.348](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.347...@lunora/config@1.0.0-alpha.348) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.300
+* **@lunora/seed:** upgraded to 1.0.0-alpha.217
+* **@lunora/studio:** upgraded to 1.0.0-alpha.295
+
+## @lunora/config [1.0.0-alpha.347](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.346...@lunora/config@1.0.0-alpha.347) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.299
+* **@lunora/seed:** upgraded to 1.0.0-alpha.216
+* **@lunora/studio:** upgraded to 1.0.0-alpha.294
+
+## @lunora/config [1.0.0-alpha.346](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.345...@lunora/config@1.0.0-alpha.346) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.298
+* **@lunora/seed:** upgraded to 1.0.0-alpha.215
+* **@lunora/studio:** upgraded to 1.0.0-alpha.293
+
+## @lunora/config [1.0.0-alpha.345](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.344...@lunora/config@1.0.0-alpha.345) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.292
+
+## @lunora/config [1.0.0-alpha.344](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.343...@lunora/config@1.0.0-alpha.344) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.297
+* **@lunora/container:** upgraded to 1.0.0-alpha.74
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+* **@lunora/seed:** upgraded to 1.0.0-alpha.214
+* **@lunora/studio:** upgraded to 1.0.0-alpha.291
+
+## @lunora/config [1.0.0-alpha.343](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.342...@lunora/config@1.0.0-alpha.343) (2026-10-13)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.296
+* **@lunora/seed:** upgraded to 1.0.0-alpha.213
+* **@lunora/studio:** upgraded to 1.0.0-alpha.290
+
+## @lunora/config [1.0.0-alpha.342](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.341...@lunora/config@1.0.0-alpha.342) (2026-10-13)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.295
+
+## @lunora/config [1.0.0-alpha.341](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.340...@lunora/config@1.0.0-alpha.341) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.294
+* **@lunora/container:** upgraded to 1.0.0-alpha.73
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+* **@lunora/seed:** upgraded to 1.0.0-alpha.212
+* **@lunora/studio:** upgraded to 1.0.0-alpha.289
+
+## @lunora/config [1.0.0-alpha.340](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.339...@lunora/config@1.0.0-alpha.340) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.293
+* **@lunora/seed:** upgraded to 1.0.0-alpha.211
+* **@lunora/studio:** upgraded to 1.0.0-alpha.288
+
+## @lunora/config [1.0.0-alpha.339](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.338...@lunora/config@1.0.0-alpha.339) (2026-10-12)
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.292
+* **@lunora/seed:** upgraded to 1.0.0-alpha.210
+* **@lunora/studio:** upgraded to 1.0.0-alpha.287
+
+## @lunora/config [1.0.0-alpha.338](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.337...@lunora/config@1.0.0-alpha.338) (2026-10-11)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.286
+
+## @lunora/config [1.0.0-alpha.337](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.336...@lunora/config@1.0.0-alpha.337) (2026-10-10)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.285
+
+## @lunora/config [1.0.0-alpha.336](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.335...@lunora/config@1.0.0-alpha.336) (2026-10-10)
+
+### Bug Fixes
+
+* **dev:** drop the ai binding without a cf login ([#1097](https://github.com/anolilab/lunora/issues/1097)) ([2844e76](https://github.com/anolilab/lunora/commit/2844e76e381effe33054018417ae392979a28da2))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.291
+* **@lunora/seed:** upgraded to 1.0.0-alpha.209
+
+## @lunora/config [1.0.0-alpha.335](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.334...@lunora/config@1.0.0-alpha.335) (2026-10-10)
+
+### Bug Fixes
+
+* **cli,config:** harden cloudflare profile and tidy reconcile target ([#1096](https://github.com/anolilab/lunora/issues/1096)) ([17dea79](https://github.com/anolilab/lunora/commit/17dea79aba2b64a748374d54a84812b9cb410ecf))
+
+## @lunora/config [1.0.0-alpha.334](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.333...@lunora/config@1.0.0-alpha.334) (2026-10-10)
+
+### Features
+
+* **config:** enable upload_source_maps on the cloudflare target ([#1094](https://github.com/anolilab/lunora/issues/1094)) ([4a22914](https://github.com/anolilab/lunora/commit/4a22914343d6464b2c84e9a3b68fd6e3234db006))
+
+## @lunora/config [1.0.0-alpha.333](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.332...@lunora/config@1.0.0-alpha.333) (2026-10-10)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.290
+* **@lunora/seed:** upgraded to 1.0.0-alpha.208
+* **@lunora/studio:** upgraded to 1.0.0-alpha.284
+
+## @lunora/config [1.0.0-alpha.332](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.331...@lunora/config@1.0.0-alpha.332) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.289
+
+## @lunora/config [1.0.0-alpha.331](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.330...@lunora/config@1.0.0-alpha.331) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.287
+* **@visulima/fs:** 6.0.28 → 6.0.29
+* **@visulima/package:** 5.0.41 → 5.0.42
+
+## @lunora/config [1.0.0-alpha.330](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.329...@lunora/config@1.0.0-alpha.330) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.285
+
+## @lunora/config [1.0.0-alpha.329](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.328...@lunora/config@1.0.0-alpha.329) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.284
+* **@lunora/container:** upgraded to 1.0.0-alpha.72
+* **@lunora/seed:** upgraded to 1.0.0-alpha.207
+
+## @lunora/config [1.0.0-alpha.328](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.327...@lunora/config@1.0.0-alpha.328) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.283
+* **@lunora/studio:** upgraded to 1.0.0-alpha.281
+
+## @lunora/config [1.0.0-alpha.327](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.326...@lunora/config@1.0.0-alpha.327) (2026-10-09)
+
+### Bug Fixes
+
+* **config:** carry a top-level service entrypoint into the env copies ([#1064](https://github.com/anolilab/lunora/issues/1064)) ([1791189](https://github.com/anolilab/lunora/commit/1791189866aea6600f16a3ac02f0c2cda4f2065d))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.282
+* **@lunora/seed:** upgraded to 1.0.0-alpha.206
+* **@lunora/studio:** upgraded to 1.0.0-alpha.280
+
+## @lunora/config [1.0.0-alpha.326](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.325...@lunora/config@1.0.0-alpha.326) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.281
+* **@lunora/seed:** upgraded to 1.0.0-alpha.205
+
+## @lunora/config [1.0.0-alpha.325](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.324...@lunora/config@1.0.0-alpha.325) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.280
+* **@lunora/seed:** upgraded to 1.0.0-alpha.204
+* **@lunora/studio:** upgraded to 1.0.0-alpha.279
+
+## @lunora/config [1.0.0-alpha.324](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.323...@lunora/config@1.0.0-alpha.324) (2026-10-08)
+
+### Bug Fixes
+
+* **queue:** route renamed queues, add maxConcurrency, type ctx.queues ([#1041](https://github.com/anolilab/lunora/issues/1041)) ([57c6a86](https://github.com/anolilab/lunora/commit/57c6a867ca68630d8662fe78196c4afa6cf35517))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.279
+* **@lunora/seed:** upgraded to 1.0.0-alpha.203
+* **@lunora/studio:** upgraded to 1.0.0-alpha.278
+
+## @lunora/config [1.0.0-alpha.323](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.322...@lunora/config@1.0.0-alpha.323) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.278
+* **@lunora/container:** upgraded to 1.0.0-alpha.71
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/seed:** upgraded to 1.0.0-alpha.202
+* **@lunora/studio:** upgraded to 1.0.0-alpha.277
+
+## @lunora/config [1.0.0-alpha.322](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.321...@lunora/config@1.0.0-alpha.322) (2026-10-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.277
+* **@lunora/seed:** upgraded to 1.0.0-alpha.201
+* **@lunora/studio:** upgraded to 1.0.0-alpha.276
+
+## @lunora/config [1.0.0-alpha.321](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.320...@lunora/config@1.0.0-alpha.321) (2026-10-07)
+
+### Bug Fixes
+
+* **config:** index optional vector metadata columns by their inner kind ([#1034](https://github.com/anolilab/lunora/issues/1034)) ([4149265](https://github.com/anolilab/lunora/commit/41492657dbbcacb0dff004d95ca44e4b1d107836)), closes [#1033](https://github.com/anolilab/lunora/issues/1033)
+
+## @lunora/config [1.0.0-alpha.320](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.319...@lunora/config@1.0.0-alpha.320) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.276
+* **@lunora/studio:** upgraded to 1.0.0-alpha.275
+
+## @lunora/config [1.0.0-alpha.319](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.318...@lunora/config@1.0.0-alpha.319) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.275
+* **@lunora/seed:** upgraded to 1.0.0-alpha.200
+* **@lunora/studio:** upgraded to 1.0.0-alpha.274
+
+## @lunora/config [1.0.0-alpha.318](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.317...@lunora/config@1.0.0-alpha.318) (2026-10-07)
+
+### Bug Fixes
+
+* **config:** scaffold only the imported payment adapter's secrets ([#1026](https://github.com/anolilab/lunora/issues/1026)) ([05173b1](https://github.com/anolilab/lunora/commit/05173b15aa1c72866e96284fffe6e9da5ed67fc9))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.274
+* **@lunora/seed:** upgraded to 1.0.0-alpha.199
+* **@lunora/studio:** upgraded to 1.0.0-alpha.273
+
+## @lunora/config [1.0.0-alpha.317](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.316...@lunora/config@1.0.0-alpha.317) (2026-10-07)
+
+### Features
+
+* **cli:** check artifacts namespace jurisdiction on deploy ([#1017](https://github.com/anolilab/lunora/issues/1017)) ([2a53718](https://github.com/anolilab/lunora/commit/2a53718e565c5b0f322b29915248940ab2b34e48))
+* **codegen:** discover queues declared in a module's queues.ts ([#1018](https://github.com/anolilab/lunora/issues/1018)) ([f5dc76c](https://github.com/anolilab/lunora/commit/f5dc76c6acdde00f6bae02e4b56852619feedb16))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.273
+* **@lunora/seed:** upgraded to 1.0.0-alpha.198
+* **@lunora/studio:** upgraded to 1.0.0-alpha.272
+
+## @lunora/config [1.0.0-alpha.316](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.315...@lunora/config@1.0.0-alpha.316) (2026-10-06)
+
+### Features
+
+* **platform-celld:** publish the package and test against celld v0.6.1 ([#1013](https://github.com/anolilab/lunora/issues/1013)) ([e695d1c](https://github.com/anolilab/lunora/commit/e695d1ccf114755b1d8169d6ce635487eef11bbb))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.272
+* **@lunora/seed:** upgraded to 1.0.0-alpha.197
+* **@lunora/studio:** upgraded to 1.0.0-alpha.271
+
+## @lunora/config [1.0.0-alpha.315](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.314...@lunora/config@1.0.0-alpha.315) (2026-10-06)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** an app whose only import of a capability package names
+allowlisted helpers no longer gets ctx.<prop> emitted or the binding
+inferred by @lunora/config; import the factory or read ctx.<prop> to keep it.
+
+Plan 447 ships; remove it and its plans/README.md row.
+
+
+Claude-Session: https://claude.ai/code/session_019eqAUAYWECEXnGUUr8A1Fr
+
+Co-authored-by: Daniel Bannert <daniel.bannert@corify.de>
+Co-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **codegen:** don't gate binding-free capability helpers ([#1012](https://github.com/anolilab/lunora/issues/1012)) ([79dfe5b](https://github.com/anolilab/lunora/commit/79dfe5b86cf7f647d60e8f0ea7ef32a47e0b9df3))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.271
+
+## @lunora/config [1.0.0-alpha.314](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.313...@lunora/config@1.0.0-alpha.314) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.270
+* **@lunora/seed:** upgraded to 1.0.0-alpha.196
+* **@lunora/studio:** upgraded to 1.0.0-alpha.270
+
+## @lunora/config [1.0.0-alpha.313](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.312...@lunora/config@1.0.0-alpha.313) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.269
+* **@lunora/seed:** upgraded to 1.0.0-alpha.195
+* **@lunora/studio:** upgraded to 1.0.0-alpha.269
+
+## @lunora/config [1.0.0-alpha.312](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.311...@lunora/config@1.0.0-alpha.312) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.268
+* **@lunora/seed:** upgraded to 1.0.0-alpha.194
+* **@lunora/studio:** upgraded to 1.0.0-alpha.268
+
+## @lunora/config [1.0.0-alpha.311](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.310...@lunora/config@1.0.0-alpha.311) (2026-10-06)
+
+### Features
+
+* durable object class budget check and opt-in merged class ([#995](https://github.com/anolilab/lunora/issues/995)) ([fa5a78e](https://github.com/anolilab/lunora/commit/fa5a78ed39f03c5d39c9d209fc83c49f27bdb6f7))
+
+### Code Refactoring
+
+* **cli:** read package manifests through shared visulima helpers ([#994](https://github.com/anolilab/lunora/issues/994)) ([dd9891e](https://github.com/anolilab/lunora/commit/dd9891e704fb70eb65b2e1be74038331a7857f7a))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.267
+* **@lunora/studio:** upgraded to 1.0.0-alpha.267
+
+## @lunora/config [1.0.0-alpha.310](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.309...@lunora/config@1.0.0-alpha.310) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.266
+
+## @lunora/config [1.0.0-alpha.309](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.308...@lunora/config@1.0.0-alpha.309) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.266
+
+## @lunora/config [1.0.0-alpha.308](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.307...@lunora/config@1.0.0-alpha.308) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.265
+* **@lunora/seed:** upgraded to 1.0.0-alpha.193
+* **@lunora/studio:** upgraded to 1.0.0-alpha.265
+* **dotenv:** 17.4.2 → 18.0.5
+* **@visulima/package:** 5.0.32 → 5.0.41
+
+## @lunora/config [1.0.0-alpha.307](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.306...@lunora/config@1.0.0-alpha.307) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.264
+* **@lunora/seed:** upgraded to 1.0.0-alpha.192
+* **@lunora/studio:** upgraded to 1.0.0-alpha.264
+
+## @lunora/config [1.0.0-alpha.306](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.305...@lunora/config@1.0.0-alpha.306) (2026-10-04)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.263
+* **@lunora/seed:** upgraded to 1.0.0-alpha.191
+* **@lunora/studio:** upgraded to 1.0.0-alpha.263
+
+## @lunora/config [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.304...@lunora/config@1.0.0-alpha.305) (2026-10-04)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.262
+* **@lunora/seed:** upgraded to 1.0.0-alpha.190
+* **@lunora/studio:** upgraded to 1.0.0-alpha.262
+
+## @lunora/config [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.303...@lunora/config@1.0.0-alpha.304) (2026-10-04)
+
+### Features
+
+* **cli:** warn when a project has a cloudflare cli config ([#965](https://github.com/anolilab/lunora/issues/965)) ([070d20d](https://github.com/anolilab/lunora/commit/070d20d3d139d012b93410f9d8fb519305e30e38)), closes [#964](https://github.com/anolilab/lunora/issues/964) [#964](https://github.com/anolilab/lunora/issues/964)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.261
+* **@lunora/seed:** upgraded to 1.0.0-alpha.189
+* **@lunora/studio:** upgraded to 1.0.0-alpha.261
+
+## @lunora/config [1.0.0-alpha.303](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.302...@lunora/config@1.0.0-alpha.303) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.260
+* **@lunora/seed:** upgraded to 1.0.0-alpha.188
+* **@lunora/studio:** upgraded to 1.0.0-alpha.260
+
+## @lunora/config [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.301...@lunora/config@1.0.0-alpha.302) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.259
+* **@lunora/seed:** upgraded to 1.0.0-alpha.187
+
+## @lunora/config [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.300...@lunora/config@1.0.0-alpha.301) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.258
+* **@lunora/seed:** upgraded to 1.0.0-alpha.186
+* **@lunora/studio:** upgraded to 1.0.0-alpha.259
+
+## @lunora/config [1.0.0-alpha.300](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.299...@lunora/config@1.0.0-alpha.300) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.257
+* **@lunora/seed:** upgraded to 1.0.0-alpha.185
+* **@lunora/studio:** upgraded to 1.0.0-alpha.258
+
+## @lunora/config [1.0.0-alpha.299](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.298...@lunora/config@1.0.0-alpha.299) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.256
+* **@lunora/seed:** upgraded to 1.0.0-alpha.184
+* **@lunora/studio:** upgraded to 1.0.0-alpha.257
+
+## @lunora/config [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.297...@lunora/config@1.0.0-alpha.298) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.255
+* **@lunora/seed:** upgraded to 1.0.0-alpha.183
+
+## @lunora/config [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.296...@lunora/config@1.0.0-alpha.297) (2026-10-03)
+
+### ⚠ BREAKING CHANGES
+
+* capability inference and the codegen probe surface changed.
+
+### Features
+
+* **cli:** add lunora dev --tunnel via cloudflare quick tunnels ([#941](https://github.com/anolilab/lunora/issues/941)) ([1446ad1](https://github.com/anolilab/lunora/commit/1446ad1f290f56f54de54b055d873ae434d3bdd7))
+
+### Bug Fixes
+
+* capability inference follow-up to [#945](https://github.com/anolilab/lunora/issues/945) ([#950](https://github.com/anolilab/lunora/issues/950)) ([e6c762e](https://github.com/anolilab/lunora/commit/e6c762e67e12aa15fb1f7ae1311c420d500f0d0b))
+* follow-ups to the cloudflare limits and ray id reviews ([#942](https://github.com/anolilab/lunora/issues/942), [#943](https://github.com/anolilab/lunora/issues/943)) ([#949](https://github.com/anolilab/lunora/issues/949)) ([34a4597](https://github.com/anolilab/lunora/commit/34a4597a14128ea2e48d52d101d0fbbf9b61e932)), closes [#944](https://github.com/anolilab/lunora/issues/944) [#944](https://github.com/anolilab/lunora/issues/944)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.254
+* **@lunora/container:** upgraded to 1.0.0-alpha.69
+* **@lunora/seed:** upgraded to 1.0.0-alpha.182
+* **@lunora/studio:** upgraded to 1.0.0-alpha.256
+
+## @lunora/config [1.0.0-alpha.296](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.295...@lunora/config@1.0.0-alpha.296) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.253
+* **@lunora/seed:** upgraded to 1.0.0-alpha.181
+* **@lunora/studio:** upgraded to 1.0.0-alpha.255
+
+## @lunora/config [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.294...@lunora/config@1.0.0-alpha.295) (2026-10-03)
+
+### ⚠ BREAKING CHANGES
+
+* `@lunora/bindings/analytics` no longer exports `createAnalyticsSqlClient`,
+`AnalyticsSqlError` or the `AnalyticsSqlClient`, `AnalyticsSqlConfig`, `AnalyticsSqlResult` and
+`AnalyticsSqlColumnMeta` types, and the `ANALYTICS_SQL_ERROR` code is gone. Query with
+`ctx.analyticsSql` or `createAnalyticsSql({ binding: createAnalyticsSqlRest(...) })` in the
+Analytics SQL dialect; failures are `AnalyticsSqlQueryError` (`ANALYTICS_SQL_QUERY_ERROR`).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* refactor(advisor): read ae metrics in the analytics sql dialect only
+
+The quarantined Analytics Engine feeder speaks only the Analytics SQL dialect, the one
+`ctx.analyticsSql` runs: `events.analyticsEngine."<dataset>"`, the SQL API's sample-weighted
+`COUNT(*)`, and every value bound as a parameter - `$since`, `$event`, and `$group` when a group
+is given. The `AnalyticsMetricsDialect` union, `dialectParts`, the `sqlString` literal escaper
+and the hidden "were params passed" dialect switch are gone; the dataset, which names the table
+and so cannot be a parameter, keeps its identifier guard.
+* `AnalyticsMetricsOptions` requires `since` (an ISO-8601 lower `timestamp`
+bound) and has no `dialect`; `AnalyticsMetricsSource.query` always receives `params`; the
+`AnalyticsMetricsDialect` type is removed. Pass `ctx.analyticsSql` as the source.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(studio): ask the host for usage panels by key, never with sql
+
+The Analytics tab has one runner, `analyticsSqlQuery(panel)`, which receives a panel key
+(`"volume"`, `"latency"`, `"hotShards"`) and resolves the rows. The host answers through an
+admin-gated action that builds the statement server-side with `functionUsageQuery(panel)` and
+runs it on `ctx.analyticsSql`. The old shape handed the host a SQL string to execute, which
+invited an action that runs caller-supplied SQL against the whole account. The prop docs and the
+not-wired message now say the action must be admin-only and take the key.
+
+The panel drops the second (token-dialect) runner, the precedence between the two, the dataset
+prop (now the server's choice) and `toPanelResult`: columns are `string[]`, read off the first
+row's keys in SELECT order.
+* `StudioProps.analyticsQuery` is removed and `analyticsSqlQuery` now has the
+signature `(panel: FunctionUsagePanel) => Promise<AnalyticsSqlQueryResult>`.
+`AnalyticsPanelProps` loses `dataset` and `runAnalyticsSql`, and its `runQuery` takes a panel
+key.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(config): report artifacts as unsupported in the alchemy translation
+
+The Alchemy translator emits only D1, R2, KV and Queue resources, but an
+artifacts[] binding was neither emitted nor listed in unsupported, so a
+config using ctx.artifacts produced a Worker without env.ARTIFACTS and no
+diagnostic. Raised by review on #941.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* docs(bindings): list the analytics-sql subpath in the readme table
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Features
+
+* cloudflare analytics sql binding as ctx.analyticsSql ([#946](https://github.com/anolilab/lunora/issues/946)) ([9c931dd](https://github.com/anolilab/lunora/commit/9c931dd11bc3f6770dd893d5792b3b31627c0f7b))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.252
+* **@lunora/container:** upgraded to 1.0.0-alpha.68
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+* **@lunora/seed:** upgraded to 1.0.0-alpha.180
+* **@lunora/studio:** upgraded to 1.0.0-alpha.254
+
+## @lunora/config [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.293...@lunora/config@1.0.0-alpha.294) (2026-10-03)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+* fetch-only service entrypoints, ctx.services test fakes, resumable upload docs ([#938](https://github.com/anolilab/lunora/issues/938)) ([6b3ff8a](https://github.com/anolilab/lunora/commit/6b3ff8a2728663e053587ee03f9b8a059bcc1177))
+
+### Bug Fixes
+
+* cloudflare oct 2026 limits + observability block ([#942](https://github.com/anolilab/lunora/issues/942)) ([6145c8c](https://github.com/anolilab/lunora/commit/6145c8cfd7d5ca5fb7ff1eb1a862b93c8bc5657e))
+
+### Code Refactoring
+
+* **codegen:** capability-table follow-up and config binding inference fix ([#945](https://github.com/anolilab/lunora/issues/945)) ([66b7d12](https://github.com/anolilab/lunora/commit/66b7d12d905bc98132f72c621e2823d6b1e2bcd7))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.251
+* **@lunora/container:** upgraded to 1.0.0-alpha.67
+* **@lunora/seed:** upgraded to 1.0.0-alpha.179
+* **@lunora/studio:** upgraded to 1.0.0-alpha.253
+
+## @lunora/config [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.292...@lunora/config@1.0.0-alpha.293) (2026-10-02)
+
+### Bug Fixes
+
+* services dev session, rpc fetch binding, and docs/codegen nits ([#935](https://github.com/anolilab/lunora/issues/935)) ([b89bbd3](https://github.com/anolilab/lunora/commit/b89bbd34c0a8d83cd8eae3d60abda3fe7cacdb88))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.248
+* **@lunora/seed:** upgraded to 1.0.0-alpha.178
+* **@lunora/studio:** upgraded to 1.0.0-alpha.250
+
+## @lunora/config [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.291...@lunora/config@1.0.0-alpha.292) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.247
+* **@lunora/container:** upgraded to 1.0.0-alpha.65
+* **@lunora/seed:** upgraded to 1.0.0-alpha.177
+* **@lunora/studio:** upgraded to 1.0.0-alpha.249
+
+## @lunora/config [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.290...@lunora/config@1.0.0-alpha.291) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.246
+* **@lunora/seed:** upgraded to 1.0.0-alpha.176
+* **@lunora/studio:** upgraded to 1.0.0-alpha.248
+
+## @lunora/config [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.289...@lunora/config@1.0.0-alpha.290) (2026-10-02)
+
+### Features
+
+* **codegen:** typed service bindings to sibling workers ([#918](https://github.com/anolilab/lunora/issues/918)) ([e57cf93](https://github.com/anolilab/lunora/commit/e57cf930ea443c21b1d1d6abf2600d031f010c5c))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.245
+* **@lunora/seed:** upgraded to 1.0.0-alpha.175
+* **@lunora/studio:** upgraded to 1.0.0-alpha.247
+
+## @lunora/config [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.288...@lunora/config@1.0.0-alpha.289) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.244
+* **@lunora/seed:** upgraded to 1.0.0-alpha.174
+* **@lunora/studio:** upgraded to 1.0.0-alpha.246
+
+## @lunora/config [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.287...@lunora/config@1.0.0-alpha.288) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.243
+* **@lunora/seed:** upgraded to 1.0.0-alpha.173
+* **@lunora/studio:** upgraded to 1.0.0-alpha.245
+
+## @lunora/config [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.286...@lunora/config@1.0.0-alpha.287) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.242
+* **@lunora/container:** upgraded to 1.0.0-alpha.64
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/seed:** upgraded to 1.0.0-alpha.172
+* **@lunora/studio:** upgraded to 1.0.0-alpha.244
+
+## @lunora/config [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.285...@lunora/config@1.0.0-alpha.286) (2026-09-30)
+
+### ⚠ BREAKING CHANGES
+
+* `EmitAppOptions.tableNames` is replaced by `tables`
+(`{ name, shardMode }[]`).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(runtime): resolve the shard registry stub per call
+
+createDynamicShardRegistry cached its registry stub for its lifetime, and
+the generated worker builds its options once per isolate. workerd refuses
+I/O on a stub created during a different request, so every request after
+the first failed with "Cannot perform I/O on behalf of a different request".
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat(do): register written .shardBy() tables with the shard registry
+
+A Durable Object namespace cannot be enumerated, so cross-shard export,
+CDC sync and migrations only reach the shards ShardRegistryDO lists, and
+nothing ever registered one. After a write flushes, ShardDO now registers
+its key for each `.shardBy()` table it touched, once per table per
+instance, through a `shardRegistry()` hook the generated subclass
+overrides. The stub is pinned to the DO's own jurisdiction (via the new
+shard-engine `stubByName`, split out of `siblingStub`). A failed
+registration is logged and retried on the next write, never thrown at a
+caller whose write already committed.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat(codegen): wire the shard registry into generated apps
+
+For a schema with `.shardBy()` tables, codegen now emits:
+
+- `.shardRegistry((env) => env.SHARD_REGISTRY)` on the app builder, which
+  feeds the namespace to the shard (so it registers what it writes) and
+  gives the worker a coordinator over `createDynamicShardRegistry`, so
+  export, CDC sync and migrations reach every registered shard;
+- `_generated/shardRegistry.ts`, re-exporting `ShardRegistryDO`.
+
+As with the scheduler module, the file's existence drives the rest:
+`@lunora/vite` composes `.shardRegistry(...)` and star-re-exports the class
+into `virtual:lunora/worker`, and `@lunora/config` maps `ShardRegistryDO`
+to `SHARD_REGISTRY` so `lunora dev` reconciles the binding and migration.
+The default registry's refusal now names `.shardRegistry(...)`.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat(templates): bind the shard registry in every .shardBy() starter
+
+All 14 templates shard `messages` by `channelId`, so a fresh app's
+`lunora export` and backups refused it. Each now binds SHARD_REGISTRY to
+ShardRegistryDO in its v1 migration; hand-written entries declare
+`.shardRegistry(...)` and export the class, while `virtual:lunora/worker`
+templates get both from the composed entry. The playground is wired the
+same way, with the class added in a v2 migration.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* docs(docs): document the shard registry
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(do): keep replicas and relays out of the shard registry
+
+A read replica (`<owner>::replica::<region>`) or relay is a ShardDO in the
+same namespace, and a replica's CDC apply flushes like any write, so it
+registered itself as a shard. It refuses admin RPCs with 421, so every
+later export, backup and migration of that table failed with a 502.
+
+Registration now also runs past the response (deferPastResponse) instead
+of on the write's tail, claims each table before the round trip so
+concurrent first writes send one request, bounds the request with a 5s
+timeout, and backs off 30s after a failure. The /register call moves into
+shard-registry-do next to the route it targets.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(runtime): settle the export fan-out before committing a status
+
+Export now runs its shard-local fan-out (prepareExportRows) before it
+builds the Response, so a failed shard answers 502 and a `.shardBy()`
+table the default registry cannot list answers 400, instead of a 200
+whose body ends early. That replaces the separate discovery pre-check.
+
+The default registry answers a root (or undeclared) table with the
+default shard itself rather than an empty list, because fan-out, rank and
+shard traffic have no empty-list fallback and reached no shard at all.
+Its refusal now names the unbound SHARD_REGISTRY case. `requireCoordinator`
+in the orchestration routes became `assertAdminPost`, which is all it did.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(cli): only blame the dev server for an unreachable local worker
+
+adminFetch now adds the "is the dev server running?" hint only for a
+loopback target, and rethrows anything that is not a network TypeError
+(an abort, a timeout) as it is. It takes the admin commands' own init
+shape, so the call sites lose their casts, and backup's PITR/prune legs
+use it too. The six `typeof fetchImpl` guards it made unreachable are
+gone. `lunora import` now says no batch was acknowledged, not that no
+row was written, and keeps the resume advice.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* refactor(codegen): one isShardByTable check and a fragment module
+
+`isShardByTable` in ir.ts replaces four spellings of the `.shardBy()`
+check. The shard registry's config field, constant and override move into
+`emitShardRegistryFragments` (shard-bindings), which brings shard.ts back
+under 1k lines. `EmitAppOptions.tables` is `Pick<TableIR, ...>` and
+`emitShardRegistry` takes the table list instead of two booleans.
+Orphaned and inaccurate comments in emit-app are fixed. Config derives the
+composed entry's framework DOs from one module-to-class map.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* docs: state the shard-registry mapping on every host
+
+Node and celld capability notes now say where fan-out shard keys come
+from (the Node host's own registry; ShardRegistryDO on celld). Templates
+and the playground export ShardRegistryDO from the generated
+shardRegistry module the docs show, and analog/nuxt forward it from their
+server module. The sharding docs note that a key is never removed and
+that the 30s delay applies to every worker.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat: prune empty shards from the shard registry
+
+A shard key stayed registered after its shard emptied, so every export,
+backup, CDC sync and migration kept visiting it. `lunora shards prune`
+(POST /_lunora/admin/shard-registry/prune) asks every registered shard to
+release the `.shardBy()` tables it holds no rows of.
+
+The shard decides, through a new `__lunora_admin__:releaseShardRegistration`
+RPC: its emptiness check and unregister run on the same chain as its own
+registrations, and clearing the table's claim means a write that lands
+mid-prune registers again after the unregister. A caller-side probe then
+delete could hide a shard written in between. An unreachable shard keeps
+its entries and the route answers 207 (the CLI exits 1); `--dry-run`
+reports without touching the registry. A caching registry is invalidated
+for the released tables, via a new optional `ShardRegistry.invalidate`.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix: green the lint and template-entry CI jobs
+
+- playground: order the `ShardRegistryDO` re-export the way
+  perfectionist/sort-exports wants.
+- vis-templates: the Nitro entry test swapped only the first
+  `"./lunora/server"` specifier, and the analog/nuxt entries now re-export
+  `ShardRegistryDO` from it too. Swap every occurrence, stub the class,
+  and assert the entry exports it.
+- do: skip the registry step entirely on a shard with no registry, so a
+  write flush there does no extra promise work.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Bug Fixes
+
+* make admin data commands work on builder and sharded apps ([#912](https://github.com/anolilab/lunora/issues/912)) ([39c9f8c](https://github.com/anolilab/lunora/commit/39c9f8ce03f5c6ab1b0ccaca8a7e3254b227b02b))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.241
+* **@lunora/seed:** upgraded to 1.0.0-alpha.171
+* **@lunora/studio:** upgraded to 1.0.0-alpha.243
+
+## @lunora/config [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.284...@lunora/config@1.0.0-alpha.285) (2026-09-30)
+
+### ⚠ BREAKING CHANGES
+
+* **ai:** `ctx.ai` is no longer present on query and mutation contexts at
+runtime. Code reaching it through a cast from a query or mutation now gets
+`undefined`; move the inference into an action.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(platform): state ai gateway routing in the capability matrix
+
+The `ai` rating now covers the `<provider>/<model>` and `dynamic/<route>` ids
+`ctx.ai.model()` routes through AI Gateway: native on Cloudflare over the same
+`AI` binding, and part of the existing `unsupported` rating on node and celld,
+which have no gateway (or `env.AI` binding) to route through.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat(cli): add ai gateway provisioning and doctor checks
+
+Add `lunora ai gateway`, which creates (or reuses) a Cloudflare AI Gateway over
+the REST API (POST/GET /accounts/{account_id}/ai-gateway/gateways) and writes
+LUNORA_AI_GATEWAY_ID + LUNORA_AI_GATEWAY_ACCOUNT_ID into the wrangler `vars`,
+preserving comments. The id defaults to the worker name (--id overrides); log
+collection is on by default (--no-logs turns it off); --dry-run makes no API
+call and edits nothing. Credentials come from CLOUDFLARE_API_TOKEN and
+CLOUDFLARE_ACCOUNT_ID (falling back to wrangler `account_id`).
+
+`lunora doctor` gains three codes: ai-binding-missing (warn),
+ai-gateway-token-unused (warn) and ai-gateway-default (info).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(studio): add ai usage panel
+
+New Observability page (tab `aiUsage`) showing what ctx.ai.model(...) calls cost:
+total spend, input/output tokens and call count, a per-minute cost sparkline, breakdowns
+by function path and by model, and the recent ai.generate / ai.stream calls linking
+through to their trace.
+
+Totals read the durable gen_ai.usage.{input_tokens,output_tokens,cost} counter series
+from getMetricHistory: bucket `sum` is the tokens/USD spent, bucket `count` the calls
+(one ctx.metrics.count per call). Calls = max(input count, output count) so a call
+reporting both is not counted twice. Cost stays split by lunora.usage.cost.source;
+estimated (or unlabelled) cost is always marked "Estimated" and never shown as
+provider-reported. With no history yet, totals fall back to the live trace ring and
+the page says they reset on hibernation.
+
+The pure fold lives in features/ai-usage/ai-usage.ts with unit tests in the node
+`unit` project.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(ai): route provider slugs to a self-hosted proxy off cloudflare
+
+LUNORA_AI_PROXY_URL (+ LUNORA_AI_PROXY_TOKEN) points ctx.ai at any
+OpenAI-compatible proxy (LiteLLM, OpenRouter, your own). "<provider>/<model>"
+slugs go there unchanged instead of AI Gateway, and no AI binding is needed, so
+ctx.ai works on celld. @cf/... ids and ctx.ai.run still need the binding.
+
+celld's `ai` capability moves from unsupported to emulated, so codegen emits
+ctx.ai there again. lunora doctor skips the binding and default-gateway checks
+when the proxy var is set.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(ai): settle stream spans on cancel and share usage accounting
+
+- Stream telemetry re-emits parts through a ReadableStream, so an ai.stream span closes on
+  consumer cancel and fails on an upstream error; a TransformStream's flush never ran on
+  either, leaving the span and its gen_ai.usage counters pending forever.
+- recordUsage/modelIdOf live in usage.ts and are shared with defineRag, whose embeds now
+  also count into ctx.metrics (RagContext.metrics), so RAG spend reaches the durable
+  history. The duplicate EmbedSpan/EmbedTracer types are gone in favour of AiSpan/AiTracer.
+- The binding path selects the gateway by LUNORA_AI_GATEWAY_ID alone; the account id is
+  only needed for a bring-your-own provider's baseURL.
+- No per-call slug metadata on top of an explicit gateway's own, which could exceed AI
+  Gateway's 5-key limit and get the whole object rejected.
+- createAi no longer throws without a binding, provider or proxy: it returns a facade whose
+  calls throw one directed error (embeddings and ai.run included), so codegen always emits
+  createAi and drops its aiStub.
+- node rates ai as emulated through LUNORA_AI_PROXY_URL, like celld.
+- Docs: unified-catalog providers are paid through Unified Billing on the run path; keys
+  stored on the gateway apply only to gateway-path providers.
+* **ai:** createAi({}) returns a throwing facade instead of throwing at construction.
+Every ctx.ai app now bundles @ai-sdk/openai and @ai-sdk/anthropic.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(cli): align ai doctor checks with the runtime
+
+- ai-gateway-token-unused now fires whenever ctx.ai is used with LUNORA_AI_GATEWAY_TOKEN set:
+  the Workers AI binding cannot send it, with or without a gateway id.
+- The checks read top-level vars, env.<name>.vars and .dev.vars, so a proxy or gateway id
+  set outside top-level vars no longer triggers a spurious finding.
+- Binding inference runs once in runDoctor and feeds both the export and AI checks.
+- WranglerConfig types the `ai` binding; the env var names live in one CLI module.
+- `lunora ai gateway` reuses @lunora/config's applyModify (now exported from
+  @lunora/config/cloudflare) and returns one failure shape from its resolvers.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(studio): count cost-only ai calls and fold usage per model
+
+- The history call count takes the largest series count per (function, model) pair and sums
+  across pairs, so a call that reported only a cost is counted and two models' counts are
+  never merged by max.
+- One slice-based flow serves both the history and live halves.
+- ai.embed spans (defineRag) show up in recent calls.
+- formatUsd/formatTokens move to reports/metrics-format and use the renderer's locale.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* docs(platform-node): match the ai row to the emulated rating
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(ai): refuse a proxy token over plain http
+
+- LUNORA_AI_PROXY_TOKEN is never sent to a non-HTTPS LUNORA_AI_PROXY_URL off loopback; the
+  proxy provider throws a directed error on use instead, as it does for an unparsable URL.
+- `lunora ai gateway --dry-run` warns when the account id a real run needs is missing.
+- doctor reads an unreadable .dev.vars as unset instead of aborting the run.
+- The node `agents` note no longer claims `ai` is unsupported there.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(ai): record stream usage that arrived before an upstream error
+
+A stream that emitted its `finish` part and then errored lost that usage: the span failed
+before recordUsage ran. The instrumented stream now settles once with its outcome and the
+error, so usage is recorded first and the error is then rethrown to fail the span.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Features
+
+* **ai:** AI Gateway model routing, per-function AI spend, and ctx.ai action-only ([#910](https://github.com/anolilab/lunora/issues/910)) ([f0e8623](https://github.com/anolilab/lunora/commit/f0e8623068b35d7c05bdb1b131761b95de768f9c))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.240
+* **@lunora/seed:** upgraded to 1.0.0-alpha.170
+* **@lunora/studio:** upgraded to 1.0.0-alpha.242
+
+## @lunora/config [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.283...@lunora/config@1.0.0-alpha.284) (2026-09-30)
+
+### Features
+
+* Rsbuild templates (React SPA + TanStack Start) with Studio under @lunora/rspack ([#909](https://github.com/anolilab/lunora/issues/909)) ([2d8b101](https://github.com/anolilab/lunora/commit/2d8b10146738ff8f1c06db9414006af69555b5f0))
+
+## @lunora/config [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.282...@lunora/config@1.0.0-alpha.283) (2026-09-29)
+
+### Features
+
+* **platform-celld:** add celld as a platform host ([#359](https://github.com/anolilab/lunora/issues/359)) ([6391cbc](https://github.com/anolilab/lunora/commit/6391cbc295c64e0ffbab2eddf17eb36faa513767))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.238
+* **@lunora/seed:** upgraded to 1.0.0-alpha.169
+* **@lunora/studio:** upgraded to 1.0.0-alpha.241
+
+## @lunora/config [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.281...@lunora/config@1.0.0-alpha.282) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.237
+* **@lunora/seed:** upgraded to 1.0.0-alpha.168
+* **@lunora/studio:** upgraded to 1.0.0-alpha.240
+
+## @lunora/config [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.280...@lunora/config@1.0.0-alpha.281) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.239
+
+## @lunora/config [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.279...@lunora/config@1.0.0-alpha.280) (2026-09-28)
+
+### Features
+
+* **rspack:** add an Rspack/webpack adapter ([#898](https://github.com/anolilab/lunora/issues/898)) ([79a869f](https://github.com/anolilab/lunora/commit/79a869fb488b7ddaadd284299f3c635d4fcd27d0)), closes [#906](https://github.com/anolilab/lunora/issues/906)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.236
+
+## @lunora/config [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.278...@lunora/config@1.0.0-alpha.279) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.235
+* **@lunora/seed:** upgraded to 1.0.0-alpha.167
+* **@lunora/studio:** upgraded to 1.0.0-alpha.238
+
+## @lunora/config [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.277...@lunora/config@1.0.0-alpha.278) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/seed:** upgraded to 1.0.0-alpha.166
+* **@lunora/studio:** upgraded to 1.0.0-alpha.237
+
+## @lunora/config [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.276...@lunora/config@1.0.0-alpha.277) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.234
+* **@lunora/seed:** upgraded to 1.0.0-alpha.165
+* **@lunora/studio:** upgraded to 1.0.0-alpha.236
+
+## @lunora/config [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.275...@lunora/config@1.0.0-alpha.276) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.233
+* **@lunora/container:** upgraded to 1.0.0-alpha.62
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/seed:** upgraded to 1.0.0-alpha.164
+* **@lunora/studio:** upgraded to 1.0.0-alpha.235
+
+## @lunora/config [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.274...@lunora/config@1.0.0-alpha.275) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.232
+* **@lunora/seed:** upgraded to 1.0.0-alpha.163
+* **@lunora/studio:** upgraded to 1.0.0-alpha.234
+
+## @lunora/config [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.273...@lunora/config@1.0.0-alpha.274) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.233
+
+## @lunora/config [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.272...@lunora/config@1.0.0-alpha.273) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.231
+* **@lunora/studio:** upgraded to 1.0.0-alpha.232
+
+## @lunora/config [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.271...@lunora/config@1.0.0-alpha.272) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.231
+
+## @lunora/config [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.270...@lunora/config@1.0.0-alpha.271) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.230
+* **@lunora/studio:** upgraded to 1.0.0-alpha.230
+
+## @lunora/config [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.269...@lunora/config@1.0.0-alpha.270) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.229
+
+## @lunora/config [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.268...@lunora/config@1.0.0-alpha.269) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.229
+* **@lunora/container:** upgraded to 1.0.0-alpha.61
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+* **@lunora/seed:** upgraded to 1.0.0-alpha.162
+* **@lunora/studio:** upgraded to 1.0.0-alpha.227
+
+## @lunora/config [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.267...@lunora/config@1.0.0-alpha.268) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.226
+
+## @lunora/config [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.266...@lunora/config@1.0.0-alpha.267) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.228
+* **@lunora/studio:** upgraded to 1.0.0-alpha.225
+
+## @lunora/config [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.265...@lunora/config@1.0.0-alpha.266) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.224
+
+## @lunora/config [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.264...@lunora/config@1.0.0-alpha.265) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.223
+
+## @lunora/config [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.263...@lunora/config@1.0.0-alpha.264) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.227
+* **@lunora/seed:** upgraded to 1.0.0-alpha.161
+* **@lunora/studio:** upgraded to 1.0.0-alpha.222
+
+## @lunora/config [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.262...@lunora/config@1.0.0-alpha.263) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.226
+* **@lunora/studio:** upgraded to 1.0.0-alpha.221
+
+## @lunora/config [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.261...@lunora/config@1.0.0-alpha.262) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.225
+* **@lunora/seed:** upgraded to 1.0.0-alpha.160
+* **@lunora/studio:** upgraded to 1.0.0-alpha.220
+
+## @lunora/config [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.260...@lunora/config@1.0.0-alpha.261) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.219
+
+## @lunora/config [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.259...@lunora/config@1.0.0-alpha.260) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.224
+* **@lunora/container:** upgraded to 1.0.0-alpha.60
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+* **@lunora/seed:** upgraded to 1.0.0-alpha.159
+* **@lunora/studio:** upgraded to 1.0.0-alpha.218
+
+## @lunora/config [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.258...@lunora/config@1.0.0-alpha.259) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.222
+* **@lunora/container:** upgraded to 1.0.0-alpha.59
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+* **@lunora/seed:** upgraded to 1.0.0-alpha.158
+* **@lunora/studio:** upgraded to 1.0.0-alpha.217
+
+## @lunora/config [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.257...@lunora/config@1.0.0-alpha.258) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.221
+* **@lunora/container:** upgraded to 1.0.0-alpha.58
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+* **@lunora/seed:** upgraded to 1.0.0-alpha.157
+* **@lunora/studio:** upgraded to 1.0.0-alpha.216
+
+## @lunora/config [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.256...@lunora/config@1.0.0-alpha.257) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.220
+* **@lunora/container:** upgraded to 1.0.0-alpha.57
+
+## @lunora/config [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.255...@lunora/config@1.0.0-alpha.256) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.215
+
+## @lunora/config [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.254...@lunora/config@1.0.0-alpha.255) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.219
+* **@lunora/seed:** upgraded to 1.0.0-alpha.156
+* **@lunora/studio:** upgraded to 1.0.0-alpha.214
+
+## @lunora/config [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.253...@lunora/config@1.0.0-alpha.254) (2026-09-25)
+
+### Bug Fixes
+
+* **config:** remove dropped queue tuning and retune --env consumers ([#830](https://github.com/anolilab/lunora/issues/830)) ([753650e](https://github.com/anolilab/lunora/commit/753650e921801a24b4a4f0be2dbba19ea32c553d)), closes [#817](https://github.com/anolilab/lunora/issues/817)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.217
+
+## @lunora/config [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.252...@lunora/config@1.0.0-alpha.253) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.216
+
+## @lunora/config [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.251...@lunora/config@1.0.0-alpha.252) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.215
+* **@lunora/seed:** upgraded to 1.0.0-alpha.154
+* **@lunora/studio:** upgraded to 1.0.0-alpha.212
+
+## @lunora/config [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.250...@lunora/config@1.0.0-alpha.251) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.214
+* **@lunora/seed:** upgraded to 1.0.0-alpha.153
+* **@lunora/studio:** upgraded to 1.0.0-alpha.211
+
+## @lunora/config [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.249...@lunora/config@1.0.0-alpha.250) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.213
+* **@lunora/seed:** upgraded to 1.0.0-alpha.152
+* **@lunora/studio:** upgraded to 1.0.0-alpha.210
+
+## @lunora/config [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.248...@lunora/config@1.0.0-alpha.249) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.212
+
+## @lunora/config [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.247...@lunora/config@1.0.0-alpha.248) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.211
+* **@lunora/seed:** upgraded to 1.0.0-alpha.151
+* **@lunora/studio:** upgraded to 1.0.0-alpha.209
+
+## @lunora/config [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.246...@lunora/config@1.0.0-alpha.247) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.210
+* **@lunora/seed:** upgraded to 1.0.0-alpha.150
+* **@lunora/studio:** upgraded to 1.0.0-alpha.208
+
+## @lunora/config [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.245...@lunora/config@1.0.0-alpha.246) (2026-09-25)
+
+### ⚠ BREAKING CHANGES
+
+* **queue,workflow:** the id formats changed. An instance in flight when this
+deploys re-derives new ids on its next replay: a ctx.run that already applied
+under the old id can apply once more, and a parent that already spawned
+children re-spawns them under the new child ids (the old children still run
+and finish, but the parent now joins the new ones).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(queue,workflow): stop dispatch declines spending retry budgets
+
+A shard answers `409 DISPATCH_IN_PROGRESS` when a dispatch id is already
+running: the caller's own earlier attempt is still executing. The decline is
+retryable, so the queue consumer rethrew the batch and a workflow step threw,
+and both runtimes charged it as a failed attempt. That is reachable with
+defaults: `ctx.run` gives up after 30s with a retryable 503 while the shard
+keeps running the action, and every redelivery during that run meets the
+claim. With the default zero retry_delay a `maxRetries: 3` queue spent its
+whole budget on declines within seconds and dropped the message (no DLQ) while
+the action was still running; on the real broker a message saw attempts 1, 2
+and 3 inside two seconds and was gone. A workflow step at the engine's default
+retries errored the instance for any action over about five and a half
+minutes; on the real engine three declines against `limit: 2` errored it.
+
+Both now bound declines by the shard claim's fifteen-minute ceiling, exported
+from @lunora/dispatch as DISPATCH_CLAIM_CEILING_MS (pinned equal to
+@lunora/do's IN_FLIGHT_CLAIM_CEILING_MS) alongside `isDispatchDecline`:
+
+- Queues have no uncounted retry, so a declined message is retried with
+  `delaySeconds` equal to the ceiling. The claim cannot outlive that delay, so
+  one claim costs at most one attempt; the next delivery is served the
+  finished result or runs the call if the first attempt died. It is never
+  acked. A decline on a message's last delivery cannot be saved by a delay;
+  that case is retried anyway and logged, naming the DLQ-or-drop outcome.
+  The scheduler's queue workpool consumer had the same flaw and gets the
+  same delayed retry.
+- A workflow waits a decline out inside the call: the same id is re-dispatched
+  after 1s doubling to 30s pauses until it is served, for at most the ceiling
+  since the first decline, then the decline is rethrown to the engine's
+  ordinary retry. A step `timeout` shorter than the wait (Cloudflare's default
+  is ten minutes) can still charge one attempt.
+
+The guarantee stays at-least-once in both: a decline is never treated as done.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(platform): state the dispatch gap in the Node queues rating
+
+The Node `queues` note rated the host "emulated" without saying that
+message.run and ctx.run POST to /_lunora/scheduler/dispatch, which
+@lunora/platform-node serves no HTTP for, so a queue handler that calls a
+Lunora function fails at runtime. The `workflows` note already disclosed the
+same gap for ctx.run; the two now agree. The platform-node docs table is
+updated in step (lint:node-capabilities-docs).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(queue,workflow): document dispatch declines and the dedup window
+
+The workflow docs still said two concurrent action dispatches of one id "can
+both miss the cache and both run". The shard's in-flight claim now declines
+the second with 409 DISPATCH_IN_PROGRESS; the section says so, including the
+fifteen-minute ceiling past which a still-running handler can be run over.
+
+Both pages now describe what a decline costs: a workflow waits it out inside
+the call without spending the step's retries, and a queue retries the message
+after the claim ceiling so a slow call costs at most one attempt, with the
+last-delivery case called out. The queue page also gains what it never
+stated: message.run's replay-dedup ids expire with the shard's 24-hour dedup
+window, so a redelivery later than that re-applies its calls. The workflow
+page documents the workflow-scoped id format, and the queue page notes that
+reconcile now keeps an existing consumer's tuning in step with defineQueue.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* chore(api): accept the dispatch and workflow surface changes
+
+@lunora/dispatch exports DISPATCH_CLAIM_CEILING_MS and isDispatchDecline;
+createRunStep's deps take dedupNamespace in place of instanceId.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(config): retune queue consumers in place and report them apart
+
+Retuning an existing consumer rewrote the whole `queues` node through one
+applyModify, which drops every comment inside it, reorders producers and
+consumers and expands one-line entries. Retuning happens on every tuning
+drift, and the consumers that drift are the hand-tuned ones that carry
+comments. Each drifted field is now written at its own path
+(`queues.consumers[i].<key>`); the whole-block write remains only for
+appending a missing producer or consumer.
+
+A retune was also pushed into `added`, so `lunora deploy` logged a
+max_retries change as "provisioned bindings". ReconcileBindingsResult gains
+an `updated` list, and the deploy command and the Vite plugin log it on its
+own line.
+
+The five tuning `if` blocks become a CONSUMER_TUNING_KEYS table, which also
+lets QueueConsumerEntry declare its keys instead of an index signature.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(dispatch): recognise claim declines by a shard-set header
+
+isDispatchDecline trusted the `DISPATCH_IN_PROGRESS` code, which the shard
+echoes from any handler-thrown LunoraError. An action forwarding a nested
+decline therefore made its workflow caller re-run it for fifteen minutes and
+parked its queue message for fifteen. The shard's claim path now sets
+`x-lunora-dispatch-declined: 1` on its decline, a header no handler can set on
+the dispatch response; the runner carries it onto the rebuilt error and
+isDispatchDecline requires it. SchedulerDO's uncharged re-arm keys on the same
+header, so a handler-thrown error with that code is charged as the failure it
+is.
+
+The claim ceiling, the code and the header name live in
+shared/dispatch-claim.ts, inlined into @lunora/do, @lunora/dispatch and
+@lunora/scheduler, replacing two hand-kept 900_000 literals and the
+cross-package equality test that `test:affected` would not have rerun.
+
+One decline policy, owned by @lunora/dispatch: retryDeclinedMessage retries
+past the ceiling (DISPATCH_DECLINE_RETRY_DELAY_SECONDS) and logs a decline on
+a message's last delivery. @lunora/queue and the scheduler's queue workpool
+both call it, so the workpool gains the last-delivery log;
+QueueConsumerOptions takes an optional `maxRetries` to recognise that
+delivery. Also: a declaredMaxRetries helper in the queue consumer and a
+private isDispatchFailure brand check in the runner.
+
+The queue capture record's deadLettered comment now also states that
+reconcile never removes an option taken out of defineQueue and never writes
+`env.<name>` blocks.
+
+Cleanup alongside: wait-out-decline.ts is renamed wait-out-declines.ts after
+its export; the workerd test workers mark their fake declines with the header,
+the queue one passes the decline env and fetch to every batch (smokeQueue
+makes no dispatch), and the workflow one installs its origin routing once at
+module scope.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(queue): state what reconcile leaves alone and what a decline costs
+
+Reconcile keeps declared tuning in step but never removes an option taken
+out of defineQueue and never writes `env.<name>` blocks; the page now says
+both. It also says plainly that a declined message waits the full fifteen
+minutes even when the action behind it finishes seconds later, since the
+consumer cannot see it finish.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* chore(api): accept the decline policy and reconcile surface changes
+
+@lunora/dispatch exports retryDeclinedMessage, DeclinedMessageLike,
+DISPATCH_DECLINE_RETRY_DELAY_SECONDS and DEFAULT_QUEUE_MAX_RETRIES;
+ReconcileBindingsResult gains `updated`; QueueConsumerOptions gains
+`maxRetries`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **queue,workflow:** dispatch declines, workflow-scoped dedup ids, queue tuning deploy ([#817](https://github.com/anolilab/lunora/issues/817)) ([7c90b21](https://github.com/anolilab/lunora/commit/7c90b21d9218452dc8f04be13d39ab23463efebb))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.209
+* **@lunora/seed:** upgraded to 1.0.0-alpha.149
+* **@lunora/studio:** upgraded to 1.0.0-alpha.207
+
+## @lunora/config [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.244...@lunora/config@1.0.0-alpha.245) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.208
+* **@lunora/seed:** upgraded to 1.0.0-alpha.148
+* **@lunora/studio:** upgraded to 1.0.0-alpha.206
+
+## @lunora/config [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.243...@lunora/config@1.0.0-alpha.244) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.207
+
+## @lunora/config [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.242...@lunora/config@1.0.0-alpha.243) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.206
+* **@lunora/container:** upgraded to 1.0.0-alpha.56
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+* **@lunora/seed:** upgraded to 1.0.0-alpha.147
+* **@lunora/studio:** upgraded to 1.0.0-alpha.205
+
+## @lunora/config [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.241...@lunora/config@1.0.0-alpha.242) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.205
+* **@lunora/seed:** upgraded to 1.0.0-alpha.146
+* **@lunora/studio:** upgraded to 1.0.0-alpha.204
+
+## @lunora/config [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.240...@lunora/config@1.0.0-alpha.241) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.204
+* **@lunora/container:** upgraded to 1.0.0-alpha.55
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/seed:** upgraded to 1.0.0-alpha.145
+* **@lunora/studio:** upgraded to 1.0.0-alpha.203
+
+## @lunora/config [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.239...@lunora/config@1.0.0-alpha.240) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.202
+
+## @lunora/config [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.238...@lunora/config@1.0.0-alpha.239) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.203
+* **@lunora/container:** upgraded to 1.0.0-alpha.54
+* **@lunora/seed:** upgraded to 1.0.0-alpha.143
+* **@lunora/studio:** upgraded to 1.0.0-alpha.201
+
+## @lunora/config [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.237...@lunora/config@1.0.0-alpha.238) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.202
+* **@lunora/container:** upgraded to 1.0.0-alpha.53
+* **@lunora/seed:** upgraded to 1.0.0-alpha.142
+
+## @lunora/config [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.236...@lunora/config@1.0.0-alpha.237) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.201
+* **@lunora/seed:** upgraded to 1.0.0-alpha.141
+* **@lunora/studio:** upgraded to 1.0.0-alpha.200
+
+## @lunora/config [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.235...@lunora/config@1.0.0-alpha.236) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.199
+
+## @lunora/config [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.234...@lunora/config@1.0.0-alpha.235) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.200
+* **@lunora/studio:** upgraded to 1.0.0-alpha.198
+
+## @lunora/config [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.233...@lunora/config@1.0.0-alpha.234) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.199
+* **@lunora/studio:** upgraded to 1.0.0-alpha.197
+
+## @lunora/config [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.232...@lunora/config@1.0.0-alpha.233) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.198
+* **@lunora/seed:** upgraded to 1.0.0-alpha.140
+* **@lunora/studio:** upgraded to 1.0.0-alpha.196
+
+## @lunora/config [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.231...@lunora/config@1.0.0-alpha.232) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.197
+* **@lunora/seed:** upgraded to 1.0.0-alpha.139
+* **@lunora/studio:** upgraded to 1.0.0-alpha.195
+
+## @lunora/config [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.230...@lunora/config@1.0.0-alpha.231) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.196
+* **@lunora/seed:** upgraded to 1.0.0-alpha.138
+* **@lunora/studio:** upgraded to 1.0.0-alpha.194
+
+## @lunora/config [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.229...@lunora/config@1.0.0-alpha.230) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.194
+* **@lunora/seed:** upgraded to 1.0.0-alpha.137
+* **@lunora/studio:** upgraded to 1.0.0-alpha.193
+
+## @lunora/config [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.228...@lunora/config@1.0.0-alpha.229) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/studio:** upgraded to 1.0.0-alpha.192
+
+## @lunora/config [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.227...@lunora/config@1.0.0-alpha.228) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.193
+* **@lunora/studio:** upgraded to 1.0.0-alpha.191
+
+## @lunora/config [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.226...@lunora/config@1.0.0-alpha.227) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.192
+* **@lunora/seed:** upgraded to 1.0.0-alpha.136
+* **@lunora/studio:** upgraded to 1.0.0-alpha.190
+
+## @lunora/config [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.225...@lunora/config@1.0.0-alpha.226) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.191
+* **@lunora/seed:** upgraded to 1.0.0-alpha.135
+* **@lunora/studio:** upgraded to 1.0.0-alpha.189
+
+## @lunora/config [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.224...@lunora/config@1.0.0-alpha.225) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.190
+* **@lunora/seed:** upgraded to 1.0.0-alpha.134
+* **@lunora/studio:** upgraded to 1.0.0-alpha.188
+
+## @lunora/config [1.0.0-alpha.224](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.223...@lunora/config@1.0.0-alpha.224) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.189
+* **@lunora/studio:** upgraded to 1.0.0-alpha.187
+
+## @lunora/config [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.222...@lunora/config@1.0.0-alpha.223) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.188
+* **@lunora/container:** upgraded to 1.0.0-alpha.52
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/seed:** upgraded to 1.0.0-alpha.133
+* **@lunora/studio:** upgraded to 1.0.0-alpha.186
+
+## @lunora/config [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.221...@lunora/config@1.0.0-alpha.222) (2026-09-13)
+
+### Bug Fixes
+
+* close template, CLI and reference drift ([#750](https://github.com/anolilab/lunora/issues/750)) ([a5188b5](https://github.com/anolilab/lunora/commit/a5188b5927b5e9233dab40c9521a62ca332c38cf))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.187
+* **@lunora/container:** upgraded to 1.0.0-alpha.51
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/seed:** upgraded to 1.0.0-alpha.132
+* **@lunora/studio:** upgraded to 1.0.0-alpha.185
+
+## @lunora/config [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.220...@lunora/config@1.0.0-alpha.221) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.186
+* **@lunora/container:** upgraded to 1.0.0-alpha.50
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/seed:** upgraded to 1.0.0-alpha.131
+* **@lunora/studio:** upgraded to 1.0.0-alpha.184
+
+## @lunora/config [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.219...@lunora/config@1.0.0-alpha.220) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.184
+* **@lunora/seed:** upgraded to 1.0.0-alpha.129
+* **@lunora/studio:** upgraded to 1.0.0-alpha.182
+
+## @lunora/config [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.218...@lunora/config@1.0.0-alpha.219) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.183
+* **@lunora/studio:** upgraded to 1.0.0-alpha.181
+
+## @lunora/config [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.217...@lunora/config@1.0.0-alpha.218) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.182
+* **@lunora/seed:** upgraded to 1.0.0-alpha.128
+* **@lunora/studio:** upgraded to 1.0.0-alpha.180
+
+## @lunora/config [1.0.0-alpha.217](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.216...@lunora/config@1.0.0-alpha.217) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.180
+* **@lunora/studio:** upgraded to 1.0.0-alpha.178
+
+## @lunora/config [1.0.0-alpha.216](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.215...@lunora/config@1.0.0-alpha.216) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.179
+* **@lunora/container:** upgraded to 1.0.0-alpha.49
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/seed:** upgraded to 1.0.0-alpha.127
+* **@lunora/studio:** upgraded to 1.0.0-alpha.177
+
+## @lunora/config [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.214...@lunora/config@1.0.0-alpha.215) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.178
+* **@lunora/seed:** upgraded to 1.0.0-alpha.126
+* **@lunora/studio:** upgraded to 1.0.0-alpha.176
+
+## @lunora/config [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.213...@lunora/config@1.0.0-alpha.214) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.177
+* **@lunora/seed:** upgraded to 1.0.0-alpha.125
+* **@lunora/studio:** upgraded to 1.0.0-alpha.175
+
+## @lunora/config [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.212...@lunora/config@1.0.0-alpha.213) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.176
+* **@lunora/seed:** upgraded to 1.0.0-alpha.124
+* **@lunora/studio:** upgraded to 1.0.0-alpha.174
+
+## @lunora/config [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.211...@lunora/config@1.0.0-alpha.212) (2026-09-10)
+
+### Features
+
+* **config,cli:** flag a missing CPU cap and R2 lifecycle rule ([#683](https://github.com/anolilab/lunora/issues/683)) ([b3efd19](https://github.com/anolilab/lunora/commit/b3efd196d475b61175a24da6704a2d43999392d3))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.175
+* **@lunora/seed:** upgraded to 1.0.0-alpha.123
+* **@lunora/studio:** upgraded to 1.0.0-alpha.173
+
+## @lunora/config [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.210...@lunora/config@1.0.0-alpha.211) (2026-09-10)
+
+### Bug Fixes
+
+* **config,cli,vite:** close the fail-open holes in the entry export check ([#677](https://github.com/anolilab/lunora/issues/677)) ([ccec4b7](https://github.com/anolilab/lunora/commit/ccec4b732fed0c208be896c12ce5fede0203320c)), closes [#653](https://github.com/anolilab/lunora/issues/653) [#652](https://github.com/anolilab/lunora/issues/652) [#678](https://github.com/anolilab/lunora/issues/678)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.174
+* **@lunora/seed:** upgraded to 1.0.0-alpha.122
+* **@lunora/studio:** upgraded to 1.0.0-alpha.172
+
+## @lunora/config [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.209...@lunora/config@1.0.0-alpha.210) (2026-09-08)
+
+### Bug Fixes
+
+* **config,cli,nuxt:** decide build-time gates on code, not on comments ([#675](https://github.com/anolilab/lunora/issues/675)) ([394954b](https://github.com/anolilab/lunora/commit/394954b4191d89e57c2175c014911a226bae9201))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.173
+* **@lunora/seed:** upgraded to 1.0.0-alpha.121
+* **@lunora/studio:** upgraded to 1.0.0-alpha.171
+
+## @lunora/config [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.208...@lunora/config@1.0.0-alpha.209) (2026-09-08)
+
+### Bug Fixes
+
+* **config:** decide the unchained .vectors() check from the project, not the entry ([#673](https://github.com/anolilab/lunora/issues/673)) ([0dbc943](https://github.com/anolilab/lunora/commit/0dbc94391b61a3a1493be5daeaa40cadca3c3cb6)), closes [#666](https://github.com/anolilab/lunora/issues/666)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.172
+* **@lunora/seed:** upgraded to 1.0.0-alpha.120
+* **@lunora/studio:** upgraded to 1.0.0-alpha.170
+
+## @lunora/config [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.207...@lunora/config@1.0.0-alpha.208) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.171
+* **@lunora/seed:** upgraded to 1.0.0-alpha.119
+* **@lunora/studio:** upgraded to 1.0.0-alpha.169
+
+## @lunora/config [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.206...@lunora/config@1.0.0-alpha.207) (2026-09-08)
+
+### Bug Fixes
+
+* the five alpha.238 field reports — auth inserts, invite-only, .vectors(), findUnique ([#671](https://github.com/anolilab/lunora/issues/671)) ([34677ef](https://github.com/anolilab/lunora/commit/34677ef5661a487340319de66bd37feaa73e7d71))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.170
+* **@lunora/seed:** upgraded to 1.0.0-alpha.118
+* **@lunora/studio:** upgraded to 1.0.0-alpha.168
+
+## @lunora/config [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.205...@lunora/config@1.0.0-alpha.206) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.169
+* **@lunora/seed:** upgraded to 1.0.0-alpha.117
+* **@lunora/studio:** upgraded to 1.0.0-alpha.167
+
+## @lunora/config [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.204...@lunora/config@1.0.0-alpha.205) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.168
+* **@lunora/seed:** upgraded to 1.0.0-alpha.116
+* **@lunora/studio:** upgraded to 1.0.0-alpha.166
+
+## @lunora/config [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.203...@lunora/config@1.0.0-alpha.204) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.167
+* **@lunora/seed:** upgraded to 1.0.0-alpha.115
+* **@lunora/studio:** upgraded to 1.0.0-alpha.165
+
 ## @lunora/config [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.202...@lunora/config@1.0.0-alpha.203) (2026-09-07)
 
 

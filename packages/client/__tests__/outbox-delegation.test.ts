@@ -49,6 +49,94 @@ const inertWebSocket = (): typeof WebSocket => {
     return WS as unknown as typeof WebSocket;
 };
 
+/**
+ * The same stub, plus the three hooks a test needs to seed a subscription with a
+ * server value before taking the socket away: `open`, `receive` and
+ * `triggerClose`. Instances land in `sockets` so the test can reach the live one.
+ */
+const sockets: SeedableSocket[] = [];
+
+interface SeedableSocket {
+    open: () => void;
+    receive: (payload: unknown) => void;
+    sent: string[];
+    triggerClose: () => void;
+}
+
+const seedableWebSocket = (): typeof WebSocket => {
+    class WS {
+        public readonly url: string;
+
+        public readyState = 0;
+
+        public sent: string[] = [];
+
+        public onopen: ((event?: unknown) => void) | null = null;
+
+        public onmessage: ((event: { data: unknown }) => void) | null = null;
+
+        public onclose: ((event?: unknown) => void) | null = null;
+
+        public onerror: ((event?: unknown) => void) | null = null;
+
+        private readonly listeners = new Map<string, ((event?: unknown) => void)[]>();
+
+        public constructor(url: string) {
+            this.url = url;
+            sockets.push(this);
+        }
+
+        public addEventListener(type: string, listener: (event?: unknown) => void): void {
+            const existing = this.listeners.get(type) ?? [];
+
+            existing.push(listener);
+            this.listeners.set(type, existing);
+        }
+
+        public open(): void {
+            this.readyState = 1;
+            this.onopen?.();
+            this.dispatch("open");
+        }
+
+        public receive(payload: unknown): void {
+            const data = JSON.stringify(payload);
+
+            this.onmessage?.({ data });
+            this.dispatch("message", { data });
+        }
+
+        public triggerClose(): void {
+            this.readyState = 3;
+            this.onclose?.();
+            this.dispatch("close");
+        }
+
+        public send(data: string): void {
+            this.sent.push(data);
+        }
+
+        public close(): void {
+            this.readyState = 3;
+        }
+
+        private dispatch(type: string, event?: unknown): void {
+            for (const listener of this.listeners.get(type) ?? []) {
+                listener(event);
+            }
+        }
+    }
+
+    return WS as unknown as typeof WebSocket;
+};
+
+/** The id of the `subscribe` frame the socket sent, so a `delta` can be addressed to it. */
+const subscriptionId = (socket: SeedableSocket): string =>
+    socket.sent
+        .filter((frame) => frame !== "lunora-ping")
+        .map((frame) => JSON.parse(frame) as { id?: string; type: string })
+        .find((frame) => frame.type === "subscribe")?.id ?? "";
+
 const fnRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
 };
@@ -103,6 +191,10 @@ describe("lunoraClient outbox delegation", () => {
         expect(enqueued).toHaveLength(2);
         expect(enqueued[0]).toStrictEqual({
             args: { text: "first" },
+            // Handed to the sink so it can replay the write under the cursor it
+            // was composed at. `undefined` here: this client holds no live
+            // subscription to take one from.
+            baselineSeq: undefined,
             clientId: "client-fixed",
             functionPath: "messages:send",
             idempotencyKey: "client-fixed:1",
@@ -121,5 +213,98 @@ describe("lunoraClient outbox delegation", () => {
         const client = makeClient(sink, "client-fixed");
 
         await expect(client.mutation(fnRef("messages:send"), { text: "x" })).rejects.toMatchObject({ code: "OFFLINE_QUEUE_OVERFLOW" });
+    });
+
+    it("hands the sink an onRejected that takes a permanently rejected write's optimistic value off the screen", async () => {
+        expect.assertions(3);
+
+        const { enqueued, sink } = recordingSink();
+        const client = new LunoraClient({
+            offlineQueue: { queueBeforeFirstConnect: true },
+            outbox: sink,
+            url: "https://app.example",
+            WebSocket: seedableWebSocket(),
+        });
+
+        const received: unknown[] = [];
+
+        client.subscribe(fnRef("counter:get"), {}, (value) => received.push(value));
+
+        const socket = sockets.at(-1) as SeedableSocket;
+
+        socket.open();
+        socket.receive({ delta: 1, id: subscriptionId(socket), type: "delta" });
+        // Offline again: the write is durably queued instead of sent.
+        socket.triggerClose();
+
+        await client.mutation(fnRef("counter:get"), {}, { optimistic: (current) => (current as number) + 1 });
+
+        // Predicted value stays on screen while the write waits in the outbox.
+        expect(received).toEqual([1, 2]);
+
+        // The sink's owner (`@lunora/db`'s replay handler) reaches a permanent
+        // verdict out of band; this handle is the client's only way to hear it.
+        enqueued[0]?.onRejected?.();
+
+        expect(received).toEqual([1, 2, 1]);
+
+        // Idempotent: a sink that calls it twice doesn't re-notify.
+        enqueued[0]?.onRejected?.();
+
+        expect(received).toEqual([1, 2, 1]);
+    });
+
+    it("keeps an importRows chunk's own key in the outbox, and reports it queued rather than imported", async () => {
+        expect.assertions(3);
+
+        const { enqueued, sink } = recordingSink();
+        let fetches = 0;
+        const client = new LunoraClient({
+            fetch: async () => {
+                fetches += 1;
+
+                return Response.json({ result: null });
+            },
+            offlineQueue: { queueBeforeFirstConnect: true },
+            // Something unrelated is still waiting in the outbox, so every new
+            // write goes behind it even though the socket is open.
+            outbox: { ...sink, pending: () => true },
+            url: "https://app.example",
+            WebSocket: seedableWebSocket(),
+        });
+
+        client.subscribe(fnRef("nodes:list"), {}, () => {});
+        (sockets.at(-1) as SeedableSocket).open();
+
+        const result = await client.importRows(fnRef("nodes:import"), [1, 2, 3], { chunkSize: 1, importId: "imp" });
+
+        expect(enqueued.map((mutation) => mutation.idempotencyKey)).toStrictEqual(["imp:0", "imp:1", "imp:2"]);
+        expect(result).toStrictEqual({ chunks: 3, imported: 0, queued: 3 });
+        expect(fetches).toBe(0);
+    });
+
+    // A durable replay that lands on a dropped socket goes back into the outbox.
+    // It was judged as the user who queued it, so that is who it stays stamped as:
+    // re-stamping it with whoever signed in since would make that user's session
+    // replay it as their own.
+    it("re-queues a replay under the identity its verdict judged, not the one signed in now", async () => {
+        expect.assertions(2);
+
+        const { enqueued, sink } = recordingSink();
+        const client = makeClient(sink, "client-fixed");
+
+        client.setAuthToken("token-a", "user-a");
+
+        const judged = client.replayIdentityVerdict("subj:user-a");
+        const replayCredential = judged.verdict === "match" ? judged.credential : undefined;
+
+        client.setAuthToken("token-b", "user-b");
+
+        await client.mutation(fnRef("messages:send"), { text: "a's" }, { mutationId: "client-fixed:9", replayBaseline: null, replayCredential });
+
+        expect(enqueued).toHaveLength(1);
+        expect(enqueued[0]?.identity).toBe("subj:user-a");
+
+        client.close();
     });
 });

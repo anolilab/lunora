@@ -1,10 +1,10 @@
-import { useLunora, useMutation, useQuery } from "@lunora/react";
 import { subscribeToPush } from "@lunora/notify/web";
+import { useLunora, useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
-import type { Doc } from "../../lunora/_generated/dataModel.js";
+import type { Doc as Document_ } from "../../lunora/_generated/dataModel.js";
 
 // The VAPID **public** key the server signs with (`VAPID_PUBLIC_KEY`). Set it in
 // the client env as `VITE_VAPID_PUBLIC_KEY`; a real deploy generates the pair
@@ -25,7 +25,7 @@ const VAPID_PUBLIC_KEY = (import.meta.env.VITE_VAPID_PUBLIC_KEY as string | unde
  */
 export const App = (): ReactElement => {
     const client = useLunora();
-    const announcements = useQuery(api.push.listAnnouncements, {}) as Doc<"announcements">[] | undefined;
+    const announcements = useQuery(api.push.listAnnouncements, {}) as Document_<"announcements">[] | undefined;
     const { mutate: registerDevice } = useMutation(api.push.registerDevice);
     const { mutate: announce } = useMutation(api.push.announce);
 
@@ -53,14 +53,19 @@ export const App = (): ReactElement => {
         await announce({ body, title });
         const result = await client.action(api.push.broadcast, { body, title });
 
-        setStatus(`Broadcast: ${result.sent} sent, ${result.failed} failed, ${result.pruned} pruned.`);
+        setStatus(`Broadcast: ${String(result.sent)} sent, ${String(result.failed)} failed, ${String(result.pruned)} pruned.`);
     };
 
     return (
         <main style={{ fontFamily: "system-ui", margin: "3rem auto", maxWidth: 560 }}>
             <h1>Notify demo</h1>
 
-            <button onClick={() => void enablePush()} type="button">
+            <button
+                onClick={() => {
+                    void enablePush();
+                }}
+                type="button"
+            >
                 Enable push on this device
             </button>
 

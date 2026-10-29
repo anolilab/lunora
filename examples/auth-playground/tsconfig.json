@@ -1,8 +1,6 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "outDir": "dist",
-        "rootDir": ".",
         "moduleResolution": "bundler",
         "jsx": "react-jsx",
         "types": ["@cloudflare/workers-types", "node", "vite/client"],
@@ -11,6 +9,6 @@
         "noUnusedLocals": false,
         "noUnusedParameters": false
     },
-    "include": ["src/**/*", "lunora/**/*", "vite.config.ts"],
+    "include": ["src/**/*", "lunora/**/*", "vite.config.ts", "__tests__/**/*"],
     "exclude": ["node_modules", "dist"]
 }

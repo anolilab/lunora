@@ -10,7 +10,7 @@ import { backfillD1SearchIndexes, createD1CtxDb as createD1ContextDatabase, runD
  * results: a recording `D1Exec` double that reports FTS5 available (the
  * create/drop probe succeeds), returns canned rows for the vocabulary read, and
  * captures every statement + params. We verify the virtual-table DDL, the
- * delete-then-insert write sync, and the MATCH/JOIN/ORDER-BY-rank search query.
+ * rowid-keyed write sync, and the MATCH/JOIN/ORDER-BY-rank search query.
  * Behavioral correctness of the query surface is covered by the LIKE-scan suite
  * in `d1-ctx-db.search.test.ts`. The D1 twin of `@lunora/do`'s
  * `ctx-db.search.fts.test.ts`.
@@ -20,6 +20,27 @@ interface Recorded {
     params: ReadonlyArray<unknown>;
     sql: string;
 }
+
+const COMPANION = '"docs__fts_by_body"';
+const MAP = '"docs__fts_by_body__ids"';
+/** Drops the document's rows a previous build wrote (positive rowids), by `__id__`. */
+const DROP_UNMAPPED = `DELETE FROM ${COMPANION} WHERE ${COMPANION}."rowid" > 0 AND CAST(${COMPANION}."__id__" AS TEXT) = ?`;
+/** Drops the document's mapped row — only if it still holds this document. */
+const DROP_MAPPED = `DELETE FROM ${COMPANION} WHERE ${COMPANION}."rowid" = (SELECT ${MAP}."__rowid__" FROM ${MAP} WHERE ${MAP}."__id__" = ?) AND ${COMPANION}."__id__" = ?`;
+const CLAIM_ROWID = `INSERT OR REPLACE INTO ${MAP} ("__rowid__", "__id__") SELECT MIN(COALESCE((SELECT MIN(${MAP}."__rowid__") FROM ${MAP}), 0), 0) - 1, ? WHERE 1 = 1`;
+const PURGE_MAPPING = `DELETE FROM ${MAP} WHERE ${MAP}."__id__" = ?`;
+/** A live write lands only while the row still holds the version it just wrote: `[id, _version, _creationTime]`. */
+const WRITTEN_GUARD = ` AND EXISTS (SELECT 1 FROM "docs" WHERE "docs"."id" = ? AND "docs"."_version" IS ? AND "docs"."_creationTime" IS ?)`;
+/** A delete's purge lands only while the row is still gone: `[id]`. */
+const DELETED_GUARD = ` AND NOT EXISTS (SELECT 1 FROM "docs" WHERE "docs"."id" = ?)`;
+
+/**
+ * Does `statement` write a document's searchable entry? It replaces the row at
+ * the document's mapped rowid; a backfill's write also carries a trailing guard
+ * on the source row, so only the leading `[text, id]` params are the entry.
+ */
+const isEntryWrite = (statement: Recorded): boolean => statement.sql.startsWith('INSERT OR REPLACE INTO "docs__fts_by_body" (rowid, "__text__", "__id__")');
+const entryOf = (statement: Recorded): unknown[] => statement.params.slice(0, 2);
 
 /** A canned MATCH/by-id row in the D1 column-per-field shape (no `__doc__` blob). */
 interface MatchRow {
@@ -121,24 +142,31 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
         ).toBe(true);
     });
 
-    it("syncs indexed text on insert via delete-then-insert", async () => {
-        expect.assertions(2);
+    it("syncs indexed text on insert by replacing the row at the document's mapped rowid", async () => {
+        expect.assertions(1);
 
         const { exec, statements } = createRecordingFts([]);
 
         await runD1SearchMigrations(exec, searchSchema);
 
         const writer = createD1ContextDatabase({ exec, idGenerator: () => "d1", schema: searchSchema });
+        const before = statements.length;
 
         await writer.insert("docs", { body: "hello world", channel: "x", title: "a" });
 
-        const remove = statements.find((statement) => statement.sql === 'DELETE FROM "docs__fts_by_body" WHERE "__id__" = ?');
-        // The last shadow INSERT is the write sync; earlier ones belong to the
-        // migration-time backfill (here just its "backfilled" sentinel).
-        const add = statements.findLast((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
+        // No purge by `__id__`: that column is UNINDEXED, so it was a full scan.
+        // (Only this document's statements: the writer's own cold start re-runs the idempotent DDL.)
+        const ftsWrites = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body") && statement.params.includes("d1"));
 
-        expect(remove?.params).toStrictEqual(["d1"]);
-        expect(add?.params).toStrictEqual(["hello world", "d1"]);
+        // Every statement carries the guard; its trailing `_creationTime` is the clock's.
+        expect(
+            ftsWrites.map((statement) => (isEntryWrite(statement) ? ["entry", ...entryOf(statement)] : [statement.sql, ...statement.params.slice(0, -1)])),
+        ).toStrictEqual([
+            [DROP_UNMAPPED + WRITTEN_GUARD, "d1", "d1", null],
+            [DROP_MAPPED + WRITTEN_GUARD, "d1", "d1", "d1", null],
+            [CLAIM_ROWID + WRITTEN_GUARD, "d1", "d1", null],
+            ["entry", "hello world", "d1"],
+        ]);
     });
 
     it("backfills rows that predate the search index", async () => {
@@ -151,9 +179,9 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
 
         await runD1SearchMigrations(exec, searchSchema);
 
-        const inserts = statements.filter((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
+        const inserts = statements.filter((statement) => isEntryWrite(statement));
 
-        expect(inserts.map((statement) => statement.params)).toStrictEqual([
+        expect(inserts.map((statement) => entryOf(statement))).toStrictEqual([
             ["hello world", "d1"],
             ["hello words", "d2"],
         ]);
@@ -179,14 +207,14 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
                 (statement) => statement.sql === 'CREATE VIRTUAL TABLE IF NOT EXISTS "docs__fts_by_body" USING fts5("__text__", "__id__" UNINDEXED)',
             ),
         ).toBe(true);
-        expect(statements.some((statement) => statement.sql.startsWith('INSERT INTO "docs__fts_by_body"'))).toBe(false);
+        expect(statements.some((statement) => isEntryWrite(statement))).toBe(false);
 
         // …until the host runs the explicit backfill.
         await backfillD1SearchIndexes(exec, stagedSchema);
 
-        const inserts = statements.filter((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
+        const inserts = statements.filter((statement) => isEntryWrite(statement));
 
-        expect(inserts.map((statement) => statement.params)).toStrictEqual([["hello world", "d1"]]);
+        expect(inserts.map((statement) => entryOf(statement))).toStrictEqual([["hello world", "d1"]]);
     });
 
     it("clears the FTS row on delete (no re-insert)", async () => {
@@ -202,12 +230,20 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
 
         const before = statements.length;
 
-        await writer.delete("d1");
+        await writer.delete("docs", "d1");
 
         const ftsWritesAfter = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body"));
 
-        expect(ftsWritesAfter.map((statement) => statement.sql)).toStrictEqual(['DELETE FROM "docs__fts_by_body" WHERE "__id__" = ?']);
-        expect(ftsWritesAfter[0]?.params).toStrictEqual(["d1"]);
+        expect(ftsWritesAfter.map((statement) => statement.sql)).toStrictEqual([
+            DROP_UNMAPPED + DELETED_GUARD,
+            DROP_MAPPED + DELETED_GUARD,
+            PURGE_MAPPING + DELETED_GUARD,
+        ]);
+        expect(ftsWritesAfter.map((statement) => statement.params)).toStrictEqual([
+            ["d1", "d1"],
+            ["d1", "d1", "d1"],
+            ["d1", "d1"],
+        ]);
     });
 
     it("scores in SQL from the vocabulary view, bounded by the caller's limit", async () => {

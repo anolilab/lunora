@@ -46,11 +46,12 @@
  * surface (see `ctx-db.ts`).
  */
 
-import { stableWireKey } from "../../../shared/wire-key";
+import { stableWireKey } from "@lunora/wire";
+
 import { depKey, SCAN_DEP } from "./dependency-tracker";
 import { estimateBytes } from "./estimate-bytes";
 import type { IndexKeyEntry, KeyRange } from "./read-write-set";
-import { keysTouchRanges } from "./read-write-set";
+import { isPointRange, keysTouchRanges } from "./read-write-set";
 
 /** Get `key`'s value from `map`, creating and filing it via `create` on first sight. */
 const getOrCreate = <K, V>(map: Map<K, V>, key: K, create: () => V): V => {
@@ -232,7 +233,11 @@ class ReactiveCache {
 
         // Evaluated AFTER the callback: like `deps`, the read's footprint is
         // only complete once the handler has actually run.
-        const readRanges = ranges();
+        // A point read's slice on the id index duplicates the `table:id` dep the
+        // same read records, which `invalidate` finds by key; indexed as a range
+        // it would make every write walk one range per cached `get`. Kept when
+        // that dep is absent, since the range is then the only invalidation path.
+        const readRanges = ranges().filter((range) => !isPointRange(range) || !deps.has(depKey(range.table, range.lo)));
 
         const entry: CacheEntry = {
             bytes,
@@ -544,5 +549,5 @@ const reactiveCacheKey = (functionPath: string, args: Record<string, unknown>, i
 export { ReactiveCache, reactiveCacheKey };
 export type { CacheEntry, ReactiveCacheOptions };
 
-export { stableStringify } from "../../../shared/stable-key";
-export { stableWireKey } from "../../../shared/wire-key";
+export { stableStringify } from "@lunora/wire";
+export { stableWireKey } from "@lunora/wire";

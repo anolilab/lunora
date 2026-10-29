@@ -47,6 +47,196 @@ describe("createContextVectors", () => {
         expect(index.upsert).toHaveBeenNthCalledWith(1, [{ id: "a", metadata: { t: 1 }, namespace: undefined, values: [5] }]);
     });
 
+    it("upsert defers through deferAfterCommit while upsertNow stays inline", async () => {
+        expect.assertions(4);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const queued: (() => Promise<void>)[] = [];
+        const context = createContextVectors(lunora, {
+            deferAfterCommit: async (work) => {
+                queued.push(work);
+            },
+        });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        // A mutation that upserts and then throws must leave NOTHING in
+        // Vectorize — the row it describes is about to be rolled back.
+        await context.upsert("docs", { embed, id: "a", input: "hello" });
+
+        expect(index.upsert).not.toHaveBeenCalled();
+
+        await context.upsertNow("docs", { embed, id: "b", input: "yo" });
+
+        expect(index.upsert).toHaveBeenCalledTimes(1);
+        expect(index.upsert).toHaveBeenCalledWith([{ id: "b", metadata: undefined, namespace: undefined, values: [2] }]);
+
+        await queued[0]?.();
+
+        expect(index.upsert).toHaveBeenCalledWith([{ id: "a", metadata: undefined, namespace: undefined, values: [5] }]);
+    });
+
+    describe("deferred writes after a failed one", () => {
+        const harness = () => {
+            let calls = 0;
+            const index = fakeIndex({
+                upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
+                    calls += 1;
+
+                    if (calls === 2) {
+                        throw new Error("batch 2 failed");
+                    }
+
+                    return { mutationId: `upsert-${String(vectors.length)}` };
+                }),
+            });
+            const queued: (() => Promise<void>)[] = [];
+            const context = createContextVectors(createVectors({ indexes: { docs: index } }), {
+                deferAfterCommit: async (work) => {
+                    queued.push(work);
+                },
+            });
+            const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+            // The queue runs them in order and contains each failure, as `flushAfterCommit` does.
+            const flush = async (): Promise<string[]> => {
+                const outcomes: string[] = [];
+
+                for (const work of queued) {
+                    try {
+                        // eslint-disable-next-line no-await-in-loop -- ordered replay, like the shard's queue
+                        await work();
+                        outcomes.push("fulfilled");
+                    } catch {
+                        outcomes.push("rejected");
+                    }
+                }
+
+                return outcomes;
+            };
+
+            return { context, embed, flush, index };
+        };
+
+        it("skips writes of the same operation, so a trailing bookkeeping write never lands", async () => {
+            expect.assertions(3);
+
+            const { context, embed, flush, index } = harness();
+            const operation = {};
+
+            await context.upsertMany?.("docs", [{ embed, id: "batch-1", input: "a" }], operation);
+            await context.upsertMany?.("docs", [{ embed, id: "batch-2", input: "b" }], operation);
+            await context.upsertMany?.("docs", [{ embed, id: "chunk-0", input: "c" }], operation);
+
+            await expect(flush()).resolves.toStrictEqual(["fulfilled", "rejected", "rejected"]);
+            expect(index.upsert).toHaveBeenCalledTimes(2);
+            expect(index.upsert).not.toHaveBeenCalledWith([expect.objectContaining({ id: "chunk-0" })]);
+        });
+
+        it("defers a tokened delete behind the operation's writes and skips it after a failure", async () => {
+            expect.assertions(4);
+
+            const { context, embed, flush, index } = harness();
+            const operation = {};
+            const afterDelete = vi.fn<() => Promise<void>>(async () => undefined);
+
+            await context.upsertMany?.("docs", [{ embed, id: "batch-1", input: "a" }], operation);
+            await context.upsertMany?.("docs", [{ embed, id: "batch-2", input: "b" }], operation);
+            await context.deleteByIds("docs", ["old"], undefined, operation, afterDelete);
+
+            expect(index.deleteByIds).not.toHaveBeenCalled();
+            await expect(flush()).resolves.toStrictEqual(["fulfilled", "rejected", "rejected"]);
+            expect(index.deleteByIds).not.toHaveBeenCalled();
+            expect(afterDelete).not.toHaveBeenCalled();
+        });
+
+        it("runs a tokened delete after its writes succeed, and an untokened delete inline", async () => {
+            expect.assertions(6);
+
+            const { context, flush, index } = harness();
+            const order: string[] = [];
+
+            vi.mocked(index.deleteByIds).mockImplementation(async (ids) => {
+                order.push("delete");
+
+                return { count: ids.length, mutationId: "d" };
+            });
+
+            await context.deleteByIds("docs", ["now"], undefined, undefined, async () => {
+                order.push("hook-now");
+            });
+
+            expect(index.deleteByIds).toHaveBeenCalledWith(["now"]);
+            expect(order).toStrictEqual(["delete", "hook-now"]);
+
+            await context.deleteByIds("docs", ["later"], undefined, {}, async () => {
+                order.push("hook-later");
+            });
+
+            expect(index.deleteByIds).toHaveBeenCalledTimes(1);
+
+            await flush();
+
+            expect(index.deleteByIds).toHaveBeenLastCalledWith(["later"]);
+            expect(order).toStrictEqual(["delete", "hook-now", "delete", "hook-later"]);
+            expect(order).toHaveLength(4);
+        });
+
+        it("declares that deleteByIds honours the operation and afterDelete arguments", () => {
+            expect.assertions(1);
+
+            expect(harness().context.deferredDelete).toBe(true);
+        });
+
+        it("still runs a later write that carries no token", async () => {
+            expect.assertions(2);
+
+            const { context, embed, flush, index } = harness();
+            const operation = {};
+
+            await context.upsertMany?.("docs", [{ embed, id: "batch-1", input: "a" }], operation);
+            await context.upsertMany?.("docs", [{ embed, id: "batch-2", input: "b" }], operation);
+            await context.upsert("docs", { embed, id: "unrelated", input: "u" });
+
+            await expect(flush()).resolves.toStrictEqual(["fulfilled", "rejected", "fulfilled"]);
+            expect(index.upsert).toHaveBeenCalledWith([expect.objectContaining({ id: "unrelated" })]);
+        });
+
+        it("still runs a later write that carries a different token", async () => {
+            expect.assertions(2);
+
+            const { context, embed, flush, index } = harness();
+            const operation = {};
+
+            await context.upsertMany?.("docs", [{ embed, id: "batch-1", input: "a" }], operation);
+            await context.upsertMany?.("docs", [{ embed, id: "batch-2", input: "b" }], operation);
+            await context.upsertMany?.("docs", [{ embed, id: "other-doc", input: "o" }], {});
+
+            await expect(flush()).resolves.toStrictEqual(["fulfilled", "rejected", "fulfilled"]);
+            expect(index.upsert).toHaveBeenCalledWith([expect.objectContaining({ id: "other-doc" })]);
+        });
+    });
+
+    it("resolves the namespace before deferring, so a root-instance misuse throws to the caller", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const queued: (() => Promise<void>)[] = [];
+        const context = createContextVectors(lunora, {
+            deferAfterCommit: async (work) => {
+                queued.push(work);
+            },
+            shardedIndexNames: ["docs"],
+        });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        // Thrown from inside the deferral this would surface after the commit,
+        // as a log line nobody is holding, instead of failing the handler.
+        await expect(context.upsert("docs", { embed, id: "a", input: "hello" })).rejects.toThrow("has no shard key");
+
+        expect(queued).toStrictEqual([]);
+    });
+
     it("query maps Vectorize matches to the server match shape", async () => {
         expect.assertions(1);
 
@@ -504,6 +694,34 @@ describe("createVectorSyncHook", () => {
         expect(vectors.deletes).toEqual([["messages-body", ["m1"]]]);
     });
 
+    it("purges instead of embedding when the source text is empty or whitespace, for both index shapes", async () => {
+        expect.assertions(3);
+
+        const vectors = fakeVectorSearch();
+        const embedCalls: string[] = [];
+        const counting = async (value: string): Promise<ReadonlyArray<number>> => {
+            embedCalls.push(value);
+
+            return [value.length];
+        };
+        const schema: SchemaLike = {
+            tables: { docs: { vectorIndexes: [{ embed: counting, field: "body", name: "docs-body" }] } },
+            vectorIndexes: { "docs-title": { embed: counting, select: (row) => String(row.title), table: "docs" } },
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ doc: { body: "", title: " \n\t " }, id: "d1", op: "update", table: "docs" });
+
+        // Nothing reaches the embedder — an empty input is refused there on every
+        // attempt — and neither index keeps a vector for text the row no longer has.
+        expect(embedCalls).toHaveLength(0);
+        expect(vectors.upserts).toHaveLength(0);
+        expect(vectors.deletes).toStrictEqual([
+            ["docs-body", ["d1"]],
+            ["docs-title", ["d1"]],
+        ]);
+    });
+
     it("threads the namespace onto upserts for tenant isolation", async () => {
         expect.assertions(1);
 
@@ -549,14 +767,14 @@ describe("createVectorSyncHook", () => {
         expect(vectors.upserts).toEqual([]);
     });
 
-    it("compensates with deletes across every affected index then re-throws the original error", async () => {
+    it("leaves a partially applied fan-out in place and re-throws the original error", async () => {
         expect.assertions(3);
 
         const original = new Error("embedder boom");
         const vectors = fakeVectorSearch();
 
         // Second upsert (standalone) rejects after the first inline upsert.
-        vi.mocked(vectors.upsert).mockImplementation(async (indexName, input) => {
+        vi.mocked(vectors.upsertNow).mockImplementation(async (indexName, input) => {
             vectors.upserts.push([indexName, input]);
 
             if (indexName === "docs-fulltext") {
@@ -572,66 +790,40 @@ describe("createVectorSyncHook", () => {
 
         await expect(hook({ doc: { body: "hi" }, id: "d1", op: "insert", table: "docs" })).rejects.toBe(original);
 
-        // Compensation purges this row's id from every index sourced from the table.
-        expect(vectors.deletes).toContainEqual(["docs-body", ["d1"]]);
-        expect(vectors.deletes).toContainEqual(["docs-fulltext", ["d1"]]);
+        // The hook runs AFTER the row committed, so the row survives this failure.
+        // Purging the index that DID apply would trade a partially indexed row for
+        // an unsearchable one; re-running the idempotent write is the recovery.
+        expect(vectors.deletes).not.toContainEqual(["docs-body", ["d1"]]);
+        expect(vectors.deletes).not.toContainEqual(["docs-fulltext", ["d1"]]);
     });
 
-    it("runs compensation only after every in-flight upsert has settled (no stale-vector race)", async () => {
-        // Regression for the compensating-delete race: when one index's upsert
-        // fails, a slow SIBLING upsert must fully settle before compensation
-        // fires. Otherwise the sibling's write can land AFTER its index's
-        // compensating delete, leaving a searchable vector for a rolled-back row.
+    it("leaves the prior vector alone when an UPDATE fan-out fails partway", async () => {
         expect.assertions(3);
 
-        const events: string[] = [];
-        const original = new Error("docs-b upsert boom");
+        const original = new Error("embedder boom");
+        const vectors = fakeVectorSearch();
 
-        const vectors: VectorSearchLike = {
-            deleteByIds: vi.fn<VectorSearchLike["deleteByIds"]>(async (indexName) => {
-                events.push(`delete:${indexName}`);
-            }),
-            getByIds: vi.fn<VectorSearchLike["getByIds"]>(async () => []),
-            query: vi.fn<VectorSearchLike["query"]>(async () => {
-                return { count: 0, matches: [] };
-            }),
-            upsert: vi.fn<VectorSearchLike["upsert"]>(async (indexName) => {
-                if (indexName === "docs-b") {
-                    throw original;
-                }
+        vi.mocked(vectors.upsertNow).mockImplementation(async (indexName, input) => {
+            if (indexName === "docs-fulltext") {
+                throw original;
+            }
 
-                // A slow sibling: it must settle before compensation runs.
-                await new Promise((resolve) => {
-                    setTimeout(resolve, 20);
-                });
-                events.push(`upsert-done:${indexName}`);
-            }),
-            upsertNow: vi.fn<VectorSearchLike["upsertNow"]>(async () => {}),
-        };
+            vectors.upserts.push([indexName, input]);
+        });
 
         const schema: SchemaLike = {
-            tables: {
-                docs: {
-                    vectorIndexes: [
-                        { embed, field: "a", name: "docs-a" },
-                        { embed, field: "b", name: "docs-b" },
-                    ],
-                },
-            },
-            vectorIndexes: {},
+            tables: { docs: { vectorIndexes: [{ embed, field: "body", name: "docs-body" }] } },
+            vectorIndexes: { "docs-fulltext": { embed, select: (row) => String(row.body), table: "docs" } },
         };
         const hook = createVectorSyncHook({ allowSharedNamespace: true, schema, vectors });
 
-        await expect(hook({ doc: { a: "aa", b: "bb" }, id: "d1", op: "insert", table: "docs" })).rejects.toBe(original);
+        await expect(hook({ doc: { body: "edited" }, id: "d1", op: "update", table: "docs" })).rejects.toBe(original);
 
-        const slowDone = events.indexOf("upsert-done:docs-a");
-        const firstDelete = events.findIndex((event) => event.startsWith("delete:"));
-
-        // The slow sibling upsert was observed as completed (not still pending
-        // when the hook threw) AND completed strictly before any compensating
-        // delete fired — so no write can survive its own compensation.
-        expect(slowDone).toBeGreaterThanOrEqual(0);
-        expect(slowDone).toBeLessThan(firstDelete);
+        // The edited row is committed. `docs-body` holds the new vector and
+        // `docs-fulltext` still holds the prior one — stale in one index, correct
+        // in the other. Deleting either would make the live row unsearchable there.
+        expect(vectors.deletes).not.toContainEqual(["docs-body", ["d1"]]);
+        expect(vectors.deletes).not.toContainEqual(["docs-fulltext", ["d1"]]);
     });
 
     it("warns once when a metadata index is synced without a namespace", async () => {

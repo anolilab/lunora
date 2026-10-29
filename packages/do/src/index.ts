@@ -1,3 +1,7 @@
+export type { DeliveryAuthorization, DeliveryAuthorizationRequest, DeliveryPermit } from "./delivery-authorization";
+export { installDeliveryFence } from "./delivery-authorization";
+export type { DurableObjectHandlers, MergedDurableObject, MergedRole, MergedRoles, RoleClass, RoleNamespaceTarget } from "./merge-durable-objects";
+export { MERGED_ROLES, mergeDurableObjects, roleNamespace } from "./merge-durable-objects";
 // `external-source-cursor` is an internal ingest detail (the durable watermark
 // codec + reserved-table helpers), consumed only by `external-source-pull` and its
 // own tests — not re-exported, mirroring `external-source-diff`'s module-private
@@ -19,12 +23,14 @@ export type {
     RunShardBulkRowArgs,
     RunShardBulkRowResult,
     RunShardExportArgs,
+    RunShardFindRelatedArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,
     RunShardRankPageArgs,
     RunShardWriteArgs,
     RunShardWriteResult,
+    SensitiveScope,
     ShardDOOptions,
     ShardDOState,
     SubscriptionOutcome,
@@ -32,7 +38,9 @@ export type {
     TraceRefLike,
 } from "./shard-do";
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "./shard-do";
-export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do";
+export type { ShardRegistryRpc } from "./shard-registry-do";
+export { hostedShardRegistry, SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do";
+export { createStableIdFactory, createStableRandomFactory } from "./stable-id";
 // Cloudflare implementations of the `@lunora/platform` host contracts. These
 // are what `@lunora/platform-cloudflare` will re-export as the default host.
 export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "@lunora/platform-cloudflare";
@@ -40,7 +48,6 @@ export { createShardAlarms, createShardDirectory, createShardHost, createShardKv
 // from the two lifetimes a Worker has (DO state, worker env).
 export type { ShardPlatform, WorkerPlatform, WorkerPlatformOptions } from "@lunora/platform-cloudflare";
 export { createShardPlatform, createWorkerPlatform } from "@lunora/platform-cloudflare";
-
 // Every re-export below must have a named consumer (the codegen emitter's
 // import builders, or an import site in this repo). Additions require one;
 // drive-by re-exports are how 230 unused names got frozen here (plan 286).
@@ -50,6 +57,11 @@ export { createShardPlatform, createWorkerPlatform } from "@lunora/platform-clou
 export type { ExportRow, ImportShardResult } from "@lunora/shard-engine";
 export type { DataMigrationLike, MigrationRunResult } from "@lunora/shard-engine";
 export type { KeyRange } from "@lunora/shard-engine";
+// Named in the emitted shard's `executeSubscription` / `executeStream` /
+// `resolveShape` / `readGlobalShapeRows` / `buildCtx` signatures, so adding a
+// member to it is a compile error in every generated app rather than six inline
+// copies that silently disagree.
+export type { SubscriptionIdentity } from "@lunora/shard-engine";
 export type { TransactionHeadroomTracker } from "@lunora/shard-engine";
 export type { DatabaseWriterLike, SchemaLike, SqlExec, ValidatorLike, WriteHook } from "@lunora/shard-engine";
 export type {
@@ -67,19 +79,20 @@ export type { SystemReaderStorageLike } from "@lunora/shard-engine";
 export type { SchedulerLike } from "@lunora/shard-engine";
 export type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
 export type { RankIndexDefinitionLike, ShardRankPageResult } from "@lunora/shard-engine";
+export type { RelatedPage } from "@lunora/shard-engine";
 export type { MutationDelta } from "@lunora/shard-engine";
-export type { SearchBackfillProgress } from "@lunora/shard-engine";
+export type { SearchBackfillProgress, VectorBackfillProgress } from "@lunora/shard-engine";
 export { createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP } from "@lunora/shard-engine";
 export { exportShardRows, importShardRows } from "@lunora/shard-engine";
 export { runDataMigration } from "@lunora/shard-engine";
 export { buildReprojectionMigration, countLegacyRows, REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationId, reprojectionTables } from "@lunora/shard-engine";
 export { isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "@lunora/shard-engine";
-export { applyCdcChanges, backfillSearchIndexes, clearMemoryTables, createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
+export { applyCdcChanges, backfillSearchIndexes, backfillVectorIndexes, clearMemoryTables, createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 export { assertShapeShardable } from "@lunora/shard-engine";
 
 // Emitter-conditional: the generated shard imports `WhereInput` when the project
 // declares shapes and the two source `*Like`s when it declares `.source()` tables
-// (`packages/codegen/src/emit.ts:4204`, `:4300`).
+// (`packages/codegen/src/emit/shard.ts`).
 export type { ExternalSourceLike, SourceClientLike, WhereInput } from "@lunora/shard-engine";
 
 // Observability is NOT re-exported from here. It lives in `@lunora/observability`

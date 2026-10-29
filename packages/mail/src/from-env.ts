@@ -20,8 +20,8 @@ import { createCaptureTransport } from "./capture-transport";
 import type { CloudflareSend } from "./cloudflare-transport";
 import createMailer from "./create-mailer";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./inbound/shard";
-import { DEFAULT_ROOT_SHARD, postShardRpc } from "./inbound/shard";
-import type { Mailer, SendPayload } from "./types";
+import { applyJurisdiction, DEFAULT_ROOT_SHARD, postShardRpc } from "./inbound/shard";
+import type { Mailer, QueueLike, SendPayload } from "./types";
 
 /** A Worker `env` projected as a plain record (vars, secrets, and bindings are `unknown`-valued). */
 type MailEnv = Record<string, unknown>;
@@ -34,15 +34,24 @@ const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as 
 
 /** Options for {@link createMailerFromEnv}. */
 interface FromEnvOptions {
-    /** RFC 822 send callback bound to the Worker's `send_email` binding (Cloudflare default transport). */
+    /**
+     * RFC 822 send callback bound to the Worker's Cloudflare Email binding (the
+     * default transport). Honoured whenever it is passed, whatever the binding is
+     * named: passing it is the caller's choice of transport, so pass it only when
+     * the binding exists.
+     */
     cloudflareSend?: CloudflareSend;
 
     /**
      * Pin the captured-mail inbox shard to a Cloudflare data-residency
-     * jurisdiction. Pass the same value as the worker's `jurisdiction` so the
-     * dev inbox co-resides with app data. Omit for the un-pinned global namespace.
+     * jurisdiction. Defaults to the jurisdiction the schema declares
+     * (`.jurisdiction("eu")`), so a generated app needs nothing here; set it only
+     * for a hand-written worker, to the same value as its `jurisdiction`. A value
+     * that contradicts the schema's throws.
      */
     jurisdiction?: DurableObjectJurisdiction;
+    /** Cloudflare Queue binding backing `mailer.queue()`; without it `queue()` throws outside capture mode. */
+    queue?: QueueLike;
     /** Shard the captured-mail inbox lives on; override if your worker sets a custom `defaultShardKey`. */
     rootShard?: string;
 }
@@ -60,7 +69,8 @@ const requireStringEnv = (env: MailEnv, name: string): string => {
 /**
  * Whether outbound mail should be captured (into the studio inbox) rather than
  * delivered. Explicit `LUNORA_MAIL_CAPTURE` (`"1"`/`"true"` vs `"0"`/`"false"`)
- * always wins; unset, capture is on only in a development environment. It does
+ * always wins; unset, capture is on only when every set environment var (`CF_ENV`,
+ * `ENVIRONMENT`, `NODE_ENV`, `WORKER_ENV`) names a development one. It does
  * NOT fall back to "no SEND_EMAIL binding ⇒ capture" — a production deploy that
  * forgot the binding must fail loudly on send, not silently swallow mail.
  */
@@ -87,11 +97,12 @@ const shouldCaptureMail = (env: MailEnv): boolean => {
         );
     }
 
-    return ENVIRONMENT_VARS.some((key) => {
-        const value = env[key];
+    // Every environment var that is set must look like dev. `some` captured a
+    // production deploy that also carried a leftover dev `NODE_ENV`,
+    // swallowing its password resets and OTPs; a non-dev value vetoes capture.
+    const values = ENVIRONMENT_VARS.map((key) => env[key]).filter((value): value is string => typeof value === "string" && value !== "");
 
-        return typeof value === "string" && DEV_ENVIRONMENT_PATTERN.test(value);
-    });
+    return values.length > 0 && values.every((value) => DEV_ENVIRONMENT_PATTERN.test(value));
 };
 
 /**
@@ -134,15 +145,20 @@ const createCaptureSink = (env: MailEnv, rootShard: string = DEFAULT_ROOT_SHARD,
                 return { id: "uncaptured" };
             }
 
+            // Outside the best-effort catch: a jurisdiction that contradicts the
+            // app's, or a binding that cannot be pinned, is a residency
+            // misconfiguration, and the send must fail rather than report a
+            // success-shaped id for mail that was never recorded.
+            const shard = applyJurisdiction(binding, jurisdiction);
+
             // Best-effort: a send must never fail for lack of somewhere to record.
             // `postShardRpc` throws on a non-2xx / error envelope (wrong admin
             // token, missing route, shard error) — catch it and surface a loud
             // diagnostic instead of returning a bogus success id for lost mail.
             try {
-                const body = (await postShardRpc(binding, {
+                const body = (await postShardRpc(shard, {
                     adminToken,
                     envelope: { args: mail, functionPath: RECORD_MAIL_OP },
-                    jurisdiction,
                     label: "@lunora/mail: recording captured mail",
                     shardKey: rootShard,
                 })) as { result?: { id?: string } };
@@ -161,9 +177,13 @@ const createCaptureSink = (env: MailEnv, rootShard: string = DEFAULT_ROOT_SHARD,
 /**
  * Build a {@link Mailer} from a Worker `env`. In a dev environment every send is
  * captured into the studio's Mail inbox; otherwise it delivers via the supplied
- * `cloudflareSend` (the `SEND_EMAIL` binding) or, failing that, `RESEND_API_KEY`.
- * Throws when neither a capture context nor a real transport is available, so a
- * misconfigured production deploy fails loudly instead of silently dropping mail.
+ * `cloudflareSend` (when passed) or,
+ * failing that, `RESEND_API_KEY`. With no real transport `send()` rejects, so a
+ * misconfigured production deploy fails loudly instead of silently dropping mail
+ * — while `queue()` still works for a producer-only worker.
+ *
+ * A queue consumer should build its mailer here too: `consumeQueuedSend` goes
+ * through `send()`, so in dev queued mail is captured at consume time.
  *
  * `MAIL_FROM` is required (the default sender).
  */
@@ -171,23 +191,15 @@ const createMailerFromEnv = (env: MailEnv, options: FromEnvOptions = {}): Mailer
     const from = requireStringEnv(env, "MAIL_FROM");
 
     if (shouldCaptureMail(env)) {
-        return createMailer({ from, transport: createCaptureTransport(createCaptureSink(env, options.rootShard, options.jurisdiction)) });
+        return createMailer({ from, queue: options.queue, transport: createCaptureTransport(createCaptureSink(env, options.rootShard, options.jurisdiction)) });
     }
 
-    if (options.cloudflareSend) {
-        return createMailer({ cloudflareSend: options.cloudflareSend, from });
-    }
+    const { cloudflareSend } = options;
+    const apiKey = typeof env["RESEND_API_KEY"] === "string" && env["RESEND_API_KEY"] !== "" ? env["RESEND_API_KEY"] : undefined;
 
-    const apiKey = typeof env["RESEND_API_KEY"] === "string" ? env["RESEND_API_KEY"] : undefined;
-
-    if (apiKey !== undefined && apiKey !== "") {
-        return createMailer({ apiKey, from });
-    }
-
-    throw new LunoraError(
-        "INTERNAL",
-        "@lunora/mail: no transport configured — provide `cloudflareSend` (a SEND_EMAIL binding) or RESEND_API_KEY, or run in a dev environment to capture.",
-    );
+    // With neither, a producer-only mailer (it has a `queue`) is still built and
+    // only `send()` rejects; `createMailer` owns that rule.
+    return createMailer({ apiKey, cloudflareSend, from, queue: options.queue });
 };
 
 export { createCaptureSink, createMailerFromEnv, shouldCaptureMail };

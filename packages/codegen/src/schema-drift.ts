@@ -33,13 +33,30 @@ import { LunoraError } from "@lunora/errors";
 
 import type { DriftChange, FieldSnapshot, IndexSnapshot, RelationSnapshot, SchemaSnapshot, TableSnapshot } from "../../../shared/schema-snapshot";
 import { diffSchemaSnapshots, parseSnapshotJson, SCHEMA_SNAPSHOT_VERSION, sortKeys } from "../../../shared/schema-snapshot";
+import { isHyperdriveGlobalTable } from "./global-backend";
 import type { MigrationIR, SchemaIR, TableIR, ValidatorIR } from "./ir";
 
 /**
- * Encode a `TableIR.shardMode` into the snapshot's stable string form.
+ * Encode a table's shard mode into the snapshot's stable string form.
+ *
+ * Takes the whole table, not just `shardMode`, because a `.global()` table's
+ * BACKEND is part of the mode: `global-backend.ts` routes `.global()` to D1 and
+ * `.global({ backend: "hyperdrive" })` to a Postgres/MySQL database, which is a
+ * different physical store that no rows follow. Encoding both as bare `"global"`
+ * made switching between them read as no change at all.
+ *
+ * Read through `isHyperdriveGlobalTable` rather than comparing `globalBackend`
+ * here: the field is optional and only that predicate encodes the right
+ * comparison for hand-built IR (see `global-backend.ts`).
  */
-const encodeShardMode = (mode: TableIR["shardMode"]): string => {
-    if (mode === "global" || mode === "root") {
+const encodeShardMode = (table: TableIR): string => {
+    const mode = table.shardMode;
+
+    if (mode === "global") {
+        return `global:${isHyperdriveGlobalTable(table) ? "hyperdrive" : "d1"}`;
+    }
+
+    if (mode === "root") {
         return mode;
     }
 
@@ -118,6 +135,9 @@ const objectFieldsOf = (shape: Record<string, ValidatorIR>): Record<string, Fiel
     return sortKeys(fields);
 };
 
+/** An `import("...")` qualifier whose specifier is an absolute path (POSIX, drive-letter or UNC), i.e. one that names a file on the machine that printed it. */
+const MACHINE_LOCAL_IMPORT = /import\(\s*["'`](?:[A-Za-z]:)?[\\/]/u;
+
 /**
  * How to read the interior of each validator kind that has one. A kind with no
  * entry contributes nothing beyond its name — which is exactly what the whole
@@ -125,6 +145,12 @@ const objectFieldsOf = (shape: Record<string, ValidatorIR>): Record<string, Fiel
  */
 const STRUCTURAL_DETAIL: Record<string, (validator: ValidatorIR) => Partial<FieldSnapshot>> = {
     array: (validator) => (validator.inner ? { of: fieldSnapshotOf(validator.inner) } : {}),
+    // An `import("/abs/path").X` qualifier names a file on THIS machine: the same
+    // schema snapshotted elsewhere prints differently, which would read as a
+    // breaking output change nobody made. Leave it unrecorded, so it is skipped.
+    // A package-qualified import (`import("@acme/schema").X`) prints the same
+    // everywhere, so its output stays recorded and a change to it is seen.
+    from: (validator) => (validator.tsType === undefined || MACHINE_LOCAL_IMPORT.test(validator.tsType) ? {} : { output: validator.tsType }),
     id: (validator) => (validator.tableName === undefined ? {} : { ref: validator.tableName }),
     literal: (validator) => (validator.literalValue === undefined ? {} : { literal: validator.literalValue }),
     object: (validator) => (validator.shape ? { fields: objectFieldsOf(validator.shape) } : {}),
@@ -164,10 +190,39 @@ const tableSnapshotOf = (table: TableIR): TableSnapshot => {
     const relations: Record<string, RelationSnapshot> = {};
 
     for (const relation of table.relations) {
-        relations[relation.name] = { field: relation.field, kind: relation.kind, table: relation.table };
+        relations[relation.name] =
+            relation.through === undefined
+                ? { field: relation.field, kind: relation.kind, table: relation.table }
+                : { kind: relation.kind, table: relation.table, through: { ...relation.through } };
     }
 
-    return { fields: sortKeys(fields), indexes: sortKeys(indexes), relations: sortKeys(relations), shardMode: encodeShardMode(table.shardMode) };
+    // The three table-level modifiers that move or destroy rows without touching
+    // a column. Each was invisible here, so a deploy that empties the table on
+    // the next cold start (`.memory()`), starts deleting rows past a cutoff
+    // (`.ttl()`), or leaves every existing row out of a changefeed
+    // (`.commitOrdered()`) passed the gate reporting no change at all. The two
+    // flags are written UNCONDITIONALLY — their absence is what dates a baseline
+    // as predating them (see `recordsTableModifiers`), so writing them only when
+    // true would make "this table is not a memory table" and "this format did not
+    // record memory tables" the same bytes.
+    const snapshot: TableSnapshot = {
+        commitOrdered: table.commitOrdered === true,
+        fields: sortKeys(fields),
+        indexes: sortKeys(indexes),
+        memory: table.memory === true,
+        relations: sortKeys(relations),
+        shardMode: encodeShardMode(table),
+    };
+
+    if (table.ttl) {
+        // Rebuilt rather than spread: `parseTtlCall` sets `after: undefined`
+        // explicitly when no offset was declared, and `JSON.stringify` drops the
+        // key — so a snapshot that kept it would not deep-equal the same snapshot
+        // round-tripped through the baseline file.
+        snapshot.ttl = table.ttl.after === undefined ? { field: table.ttl.field } : { after: table.ttl.after, field: table.ttl.field };
+    }
+
+    return snapshot;
 };
 
 /**
@@ -473,20 +528,5 @@ const evaluateSchemaDrift = (options: {
     return decide(true, reason);
 };
 
-// The snapshot format, its diff, and the serializer moved to
-// `shared/schema-snapshot.ts` so `@lunora/studio` can render the SAME diff the
-// deploy gate blocks on. Re-exported here so every existing import site
-// (`run-codegen.ts`, the CLI gate, the tests) is unchanged.
-export type {
-    DriftChange,
-    DriftRemediation,
-    FieldSnapshot,
-    IndexSnapshot,
-    RelationSnapshot,
-    SchemaDrift,
-    SchemaSnapshot,
-    TableSnapshot,
-} from "../../../shared/schema-snapshot";
-export { diffSchemaSnapshots, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 export type { SchemaDriftDecision };
 export { buildSchemaSnapshot, evaluateSchemaDrift, parseSchemaSnapshot, SchemaSnapshotParseError };

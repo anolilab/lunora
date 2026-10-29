@@ -39,10 +39,21 @@
  * });
  * ```
  *
- * `createBrowser`'s `allowedHosts` is the hard guarantee (it is enforced on
- * every navigation *and* every subresource request, and it is what satisfies the
- * `browser_user_url_without_allowlist` advisor lint); the check in this file is
- * the fail-closed default for the window before you have configured it.
+ * That factory call is the hard guarantee, and it is a strictly stronger one
+ * than the check below: `allowedHosts` is enforced on every navigation *and*
+ * every subresource request, so it survives a 3xx redirect and a page that
+ * fetches somewhere else. {@link assertAllowedTarget} sees only the URL you
+ * hand it, once, which is why it cannot be the last word.
+ *
+ * Until you add that call, `lunora codegen` reports
+ * `browser_user_url_without_allowlist` (WARN) against the two `ctx.browser.*`
+ * calls here. That is accurate, not noise: the advisor suppresses on a
+ * `createBrowser({ allowedHosts })` in your project, because that is the only
+ * shape that covers redirects and subresources — and this file, shipped on its
+ * own, does not install one. Leaving the warning standing is deliberate; a
+ * scaffold that silenced it would be claiming a guarantee it cannot make. The
+ * `ctx.browser` you get from the `BROWSER` wrangler binding alone carries no
+ * host allowlist.
  */
 import { LunoraError } from "@lunora/errors";
 import { RateLimiter, createMemoryStore, rateLimit } from "@lunora/ratelimit";

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runBackupCommand } from "../../src/commands/backup/handler";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import type { FetchLike } from "../../src/commands/run/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const capturingLogger = (): { logger: Logger; logs: string[] } => {
@@ -47,12 +48,20 @@ const FIXED_NOW = (): Date => new Date("2026-06-03T12:00:00.000Z");
 const capturingImportFetch =
     (calls: string[]): StreamingFetchLike =>
     async (url) => {
-        calls.push(url);
+        // The check before the import writes nothing, so it is not one of the calls the import made.
+        const { searchParams } = new URL(url);
+        const check = searchParams.get("dryRun") === "true";
+        // A worker that can replace echoes the mode, which the CLI checks before sending a row.
+        const echo = searchParams.get("onConflict") === "replace" ? { onConflict: "replace" } : {};
+
+        if (!check) {
+            calls.push(url);
+        }
 
         return {
             body: null,
             json: async () => {
-                return { inserted: { users: 1 } };
+                return { inserted: check ? {} : { users: 1 }, ...(check ? { dryRun: true } : {}), ...echo };
             },
             ok: true,
             status: 200,
@@ -186,6 +195,35 @@ describe("lunora backup", () => {
         expect(importCalls[0]).toContain("/_lunora/admin/import");
     });
 
+    it("restore --replace imports in overwrite mode", async () => {
+        expect.assertions(2);
+
+        const { logger } = capturingLogger();
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+        const importCalls: string[] = [];
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: capturingImportFetch(importCalls),
+            logger,
+            replace: true,
+            subcommand: "restore",
+            target: created.entry?.id,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(0);
+        expect(importCalls[0]).toContain("onConflict=replace");
+    });
+
     it("restore refuses --prod without --yes (no import request)", async () => {
         expect.assertions(2);
 
@@ -215,7 +253,7 @@ describe("lunora backup", () => {
             url: "https://app.example.com",
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(importCalls).toHaveLength(0);
     });
 
@@ -453,7 +491,7 @@ describe("lunora backup", () => {
 
         const result = await runBackupCommand({ cwd: workDir, logger, subcommand: "restore", target: "does-not-exist" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
     });
 
     describe("retention", () => {
@@ -552,7 +590,7 @@ describe("lunora backup", () => {
             try {
                 const result = await runBackupCommand({ cwd: workDir, logger, subcommand: "retention", url: "http://localhost:8787" });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.AUTH);
                 expect(logs.some((line) => line.includes("admin token required"))).toBe(true);
             } finally {
                 if (previous !== undefined) {
@@ -611,7 +649,7 @@ describe("lunora backup", () => {
                 url: "http://localhost:8787",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls.map((call) => call.method)).toStrictEqual(["GET"]);
             expect(logs.some((line) => line.includes("--yes"))).toBe(true);
         });
@@ -772,7 +810,7 @@ describe("lunora backup", () => {
                 yes: true,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toStrictEqual([]);
             expect(logs.some((line) => line.includes("--bucket"))).toBe(true);
         });
@@ -816,7 +854,7 @@ describe("lunora backup", () => {
                 yes: true,
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls.map((call) => call.method)).toStrictEqual(["GET"]);
             expect(logs.some((line) => line.includes("backupRetain"))).toBe(true);
         });
@@ -933,7 +971,7 @@ describe("lunora backup", () => {
                 url: "http://localhost:8787",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
         });
 
@@ -954,7 +992,7 @@ describe("lunora backup", () => {
                 url: "https://app.example.com",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
             expect(logs.join("\n")).toContain("--yes");
         });
@@ -999,7 +1037,7 @@ describe("lunora backup", () => {
                 url: "https://app.example.com",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(calls).toHaveLength(0);
         });
 
@@ -1014,7 +1052,7 @@ describe("lunora backup", () => {
             try {
                 const result = await runBackupCommand({ cwd: workDir, logger, subcommand: "pitr", url: "http://localhost:8787" });
 
-                expect(result.code).toBe(1);
+                expect(result.code).toBe(EXIT_CODE.AUTH);
             } finally {
                 if (previous !== undefined) {
                     process.env.LUNORA_ADMIN_TOKEN = previous;

@@ -1,7 +1,7 @@
 {
     "name": "@lunora/ratelimit",
-    "version": "1.0.0-alpha.44",
-    "description": "Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, sharding, pluggable stores, and procedure middleware",
+    "version": "1.0.0-alpha.179",
+    "description": "Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, pluggable stores, and procedure middleware",
     "keywords": [
         "cloudflare",
         "durable-objects",
@@ -61,19 +61,24 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.35"
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0"
     },
     "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
+        "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/server": "1.0.0-alpha.108",
-        "@lunora/values": "1.0.0-alpha.43",
+        "@lunora/d1": "1.0.0-alpha.216",
+        "@lunora/server": "1.0.0-alpha.249",
+        "@lunora/shard-engine": "1.0.0-alpha.168",
+        "@lunora/values": "1.0.0-alpha.85",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
     },
     "peerDependencies": {
         "@lunora/server": ">=1.0.0-alpha.24 <2.0.0-0",

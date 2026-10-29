@@ -1,0 +1,18 @@
+// The live smoke Worker for @lunora/browser (see ./README.md). Deployed only by
+// `scripts/browser-smoke.sh`, never by CI, and not part of the package.
+{
+    "$schema": "../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-browser-smoke",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    // The real Browser Run binding the checks drive.
+    "browser": { "binding": "BROWSER" },
+    // The cross-origin check redirects to this version's preview URL
+    // (`<version prefix>-<name>.<subdomain>.workers.dev`), a second origin for the
+    // same Worker. Set the CROSS_ORIGIN var instead if preview URLs are off.
+    "workers_dev": true,
+    "preview_urls": true,
+    "version_metadata": { "binding": "VERSION" },
+    "observability": { "enabled": true },
+}

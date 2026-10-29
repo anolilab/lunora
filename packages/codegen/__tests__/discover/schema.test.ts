@@ -58,6 +58,25 @@ describe("discoverSchema", () => {
         expect(tasks?.shape.status?.members?.map((member) => member.literalValue)).toStrictEqual(['"todo"', '"done"']);
     });
 
+    it('keeps a literal computed column (`defineTable({ ["email"]: … })`) in the table shape', () => {
+        expect.assertions(2);
+
+        // Computed names used to be skipped outright, dropping the column from
+        // `Doc_*` and the emitted schema although it exists at runtime.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                users: defineTable({ name: v.string(), ["email"]: v.string() }),
+            });
+        `);
+
+        const users = discoverSchema(project, schemaPath).tables.find((table) => table.name === "users");
+
+        expect(Object.keys(users?.shape ?? {})).toStrictEqual(["name", "email"]);
+        expect(users?.shape.email?.kind).toBe("string");
+    });
+
     it("captures `.externallyManaged()` into the table IR; defaults to false", () => {
         expect.assertions(2);
 
@@ -163,11 +182,13 @@ describe("discoverSchema", () => {
         expect(posts?.softDelete).toStrictEqual({ field: "deletedAt" });
         expect(logs?.softDelete).toStrictEqual({ field: "removedAt" });
 
-        // The injected column flows into the emitted Doc as an optional number.
+        // The injected column flows into the emitted Doc as an optional, nullable
+        // number — the runtime injects `v.optional(v.number().nullable())`, and
+        // `restore()` clears the marker with `null`.
         const dataModel = emitDataModel(schema);
 
-        expect(dataModel).toContain("deletedAt?: number;");
-        expect(dataModel).toContain("removedAt?: number;");
+        expect(dataModel).toContain("deletedAt?: number | null;");
+        expect(dataModel).toContain("removedAt?: number | null;");
     });
 
     it("captures searchIndex name + field + filterFields", () => {
@@ -613,6 +634,24 @@ describe("discoverSchema", () => {
         expect(() => discoverSchema(project, schemaPath)).toThrow(/table name "query" is reserved/u);
     });
 
+    it.each(["__drafts", "posts__agg_x", "posts__rank_x", "posts__geo_x", "posts__fts_x"])(
+        "throws a diagnostic for the framework-reserved table name %s",
+        (name) => {
+            expect.assertions(2);
+
+            const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                ${name}: defineTable({ text: v.string() }),
+            });
+        `);
+
+            expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+            expect(() => discoverSchema(project, schemaPath)).toThrow(/reserved for framework tables/u);
+        },
+    );
+
     it("throws a diagnostic when a table name is not a valid JS identifier", () => {
         expect.assertions(3);
 
@@ -904,10 +943,10 @@ describe("discoverSchema", () => {
         const server = emitServer({ schema: relationSchema });
 
         // Phantom descriptors + the per-table Relations map.
-        expect(dataModel).toContain("export interface OneRelation<Target extends keyof DataModel>");
+        expect(dataModel).toContain("export interface OneRelation<Target extends keyof DataModel, Field extends string>");
         expect(dataModel).toContain("export interface ManyRelation<Target extends keyof DataModel>");
         expect(dataModel).toContain('posts: ManyRelation<"posts">;');
-        expect(dataModel).toContain('author: OneRelation<"users">;');
+        expect(dataModel).toContain('author: OneRelation<"users", "authorId">;');
 
         // The with-inference machinery binds the shipped generics to this
         // project's DataModel + Relations (the bodies live in
@@ -1305,6 +1344,43 @@ describe("discoverSchema", () => {
             expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["ratelimit_buckets", "todos"]);
             expect(Object.keys(buckets?.shape ?? {}).toSorted((a, b) => a.localeCompare(b))).toEqual(["key", "prev", "ts", "value"]);
             expect(buckets?.indexes).toEqual([{ fields: ["key"], name: "by_key" }]);
+        } finally {
+            rmSync(root, { force: true, recursive: true });
+        }
+    });
+
+    it("resolves a package extension whose exports carry only an `import` condition", () => {
+        expect.assertions(1);
+
+        // Every `@lunora/*` package (`@lunora/payment`, `@lunora/agent`) exports
+        // `{ types, import }` with no `require`/`default`, which `require.resolve`
+        // refuses — so their extensions were skipped with a warning.
+        const root = mkdtempSync(join(tmpdir(), "lunora-pkgext-esm-"));
+
+        try {
+            const pkgDir = join(root, "node_modules", "test-esm-ext");
+
+            mkdirSync(pkgDir, { recursive: true });
+            writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ exports: { ".": { import: "./index.mjs" } }, name: "test-esm-ext", type: "module" }));
+            writeFileSync(
+                join(pkgDir, "index.mjs"),
+                `export const paymentExtension = { key: "payment", tables: { events: { shape: { type: { kind: "string", _meta: {} } }, indexes: [] } } };`,
+            );
+
+            mkdirSync(join(root, "lunora"), { recursive: true });
+            const schemaPath = join(root, "lunora", "schema.ts");
+
+            writeFileSync(
+                schemaPath,
+                `import { defineSchema } from "@lunora/server";
+                 import { paymentExtension } from "test-esm-ext";
+                 export const schema = defineSchema({}).extend(paymentExtension);
+                `,
+            );
+
+            const schema = discoverSchema(new Project({ skipAddingFilesFromTsConfig: true }), schemaPath, root);
+
+            expect(schema.tables.map((table) => table.name)).toStrictEqual(["payment_events"]);
         } finally {
             rmSync(root, { force: true, recursive: true });
         }
@@ -1747,7 +1823,6 @@ describe("discoverSchema", () => {
 
         // Skipped in silence before: every table behind the spread was absent
         // from the generated data model while the schema still declared it.
-        // `registry/payment` ships `paymentTables` as exactly this shape.
         const { project, schemaPath } = projectWith(`
             import { defineSchema, defineTable, v } from "@lunora/server";
 

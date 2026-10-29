@@ -8,37 +8,39 @@
  * shared insert fan-out (`syncCompanionsForInsert`) that also drives CDC, the
  * reactive cache, and live-subscription broadcast.
  *
- * Behavior is byte-identical to the in-`ctx-db` original — the SQL text, the
- * call order, the backfill idempotency model (one rebuild per (table, index)
- * per ctx-db instance, run BEFORE the triggering row write), and the companion
- * semantics all sit on the hot write path and feed the same reads, so nothing
- * here may shift.
+ * Backfill idempotency: an aggregate or rank rebuild is recorded durably under
+ * its definition's signature (`ctx-db-companion-state`), so it runs once per
+ * shard per definition — not once per ctx-db instance, which codegen builds per
+ * dispatch. It runs BEFORE the triggering row write. The eager
+ * `backfillAggregateIndexes` / `backfillRankIndexes` call the same
+ * {@link ensureAggregateCompanion} / {@link ensureRankCompanion}.
  *
  * The maintenance functions need the DO writer's locals (`sql`, `schema`, the
  * read hook, the reactive cache, the CDC recorder, the subscription broadcast).
  * Those are threaded explicitly through {@link CompanionSyncDeps} rather than
  * captured from the writer closure, so the cluster reads as a pure function of
- * its dependencies — mirroring `ctx-db-rank-page`'s `RankPageDeps`. The
- * per-(table, index) backfill bookkeeping lives inside the factory, so a fresh
- * companion-sync (one per ctx-db instance) cold-starts its backfills.
+ * its dependencies — mirroring `ctx-db-rank-page`'s `RankPageDeps`.
  */
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-companions" mirrors its parent "ctx-db.ts" (the established public module name); `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { analyzedSearchText, FTS_ID_COLUMN, FTS_TEXT_COLUMN, ftsTableName, searchTextUnchanged } from "@lunora/search-core";
+import { analyzedSearchText, ftsTableName, searchTextUnchanged } from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
+import { readFieldPath } from "../../../shared/json-field-path";
 import { aggregateSqlFunction, matchesStaticWhere } from "./aggregate-sql";
 import type { AggregateTally } from "./aggregate-tally";
 import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally } from "./aggregate-tally";
 // Type-only imports for the structural surfaces the DO writer threads in — value
 // imports would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec } from "./ctx-db";
-import { runDrizzle } from "./do-exec";
+import { aggregateSignature, rankSignature, readCompanionSignature, writeCompanionSignature } from "./ctx-db-companion-state";
+import { runAll, runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, aggUpsertSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
 import { param, WORKERD_SQLITE_LIMITS } from "./drizzle";
+import { ftsPurgeDocument, ftsWriteDocument } from "./fts-companion";
 import { encodeGeohash, GEO_DEFAULT_PRECISION } from "./geo";
 import { isLiveForCompanion } from "./query-args";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
@@ -54,7 +56,8 @@ import type { MutationDelta } from "./types";
 const rankIndexFieldsUnchanged = (index: RankIndexDefinitionLike, previous: Record<string, unknown>, next: Record<string, unknown>): boolean => {
     const fields = [...(index.partitionBy ?? []), ...index.sortBy.map((key) => key.field), ...(index.where ? Object.keys(index.where) : [])];
 
-    return fields.every((field) => previous[field] === next[field]);
+    // `where` keys may be dotted paths into an object column; read them the way the SQL and the matcher do.
+    return fields.every((field) => readFieldPath(previous, field) === readFieldPath(next, field));
 };
 
 /** The rank companion's column list: `__id__, __partition__, __sort_k<i>__…`. */
@@ -65,11 +68,11 @@ const rankColumnsSql = (index: RankIndexDefinitionLike): SQL =>
     );
 
 /**
- * INSERT one row's rank-companion entry (id, canonical partition key, the
- * serialized sort values). `columnsSql` is prebuilt via {@link rankColumnsSql}
- * so a backfill loop hoists it out of its per-row iteration.
+ * One row's rank-companion value tuple, in {@link rankColumnsSql} order: id,
+ * canonical partition key, the serialized sort values. Shared by the single-row
+ * insert and the chunked rebuild so the two encodings cannot diverge.
  */
-const insertRankRow = (sql: SqlExec, rankTable: string, index: RankIndexDefinitionLike, columnsSql: SQL, id: string, record: Record<string, unknown>): void => {
+const rankRowValuesSql = (index: RankIndexDefinitionLike, id: string, record: Record<string, unknown>): SQL => {
     const partitionKey = encodePartitionKey(index.partitionBy ?? [], record);
     // eslint-disable-next-line unicorn/no-null -- binds the rank sort column to SQLite: a missing sort field is a NULL column value, not undefined
     const sortValues = index.sortBy.map((key) => serializeSqlValue(record[key.field] ?? null));
@@ -78,7 +81,154 @@ const insertRankRow = (sql: SqlExec, rankTable: string, index: RankIndexDefiniti
         dsql`, `,
     );
 
-    runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(rankTable)} (${columnsSql}) VALUES (${valuesSql})`);
+    return dsql`(${valuesSql})`;
+};
+
+/** INSERT one row's rank-companion entry. `columnsSql` is prebuilt via {@link rankColumnsSql}. */
+const insertRankRow = (sql: SqlExec, rankTable: string, index: RankIndexDefinitionLike, columnsSql: SQL, id: string, record: Record<string, unknown>): void => {
+    runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(rankTable)} (${columnsSql}) VALUES ${rankRowValuesSql(index, id, record)}`);
+};
+
+/** Rows read per page by {@link companionSourceRows}. */
+const SOURCE_PAGE_ROWS = 1000;
+
+/**
+ * One full scan of `tableName`, decoded, keeping the rows a companion tallies:
+ * live, and matching its static `where`. Read in primary-key pages, so a
+ * rebuild holds one page in memory rather than the whole table, and no cursor
+ * is open while the caller writes between pages (better-sqlite3 refuses a
+ * write on a connection mid-iteration).
+ */
+const companionSourceRows = function* companionSourceRows(
+    sql: SqlExec,
+    tableName: string,
+    softField: string | undefined,
+    matchesWhere: (record: Record<string, unknown>) => boolean,
+): Generator<Record<string, unknown>> {
+    let after: string | undefined;
+
+    for (;;) {
+        const afterSql = after === undefined ? dsql`` : dsql` WHERE id > ${param(after)}`;
+        const page = [
+            ...runDrizzle(
+                sql,
+                dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}${afterSql} ORDER BY id LIMIT ${param(SOURCE_PAGE_ROWS)}`,
+            ),
+        ];
+
+        for (const row of page) {
+            const record = rowToDocument(row);
+
+            if (record && isLiveForCompanion(record, softField) && matchesWhere(record)) {
+                yield record;
+            }
+        }
+
+        if (page.length < SOURCE_PAGE_ROWS) {
+            return;
+        }
+
+        after = String(page.at(-1)?.["id"]);
+    }
+};
+
+/**
+ * Rebuild an aggregate companion from scratch — TRUNCATE, re-tally through
+ * {@link foldAggregateTally}, record the marker — so an index declared after
+ * rows already existed, or whose definition changed, heals. The marker is
+ * written last, so a rebuild cut short is simply redone.
+ */
+const rebuildAggregateCompanion = (
+    sql: SqlExec,
+    tableName: string,
+    index: AggregateIndexDefinitionLike,
+    softField: string | undefined,
+    signature: string,
+): void => {
+    const aggTable = aggregateTableName(tableName, index.name);
+    const by = index.by ?? [];
+    const tallies = new Map<string, AggregateTally>();
+
+    for (const record of companionSourceRows(sql, tableName, softField, (candidate) => !index.where || matchesStaticWhere(candidate, index.where))) {
+        foldAggregateTally(tallies, encodeAggregateKey(by, record), index, record);
+    }
+
+    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(aggTable)}`);
+
+    // 3 params/row, so one statement lands just under Workerd's per-statement parameter cap.
+    const CHUNK_ROWS = Math.floor(WORKERD_SQLITE_LIMITS.boundParams / 3);
+    const entries = [...tallies];
+
+    for (let start = 0; start < entries.length; start += CHUNK_ROWS) {
+        const chunk = entries.slice(start, start + CHUNK_ROWS);
+        const rowsSql = dsql.join(
+            chunk.map(([encoded, tally]) => dsql`(${encoded}, ${tally.value}, ${tally.count})`),
+            dsql`, `,
+        );
+
+        runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(aggTable)} (${AGG_KEY}, ${AGG_VALUE}, ${AGG_COUNT}) VALUES ${rowsSql}`);
+    }
+
+    writeCompanionSignature(sql, aggTable, signature);
+};
+
+/**
+ * Rebuild an aggregate companion unless its durable marker records the current
+ * definition. Must run **before** the triggering row write — otherwise the
+ * rebuild would double-count the row that's about to be stepped.
+ */
+const ensureAggregateCompanion = (sql: SqlExec, tableName: string, index: AggregateIndexDefinitionLike, softField: string | undefined): void => {
+    const signature = aggregateSignature(index, softField);
+
+    if (readCompanionSignature(sql, aggregateTableName(tableName, index.name)) !== signature) {
+        rebuildAggregateCompanion(sql, tableName, index, softField, signature);
+    }
+};
+
+/**
+ * Rebuild a rank companion from scratch — TRUNCATE, re-insert every live row
+ * matching the static `where`, record the marker. Live rows only because the
+ * write path removes a soft-deleted row from the companion and `restore()`
+ * re-inserts it; a rebuild that kept it would make that re-insert collide on
+ * `__id__`.
+ */
+const rebuildRankCompanion = (sql: SqlExec, tableName: string, index: RankIndexDefinitionLike, softField: string | undefined, signature: string): void => {
+    const rankTable = rankTableName(tableName, index.name);
+    const columnsSql = rankColumnsSql(index);
+
+    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(rankTable)}`);
+
+    // id + partition + one per sort key bound per row, so one statement lands just under Workerd's per-statement parameter cap.
+    const CHUNK_ROWS = Math.max(1, Math.floor(WORKERD_SQLITE_LIMITS.boundParams / (2 + index.sortBy.length)));
+    let chunk: SQL[] = [];
+    const flushChunk = (): void => {
+        if (chunk.length > 0) {
+            runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(rankTable)} (${columnsSql}) VALUES ${dsql.join(chunk, dsql`, `)}`);
+            chunk = [];
+        }
+    };
+
+    // Inserted chunk by chunk as the scan pages, so the rebuild never holds the whole table.
+    for (const record of companionSourceRows(sql, tableName, softField, (candidate) => !index.where || matchesRankStaticWhere(candidate, index.where))) {
+        chunk.push(rankRowValuesSql(index, record["_id"] as string, record));
+
+        if (chunk.length >= CHUNK_ROWS) {
+            flushChunk();
+        }
+    }
+
+    flushChunk();
+
+    writeCompanionSignature(sql, rankTable, signature);
+};
+
+/** Rebuild a rank companion unless its durable marker records the current definition. Same ordering rule as the aggregate twin. */
+const ensureRankCompanion = (sql: SqlExec, tableName: string, index: RankIndexDefinitionLike, softField: string | undefined): void => {
+    const signature = rankSignature(index, softField);
+
+    if (readCompanionSignature(sql, rankTableName(tableName, index.name)) !== signature) {
+        rebuildRankCompanion(sql, tableName, index, softField, signature);
+    }
 };
 
 /**
@@ -146,17 +296,24 @@ interface CompanionSyncDeps {
     schema: SchemaLike;
     /** Project of `state.storage.sql` — the DO's SQLite handle. */
     sql: SqlExec;
+
+    /**
+     * Companions already verified against their durable marker. A host that builds
+     * a ctx-db per dispatch passes one long-lived set so only the first touch per
+     * shard instance pays the lookup; omitted, each ctx-db keeps its own.
+     */
+    verified?: Set<string>;
 }
 
 /** The companion-maintenance surface the writer destructures back into its hot write path. */
 interface CompanionSync {
-    /** Pre-write hook: ensure every aggregate counter on `tableName` is rebuilt once per ctx-db. */
+    /** Pre-write hook: ensure every aggregate counter on `tableName` is built from its current definition. */
     ensureBackfilledForTable: (tableName: string) => void;
-    /** Lazily (re)build a single aggregate companion the first time this ctx-db touches it. */
+    /** Rebuild a single aggregate companion unless the durable marker records it as built from this definition. */
     ensureBackfilledIndex: (tableName: string, index: AggregateIndexDefinitionLike) => void;
-    /** Lazily (re)build a single rank companion the first time this ctx-db touches it. */
+    /** Rebuild a single rank companion unless the durable marker records it as built from this definition. */
     ensureRankBackfilled: (tableName: string, index: RankIndexDefinitionLike) => void;
-    /** Pre-write hook: ensure every rank companion on `tableName` is rebuilt once per ctx-db. */
+    /** Pre-write hook: ensure every rank companion on `tableName` is built from its current definition. */
     ensureRankBackfilledForTable: (tableName: string) => void;
     /** Post-write hook: apply the `-prev + next` step for every declared aggregate index. */
     syncAggregates: (tableName: string, previous: Record<string, unknown> | undefined, next: Record<string, unknown> | undefined) => void;
@@ -179,91 +336,32 @@ interface CompanionSync {
  * Build the companion-index maintenance cluster bound to one ctx-db instance.
  * The returned functions keep the aggregate, rank, and FTS companions in step
  * with the writer's row writes; both the write path and the aggregate/rank read
- * fast-paths share the returned backfill helpers, so the per-(table, index)
- * backfill set held here is the single "rebuilt this instance?" source of truth.
+ * fast-paths share the returned backfill helpers.
  */
 const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     const { broadcast, indexKeysFor, invalidateCache, recordCdc, schema, sql } = deps;
 
-    // Tracks which (table, aggregateIndex) pairs this ctx-db has already rebuilt
-    // so the lazy backfill runs exactly once per index per ctx-db instance.
-    const backfilled = new Set<string>();
+    // Companions already verified against the durable marker, so only the first
+    // touch per memo pays the lookup.
+    const verified = deps.verified ?? new Set<string>();
 
     /**
      * The table's soft-delete marker column, or `undefined` when it has none.
-     * Aggregate companions tally LIVE rows only — see {@link isLiveForCompanion}
-     * — so a soft delete removes the row from its group and a restore adds it
-     * back, and the readers can trust the companion instead of always scanning.
+     * Aggregate and rank companions hold LIVE rows only — see
+     * {@link isLiveForCompanion} — so a soft delete removes the row and a
+     * restore adds it back, and the readers can trust the companion instead of
+     * always scanning.
      */
     const softDeleteFieldFor = (tableName: string): string | undefined => schema.tables[tableName]?.softDeleteMode?.field;
-    // Same bookkeeping for rank companions.
-    const rankBackfilled = new Set<string>();
 
-    /**
-     * Lazily (re)build an aggregate companion the first time this ctx-db
-     * touches it. Idempotency model: each ctx-db tracks which (table, index)
-     * pairs it has already considered; the first touch (read or write) does a
-     * full rebuild from scratch — TRUNCATE then re-tally — so that an index
-     * declared after rows already existed (the "added to an existing schema"
-     * case) heals on first use. Subsequent touches in the same ctx-db skip the
-     * rebuild and trust the trigger-maintained deltas.
-     *
-     * Must run **before** the triggering row write — otherwise the rebuild
-     * would double-count the row that's about to be stepped.
-     *
-     * **The memo is per ctx-db INSTANCE, and codegen builds one per dispatch** —
-     * so this full scan runs on the first companion touch of every request, and
-     * the incremental deltas it maintains are discarded and recomputed each
-     * time. That cost is why `ctx-db.ts`'s readers gate the companion behind
-     * `scanRefusesAny` on a soft-delete table rather than always preferring it.
-     * Making this marker durable (plan 315) is what retires that gate.
-     */
+    /** Run {@link ensureAggregateCompanion} once per ctx-db per companion. */
     const ensureBackfilledIndex = (tableName: string, index: AggregateIndexDefinitionLike): void => {
-        const cacheKey = `${tableName}::${index.name}`;
+        const companion = aggregateTableName(tableName, index.name);
 
-        if (backfilled.has(cacheKey)) {
-            return;
+        if (!verified.has(companion)) {
+            ensureAggregateCompanion(sql, tableName, index, softDeleteFieldFor(tableName));
+            verified.add(companion);
         }
-
-        const aggTable = aggregateTableName(tableName, index.name);
-        const by = index.by ?? [];
-        const softField = softDeleteFieldFor(tableName);
-        const tallies = new Map<string, AggregateTally>();
-        const rows = runDrizzle(sql, dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`).toArray();
-
-        for (const row of rows) {
-            const record = rowToDocument(row);
-
-            if (!record || !isLiveForCompanion(record, softField)) {
-                continue;
-            }
-
-            if (index.where && !matchesStaticWhere(record, index.where)) {
-                continue;
-            }
-
-            const encoded = encodeAggregateKey(by, record);
-
-            foldAggregateTally(tallies, encoded, index, record);
-        }
-
-        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(aggTable)}`);
-
-        // 3 params/row, so one statement lands just under Workerd's per-statement parameter cap.
-        const CHUNK_ROWS = Math.floor(WORKERD_SQLITE_LIMITS.boundParams / 3);
-        const entries = [...tallies];
-
-        for (let start = 0; start < entries.length; start += CHUNK_ROWS) {
-            const chunk = entries.slice(start, start + CHUNK_ROWS);
-            const rowsSql = dsql.join(
-                chunk.map(([encoded, tally]) => dsql`(${encoded}, ${tally.value}, ${tally.count})`),
-                dsql`, `,
-            );
-
-            runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(aggTable)} (${AGG_KEY}, ${AGG_VALUE}, ${AGG_COUNT}) VALUES ${rowsSql}`);
-        }
-
-        backfilled.add(cacheKey);
     };
 
     /**
@@ -568,8 +666,8 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     /* eslint-enable sonarjs/cognitive-complexity */
 
     /**
-     * Pre-write hook: ensure every aggregate counter on `tableName` is rebuilt
-     * once per ctx-db instance. The rebuild scans the live source table, so
+     * Pre-write hook: ensure every aggregate counter on `tableName` is built
+     * from its current definition. A rebuild scans the live source table, so
      * callers MUST invoke this before the row write — otherwise the new row
      * lands in both the rebuild and the `+1` step that follows.
      */
@@ -590,40 +688,17 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
         }
     };
 
-    /**
-     * Lazily rebuild a rank companion the first time the ctx-db instance
-     * touches it. TRUNCATE then re-insert so a rankIndex declared after rows
-     * already existed heals on first use. Must run BEFORE the triggering row
-     * write, same reasoning as the aggregate backfill.
-     */
+    /** Run {@link ensureRankCompanion} once per ctx-db per companion. */
     const ensureRankBackfilled = (tableName: string, index: RankIndexDefinitionLike): void => {
-        const cacheKey = `${tableName}::rank::${index.name}`;
+        const companion = rankTableName(tableName, index.name);
 
-        if (rankBackfilled.has(cacheKey)) {
-            return;
+        if (!verified.has(companion)) {
+            ensureRankCompanion(sql, tableName, index, softDeleteFieldFor(tableName));
+            verified.add(companion);
         }
-
-        const rankTable = rankTableName(tableName, index.name);
-        const rows = runDrizzle(sql, dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`).toArray();
-
-        runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(rankTable)}`);
-
-        const columnsSql = rankColumnsSql(index);
-
-        for (const row of rows) {
-            const record = rowToDocument(row);
-
-            if (!record || (index.where && !matchesRankStaticWhere(record, index.where))) {
-                continue;
-            }
-
-            insertRankRow(sql, rankTable, index, columnsSql, record["_id"] as string, record);
-        }
-
-        rankBackfilled.add(cacheKey);
     };
 
-    /** Pre-write hook: ensure every rank companion on `tableName` is rebuilt once per ctx-db. */
+    /** Pre-write hook: ensure every rank companion on `tableName` is built from its current definition. */
     const ensureRankBackfilledForTable = (tableName: string): void => {
         for (const index of schema.tables[tableName]?.rankIndexes ?? []) {
             ensureRankBackfilled(tableName, index);
@@ -646,8 +721,8 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     /**
      * Keep the FTS5 shadow tables in step with a row write. A no-op when the
      * table declares no search indexes or when FTS5 is unavailable (the scan
-     * fallback reads the live document table, so nothing to mirror). Delete then
-     * insert makes it idempotent across insert/update; `doc === undefined`
+     * fallback reads the live document table, so nothing to mirror). A write
+     * replaces the document's one row at its mapped rowid; `doc === undefined`
      * deletes only (row removal).
      */
     const syncSearch = (tableName: string, id: string, document: Record<string, unknown> | undefined, previous?: Record<string, unknown>): void => {
@@ -669,14 +744,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
 
             const ftName = ftsTableName(tableName, index.name);
 
-            runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(ftName)} WHERE ${dsql.identifier(FTS_ID_COLUMN)} = ${id}`);
-
-            if (document) {
-                runDrizzle(
-                    sql,
-                    dsql`INSERT INTO ${dsql.identifier(ftName)} (${dsql.identifier(FTS_TEXT_COLUMN)}, ${dsql.identifier(FTS_ID_COLUMN)}) VALUES (${analyzedSearchText(document, index)}, ${id})`,
-                );
-            }
+            runAll(sql, document ? ftsWriteDocument(ftName, id, analyzedSearchText(document, index)) : ftsPurgeDocument(ftName, id));
         }
     };
 
@@ -746,5 +814,5 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     };
 };
 
-export { createCompanionSync, insertRankRow, rankColumnsSql };
+export { createCompanionSync, ensureAggregateCompanion, ensureRankCompanion };
 export type { CompanionSync, CompanionSyncDeps };

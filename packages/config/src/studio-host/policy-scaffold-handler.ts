@@ -27,6 +27,7 @@ import { LunoraError } from "@lunora/errors";
 import join from "../path";
 import type { DestructivePolicyEdit, PolicyEdit, PolicyScaffoldFailureReason, ScaffoldPolicyEdit, WireRlsEdit } from "../schema-edit/policy-scaffold";
 import { classifyPolicyEdit, resolveServerModule, scaffoldPolicyFile, wireRlsIntoProcedure } from "../schema-edit/policy-scaffold";
+import type { StudioSourceWrite } from "./codegen-options";
 import { runStudioCodegen } from "./codegen-options";
 import writeFileAtomic from "./write-atomic";
 
@@ -52,6 +53,8 @@ interface PolicyScaffoldRequest {
     readonly apiSpec?: CodegenOptions["apiSpec"];
     /** Parsed JSON body of the `POST`. */
     readonly body?: unknown;
+    /** Lazy function mode the host runs codegen with; forwarded to the regeneration. */
+    readonly lazyFunctions?: CodegenOptions["lazyFunctions"];
     /** HTTP method — only `POST` is handled. */
     readonly method: string;
     /** Project root containing the `lunora/` directory. */
@@ -87,11 +90,11 @@ const statusForFailure = (reason: PolicyScaffoldFailureReason): number => {
  * rather than failing the write (the file is already on disk); any other error
  * is a hard `500`.
  */
-const runCodegenForResponse = (request: PolicyScaffoldRequest, okBody: Record<string, unknown>): PolicyScaffoldResponse => {
+const runCodegenForResponse = (request: PolicyScaffoldRequest, written: StudioSourceWrite, okBody: Record<string, unknown>): PolicyScaffoldResponse => {
     let diagnostics: ReadonlyArray<string>;
 
     try {
-        diagnostics = runStudioCodegen(request);
+        diagnostics = runStudioCodegen(request, written);
     } catch (error: unknown) {
         return { body: { error: error instanceof Error ? error.message : String(error), ok: false }, status: 500 };
     }
@@ -132,7 +135,7 @@ const handleScaffoldPolicy = (request: PolicyScaffoldRequest, edit: ScaffoldPoli
 
     writeFileAtomic(targetPath, result.source);
 
-    return runCodegenForResponse(request, { fileName: result.fileName });
+    return runCodegenForResponse(request, { path: targetPath, text: result.source }, { fileName: result.fileName });
 };
 
 /**
@@ -171,7 +174,7 @@ const handleWireRls = (request: PolicyScaffoldRequest, edit: WirePolicyEdit): Po
 
     writeFileAtomic(procedurePath, wired.text);
 
-    return runCodegenForResponse(request, { exportName: edit.exportName });
+    return runCodegenForResponse(request, { path: procedurePath, text: wired.text }, { exportName: edit.exportName });
 };
 
 /**

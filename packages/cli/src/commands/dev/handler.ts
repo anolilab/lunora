@@ -1,18 +1,13 @@
-import type { ChildProcess } from "node:child_process";
-import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-
 import { runCodegen } from "@lunora/codegen";
-import type { ContainerLogStreamHandle } from "@lunora/config";
+import type { ContainerLogStreamHandle, DiscoveryCache } from "@lunora/config";
 import {
     AGENT_RULES_HINT,
     claimAgentRulesHint,
     claimDevServerState,
     clearDevServerState,
+    createDiscoveryCache,
     detectAgentRules,
     detectAiAgent,
-    detectFramework,
     DEV_BINDINGS_FILE,
     DEV_DAEMON_ENV,
     DEV_HANDOFF_ENV,
@@ -20,613 +15,44 @@ import {
     DEV_STATE_FILE,
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
-    discoverContainerInfo,
     ensureDevVariables,
     ensureDevVarsExample,
     fillDevSecrets,
-    formatLunoraEvent,
     inferLunoraBindings,
     isInteractive,
-    packageNamesFromBindings,
-    parseDevVariableEntries,
     readLiveDevServerState,
     readProjectRemotePreference,
-    resolveDeployDriver,
-    resolveProjectTarget,
-    streamContainerLogs,
+    resolveLazyFunctions,
+    resolveSchemaDirectory,
+    secretSourcesFromBindings,
     updateDevServerState,
+    writeCelldDevProjection,
 } from "@lunora/config";
-import { findWranglerFile, materializeRemoteWranglerConfig, readWranglerJsonc, resolveRemoteEnabled } from "@lunora/config/cloudflare";
+import type { LocalHyperdrive } from "@lunora/config/cloudflare";
+import { describeWithheld, resolveRemoteEnabled, startLocalHyperdrive, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
-import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
-import type { CodegenWatcherHandle } from "../../util/codegen-watch";
 import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { resolveRunnableTargetOrError } from "../../util/deploy-target";
-import { detectPackageManager, execArgsFor, runScriptCommand } from "../../util/detect-package-manager";
-import type { ReadinessProbe } from "../../util/dev-probe";
-import { findAvailablePort } from "../../util/free-port";
+import { resolveRunnableTargetOrError } from "../../util/deploy-target-resolve";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { forceJsonLogging } from "../../util/logger";
-import { hasIpv6Loopback } from "../../util/loopback";
-import type { SpawnDescriptor } from "../../util/spawn";
-import { spawnShellCompat } from "../../util/spawn";
 import type { StudioServerHandle } from "../../util/studio-server";
 import { startStudioServer } from "../../util/studio-server";
 import { createTuiConfirm } from "../../util/tui-prompts";
 import markWorkerReadyWhenServing from "../../util/worker-ready";
 import { provisionBindings } from "../deploy/handler";
 import type { DevOptions } from "./index";
-import type { DevFlavor } from "./lifecycle";
-import {
-    codegenRequested,
-    detectDevFlavor,
-    reportExistingServer,
-    runLifecycleSubcommand,
-    startBackground,
-    viteDevCommand,
-    withViteChildEnv,
-} from "./lifecycle";
-
-/**
- * The dev-only wrangler config the `framework-worker` sidecar runs (`wrangler dev
- * -c wrangler.dev.jsonc`). Committed in the SvelteKit / Nuxt templates: its
- * `main` is the Lunora-only `lunora/server.ts` worker (`.build()`, exporting
- * `ShardDO`), and its `dev.port` pins the sidecar port the framework front end
- * proxies to (SvelteKit) or the client points at (Nuxt). Kept separate from the
- * deploy `wrangler.jsonc` (whose `main` is the framework adapter's built output,
- * which doesn't exist in dev).
- */
-const DEV_WRANGLER_CONFIG = "wrangler.dev.jsonc";
-
-/** Default port the embedded studio server listens on (the URL you open). */
-const DEFAULT_STUDIO_PORT = 6173;
-/** Default port `wrangler dev` serves the worker on. */
-const DEFAULT_WORKER_PORT = 8787;
-/** Default port Vite serves on — the state record carries the real resolved URL. */
-const DEFAULT_VITE_PORT = 5173;
-/** Grace period after the first SIGINT before we force-kill the worker. */
-const SIGINT_GRACE_MS = 5000;
-
-/** A running worker child the orchestrator controls: send signals, await its exit. */
-interface WorkerProcess {
-    /** Resolves with the worker's exit code (1 if it failed to start). */
-    exited: Promise<number>;
-    kill: (signal: NodeJS.Signals) => void;
-}
-
-/** Spawns the worker child. Injectable so tests drive the orchestration without a real process. */
-type WorkerSpawner = (descriptor: SpawnDescriptor & { tag: string }, logger: Logger) => WorkerProcess;
-
-interface DevCommandOptions {
-    /** Which API spec(s) the codegen watcher emits. Defaults to codegen's `"openapi"` when omitted. */
-    apiSpec?: ApiSpec;
-    /** Disable the codegen watch loop. */
-    codegen?: boolean;
-    cwd?: string;
-
-    /**
-     * Override where the binding manifest is written. One is always produced at
-     * {@link DEV_BINDINGS_FILE}; naming a path also makes a derivation failure
-     * fatal, since a named path means something is waiting on it.
-     */
-    emitBindings?: string;
-    /** Injection seam for tests — defaults to the real `.dev.vars` scaffolder. */
-    ensureEnv?: typeof ensureDevVariables;
-    /** Injection seam for tests — defaults to the real `.dev.vars.example` package-aware scaffolder. */
-    ensureExample?: typeof ensureDevVarsExample;
-    /** Injection seam for tests — defaults to the real empty-secret/admin-token filler. */
-    fillSecrets?: typeof fillDevSecrets;
-    /** Injection seam for tests — defaults to the real free-port probe ({@link findAvailablePort}). */
-    findFreePort?: (preferred: number) => Promise<number>;
-    /** Dev flavor override (tests / callers that already detected it) — defaults to {@link detectDevFlavor}. */
-    flavor?: DevFlavor;
-    /** Injection seam for tests — defaults to the real IPv6-loopback probe ({@link hasIpv6Loopback}). */
-    hasIpv6Loopback?: () => boolean;
-
-    /**
-     * Logs are NDJSON on stdout (`--json`, or a detected AI agent). Forwarded to
-     * the codegen watcher so a `postcodegen` script's own stdout is routed to
-     * stderr instead of corrupting the stream.
-     */
-    jsonLogs?: boolean;
-
-    logger: Logger;
-    /** Injection seam for tests — defaults to the real remote-config materializer. */
-    materializeRemote?: typeof materializeRemoteWranglerConfig;
-    /** Studio server port. */
-    port?: number;
-    /** Injection seam for tests — defaults to the real HTTP readiness probe. Without it the suite issues live GETs to the dev port. */
-    probeReady?: ReadinessProbe;
-    /** Proxy D1/KV/R2 bindings to the deployed worker during dev (`LUNORA_REMOTE=1` / `--remote`); DO shards stay local. */
-    remote?: boolean;
-    /** Injection seam for tests — defaults to the real codegen watcher. */
-    startCodegen?: typeof startCodegenWatch;
-    /** Injection seam for tests — defaults to the real studio server. */
-    startStudio?: typeof startStudioServer;
-    /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */
-    startWorker?: WorkerSpawner;
-
-    /** Disable the embedded studio server. */
-    studio?: boolean;
-    /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.json`, then `"cloudflare"`. */
-    target?: string;
-
-    /**
-     * Injection seam for tests — defaults to parking until SIGINT.
-     *
-     * Attached mode (`--no-worker`) ends only on a signal, so without this the
-     * whole branch is unreachable from a test. That is how the readiness probe
-     * came to be wired after the early return, reported for a flavor it never
-     * covered, and shipped.
-     */
-    waitForInterrupt?: (logger: Logger) => Promise<number>;
-    /** Disable the `wrangler dev` spawn — an external task runner owns the worker. */
-    worker?: boolean;
-    /** `wrangler dev` port. */
-    workerPort?: number;
-}
-
-interface DevRemotePlan {
-    /** Short binding labels remoted (e.g. `"DB (D1)"`), for the banner. */
-    bindings: string[];
-
-    /**
-     * Removes the generated temp wrangler config when dev exits. Always present
-     * and idempotent — a no-op when remote mode is off or nothing was
-     * materialized. The dev loop calls it on every shutdown path.
-     */
-    cleanup: () => void;
-    /** Whether remote mode was requested. */
-    enabled: boolean;
-    /** Why remote mode didn't take effect despite being requested, for logging. */
-    reason?: string;
-}
-
-interface DevCommandPlan {
-    /** Which stack the child runs — see {@link DevFlavor}. */
-    flavor: DevFlavor;
-
-    /**
-     * One-line redirect hint printed when a meta-framework is detected on the
-     * wrangler flavor: without `@lunora/vite` in the dependencies the worker
-     * still runs *inside* the framework's dev server, so the user should run
-     * their framework dev script for the full app. `undefined` for the vite
-     * flavor (`lunora dev` already runs the project's dev script there) and
-     * for a standalone project. Purely informational: the wrangler spawn runs
-     * regardless.
-     */
-    frameworkHint?: string;
-
-    /**
-     * True when `wrangler dev` was given `--ip 127.0.0.1` because the host has no
-     * IPv6 loopback (`::1`) — surfaced so the dev loop can note the rebind.
-     * Always `false` for the vite flavor (the plugin owns its own bind).
-     */
-    ipv4LoopbackForced: boolean;
-
-    /** The remote-binding decision: which D1/KV/R2 bindings hit the deployed worker. */
-    remote: DevRemotePlan;
-    runsCodegenWatch: boolean;
-
-    /**
-     * The `wrangler dev` sidecar for the `framework-worker` flavor (SvelteKit /
-     * Nuxt): a second child that owns the real `ShardDO` in `workerd`, wired via
-     * the committed `wrangler.dev.jsonc`. `undefined` for every other flavor —
-     * only the two-process class-B stack has a sidecar. When present, `wrangler`
-     * (above) is the framework's own dev server (the front door / HMR) and this
-     * is the Lunora realtime plane.
-     */
-    sidecar?: SpawnDescriptor & { tag: string };
-    studioEnabled: boolean;
-
-    studioPort: number;
-
-    /**
-     * Whether this process spawns `wrangler dev`.
-     *
-     * `--no-worker` turns it off so an external task runner (Turbo, Nx, vis, a
-     * Procfile) can own worker supervision while `lunora dev` still provides
-     * codegen-watch and Studio. Without it, `lunora dev` insisted on being the
-     * process root, which is what blocked running the Lunora worker as one node
-     * in a larger dev graph.
-     */
-    workerEnabled: boolean;
-    workerOrigin: string;
-    workerPort: number;
-    /** The primary child `lunora dev` spawns: `wrangler dev` (wrangler flavor) or the framework/`vite dev` server (vite / framework-worker). */
-    wrangler: SpawnDescriptor & { tag: string };
-}
-
-/**
- * Resolve remote-binding mode into the extra `wrangler dev` args + a banner
- * summary. When `--remote`/`LUNORA_REMOTE` is set we materialize a temp wrangler
- * config with `"remote": true` on each D1/KV/R2 binding (Durable Object shards
- * stay local) and point `wrangler dev --config` at it, so the local worker reads
- * and writes the **deployed** resources. When disabled, or when there's nothing
- * to remote, the args stay empty and dev runs fully local.
- */
-const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: string[]; plan: DevRemotePlan } => {
-    // A disposer that does nothing — used whenever no temp config was written
-    // (remote off, or a fall-through case), so `cleanup` is always callable.
-    const noopCleanup = (): void => {};
-
-    if (!options.remote) {
-        return { args: [], plan: { bindings: [], cleanup: noopCleanup, enabled: false } };
-    }
-
-    const materialize = options.materializeRemote ?? materializeRemoteWranglerConfig;
-    const result = materialize({ enabled: true, projectRoot: cwd });
-    const bindings = result.remoteBindings.map((binding) => `${binding.binding} (${binding.kind})`);
-    // The materializer always returns an idempotent, never-throwing `cleanup`.
-    const { cleanup } = result;
-
-    if (result.configPath === undefined) {
-        return { args: [], plan: { bindings, cleanup, enabled: true, reason: result.reason } };
-    }
-
-    return { args: ["--config", result.configPath], plan: { bindings, cleanup, enabled: true } };
-};
-
-/** Read `dev.ip` from one wrangler config file, or `undefined` when unset / the file doesn't parse. */
-const readDevIp = (wranglerPath: string): unknown => readWranglerJsonc<{ dev?: { ip?: unknown } }>(wranglerPath).parsed?.dev?.ip;
-
-/**
- * Extra `wrangler dev` args that pin the worker to the IPv4 loopback
- * (`--ip 127.0.0.1`) when the host has no IPv6 loopback (`::1`) — without which
- * `workerd`'s default `[::1]` bind aborts on startup with `Cannot assign
- * requested address`. Returns nothing (leaving wrangler's default) when the host
- * has `::1`, or when the wrangler config the `wrangler dev` process actually
- * runs with already pins `dev.ip` — an explicit user choice always wins over
- * the auto-detection.
- *
- * `sidecarConfigFile`, when given, names the config `wrangler dev` is actually
- * invoked with (e.g. the `framework-worker` flavor's sidecar runs `--config
- * wrangler.dev.jsonc`, not the project's default `wrangler.jsonc`) — it is
- * checked FIRST, since that's the file whose `dev.ip` the spawned process
- * would honor. The project's default wrangler config is still checked after
- * (a `dev.ip` pinned there is a reasonable project-wide default), but a
- * `dev.ip` in the wrong file must never suppress the flag the sidecar actually
- * needs.
- */
-const resolveLoopbackArgs = (cwd: string, hasLoopback: () => boolean, sidecarConfigFile?: string): string[] => {
-    if (sidecarConfigFile !== undefined) {
-        const sidecarConfigPath = join(cwd, sidecarConfigFile);
-
-        if (existsSync(sidecarConfigPath) && readDevIp(sidecarConfigPath) !== undefined) {
-            return [];
-        }
-    }
-
-    const wranglerPath = findWranglerFile(cwd);
-
-    if (wranglerPath !== undefined && readDevIp(wranglerPath) !== undefined) {
-        return [];
-    }
-
-    return hasLoopback() ? [] : ["--ip", "127.0.0.1"];
-};
-
-/** Hosts a `.dev.vars` origin can name that resolve to this machine. */
-const LOOPBACK_ORIGIN_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
-
-/**
- * `.dev.vars` keys whose value is a loopback origin on `port` — i.e. the keys
- * that pin the project to the worker serving there. `AUTH_URL`,
- * `BETTER_AUTH_URL` and the templates' app-origin vars are all written as
- * `http://localhost:8787` by the scaffolds.
- */
-const devVariablesPinningPort = (cwd: string, port: number): string[] => {
-    let content: string;
-
-    try {
-        content = readFileSync(join(cwd, DEV_VARS_FILE), "utf8");
-    } catch {
-        // No `.dev.vars` (or unreadable) — nothing is pinned.
-        return [];
-    }
-
-    const pinned: string[] = [];
-
-    for (const entry of parseDevVariableEntries(content)) {
-        let parsed: URL;
-
-        try {
-            parsed = new URL(entry.value);
-        } catch {
-            continue;
-        }
-
-        if (LOOPBACK_ORIGIN_HOSTS.has(parsed.hostname) && parsed.port === String(port)) {
-            pinned.push(entry.key);
-        }
-    }
-
-    return pinned;
-};
-
-/**
- * Resolve the port `wrangler dev` binds, so Lunora knows the worker origin up
- * front (the studio proxies to it). Precedence — an explicit choice always wins:
- *
- * 1. `--worker-port` on the CLI (`options.workerPort`).
- * 2. `dev.port` pinned in the project's wrangler config.
- * 3. The first free port at/above 8787.
- *
- * Step 3 restores the free-port fallback that a fixed port would otherwise
- * disable: `wrangler dev` only auto-probes for an open port when none is passed,
- * so without this two projects both defaulting to 8787 would collide (the second
- * crashing with `EADDRINUSE`) instead of the second one landing on 8788.
- *
- * That fallback is silent, though, and a project whose `.dev.vars` names
- * `http://localhost:8787` has committed to that port: OAuth callbacks and the
- * client's own origin are registered against it, and a worker on 8788 answers
- * none of them. Refuse rather than drift, naming the keys that disagree —
- * `--worker-port` is the escape when the operator means it. Projects that pin
- * nothing keep the silent fallback, which is the case it was added for.
- */
-const resolveWorkerPort = async (options: DevCommandOptions, cwd: string): Promise<number> => {
-    if (options.workerPort !== undefined) {
-        return options.workerPort;
-    }
-
-    const wranglerPath = findWranglerFile(cwd);
-
-    if (wranglerPath !== undefined) {
-        const { parsed } = readWranglerJsonc<{ dev?: { port?: unknown } }>(wranglerPath);
-
-        if (typeof parsed?.dev?.port === "number") {
-            return parsed.dev.port;
-        }
-    }
-
-    const port = await (options.findFreePort ?? findAvailablePort)(DEFAULT_WORKER_PORT);
-
-    if (port === DEFAULT_WORKER_PORT) {
-        return port;
-    }
-
-    const pinned = devVariablesPinningPort(cwd, DEFAULT_WORKER_PORT);
-
-    if (pinned.length > 0) {
-        throw new Error(
-            `port ${String(DEFAULT_WORKER_PORT)} is in use, but ${DEV_VARS_FILE} pins the worker origin to it (${pinned.join(", ")}). ` +
-                `Serving on ${String(port)} would leave those URLs pointing at nothing. Stop whatever holds ${String(DEFAULT_WORKER_PORT)}, ` +
-                `or run \`lunora dev --worker-port ${String(port)}\` and update those values to match.`,
-        );
-    }
-
-    return port;
-};
-
-/**
- * Plan `lunora dev`. Wrangler flavor: the worker runs via `wrangler dev` and
- * nothing else as a child process. Vite flavor (`@lunora/vite` declared): the
- * plugin already runs the worker inside the Vite dev server, so the one child
- * is the project's own dev script (`vite dev`, `astro dev`, …) and every CLI
- * sibling is disabled. Pure + synchronous so it's unit-testable.
- */
-const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
-    const cwd = options.cwd ?? process.cwd();
-    const manager = detectPackageManager(cwd);
-    const flavor = options.flavor ?? detectDevFlavor(cwd);
-
-    if (flavor === "vite" || flavor === "framework-worker") {
-        // `@lunora/vite` already runs the worker + studio + codegen (and remote
-        // bindings, dev vars, container logs) inside the Vite dev server — the
-        // CLI's own siblings would duplicate them, so they're all disabled and
-        // the primary child is the project's own dev server. Remote mode is
-        // forwarded as env (`LUNORA_REMOTE=1`) for the plugin's remote-bindings
-        // handling; no temp wrangler config is materialized here. The Vite
-        // plugin writes the authoritative `.lunora/dev.json` (real resolved URL
-        // + Vite's PID) once the server listens; `workerOrigin` is only the
-        // pre-listen default.
-        const exec = viteDevCommand(cwd);
-
-        // The `framework-worker` flavor (SvelteKit / Nuxt) adds a `wrangler dev`
-        // sidecar that owns the real `ShardDO`, run from the committed
-        // `wrangler.dev.jsonc` (its `dev.port` pins the port). On a host without
-        // IPv6 loopback, prepend `--ip 127.0.0.1` so workerd doesn't abort
-        // binding its default `[::1]`. `--var WORKER_ENV:development` streams the
-        // sidecar's RPC dispatch summaries to the terminal (mirrors the wrangler
-        // flavor). One-shot codegen runs in `runDevCommand` before the sidecar
-        // spawns, so `lunora/server.ts`'s `_generated` imports resolve.
-        let sidecar: (SpawnDescriptor & { tag: string }) | undefined;
-
-        if (flavor === "framework-worker") {
-            // The sidecar runs `--config wrangler.dev.jsonc`, not the deploy
-            // `wrangler.jsonc` — check its own `dev.ip` first.
-            const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback, DEV_WRANGLER_CONFIG);
-            // The toolchain is the target's, not always wrangler's — resolving from the
-            // project keeps a non-default target from shelling out to the wrong CLI.
-            const devCommand = resolveDeployDriver(resolveProjectTarget(cwd)).toolchain?.dev({
-                configPath: DEV_WRANGLER_CONFIG,
-                extraArgs: [...loopbackArgs, "--var", "WORKER_ENV:development"],
-            });
-            const sidecarExec = execArgsFor(manager, devCommand?.tool ?? "wrangler", devCommand?.args ?? []);
-
-            sidecar = { args: sidecarExec.args, command: sidecarExec.command, cwd, tag: "worker" };
-        }
-
-        if (options.worker === false) {
-            options.logger.warn(
-                `--no-worker does not apply to the ${flavor} flavor: Vite owns the worker, codegen and studio in-process. Run your framework's dev script instead.`,
-            );
-        }
-
-        return {
-            runsCodegenWatch: false,
-            flavor,
-            ipv4LoopbackForced: false,
-            remote: { bindings: [], cleanup: () => {}, enabled: options.remote === true },
-            ...(sidecar ? { sidecar } : {}),
-            studioEnabled: false,
-            studioPort: options.port ?? DEFAULT_STUDIO_PORT,
-            // Always true here. On these flavors the child is the FRAMEWORK dev
-            // server (Vite runs the worker, codegen and studio in-process), not
-            // the standalone `wrangler dev` this command owns — so there is
-            // nothing for `--no-worker` to hand to an external runner, and
-            // honouring it would park the process having started nothing.
-            workerEnabled: true,
-            workerOrigin: `http://localhost:${String(DEFAULT_VITE_PORT)}`,
-            workerPort: DEFAULT_VITE_PORT,
-            wrangler: {
-                args: exec.args,
-                command: exec.command,
-                cwd,
-                ...withViteChildEnv(options),
-                tag: "vite",
-            },
-        };
-    }
-
-    // In a meta-framework project WITHOUT `@lunora/vite` (wrangler flavor, so
-    // the vite branch above didn't take it) the worker still runs inside the
-    // framework's dev server, so `lunora dev` (wrangler-only) gives just the
-    // worker — no frontend, no HMR. Surface a one-line redirect hint; the
-    // wrangler spawn still runs regardless (this is a hint, not a redirect).
-    const detection = detectFramework(cwd);
-    const frameworkHint =
-        detection.framework === "none"
-            ? undefined
-            : `this project uses ${detection.framework} — the worker runs inside Vite there. run \`${runScriptCommand(manager, "dev")}\` for the full app (frontend + HMR); \`lunora dev\` starts only the worker.`;
-    const workerPort = options.workerPort ?? DEFAULT_WORKER_PORT;
-    const remote = resolveRemotePlan(options, cwd);
-    // `--var WORKER_ENV:development` flags the worker as a dev deployment so the
-    // runtime streams every RPC dispatch summary to the terminal by default
-    // (`@lunora/do`'s `isDevEnvironment`). `wrangler dev` only — never `deploy` —
-    // so it can't leak into production; a `WORKER_ENV` in wrangler config / a
-    // `--var` the user passes still wins. Mirrors the Vite plugin's injection.
-    // `--config <temp>` (when remote) points wrangler at a config whose D1/KV/R2
-    // bindings carry `"remote": true`.
-    // On a host without IPv6 loopback, prepend `--ip 127.0.0.1` so workerd doesn't
-    // abort trying to bind its default `[::1]` (see resolveLoopbackArgs).
-    const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback);
-    const exec = execArgsFor(manager, "wrangler", ["dev", "--port", String(workerPort), ...loopbackArgs, "--var", "WORKER_ENV:development", ...remote.args]);
-
-    return {
-        runsCodegenWatch: codegenRequested(options),
-        flavor,
-        frameworkHint,
-        ipv4LoopbackForced: loopbackArgs.length > 0,
-        remote: remote.plan,
-        studioEnabled: options.studio !== false,
-        studioPort: options.port ?? DEFAULT_STUDIO_PORT,
-        workerEnabled: options.worker !== false,
-        workerOrigin: `http://localhost:${String(workerPort)}`,
-        workerPort,
-        wrangler: { args: exec.args, command: exec.command, cwd, tag: "wrangler" },
-    };
-};
-
-/**
- * Emit one already-split output line. A Lunora structured event
- * (`source: "lunora"`) is rewritten as a tagged, attributed `[lunora]` line at
- * its own severity; everything else passes through tagged with the child's name
- * (`[wrangler]`), stderr at warn level.
- */
-const emitChildLine = (line: string, tag: string, kind: "stderr" | "stdout", logger: Logger): void => {
-    if (line.length === 0) {
-        return;
-    }
-
-    const formatted = formatLunoraEvent(line);
-
-    if (formatted) {
-        // `formatted.level` is exactly the `error | info | warn` union of the
-        // logger's channels, so index straight into it — no branch ladder.
-        logger[formatted.level](`[lunora] ${formatted.text}`);
-
-        return;
-    }
-
-    const prefixed = `[${tag}] ${line}`;
-
-    if (kind === "stderr") {
-        logger.warn(prefixed);
-    } else {
-        logger.info(prefixed);
-    }
-};
-
-/**
- * Pipe a child's stdout/stderr through the logger, tagged by name, recognising
- * and reformatting Lunora structured log events along the way. Output is
- * line-buffered per stream so a structured event split across two `data` chunks
- * is still parsed as one line; the trailing partial is flushed on stream end.
- */
-const pipeChildOutput = (child: ChildProcess, tag: string, logger: Logger): void => {
-    const pumpStream = (stream: NodeJS.ReadableStream | null, kind: "stderr" | "stdout"): void => {
-        if (!stream) {
-            return;
-        }
-
-        let buffer = "";
-
-        stream.on("data", (chunk: Buffer) => {
-            buffer += chunk.toString("utf8");
-
-            const lines = buffer.split("\n");
-
-            // Keep the last element as the (possibly incomplete) pending line.
-            buffer = lines.pop() ?? "";
-
-            for (const line of lines) {
-                emitChildLine(line.trimEnd(), tag, kind, logger);
-            }
-        });
-
-        stream.on("end", () => {
-            emitChildLine(buffer.trimEnd(), tag, kind, logger);
-            buffer = "";
-        });
-    };
-
-    pumpStream(child.stdout, "stdout");
-    pumpStream(child.stderr, "stderr");
-};
-
-/** Real worker spawner: runs the descriptor as a child and pipes its output through the logger. */
-const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
-    // Windows can't spawn the package-manager .cmd shims without a shell — see
-    // spawnShellCompat. POSIX passes through untouched.
-    const exec = spawnShellCompat(descriptor.command, descriptor.args);
-    const child = nodeSpawn(exec.command, exec.args, {
-        cwd: descriptor.cwd ?? process.cwd(),
-        env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
-        shell: exec.shell,
-        stdio: ["inherit", "pipe", "pipe"],
-    });
-
-    pipeChildOutput(child, descriptor.tag, logger);
-
-    return {
-        exited: new Promise<number>((resolve) => {
-            child.on("error", (error) => {
-                logger.error(`[${descriptor.tag}] failed to start: ${error.message}`);
-                resolve(1);
-            });
-            child.on("exit", (code, signal) => {
-                // A signal-killed child reports `code === null`; treat that as a
-                // failure rather than a clean exit, matching `util/spawn.ts` and
-                // `lifecycle.ts`. An OOM-SIGKILLed or segfaulting `wrangler dev`
-                // used to make `lunora dev` exit 0, so a task runner supervising
-                // it saw a crashed worker as a successful run.
-                resolve(code ?? (signal ? 1 : 0));
-            });
-        }),
-        kill: (signal) => {
-            try {
-                child.kill(signal);
-            } catch {
-                /* already gone */
-            }
-        },
-    };
-};
+import { codegenRequested, detectDevFlavor, printCloudflareCliConfigWarning, reportExistingServer, runLifecycleSubcommand, startBackground } from "./lifecycle";
+import { resolveTargetFlavor, startCelldWorker } from "./own-dev-server";
+import { buildDevPlan } from "./plan";
+import type { Teardown } from "./supervise";
+import { defaultWorkerSpawner, startContainerLogStreaming, superviseWorkers, teardown, waitForInterrupt } from "./supervise";
+import { normalizeAllowMail, printPublicWarning, startTunnelForPlan } from "./tunnel";
+import type { DevCommandOptions, DevCommandPlan, DevTunnelRequest, WorkerProcess, WorkerSpawner } from "./types";
 
 /** Print the Convex-style startup banner once the studio + worker URLs are known. */
 const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | undefined, manifestPath: string | undefined): void => {
@@ -659,9 +85,15 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
     if (plan.remote.enabled) {
         if (plan.remote.bindings.length > 0) {
             logger.info(`  ➜  Remote:     ${plan.remote.bindings.join(", ")} → deployed worker`);
-        } else {
-            logger.warn(`  ➜  Remote:     requested but inactive (${plan.remote.reason ?? "no eligible bindings"}) — running fully local`);
+        } else if (plan.remote.reason !== undefined) {
+            // No reason means the session still runs with a temp config (only
+            // a remote-only binding was withheld), so "running fully local" would be wrong.
+            logger.warn(`  ➜  Remote:     requested but inactive (${plan.remote.reason}) — running fully local`);
         }
+    }
+
+    for (const binding of plan.remote.withheld) {
+        logger.warn(`  ➜  ${describeWithheld(binding)}`);
     }
 
     logger.info("");
@@ -681,84 +113,6 @@ const printAgentRulesHint = (logger: Logger, cwd: string): void => {
     logger.info("");
 };
 
-interface Teardown {
-    codegen?: CodegenWatcherHandle;
-    /** Disposer for the dev container log stream (stops polling Docker + detaches). */
-    containerLogs?: ContainerLogStreamHandle;
-    /** Cancels the worker readiness probe, so it stops with the server instead of on its own timeout. */
-    readyProbe?: AbortController;
-    /** Disposer for the materialized remote wrangler temp config (idempotent, never throws). */
-    remoteCleanup?: () => void;
-    studio?: StudioServerHandle;
-}
-
-/**
- * Follow the local Docker logs of every declared container and surface each
- * output line on the dev logger, tagged `[container:<name>]`. Returns a disposer
- * (or `undefined` when there are no containers, so no Docker work ever starts).
- *
- * wrangler builds + runs each declared container locally but only forwards the
- * worker's console; the container process's own stdout/stderr would otherwise be
- * invisible. Set `LUNORA_CONTAINER_LOGS=0` to opt out.
- */
-const startContainerLogStreaming = (cwd: string, logger: Logger): ContainerLogStreamHandle | undefined => {
-    if (process.env.LUNORA_CONTAINER_LOGS === "0") {
-        return undefined;
-    }
-
-    const discovery = discoverContainerInfo(cwd, "lunora");
-    const containers = discovery.containers.map((container) => {
-        return { className: container.className, exportName: container.exportName };
-    });
-
-    if (containers.length === 0) {
-        return undefined;
-    }
-
-    return streamContainerLogs({
-        containers,
-        onLine: (line) => {
-            const tagged = `[container:${line.name}] ${line.text}`;
-
-            if (line.level === "error") {
-                logger.warn(tagged);
-            } else {
-                logger.info(tagged);
-            }
-        },
-        onUnavailable: (message) => {
-            logger.warn(`[container] Docker engine unreachable — container logs unavailable (${message})`);
-        },
-    });
-};
-
-/** Best-effort shutdown of the studio server, codegen watcher, container logs, and remote temp config. */
-const teardown = async (handles: Teardown): Promise<void> => {
-    // Idempotent second call: `runDevCommand`'s `finally` aborts before clearing
-    // the state record, and this covers the paths that tear down without going
-    // through it. `AbortController.abort()` on an already-aborted controller is a
-    // no-op.
-    handles.readyProbe?.abort();
-
-    // Awaited: `close()` stops the watch loop immediately but resolves only once
-    // a regeneration already in flight is done, and that run may have spawned
-    // the project's `postcodegen`. `defineHandler` calls `process.exit` right
-    // after this, so not awaiting leaves that child running, mid-write, against
-    // a shell that already has its prompt back — the terminal Ctrl-C case is
-    // covered by the signal reaching the whole process group, but a worker crash
-    // or a SIGTERM to the daemon PID is not.
-    await handles.codegen?.close().catch(() => undefined);
-    handles.containerLogs?.close();
-    await handles.studio?.close().catch(() => undefined);
-    // Unlink the generated remote wrangler config last; the disposer is itself
-    // idempotent + swallows errors, but guard the call site too for safety.
-    try {
-        handles.remoteCleanup?.();
-    } catch {
-        /* already gone */
-    }
-};
-
 /**
  * Offer to scaffold `.dev.vars` before the worker starts — otherwise it throws
  * on the first required secret (e.g. `AUTH_SECRET is required`). Non-interactive
@@ -773,19 +127,32 @@ const teardown = async (handles: Teardown): Promise<void> => {
  * Phase 2 (existing flow): offer to generate (or top up) `.dev.vars` from the
  * now-complete `.dev.vars.example`, then log the non-interactive hint if declined.
  */
-const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string): Promise<void> => {
-    // Phase 1 — seed .dev.vars.example with any package-required secrets that
-    // are not already listed there. Best-effort: a scan failure is non-fatal.
-    try {
-        const bindings = await inferLunoraBindings({ projectRoot: cwd });
-        const packageNames = packageNamesFromBindings(bindings);
-        const addedKeys = (options.ensureExample ?? ensureDevVarsExample)(cwd, packageNames);
+const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string, cache: DiscoveryCache): Promise<void> => {
+    // The project's secret sources, read once for both the example and the fill. Best-effort: a scan failure is non-fatal, and the fill then
+    // generates every key.
+    let secretSources: ReadonlyArray<string> | undefined;
 
-        if (addedKeys.length > 0) {
-            options.logger.info(`Updated .dev.vars.example with secrets for: ${packageNames.join(", ")} (${addedKeys.join(", ")})`);
-        }
+    try {
+        secretSources = secretSourcesFromBindings(await inferLunoraBindings({ cache, projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) }));
     } catch {
         // Non-fatal — scanning may fail in unusual project layouts.
+    }
+
+    // Phase 1 — seed .dev.vars.example with any package-required secrets that
+    // are not already listed there. Best-effort: a write failure is non-fatal.
+    if (secretSources !== undefined) {
+        try {
+            const addedKeys = (options.ensureExample ?? ensureDevVarsExample)(cwd, secretSources);
+
+            if (addedKeys.length > 0) {
+                // `@lunora/notify:webPush` → `@lunora/notify (webPush)`.
+                const readable = secretSources.map((source) => (source.includes(":") ? `${source.replace(":", " (")})` : source));
+
+                options.logger.info(`Updated .dev.vars.example with secrets for: ${readable.join(", ")} (${addedKeys.join(", ")})`);
+            }
+        } catch {
+            // Non-fatal — the example is left as it was.
+        }
     }
 
     // Phase 2 — offer to generate / top up .dev.vars from the example.
@@ -818,6 +185,7 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
     try {
         (options.fillSecrets ?? fillDevSecrets)({
             cwd,
+            secretSources,
             info: (message) => {
                 options.logger.info(message);
             },
@@ -957,136 +325,6 @@ const emitDevBindingManifest = (options: {
 };
 
 /**
- * Resolve the worker port (a free-port probe for the wrangler flavor, so the
- * origin stays deterministic without pinning a busy 8787) and build the dev
- * plan. Extracted from {@link runDevCommand} so its startup orchestration stays
- * legible — the async port resolution is the only reason planning isn't inline.
- */
-const buildDevPlan = async (options: DevCommandOptions): Promise<DevCommandPlan> => {
-    const cwd = options.cwd ?? process.cwd();
-    const flavor = options.flavor ?? detectDevFlavor(cwd);
-    // The vite flavor lets Vite resolve its own port; only the wrangler flavor
-    // needs a pre-picked free port passed through as `--port`.
-    const workerPort = flavor === "wrangler" ? await resolveWorkerPort(options, cwd) : options.workerPort;
-
-    return planDevCommand({ ...options, cwd, flavor, workerPort });
-};
-
-/**
- * Block until SIGINT/SIGTERM, then resolve 0.
- *
- * The `--no-worker` counterpart to {@link superviseWorkers}: with no child to
- * await, the process would otherwise fall out of `runDevCommand` immediately
- * and take codegen-watch and Studio down with it.
- */
-const waitForInterrupt = async (logger: Logger): Promise<number> =>
-    await new Promise<number>((resolve) => {
-        // Held in a record so `stop` can detach both handlers without a forward
-        // reference to bindings declared after it.
-        const handlers: { sigint?: () => void; sigterm?: () => void } = {};
-
-        const stop = (signal: NodeJS.Signals): void => {
-            logger.info(`received ${signal} — shutting down`);
-
-            if (handlers.sigint) {
-                process.off("SIGINT", handlers.sigint);
-            }
-
-            if (handlers.sigterm) {
-                process.off("SIGTERM", handlers.sigterm);
-            }
-
-            resolve(0);
-        };
-
-        const onSigint = (): void => {
-            stop("SIGINT");
-        };
-        const onSigterm = (): void => {
-            stop("SIGTERM");
-        };
-
-        handlers.sigint = onSigint;
-        handlers.sigterm = onSigterm;
-        process.on("SIGINT", onSigint);
-        process.on("SIGTERM", onSigterm);
-    });
-
-/**
- * Supervise the spawned dev children until dev ends. Wires SIGINT/SIGTERM to
- * signal BOTH the framework dev server and the sidecar together (Ctrl-C once →
- * SIGTERM, again → SIGKILL; a grace timer escalates the first SIGINT), then
- * resolves when the FIRST child exits — a stopped framework dev server and a
- * crashed sidecar both mean "dev is over" — tearing the other down and awaiting
- * it so neither is orphaned holding a port. Returns that first child's exit
- * code. With no sidecar (single-process flavors) this collapses to plain
- * single-child supervision. Extracted from {@link runDevCommand} to keep its
- * orchestration legible (and under the cognitive-complexity budget).
- */
-const superviseWorkers = async (worker: WorkerProcess, sidecar: WorkerProcess | undefined, logger: Logger): Promise<number> => {
-    let sigintCount = 0;
-    let escalationTimer: NodeJS.Timeout | undefined;
-
-    const killChildren = (signal: NodeJS.Signals): void => {
-        worker.kill(signal);
-        sidecar?.kill(signal);
-    };
-    const onSigint = (): void => {
-        sigintCount += 1;
-
-        if (sigintCount === 1) {
-            logger.info("received SIGINT — shutting down (press Ctrl-C again to force-kill)");
-            killChildren("SIGTERM");
-            escalationTimer = setTimeout(() => {
-                killChildren("SIGKILL");
-            }, SIGINT_GRACE_MS);
-            escalationTimer.unref();
-        } else {
-            killChildren("SIGKILL");
-        }
-    };
-    const onSigterm = (): void => {
-        killChildren("SIGTERM");
-    };
-
-    process.on("SIGINT", onSigint);
-    process.on("SIGTERM", onSigterm);
-
-    const first = await Promise.race([
-        worker.exited.then((code) => {
-            return { code, who: "worker" as const };
-        }),
-        ...(sidecar === undefined
-            ? []
-            : [
-                  sidecar.exited.then((code) => {
-                      return { code, who: "sidecar" as const };
-                  }),
-              ]),
-    ]);
-
-    if (sidecar !== undefined) {
-        if (first.who === "sidecar") {
-            logger.warn("[worker] the Lunora sidecar (wrangler dev) exited — shutting down the framework dev server");
-            worker.kill("SIGTERM");
-        } else {
-            sidecar.kill("SIGTERM");
-        }
-
-        await Promise.allSettled([worker.exited, sidecar.exited]);
-    }
-
-    if (escalationTimer) {
-        clearTimeout(escalationTimer);
-    }
-
-    process.off("SIGINT", onSigint);
-    process.off("SIGTERM", onSigterm);
-
-    return first.code;
-};
-
-/**
  * Start the embedded studio server for the wrangler/framework-worker flavors —
  * best-effort: a start failure is logged and dev continues without it. Returns
  * the handle (for teardown), or `undefined` when studio is disabled or failed.
@@ -1107,6 +345,7 @@ const startStudioBestEffort = async (
             // in-process, so they need the SAME apiSpec this run's own codegen uses
             // — codegen deletes the spec file its mode does not name.
             apiSpec: options.apiSpec,
+            lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
             cwd,
             logger: {
                 warnOnce: (message) => {
@@ -1153,10 +392,99 @@ const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions
     }
 
     try {
-        runCodegen({ apiSpec: options.apiSpec, lunoraDirectory: "lunora", projectRoot: cwd, target });
+        runCodegen({
+            apiSpec: options.apiSpec,
+            lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+            lunoraDirectory: "lunora",
+            projectRoot: cwd,
+            target,
+            ...wranglerCodegenInputs(cwd),
+        });
     } catch (error: unknown) {
         logger.warn(`codegen (pre-sidecar) failed: ${error instanceof Error ? error.message : String(error)} — the framework dev server will retry`);
     }
+};
+
+/** The startup line: Vite owns everything on its flavor; otherwise it names the worker's dev server (the child's tag). */
+const startBanner = (plan: DevCommandPlan): string =>
+    plan.flavor === "vite" ? "starting vite dev (worker + studio + codegen run inside Vite via @lunora/vite)" : `starting ${plan.wrangler.tag} dev + studio`;
+
+/** Says why the worker binds IPv4 loopback: the host has no IPv6 `::1`, which `wrangler dev` needs. */
+const noteIpv4LoopbackFallback = (plan: DevCommandPlan, logger: Logger): void => {
+    if (plan.ipv4LoopbackForced) {
+        logger.info(
+            "no IPv6 loopback (::1) on this host — binding the worker to 127.0.0.1 (--ip) so wrangler dev doesn't crash. Pin `dev.ip` in wrangler.jsonc to override.",
+        );
+    }
+};
+
+/**
+ * Whether an attached `--no-worker` celld run can start. Its external runner
+ * executes `celld dev` on the projection, so the projection is written first, once
+ * the toolchain probe passes; `false`, logged, when it cannot be written. A run
+ * that starts its own session writes the projection there instead.
+ */
+const attachedCelldProjectionReady = async (plan: DevCommandPlan, options: DevCommandOptions, cwd: string, logger: Logger): Promise<boolean> => {
+    if (plan.celldSession !== true || plan.workerEnabled) {
+        return true;
+    }
+
+    try {
+        for (const warning of await (options.writeCelldProjection ?? writeCelldDevProjection)({ projectRoot: cwd })) {
+            logger.warn(warning);
+        }
+
+        return true;
+    } catch (error: unknown) {
+        logger.error(`could not write the celld projection: ${error instanceof Error ? error.message : String(error)}`);
+
+        return false;
+    }
+};
+
+/**
+ * The worker the plan runs — a celld dev session, else the planned dev server
+ * process — or `undefined`, logged, when it cannot start.
+ */
+const startPlannedWorker = async (
+    plan: DevCommandPlan,
+    options: DevCommandOptions,
+    spawn: WorkerSpawner,
+    cwd: string,
+    logger: Logger,
+): Promise<WorkerProcess | undefined> => {
+    try {
+        return plan.celldSession === true
+            ? await startCelldWorker({ logger, port: plan.workerPort, projectRoot: cwd, start: options.startCelldSession })
+            : spawn(plan.wrangler, logger);
+    } catch (error: unknown) {
+        logger.error(`could not start the worker: ${error instanceof Error ? error.message : String(error)}`);
+
+        return undefined;
+    }
+};
+
+/**
+ * The embedded Postgres behind a Hyperdrive binding that has no local database,
+ * for the session's lifetime. Also under `--remote`: Hyperdrive has no remote
+ * mode here, so wrangler still dials a local database for it.
+ */
+const startEmbeddedHyperdrive = async (options: DevCommandOptions, cwd: string, logger: Logger): Promise<LocalHyperdrive | undefined> => {
+    const hyperdrive = await (options.startHyperdrive ?? startLocalHyperdrive)({
+        onWarning: (message) => {
+            logger.warn(message);
+        },
+        projectRoot: cwd,
+    });
+
+    if (hyperdrive !== undefined && hyperdrive.bindings.length > 0) {
+        logger.info(
+            // eslint-disable-next-line no-secrets/no-secrets -- an environment variable name with a placeholder, not a credential
+            `Hyperdrive ${hyperdrive.bindings.join(", ")}: embedded Postgres (PGlite), data in .wrangler/state/lunora-pglite. Set CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING> to use your own.`,
+        );
+    }
+
+    return hyperdrive;
 };
 
 /**
@@ -1167,11 +495,13 @@ const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions
  */
 const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number; plan: DevCommandPlan }> => {
     const { logger } = options;
+    // Startup discovery (binding provisioning, then the dev-vars scaffold) parses the same sources twice; share one scan.
+    const discoveryCache = createDiscoveryCache();
     // Resolved the same way `buildDevPlan` / `planDevCommand` resolve them, so
     // the pre-plan work below sees exactly the project (and flavor) the plan
     // will describe.
     const cwd = options.cwd ?? process.cwd();
-    const flavor = options.flavor ?? detectDevFlavor(cwd);
+    const detectedFlavor = options.flavor ?? detectDevFlavor(cwd);
     // Resolved for every flavor, not just the ones that run the codegen watcher:
     // the `vite` and `framework-worker` flavors have `runsCodegenWatch === false`,
     // so gating on it accepted `--target` and then used it nowhere — while
@@ -1197,6 +527,8 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 
     const { target } = resolvedTarget;
 
+    const flavor = resolveTargetFlavor(target, detectedFlavor, logger);
+
     // Auto-provision the bindings the project's code implies, the same way
     // `@lunora/vite` does on every dev-server start — for the wrangler flavor
     // there is no plugin to do it, so a newly exported `SchedulerDO` /
@@ -1213,13 +545,13 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     // binding this call had just written. Same ordering the Vite plugin's remote
     // path had to adopt.
     if (flavor === "wrangler") {
-        await provisionBindings(cwd, logger, undefined, target, undefined);
+        await provisionBindings(cwd, logger, undefined, target, undefined, discoveryCache);
     }
 
-    const plan = await buildDevPlan({ ...options, flavor });
+    const plan = await buildDevPlan({ ...options, flavor, target });
     // Torn down on every exit path, including a throw during startup (the
     // `finally`).
-    const handles: Teardown = { remoteCleanup: plan.remote.cleanup };
+    const handles: Teardown = { remoteCleanup: plan.remote.cleanup, serviceConfigCleanup: plan.serviceConfigCleanup };
 
     try {
         // Lockfile check: a live `.lunora/dev.json` means a dev server is
@@ -1263,21 +595,28 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             plan.wrangler.env = { ...plan.wrangler.env, [DEV_HANDOFF_ENV]: String(process.pid) };
         }
 
-        await offerDevVariablesScaffold(options, cwd);
-
-        logger.info(
-            plan.flavor === "vite" ? "starting vite dev (worker + studio + codegen run inside Vite via @lunora/vite)" : "starting wrangler dev + studio",
-        );
-
-        if (plan.ipv4LoopbackForced) {
-            logger.info(
-                "no IPv6 loopback (::1) on this host — binding the worker to 127.0.0.1 (--ip) so wrangler dev doesn't crash. Pin `dev.ip` in wrangler.jsonc to override.",
-            );
+        // After the incumbent check, so a second `lunora dev` never opens a second
+        // database on the same data directory.
+        // Not in attached mode (`--no-worker`): an external runner starts the worker, which would never see the
+        // address this process puts in its own environment. That worker starts its own database (the Vite plugin does).
+        // Only for Cloudflare: Hyperdrive is a Cloudflare binding, and the other targets rate it unsupported.
+        if (plan.workerEnabled && target === "cloudflare") {
+            handles.hyperdrive = await startEmbeddedHyperdrive(options, cwd, logger);
         }
+
+        await offerDevVariablesScaffold(options, cwd, discoveryCache);
+
+        logger.info(startBanner(plan));
+
+        // Before anything is spawned — see the helper.
+        printCloudflareCliConfigWarning(logger, cwd);
+
+        noteIpv4LoopbackFallback(plan, logger);
 
         if (plan.runsCodegenWatch) {
             handles.codegen = (options.startCodegen ?? startCodegenWatch)({
                 apiSpec: options.apiSpec,
+                lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
                 jsonLogs: options.jsonLogs,
                 logger,
                 projectRoot: cwd,
@@ -1302,7 +641,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         if (emitted.error !== undefined) {
             logger.error(emitted.error);
 
-            return { code: 1, plan };
+            return { code: EXIT_CODE.USAGE, plan };
         }
 
         // After the studio start, so the two overlap, but before the worker below:
@@ -1345,6 +684,10 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             });
         };
 
+        if (!(await attachedCelldProjectionReady(plan, options, cwd, logger))) {
+            return { code: EXIT_CODE.FAILURE, plan };
+        }
+
         if (!plan.workerEnabled) {
             // Attached mode: whatever is left after `--no-worker` keeps running
             // and an external runner owns the worker. Park until interrupted so
@@ -1356,6 +699,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             // server that had been serving for an hour.
             startReadyProbe();
             logger.info(attachedModeNotice(plan));
+            handles.tunnel = startTunnelForPlan({ cwd, logger, plan, tunnel: options.tunnel });
 
             return { code: await (options.waitForInterrupt ?? waitForInterrupt)(logger), plan };
         }
@@ -1363,7 +707,11 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         ensureSidecarGenerated(plan, options, cwd, logger, target);
 
         const spawn = options.startWorker ?? defaultWorkerSpawner;
-        const worker = spawn(plan.wrangler, logger);
+        const worker = await startPlannedWorker(plan, options, spawn, cwd, logger);
+
+        if (worker === undefined) {
+            return { code: EXIT_CODE.FAILURE, plan };
+        }
         // The Lunora realtime sidecar (`wrangler dev`, owns ShardDO) for the
         // framework-worker flavor — `undefined` for every single-process flavor.
         const sidecar = plan.sidecar === undefined ? undefined : spawn(plan.sidecar, logger);
@@ -1378,6 +726,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         startReadyProbe();
 
         handles.containerLogs = afterWorkerSpawn(plan, cwd, logger, studioUrl, emitted.written);
+        handles.tunnel = startTunnelForPlan({ cwd, logger, plan, tunnel: options.tunnel });
 
         printAgentRulesHint(logger, cwd);
 
@@ -1423,6 +772,34 @@ const negatableDevFlags = (options: Pick<DevOptions, "codegen" | "studio" | "wor
     };
 };
 
+/**
+ * The flag combinations `lunora dev` refuses as a usage error, or `undefined`.
+ * `--local` is the opposite of `--remote`; `--allow-mail` protects a tunnel, so
+ * without `--tunnel` there is nothing for it to protect, and an entry that is
+ * not an email address (or `*@domain`) protects nothing either.
+ */
+const devFlagConflict = (options: Pick<DevOptions, "allowMail" | "local" | "remote" | "tunnel">): string | undefined => {
+    if (options.local === true && options.remote === true) {
+        return "`--local` and `--remote` are mutually exclusive — pass at most one.";
+    }
+
+    const { entries, invalid } = normalizeAllowMail(options.allowMail);
+
+    if (invalid.length > 0) {
+        return `\`--allow-mail\` takes email addresses or '*@domain' — not ${invalid.map((entry) => `"${entry}"`).join(", ")}.`;
+    }
+
+    if (entries.length > 0 && options.tunnel !== true) {
+        return "`--allow-mail` only applies to a tunnel — add `--tunnel`.";
+    }
+
+    return undefined;
+};
+
+/** The `--tunnel` request, built once from the parsed flags; `undefined` without `--tunnel`. */
+const tunnelRequest = (options: Pick<DevOptions, "allowMail" | "tunnel">): DevTunnelRequest | undefined =>
+    options.tunnel === true ? { allowMail: normalizeAllowMail(options.allowMail).entries } : undefined;
+
 /** `lunora dev` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ argument, cwd, logger, options }) => {
     const json = options.json === true;
@@ -1454,13 +831,28 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
 
     // Remote-binding mode obeys a clear precedence: an explicit `--remote`
     // flag wins, then `LUNORA_REMOTE` in the environment, then the `remote`
-    // key in the project's `lunora.json` (a project default). See
+    // key in the project's `lunora.config.*` (a project default). See
     // `resolveRemoteEnabled` in @lunora/config.
-    const remote = resolveRemoteEnabled({
-        configPreference: readProjectRemotePreference(cwd),
-        envValue: process.env["LUNORA_REMOTE"],
-        flag: options.remote,
-    });
+    // `--local` is the opposite request, so the two flags together are a usage
+    // error; on its own it beats a remote default from the env or the config.
+    const usageError = devFlagConflict(options);
+
+    if (usageError !== undefined) {
+        logger.error(`dev: ${usageError}`);
+
+        return { code: EXIT_CODE.USAGE };
+    }
+
+    const tunnel = tunnelRequest(options);
+
+    const remote =
+        options.local === true
+            ? false
+            : resolveRemoteEnabled({
+                  configPreference: readProjectRemotePreference(cwd),
+                  envValue: process.env["LUNORA_REMOTE"],
+                  flag: options.remote,
+              });
 
     if (!isDaemon && (options.background === true || agent !== undefined)) {
         // Idempotent start: a live server means success, not a conflict.
@@ -1472,6 +864,13 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
             return { code: 0 };
         }
 
+        // The daemon prints the tunnel's own warning into its log file, which
+        // nobody reads until something goes wrong — say it here, where the
+        // person who asked for a public URL is looking.
+        if (tunnel?.allowMail.length === 0) {
+            printPublicWarning(logger);
+        }
+
         return startBackground({ cwd, jsonLogs, logger, options, remote });
     }
 
@@ -1479,20 +878,19 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         emitBindings: options.emitBindings,
+        inspectorPort: options.inspectorPort,
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         jsonLogs,
+        local: options.local,
         logger,
         port: options.port,
         remote,
         target: options.target,
+        tunnel,
         workerPort: options.workerPort,
         ...negatableDevFlags(options),
     });
 });
 
 export { execute };
-export type { DevCommandOptions, DevCommandPlan, DevRemotePlan, WorkerProcess, WorkerSpawner };
-// `DevFlavor` / `detectDevFlavor` live in `./lifecycle`; re-exported here so the
-// planning surface (`planDevCommand` and friends) stays importable from one module.
-export type { DevFlavor } from "./lifecycle";
-export { detectDevFlavor } from "./lifecycle";
-export { defaultWorkerSpawner, negatableDevFlags, planDevCommand, resolveWorkerPort, runDevCommand };
+export { devFlagConflict, negatableDevFlags, runDevCommand };

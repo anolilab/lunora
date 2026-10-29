@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike, ValidatorLike } from "@lunora/shard-engine";
+import { renderSql } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -60,6 +61,7 @@ const dialect: SqlDialect = {
     ],
     isUniqueViolation: (error) => error instanceof Error && /unique constraint failed/iu.test(error.message),
     name: "sqlite",
+    render: (query) => renderSql("sqlite", query),
     // The portable layout, so the companion's rows can be read back directly.
     supportsFts5: false,
     supportsReturning: true,
@@ -73,8 +75,11 @@ let statements: string[];
 const raw = (query: string, ...parameters: unknown[]): Record<string, unknown>[] => database.prepare(query).all(...(parameters as never[]));
 
 const createNotesTable = (): void => {
-    raw(`CREATE TABLE "notes" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "body" TEXT, "channel" TEXT)`);
+    raw(`CREATE TABLE "notes" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "_version" INTEGER, "body" TEXT, "channel" TEXT)`);
 };
+
+/** The version columns {@link insertNote} leaves on a row, as the write hook is told them. */
+const INSERTED = { _creationTime: 1_700_000_000_000, _version: null };
 
 const insertNote = (id: string, body: string, channel = "general"): void => {
     raw(`INSERT INTO "notes" ("id", "_creationTime", "body", "channel") VALUES (?, ?, ?, ?)`, id, 1_700_000_000_000, body, channel);
@@ -240,8 +245,8 @@ describe("global search provisioning", () => {
                     createCompanion: (companion, keyType) =>
                         sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(companion)} (${sql.identifier("__id__")} ${sql.raw(keyType)} PRIMARY KEY, ${sql.identifier("__vector__")} TEXT)`,
                     createIndexes: () => [],
-                    indexDocument: (companion, id, analyzed) =>
-                        sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier("__id__")}, ${sql.identifier("__vector__")}) VALUES (${id}, ${analyzed})`,
+                    indexDocument: (companion, id, analyzed, guard) =>
+                        sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier("__id__")}, ${sql.identifier("__vector__")}) SELECT ${id}, ${analyzed} WHERE ${guard} ON CONFLICT (${sql.identifier("__id__")}) DO UPDATE SET ${sql.identifier("__vector__")} = excluded.${sql.identifier("__vector__")}`,
                     matches: (companion) => sql`${sql.identifier(companion)}.${sql.identifier("__vector__")} <> ''`,
                     rank: (companion) => sql`LENGTH(${sql.identifier(companion)}.${sql.identifier("__vector__")})`,
                 },
@@ -337,6 +342,25 @@ describe("global search provisioning", () => {
             await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.toThrow(/still backfilling/u);
         });
 
+        it("points a refused read at the backfill entry point the backend in use names", async () => {
+            expect.assertions(3);
+
+            createNotesTable();
+            insertPastOnePage();
+            await runSqlSearchMigrations(exec, searchSchema, dialect);
+
+            const hinted = { ...dialect, searchBackfillHint: "call the example backfill" };
+
+            // Each backend completes a `.global()` index its own way — D1, Hyperdrive
+            // and the Node store all differ — and the `backfillSearch` admin op is
+            // wired only for shard-local indexes, so naming it sent operators to a 501.
+            await expect(runSqlSearch(exec, hinted, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.toThrow(
+                /still backfilling .* retry once it finishes, or complete it now: call the example backfill$/u,
+            );
+            await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.toThrow(/retry once it finishes$/u);
+            await expect(runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello"), 300)).rejects.not.toThrow(/backfillSearch admin/u);
+        });
+
         it("serves a staged index declared over an empty table", async () => {
             expect.assertions(2);
 
@@ -353,7 +377,7 @@ describe("global search provisioning", () => {
             const sync = createSearchSync({ dialect, exec, schema: stagedSchema });
 
             insertNote("n1", "hello world");
-            await sync("notes", "n1", { body: "hello world" });
+            await sync("notes", "n1", { document: { body: "hello world" }, written: INSERTED });
 
             const rows = await runSqlSearch(exec, dialect, notesDefinition, "notes", bodyStage("hello", { ...BY_BODY, staged: true }), 300);
 
@@ -445,7 +469,8 @@ describe("global search provisioning", () => {
             // the index — the exact case staging exists for.
             const sync = createSearchSync({ dialect, exec, schema: stagedSchema });
 
-            await sync("notes", "new", { body: "ancient news" });
+            insertNote("new", "ancient news");
+            await sync("notes", "new", { document: { body: "ancient news" }, written: INSERTED });
             await backfillSqlSearchIndexes(exec, stagedSchema, dialect);
 
             expect(tokensFor("old")).toStrictEqual(["ancient", "history"]);
@@ -459,7 +484,7 @@ describe("global search provisioning", () => {
 
             // "The documented remedy throws unless you happened to migrate first"
             // is not a remedy.
-            await expect(backfillSqlSearchIndexes(exec, stagedSchema, dialect)).resolves.toBeUndefined();
+            await expect(backfillSqlSearchIndexes(exec, stagedSchema, dialect)).resolves.toStrictEqual({ uniqueKeyMissing: [], unmappedSkipped: 0 });
         });
 
         it("walks a table larger than one backfill page", async () => {
@@ -480,6 +505,25 @@ describe("global search provisioning", () => {
     });
 
     describe("createSearchSync", () => {
+        it("guards a live write with the version the row write left, so it lands on the first attempt", async () => {
+            expect.assertions(3);
+
+            createNotesTable();
+
+            const writer = createSqlCtxDb({ clock: () => 1, dialect, exec, schema: searchSchema });
+            const rechecks = (): number => statements.filter((text) => text.startsWith(`SELECT * FROM "notes" WHERE "id" >=`)).length;
+
+            await writer.insert("notes", { _id: "a", body: "hello world", channel: "general" }, { allowExplicitId: true });
+            await writer.patch("notes", "a", { body: "goodbye world" });
+            await writer.patch("notes", "a", { body: "farewell world" });
+
+            // One re-check per write: had the guard's version drifted from the one
+            // the row write set, each write would miss once and need a second.
+            expect(rechecks()).toBe(3);
+            expect(tokensFor("a")).toStrictEqual(["farewell", "world"]);
+            expect(raw(`SELECT "_version" AS v FROM "notes" WHERE "id" = 'a'`).map((row) => row["v"])).toStrictEqual([2]);
+        });
+
         it("indexes a written document and purges a removed one", async () => {
             expect.assertions(2);
 
@@ -488,11 +532,13 @@ describe("global search provisioning", () => {
 
             const sync = createSearchSync({ dialect, exec, schema: searchSchema });
 
-            await sync("notes", "a", { body: "hello world" });
+            insertNote("a", "hello world");
+            await sync("notes", "a", { document: { body: "hello world" }, written: INSERTED });
 
             expect(tokensFor("a")).toStrictEqual(["hello", "world"]);
 
-            // `document === undefined` is a row removal: delete only, no re-insert.
+            // An `undefined` change is a row removal: delete only, no re-insert.
+            raw(`DELETE FROM "notes" WHERE "id" = 'a'`);
             await sync("notes", "a", undefined);
 
             expect(tokensFor("a")).toStrictEqual([]);
@@ -506,19 +552,24 @@ describe("global search provisioning", () => {
 
             const sync = createSearchSync({ dialect, exec, schema: searchSchema });
 
-            await sync("notes", "a", { body: "hello world", channel: "general" });
+            insertNote("a", "hello world");
+            await sync("notes", "a", { document: { body: "hello world", channel: "general" }, written: INSERTED });
 
             statements = [];
 
             // Most writes touch a column the index doesn't cover — a status flip, a
             // counter, an `$onUpdateFn` timestamp. Re-tokenizing for those is a
             // DELETE plus an INSERT per chunk, every time, over a remote connection.
-            await sync("notes", "a", { body: "hello world", channel: "other" }, { body: "hello world", channel: "general" });
+            await sync("notes", "a", {
+                document: { body: "hello world", channel: "other" },
+                previous: { body: "hello world", channel: "general" },
+                written: INSERTED,
+            });
 
             expect(statements).toStrictEqual([]);
 
             // A real edit still re-indexes.
-            await sync("notes", "a", { body: "goodbye world" }, { body: "hello world" });
+            await sync("notes", "a", { document: { body: "goodbye world" }, previous: { body: "hello world" }, written: INSERTED });
 
             expect(tokensFor("a")).toStrictEqual(["goodbye", "world"]);
         });
@@ -530,7 +581,7 @@ describe("global search provisioning", () => {
 
             const sync = createSearchSync({ dialect, exec, schema: plainSchema });
 
-            await sync("notes", "a", { body: "hello world" });
+            await sync("notes", "a", { document: { body: "hello world" }, written: INSERTED });
 
             expect(statements).toStrictEqual([]);
         });

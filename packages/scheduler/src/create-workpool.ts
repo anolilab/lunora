@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
+import { encodeArgsOrThrow } from "@lunora/wire";
 
-import { encodeArgsOrThrow } from "../../../shared/wire-codec";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptions } from "./types";
 import assertScheduleDelay from "./validate-delay";
@@ -17,6 +17,22 @@ import assertScheduleDelay from "./validate-delay";
  * `enqueue` schedules a job tagged with this pool; the DO dispatches at most
  * `maxConcurrency` of the pool's jobs at once and queues the rest durably,
  * draining them as the runtime reports completions (`POST /complete`).
+ *
+ * The ceiling the platform adds: one alarm drain keeps at most SIX dispatches in
+ * flight, because a Durable Object may have only six connections simultaneously
+ * waiting for response headers. A `maxConcurrency` above six is therefore not
+ * wrong, just not reachable within a single drain — the surplus drains on the
+ * following alarms. The same invocation is bounded by the 15-minute alarm wall
+ * clock, which covers the WHOLE drain rather than one job; work that does not
+ * fit is deferred to the next alarm, never dropped.
+ *
+ * For jobs that are individually long — an LLM call, an export, a payment
+ * round-trip — prefer `createQueueWorkpool`: the dispatch this DO awaits
+ * only returns once the function has finished running, so a long job occupies
+ * one of those six slots and one slice of that 15-minute budget for its whole
+ * duration. A Queues consumer gets a fresh Worker invocation per batch, with its
+ * own connection budget and its own clock, and its `max_concurrency` is not
+ * capped at six. You give up the hard cap, per-job cancel, and per-job status.
  *
  * ```ts
  * const pool = createWorkpool({ namespace: env.SCHEDULER, maxConcurrency: 5 });
@@ -62,7 +78,8 @@ const createWorkpool = (options: WorkpoolOptions): Workpool => {
             maxConcurrency: options.maxConcurrency,
             pool: name,
             retry: options_.retry,
-            scheduledFor: Date.now() + delayMs,
+            // Whole milliseconds, rounded up — see `createScheduler`'s `runAt`.
+            scheduledFor: Math.ceil(Date.now() + delayMs),
             shardKey: options_.shardKey,
         });
     };

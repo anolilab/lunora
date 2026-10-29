@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 import { useRef, useState } from "react";
 
+import { settlePolls } from "../../../hooks/use-auto-refresh";
 import useMirroredRef from "../../../hooks/use-mirrored-ref";
 import type { FacetResult } from "../../../lib/admin";
 import { errorMessage, fireAndForget } from "../../../lib/internal";
@@ -32,7 +33,7 @@ interface UseFacets {
     /** Latest `facets` mirrored into a ref, so poll ticks / filter handlers read the current set without re-binding. */
     facetsRef: RefObject<Record<string, FacetState>>;
     /** Refetch every toggled-on facet over the view bound into `fetcher` (after a filter change or on a poll tick). */
-    refetchFacets: (fetcher: FacetFetcher) => void;
+    refetchFacets: (fetcher: FacetFetcher) => Promise<void>;
     /** Toggle a column into / out of the facet sidebar. Turning it on seeds a loading slot and (when `fetcher` is non-null) fetches its summary for the active view; turning it off drops it. Pass `null` when no table is selected to seed the slot without fetching. */
     toggleFacet: (column: string, fetcher: FacetFetcher | null) => void;
 }
@@ -80,6 +81,9 @@ export const useFacets = (): UseFacets => {
             }
 
             setFacets((current) => (column in current ? { ...current, [column]: { error: errorMessage(error), loading: false, result: null } } : current));
+
+            // Rethrown so a poll that refetches this column sees the failure; the state above is what the sidebar shows.
+            throw error;
         }
     };
 
@@ -102,11 +106,7 @@ export const useFacets = (): UseFacets => {
         }
     };
 
-    const refetchFacets = (fetcher: FacetFetcher): void => {
-        for (const column of Object.keys(facetsRef.current)) {
-            fireAndForget(fetchFacet(column, fetcher));
-        }
-    };
+    const refetchFacets = (fetcher: FacetFetcher): Promise<void> => settlePolls(Object.keys(facetsRef.current).map((column) => fetchFacet(column, fetcher)));
 
     const clearFacets = (): void => {
         setFacets({});

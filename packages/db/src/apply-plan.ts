@@ -37,6 +37,7 @@
 
 import type { Collection } from "@tanstack/db";
 
+import { isFieldOperator, previewPatch } from "../../../shared/field-operators";
 import type { Row } from "./internals";
 
 /** One row to insert. `_id` may be pre-minted client-side so the optimistic row keys match the persisted one. */
@@ -78,7 +79,7 @@ export interface ChangePlan {
  * satisfies it.
  *
  * The `never` parameter positions are deliberate, not laziness. `ctx.db.delete` is
- * `<T extends string>(id: Id<T>) => …` over the **branded** `Id<T>`, and under
+ * `<T extends string>(table: T, id: Id<T>) => …` over the **branded** `Id<T>`, and under
  * `strictFunctionTypes` a parameter is contravariant — so declaring `id: string` here
  * would make the real `ctx.db` un-assignable to `PlanWriter` (`string` is not
  * assignable to `string & { __table }`), and every caller would need a cast at the
@@ -90,9 +91,9 @@ export interface ChangePlan {
  * id)` when building the plan to catch a malformed id at the boundary.
  */
 export interface PlanWriter {
-    delete: (id: never) => Promise<void>;
+    delete: (table: never, id: never) => Promise<void>;
     insert: (tableName: never, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<unknown>;
-    patch: (id: never, patch: Record<string, unknown>) => Promise<void>;
+    patch: (table: never, id: never, patch: Record<string, unknown>) => Promise<void>;
 }
 
 /**
@@ -116,7 +117,17 @@ export const applyPlanToCollections = (collections: Record<string, Collection<Ro
         }
 
         collection.update(entry.id, (draft) => {
-            Object.assign(draft, entry.fields);
+            // The server resolves an atomic operator (`{ increment: 1 }`) against the stored row; here the
+            // draft is that row's local copy, so the prediction matches the correction. A field the copy
+            // cannot resolve (absent, null) is left out rather than shown as the operator object: the row
+            // keeps its old value until the server's arrives.
+            const kept = Object.entries(previewPatch(entry.fields, draft)).filter(([field, value]) => {
+                const stored: unknown = draft[field];
+
+                return !isFieldOperator(value) || (typeof stored === "object" && stored !== null);
+            });
+
+            Object.assign(draft, Object.fromEntries(kept));
         });
     }
 
@@ -152,12 +163,12 @@ export const applyPlanToCollections = (collections: Record<string, Collection<Ro
 export const applyPlanToDb = async (db: PlanWriter, plan: ChangePlan): Promise<void> => {
     for (const entry of plan.deletes ?? []) {
         // eslint-disable-next-line no-await-in-loop -- ordered, single-threaded shard writes; a mid-plan throw rolls the mutation back
-        await db.delete(entry.id as never);
+        await db.delete(entry.table as never, entry.id as never);
     }
 
     for (const entry of plan.patches ?? []) {
         // eslint-disable-next-line no-await-in-loop -- see above
-        await db.patch(entry.id as never, entry.fields);
+        await db.patch(entry.table as never, entry.id as never, entry.fields);
     }
 
     for (const entry of plan.inserts ?? []) {

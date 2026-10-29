@@ -1,10 +1,11 @@
-import { getAuthTablesWithResolvedIndexes } from "@better-auth/core/db/internal";
+import { getAuthTablesWithResolvedIndexes, invalidateSchemaChecks } from "@better-auth/core/db/internal";
 import { LunoraError } from "@lunora/errors";
+import { betterAuth } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
 
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
-import { resolveAuthOptions } from "./create-auth";
+import { prepareAuthOptions, resolveAuthOptions } from "./create-auth";
 import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
 
@@ -65,14 +66,28 @@ const withD1MigrationSupport = (options: LunoraAuthOptions): LunoraAuthOptions =
  * those would run a `DROP COLUMN` that fails with `no such column`, and because the DDL
  * text never changes the retry fails identically — wedging `ensureMigrated` forever on a
  * database that was never broken. The probe answers the question exactly instead.
+ *
+ * The reference is **table-qualified**, and that is what makes the probe an answer rather
+ * than a formality. workerd and D1 build SQLite with the double-quoted-string misfeature
+ * enabled, so a bare `"issuer"` that resolves to no column is silently reinterpreted as a
+ * string literal and the statement succeeds — the probe would report "present" for every
+ * database on the only runtime this path runs on, and the cleanup would then fail its
+ * `DROP COLUMN` and log a break that does not exist. A qualified name has no string-literal
+ * reading, so it raises `no such column: t.issuer` on workerd, D1 and `node:sqlite` alike.
+ * Verified in `__tests__/workerd/migrate-legacy-issuer.workerd.test.ts`; a Node-only suite
+ * cannot see the difference, because `node:sqlite` builds with `SQLITE_DQS=0`.
  */
 const hasIssuerColumn = async (database: D1Database, accountTable: string): Promise<boolean> => {
+    const alias = quoteIdentifier("t");
+
     try {
-        await database.prepare(`SELECT ${quoteIdentifier("issuer")} FROM ${quoteIdentifier(accountTable)} LIMIT 0`).run();
+        await database.prepare(`SELECT ${alias}.${quoteIdentifier("issuer")} FROM ${quoteIdentifier(accountTable)} AS ${alias} LIMIT 0`).run();
 
         return true;
     } catch {
         // Either the column or the table is absent; both mean there is nothing to clean up.
+        // This is also the direction the uncertainty must fall: a false "absent" skips a
+        // cleanup, a false "present" runs an irreversible `DROP COLUMN`.
         return false;
     }
 };
@@ -140,7 +155,37 @@ const dropLegacyIssuerColumn = async (options: LunoraAuthOptions): Promise<void>
         );
     } catch (error) {
         // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
-        console.error("@lunora/auth: could not drop the reverted `account.issuer` column; sign-ups will fail until it is removed.", error);
+        console.error(
+            "@lunora/auth: could not drop the reverted `account.issuer` column; if it is still present, sign-ups will fail until it is removed.",
+            error,
+        );
+    }
+};
+
+/**
+ * Bump this database's schema revision, so a schema verdict `lunoraD1Adapter`'s
+ * check cached before the migration is re-taken rather than replayed.
+ *
+ * better-auth keys the revision on the database **object**, and the two instances
+ * agree on it by construction: the request instance registers its check against
+ * the binding handed to `lunoraD1Adapter(env.DB)`, and this migration instance
+ * holds that same `env.DB` as its `database` (the migrator needs the raw binding —
+ * see {@link assertMigratableDatabase}). Without this, a mismatch observed before
+ * the migration ran would be rethrown for the life of the isolate even though the
+ * migration has just fixed it.
+ *
+ * Reads `options.database`, not the proxy {@link withD1MigrationSupport} builds:
+ * that is a different object and would invalidate nothing. Widened to `unknown`
+ * for the same reason {@link assertMigratableDatabase} does it — better-auth's
+ * `database` union has an adapter arm the linter reads as an error type. The type
+ * guard is narrowing, not doubt: `assertMigratableDatabase` has already rejected a
+ * falsy or function `database` by the time this runs.
+ */
+const invalidateAuthSchemaChecks = (options: LunoraAuthOptions): void => {
+    const { database } = options as { database?: unknown };
+
+    if (typeof database === "object" && database !== null) {
+        invalidateSchemaChecks(database);
     }
 };
 
@@ -192,6 +237,7 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
 
         await runMigrations();
         await dropLegacyIssuerColumn(options);
+        invalidateAuthSchemaChecks(options);
     })();
 
     // Record the promise synchronously (before the first await above resolves)
@@ -235,3 +281,11 @@ export const compileMigrationsSql = async (options: LunoraAuthOptions): Promise<
 
     return compileMigrations();
 };
+
+/**
+ * The migration-only auth instance: the same validated, hardened options as `createAuth`, but
+ * through the full `better-auth` entry so `database` may be the raw D1 binding the Kysely
+ * migrator drives. Hand it to {@link ensureMigrated}; never serve requests from it. Lives here
+ * so the migrator's Kysely edge stays out of the runtime bundle.
+ */
+export const createMigrationAuth = (options: LunoraAuthOptions): LunoraAuth => betterAuth(prepareAuthOptions(options));

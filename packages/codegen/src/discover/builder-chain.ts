@@ -53,18 +53,24 @@ const walkBuilderChain = (receiver: Node): { root: Node | undefined; steps: Buil
 const builderChainSteps = (receiver: Node): BuilderChainStep[] => walkBuilderChain(receiver).steps;
 
 /**
+ * The first argument of every `<method>(<callee>(...))` step whose callee
+ * `matches`. The walk and the argument rule are shared; only the question asked
+ * of the callee varies, so each caller states its own trust policy: middleware
+ * detectors use `resolvesToImportedName`, the security markers use `isServerImport`.
+ */
+const wrappedCallsWhere = (receiver: Node, method: string, matches: (callee: Node) => boolean): CallExpression[] =>
+    builderChainSteps(receiver)
+        .filter((step) => step.name === method)
+        .map((step) => step.call.getArguments()[0])
+        .filter((argument): argument is CallExpression => argument !== undefined && TsNode.isCallExpression(argument) && matches(argument.getExpression()));
+
+/**
  * The first argument of every `<method>(<callee>(...))` step in the chain — the
  * shape `.use(rls(...))` / `.use(mask(...))` take. `callee` is matched through
  * {@link resolvesToImportedName}, so an import alias counts.
  */
 const wrappedCallsInChain = (receiver: Node, method: string, callee: string): CallExpression[] =>
-    builderChainSteps(receiver)
-        .filter((step) => step.name === method)
-        .map((step) => step.call.getArguments()[0])
-        .filter(
-            (argument): argument is CallExpression =>
-                argument !== undefined && TsNode.isCallExpression(argument) && resolvesToImportedName(argument.getExpression(), callee),
-        );
+    wrappedCallsWhere(receiver, method, (candidate) => resolvesToImportedName(candidate, callee));
 
 /** True when the builder chain rooted at `receiver` carries a step whose method name is `method` (`.output(...)` / `.use(...)`). */
 const chainHasStep = (receiver: TsNode, method: string): boolean => builderChainSteps(receiver).some((step) => step.name === method);
@@ -82,4 +88,4 @@ const chainHasStep = (receiver: TsNode, method: string): boolean => builderChain
 const chainUsesWrappedCall = (receiver: TsNode, method: string, wrappedCallee: string): boolean =>
     wrappedCallsInChain(receiver, method, wrappedCallee).length > 0;
 
-export { builderChainSteps, chainHasStep, chainUsesWrappedCall, walkBuilderChain, wrappedCallsInChain };
+export { builderChainSteps, chainHasStep, chainUsesWrappedCall, walkBuilderChain, wrappedCallsInChain, wrappedCallsWhere };

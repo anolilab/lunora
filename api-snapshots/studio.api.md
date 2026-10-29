@@ -77,6 +77,7 @@ const ADMIN_FUNCTIONS: {
     readonly runSql: "__lunora_admin__:runSql";
     readonly sendQueueMessage: "__lunora_admin__:sendQueueMessage";
     readonly sendTestMail: "__lunora_admin__:sendTestMail";
+    readonly sendWorkflowEvent: "__lunora_admin__:sendWorkflowEvent";
     readonly setIssueSeverity: "__lunora_admin__:setIssueSeverity";
     readonly storageOrphans: "__lunora_admin__:storageOrphans";
     readonly storageReferences: "__lunora_admin__:storageReferences";
@@ -286,13 +287,14 @@ const DEFAULT_LOCALE = "en";
 ### `DataBrowser` (const)
 
 ```ts
-const DataBrowser: ({ editable, globalTableNames, initialFilters, initialOrderBy, initialPins, initialSearch, initialShardKey, onNavigateToGlobal, onSelectTable, onViewChange, pageSize: initialPageSize, queryBar, schemaSwitch, tableParam }: DataBrowserProps) => ReactElement;
+const DataBrowser: ({ canGenerateRows, editable, globalTableNames, initialFilters, initialOrderBy, initialPins, initialSearch, initialShardKey, onNavigateToGlobal, onSelectTable, onViewChange, pageSize: initialPageSize, queryBar, schemaSwitch, tableParam }: DataBrowserProps) => ReactElement;
 ```
 
 ### `DataBrowserProps` (interface)
 
 ```ts
 interface DataBrowserProps {
+    readonly canGenerateRows?: boolean;
     readonly editable?: boolean;
     readonly globalTableNames?: ReadonlySet<string>;
     readonly initialFilters?: FilterClause[];
@@ -367,7 +369,12 @@ type DeploymentHealthProbe = (kind: ProbeKind) => Promise<ProbeSnapshot>;
 ```ts
 interface EditableFilter {
     column: string;
+    literal?: [
+        unknown
+    ];
     operator: FilterOperator;
+    path?: string;
+    pathSegments?: string[];
     value: string;
 }
 ```
@@ -439,6 +446,7 @@ interface FileBrowserProps {
 interface FilterClause {
     column: string;
     operator: FilterOperator;
+    path?: string[];
     value?: unknown;
 }
 ```
@@ -446,7 +454,7 @@ interface FilterClause {
 ### `FilterOperator` (type)
 
 ```ts
-type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
+type FilterOperator = "contains" | "eq" | "gt" | "gte" | "has" | "lt" | "lte" | "ne";
 ```
 
 ### `FunctionCallStat` (interface)
@@ -585,6 +593,7 @@ interface ImportShardResult {
     conflicts: number;
     errors: ImportError[];
     inserted: Record<string, number>;
+    replaced?: number;
 }
 ```
 
@@ -686,6 +695,10 @@ interface LogsResult {
     entries: LogEntry[];
 }
 ```
+
+### `LunoraAdminClient` (class)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `LunoraClient` (class)
 
@@ -812,6 +825,29 @@ const PitrPanel: ({ initialShardKey }: PitrPanelProps) => ReactElement;
 ```ts
 interface PitrPanelProps {
     readonly initialShardKey?: string;
+}
+```
+
+### `PrivacyRequestRow` (interface)
+
+```ts
+interface PrivacyRequestRow {
+    readonly dueAt: number;
+    readonly extendedDueAt?: null | number;
+    readonly id: string;
+    readonly receivedAt: number;
+    readonly status: RequestStatus;
+    readonly subjectId: string;
+    readonly type: RequestType;
+}
+```
+
+### `PrivacyRequestsSource` (interface)
+
+```ts
+interface PrivacyRequestsSource {
+    listOpenPrivacyRequests: () => Promise<ReadonlyArray<PrivacyRequestRow>>;
+    retryPrivacyRequest: (id: string) => Promise<unknown>;
 }
 ```
 
@@ -1007,7 +1043,7 @@ interface ShardMetricsResult {
 ### `SqlEditorPanel` (const)
 
 ```ts
-const SqlEditorPanel: ({ initialShardKey }: SqlEditorPanelProps) => ReactElement;
+const SqlEditorPanel: ({ initialShardKey, now }: SqlEditorPanelProps) => ReactElement;
 ```
 
 ### `SqlEditorPanelProps` (interface)
@@ -1015,6 +1051,7 @@ const SqlEditorPanel: ({ initialShardKey }: SqlEditorPanelProps) => ReactElement
 ```ts
 interface SqlEditorPanelProps {
     readonly initialShardKey?: string;
+    readonly now?: () => number;
 }
 ```
 
@@ -1041,7 +1078,7 @@ interface StudioAppProps {
     readonly adminToken?: string;
     readonly basePath?: string;
     readonly baseUrl?: string;
-    readonly client?: LunoraClient;
+    readonly client?: LunoraAdminClient;
     readonly locale?: string;
     readonly rulesInstalled?: boolean;
     readonly studio?: Omit<StudioProps, "children" | "chrome" | "i18n" | "locale">;
@@ -1075,7 +1112,7 @@ interface StudioI18nProviderProps {
 
 ```ts
 interface StudioProps {
-    readonly analyticsQuery?: AnalyticsPanelProps["runQuery"];
+    readonly analyticsSqlQuery?: AnalyticsPanelProps["runQuery"];
     readonly basePath?: string;
     readonly chrome?: StudioChrome;
     readonly dataEditable?: boolean;
@@ -1085,6 +1122,7 @@ interface StudioProps {
     readonly locale?: string;
     readonly openApiSpec?: unknown;
     readonly openRpcSpec?: unknown;
+    readonly privacyRequests?: PrivacyRequestsSource;
     readonly runAsIdentity?: boolean;
     readonly scheduledCancel?: SchedulePanelProps["scheduledCancel"];
     readonly scheduledCron?: SchedulePanelProps["loadCronJobs"];
@@ -1096,7 +1134,7 @@ interface StudioProps {
 ### `StudioTab` (type)
 
 ```ts
-type StudioTab = "agents" | "analytics" | "api" | "audit" | "authAudit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "deploymentHealth" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "notifications" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "reactors" | "realtime" | "rls" | "schedule" | "schema" | "advisorHealth" | "evals" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
+type StudioTab = "agents" | "analytics" | "api" | "architecture" | "audit" | "authAudit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "deploymentHealth" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "notifications" | "organizations" | "payments" | "permissions" | "pitr" | "privacyRequests" | "queues" | "reactors" | "realtime" | "rls" | "schedule" | "schema" | "advisorHealth" | "evals" | "aiUsage" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
 ```
 
 ### `TFunction` (type)
@@ -1108,13 +1146,14 @@ type TFunction = (id: MessageId, values?: Record<string, unknown>) => string;
 ### `TableEditor` (const)
 
 ```ts
-const TableEditor: ({ editable, initialShardKey }: TableEditorProps) => ReactElement;
+const TableEditor: ({ canGenerateRows, editable, initialShardKey }: TableEditorProps) => ReactElement;
 ```
 
 ### `TableEditorProps` (interface)
 
 ```ts
 interface TableEditorProps {
+    readonly canGenerateRows?: boolean;
     readonly editable?: boolean;
     readonly initialShardKey?: string;
 }
@@ -1155,6 +1194,7 @@ interface TablePage {
     columns: string[];
     refs?: Record<string, string>;
     rows: Record<string, unknown>[];
+    sqlColumns?: string[];
     total?: number;
 }
 ```
@@ -1230,7 +1270,7 @@ const toFilterClauses: (filters: ReadonlyArray<EditableFilter>) => FilterClause[
 ### `useAutoRefresh` (const)
 
 ```ts
-const useAutoRefresh: (onTick: () => void, enabled: boolean, intervalMs?: number) => void;
+const useAutoRefresh: (onTick: () => unknown, enabled: boolean, intervalMs?: number) => void;
 ```
 
 ### `useDebounced` (const)
@@ -1279,8 +1319,7 @@ interface AdvisorHealthPanelProps {
 
 ```ts
 interface AnalyticsPanelProps {
-    readonly dataset?: string;
-    readonly runQuery?: (sql: string) => Promise<AnalyticsSqlResult>;
+    readonly runQuery?: (panel: FunctionUsagePanel) => Promise<AnalyticsSqlQueryResult>;
 }
 ```
 
@@ -1328,6 +1367,7 @@ interface FunctionArgumentDescriptor {
     kind: string;
     name: string;
     optional: boolean;
+    sensitive?: true;
     table?: string;
 }
 ```
@@ -1345,6 +1385,24 @@ interface FunctionScanAttribution {
 
 ```ts
 const MESSAGE_IDS: readonly [
+    "Architecture",
+    "Your modules, and the calls, reads, writes and hand-offs between them, from codegen.",
+    "Module",
+    "Owned tables",
+    "Outside any module",
+    "All modules",
+    "Couldn't load the architecture manifest: {message}",
+    "Architecture unavailable",
+    "Add a lunora/<folder>/module.ts that default-exports defineModule(...) and run lunora codegen to map your modules here. Installed components join the map once you declare one.",
+    "No modules declared",
+    "{count} call sites could not be drawn",
+    "{count} edges shown",
+    "Export failed: {message}",
+    "Not sent to {failed}",
+    "Topic {topic} · {count} subscriptions",
+    "{topic} (topic → {count} subscriptions)",
+    "Component",
+    "Installed component",
     "Send this link to the invitee. It is shown once and cannot be recovered.",
     "Only invited addresses can create an account. Nothing is emailed — send the invitee the one-time link yourself.",
     "Showing the most recent invitations. Query the signUpInvitation table directly to see the rest.",
@@ -1353,6 +1411,7 @@ const MESSAGE_IDS: readonly [
     "Email address to invite",
     "ada@example.com",
     "Invite",
+    "Your app's sign-up page",
     "Nobody has been invited yet.",
     "Email",
     "Expires",
@@ -1405,6 +1464,7 @@ const MESSAGE_IDS: readonly [
     "No agent has run yet. Start a run with ctx.agents.<name>.run(...) and its thread appears here.",
     "No agent threads yet",
     "This thread has no messages yet.",
+    "Showing the latest {count} messages; older ones are not shown.",
     "Bindings",
     "KV Namespaces",
     "R2 Buckets",
@@ -1424,7 +1484,7 @@ const MESSAGE_IDS: readonly [
     "{total} total",
     "No subscriptions yet",
     "No payments configured",
-    "No @lunora/payment tables found in this deployment. Declare the store tables (subscriptions, events, …) in lunora/schema.ts and wire `payment` on createShardDO() to sync customers and subscriptions.",
+    "No @lunora/payment tables found in this deployment. Add `.extend(paymentExtension)` to lunora/schema.ts and wire `payment` on createShardDO() to sync customers and subscriptions.",
     "Payments",
     "Plan",
     "Provider",
@@ -1434,6 +1494,7 @@ const MESSAGE_IDS: readonly [
     "Subscriptions",
     "Synced customers, subscriptions, and webhook events.",
     "{count} messages",
+    "+{count} more",
     "{count} pending changes",
     "{count} pasted cells were skipped",
     "{count} running",
@@ -1485,6 +1546,7 @@ const MESSAGE_IDS: readonly [
     "Connect to Lunora Studio",
     "Connected",
     "Connecting…",
+    "Polling",
     "Enter your admin token to access the studio.",
     "From your worker's LUNORA_ADMIN_TOKEN — your project's .dev.vars in dev, or a deployment secret in production.",
     "Local",
@@ -1540,6 +1602,7 @@ const MESSAGE_IDS: readonly [
     "SVG",
     "Export / Import",
     "Exported {count} rows.",
+    "Importing rows {from}–{to} of {total}…",
     "Facets",
     "file:function",
     "Files",
@@ -1563,11 +1626,29 @@ const MESSAGE_IDS: readonly [
     "Idle",
     "Import",
     "Import (writes rows)?",
-    "Inserted {inserted}, {conflicts} conflicts, {errors} errors.",
+    "Import file",
+    "Couldn't read the columns of {table}: {message}",
+    "Import stopped after {rows} rows: {message}. The counts below cover completed chunks only. The chunk from line {line} may have written rows: check the table for rows from line {line} onward before importing again, or delete the written rows first and then import the whole file.",
+    "Import stopped after {rows} rows: {message}. The counts below cover those rows. Rows from line {line} onward were not sent: do not import the whole file again, import from that line onward, or delete the written rows first and then import the whole file.",
+    "Inserted {inserted}, replaced {replaced}, {conflicts} conflicts, {errors} errors.",
+    "Overwrite rows whose _id already exists (otherwise they are left unchanged and counted as conflicts)",
+    "This shard cannot overwrite existing rows. Nothing was sent. Update the app and import again.",
     "Interactive OpenAPI reference and copy-paste snippets for your functions.",
     "Invalid JSON args: {message}",
     "Invalid JSON: {message}",
     "Invalid NDJSON: {message}",
+    "Invalid CSV: {message}",
+    "The CSV has no data rows after the header.",
+    "The header “{name}” appears more than once.",
+    "Header column {column} is empty.",
+    "CSV rows have no table column, so choose the table they go into.",
+    "Choose a table",
+    "Checking {total} rows before writing…",
+    "Nothing was written, because some rows would be refused. Fix the rows listed below and import again.",
+    "The shard refused {count} rows, so the rest of the file was not sent. Nothing was written. Fix the rows listed below and import again.",
+    "The shard refused {count} rows, so the rest of the file was not sent. {written} rows were already written, so do not import the whole file again. Import the refused rows and any rows from line {line} onward, or delete the written rows first and then import the whole file.",
+    "This shard predates import checks, so it would write the file while checking it. Nothing was sent. Update the app and import again.",
+    "Target table",
     "ip",
     "Jobs queued with runAfter / runAt will appear here.",
     "JSON",
@@ -1576,11 +1657,30 @@ const MESSAGE_IDS: readonly [
     "key prefix (optional)",
     "Level filter",
     "line {line} ({table}): {message}",
+    "line {line}: expected {expected} cells, found {found}.",
+    "line {line}: text follows a closing quote.",
+    "line {line}: a quoted field is never closed.",
+    "line {line}: column “{column}” holds “{value}”, which a number column cannot store exactly. Store a whole number past 9007199254740991 in a bigint column.",
+    "line {line}: column “{column}” must be a number, got “{value}”.",
+    "line {line}: column “{column}” must be true or false, got “{value}”.",
+    "line {line}: column “{column}” must be an integer, got “{value}”.",
+    "line {line}: column “{column}” holds an integer longer than the import can send.",
+    "line {line}: column “{column}” must be an ISO-8601 date or epoch milliseconds of at least 11 digits, got “{value}”.",
     "List",
     "Live",
     "Live — changes stream in automatically",
     "Live unavailable",
     "Live unavailable: {liveError}",
+    "{capability} is not supported on {platform}.",
+    "Durable agents",
+    "Cross-shard fan-out",
+    "Key-value storage",
+    "Mail delivery",
+    "Object storage",
+    "Point-in-time recovery",
+    "Scheduling",
+    "Server reactors",
+    "Vector search",
     "Live: on",
     "Load",
     "Load more",
@@ -1651,6 +1751,7 @@ const MESSAGE_IDS: readonly [
     "Read and write this table through the typed data model.",
     "Move widget down",
     "Move widget up",
+    "Re-enter the sensitive values before running this again.",
     "Recent errors",
     "Recent logs",
     "Recently visited shards — click to switch",
@@ -1688,8 +1789,12 @@ const MESSAGE_IDS: readonly [
     "Run as (userId)",
     "Identity (userId) to run as",
     "Run probe",
+    "Include mutations and actions",
+    "This will execute `{functionPath}` as user `{userId}`.",
     "Allowed",
     "Denied",
+    "Errored",
+    "The call failed for a reason that is not an access verdict, so it says nothing about the policy.",
     "Probing…",
     "Set `runAsIdentity` to forge an identity and probe access.",
     "Dev only: runs the selected function as this user over the admin gate so you can test auth and RLS.",
@@ -1894,6 +1999,19 @@ const MESSAGE_IDS: readonly [
     "Draft SQL",
     "Thinking…",
     "Fix this",
+    "Tell the model what to change",
+    "Rewrite",
+    "Proposed edit",
+    "Accept",
+    "Reject",
+    "Selection",
+    "Whole query",
+    "Added",
+    "Removed",
+    "The model could not be reached.",
+    "The model returned a statement that is not read-only, so it was discarded.",
+    "The model returned nothing usable.",
+    "The statement is too long to rewrite. Select a shorter part of it.",
     "Related",
     "p50",
     "p95",
@@ -1928,7 +2046,7 @@ const MESSAGE_IDS: readonly [
     "breaking",
     "safe",
     "{count} rows",
-    "Showing the first {max} of {count} rows.",
+    "Showing the first {max} rows.",
     "Showing the {n} most common values.",
     "No rows returned.",
     "Private",
@@ -1975,10 +2093,11 @@ const MESSAGE_IDS: readonly [
     "SQL",
     "{count} selected",
     "Delete {count}",
-    "Delete {count} rows?",
+    "Delete {count} rows and everything that cascades?",
     "Copy",
     "Copied",
     "Cell value",
+    "Filter by this value",
     "Close",
     "Form",
     "Invalid JSON",
@@ -2046,6 +2165,19 @@ const MESSAGE_IDS: readonly [
     "Filter audit log",
     "filter op, table, id",
     "No audit entries.",
+    "Privacy requests",
+    "Open data-subject export and erasure requests, with due dates and failed-run retries.",
+    "Privacy requests not configured",
+    "Pass privacyRequests to the Studio to list and retry data-subject requests.",
+    "Loading privacy requests…",
+    "No open privacy requests.",
+    "ID",
+    "Subject",
+    "Received",
+    "Due",
+    "Extended due",
+    "Overdue",
+    "Erasure",
     "Notifications",
     "Registered push devices — endpoint, kind, last-send status, and delivery errors.",
     "Registered Web Push / FCM devices appear here. Configure lunora/notify.ts with defineNotify({ store }) and register a device with ctx.push.register(...).",
@@ -2109,6 +2241,8 @@ const MESSAGE_IDS: readonly [
     "Current bookmark",
     "Restore",
     "Time (ISO or epoch-ms, last 30 days)",
+    "Not a time — use epoch-ms or ISO 8601.",
+    "Resolves to {instant} (a date-time without an offset is read in this browser's time zone; a bare date is UTC)",
     "Preview",
     "Bookmark for that time",
     "Or an explicit bookmark (wins over time)",
@@ -2142,6 +2276,7 @@ const MESSAGE_IDS: readonly [
     "Ban user",
     "Ban reason (optional)",
     "Days",
+    "Permanent",
     "Unban",
     "New password",
     "Set password",
@@ -2395,7 +2530,7 @@ const MESSAGE_IDS: readonly [
     "Latency p50 / p95 per function",
     "No data points yet.",
     "Request volume per function",
-    "Analytics Engine reads need an account-scoped Cloudflare API token, which cannot be shipped to a browser. The host must pass studio.analyticsQuery — a runner that proxies the SQL through your worker — to enable these panels.",
+    "Analytics usage panels read through your worker, never from the browser. Pass studio.analyticsSqlQuery, a runner that calls an admin-only action running functionUsageQuery(panel) through ctx.analyticsSql, to enable these panels.",
     "Usage and latency from Analytics Engine — request volume, p50/p95, and hot shards.",
     "(whole bucket)",
     "Access Rules",
@@ -2423,7 +2558,7 @@ const MESSAGE_IDS: readonly [
     "Body must be valid JSON.",
     "Captured",
     "Clear log",
-    "Clear {count} messages?",
+    "Clear the whole message log?",
     "Cloudflare Queues have no peek API, so this is what push consumers actually processed — not pending depth.",
     "Consumed messages appear here once a push consumer processes a batch in dev. Send one from the Send tab to see it captured.",
     "Declare a queue with defineQueue in lunora/queues.ts to enqueue a test message.",
@@ -2474,6 +2609,12 @@ const MESSAGE_IDS: readonly [
     "Params (JSON)",
     "Params (JSON, optional)",
     "Params must be valid JSON",
+    "Send event",
+    "Event type",
+    "Payload (JSON)",
+    "Payload (JSON, optional)",
+    "Payload must be valid JSON",
+    "Event sent, but refreshing the instance failed",
     "Instances",
     "Status",
     "Output",
@@ -2495,6 +2636,8 @@ const MESSAGE_IDS: readonly [
     "This instance has no recorded steps yet.",
     "pause",
     "resume",
+    "restart",
+    "Restart?",
     "terminate",
     ">100ms avg execution",
     "50–100ms avg execution",
@@ -2602,6 +2745,29 @@ const MESSAGE_IDS: readonly [
     "Open the trace {trace}",
     "No evals recorded",
     "Call recordEvaluation from a graded run and its score shows up here.",
+    "AI usage",
+    "Tokens and spend from ctx.ai.model calls — totals, per function and per model, and the recent calls behind them.",
+    "Estimated",
+    "Partly estimated",
+    "Derived from a price table, not reported by the provider.",
+    "Includes cost derived from a price table, not reported by the provider.",
+    "Input tokens",
+    "Output tokens",
+    "Cost",
+    "Recent calls",
+    "Model",
+    "stream",
+    "failed",
+    "Cost per minute",
+    "No cost reported",
+    "{provider} provider-reported · {estimated} estimated",
+    "Total cost",
+    "By model",
+    "Spend shows up here once an action calls ctx.ai.model(...) — tokens and cost per function and per model.",
+    "No AI usage recorded",
+    "No durable history yet — these totals come from the live trace ring and reset when the shard hibernates.",
+    "Totals cover the retained metric history (up to the last 24 hours).",
+    "No recent calls in the live trace ring — it empties when the shard hibernates.",
     "Search traces",
     "search trace, span, or function",
     "Errors only",
@@ -2728,7 +2894,19 @@ const MESSAGE_IDS: readonly [
     "Enter a JSON value — for example true, 0, null, or \"done\".",
     "Set on {total} rows",
     "Set column on {total} matching",
+    "Permanently delete {total} matching rows and everything that cascades?",
+    "Permanently delete all matching rows and everything that cascades?",
+    "Delete {total} matching",
+    "Delete matching",
+    "Permanently clear all {total} rows and everything that cascades?",
+    "Permanently clear every row and everything that cascades?",
+    "Clear table ({total})",
+    "Clear table",
     "Shard: root",
+    "has",
+    "Nested field path",
+    "nested path, e.g. geo.city",
+    "value (\"10\" in quotes matches text)",
     "Shard: {shardKey} — rows in other shards are not touched.",
     "{column} has a unique index — the same value cannot be set on {total} rows."
 ];
@@ -2738,6 +2916,33 @@ const MESSAGE_IDS: readonly [
 
 ```ts
 type ProbeKind = "live" | "ready";
+```
+
+### `REQUEST_STATUSES` (const)
+
+```ts
+const REQUEST_STATUSES: readonly [
+    "received",
+    "grace",
+    "processing",
+    "ready",
+    "completed",
+    "failed",
+    "cancelled",
+    "expired"
+];
+```
+
+### `RequestStatus` (type)
+
+```ts
+type RequestStatus = (typeof REQUEST_STATUSES)[number];
+```
+
+### `RequestType` (type)
+
+```ts
+type RequestType = "erasure" | "export";
 ```
 
 ### `SavedQuery` (interface)

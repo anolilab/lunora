@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { SchemaLike } from "../../src/vectors/context";
 import { createContextVectors, createVectorSyncHook } from "../../src/vectors/context";
@@ -93,7 +93,7 @@ const createStatefulVectorizeIndex = (): VectorizeIndexLike => {
                     id: stored.id,
                     metadata: options?.returnMetadata === "none" ? undefined : stored.metadata,
                     namespace: stored.namespace,
-                    score: cosine(vector, stored.values),
+                    score: cosine(vector, [...stored.values]),
                     values: options?.returnValues ? stored.values : undefined,
                 });
             }
@@ -194,6 +194,25 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
         expect(matches.matches[0]?.score).toBeGreaterThan(0);
     });
 
+    it("createContextVectors: upsertMany writes the whole batch in one binding call", async () => {
+        expect.assertions(2);
+
+        const index = createStatefulVectorizeIndex();
+        const spy = vi.spyOn(index, "upsert");
+        const context = createContextVectors(createVectors({ indexes: { docs: index } }));
+
+        await context.upsertMany?.("docs", [
+            { embed, id: "row-1", input: "hello world" },
+            { embed, id: "row-2", input: "bye" },
+        ]);
+
+        expect(spy).toHaveBeenCalledTimes(1);
+
+        const records = await context.getByIds("docs", ["row-1", "row-2"]);
+
+        expect(records.map((record) => record.id)).toEqual(["row-1", "row-2"]);
+    });
+
     it("createContextVectors: deleteByIds removes a row from subsequent query results", async () => {
         expect.assertions(1);
 
@@ -240,7 +259,7 @@ describe("createVectorSyncHook: cross-shard namespace isolation (codegen write p
             vectorIndexes: {},
         };
 
-        // Mirrors `emit.ts`'s `buildCtx`: each shard DO builds its OWN onWrite
+        // Mirrors `emit/shard-context.ts`'s `buildCtx`: each shard DO builds its OWN onWrite
         // hook, scoped by ITS OWN shard key — never a shared, namespace-less hook.
         const shardAHook = createVectorSyncHook({ namespace: "shard-a", schema, vectors });
         const shardBHook = createVectorSyncHook({ namespace: "shard-b", schema, vectors });

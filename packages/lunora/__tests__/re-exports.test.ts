@@ -55,6 +55,10 @@ const OPT_OUT = new Map<string, string>([
         "the behavioural TCK versions in lockstep with the @lunora/platform contracts it asserts, not the umbrella's opinionated re-export surface — a host author consumes @lunora/platform/conformance directly",
     ],
     [upstreamKey("@lunora/platform", "./conformance/suite"), "same as ./conformance above — the workerd-safe pure suite is part of the same TCK"],
+    [
+        upstreamKey("@lunora/server", "./in-process"),
+        "the in-process engine seam @lunora/testing runs functions on — tooling consumes it from @lunora/server directly, an app never imports it",
+    ],
 ]);
 
 /**
@@ -97,18 +101,22 @@ const PACKAGE_OPT_OUT = new Map<string, string>([
     ["dispatch", "internal, not published"],
     ["fingerprint", "add-on — zero-dep error grouping, installed directly when used"],
     ["hyperdrive", "add-on — installed directly when used"],
+    ["jwt-auth", "add-on — installed directly when used"],
     ["lunora", "the umbrella itself"],
     ["mail", "add-on — installed directly when used"],
     ["mcp", "add-on — installed directly when used"],
     ["notify", "add-on — installed directly when used"],
     ["nuxt", "framework adapter — installed per framework, not part of the base surface"],
     ["payment", "optional add-on with heavy provider deps — installed directly"],
+    ["platform-celld", "host/engine layer — experimental celld host, never app code"],
     ["platform-cloudflare", "host/engine layer — consumed by @lunora/do, never app code"],
     ["platform-node", "host/engine layer — experimental Node host, never app code"],
+    ["privacy", "add-on — installed directly when used"],
     ["queue", "add-on — installed directly when used"],
     ["react", "framework adapter — installed per framework, not part of the base surface"],
     ["react-native", "framework adapter — installed per framework, not part of the base surface"],
     ["replica", "local-first replica runtime — installed directly by apps that opt into local mirrors"],
+    ["rspack", "tooling — the Rspack plugin is its own install, not a runtime re-export"],
     ["scheduler", "add-on — installed directly when used"],
     ["search-core", "internal, not published"],
     ["seed", "tooling — dev-time seeding, installed directly where used"],
@@ -121,6 +129,7 @@ const PACKAGE_OPT_OUT = new Map<string, string>([
     ["testing", "tooling — test harness, installed directly by test suites"],
     ["vite", "tooling — the Vite plugin is its own install, not a runtime re-export"],
     ["vue", "framework adapter — installed per framework, not part of the base surface"],
+    ["wire", "internal codec — a transitive dependency of the packages that use it, not app-facing"],
     ["workflow", "add-on — installed directly when used"],
     ["x402", "optional add-on with heavy provider/chain deps — installed directly"],
 ]);

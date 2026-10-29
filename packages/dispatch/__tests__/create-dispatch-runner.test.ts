@@ -1,9 +1,9 @@
 import { LunoraError } from "@lunora/errors";
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { createDispatchLogger } from "../src/create-dispatch-logger";
-import { createDispatchRunner, isDeterministicDispatchFailure } from "../src/create-dispatch-runner";
+import { createDispatchRunner, isDeterministicDispatchFailure, isDispatchDecline } from "../src/create-dispatch-runner";
 
 const ENV = { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com/" };
 const REF = { __lunoraRef: "messages:send" };
@@ -306,6 +306,35 @@ describe("createDispatchRunner", () => {
     });
 });
 
+describe("isDispatchDecline", () => {
+    const failWith = async (status: number, code: string, headers: Record<string, string> = {}): Promise<unknown> =>
+        createDispatchRunner({
+            env: ENV,
+            fetchImpl: async () => Response.json({ error: { code, message: "m" } }, { headers, status }),
+            label: "@lunora/queue",
+        })(REF).then(
+            () => undefined,
+            (error: unknown) => error,
+        );
+
+    it("is true for the shard's claim decline, which carries the declined header", async () => {
+        expect.assertions(2);
+
+        expect(isDispatchDecline(await failWith(409, "DISPATCH_IN_PROGRESS", { "x-lunora-dispatch-declined": "1" }))).toBe(true);
+        // Right code, but not rebuilt from a dispatch response.
+        expect(isDispatchDecline(new LunoraError("DISPATCH_IN_PROGRESS", "m"))).toBe(false);
+    });
+
+    it("is false for a handler that forwards a DISPATCH_IN_PROGRESS error of its own", async () => {
+        expect.assertions(1);
+
+        // The shard echoes a handler-thrown error's code and status, but only the
+        // claim path sets the header. Read as a decline, this would re-run the
+        // action for fifteen minutes (workflow) or park it for fifteen (queue).
+        expect(isDispatchDecline(await failWith(409, "DISPATCH_IN_PROGRESS"))).toBe(false);
+    });
+});
+
 describe("isDeterministicDispatchFailure", () => {
     it("is true for the deterministic allowlist and false for 408/429/5xx and non-LunoraErrors", async () => {
         expect.assertions(8);
@@ -329,6 +358,29 @@ describe("isDeterministicDispatchFailure", () => {
         expect(isDeterministicDispatchFailure(await errorWithStatus(429))).toBe(false);
         expect(isDeterministicDispatchFailure(await errorWithStatus(500))).toBe(false);
         expect(isDeterministicDispatchFailure(new Error("plain"))).toBe(false);
+    });
+
+    it("is false for a shard's `409 DISPATCH_IN_PROGRESS` decline — it must stay retryable", async () => {
+        expect.assertions(2);
+
+        // The shard declines a re-delivery whose first attempt is still running.
+        // The decline is about WHEN the call arrived, not about the call: it
+        // clears once that attempt settles. Classified deterministic, a queue
+        // consumer would ack the message and a workflow step would fail for
+        // good — and if the first attempt then died, the job would never run:
+        // at-least-once silently turned into at-most-once.
+        const declined = await createDispatchRunner({
+            env: ENV,
+            fetchImpl: async () => Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "already running" } }, { status: 409 }),
+            label: "@lunora/queue",
+        })(REF).then(
+            () => undefined,
+            (error: unknown) => error,
+        );
+
+        // A real, branded dispatch failure — so it is the classification, not the brand, that keeps it retryable.
+        expect(declined).toMatchObject({ code: "DISPATCH_IN_PROGRESS", status: 409 });
+        expect(isDeterministicDispatchFailure(declined)).toBe(false);
     });
 
     it("is false for an allowlisted status whose body carries no dispatch envelope (edge challenge / WAF block)", async () => {

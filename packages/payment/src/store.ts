@@ -11,13 +11,24 @@ const customerKey = (provider: ProviderId, referenceId: string): string => `${pr
 
 const recordKey = (provider: ProviderId, id: string): string => `${provider}:${id}`;
 
-/**
- * `PaymentStore` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
+/** Applies a write to a revisioned row, returning whether it applied. An unguarded write always applies. */
+const applyRevisioned = <T extends { readonly revision?: number }>(rows: Map<string, T>, key: string, record: T, guard: RevisionGuard | undefined): boolean => {
+    const current = rows.get(key)?.revision;
+
+    if (guard !== undefined && current !== guard.ifRevision) {
+        return false;
+    }
+
+    rows.set(key, { ...record, revision: (current ?? 0) + 1 });
+
+    return true;
+};
+
 export interface PaymentStore {
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
+    /** A payment session for `subscriptionId` that names an owner (non-blank `referenceId`), if any. */
+    getPaymentSessionBySubscription: (provider: ProviderId, subscriptionId: string) => Promise<PaymentSession | undefined>;
     getSubscription: (provider: ProviderId, id: string) => Promise<Subscription | undefined>;
     listSubscriptionsByReference: (referenceId: string) => Promise<Subscription[]>;
 
@@ -87,8 +98,18 @@ export interface PaymentStore {
     /** Period usage totals for many features in one read — the batch form of {@link PaymentStore.sumUsage}. */
     sumUsageByFeature: (referenceId: string, featureIds: ReadonlyArray<string>, since: number) => Promise<ReadonlyMap<string, number>>;
     upsertCustomer: (customer: Customer) => Promise<void>;
-    upsertPaymentSession: (session: PaymentSession) => Promise<void>;
-    upsertSubscription: (subscription: Subscription) => Promise<void>;
+
+    /**
+     * Writes a session. With a `guard` the write applies only while the stored revision still equals
+     * `guard.ifRevision`; the result says whether it did. Without one it always applies.
+     */
+    upsertPaymentSession: (session: PaymentSession, guard?: RevisionGuard) => Promise<boolean>;
+    upsertSubscription: (subscription: Subscription, guard?: RevisionGuard) => Promise<boolean>;
+}
+
+/** The revision a guarded write expects to find. `undefined` matches a row with no revision yet, which includes a row that does not exist. */
+export interface RevisionGuard {
+    readonly ifRevision: number | undefined;
 }
 
 /**
@@ -104,7 +125,6 @@ export interface PaymentStore {
  * Exported so {@link MemoryPaymentStore} and the database-backed store share ONE
  * definition: a divergence between them would show up as a metered limit that
  * enforces differently in tests than in production.
- * @experimental
  */
 export const foldUsage = (events: ReadonlyArray<Pick<UsageEvent, "createdAt" | "idempotencyKey" | "mode" | "quantity">>): number => {
     const ordered = events.toSorted((a, b) => a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey));
@@ -118,8 +138,26 @@ export const foldUsage = (events: ReadonlyArray<Pick<UsageEvent, "createdAt" | "
 };
 
 /**
+ * The owner a row keeps: the stored `referenceId` wins unless it is blank. Owner attribution comes
+ * from checkout metadata the provider does not always echo, so an incoming value only fills a gap.
+ */
+export const ownerOf = (stored: string | undefined, incoming: string | undefined): string => (stored?.trim() ? stored : (incoming ?? ""));
+
+/**
+ * Overlay the provider's view of a subscription on the stored row: provider truth for the
+ * lifecycle, the store for owner, `createdAt` and `lastEventAt` (a status read is not an event).
+ */
+export const overlayProviderSubscription = (existing: Subscription | undefined, current: Subscription): Subscription => {
+    return {
+        ...current,
+        createdAt: existing?.createdAt ?? current.createdAt,
+        lastEventAt: existing?.lastEventAt,
+        referenceId: ownerOf(existing?.referenceId, current.referenceId),
+    };
+};
+
+/**
  * In-memory {@link PaymentStore} for tests and local development. Not durable.
- * @experimental
  */
 export class MemoryPaymentStore implements PaymentStore {
     private readonly customers = new Map<string, Customer>();
@@ -138,6 +176,14 @@ export class MemoryPaymentStore implements PaymentStore {
 
     public getPaymentSession(provider: ProviderId, id: string): Promise<PaymentSession | undefined> {
         return Promise.resolve(this.sessions.get(recordKey(provider, id)));
+    }
+
+    public getPaymentSessionBySubscription(provider: ProviderId, subscriptionId: string): Promise<PaymentSession | undefined> {
+        return Promise.resolve(
+            [...this.sessions.values()].find(
+                (session) => session.provider === provider && session.subscriptionId === subscriptionId && session.referenceId.trim() !== "",
+            ),
+        );
     }
 
     public getSubscription(provider: ProviderId, id: string): Promise<Subscription | undefined> {
@@ -227,15 +273,11 @@ export class MemoryPaymentStore implements PaymentStore {
         return Promise.resolve();
     }
 
-    public upsertPaymentSession(session: PaymentSession): Promise<void> {
-        this.sessions.set(recordKey(session.provider, session.id), session);
-
-        return Promise.resolve();
+    public upsertPaymentSession(session: PaymentSession, guard?: RevisionGuard): Promise<boolean> {
+        return Promise.resolve(applyRevisioned(this.sessions, recordKey(session.provider, session.id), session, guard));
     }
 
-    public upsertSubscription(subscription: Subscription): Promise<void> {
-        this.subscriptions.set(recordKey(subscription.provider, subscription.id), subscription);
-
-        return Promise.resolve();
+    public upsertSubscription(subscription: Subscription, guard?: RevisionGuard): Promise<boolean> {
+        return Promise.resolve(applyRevisioned(this.subscriptions, recordKey(subscription.provider, subscription.id), subscription, guard));
     }
 }

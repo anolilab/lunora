@@ -219,4 +219,4 @@ const readSupabaseExport = async function* (
     yield* readDumpFiles(tables, logger, sourceRows, (dumpFile) => readSupabaseTable(dumpFile, mapping));
 };
 
-export { castPostgresCsv, listSupabaseTables, readSupabaseExport, toDocument };
+export { castPostgresCsv, listSupabaseTables, readSupabaseExport };

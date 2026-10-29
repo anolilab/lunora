@@ -76,6 +76,8 @@ import { dirname, join } from "node:path";
 import type { FunctionReference } from "@lunora/client";
 // eslint-disable-next-line import/first -- must follow the vi.mock above
 import type { Collection } from "@tanstack/db";
+// eslint-disable-next-line import/first -- must follow the vi.mock above
+import { NonRetriableError } from "@tanstack/offline-transactions";
 
 // eslint-disable-next-line import/first -- must follow the vi.mock above
 import { createCheckpointRegistry, getShardCheckpoints, lunoraCollectionOptions } from "../src/collection-options";
@@ -988,5 +990,30 @@ describe(bindMutators, () => {
             expect(typed.bindMutators).toBe(bindMutators);
             expect(typed.defineMutator).toBe(defineMutator);
         });
+    });
+
+    // A bound mutator's write is direct: nothing retries it, so every coded
+    // failure (a refused credential included) is final and reported as one.
+    it("reports a credential refusal as a final, coded verdict", async () => {
+        configs.length = 0;
+
+        const refusal = Object.assign(new Error("token expired"), { code: "TOKEN_EXPIRED" });
+        const client = {
+            callMutator: async () => {
+                throw refusal;
+            },
+            confirmedMutationWatermark: () => 0,
+            currentIdentity: () => null,
+        } as never;
+        const { collection } = mockCollection();
+        const mutators = { send: defineMutator<{ text: string }>({ apply: () => undefined, serverRef: "messages:send" }) };
+        const bound = bindMutators(client, { collections: { messages: collection } }, mutators);
+
+        bound.send({ text: "x" });
+
+        const failure = await configs[0]?.mutationFn().catch((error: unknown) => error);
+
+        expect(failure).toBeInstanceOf(NonRetriableError);
+        expect((failure as { code?: string }).code).toBe("TOKEN_EXPIRED");
     });
 });

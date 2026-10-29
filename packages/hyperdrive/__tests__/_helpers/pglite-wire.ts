@@ -1,4 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
+import { vector } from "@electric-sql/pglite-pgvector";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 
 import type { HyperdriveLike } from "../../src/types";
@@ -30,7 +31,9 @@ interface PgliteWireHarness {
 }
 
 const createPgliteWireHarness = async (): Promise<PgliteWireHarness> => {
-    const database = new PGlite();
+    // `pgvector` registered for the same reason as in `pglite-exec`: PGlite only
+    // exposes the type when the extension is passed at construction.
+    const database = new PGlite({ extensions: { vector } });
 
     await database.waitReady;
 

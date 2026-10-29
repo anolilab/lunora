@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { reconcileWranglerCompatibilityDate } from "../src/cloudflare/reconcile-compatibility-date";
 import { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "../src/cloudflare/workers-cache";
-import { validateWranglerProject } from "../src/cloudflare/wrangler-validator";
+import { validateWranglerProject } from "../src/cloudflare/wrangler-project";
 
 let workdir: string;
 

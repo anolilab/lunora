@@ -14,6 +14,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'errors.dart';
 import 'offline_queue.dart';
@@ -59,6 +60,34 @@ class OfflineReplayer {
 
   final Stopwatch _clock = Stopwatch()..start();
 
+  /// The pending re-flush per shard, and how many answered transient failures
+  /// in a row that shard has met — what the hintless backoff ramps on.
+  ///
+  /// A 429 or a 503 arrives over a socket that STAYS open, so nothing reconnects
+  /// to flush again: without a timer the write sat queued until the socket
+  /// happened to drop (protocol/README.md 4.3).
+  final Map<String, Timer> _retryTimers = <String, Timer>{};
+  final Map<String, int> _retryAttempts = <String, int>{};
+
+  /// Shards whose retry timer has just fired. That timer already waited out the
+  /// rate-limit window, so the flush it starts skips the check once rather than
+  /// racing the stopwatch by a millisecond.
+  final Set<String> _retryDue = <String>{};
+
+  final Random _random = Random();
+
+  /// Drop every scheduled re-flush: the client closed, or this shard's socket
+  /// went down and its reconnect flushes anyway.
+  void cancelRetries({String? shardKey, bool all = false}) {
+    for (final shard in all ? <String>{..._retryTimers.keys, ..._retryDue} : <String>{shardKey ?? ''}) {
+      _retryTimers.remove(shard)?.cancel();
+      _retryAttempts.remove(shard);
+      // A fired retry folded into a flush still running carries this mark; it
+      // goes with the timer, or the reconnect's flush would skip a live window.
+      _retryDue.remove(shard);
+    }
+  }
+
   /// Replay every queued write, oldest first.
   ///
   /// Called for you on the transition to connected; public because a caller that
@@ -88,15 +117,19 @@ class OfflineReplayer {
     try {
       bool again;
       int? retryAfter;
+      _FlushState state;
 
       do {
         _flushAgain.remove(shard);
 
-        retryAfter = await _flushOnce(shardKey);
+        state = _FlushState();
+        retryAfter = await _flushOnce(shardKey, state);
         // Only while THIS shard is still connected, so a disconnect that lands
         // mid-pass ends the loop instead of retrying into a socket that is down.
         again = _flushAgain.contains(shard);
       } while (again && isConnected(shardKey));
+
+      _scheduleRetry(shardKey, state, retryAfter);
 
       return retryAfter;
     } finally {
@@ -107,7 +140,30 @@ class OfflineReplayer {
 
   /// One drain-and-replay pass. See [flush], which owns the
   /// re-entrancy and the coalesced-reconnect loop around it.
-  Future<int?> _flushOnce(String? shardKey) async {
+  ///
+  /// Nothing escapes it. [LunoraClient.setConnected] and `hydrate` start a flush
+  /// unawaited, so an exception out of here is an unhandled async error — which
+  /// ends the process — and it had already left every write drained but not yet
+  /// settled in no queue at all: a result the codec refused in one batch slot
+  /// did both. An unexpected failure is therefore treated as a transport one:
+  /// every drained write not yet settled goes back on the queue, in order, for
+  /// the next flush.
+  Future<int?> _flushOnce(String? shardKey, _FlushState state) async {
+    try {
+      return await _replayPass(shardKey, state);
+    } on Object {
+      final queued = queue.items.toSet();
+
+      _returnOrAbandon(<QueuedMutation>[
+        for (final item in state.drained)
+          if (!item.settled && !queued.contains(item)) item,
+      ]);
+
+      return state.retryAfterMs;
+    }
+  }
+
+  Future<int?> _replayPass(String? shardKey, _FlushState state) async {
     // A client with no poster cannot replay anything. Checked here rather than
     // per write, because the two replay shapes classified it oppositely: the
     // single-call path saw a CODED error and rejected the whole queue
@@ -123,7 +179,9 @@ class OfflineReplayer {
     // earns the same 429, indefinitely.
     final remaining = _flushNotBefore - _clock.elapsedMilliseconds;
 
-    if (remaining > 0) {
+    if (!_retryDue.remove(shardKey ?? '') && remaining > 0) {
+      state.waited = true;
+
       return remaining;
     }
 
@@ -136,7 +194,7 @@ class OfflineReplayer {
     // `sameShard`, not `==`: a null shard key and an empty one are the SAME
     // shard, so a write submitted with `''` drains on the default shard's flush
     // instead of waiting for a socket that is never opened.
-    final drained = queue.drain((item) => sameShard(item.shardKey, shardKey));
+    final drained = state.drained = queue.drain((item) => sameShard(item.shardKey, shardKey));
 
     if (drained.isEmpty) {
       return null;
@@ -146,11 +204,23 @@ class OfflineReplayer {
     // authenticated requests and there is no point between them where the
     // token could change without this loop seeing it. A mismatch is rejected
     // rather than silently dropped, so an awaiting caller gets a verdict.
+    //
+    // Three verdicts, as the reference's `replayIdentityVerdict` has them. A
+    // write is HELD — back on the queue, persisted, unsettled — while the
+    // identity cannot be told: a subject not yet confirmed for a new token (a
+    // refresh and an account switch look alike until it is), or nobody signed
+    // in. A different identity signed in is terminal.
     final identity = transport.identityFingerprint();
+    final unconfirmed = transport.subjectAwaitingReconfirm;
     final sendable = <QueuedMutation>[];
+    final held = <QueuedMutation>[];
 
     for (final item in drained) {
-      if (item.identityAllowsReplay(identity)) {
+      if (!item.identityStamped) {
+        sendable.add(item);
+      } else if (unconfirmed || (identity == null && item.identity != null)) {
+        held.add(item);
+      } else if (item.identityAllowsReplay(identity) || transport.isSameCredential(item.identity)) {
         sendable.add(item);
       } else {
         queue.unpersist(item.id);
@@ -158,13 +228,17 @@ class OfflineReplayer {
       }
     }
 
+    _returnOrAbandon(held);
+
+    if (held.isNotEmpty && !isClosed()) {
+      queue.onHeld?.call(List<QueuedMutation>.unmodifiable(held));
+    }
+
     final encodable = _encodableOrSettleTerminal(sendable);
 
     if (encodable.isEmpty) {
       return null;
     }
-
-    final state = _FlushState();
 
     // A lone write rides the single-call path, which is the proven one. Two or
     // more coalesce into batch round trips — the flaky-reconnect win, where N
@@ -243,8 +317,43 @@ class OfflineReplayer {
     return chunks;
   }
 
+  /// Re-flush a shard whose replay a server ANSWERED with a transient refusal,
+  /// after its hint or, lacking one, a bounded jittered backoff.
+  ///
+  /// Only while that shard is connected: a raw transport failure is what a
+  /// dropped socket looks like, and the reconnect flushes anyway. One timer per
+  /// shard, replaced rather than stacked; a pass with no answered failure resets
+  /// the backoff.
+  void _scheduleRetry(String? shardKey, _FlushState state, int? retryAfter) {
+    final shard = shardKey ?? '';
+
+    if (!state.answered && !state.waited) {
+      _retryAttempts.remove(shard);
+
+      return;
+    }
+
+    if (isClosed() || !isConnected(shardKey)) {
+      return;
+    }
+
+    final attempts = (_retryAttempts[shard] ?? 0) + (state.answered ? 1 : 0);
+
+    _retryAttempts[shard] = attempts;
+    _retryTimers.remove(shard)?.cancel();
+    _retryTimers[shard] = Timer(Duration(milliseconds: retryAfter ?? replayBackoffMs(attempts, _random.nextDouble)), () {
+      _retryTimers.remove(shard);
+      _retryDue.add(shard);
+      unawaited(flush(shardKey: shardKey));
+    });
+  }
+
   /// Record a rate limit's delay, and hold the next flush off until it passes.
   void _noteRetryAfter(_FlushState state, Object error) {
+    if (error is LunoraApiException && !authReplayErrorCodes.contains(error.code)) {
+      state.answered = true;
+    }
+
     final delay = retryAfterMs(error);
 
     if (delay == null) {
@@ -310,18 +419,16 @@ class OfflineReplayer {
   Future<void> _replaySequential(List<QueuedMutation> items, _FlushState state) async {
     for (var index = 0; index < items.length; index += 1) {
       final item = items[index];
+      final LunoraRpcOutcome outcome;
 
       try {
-        final outcome = await transport.rpc(item.functionPath, args: item.args, shardKey: item.shardKey, mutationId: item.id, issuedBy: item.clientId);
-
-        queue.unpersist(item.id);
-        item.onCommit?.call(outcome.commitCursor);
-        item.resolve(outcome.result);
+        outcome = await transport.rpcUndecoded(item.functionPath, args: item.args, shardKey: item.shardKey, mutationId: item.id, issuedBy: item.clientId);
       } on LunoraApiException catch (error) {
-        // Coded, but not necessarily a VERDICT. A 5xx, an envelope-less non-2xx
-        // (an edge error page, a WAF block, a proxy), a shard blip or a rate
-        // limit all mean the write never reached one — so it goes back on the
-        // queue rather than being dropped for having been alone in the flush.
+        // Coded, but not necessarily a VERDICT. An envelope-less reply (an edge
+        // error page, a WAF block, a proxy), a shard blip or a rate limit all
+        // mean the write never reached one — so it goes back on the queue
+        // rather than being dropped for having been alone in the flush. The
+        // predicate is the batch path's, so the two cannot disagree.
         if (isTransientFailure(error)) {
           _noteRetryAfter(state, error);
           _returnOrAbandon(items.sublist(index));
@@ -333,6 +440,8 @@ class OfflineReplayer {
         // would fail identically forever.
         queue.unpersist(item.id);
         item.reject(error);
+
+        continue;
       } on Object {
         // Uncoded: a transport failure. Transient — put this write and every
         // one after it back at the front, in order, and stop the flush.
@@ -340,6 +449,39 @@ class OfflineReplayer {
 
         return;
       }
+
+      // Outside the try: settling runs observers, and one that throws must not
+      // read as a transport failure that re-queues a write already settled.
+      _settleCommitted(item, outcome.result, outcome.commitCursor);
+    }
+  }
+
+  /// Settle a write the server COMMITTED, whether or not its result decodes.
+  ///
+  /// The order is the point: decide the outcome (decode) first, then remove the
+  /// durable record, then settle. A result the codec refuses is still a commit —
+  /// replaying the write could only return the same result — so it settles
+  /// committed, its overlay confirmed on the echoed cursor, carrying
+  /// [wireDecodeFailed] instead of a value. Left to throw, it was re-queued
+  /// forever on the single-call path, and on the batch path it escaped the slot
+  /// loop with every later slot drained and never settled.
+  void _settleCommitted(QueuedMutation item, Object? result, int? commitCursor) {
+    Object? value;
+    LunoraApiException? undecodable;
+
+    try {
+      value = LunoraTransport.decodeResult(result);
+    } on LunoraApiException catch (error) {
+      undecodable = error;
+    }
+
+    queue.unpersist(item.id);
+    item.onCommit?.call(commitCursor);
+
+    if (undecodable == null) {
+      item.resolve(value);
+    } else {
+      item.resolveUndecodable(undecodable);
     }
   }
 
@@ -372,7 +514,11 @@ class OfflineReplayer {
           // as independent single calls.
           'mutationId': item.id,
           'clientId': item.clientId ?? transport.clientId,
-          if (item.shardKey != null) 'shardKey': item.shardKey,
+          // Empty is the default shard, as it is on the single-call path
+          // (`buildRpcBody`) and in the drain that put these writes together:
+          // `""` here routed the write to the Durable Object the runtime names
+          // `""` whenever it shared a flush, and to the default shard when alone.
+          if (item.shardKey != null && item.shardKey!.isNotEmpty) 'shardKey': item.shardKey,
         },
     ];
 
@@ -385,71 +531,55 @@ class OfflineReplayer {
       return (requeue: items, stop: true);
     }
 
-    final Object? decoded;
-
-    try {
-      decoded = response.body.isEmpty ? null : jsonDecode(response.body);
-    } on FormatException {
-      // A non-JSON body, an edge 5xx say. Transient: do not lose the writes.
-      return (requeue: items, stop: true);
-    }
-
-    final body = decoded is Map<String, Object?> ? decoded : const <String, Object?>{};
-    final results = body['results'];
+    final body = LunoraTransport.readBody(response.body);
+    final results = body is Map<String, Object?> ? body['results'] : null;
 
     if (results is List) {
       return (requeue: _settleBatchSlots(items, results, state), stop: false);
     }
 
-    // No per-slot results. A coded envelope is a verdict on the whole batch — a
-    // bad request, an authorization denial — and therefore terminal for every
-    // entry; anything else is transport, and transient.
-    final envelope = body['error'];
+    // No per-slot results: a whole-batch outcome, classified by the SAME
+    // predicate a lone write's reply is. A coded envelope is a verdict on every
+    // entry, anything without one is transport — and a 2xx carrying neither is
+    // no answer at all, so transport too.
+    final error =
+        LunoraTransport.replyError(body, status: response.status) ?? const LunoraApiException('INTERNAL', 'batch reply carries no results', null, true);
 
-    if (envelope is Map<String, Object?>) {
-      final error = LunoraApiException(
-        envelope['code'] is String ? envelope['code'] as String : 'INTERNAL',
-        envelope['message'] is String ? envelope['message'] as String : 'batch rejected',
-        envelope['data'] == null ? null : decodeWire(envelope['data']),
-        response.status >= 500,
-      );
+    // The body was too big, not wrong — every entry in it would have committed
+    // alone. Halve and retry, on ANY 413: the estimate the chunker used cannot
+    // see the framing the worker measured, and an edge in front of the worker
+    // refuses with its own page and no envelope. A lone write still refused
+    // falls through and settles on the verdict below.
+    if (error.code == payloadTooLarge && items.length > 1) {
+      final middle = items.length ~/ 2;
+      final left = await _replayBatched(items.sublist(0, middle), state);
 
-      // The body was too big, not wrong — every entry in it would have committed
-      // alone. Halve and retry: the estimate the chunker used cannot see the
-      // framing the worker actually measured, and only the answer can.
-      if (error.code == payloadTooLarge && items.length > 1) {
-        final middle = items.length ~/ 2;
-        final left = await _replayBatched(items.sublist(0, middle), state);
-
-        if (left.stop) {
-          // The left half stopped the flush, so the right half is re-queued
-          // UNSENT and in order behind it.
-          return (requeue: <QueuedMutation>[...left.requeue, ...items.sublist(middle)], stop: true);
-        }
-
-        final right = await _replayBatched(items.sublist(middle), state);
-
-        return (requeue: <QueuedMutation>[...left.requeue, ...right.requeue], stop: right.stop);
+      if (left.stop) {
+        // The left half stopped the flush, so the right half is re-queued
+        // UNSENT and in order behind it.
+        return (requeue: <QueuedMutation>[...left.requeue, ...items.sublist(middle)], stop: true);
       }
 
-      // A shard blip, a gateway failure or a rate limit is not a verdict on the
-      // batch's contents. Requeue it whole and stop the flush, exactly as the
-      // single-call path does for the same codes.
-      if (isTransientFailure(error)) {
-        _noteRetryAfter(state, error);
+      final right = await _replayBatched(items.sublist(middle), state);
 
-        return (requeue: items, stop: true);
-      }
-
-      for (final item in items) {
-        queue.unpersist(item.id);
-        item.reject(error);
-      }
-
-      return (requeue: <QueuedMutation>[], stop: false);
+      return (requeue: <QueuedMutation>[...left.requeue, ...right.requeue], stop: right.stop);
     }
 
-    return (requeue: items, stop: true);
+    // A shard blip, a gateway failure or a rate limit is not a verdict on the
+    // batch's contents. Requeue it whole and stop the flush, exactly as the
+    // single-call path does for the same reply.
+    if (isTransientFailure(error)) {
+      _noteRetryAfter(state, error);
+
+      return (requeue: items, stop: true);
+    }
+
+    for (final item in items) {
+      queue.unpersist(item.id);
+      item.reject(error);
+    }
+
+    return (requeue: <QueuedMutation>[], stop: false);
   }
 
   /// Demux a batch reply back onto the writes it replayed, in input order,
@@ -484,15 +614,22 @@ class OfflineReplayer {
         continue;
       }
 
-      final envelope = slot['error'];
+      // An `error` key holding a string, a null, a list or a number is no
+      // envelope (§4.2), and a slot carries no HTTP status of its own to
+      // classify it by — so nothing readable came back about this entry, which
+      // is exactly the position of a slot the server never returned. §4.3
+      // retries that one. Falling through to the commit branch below settled a
+      // durable write COMMITTED with a null result and un-persisted it.
+      if (slot.containsKey('error') && slot['error'] is! Map<String, Object?>) {
+        requeue.add(item);
 
-      if (envelope is Map<String, Object?>) {
-        final error = LunoraApiException(
-          envelope['code'] is String ? envelope['code'] as String : 'INTERNAL',
-          envelope['message'] is String ? envelope['message'] as String : 'request failed',
-          envelope['data'] == null ? null : decodeWire(envelope['data']),
-        );
+        continue;
+      }
 
+      // A slot's `body` is exactly a §4.2 envelope with no status of its own.
+      final error = LunoraTransport.replyError(slot, status: 200);
+
+      if (error != null) {
         // The SAME predicate the whole-batch and single-call paths use, not a
         // second code set beside them: a slot's `body` is exactly a §4.2
         // envelope, so a durable write's fate must not depend on how many
@@ -512,9 +649,9 @@ class OfflineReplayer {
 
       final cursor = slot['commitCursor'];
 
-      queue.unpersist(item.id);
-      item.onCommit?.call(cursor is int ? cursor : null);
-      item.resolve(decodeWire(slot['result']));
+      // Decoded per slot inside `_settleCommitted`, so one result the codec
+      // refuses settles its own write and never aborts the loop.
+      _settleCommitted(item, slot['result'], cursor is int ? cursor : null);
     }
 
     return requeue;
@@ -529,4 +666,15 @@ class OfflineReplayer {
 class _FlushState {
   /// Milliseconds the server asked the caller to wait before flushing again.
   int? retryAfterMs;
+
+  /// A server or edge ANSWERED a replay with a transient refusal — a raw
+  /// transport failure never landed, and a held credential waits for a token.
+  bool answered = false;
+
+  /// The pass met the rate-limit window and drained nothing.
+  bool waited = false;
+
+  /// Every write this pass took off the queue, in order — what the guard in
+  /// `_flushOnce` puts back if the pass fails before settling them.
+  List<QueuedMutation> drained = const <QueuedMutation>[];
 }

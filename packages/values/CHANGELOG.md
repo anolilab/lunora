@@ -1,3 +1,447 @@
+## @lunora/values [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.84...@lunora/values@1.0.0-alpha.85) (2026-10-28)
+
+### Performance Improvements
+
+* **values:** hoist output key check, skip certain literal union misses ([#1388](https://github.com/anolilab/lunora/issues/1388)) ([fecf322](https://github.com/anolilab/lunora/commit/fecf3224652825afa31976be6eb0f529f23bde0e))
+
+## @lunora/values [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.83...@lunora/values@1.0.0-alpha.84) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.74
+
+## @lunora/values [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.82...@lunora/values@1.0.0-alpha.83) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+
+## @lunora/values [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.81...@lunora/values@1.0.0-alpha.82) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+
+## @lunora/values [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.80...@lunora/values@1.0.0-alpha.81) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+
+## @lunora/values [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.79...@lunora/values@1.0.0-alpha.80) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+
+## @lunora/values [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.78...@lunora/values@1.0.0-alpha.79) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+
+## @lunora/values [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.77...@lunora/values@1.0.0-alpha.78) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+
+## @lunora/values [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.76...@lunora/values@1.0.0-alpha.77) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+
+## @lunora/values [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.75...@lunora/values@1.0.0-alpha.76) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+
+## @lunora/values [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.74...@lunora/values@1.0.0-alpha.75) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+
+## @lunora/values [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.73...@lunora/values@1.0.0-alpha.74) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+
+## @lunora/values [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.72...@lunora/values@1.0.0-alpha.73) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+
+## @lunora/values [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.71...@lunora/values@1.0.0-alpha.72) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+
+## @lunora/values [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.70...@lunora/values@1.0.0-alpha.71) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+
+## @lunora/values [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.69...@lunora/values@1.0.0-alpha.70) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+
+## @lunora/values [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.68...@lunora/values@1.0.0-alpha.69) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+
+## @lunora/values [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.67...@lunora/values@1.0.0-alpha.68) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+
+## @lunora/values [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.66...@lunora/values@1.0.0-alpha.67) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.57
+
+## @lunora/values [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.65...@lunora/values@1.0.0-alpha.66) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.56
+
+## @lunora/values [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.64...@lunora/values@1.0.0-alpha.65) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+
+## @lunora/values [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.63...@lunora/values@1.0.0-alpha.64) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+
+## @lunora/values [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.62...@lunora/values@1.0.0-alpha.63) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+
+## @lunora/values [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.61...@lunora/values@1.0.0-alpha.62) (2026-10-10)
+
+### Features
+
+* ctx.newId, a replay-stable id for mutations; one cyrb53 hash ([#1090](https://github.com/anolilab/lunora/issues/1090)) ([b59709a](https://github.com/anolilab/lunora/commit/b59709abba15f380fb2f8954b2f647d875d1fcfb))
+
+## @lunora/values [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.60...@lunora/values@1.0.0-alpha.61) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+
+## @lunora/values [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.59...@lunora/values@1.0.0-alpha.60) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+
+## @lunora/values [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.58...@lunora/values@1.0.0-alpha.59) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+
+## @lunora/values [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.57...@lunora/values@1.0.0-alpha.58) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+
+## @lunora/values [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.56...@lunora/values@1.0.0-alpha.57) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+
+## @lunora/values [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.55...@lunora/values@1.0.0-alpha.56) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+
+## @lunora/values [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.54...@lunora/values@1.0.0-alpha.55) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+
+## @lunora/values [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.53...@lunora/values@1.0.0-alpha.54) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+
+## @lunora/values [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.52...@lunora/values@1.0.0-alpha.53) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+
+## @lunora/values [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.51...@lunora/values@1.0.0-alpha.52) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** defineSchema throws for a table that is both .global()
+and .ttl(). Drop .ttl() and expire those rows from a cron. Codegen now
+fails on a container config key it cannot read statically instead of
+omitting it, and on two containers whose names map to one binding.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(values): say what $type<T>() does and does not override
+
+The JSDoc said $type<T>() overrides "the inferred select/insert type".
+It overrides Infer<> only. The runtime parser is unchanged, so codegen's
+Doc_* / Insert_* / procedure-arg types keep the base kind, which is the
+type a stored value is actually guaranteed to have. The example used
+Id<"users">, the one case with a checked alternative (v.id), so it now
+points there instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* style(codegen): format the imports the key-name codemod touched
+
+The codemod that routed object-literal keys through propertyKeyName /
+findObjectProperty merged names into existing import lists without a space
+after the comma; ESLint's import sort then ran after Prettier and left 16
+files unformatted. Prettier, then ESLint, over packages/codegen/src.
+
+The previous fix(codegen) commit's footer left one break out: nullable
+columns are now typed nullable everywhere codegen renders a type.
+* **codegen:** Doc_*, Insert_* and procedure-argument types now include
+`| null` for `.nullable()` columns (and the injected `.softDelete()` marker
+is `number | null`). Code that reads such a column without a null check,
+e.g. `doc.note.length`, no longer typechecks.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): refuse container settings codegen would misread
+
+Four shapes still let a wrangler-relevant container setting be dropped or
+read with a value the app does not run with:
+
+- A spread typed `T | undefined` or `any` has no properties to list, so the
+  opaque-spread check found no guarded key and skipped it, dropping
+  `max_instances`. Keys now come from the non-nullable apparent type (every
+  member of a union), and an `any` / `unknown` spread is refused outright.
+- `const base = { maxInstances: 2 }; base.maxInstances = 10;` wrote 2 to
+  wrangler while the container ran with 10. A const object that is assigned
+  through, incremented, deleted from or `Object.assign`ed anywhere in its
+  file is now refused with a located error.
+- `const a: any = { ...b }; const b: any = { ...a };` overflowed the stack.
+  Spread resolution tracks the literals it is inside and reports the cycle.
+- `const maxInstances = 3 as const` (or `satisfies`, a type assertion or
+  parentheses) failed the "static number literal" check. Type-only wrappers
+  are unwrapped before reading.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): read quoted destructuring keys without their quotes
+
+The object-literal fix left the pattern side: destructuring readers took
+`getPropertyNameNode().getText()`, which keeps a string-literal key's
+quotes, so `({ "ctx": c })` or `const { "storage": bucket } = ctx` read as
+the property `"ctx"` / `"storage"` and the read went unseen.
+
+A `bindingKeyName` helper in discover/ast.ts reads the key through the same
+`propertyNameText` as `propertyKeyName`. It replaces all seven sites:
+argument-taint, ai-tool-side-effects, feature-usage (two),
+functions/internal/resolve-call and http-action-guards (two). A
+feature-usage test covers both spellings and fails without the fix.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(server): hold extension tables to the table-mode rules
+
+`defineSchema` validates only the tables it is called with, and
+`mergeSchemaExtension` re-ran only the index and vector checks. A table
+contributed through `.extend()` or `installPlugins` could therefore be
+`.global()` together with `.ttl()`, a `v.bigint()` column or
+`.dropStalePatches()` — every combination `defineSchema` refuses for an
+app's own tables — and the refusal silently did not apply.
+
+The per-table mode checks (commitOrdered, dropStalePatches, global bigint,
+global ttl, memory) are grouped as `validateTableModes`, run by
+`defineSchema` and again by `mergeSchemaExtension` over the merged set.
+Tests cover ttl, bigint and dropStalePatches through both `.extend()` and
+`installPlugins`; all fail without the merge-time call.
+* **codegen:** `.extend()` / `installPlugins` now throw for an extension
+table combining `.global()` with `.ttl()`, `.commitOrdered()`,
+`.dropStalePatches()` or a `v.bigint()` column, or `.memory()` with a
+companion index, as `defineSchema` already did for app tables.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): resolve a shorthand container setting through const aliases
+
+`{ maxInstances: LIMIT }` resolved LIMIT to its value, but the shorthand
+`{ maxInstances }` over `const maxInstances = LIMIT` stopped at the first
+initializer, handed the identifier `LIMIT` to the per-key reader, and
+failed the static-number check. The same applied to guarded keys inside
+`rollout`.
+
+Both forms now go through one `resolveBinding`, which follows
+`const a = b` aliases (and type-only wrappers) to the value, up to 16
+hops, and applies the written-through check at each const object it
+passes. A test covers a shorthand `maxInstances` and a two-hop,
+`as const` `rollout.gracePeriodSeconds`; it fails without the change.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(codegen): pin numeric object keys to their runtime spelling
+
+`{ 0x10: … }` is the key "16" at runtime, `{ 1e3: … }` "1000", `{ 1.50: … }`
+"1.5". `propertyNameText` reads a numeric key through `getLiteralText()`,
+and TypeScript's scanner already stores a numeric literal's text in that
+normalised form (verified for hex, binary, exponent, separator, trailing
+zero and >2^53 literals against `Object.keys` of the same object), so no
+code change is needed. This test keeps it that way.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **codegen:** read keys, nullability and ttl as the runtime does ([#838](https://github.com/anolilab/lunora/issues/838)) ([57c54d8](https://github.com/anolilab/lunora/commit/57c54d801da44dbbed2380b6b33976a6d8e078a4))
+
+## @lunora/values [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.50...@lunora/values@1.0.0-alpha.51) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+
+## @lunora/values [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.49...@lunora/values@1.0.0-alpha.50) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+
+## @lunora/values [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.48...@lunora/values@1.0.0-alpha.49) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/values [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.47...@lunora/values@1.0.0-alpha.48) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/values [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.46...@lunora/values@1.0.0-alpha.47) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/values [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.45...@lunora/values@1.0.0-alpha.46) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **values:** `v.bytes()` no longer throws on an `ArrayBufferView`. Code that
+relied on the rejection (to detect a view before converting it) now receives a
+normalised `ArrayBuffer` instead of a `ValidationError`.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **values:** accept a buffer view in v.bytes() ([#704](https://github.com/anolilab/lunora/issues/704)) ([6ef377b](https://github.com/anolilab/lunora/commit/6ef377b5b73d4caa6214276934eee0f49288031a))
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+## @lunora/values [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.44...@lunora/values@1.0.0-alpha.45) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+
+## @lunora/values [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.43...@lunora/values@1.0.0-alpha.44) (2026-09-11)
+
+### Bug Fixes
+
+* **codegen:** emit v.any() args as optional keys ([#693](https://github.com/anolilab/lunora/issues/693)) ([cb2e4ca](https://github.com/anolilab/lunora/commit/cb2e4ca895ee4ac4bc2d510ff8cf53f5d5345839))
+
 ## @lunora/values [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/values@1.0.0-alpha.42...@lunora/values@1.0.0-alpha.43) (2026-09-07)
 
 

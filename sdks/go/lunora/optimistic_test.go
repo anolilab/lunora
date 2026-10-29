@@ -40,7 +40,7 @@ func subscribedState(t *testing.T, base any) (*Client, *OptimisticState, *[]any)
 	t.Helper()
 
 	client := NewClient("https://app.example", nil)
-	client.AttachSocket(func(map[string]any) error { return nil })
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
 	seen := &[]any{}
 

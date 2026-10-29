@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
     CLOUDFLARE_PLATFORM_ERRORS,
     ERROR_CATALOG,
+    ERROR_HINTS,
     findCloudflarePlatformSolution,
     findIssueSolution,
     findSolutionByMessage,
@@ -32,13 +33,14 @@ describe("lunoraError", () => {
         expect(error.title).toBe(ERROR_CATALOG.NOT_FOUND.title);
     });
 
-    it("carries a catalog hint for CONFLICT", () => {
-        expect.assertions(2);
+    it("leaves the catalog hint to resolveHint rather than copying it on", () => {
+        expect.assertions(3);
 
         const error = new LunoraError("CONFLICT", "boom");
 
         expect(error.message).toBe("boom");
-        expect(error.hint).toBe(ERROR_CATALOG.CONFLICT.hint);
+        expect(error.hint).toBeUndefined();
+        expect(resolveHint(error)).toBe(ERROR_HINTS.CONFLICT);
     });
 
     it("lets options override status, name, hint, data, docsUrl", () => {
@@ -101,6 +103,37 @@ describe("lunoraError", () => {
         expect(keys).toContain("status");
         expect(keys).toContain("hint");
         expect(keys).toContain("data");
+    });
+});
+
+describe("instanceof LunoraError across copies", () => {
+    it("matches an error from a second copy of the package", () => {
+        expect.assertions(2);
+
+        // Stands in for a duplicate install: a separate class that sets the same global brand.
+        class SecondCopyLunoraError extends Error {
+            public constructor() {
+                super("from another copy");
+                Object.defineProperty(this, Symbol.for("@lunora/errors/LunoraError"), { value: true });
+            }
+        }
+
+        expect(new SecondCopyLunoraError()).toBeInstanceOf(LunoraError);
+        expect(new Error("plain")).not.toBeInstanceOf(LunoraError);
+    });
+
+    it("keeps subclass instanceof as prototype membership", () => {
+        expect.assertions(4);
+
+        class ConflictError extends LunoraError {}
+        class OtherError extends LunoraError {}
+
+        const conflict = new ConflictError("CONFLICT");
+
+        expect(conflict).toBeInstanceOf(LunoraError);
+        expect(conflict).toBeInstanceOf(ConflictError);
+        expect(conflict).not.toBeInstanceOf(OtherError);
+        expect(new LunoraError("CONFLICT")).not.toBeInstanceOf(ConflictError);
     });
 });
 
@@ -186,7 +219,7 @@ describe("toErrorBody", () => {
         expect(status).toBe(409);
         expect(body.code).toBe("CONFLICT");
         expect(body.message).toBe("stale");
-        expect(body.hint).toBe(ERROR_CATALOG.CONFLICT.hint);
+        expect(body.hint).toBe(ERROR_HINTS.CONFLICT);
         expect(body.docsUrl).toBe("https://lunora.sh/docs/errors");
     });
 
@@ -256,8 +289,8 @@ describe("catalog message solutions", () => {
         expect.assertions(3);
 
         expect(resolveHint({ hint: "explicit" })).toBe("explicit");
-        expect(resolveHint({ code: "CONFLICT" })).toBe(ERROR_CATALOG.CONFLICT.hint);
-        expect(resolveHint("optimistic concurrency conflict on row")).toBe(ERROR_CATALOG.CONFLICT.hint.join("\n"));
+        expect(resolveHint({ code: "CONFLICT" })).toBe(ERROR_HINTS.CONFLICT);
+        expect(resolveHint("optimistic concurrency conflict on row")).toBe((ERROR_HINTS.CONFLICT as ReadonlyArray<string>).join("\n"));
     });
 });
 
@@ -448,5 +481,104 @@ describe("raise", () => {
         const { id } = rows[0] ?? raise("NOT_FOUND", "row");
 
         expect(id).toBe("a");
+    });
+});
+
+describe("lunoraError response headers", () => {
+    // Distinctive sentinel: a response's cookie must never appear in anything a client receives.
+    const COOKIE = "session=sentinel-cookie-value";
+
+    it("is absent on an error that did not come from a response", () => {
+        expect.assertions(2);
+
+        const error = new LunoraError("CONFLICT", "stale");
+
+        expect(error.headers).toBeUndefined();
+        expect(Object.getOwnPropertyDescriptor(error, "headers")).toBeUndefined();
+    });
+
+    it("exposes the headers it was given, read-only and non-enumerable", () => {
+        expect.assertions(4);
+
+        const error = new LunoraError("TOO_MANY_REQUESTS", "slow down", { headers: { "retry-after": "3" } });
+
+        expect(error.headers).toStrictEqual({ "retry-after": "3" });
+        expect(Object.getOwnPropertyDescriptor(error, "headers")?.writable).toBe(false);
+        expect(Object.keys(error)).not.toContain("headers");
+        expect(JSON.stringify(error)).not.toContain("retry-after");
+    });
+
+    it("keeps headers out of the client envelope and the wire body", () => {
+        expect.assertions(2);
+
+        const error = new LunoraError("INTERNAL", "boom", { headers: { "set-cookie": COOKIE } });
+
+        expect(JSON.stringify(error)).not.toContain(COOKIE);
+        expect(toErrorBody(error).body).not.toHaveProperty("headers");
+    });
+});
+
+describe("lunoraError internal and why", () => {
+    // Distinctive sentinel: it must never appear in anything a client receives.
+    const SENTINEL = "INTERNAL_CONTEXT_SENTINEL_7f3a";
+
+    it("exposes why and internal as readonly fields, undefined when not given", () => {
+        expect.assertions(4);
+
+        const error = new LunoraError("CONFLICT", "stale");
+
+        expect(error.why).toBeUndefined();
+        expect(error.internal).toBeUndefined();
+        expect(new LunoraError("CONFLICT", "stale", { internal: { shard: "a" }, why: "row moved" })).toMatchObject({
+            internal: { shard: "a" },
+            why: "row moved",
+        });
+        expect(Object.keys(new LunoraError("CONFLICT", "stale", { why: "row moved" }))).toContain("why");
+    });
+
+    it("keeps internal non-enumerable so JSON.stringify and Object.keys never see it", () => {
+        expect.assertions(3);
+
+        const error = new LunoraError("INTERNAL", "boom", { internal: { query: SENTINEL } });
+
+        expect(error.internal).toStrictEqual({ query: SENTINEL });
+        expect(Object.keys(error)).not.toContain("internal");
+        expect(JSON.stringify(error)).not.toContain(SENTINEL);
+    });
+
+    it("keeps the client-visible fields in JSON, with why alongside hint", () => {
+        expect.assertions(2);
+
+        const serialized = JSON.stringify(new LunoraError("CONFLICT", "stale", { internal: { a: 1 }, why: "row moved" }));
+        const json = JSON.parse(serialized) as Record<string, unknown>;
+
+        expect(json.why).toBe("row moved");
+        expect(json).not.toHaveProperty("internal");
+    });
+
+    it("leaves a non-string why out of the body, so the response still serializes", () => {
+        expect.assertions(2);
+
+        const cyclic: Record<string, unknown> = {};
+
+        cyclic.self = cyclic;
+
+        const error = Object.assign(new LunoraError("CONFLICT", "stale"), { why: cyclic });
+        const { body } = toErrorBody(error);
+
+        expect(body).not.toHaveProperty("why");
+        expect(() => JSON.stringify(body)).not.toThrow();
+    });
+
+    it("ships why on a non-redacted body and never ships internal on any body", () => {
+        expect.assertions(4);
+
+        const visible = toErrorBody(new LunoraError("CONFLICT", "stale", { internal: { query: SENTINEL }, why: "row moved" }));
+        const redacted = toErrorBody(new LunoraError("INTERNAL", "boom", { internal: { query: SENTINEL }, why: "row moved" }));
+
+        expect(visible.body.why).toBe("row moved");
+        expect(JSON.stringify(visible.body)).not.toContain(SENTINEL);
+        expect(redacted.body).not.toHaveProperty("why");
+        expect(JSON.stringify(redacted.body)).not.toContain(SENTINEL);
     });
 });

@@ -1,22 +1,27 @@
 // Minimal wrangler config used ONLY by `@cloudflare/vitest-plugin` to boot
 // the test Worker in a real workerd runtime.
 //
-// IMPORTANT: this file is not deployed. Two suites share it:
+// IMPORTANT: this file is not deployed. Three suites share it:
 //
 //   - the plugin-load smoke, which needs no storage at all (it only proves the
-//     enterprise plugins import and construct inside workerd), and
+//     enterprise plugins import and construct inside workerd),
 //   - the DO-backed adapter suite, which needs a real SQLite-backed Durable Object
 //     so `state.storage.transaction` is the platform's own primitive rather than a
-//     BEGIN/COMMIT stand-in.
+//     BEGIN/COMMIT stand-in, and
+//   - the D1 migration suite, which needs a real D1 binding because workerd's SQLite
+//     and `node:sqlite` disagree about double-quoted names that resolve to nothing:
+//     the Node suites build with `SQLITE_DQS=0` and raise, D1 reads a string literal.
+//     Anything gated on that distinction is untestable off this runtime.
 //
-// Hence the DO binding and the `new_sqlite_classes` migration below. No D1 binding:
-// D1 behaviour is covered by the Node suites, and SCIM cannot run on D1 anyway.
+// Hence the DO binding, the `new_sqlite_classes` migration, and the D1 binding below.
+// The `database_id` is a local miniflare handle, not a real database.
 {
     "$schema": "../../../../node_modules/wrangler/config-schema.json",
     "name": "lunora-auth-enterprise-test-worker",
     "main": "test-worker.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
+    "d1_databases": [{ "binding": "TEST_DB", "database_id": "lunora-auth-test", "database_name": "lunora-auth-test" }],
     "durable_objects": {
         "bindings": [{ "class_name": "AuthStorageDO", "name": "AUTH_DO" }],
     },

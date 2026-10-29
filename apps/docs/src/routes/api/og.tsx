@@ -1,6 +1,4 @@
-import { initWasm, Resvg } from "@resvg/resvg-wasm";
 import { createFileRoute } from "@tanstack/react-router";
-import satori from "satori";
 
 import { getPackageBySlug } from "@/data/packages";
 
@@ -30,7 +28,7 @@ const ALREADY_INITIALIZED = /already initialized/i;
  * fetch — a CDN blip, a cold start racing the network — and every later request
  * rejects instantly from the cache. Clearing it lets the next request retry.
  */
-const ensureWasm = (): Promise<void> => {
+const ensureWasm = (initWasm: typeof import("@resvg/resvg-wasm").initWasm): Promise<void> => {
     wasmReady ??= initWasm(fetch(RESVG_WASM_URL)).catch((error: unknown) => {
         if (error instanceof Error && ALREADY_INITIALIZED.test(error.message)) {
             return;
@@ -86,6 +84,17 @@ const loadFonts = () => {
 const truncate = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 
 const renderPng = async (title: string, description: string, eyebrow: string, accent: string): Promise<Uint8Array<ArrayBuffer>> => {
+    // Imported here, not at the top of the module. This file is part of the route
+    // tree, so a top-level import loads satori on every request the function
+    // serves. satori statically imports harfbuzzjs, whose entry starts loading
+    // `hb.wasm` from disk on import and leaves the result as a promise nothing
+    // awaits. When that file is missing (Netlify's tracer does not follow it; see
+    // `included_files` in netlify.toml) the rejection goes unhandled, and on Lambda
+    // that ends the process. Every instance died after its first request, so every
+    // navigation paid a ~8s cold start. Loading the renderer here keeps any such
+    // failure confined to this endpoint.
+    const [{ default: satori }, { initWasm, Resvg }] = await Promise.all([import("satori"), import("@resvg/resvg-wasm")]);
+
     const svg = await satori(
         <div style={{ backgroundColor: "#0e0e11", display: "flex", fontFamily: "Geist", height: "630px", width: "1200px" }}>
             <div style={{ background: "linear-gradient(180deg, #31DAED 0%, #9273E8 50%, #ED5AA3 100%)", height: "630px", width: "10px" }} />
@@ -101,7 +110,7 @@ const renderPng = async (title: string, description: string, eyebrow: string, ac
         { fonts: await loadFonts(), height: 630, width: 1200 },
     );
 
-    await ensureWasm();
+    await ensureWasm(initWasm);
 
     const resvg = new Resvg(svg);
     const rendered = resvg.render();

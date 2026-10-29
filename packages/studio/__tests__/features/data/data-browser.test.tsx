@@ -1,13 +1,13 @@
 import { LunoraProvider } from "@lunora/react";
+// Bundler-inlined shared helper (see CLAUDE.md `shared/` rules) — the same codec
+// the shard writer stores `__doc__` with, so the test asserts against the real
+// stored form rather than a hand-written copy of it.
+import { encodeWire } from "@lunora/wire";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-// Bundler-inlined shared helper (see CLAUDE.md `shared/` rules) — the same codec
-// the shard writer stores `__doc__` with, so the test asserts against the real
-// stored form rather than a hand-written copy of it.
-import { encodeWire } from "../../../../../shared/wire-codec";
 import type { DataBrowserProps } from "../../../src/features/data/data-browser";
 import { DataBrowser } from "../../../src/features/data/data-browser";
 import useMirroredRef from "../../../src/hooks/use-mirrored-ref";
@@ -429,6 +429,199 @@ describe("dataBrowser", () => {
 
         expect(mounted.length).toBeGreaterThan(0);
         expect(mounted.length).toBeLessThan(200);
+    });
+
+    /**
+     * Drag-to-reorder, twice.
+     *
+     * What this actually guards is the feature registration. TanStack v9 tables
+     * carry only the APIs their `features` object registers, and a missing one is
+     * not a type error at this call site — it is `undefined` at runtime. Dropping
+     * `columnOrderingFeature` from `gridTableFeatures` fails this test with
+     * "Cannot read properties of undefined", which is how it was verified.
+     *
+     * FOUR columns, not the two the shared `messages` fixture has, so a second drag
+     * has somewhere non-trivial to land.
+     *
+     * Note that reading the current order is deliberately belt-and-braces: the
+     * `getAllLeafColumns()` fallback already returns columns in applied order, so
+     * `atoms.columnOrder.get()` returning nothing would not change the outcome.
+     * Don't read a pass here as covering that accessor.
+     */
+    it("reorders columns by drag-and-drop, and the second drag builds on the first", async () => {
+        expect.assertions(2);
+
+        const COLUMNS = ["__id__", "alpha", "beta", "gamma"];
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 1 }];
+                }
+
+                const { table } = args as PageArgs;
+
+                if (table !== "messages") {
+                    throw new Error(`unknown table: ${table}`);
+                }
+
+                return { columns: COLUMNS, rows: [{ __id__: "m1", alpha: "a", beta: "b", gamma: "g" }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        // Header order, read off the DOM in render order.
+        const headerIds = (): string[] => screen.getAllByTestId(/^db-head-/u).map((cell) => cell.dataset["testid"]?.replace("db-head-", "") ?? "");
+
+        const drag = (from: string, to: string): void => {
+            fireEvent.dragStart(screen.getByTestId(`db-head-${from}`));
+            fireEvent.drop(screen.getByTestId(`db-head-${to}`));
+        };
+
+        const expectOrder = async (order: string[]): Promise<void> => {
+            await waitFor(() => {
+                if (headerIds().join("|") !== order.join("|")) {
+                    throw new Error(`expected ${order.join(",")}, saw ${headerIds().join(",")}`);
+                }
+            });
+        };
+
+        await expectOrder(COLUMNS);
+
+        // Drop `gamma` before `__id__`: it takes the first slot.
+        drag("gamma", "__id__");
+        await expectOrder(["gamma", "__id__", "alpha", "beta"]);
+
+        expect(headerIds()).toStrictEqual(["gamma", "__id__", "alpha", "beta"]);
+
+        // Drop `beta` before `__id__`. Read against the STORED order this lands
+        // `["gamma", "beta", "__id__", "alpha"]`; re-seeded from the declared order it
+        // would land `["beta", "__id__", "alpha", "gamma"]` instead.
+        drag("beta", "__id__");
+        await expectOrder(["gamma", "beta", "__id__", "alpha"]);
+
+        expect(headerIds()).toStrictEqual(["gamma", "beta", "__id__", "alpha"]);
+    });
+
+    /**
+     * Drag-to-resize.
+     *
+     * Same class of guard as the reorder test above: `columnResizingFeature` and
+     * `columnSizingFeature` are registered features, and dropping either one is not
+     * a type error at the call site — `header.getResizeHandler()` is simply
+     * `undefined` and the mousedown throws. Verified by removing each in turn.
+     *
+     * `columnResizeMode: "onChange"` means the width tracks the pointer live, so a
+     * single mousemove is enough; the assertion reads the width off the header's
+     * inline style, which is what `header.getSize()` feeds.
+     */
+    it("resizes a column by dragging its handle, and marks it resizing while held", async () => {
+        expect.assertions(4);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        const headWidth = (): number => Number.parseFloat(screen.getByTestId("db-head-text").style.width);
+
+        const handle = screen.getByTestId("db-resize-text");
+        const before = headWidth();
+
+        expect(before).toBeGreaterThan(0);
+        expect(handle.dataset["resizing"]).toBe("false");
+
+        // Grab the handle and drag it 60px to the right.
+        fireEvent.mouseDown(handle, { clientX: 0 });
+
+        await waitFor(() => {
+            if (screen.getByTestId("db-resize-text").dataset["resizing"] !== "true") {
+                throw new Error("handle never entered the resizing state");
+            }
+        });
+
+        expect(screen.getByTestId("db-resize-text").dataset["resizing"]).toBe("true");
+
+        fireEvent.mouseMove(document, { clientX: 60 });
+        fireEvent.mouseUp(document, { clientX: 60 });
+
+        await waitFor(() => {
+            if (headWidth() <= before) {
+                throw new Error(`width did not grow: ${String(before)} -> ${String(headWidth())}`);
+            }
+        });
+
+        expect(headWidth()).toBeGreaterThan(before);
+    });
+
+    /**
+     * The Columns menu, driven through the real table rather than a stub.
+     *
+     * `grid-features.test.tsx` covers this file's pure exports (`toCsv` and
+     * friends) and nothing else, so the menu's binding to TanStack —
+     * `column.toggleVisibility`, `table.getIsAllColumnsVisible`,
+     * `table.toggleAllColumnsVisible` — had no coverage at all. Under v9 that
+     * binding is exactly what an unregistered `columnVisibilityFeature` breaks, at
+     * runtime and not in `tsc`; verified by removing it and watching this fail.
+     */
+    it("hides and restores a column from the Columns menu, and toggles them all", async () => {
+        expect.assertions(4);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        // `queryAll`, not `getAll`: hiding every column legitimately leaves no headers,
+        // and `getAllByTestId` throws on an empty match instead of returning [].
+        const headerIds = (): string[] => screen.queryAllByTestId(/^db-head-/u).map((cell) => cell.dataset["testid"]?.replace("db-head-", "") ?? "");
+
+        expect(headerIds()).toContain("text");
+
+        fireEvent.click(screen.getByTestId("grid-columns"));
+
+        // Hiding a column drops its header, not just the menu checkbox.
+        fireEvent.click(await screen.findByTestId("grid-column-text"));
+
+        await waitFor(() => {
+            if (headerIds().includes("text")) {
+                throw new Error(`text still rendered: ${headerIds().join(",")}`);
+            }
+        });
+
+        expect(headerIds()).not.toContain("text");
+
+        // "All" restores every hidden column in one go.
+        fireEvent.click(screen.getByTestId("grid-columns-all"));
+
+        await waitFor(() => {
+            if (!headerIds().includes("text")) {
+                throw new Error(`text not restored: ${headerIds().join(",")}`);
+            }
+        });
+
+        expect(headerIds()).toContain("text");
+
+        // And toggling "All" again hides the data columns rather than doing nothing.
+        fireEvent.click(screen.getByTestId("grid-columns-all"));
+
+        await waitFor(() => {
+            if (headerIds().includes("text")) {
+                throw new Error(`text still rendered after hide-all: ${headerIds().join(",")}`);
+            }
+        });
+
+        expect(headerIds()).not.toContain("text");
     });
 
     it("clears the sort on the third click", async () => {
@@ -1590,6 +1783,29 @@ describe("dataBrowser — structured filters and bulk delete", () => {
         expect(screen.getByTestId("db-clear-table")).toBeDefined();
     });
 
+    it('does not offer "Delete N matching" for a `contains` row with no value yet', async () => {
+        expect.assertions(3);
+
+        // Switching the operator to `contains` before typing a value leaves a
+        // substring test for "" — which every row satisfies. The bulk ops must not
+        // treat that as a predicate and offer to delete the whole table under it.
+        const mock = createFilterableClient();
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        fireEvent.change(await screen.findByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(await screen.findByTestId("db-filter-operator"), { target: { value: "contains" } });
+        await screen.findByTestId("db-page");
+
+        expect(screen.queryByTestId("db-bulk-delete")).toBeNull();
+        expect(screen.queryByTestId("db-bulk-patch")).toBeNull();
+        expect(screen.getByTestId("db-clear-table")).toBeDefined();
+    });
+
     it("loops the bounded deleteRows call until the server reports no more", async () => {
         expect.assertions(2);
 
@@ -2083,6 +2299,300 @@ describe("dataBrowser — facets", () => {
 
         expect((lastRead?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([{ column: "status", operator: "eq", value: "archived" }]);
         expect(screen.getByTestId("db-row").textContent).toContain("again");
+    });
+});
+
+/** The default rows: the first `note` is NULL, the second's is set, and `meta` is an object on both. */
+const NULLABLE_CELL_ROWS: Record<string, unknown>[] = [
+    { __id__: "m1", meta: { level: 1 }, note: null, text: "hello" },
+    { __id__: "m2", meta: { level: 2 }, note: "kept", text: "world" },
+];
+
+/**
+ * A client serving a `messages` page over the given rows. An `eq` clause with a null
+ * value selects every row where the field is NULL or absent, the way the server's
+ * `json_extract` compiles it, so the page narrows to exactly the cell that was clicked.
+ */
+const createNullableCellClient = (rows: Record<string, unknown>[] = NULLABLE_CELL_ROWS): MockClientHooks => {
+    const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+
+    return createMockClient({
+        query: (reference, args): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: "messages", rowCount: rows.length }];
+            }
+
+            const { filters = [], limit = 50, offset = 0, table } = args as { filters?: FilterArg[]; limit?: number; offset?: number; table: string };
+
+            if (table !== "messages") {
+                throw new Error(`unknown table: ${table}`);
+            }
+
+            const matched = rows.filter((row) => filters.every((clause) => clause.operator !== "eq" || (row[clause.column] ?? null) === clause.value));
+
+            return { columns, rows: matched.slice(offset, offset + limit), total: matched.length };
+        },
+    });
+};
+
+describe("dataBrowser — filter by cell value", () => {
+    it("adds an eq filter with a null value from a NULL cell, narrowing to the rows that hold NULL", async () => {
+        expect.assertions(3);
+
+        const mock = createNullableCellClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-note")[0] as HTMLElement);
+        fireEvent.click(await screen.findByTestId("grid-cell-filter"));
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 1) {
+                throw new Error("null filter not applied yet");
+            }
+        });
+
+        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage);
+
+        expect((lastRead?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([{ column: "note", operator: "eq", value: null }]);
+        expect(screen.getByTestId("db-row").textContent).toContain("hello");
+        expect(screen.queryByTestId("grid-cell-dialog")).toBeNull();
+    });
+
+    it("offers the action on a field absent from one document, and filters to the rows where it is absent", async () => {
+        expect.assertions(3);
+
+        // Row m1 has no `note` key at all, so its cell reads as undefined. The
+        // compiled `IS NULL` also matches a missing key, so that is the filter to add.
+        const mock = createNullableCellClient([
+            { __id__: "m1", text: "hello" },
+            { __id__: "m2", note: "kept", text: "world" },
+        ]);
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-note")[0] as HTMLElement);
+        fireEvent.click(await screen.findByTestId("grid-cell-filter"));
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 1) {
+                throw new Error("absent-field filter not applied yet");
+            }
+        });
+
+        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage);
+
+        expect((lastRead?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([{ column: "note", operator: "eq", value: null }]);
+        expect(screen.getByTestId("db-row").textContent).toContain("hello");
+        expect(screen.queryByTestId("grid-cell-dialog")).toBeNull();
+    });
+
+    it.each([
+        { label: "true", row: 0, value: true },
+        { label: "false", row: 1, value: false },
+    ])("offers the action on a boolean cell and filters on $label", async ({ row, value }) => {
+        expect.assertions(2);
+
+        const mock = createNullableCellClient([
+            { __id__: "m1", active: true, text: "hello" },
+            { __id__: "m2", active: false, text: "world" },
+        ]);
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-active")[row] as HTMLElement);
+        fireEvent.click(await screen.findByTestId("grid-cell-filter"));
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 1) {
+                throw new Error("boolean filter not applied yet");
+            }
+        });
+
+        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage);
+
+        expect((lastRead?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([{ column: "active", operator: "eq", value }]);
+        expect(screen.getByTestId("db-row").textContent).toContain(row === 0 ? "hello" : "world");
+    });
+
+    it("filters on the stored value of a cell whose edit is staged, not the typed one", async () => {
+        expect.assertions(2);
+
+        const mock = createNullableCellClient();
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.doubleClick(screen.getByTestId("db-cell-m1-text"));
+
+        const input = await screen.findByTestId<HTMLInputElement>("db-cell-input-m1-text");
+
+        fireEvent.change(input, { target: { value: "edited" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        await screen.findByTestId("db-staged");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-text")[0] as HTMLElement);
+        fireEvent.click(await screen.findByTestId("grid-cell-filter"));
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 1) {
+                throw new Error("stored-value filter not applied yet");
+            }
+        });
+
+        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage);
+
+        expect((lastRead?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([{ column: "text", operator: "eq", value: "hello" }]);
+        // The staged text still shows on the row: the filter addressed the stored value, not the edit.
+        expect(screen.getByTestId("db-row").textContent).toContain("edited");
+    });
+
+    it("withholds the filter action on an object value, which no equality clause can match", async () => {
+        expect.assertions(1);
+
+        const mock = createNullableCellClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-meta")[0] as HTMLElement);
+        await screen.findByTestId("grid-cell-value");
+
+        expect(screen.queryByTestId("grid-cell-filter")).toBeNull();
+    });
+
+    it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+        "withholds the filter action on the non-finite number %s, which the stored form never equals",
+        async (value) => {
+            expect.assertions(1);
+
+            const mock = createNullableCellClient([{ __id__: "m1", note: value, text: "hello" }]);
+
+            render(renderBrowser(mock, { pageSize: 10 }));
+
+            fireEvent.click(await screen.findByTestId("db-table-messages"));
+            await screen.findByTestId("db-page");
+
+            fireEvent.click(screen.getAllByTestId("db-expand-note")[0] as HTMLElement);
+            await screen.findByTestId("grid-cell-value");
+
+            expect(screen.queryByTestId("grid-cell-filter")).toBeNull();
+        },
+    );
+
+    it.each([
+        { declared: "any", offered: false },
+        { declared: "bigint", offered: true },
+    ])("offers the filter action on a bigint only in a field declared bigint (declared $declared)", async ({ declared, offered }) => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 1 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.describeTables) {
+                    return { columnsByTable: { messages: [{ name: "n", optional: false, type: declared }] } };
+                }
+
+                return { columns: ["__id__", "n"], rows: [{ __id__: "m1", n: 123n }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-n")[0] as HTMLElement);
+        await screen.findByTestId("grid-cell-value");
+
+        expect(screen.queryByTestId("grid-cell-filter") !== null).toBe(offered);
+    });
+
+    it("keeps a nested clause on the same column when a cell filter adds its equality", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: NULLABLE_CELL_ROWS.length }];
+                }
+
+                return { columns: ["__id__", "note", "text"], rows: NULLABLE_CELL_ROWS, total: NULLABLE_CELL_ROWS.length };
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <DataBrowser initialFilters={[{ column: "note", operator: "eq", path: ["a"], value: "x" }]} tableParam="messages" />
+            </LunoraProvider>,
+        );
+
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-note")[0] as HTMLElement);
+        fireEvent.click(await screen.findByTestId("grid-cell-filter"));
+
+        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage);
+
+        expect((lastRead?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([
+            { column: "note", operator: "eq", path: ["a"], value: "x" },
+            { column: "note", operator: "eq", value: null },
+        ]);
+    });
+
+    it("closes the expanded cell when the table changes under it, so its filter cannot reach the new table", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [
+                        { name: "messages", rowCount: 1 },
+                        { name: "users", rowCount: 1 },
+                    ];
+                }
+
+                const { table } = args as { table: string };
+
+                return { columns: ["__id__", "note"], rows: [{ __id__: `${table}-1`, note: null }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-note")[0] as HTMLElement);
+        await screen.findByTestId("grid-cell-filter");
+
+        // A history navigation changes the table while the dialog is still mounted.
+        fireEvent.click(screen.getByTestId("db-table-users"));
+
+        // The scope reset runs during render, so the dialog is already gone when the click's act() returns.
+        expect(screen.queryByTestId("grid-cell-dialog")).toBeNull();
+        expect(screen.queryByTestId("grid-cell-filter")).toBeNull();
+        expect(
+            mock.query.mock.calls.some(
+                (call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage && (call[1] as { filters?: FilterArg[] }).filters?.length,
+            ),
+        ).toBe(false);
     });
 });
 
@@ -2873,6 +3383,100 @@ describe("dataBrowser — same-table saved-query apply (STUDIO-274)", () => {
 });
 
 /**
+ * The page read (`skipCount: true`, one `pageSize` window) and the COUNT are
+ * independent admin RPCs, and the COUNT is by far the slower of the two — a
+ * `search` runs `instr(...)` over every column of every row. Until it lands the
+ * browser's `total` is a LOWER BOUND derived from the loaded page, and quoting
+ * it at a destructive step promised "Clear all 50 rows?" over a table the op
+ * then emptied entirely.
+ */
+describe("destructive labels while the COUNT is still pending", () => {
+    const ROWS = Array.from({ length: 500 }, (_, index) => {
+        return { __id__: `r${index.toString()}`, text: `row ${index.toString()}` };
+    });
+
+    /** A client that serves the page immediately and leaves the COUNT read hanging. */
+    const createPendingCountClient = (): MockClientHooks =>
+        createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 500 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.clearTable || reference === ADMIN_FUNCTIONS.deleteRows) {
+                    return { count: ROWS.length, done: true };
+                }
+
+                const { limit = 50, offset = 0, skipCount } = args as { limit?: number; offset?: number; skipCount?: boolean };
+
+                // The COUNT read is the one WITHOUT `skipCount`. Never resolves.
+                if (skipCount !== true) {
+                    return new Promise(() => {});
+                }
+
+                return { columns: ["__id__", "text"], rows: ROWS.slice(offset, offset + limit) };
+            },
+        });
+
+    const openTable = async (): Promise<void> => {
+        render(renderBrowser(createPendingCountClient(), { editable: true, pageSize: 50 }));
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+    };
+
+    it("never quotes the page size on the clear-table button or its confirm", async () => {
+        expect.assertions(2);
+
+        await openTable();
+
+        const clear = screen.getByTestId("db-clear-table");
+
+        expect(clear.textContent).toBe("Clear table");
+
+        fireEvent.click(clear);
+
+        expect(screen.getByTestId("db-clear-table-confirm").textContent).toBe("Permanently clear every row and everything that cascades?");
+    });
+
+    it("never quotes the page size on 'Delete N matching'", async () => {
+        expect.assertions(2);
+
+        await openTable();
+
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "row" } });
+
+        const bulk = await screen.findByTestId("db-bulk-delete");
+
+        expect(bulk.textContent).toBe("Delete matching");
+
+        fireEvent.click(bulk);
+
+        expect(screen.getByTestId("db-bulk-delete-confirm").textContent).toBe("Permanently delete all matching rows and everything that cascades?");
+    });
+
+    it("keeps the pager's Next reachable on a full page", async () => {
+        expect.assertions(1);
+
+        await openTable();
+
+        // `total` is exactly `offset + rows.length` while the COUNT is pending, so
+        // comparing against it froze the pager on page one.
+        expect(screen.getByTestId<HTMLButtonElement>("db-next").disabled).toBe(false);
+    });
+
+    it("withholds the bulk-patch action until the count it quotes exists", async () => {
+        expect.assertions(1);
+
+        await openTable();
+
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "row" } });
+        await screen.findByTestId("db-bulk-delete");
+
+        expect(screen.queryByTestId("db-bulk-patch")).toBeNull();
+    });
+});
+
+/**
  * Plan 265 made `v.bigint()` / `v.bytes()` storable by routing `__doc__` through
  * the wire codec, so a decoded row now reaches the browser carrying real
  * `bigint` and `ArrayBuffer` values rather than JSON-safe stand-ins. The JSON
@@ -2890,7 +3494,7 @@ describe("dataBrowser — wire-tagged columns in the JSON editor", () => {
         createMockClient({
             query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.listTables) {
-                    return [{ name: "paymentSessions", rowCount: 1 }];
+                    return [{ name: "payment_sessions", rowCount: 1 }];
                 }
 
                 if (reference === ADMIN_FUNCTIONS.writeRow) {
@@ -2912,7 +3516,7 @@ describe("dataBrowser — wire-tagged columns in the JSON editor", () => {
             </LunoraProvider>,
         );
 
-        fireEvent.click(await screen.findByTestId("db-table-paymentSessions"));
+        fireEvent.click(await screen.findByTestId("db-table-payment_sessions"));
         await screen.findByTestId("db-page");
     };
 
@@ -3018,5 +3622,354 @@ describe("dataBrowser — wire-tagged columns in the JSON editor", () => {
         // No tagged leaves → the encode is identity, so the editor shows the
         // same plain document it always did.
         expect(JSON.parse(screen.getByTestId<HTMLTextAreaElement>("db-editor-doc").value)).toEqual({ text: "hello" });
+    });
+});
+
+describe("dataBrowser — AI filter reply after a table switch", () => {
+    it("does not apply a suggestion asked for one table onto the next", async () => {
+        expect.assertions(1);
+
+        let finishAi: (clauses: { column: string; operator: string; value: unknown }[]) => void = () => {};
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
+                    return new Promise((resolve) => {
+                        finishAi = (clauses) => {
+                            resolve({ result: { clauses, degraded: false } });
+                        };
+                    });
+                }
+
+                const { table } = args as PageArgs;
+
+                return table === "users"
+                    ? { columns: ["__id__", "name"], rows: [{ __id__: "u1", name: "ada" }], total: 1 }
+                    : { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "only hello" } });
+        fireEvent.click(screen.getByTestId("db-ai-filter"));
+
+        fireEvent.click(screen.getByTestId("db-table-users"));
+        await waitFor(() => {
+            if (screen.queryAllByTestId("db-row").length !== 1) {
+                throw new Error("users page not shown yet");
+            }
+        });
+
+        // The reply names `messages.text`; `users` is open now.
+        await act(async () => {
+            finishAi([{ column: "text", operator: "eq", value: "hello" }]);
+            await new Promise((resolve) => {
+                setTimeout(resolve, 20);
+            });
+        });
+
+        const filteredUserReads = mock.query.mock.calls.filter((call) => {
+            const args = call[1] as { filters?: unknown[]; table?: string };
+
+            return call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage && args.table === "users" && (args.filters?.length ?? 0) > 0;
+        });
+
+        expect(filteredUserReads).toStrictEqual([]);
+    });
+});
+
+describe("dataBrowser — nested paths on suggested and linked filters", () => {
+    // Module-stable identity: a fresh array each render would re-seed the browser.
+    const LINKED_DOTTED_FILTER = [{ column: "text", operator: "eq" as const, path: ["a.b"], value: "x" }];
+
+    const readFilters = (mock: MockClientHooks): unknown[] =>
+        mock.query.mock.calls
+            .filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage)
+            .map((call) => (call[1] as { filters?: unknown[] }).filters)
+            .filter((filters): filters is unknown[] => filters !== undefined && filters.length > 0);
+
+    it("keeps the nested path of an AI-suggested clause on the request, rather than testing the parent column", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
+                    return { result: { clauses: [{ column: "text", operator: "has", path: ["a.b", "tags"], value: "x" }], degraded: false } };
+                }
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "tagged x" } });
+        fireEvent.click(screen.getByTestId("db-ai-filter"));
+
+        // The suggestion lands as a filter row in the same commit that issues the filtered read.
+        await screen.findByTestId("db-filter-row");
+
+        expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator: "has", path: ["a.b", "tags"], value: "x" }]);
+    });
+
+    it("pins an AI-suggested null equality as null, so the nested clause tests for null and not for an empty string", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
+                    return { result: { clauses: [{ column: "text", operator: "eq", path: ["a"], value: null }], degraded: false } };
+                }
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "unset" } });
+        fireEvent.click(screen.getByTestId("db-ai-filter"));
+
+        await screen.findByTestId("db-filter-row");
+
+        expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator: "eq", path: ["a"], value: null }]);
+    });
+
+    it.each([
+        { operator: "eq", value: true },
+        { operator: "ne", value: false },
+    ])("sends an AI-suggested boolean $operator $value as a boolean, not the text the box shows", async ({ operator, value }) => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
+                    return { result: { clauses: [{ column: "text", operator, value }], degraded: false } };
+                }
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "flagged" } });
+        fireEvent.click(screen.getByTestId("db-ai-filter"));
+
+        await screen.findByTestId("db-filter-row");
+
+        expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator, value }]);
+    });
+
+    it('keeps an AI-suggested text equality as text, so a nested "10" is not sent as the number 10', async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
+                    return { result: { clauses: [{ column: "text", operator: "eq", path: ["a"], value: "10" }], degraded: false } };
+                }
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "ten" } });
+        fireEvent.click(screen.getByTestId("db-ai-filter"));
+
+        await screen.findByTestId("db-filter-row");
+
+        expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator: "eq", path: ["a"], value: "10" }]);
+    });
+
+    it("sends an AI-suggested membership value with the type the model gave it, and leaves a bound's number a number", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiTableFilter) {
+                    return {
+                        result: {
+                            clauses: [
+                                { column: "text", operator: "has", value: "10" },
+                                { column: "text", operator: "has", value: "true" },
+                                { column: "text", operator: "gt", value: "18" },
+                                { column: "text", operator: "has", value: 10 },
+                            ],
+                            degraded: false,
+                        },
+                    };
+                }
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.change(await screen.findByTestId("db-ai-prompt"), { target: { value: "typed" } });
+        fireEvent.click(screen.getByTestId("db-ai-filter"));
+
+        // All four suggestions land as filter rows in the same commit that issues the filtered read.
+        await expect(screen.findAllByTestId("db-filter-row")).resolves.toHaveLength(4);
+        expect(readFilters(mock).at(-1)).toStrictEqual([
+            { column: "text", operator: "has", value: "10" },
+            { column: "text", operator: "has", value: "true" },
+            { column: "text", operator: "gt", value: 18 },
+            { column: "text", operator: "has", value: 10 },
+        ]);
+    });
+
+    it("sends a linked clause's dotted field name as one segment", async () => {
+        expect.assertions(1);
+
+        const mock = createBrowserClient();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <DataBrowser initialFilters={LINKED_DOTTED_FILTER} tableParam="messages" />
+            </LunoraProvider>,
+        );
+
+        await screen.findByTestId("db-page");
+
+        expect(readFilters(mock).at(-1)).toStrictEqual([{ column: "text", operator: "eq", path: ["a.b"], value: "x" }]);
+    });
+});
+
+describe("dataBrowser — bulk op finishing after a table switch", () => {
+    it("does not show the old table's outcome notice or reset the new table's page", async () => {
+        expect.assertions(2);
+
+        const userRows = Array.from({ length: 5 }, (_, index) => {
+            return { __id__: `u${index.toString()}`, name: `user-${index.toString()}` };
+        });
+        let finishClear: () => void = () => {};
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.clearTable) {
+                    return new Promise((resolve) => {
+                        finishClear = () => {
+                            resolve({ count: 3, hasMore: false });
+                        };
+                    });
+                }
+
+                const { limit = 50, offset = 0, table } = args as PageArgs;
+
+                return table === "users"
+                    ? { columns: ["__id__", "name"], rows: userRows.slice(offset, offset + limit), total: userRows.length }
+                    : { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { editable: true, pageSize: 2 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.click(screen.getByTestId("db-clear-table"));
+        fireEvent.click(screen.getByTestId("db-clear-table-confirm"));
+
+        // Switch table and page forward while the clear is still in flight.
+        fireEvent.click(screen.getByTestId("db-table-users"));
+        await screen.findByText("1-2 of 5");
+        fireEvent.click(screen.getByTestId("db-next"));
+        await screen.findByText("3-4 of 5");
+
+        await act(async () => {
+            finishClear();
+            await new Promise((resolve) => {
+                setTimeout(resolve, 20);
+            });
+        });
+
+        // "3 rows deleted." describes `messages`, and page 2 of `users` stays put.
+        expect(screen.queryByTestId("db-write-notice")).toBeNull();
+        expect(screen.getByText("3-4 of 5")).not.toBeNull();
+    });
+
+    it("does not revive a drain after the shard is edited away and back", async () => {
+        expect.assertions(1);
+
+        let finishClear: () => void = () => {};
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.clearTable) {
+                    return new Promise((resolve) => {
+                        finishClear = () => {
+                            resolve({ count: 3, hasMore: false });
+                        };
+                    });
+                }
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS, total: MESSAGE_ROWS.length };
+            },
+        });
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.click(screen.getByTestId("db-clear-table"));
+        fireEvent.click(screen.getByTestId("db-clear-table-confirm"));
+
+        // Type another shard, then back: the drain's view was left in between.
+        fireEvent.change(screen.getByTestId("db-shard-input"), { target: { value: "s2" } });
+        fireEvent.change(screen.getByTestId("db-shard-input"), { target: { value: "" } });
+
+        await act(async () => {
+            finishClear();
+            await new Promise((resolve) => {
+                setTimeout(resolve, 20);
+            });
+        });
+
+        expect(screen.queryByTestId("db-write-notice")).toBeNull();
     });
 });

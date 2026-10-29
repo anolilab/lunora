@@ -65,6 +65,40 @@ describe(".meta()", () => {
     // stopped only the top-level assignment; `.meta({ rateLimit: { hits: 0 } })`
     // plus `ctx.meta.rateLimit.hits += 1` is exactly the nested shape the
     // surface invites.
+    // `ctx.payments` / `ctx.ip` are getters that must stay lazy: reading one builds a payment
+    // facade (running an app thunk that may throw) or marks the cache entry as per-address.
+    // A spread or `Object.assign` in the `.meta()` clone or the `.use()` merge would read them.
+    it("lets .use() replace a non-configurable context property", async () => {
+        expect.assertions(1);
+
+        const context = Object.defineProperty({}, "tenant", { configurable: false, enumerable: true, value: "a" });
+        const procedure = c.query
+            .use(async ({ next }) => await next({ ctx: { tenant: "b" } }))
+            .query(({ ctx }) => (ctx as unknown as { tenant: string }).tenant);
+
+        await expect(procedure.handler(context, {})).resolves.toBe("b");
+    });
+
+    it("keeps context getters lazy through .meta() and .use()", async () => {
+        expect.assertions(2);
+
+        const reads = vi.fn<() => void>();
+        const context = {
+            get payments(): never {
+                reads();
+
+                throw new Error("payment thunk ran");
+            },
+        };
+        const procedure = c.query
+            .meta({ tag: "x" })
+            .use(async ({ next }) => await next({ ctx: { extra: 1 } }))
+            .query(({ ctx }) => (ctx as unknown as { extra: number }).extra);
+
+        await expect(procedure.handler(context, {})).resolves.toBe(1);
+        expect(reads).not.toHaveBeenCalled();
+    });
+
     it("deep-freezes the declaration so a middleware cannot accumulate into it", async () => {
         expect.assertions(3);
 

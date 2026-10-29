@@ -1,4 +1,4 @@
-import { useAuth, useLunora, useMutation, useQuery } from "@lunora/react";
+import { useLunora, useMutation, useQuery } from "@lunora/react";
 import { eq } from "@tanstack/db";
 import { useLiveQuery } from "@tanstack/react-db";
 import type { CSSProperties, ReactElement } from "react";
@@ -18,7 +18,7 @@ const LAYOUT_STYLE: CSSProperties = { display: "grid", gap: 16, gridTemplateColu
  * offline-transactions outbox for writes, and a client-only localStorage
  * collection for per-channel drafts (survives reload, syncs across tabs).
  */
-export const Chat = (): ReactElement => {
+export const Chat = ({ userId }: { userId: string }): ReactElement => {
     const [activeChannel, setActiveChannel] = useState<Id<"channels"> | null>(null);
     const [noteDraft, setNoteDraft] = useState("");
     const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -27,7 +27,6 @@ export const Chat = (): ReactElement => {
     const drafts = getDraftsCollection();
 
     const client = useLunora();
-    const { user } = useAuth();
     const store = getMessagesStore(client);
 
     // Surface the real outbox state on a single poll: how many sends are
@@ -103,8 +102,8 @@ export const Chat = (): ReactElement => {
             return;
         }
 
-        const userId = (user?.id ?? "anonymous") as Id<"users">;
-        const { id, transaction } = store.send({ channelId: activeChannel, text: draft, userId });
+        const author = userId as Id<"users">;
+        const { id, transaction } = store.send({ channelId: activeChannel, text: draft, userId: author });
 
         // Mark pending until the send's transaction settles (ack supersedes the
         // optimistic row; a server rejection rolls it back).
@@ -139,7 +138,7 @@ export const Chat = (): ReactElement => {
                             return;
                         }
 
-                        store.createChannel({ createdBy: (user?.id ?? "anonymous") as Id<"users">, name });
+                        store.createChannel({ createdBy: userId as Id<"users">, name });
                     }}
                     type="button"
                 >
@@ -173,6 +172,7 @@ export const Chat = (): ReactElement => {
                         }}
                     >
                         <input
+                            aria-label="New note"
                             onChange={(event) => {
                                 setNoteDraft(event.target.value);
                             }}
@@ -203,6 +203,7 @@ export const Chat = (): ReactElement => {
                     }}
                 >
                     <input
+                        aria-label="Message"
                         disabled={!activeChannel}
                         onChange={(event) => {
                             if (activeChannel) {

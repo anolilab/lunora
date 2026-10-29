@@ -72,7 +72,7 @@ If you already hold a parsed config object, `validateWranglerConfig` (aliased as
 ```ts
 import { validateWranglerConfig } from "@lunora/config/cloudflare";
 
-const report = validateWranglerConfig(wrangler, { hasGlobalTable: true });
+const report = validateWranglerConfig(wrangler, { hasD1GlobalTable: true, hasHyperdriveGlobalTable: false });
 // report: { valid: boolean; errors: string[]; warnings: string[] }
 ```
 

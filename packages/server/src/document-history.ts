@@ -59,8 +59,8 @@
 
 import type { Id } from "@lunora/values";
 import { v } from "@lunora/values";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { initLunora } from "./builder/index";
 import type { Component, SchemaExtension } from "./plugin";
 import { defineComponent, defineSchemaExtension } from "./plugin";
@@ -263,7 +263,7 @@ const documentHistoryExtension = defineSchemaExtension(DOCUMENT_HISTORY_KEY, {
             // Drives `vacuum`'s oldest-first scan.
             .index("byRecordedAt", ["recordedAt"]),
     },
-}) as unknown as SchemaExtension<{ [DOCUMENT_HISTORY_BARE_TABLE]: ReturnType<typeof defineTable> }>;
+}) as unknown as SchemaExtension<{ [DOCUMENT_HISTORY_BARE_TABLE]: ReturnType<typeof defineTable> }, typeof DOCUMENT_HISTORY_KEY>;
 
 // No generated server here, so bind the base contexts via the builder factory —
 // same as `definePresence`.
@@ -371,7 +371,17 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
         const serialized = JSON.stringify(encodeWire(redact(row)));
 
         // Each side is capped on its own: a large `previous` should not discard a
-        // small `doc`, which is usually the more useful half.
+        // small `doc`, which is usually the more useful half. A UTF-16 string's UTF-8
+        // length lies in `[length, 3 * length]`, so the cap is decided from those
+        // bounds and the string is only encoded when they straddle it.
+        if (serialized.length > maxSnapshotBytes) {
+            return undefined;
+        }
+
+        if (3 * serialized.length <= maxSnapshotBytes) {
+            return serialized;
+        }
+
         return new TextEncoder().encode(serialized).length > maxSnapshotBytes ? undefined : serialized;
     };
 
@@ -484,7 +494,7 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
             }
 
             // eslint-disable-next-line no-await-in-loop -- see above
-            await Promise.all(page.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
+            await Promise.all(page.map(async (row) => context.db.delete(DOCUMENT_HISTORY_TABLE, row["_id"] as Id<typeof DOCUMENT_HISTORY_TABLE>)));
             deleted += page.length;
         }
 

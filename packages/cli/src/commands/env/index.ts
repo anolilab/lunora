@@ -1,5 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 const envCommand: Command = {
     argument: { description: "list | get <KEY> | set <KEY> <VALUE> | unset <KEY> | generate [KEY] | push | diff | doctor", name: "subcommand", type: String },
     description: "Manage .dev.vars and sync secrets via wrangler (list | get | set | unset | generate | push | diff | doctor)",
@@ -10,6 +12,7 @@ const envCommand: Command = {
         ["lunora env generate AUTH_SECRET --set", "Generate one secret and write it to .dev.vars"],
         ["lunora env push --yes", "Upload secrets to Cloudflare"],
         ["lunora env diff", "Compare local .dev.vars keys against Cloudflare"],
+        ["lunora env diff --format json", "Same, as a single JSON document on stdout"],
     ],
     group: "Data",
     loader: () =>
@@ -20,6 +23,7 @@ const envCommand: Command = {
     options: [
         { description: "Target this Cloudflare environment for `push`/`diff` (passes --env <name> to wrangler)", name: "env", type: String },
         { description: "Alias for --env production", name: "prod", type: Boolean },
+        OUTPUT_FORMAT_OPTION,
         { description: "For `generate` — write the generated secrets into .dev.vars instead of printing them", name: "set", type: Boolean },
         {
             description:
@@ -35,6 +39,7 @@ export { envCommand };
 
 export type EnvOptions = CreateOptions<{
     env: string | undefined;
+    format: string | undefined;
     prod: boolean | undefined;
     set: boolean | undefined;
     temporary: boolean | undefined;

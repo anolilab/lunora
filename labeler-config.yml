@@ -67,6 +67,9 @@
 "package: hyperdrive":
     - changed-files:
           - any-glob-to-any-file: "packages/hyperdrive/**/*"
+"package: jwt-auth":
+    - changed-files:
+          - any-glob-to-any-file: "packages/jwt-auth/**/*"
 "package: lunora":
     - changed-files:
           - any-glob-to-any-file: "packages/lunora/**/*"
@@ -91,12 +94,18 @@
 "package: platform":
     - changed-files:
           - any-glob-to-any-file: "packages/platform/**/*"
+"package: platform-celld":
+    - changed-files:
+          - any-glob-to-any-file: "packages/platform-celld/**/*"
 "package: platform-cloudflare":
     - changed-files:
           - any-glob-to-any-file: "packages/platform-cloudflare/**/*"
 "package: platform-node":
     - changed-files:
           - any-glob-to-any-file: "packages/platform-node/**/*"
+"package: privacy":
+    - changed-files:
+          - any-glob-to-any-file: "packages/privacy/**/*"
 "package: queue":
     - changed-files:
           - any-glob-to-any-file: "packages/queue/**/*"
@@ -112,6 +121,9 @@
 "package: replica":
     - changed-files:
           - any-glob-to-any-file: "packages/replica/**/*"
+"package: rspack":
+    - changed-files:
+          - any-glob-to-any-file: "packages/rspack/**/*"
 "package: runtime":
     - changed-files:
           - any-glob-to-any-file: "packages/runtime/**/*"
@@ -157,6 +169,9 @@
 "package: vue":
     - changed-files:
           - any-glob-to-any-file: "packages/vue/**/*"
+"package: wire":
+    - changed-files:
+          - any-glob-to-any-file: "packages/wire/**/*"
 "package: workflow":
     - changed-files:
           - any-glob-to-any-file: "packages/workflow/**/*"

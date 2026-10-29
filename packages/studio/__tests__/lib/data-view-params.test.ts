@@ -1,3 +1,4 @@
+import { defaultParseSearch } from "@tanstack/react-router";
 import { describe, expect, it } from "vitest";
 
 import { dataViewToSearch, searchToDataView, validateDataViewSearch, validateSchemaVersionSearch } from "../../src/lib/data-view-params";
@@ -74,6 +75,15 @@ describe("dataViewParams", () => {
         expect(searchToDataView({ order: "createdAt:sideways" }).orderBy).toBeUndefined();
     });
 
+    it("keeps an eq filter on a NULL value through the URL round-trip", () => {
+        expect.assertions(2);
+
+        const search = dataViewToSearch(searchToDataView({ filters: JSON.stringify([{ column: "note", operator: "eq", value: null }]) }));
+
+        expect(search.filters).toBe(JSON.stringify([{ column: "note", operator: "eq", value: null }]));
+        expect(searchToDataView(search).filters).toStrictEqual([{ column: "note", operator: "eq", value: null }]);
+    });
+
     it("drops malformed filters, keeping the valid ones", () => {
         expect.assertions(1);
 
@@ -85,6 +95,40 @@ describe("dataViewParams", () => {
         ]);
 
         expect(searchToDataView({ filters }).filters).toEqual([{ column: "status", operator: "eq", value: "error" }]);
+    });
+
+    it("keeps a has clause and a nested path through the URL round-trip", () => {
+        expect.assertions(1);
+
+        const filters = [
+            { column: "tags", operator: "has", value: "blue" },
+            { column: "address", operator: "eq", path: ["geo", "city"], value: "Berlin" },
+        ];
+
+        expect(searchToDataView(dataViewToSearch(searchToDataView({ filters: JSON.stringify(filters) }))).filters).toStrictEqual(filters);
+    });
+
+    it("drops a clause whose path is not a list of field names, rather than keeping it on the parent field", () => {
+        expect.assertions(1);
+
+        const filters = JSON.stringify([
+            { column: "address", operator: "eq", path: "city", value: "Berlin" },
+            { column: "address", operator: "eq", path: ["city", 2], value: "Berlin" },
+            { column: "status", operator: "eq", value: "active" },
+        ]);
+
+        expect(searchToDataView({ filters }).filters).toStrictEqual([{ column: "status", operator: "eq", value: "active" }]);
+    });
+
+    it("keeps a clause with an empty path segment, so the server refuses it instead of a reload dropping the filter", () => {
+        expect.assertions(1);
+
+        const filters = [
+            { column: "address", operator: "eq", path: [""], value: "Berlin" },
+            { column: "address", operator: "eq", path: ["geo", ""], value: "Berlin" },
+        ];
+
+        expect(searchToDataView({ filters: JSON.stringify(filters) }).filters).toStrictEqual(filters);
     });
 
     it("tolerates non-JSON filters", () => {
@@ -203,5 +247,16 @@ describe("validateSchemaVersionSearch", () => {
         expect.assertions(1);
 
         expect(validateSchemaVersionSearch({ table: "logs", version: "deadbeefdeadbeef" })).toStrictEqual({ version: "deadbeefdeadbeef" });
+    });
+});
+
+describe("dataViewParams — values the router or JSON cannot carry verbatim", () => {
+    it("keeps a numeric shard key from a hand-written link", () => {
+        expect.assertions(2);
+
+        // `?shard=42` reaches `validateSearch` as the NUMBER 42 after the router's JSON parse.
+        expect(searchToDataView(validateDataViewSearch(defaultParseSearch("?table=messages&shard=42"))).shard).toBe("42");
+        // Past 2^53 the parse already rounded it to a different key, so it is dropped rather than guessed.
+        expect(validateDataViewSearch({ shard: 2 ** 60 }).shard).toBeUndefined();
     });
 });

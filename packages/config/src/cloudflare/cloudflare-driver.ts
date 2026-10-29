@@ -20,6 +20,9 @@ import type { DeployDriver, DriverToolchain } from "../deploy-driver";
  * for the project's package manager.
  */
 const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
+    devServer: "workerd",
+    prebuildsContainerImages: true,
+
     deploy: (request) => {
         // `versions upload` publishes a new Version with a preview URL instead
         // of taking production traffic.
@@ -29,6 +32,10 @@ const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
         // adapter-owned `main` in wrangler.jsonc.
         if (request.entry !== undefined) {
             args.push(request.entry);
+        }
+
+        if (request.configPath !== undefined) {
+            args.push("--config", request.configPath);
         }
 
         if (request.environment !== undefined) {
@@ -70,6 +77,21 @@ const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
 
     secretList: (request) => {
         const args: string[] = ["secret", "list", "--format", "json"];
+
+        if (request.environment !== undefined) {
+            args.push("--env", request.environment);
+        }
+
+        if (request.temporary === true) {
+            args.push("--temporary");
+        }
+
+        return { args, tool: "wrangler" };
+    },
+
+    secretBulk: (request) => {
+        // The JSON body (name to value) is fed on stdin by the caller, never argv.
+        const args: string[] = ["secret", "bulk"];
 
         if (request.environment !== undefined) {
             args.push("--env", request.environment);

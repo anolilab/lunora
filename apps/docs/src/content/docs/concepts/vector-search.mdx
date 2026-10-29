@@ -48,7 +48,7 @@ your query, mutation, and action contexts.
 A vector index always names a source of text to embed. The common case is to
 embed one string column: chain `.vectorize` off `defineTable`. The `index` is
 the logical name (it must match a `vectorize` binding in `wrangler.jsonc`);
-`embed` is your own embedder.
+`embed` is your own embedder, and `model` names the model it calls.
 
 ```ts
 // lunora/schema.ts
@@ -67,6 +67,7 @@ export default defineSchema({
             dimensions: 1024,
             metric: "cosine",
             embed,
+            model: "@cf/baai/bge-m3", // the model `embed` calls; changing it re-embeds on the next backfill
             metadata: ["title", "workspaceId"], // mirrored into Vectorize metadata for filtering
         }),
 });
@@ -81,9 +82,109 @@ for the full shape.
 
 You never upsert vectors by hand for declared indexes. On every `insert`,
 `update`, or `delete` to a table that sources an index, the adapter embeds the
-source and upserts under the row's id (or removes it on delete). The sync runs
-inline within the mutation. Upserts and deletes are keyed by row id, so they're
-idempotent: to recover from a transient Vectorize failure, re-run the write.
+source and upserts under the row's id (or removes it on delete). A
+soft-deleted row (`.softDelete()`) has no vector: the soft delete
+removes it, a later `patch` or `replace` on the hidden row does not bring it
+back, and `restore()` re-embeds the row's current text.
+
+Write sync only sees writes made **after** the index exists. Rows already in the
+table when you add `.vectorize()` (or change an index's `field`, `dimensions`,
+`metric`, `metadata` or `model`, or the table's `.softDelete()` field) are indexed by the `backfillVectors` admin operation; see
+[Indexing existing rows](#indexing-existing-rows).
+
+A `.global()` table cannot declare a vector index. Its writes go to D1 or
+Hyperdrive, not through the shard write path the sync runs on, so the index would
+stay empty. `defineSchema` and `lunora codegen` both reject the combination.
+
+The sync runs **after the mutation's transaction commits**, not inside it.
+Vectorize is outside the shard's storage and cannot be rolled back, so running it
+inline would leave a vector for a row a later throw took away. Two consequences
+worth knowing:
+
+- **A mutation that rolls back syncs nothing.** No vector is written for a row
+  that never existed, and no vector is removed for a delete that did not happen.
+- **A sync failure does not fail the mutation.** The rows are already committed,
+  so reporting the write as failed would push callers into retrying a
+  non-idempotent insert. The failure is logged server-side and the row is left
+  indexed in some indexes and not others. Upserts and deletes are keyed by row
+  id, so re-running the write converges — but nothing tells the caller to, and
+  nothing retries on its own. If a stale index is a problem for your app, re-run
+  the write from a scheduled job rather than expecting an error.
+
+Writes to the same row do **not** race each other: one mutation's sync completes
+before the next mutation's begins, so the last commit is the one the index ends
+up reflecting.
+
+### Indexing existing rows
+
+Run the `backfillVectors` admin operation on each shard after deploying a new
+vector index over a table that already has rows. Target a shard with `--shard`:
+
+```sh
+lunora run '__lunora_admin__:backfillVectors' --args '{"maxPages":5}'
+lunora run '__lunora_admin__:backfillVectors' --args '{"maxPages":5}' --shard workspace:acme
+```
+
+Each call embeds at most `maxPages` pages of 50 rows (one page when you omit it,
+at most 20). Every row is a remote embed plus a Vectorize write, so a large table
+cannot be embedded in one request. The result reports
+`{ done, pages, rows, failed, failedIds }`. Progress is stored in the shard, so
+repeat the call until `done` is `true`.
+
+Two kinds of failure are handled differently:
+
+- **A row that can never be indexed** is counted in `failed`, its id listed in
+  `failedIds` (the first 20), and skipped. Examples: a non-string source value,
+  text the embedding model refuses, metadata Vectorize rejects. The live write
+  sync only logs these too. A row whose source text is empty or only whitespace
+  is not a failure: it has nothing to embed, so its vector is removed, as when
+  the field is cleared.
+- **A page that fails as a whole**, because the embedder or Vectorize is
+  unreachable, answers `503` with the progress made so far. That page is retried
+  by the next call. When the error carries a status, it decides: a 5xx, 408 or
+  429 (or a timeout) is the service and is retried for as long as it lasts, and
+  a 4xx is the row. Without one, a page that fails whole on three calls in a
+  row is written off: its rows are counted in `failed` and the walk moves on,
+  so one bad page cannot stop every table after it.
+
+Only one `backfillVectors` call runs per shard at a time. A second call made
+while one is running answers `409`; repeat it once the first returns.
+
+The backfill records the index configuration it built from. When you change an
+index's `field`, `dimensions`, `metric`, `metadata` or `model`, add or rename
+an index, or change the table's `.softDelete()` field, the next call re-embeds
+the table from the top. Existing vectors are overwritten in place, never cleared
+first. Nothing else is compared, so any other change needs `restart` (below).
+
+`embed` is a function, and Lunora cannot tell which model it calls: its source
+text changes with every rebuild of your bundle, so it is not compared. The
+optional `model` string is what makes a model swap visible. Set it to the model
+`embed` calls and change the two together. `model` is only compared, never
+parsed, so any string works, and changing it on purpose re-embeds the table.
+Adding `model` to an index that had none re-embeds that table once, because the
+backfill has no record of which model built the stored vectors. An index without
+`model` keeps its recorded configuration and is not re-embedded.
+
+Pass `{"restart":true}` once to re-embed everything when the check cannot see
+the change:
+
+- a different model behind `embed` with no `model` declared, or with `model` left
+  unchanged;
+- a change to a `defineVectorIndex` `select` or `metadata` function;
+- rows written through the admin writer, such as a bulk import with
+  `lunora import`. That path skips write sync, so those rows have no vectors
+  until a backfill walks them.
+
+A backfill never overwrites a newer write, from a mutation or an action. Each
+page is read inside the shard's single-writer gate and synced in commit order
+with live writes. A row patched or deleted while its page is embedding ends up
+with the patched vector, or none.
+
+That ordering has a cost while a backfill runs. A page holds the shard's
+write-sync queue for as long as it takes to embed its rows (a few seconds with a
+typical remote embedder), and a mutation or action that commits meanwhile waits
+for its own sync behind it before it returns. Run large backfills with a small
+`maxPages` in quiet periods if that latency matters.
 
 <Callout type="warn">
     **Tenant isolation.** Vectorize indexes are account-global and shared by every shard. In a multi-tenant / sharded app you **must** scope writes and queries
@@ -95,18 +196,27 @@ idempotent: to recover from a transient Vectorize failure, re-run the write.
 The function context exposes the bridged search surface. The read half is
 available everywhere; the mutating half is gated by context kind:
 
-| Method                    | `QueryCtx` | `MutationCtx` / `ActionCtx` | Use                         |
-| ------------------------- | :--------: | :-------------------------: | --------------------------- |
-| `query(index, input)`     |     ✓      |              ✓              | Similarity search.          |
-| `getByIds(index, ids)`    |     ✓      |              ✓              | Fetch stored vectors by id. |
-| `upsert(index, input)`    |     —      |              ✓              | Manually upsert one vector. |
-| `upsertNow(index, input)` |     —      |              ✓              | Synchronous upsert.         |
-| `deleteByIds(index, ids)` |     —      |              ✓              | Remove vectors by id.       |
+| Method                    | `QueryCtx` | `MutationCtx` / `ActionCtx` | Use                                            |
+| ------------------------- | :--------: | :-------------------------: | ---------------------------------------------- |
+| `query(index, input)`     |     ✓      |              ✓              | Similarity search.                             |
+| `getByIds(index, ids)`    |     ✓      |              ✓              | Fetch stored vectors by id.                    |
+| `upsert(index, input)`    |     —      |              ✓              | Upsert one vector, after the mutation commits. |
+| `upsertNow(index, input)` |     —      |              ✓              | Upsert one vector immediately.                 |
+| `deleteByIds(index, ids)` |     —      |              ✓              | Remove vectors by id.                          |
 
 A query gets a read-only `VectorSearchReader` (search + fetch); mutations and
 actions get the full `VectorSearch` (also upsert + delete). This matches the
 reactivity model: a query may not write, so search lives naturally in a
 reactive `query`.
+
+`upsert` follows the same rule as the automatic sync above — it is held until
+the mutation's transaction commits and dropped if the mutation throws, so a
+hand-written upsert cannot outlive the row it describes. `upsertNow` writes
+straight through; reach for it only when you need the vector visible before the
+mutation ends and you accept that a rollback will strand it. In an `action`
+there is no transaction to wait for, so the two behave identically.
+
+`deleteByIds` is **not** deferred: it writes immediately, in both contexts.
 
 ### Similarity search
 
@@ -169,6 +279,10 @@ export const answer = action.input({ q: v.string(), workspaceId: v.id("workspace
 
     // 3. Generate an answer grounded in the retrieved context.
     const { text } = await generateText({
+        // An `action` is public RPC and generation bills per output token, so
+        // cap the completion; without it an anonymous caller can drive
+        // arbitrarily long answers in a loop.
+        maxOutputTokens: 500,
         model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
         prompt: `Answer using only this context:\n${context}\n\nQuestion: ${q}`,
     });
@@ -230,7 +344,7 @@ let docsBody: ReturnType<typeof createPgVectorIndex> | undefined;
 export const ShardDO = createShardDO({
     vectors: (env) => {
         docsBody ??= createPgVectorIndex({
-            client: fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE).connectionString)),
+            client: fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE).connectionString, { fetch_types: false, max: 5 })),
             dimensions: 768,
             metric: "cosine",
             name: "docs_body",

@@ -367,5 +367,5 @@ const emitIntrospection = (database: IntrospectedDatabase, options: EmitOptions)
     return { files, warnings };
 };
 
-export type { EmitOptions, EmitResult, EmittedFile };
+export type { EmittedFile };
 export { emitIntrospection, identifierFor, indexedColumns };

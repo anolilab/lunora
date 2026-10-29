@@ -1,17 +1,19 @@
 import type { LunoraAuth } from "@lunora/auth";
-import { lunoraD1Adapter, createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
-import type { ExecutionContextLike, Route, ShardNamespaceLike } from "lunorash/runtime";
-import { createWorker } from "lunorash/runtime";
-import { createScheduler, type DurableObjectNamespaceLike } from "@lunora/scheduler";
-import type { R2BucketLike } from "@lunora/storage";
-import { createStorage } from "@lunora/storage";
+import { createAuth, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";
 import type { VectorizeIndexLike } from "@lunora/bindings/vectors";
 import { createVectorAdminIntrospector } from "@lunora/bindings/vectors";
+import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
+import { createScheduler } from "@lunora/scheduler";
+import type { R2BucketLike } from "@lunora/storage";
+import { createStorage, verifySignedUrl } from "@lunora/storage";
+import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
+import { createWorker } from "lunorash/runtime";
 
 import { LUNORA_CRONS } from "../../lunora/_generated/crons.js";
-import { LUNORA_VECTOR_INDEXES } from "../../lunora/_generated/vectors.js";
 import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
+import { LUNORA_VECTOR_INDEXES } from "../../lunora/_generated/vectors.js";
 
 export { SchedulerDO } from "./scheduler-do.js";
 
@@ -19,7 +21,7 @@ interface Env {
     AUTH_SECRET?: string;
     AUTH_URL?: string;
     DB: unknown;
-    FILES: unknown;
+    FILES: R2BucketLike;
     SCHEDULER: ShardNamespaceLike;
     SHARD: ShardNamespaceLike;
     STORAGE_SECRET?: string;
@@ -30,7 +32,6 @@ interface ShardEnv {
     // Bound by the `[[vectorize]]` entry in wrangler.jsonc; required because the
     // schema declares the `posts_search` index.
     POSTS_SEARCH: VectorizeIndexLike;
-    PUBLIC_STORAGE_BASE_URL?: string;
     SCHEDULER?: DurableObjectNamespaceLike;
     STORAGE_SECRET?: string;
 }
@@ -41,26 +42,78 @@ export const ShardDO = createShardDO({
 
         return shardEnv.SCHEDULER ? createScheduler({ namespace: shardEnv.SCHEDULER }) : undefined;
     },
-    storage: (env) => {
+    // `origin` is the origin the current request reached the worker on. Signed
+    // URLs bind their host into the HMAC, so signing against it makes the upload
+    // URL land back on this worker (see `handleImageUpload`) on any port or host,
+    // with no per-environment base URL to configure.
+    storage: (env, origin) => {
         const shardEnv = env as unknown as ShardEnv;
 
         return shardEnv.FILES
             ? createStorage({
                   bucket: shardEnv.FILES,
                   bucketName: "default",
-                  publicBaseUrl: shardEnv.PUBLIC_STORAGE_BASE_URL,
+                  publicBaseUrl: origin,
                   signingSecret: shardEnv.STORAGE_SECRET,
               })
             : undefined;
     },
     // Maps the schema's logical index name (`posts_search`) to the Vectorize
     // binding. This is what makes `ctx.vectors` live and auto-syncs writes.
-    vectors: (env) => ({ posts_search: (env as unknown as ShardEnv).POSTS_SEARCH }),
+    vectors: (env) => {
+        return { posts_search: (env as unknown as ShardEnv).POSTS_SEARCH };
+    },
 });
 
-let worker: ReturnType<typeof createWorker> | null = null;
-let auth: LunoraAuth | null = null;
-let authReady: Promise<LunoraAuth> | null = null;
+/** Ceiling on a featured image. R2 would take more; the demo should not. */
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Accept the direct-to-R2 upload that `posts:requestImageUpload` signs.
+ *
+ * R2 is not exposed to the internet here, so something has to check the
+ * signature: verify host + key + method + expiry, then store the bytes. The
+ * body never passes through the RPC layer. The 403 is deliberately opaque, so
+ * this is not an oracle for telling an expired URL from a forged one.
+ */
+const handleImageUpload = async (request: Request, env: Env): Promise<Response | null> => {
+    const url = new URL(request.url);
+
+    if (request.method !== "PUT" || !url.pathname.startsWith("/posts/")) {
+        return null;
+    }
+
+    if (!env.STORAGE_SECRET) {
+        return new Response("storage signing is not configured", { status: 500 });
+    }
+
+    const verdict = await verifySignedUrl(request.url, env.STORAGE_SECRET);
+
+    if (!verdict.valid || verdict.key === undefined || verdict.method !== "PUT" || verdict.bucketName !== "default") {
+        return new Response("forbidden", { status: 403 });
+    }
+
+    // Store the content type the SIGNATURE pins (checked against the allowlist
+    // when the URL was minted), never the request header — a caller could
+    // otherwise upload `text/html` to a URL minted for `image/png`.
+    if (verdict.contentType === undefined) {
+        return new Response("upload URL carries no content type", { status: 400 });
+    }
+
+    const length = Number(request.headers.get("content-length") ?? Number.NaN);
+
+    if (!Number.isFinite(length) || length > MAX_IMAGE_BYTES) {
+        return new Response("image too large", { status: 413 });
+    }
+
+    await env.FILES.put(verdict.key, request.body, { httpMetadata: { contentType: verdict.contentType } });
+
+    return new Response(null, { status: 200 });
+};
+
+let worker: ReturnType<typeof createWorker> | undefined;
+let auth: LunoraAuth | undefined;
+let authReady: Promise<LunoraAuth> | undefined;
 
 /**
  * Compose the full v0.1 add-on stack: better-auth for email/password sign-in
@@ -86,7 +139,7 @@ const authOptions = (env: Env): Parameters<typeof createAuth>[0] => {
 const buildAuth = (env: Env): LunoraAuth => createAuth({ ...authOptions(env), database: lunoraD1Adapter(env.DB as never) });
 
 // Raw-D1 instance used only to drive `ensureMigrated` (Kysely migrator → tables).
-const buildMigrationAuth = (env: Env): LunoraAuth => createAuth({ ...authOptions(env), database: env.DB as never });
+const buildMigrationAuth = (env: Env): LunoraAuth => createMigrationAuth({ ...authOptions(env), database: env.DB as never });
 
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
@@ -115,14 +168,20 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
 
             const session = await auth.api.getSession({ headers: request.headers });
 
-            return session?.user?.id ? { userId: session.user.id } : null;
+            return session?.user.id ? { userId: session.user.id } : null;
         },
-        routes: {} as Record<string, Route>,
+        routes: {},
         shardDO: env.SHARD,
     });
 
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
+        const upload = await handleImageUpload(request, env);
+
+        if (upload) {
+            return upload;
+        }
+
         // Memoize init+migration as a single promise so concurrent cold-start
         // requests await the same initialization instead of racing — without this,
         // a second request could see `auth` truthy while the first request's

@@ -9,13 +9,29 @@
  * is gated by RLS (denied uploads are rejected, no admin gating involved).
  */
 import { MemoryStorage } from "@visulima/storage/provider/memory";
-import { createTusAdapter, UploadControl } from "@visulima/storage-client";
+import { createChunkedRestAdapter, createTusAdapter, UploadControl } from "@visulima/storage-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { UploadAuthzContext } from "../src/upload-handler";
-import { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
+import type { UploadAuthorizeResult, UploadAuthzContext, UploadHandler, UploadSizeContext } from "../src/upload-handler";
+import { createUploadContext, createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
+import { chunkedRest, routedFetch, uploadId } from "./chunked-rest-driver";
+import { TUS_ENDPOINT, tusDriver } from "./tus-driver";
 
-const ENDPOINT = "https://test.local/upload";
+const ENDPOINT = TUS_ENDPOINT;
+const MiB = 1024 * 1024;
+
+/** Every method-override header, on every method the route takes, overridden to `GET` or to itself, at `/<id>` and `/<id>/metadata`. */
+const OVERRIDE_CASES: [header: string, method: string, value: string, suffix: string][] = [];
+
+for (const header of ["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"]) {
+    for (const method of ["POST", "PATCH", "HEAD", "OPTIONS"]) {
+        for (const value of ["GET", method]) {
+            for (const suffix of ["", "/metadata"]) {
+                OVERRIDE_CASES.push([header, method, value, suffix]);
+            }
+        }
+    }
+}
 const B64 = (value: string): string => Buffer.from(value).toString("base64");
 
 /** A `File` from raw bytes (Node >=20 exposes `File` globally). */
@@ -61,41 +77,6 @@ const wireFetch = (handler: { fetch: (request: Request) => Promise<Response> }) 
     };
 };
 
-/** A minimal raw-TUS driver so pause/resume and resume-after-drop are deterministic (no adapter timing). */
-const rawTus = (handler: { fetch: (request: Request) => Promise<Response> }) => {
-    return {
-        create: async (length: number, name: string): Promise<string> => {
-            const response = await handler.fetch(
-                new Request(ENDPOINT, {
-                    headers: { "Tus-Resumable": "1.0.0", "Upload-Length": String(length), "Upload-Metadata": `filename ${B64(name)}` },
-                    method: "POST",
-                }),
-            );
-
-            expect(response.status).toBe(201);
-
-            const location = response.headers.get("location") ?? "";
-
-            return location.startsWith("http") ? location : `https://test.local${location}`;
-        },
-        head: async (location: string): Promise<number> => {
-            const response = await handler.fetch(new Request(location, { headers: { "Tus-Resumable": "1.0.0" }, method: "HEAD" }));
-
-            expect(response.status).toBe(200);
-
-            return Number(response.headers.get("upload-offset"));
-        },
-        patch: async (location: string, offset: number, chunk: Uint8Array): Promise<Response> =>
-            handler.fetch(
-                new Request(location, {
-                    body: Uint8Array.from(chunk),
-                    headers: { "Content-Type": "application/offset+octet-stream", "Tus-Resumable": "1.0.0", "Upload-Offset": String(offset) },
-                    method: "PATCH",
-                }),
-            ),
-    };
-};
-
 describe("createUploadHandler (RLS-gated, non-admin)", () => {
     let handler: ReturnType<typeof createUploadHandler>;
 
@@ -129,46 +110,303 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         wire.restore();
 
         expect(result.bytesWritten ?? 0).toBe(2_000_000);
-        // Progress is monotonic and reaches 100.
-        expect(progress.at(-1)).toBe(100);
+        // Progress is live, monotonic, and reaches 100%.
         expect(progress.length).toBeGreaterThan(1);
+        expect(progress).toStrictEqual(progress.toSorted((a, b) => a - b));
+        expect(progress.at(-1)).toBe(100);
         // The upload went through the RLS route (POST create + PATCH chunks), never an admin path.
         expect(wire.requests.some((entry) => entry.method === "POST")).toBe(true);
         expect(wire.requests.some((entry) => entry.method === "PATCH")).toBe(true);
     });
 
+    it("refuses to delete a finished upload through the upload route", async () => {
+        expect.hasAssertions();
+
+        const tus = tusDriver(handler);
+        const location = await tus.create(4, { filename: "done.bin" });
+
+        const patched = await tus.patch(location, 0, new Uint8Array(4).fill(1));
+
+        expect(patched.ok).toBe(true);
+
+        const deleted = await tus.delete(location);
+
+        expect(deleted.status).toBeGreaterThanOrEqual(400);
+        await expect(tus.offset(location)).resolves.toBe(4);
+    });
+
+    it.each(["chunked-rest", "multipart"] as const)("refuses DELETE on a %s route before the gate (405)", async (protocol) => {
+        expect.hasAssertions();
+
+        const authorize = vi.fn<() => boolean>(() => true);
+        const route = createUploadHandler({ authorize, protocol, storage: new MemoryStorage({ path: "/upload" }) });
+
+        // Neither protocol honors disableTerminationForFinishedUploads: their
+        // DELETE removes any stored file by id (chunked REST also via `?ids=`).
+        const response = await route.fetch(new Request(`${ENDPOINT}?ids=a,b`, { method: "DELETE" }));
+
+        expect(response.status).toBe(405);
+        expect(response.headers.get("Allow")).not.toContain("DELETE");
+        expect(authorize).not.toHaveBeenCalled();
+    });
+
+    describe("write-only route: GET never serves a stored file", () => {
+        /** Store a real file through the multipart route, so GET has something it could serve. */
+        const storeFile = async (storage: MemoryStorage): Promise<string> => {
+            const form = new FormData();
+
+            form.append("file", new File(["secret bytes"], "secret.txt", { type: "text/plain" }));
+
+            const created = await createUploadHandler({ protocol: "multipart", silent: true, storage }).fetch(
+                new Request(ENDPOINT, { body: form, method: "POST" }),
+            );
+
+            expect(created.status).toBe(200);
+
+            const { id } = await created.json<{ id: string }>();
+
+            return id;
+        };
+
+        // `@visulima/storage` serves all of these over fetch since 2.0.24.
+        it.each(
+            (["chunked-rest", "multipart", "tus"] as const).flatMap((protocol) =>
+                ["/<id>", "/<id>.txt", "/<id>/metadata", "", "?page=1"].map((path) => [protocol, path] as const),
+            ),
+        )("refuses GET on a %s route at %j before the gate (405)", async (protocol, path) => {
+            expect.hasAssertions();
+
+            const storage = new MemoryStorage({ path: "/upload" });
+            const id = await storeFile(storage);
+            const authorize = vi.fn<() => boolean>(() => true);
+            const route = createUploadHandler({ authorize, protocol, storage });
+            const response = await route.fetch(
+                new Request(`${ENDPOINT}${path.replace("<id>", id)}`, { headers: { "Tus-Resumable": "1.0.0", range: "bytes=0-5" }, method: "GET" }),
+            );
+
+            expect(response.status).toBe(405);
+            expect(response.headers.get("Allow")).not.toContain("GET");
+            await expect(response.text()).resolves.not.toContain("secret bytes");
+            expect(authorize).not.toHaveBeenCalled();
+        });
+
+        it("refuses GET on a public route too, which has no gate at all", async () => {
+            expect.hasAssertions();
+
+            const storage = new MemoryStorage({ path: "/upload" });
+            const id = await storeFile(storage);
+            const route = createUploadHandler({ protocol: "chunked-rest", public: true, storage });
+
+            await expect(route.fetch(new Request(`${ENDPOINT}/${id}`, { method: "GET" }))).resolves.toHaveProperty("status", 405);
+        });
+
+        it.each([
+            ["tus", "DELETE, HEAD, OPTIONS, PATCH, POST"],
+            ["chunked-rest", "HEAD, OPTIONS, PATCH, POST, PUT"],
+            ["multipart", "OPTIONS, POST"],
+        ] as const)("names the refused method and advertises only the %s upload methods", async (protocol, allow) => {
+            expect.hasAssertions();
+
+            const route = createUploadHandler({ protocol, silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+            const response = await route.fetch(new Request(`${ENDPOINT}/abc`, { method: "PROPFIND" }));
+
+            expect(response.status).toBe(405);
+            expect(response.headers.get("Allow")).toBe(allow);
+            await expect(response.json()).resolves.toMatchObject({
+                error: { code: "METHOD_NOT_ALLOWED", message: expect.stringMatching(/^PROPFIND is not allowed/) },
+            });
+        });
+
+        describe.each(["chunked-rest", "multipart", "tus"] as const)("method edge cases on a %s route", (protocol) => {
+            it.each(["get", "Get", "gEt"])("refuses %j as GET (405) before the gate", async (method) => {
+                expect.hasAssertions();
+
+                const storage = new MemoryStorage({ path: "/upload" });
+                const id = await storeFile(storage);
+                const authorize = vi.fn<() => boolean>(() => true);
+                const response = await createUploadHandler({ authorize, protocol, storage }).fetch(
+                    new Request(`${ENDPOINT}/${id}`, { headers: { "Tus-Resumable": "1.0.0" }, method }),
+                );
+
+                expect(response.status).toBe(405);
+                await expect(response.text()).resolves.not.toContain("secret bytes");
+                expect(authorize).not.toHaveBeenCalled();
+            });
+
+            it.each(["patch", "Patch"])("refuses %j, which is not PATCH (405), before the gate", async (method) => {
+                expect.hasAssertions();
+
+                // `Request` upper-cases the standard methods but keeps `patch`
+                // as sent; HTTP methods are case-sensitive.
+                const storage = new MemoryStorage({ path: "/upload" });
+                const write = vi.spyOn(storage, "write");
+                const authorize = vi.fn<() => boolean>(() => true);
+                const response = await createUploadHandler({ authorize, protocol, storage }).fetch(
+                    new Request(`${ENDPOINT}/abc`, {
+                        body: new Uint8Array(4),
+                        headers: {
+                            "Content-Length": "4",
+                            "Content-Type": "application/offset+octet-stream",
+                            "Tus-Resumable": "1.0.0",
+                            "Upload-Offset": "0",
+                            "X-Chunk-Offset": "0",
+                        },
+                        method,
+                    }),
+                );
+
+                expect(response.status).toBe(405);
+                await expect(response.json()).resolves.toMatchObject({
+                    error: { code: "METHOD_NOT_ALLOWED", message: expect.stringMatching(new RegExp(`^${method} is not allowed`)) },
+                });
+                expect(authorize).not.toHaveBeenCalled();
+                expect(write).not.toHaveBeenCalled();
+            });
+
+            it("refuses an unknown method (PROPFIND) before the gate (405)", async () => {
+                expect.hasAssertions();
+
+                const authorize = vi.fn<() => boolean>(() => true);
+                const response = await createUploadHandler({ authorize, protocol, storage: new MemoryStorage({ path: "/upload" }) }).fetch(
+                    new Request(`${ENDPOINT}/abc`, { method: "PROPFIND" }),
+                );
+
+                expect(response.status).toBe(405);
+                expect(authorize).not.toHaveBeenCalled();
+            });
+
+            // A method-override header would swap the method after this
+            // route's method check, so a `POST` overridden to `GET` would be
+            // served as a read past the write gate.
+            it.each(OVERRIDE_CASES)(
+                "refuses %s on %s (overridden to %s) at /<id>%s with 405 before the gate, and reads nothing",
+                async (header, method, value, suffix) => {
+                    expect.hasAssertions();
+
+                    const storage = new MemoryStorage({ path: "/upload" });
+                    const id = await storeFile(storage);
+                    const getMeta = vi.spyOn(storage, "getMeta");
+                    const authorize = vi.fn<() => boolean>(() => true);
+                    const route = createUploadHandler({ authorize, protocol, storage });
+                    const response = await route.fetch(
+                        new Request(`${ENDPOINT}/${id}${suffix}`, { headers: { [header]: value, "Tus-Resumable": "1.0.0" }, method }),
+                    );
+
+                    expect(response.status).toBe(405);
+                    // Read in-process, so a HEAD's refusal has its body too.
+                    await expect(response.json()).resolves.toMatchObject({
+                        error: {
+                            code: "METHOD_NOT_ALLOWED",
+                            message: expect.stringMatching(/^(X-[\w-]+|PATCH|HEAD) is not allowed on this upload route/),
+                        },
+                    });
+                    expect(authorize).not.toHaveBeenCalled();
+                    expect(getMeta).not.toHaveBeenCalled();
+                },
+            );
+        });
+
+        describe("tus route", () => {
+            const tusRoute = (storage = new MemoryStorage({ path: "/upload" })) => createUploadHandler({ protocol: "tus", silent: true, storage });
+
+            it("answers HEAD with the upload's TUS headers only, and no body", async () => {
+                expect.hasAssertions();
+
+                const route = tusRoute();
+                const created = await route.fetch(
+                    new Request(ENDPOINT, {
+                        headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "4", "Upload-Metadata": `filename ${B64("a.txt")}` },
+                        method: "POST",
+                    }),
+                );
+                const location = new URL(created.headers.get("location") ?? "", ENDPOINT).href;
+                const head = await route.fetch(new Request(location, { headers: { "Tus-Resumable": "1.0.0" }, method: "HEAD" }));
+                const names = [...head.headers.keys()].filter((name) => name !== "access-control-expose-headers").toSorted((a, b) => a.localeCompare(b));
+
+                expect(head.status).toBe(200);
+                await expect(head.text()).resolves.toBe("");
+                expect(names).toStrictEqual(["cache-control", "tus-resumable", "upload-length", "upload-metadata", "upload-offset"]);
+                expect(head.headers.get("upload-length")).toBe("4");
+                expect(head.headers.get("upload-offset")).toBe("0");
+                expect(head.headers.get("upload-metadata")).toBe(`filename ${B64("a.txt")}`);
+            });
+
+            it("answers OPTIONS (CORS preflight) with 204 and the TUS capabilities", async () => {
+                expect.hasAssertions();
+
+                const response = await tusRoute().fetch(new Request(ENDPOINT, { method: "OPTIONS" }));
+
+                expect(response.status).toBe(204);
+                expect(response.headers.get("tus-resumable")).toBe("1.0.0");
+                expect(response.headers.get("tus-version")).toBe("1.0.0");
+            });
+
+            it("refuses GET on a stored upload (405), even with a valid Tus-Resumable header", async () => {
+                expect.hasAssertions();
+
+                const storage = new MemoryStorage({ path: "/upload" });
+                const id = await storeFile(storage);
+                const response = await tusRoute(storage).fetch(new Request(`${ENDPOINT}/${id}`, { headers: { "Tus-Resumable": "1.0.0" }, method: "GET" }));
+
+                expect(response.status).toBe(405);
+                expect(response.headers.get("tus-resumable")).toBe("1.0.0");
+                expect(response.headers.get("allow")).toBe("DELETE, HEAD, OPTIONS, PATCH, POST");
+            });
+        });
+
+        it("still answers HEAD and OPTIONS, which resume and CORS need", async () => {
+            expect.hasAssertions();
+
+            const route = createUploadHandler({ protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+            const created = await route.fetch(
+                new Request(ENDPOINT, { headers: { "content-type": "text/plain", "x-chunked-upload": "true", "x-total-size": "10" }, method: "POST" }),
+            );
+            const location = new URL(created.headers.get("location") ?? "", ENDPOINT).href;
+            const head = await route.fetch(new Request(location, { method: "HEAD" }));
+
+            expect(head.status).toBe(200);
+            expect(head.headers.get("x-upload-offset")).toBe("0");
+
+            const preflight = await route.fetch(new Request(ENDPOINT, { method: "OPTIONS" }));
+
+            expect(preflight.status).toBe(204);
+        });
+    });
+
     it("survives pause/resume mid-upload", async () => {
         expect.hasAssertions();
 
-        const driver = rawTus(handler);
+        const driver = tusDriver(handler);
         const total = 300 * 1024;
         const bytes = new Uint8Array(total).fill(67);
-        const location = await driver.create(total, "paused.bin");
+        const location = await driver.create(total, { filename: "paused.bin" });
 
         // Upload the first third, then "pause" (simply stop issuing PATCHes).
         const cut = 100 * 1024;
         const first = await driver.patch(location, 0, bytes.slice(0, cut));
 
-        expect(first.status).toBe(200);
+        // Every successful PATCH is 204, the completing one included (tus 1.0).
+        expect(first.status).toBe(204);
         expect(Number(first.headers.get("upload-offset"))).toBe(cut);
 
         // A HEAD while paused still reports the persisted offset — resume anchor.
-        await expect(driver.head(location)).resolves.toBe(cut);
+        await expect(driver.offset(location)).resolves.toBe(cut);
 
         // "Resume": finish from the reported offset.
         const rest = await driver.patch(location, cut, bytes.slice(cut));
 
         expect(rest.status).toBe(204);
+        await expect(rest.text()).resolves.toBe("");
         expect(Number(rest.headers.get("upload-offset"))).toBe(total);
     });
 
     it("resumes after a dropped connection", async () => {
         expect.hasAssertions();
 
-        const driver = rawTus(handler);
+        const driver = tusDriver(handler);
         const total = 500 * 1024;
         const bytes = new Uint8Array(total).fill(68);
-        const location = await driver.create(total, "dropped.bin");
+        const location = await driver.create(total, { filename: "dropped.bin" });
 
         // First chunk lands on the server.
         const cut = 200 * 1024;
@@ -177,12 +415,13 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
 
         // Connection drops before the next chunk — the client lost its progress,
         // so it re-discovers the server offset via HEAD and continues.
-        const resumeOffset = await driver.head(location);
+        const resumeOffset = await driver.offset(location);
 
         expect(resumeOffset).toBe(cut);
 
         const finished = await driver.patch(location, resumeOffset, bytes.slice(resumeOffset));
 
+        // The completing chunk answers 204, like a partial one.
         expect(finished.status).toBe(204);
         expect(Number(finished.headers.get("upload-offset"))).toBe(total);
     });
@@ -210,7 +449,7 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
     });
 
     describe("rLS enforcement (not admin-gated)", () => {
-        const authzHandler = (authorize: (context: UploadAuthzContext) => boolean | Promise<boolean>) =>
+        const authzHandler = (authorize: (context: UploadAuthzContext) => UploadAuthorizeResult | Promise<UploadAuthorizeResult>) =>
             createUploadHandler({ authorize, storage: new MemoryStorage({ path: "/upload" }) });
 
         it("rejects a non-admin caller without permission (403, no admin token)", async () => {
@@ -277,6 +516,127 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             const response = await gated.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
 
             expect(response.status).toBe(403);
+        });
+
+        it.each([
+            ["a hand-built `{ context }`", { context: { userId: "alice" } }],
+            ["`{ valid: false, context }`", { context: { userId: "alice" }, valid: false }],
+            ["an inherited `context`", Object.create({ context: { userId: "alice" } }) as object],
+        ])("denies %s: only createUploadContext issues a grant (403)", async (_label, verdict) => {
+            expect.hasAssertions();
+
+            const gated = authzHandler(() => verdict as unknown as boolean);
+
+            const response = await gated.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
+
+            expect(response.status).toBe(403);
+        });
+
+        it("answers a Response the gate returns as it is, so it can rate-limit (429 + Retry-After)", async () => {
+            expect.hasAssertions();
+
+            const gated = authzHandler(() => new Response(null, { headers: { "Retry-After": "30" }, status: 429 }));
+
+            const response = await gated.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
+
+            expect(response.status).toBe(429);
+            expect(response.headers.get("Retry-After")).toBe("30");
+            expect(response.headers.get("Tus-Resumable")).toBe("1.0.0");
+        });
+
+        it("adds Tus-Resumable to a gate Response whose headers are immutable", async () => {
+            expect.hasAssertions();
+
+            const gated = authzHandler(() => Response.redirect("https://example.com/login", 302));
+
+            const response = await gated.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
+
+            expect(response.status).toBe(302);
+            expect(response.headers.get("location")).toBe("https://example.com/login");
+            expect(response.headers.get("Tus-Resumable")).toBe("1.0.0");
+        });
+
+        it("hands a grant's context to the storage callbacks and maxFileSizeFor, per request (#1040)", async () => {
+            expect.hasAssertions();
+
+            const caller = createUploadContext<string>();
+            const seen: [callback: string, context: string | undefined][] = [];
+            const storage = new MemoryStorage({
+                filename: (file) => {
+                    seen.push(["filename", caller.get()]);
+
+                    return file.id;
+                },
+                onCreate: () => {
+                    seen.push(["onCreate", caller.get()]);
+                },
+                path: "/upload",
+            });
+            const route = createUploadHandler({
+                authorize: ({ request }) => caller.grant(request.headers.get("x-user") ?? ""),
+                maxFileSizeFor: ({ granted }) => {
+                    seen.push(["maxFileSizeFor", granted]);
+
+                    return undefined;
+                },
+                storage,
+            });
+            const create = async (user: string) =>
+                route.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10", "x-user": user }, method: "POST" }));
+
+            const [first, second] = await Promise.all([create("alice"), create("bob")]);
+
+            expect([first.status, second.status]).toStrictEqual([201, 201]);
+            expect(seen).toHaveLength(6);
+            expect(seen).toStrictEqual(
+                expect.arrayContaining([
+                    ["filename", "alice"],
+                    ["filename", "bob"],
+                    ["maxFileSizeFor", "alice"],
+                    ["maxFileSizeFor", "bob"],
+                    ["onCreate", "alice"],
+                    ["onCreate", "bob"],
+                ]),
+            );
+            // Outside a request there is no grant to read.
+            expect(() => caller.get()).toThrow(/no upload grant/u);
+        });
+
+        it("has no context when the gate answers `true`, or a grant from another UploadContext", async () => {
+            expect.hasAssertions();
+
+            const caller = createUploadContext<string>();
+            const other = createUploadContext<string>();
+            const read: unknown[] = [];
+            const route = (verdict: () => UploadAuthorizeResult<string>) =>
+                createUploadHandler({
+                    authorize: verdict,
+                    maxFileSizeFor: ({ granted }) => {
+                        read.push(granted);
+
+                        return undefined;
+                    },
+                    storage: new MemoryStorage({
+                        filename: (file) => {
+                            try {
+                                read.push(caller.get());
+                            } catch (error) {
+                                read.push(error instanceof Error ? error.message : error);
+                            }
+
+                            return file.id;
+                        },
+                        path: "/upload",
+                    }),
+                });
+            const post = () => new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" });
+
+            const plain = await route(() => true).fetch(post());
+            const foreign = await route(() => other.grant("mallory")).fetch(post());
+
+            expect([plain.status, foreign.status]).toStrictEqual([201, 201]);
+            // `maxFileSizeFor` sees nothing for `true` and the other context's value for its grant; `caller.get()` throws for both.
+            expect(read).toStrictEqual([undefined, expect.stringMatching(/no upload grant/u), "mallory", expect.stringMatching(/no upload grant/u)]);
         });
 
         it("surfaces the denial to the client adapter as a failed upload (403)", async () => {
@@ -382,6 +742,24 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             expect(withinCap.status).toBe(201);
         });
 
+        it("rejects a maxFileSize that is not a finite, non-negative number", async () => {
+            expect.hasAssertions();
+
+            // `??` only fills in a nullish value, so an unset upload-limit env
+            // var coerced with `Number(...)` survives as `NaN` — and
+            // `declaredSize > NaN` is always false, so
+            // every TUS/chunked-REST create passed the only cap this handler
+            // enforces for those protocols.
+            expect(() => createUploadHandler({ maxFileSize: Number.NaN, silent: true, storage: new MemoryStorage({ path: "/upload" }) })).toThrow(
+                /maxFileSize/,
+            );
+            expect(() => createUploadHandler({ maxFileSize: Number.POSITIVE_INFINITY, silent: true, storage: new MemoryStorage({ path: "/upload" }) })).toThrow(
+                /maxFileSize/,
+            );
+            // The mirror image: a negative cap rejects every upload.
+            expect(() => createUploadHandler({ maxFileSize: -1, silent: true, storage: new MemoryStorage({ path: "/upload" }) })).toThrow(/maxFileSize/);
+        });
+
         it("rejects a chunked-REST create whose declared total (X-Total-Size) is over the cap", async () => {
             expect.hasAssertions();
 
@@ -426,5 +804,324 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
 
             expect(response.status).toBe(413);
         });
+    });
+});
+
+describe("createUploadHandler maxFileSizeFor (per-request cap)", () => {
+    const capped = (maxFileSizeFor: (context: UploadSizeContext) => number | undefined | Promise<number | undefined>, maxFileSize = 100 * MiB) =>
+        createUploadHandler({ maxFileSize, maxFileSizeFor, silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+
+    const byType = (context: UploadSizeContext): number | undefined => {
+        if (context.contentType.startsWith("image/")) {
+            return 1 * MiB;
+        }
+
+        return context.contentType.startsWith("video/") ? 50 * MiB : undefined;
+    };
+
+    const create = async (handler: UploadHandler, headers: Record<string, string>): Promise<Response> =>
+        handler.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", ...headers }, method: "POST" }));
+
+    it("caps an upload by the type its TUS metadata declares", async () => {
+        expect.hasAssertions();
+
+        const handler = capped(byType);
+
+        const image = (size: number) => create(handler, { "Upload-Length": String(size), "Upload-Metadata": `filetype ${B64("image/png")}` });
+
+        await expect(image(2 * MiB)).resolves.toHaveProperty("status", 413);
+        await expect(image(MiB)).resolves.toHaveProperty("status", 201);
+        await expect(create(handler, { "Upload-Length": String(20 * MiB), "Upload-Metadata": `filetype ${B64("video/mp4")}` })).resolves.toHaveProperty(
+            "status",
+            201,
+        );
+    });
+
+    it("hands the decoded metadata and declared size to the callback", async () => {
+        expect.hasAssertions();
+
+        const seen: UploadSizeContext[] = [];
+        const handler = capped((context) => {
+            seen.push(context);
+
+            return undefined;
+        });
+
+        await create(handler, { "Upload-Length": "42", "Upload-Metadata": `filename ${B64("résumé.pdf")},filetype ${B64("application/pdf")},flag` });
+
+        expect(seen[0]?.metadata).toStrictEqual({ filename: "résumé.pdf", filetype: "application/pdf", flag: "" });
+        expect(seen[0]?.contentType).toBe("application/pdf");
+        expect(seen[0]?.declaredSize).toBe(42);
+        expect(seen[0]?.method).toBe("POST");
+    });
+
+    it("never raises the cap past maxFileSize", async () => {
+        expect.hasAssertions();
+
+        const handler = capped(() => 10 * MiB, MiB);
+
+        await expect(create(handler, { "Upload-Length": String(2 * MiB) })).resolves.toHaveProperty("status", 413);
+    });
+
+    it("refuses a create that declares no size once a cap applies", async () => {
+        expect.hasAssertions();
+
+        const handler = capped(() => MiB);
+
+        await expect(create(handler, { "Upload-Defer-Length": "1" })).resolves.toHaveProperty("status", 413);
+    });
+
+    it("fails closed when the callback throws or answers something that is not a size", async () => {
+        expect.hasAssertions();
+
+        const throwing = capped(() => {
+            throw new Error("lookup failed");
+        });
+        const nonsense = capped(() => Number.NaN);
+
+        await expect(create(throwing, { "Upload-Length": "10" })).resolves.toHaveProperty("status", 403);
+        await expect(create(nonsense, { "Upload-Length": "10" })).resolves.toHaveProperty("status", 403);
+    });
+
+    it("runs only on creates, after the authorize gate", async () => {
+        expect.hasAssertions();
+
+        const maxFileSizeFor = vi.fn<(context: UploadSizeContext) => number | undefined>(() => undefined);
+        const handler = createUploadHandler({
+            authorize: ({ request }) => request.headers.get("x-user") === "member",
+            maxFileSizeFor,
+            storage: new MemoryStorage({ path: "/upload" }),
+        });
+
+        await expect(create(handler, { "Upload-Length": "10" })).resolves.toHaveProperty("status", 403);
+        expect(maxFileSizeFor).not.toHaveBeenCalled();
+
+        const created = await create(handler, { "Upload-Length": "10", "x-user": "member" });
+        const location = new URL(created.headers.get("location") ?? "", ENDPOINT).href;
+
+        await handler.fetch(new Request(location, { headers: { "Tus-Resumable": "1.0.0", "x-user": "member" }, method: "HEAD" }));
+
+        expect(maxFileSizeFor).toHaveBeenCalledTimes(1);
+    });
+
+    it("caps a chunked-REST create by its Content-Type, the type that gets stored, not its metadata", async () => {
+        expect.hasAssertions();
+
+        const seen: UploadSizeContext[] = [];
+        const handler = createUploadHandler({
+            maxFileSizeFor: (context) => {
+                seen.push(context);
+
+                return byType(context);
+            },
+            protocol: "chunked-rest",
+            silent: true,
+            storage: new MemoryStorage({ path: "/upload" }),
+        });
+
+        const response = await handler.fetch(
+            new Request(ENDPOINT, {
+                headers: {
+                    "content-type": "image/jpeg",
+                    "x-chunked-upload": "true",
+                    "x-file-metadata": JSON.stringify({ filetype: "video/mp4", size: 3 }),
+                    "x-total-size": String(2 * MiB),
+                },
+                method: "POST",
+            }),
+        );
+
+        expect(response.status).toBe(413);
+        expect(seen[0]?.contentType).toBe("image/jpeg");
+        expect(seen[0]?.metadata).toStrictEqual({ filetype: "video/mp4", size: "3" });
+    });
+
+    it("resolves a TUS type the way the stored file does: mimeType, then type, then filetype (regression)", async () => {
+        expect.hasAssertions();
+
+        const handler = capped(byType);
+
+        // A small `filetype` beside an image `mimeType` used to pick the lenient video cap.
+        await expect(
+            create(handler, {
+                "Upload-Length": "1000000000",
+                "Upload-Metadata": `filename ${B64("a.png")},filetype ${B64("video/mp4")},mimeType ${B64("image/png")}`,
+            }),
+        ).resolves.toHaveProperty("status", 413);
+    });
+
+    it("refuses url-safe base64 metadata (400), as the TUS handler does since 2.0.26", async () => {
+        expect.hasAssertions();
+
+        const seen: UploadSizeContext[] = [];
+        const handler = capped((context) => {
+            seen.push(context);
+
+            return undefined;
+        });
+        const urlSafe = Buffer.from("?>?>").toString("base64url");
+
+        await expect(create(handler, { "Upload-Length": "1", "Upload-Metadata": `filename ${urlSafe}` })).resolves.toHaveProperty("status", 400);
+        expect(seen).toStrictEqual([]);
+    });
+
+    it.each(["-1", "1.5", "abc", "1e3", ""])("reads a declared size of %j as too large, never as small (regression)", async (length) => {
+        expect.hasAssertions();
+
+        const maxFileSizeFor = vi.fn<(context: UploadSizeContext) => number | undefined>(() => 10);
+        const handler = capped(maxFileSizeFor);
+
+        await expect(create(handler, { "Upload-Length": length })).resolves.toHaveProperty("status", 413);
+    });
+});
+
+describe("createUploadHandler chunked REST", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it("uploads a file end to end: POST init, two in-order PATCHes, HEAD reports it complete (visulima/visulima#884)", async () => {
+        expect.hasAssertions();
+
+        // `@visulima/storage` 2.0.8 to 2.0.22 answered every chunked-REST PATCH
+        // with 400: its create never marked the upload as chunked.
+        const storage = new MemoryStorage({ path: "/upload" });
+        const driver = chunkedRest(createUploadHandler({ protocol: "chunked-rest", silent: true, storage }));
+        const bytes = new TextEncoder().encode("0123456789");
+        const location = await driver.create(bytes.byteLength, "text/plain");
+
+        const first = await driver.patch(location, 0, bytes.slice(0, 5));
+
+        expect(first.status).toBe(202);
+        expect(first.headers.get("x-upload-offset")).toBe("5");
+        expect(first.headers.get("x-upload-complete")).toBe("false");
+
+        const second = await driver.patch(location, 5, bytes.slice(5));
+
+        expect(second.status).toBe(200);
+        expect(second.headers.get("x-upload-offset")).toBe("10");
+        expect(second.headers.get("x-upload-complete")).toBe("true");
+
+        const head = await driver.head(location);
+
+        expect(head.status).toBe(200);
+        expect(head.headers.get("x-upload-complete")).toBe("true");
+        expect(head.headers.get("x-upload-offset")).toBe("10");
+
+        // Read back from the provider: the upload route itself is write-only.
+        const stored = await storage.get({ id: uploadId(location) });
+
+        expect(Buffer.from(stored.content).toString()).toBe("0123456789");
+    });
+
+    it.each(["model/vnd.parasolid.transmit.text", "application/x-virtualbox-vbox-extpack", "message/disposition-notification"])(
+        "completes an upload of %s, whose extension carries `_` or `-`",
+        async (contentType) => {
+            expect.hasAssertions();
+
+            const driver = chunkedRest(createUploadHandler({ protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) }));
+            const location = await driver.create(4, contentType);
+            const patched = await driver.patch(location, 0, new Uint8Array(4).fill(1));
+
+            expect(patched.status).toBe(200);
+            await expect(driver.head(location)).resolves.toHaveProperty("status", 200);
+        },
+    );
+
+    it("stores chunks sent out of order at their offsets (visulima/visulima#893)", async () => {
+        expect.hasAssertions();
+
+        const storage = new MemoryStorage({ path: "/upload" });
+        const driver = chunkedRest(createUploadHandler({ protocol: "chunked-rest", silent: true, storage }));
+        const location = await driver.create(10, "text/plain");
+
+        const second = await driver.patch(location, 5, new TextEncoder().encode("BBBBB"));
+
+        expect(second.status).toBe(202);
+        expect(second.headers.get("x-upload-complete")).toBe("false");
+
+        const first = await driver.patch(location, 0, new TextEncoder().encode("AAAAA"));
+
+        expect(first.status).toBe(200);
+        expect(first.headers.get("x-upload-complete")).toBe("true");
+
+        const stored = await storage.get({ id: uploadId(location) });
+
+        expect(Buffer.from(stored.content).toString()).toBe("AAAAABBBBB");
+    });
+
+    it("lets the bundled client finish a multi-chunk upload through the write-only route (visulima/visulima#895)", async () => {
+        expect.hasAssertions();
+
+        const storage = new MemoryStorage({ path: "/upload" });
+        const route = routedFetch(createUploadHandler({ protocol: "chunked-rest", silent: true, storage }));
+
+        vi.stubGlobal("fetch", route.fetch);
+
+        const bytes = new Uint8Array(40_000).map((_, index) => index % 251);
+        const adapter = createChunkedRestAdapter({ chunkSize: 10_000, endpoint: ENDPOINT, retry: false });
+        const result = await adapter.upload(new File([bytes], "four.bin", { type: "application/octet-stream" }));
+
+        // The client sends its four chunks one at a time (storage-client 1.0.8);
+        // the last one reports the upload complete.
+        expect(result).toMatchObject({ bytesWritten: 40_000, status: "completed" });
+        expect(route.requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(4);
+        // The client never asks for the file's bytes.
+        expect(route.requests.filter((request) => request.startsWith("GET"))).toStrictEqual([]);
+
+        const stored = await storage.get({ id: result.id });
+
+        expect(Buffer.from(stored.content).equals(Buffer.from(bytes))).toBe(true);
+    });
+
+    it("answers PATCH with a Location of <collection>/<id>.<ext>, without the id repeated (2.0.24)", async () => {
+        expect.hasAssertions();
+
+        const handler = createUploadHandler({ protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+        const created = await handler.fetch(
+            new Request(ENDPOINT, { headers: { "content-type": "text/plain", "x-chunked-upload": "true", "x-total-size": "4" }, method: "POST" }),
+        );
+        const location = new URL(created.headers.get("location") ?? "", ENDPOINT);
+        const patched = await handler.fetch(
+            new Request(location, {
+                body: new Uint8Array(4),
+                headers: { "content-length": "4", "content-type": "application/octet-stream", "x-chunk-offset": "0" },
+                method: "PATCH",
+            }),
+        );
+        const patchedLocation = new URL(patched.headers.get("location") ?? "", ENDPOINT);
+        const segments = patchedLocation.pathname.split("/").filter(Boolean);
+
+        expect(patched.status).toBe(200);
+        // `/upload/<id>.txt`: one segment after the collection, the id not repeated.
+        expect(segments).toHaveLength(2);
+        expect(segments[0]).toBe("upload");
+        expect(patchedLocation.pathname).toBe(location.pathname);
+    });
+
+    it("creates a file with PUT under a word-character id, and refuses a dotted one (400, 2.0.24)", async () => {
+        expect.hasAssertions();
+
+        const maxFileSizeFor = vi.fn<(context: UploadSizeContext) => number | undefined>(() => 1000);
+        const handler = createUploadHandler({ maxFileSizeFor, protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+        const put = async (name: string): Promise<Response> =>
+            handler.fetch(
+                new Request(`${ENDPOINT}/${name}`, {
+                    body: new Uint8Array(3).fill(1),
+                    headers: { "content-length": "3", "content-type": "application/pdf" },
+                    method: "PUT",
+                }),
+            );
+
+        const created = await put("report-v2.pdf");
+
+        expect(created.status).toBe(201);
+        expect(new URL(created.headers.get("location") ?? "", ENDPOINT).pathname).toBe("/upload/report-v2.pdf");
+
+        // The per-upload cap still runs on a PUT create, and an id with a dot
+        // before its extension is then refused upstream.
+        await expect(put("report.v2.pdf")).resolves.toHaveProperty("status", 400);
+        expect(maxFileSizeFor).toHaveBeenCalledTimes(2);
+        expect(maxFileSizeFor.mock.calls[0]?.[0]).toMatchObject({ contentType: "application/pdf", declaredSize: 3, method: "PUT" });
     });
 });

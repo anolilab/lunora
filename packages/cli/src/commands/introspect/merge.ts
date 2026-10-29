@@ -175,5 +175,4 @@ const mergeIntoSchema = (source: string, database: IntrospectedDatabase, dialect
     return { applied, warnings, ...(applied === 0 ? {} : { text }) };
 };
 
-export type { MergePlan, MergeResult };
 export { innerValidator, mergeIntoSchema, planMerge };

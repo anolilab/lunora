@@ -29,7 +29,7 @@ const buildClientWithStream = (): { client: LunoraClient; opened: MockEntry[]; o
         return iterable;
     });
 
-    const client = { stream: streamFunction } as unknown as LunoraClient;
+    const client = { onIdentityChange: () => () => undefined, stream: streamFunction } as unknown as LunoraClient;
 
     return {
         client,

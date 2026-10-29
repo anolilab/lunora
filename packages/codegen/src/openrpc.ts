@@ -1,8 +1,10 @@
 import type { JsonSchema } from "@lunora/values";
 
+import { moduleTagOf } from "./discover/modules";
 import { GENERATED_HEADER } from "./emit";
-import type { FunctionIR } from "./ir";
-import sanitizeNamespace from "./paths";
+import type { FunctionIR, ModuleIR } from "./ir";
+import renderJsonData from "./json-data";
+import { sanitizeNamespace } from "./paths";
 import { LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
 
 // ─── OpenRPC document assembly ───────────────────────────────────────────────
@@ -28,7 +30,16 @@ const inferredResultSchema: JsonSchema = {
 };
 
 /**
- * Build one OpenRPC method object for a query/mutation/action. Lunora passes a
+ * The method description. A stream is not invoked over the RPC envelope: it opens
+ * a WebSocket procedure stream and yields chunks, so the POST text would be wrong.
+ */
+const methodDescription = (kind: FunctionIR["kind"], functionPath: string): string =>
+    kind === "stream"
+        ? `Open the \`stream\` \`${functionPath}\` over the Lunora WebSocket. It yields chunks rather than one result, so its \`result\` schema is a placeholder.`
+        : `Invoke the \`${kind}\` \`${functionPath}\` over the Lunora RPC envelope (POST /_lunora/rpc, body \`{ "functionPath": "${functionPath}", "args": { … } }\`).`;
+
+/**
+ * Build one OpenRPC method object for a query/mutation/action/stream. Lunora passes a
  * single args object per call (`{ functionPath, args }`), so the method exposes
  * exactly one named param — `args` — whose `schema` is the function's
  * `v.*`-derived args object. Modelling it as a single object param (rather than
@@ -40,12 +51,12 @@ const inferredResultSchema: JsonSchema = {
  * (OpenRPC has no first-class tag grouping), and the standard `LunoraError`
  * codes are enumerated under `errors` so clients can switch on `error.code`.
  */
-const rpcMethod = (definition: FunctionIR): Record<string, unknown> => {
+const rpcMethod = (definition: FunctionIR, tag: string): Record<string, unknown> => {
     const namespace = sanitizeNamespace(definition.filePath);
     const functionPath = `${namespace}:${definition.exportName}`;
 
     return {
-        description: `Invoke the \`${definition.kind}\` \`${functionPath}\` over the Lunora RPC envelope (POST /_lunora/rpc, body \`{ "functionPath": "${functionPath}", "args": { … } }\`).`,
+        description: methodDescription(definition.kind, functionPath),
         errors: LUNORA_ERROR_CODES.map((code, index) => {
             // OpenRPC error `code`s are integers; Lunora's codes are strings, so
             // the machine-readable string is carried under `data.code` (what
@@ -71,19 +82,26 @@ const rpcMethod = (definition: FunctionIR): Record<string, unknown> => {
             // permissive placeholder. Downstream generators (`lunora sdk
             // generate`) key off exactly this: a described-but-untyped schema
             // becomes an untyped return rather than an empty model.
-            schema: definition.output ? validatorIrToJsonSchema(definition.output) : inferredResultSchema,
+            // A stream yields chunks over its WebSocket, so no single result is declared for it, whatever
+            // an `.output()` validator (which a stream cannot take) would have said.
+            schema: definition.output && definition.kind !== "stream" ? validatorIrToJsonSchema(definition.output) : inferredResultSchema,
         },
         summary: `${definition.kind}: ${functionPath}`,
         "x-lunora-function-kind": definition.kind,
+        // The method `description` above is the generic RPC envelope text, so the author's
+        // doc comment travels in its own extension. Present only when the export has one.
+        ...(definition.description ? { "x-lunora-description": definition.description } : {}),
         // OpenRPC has no first-class tag grouping; surface the file namespace as
-        // an `x-tags` extension so tooling can group methods by source file.
-        "x-tags": [{ name: namespace }],
+        // an `x-tags` extension so tooling can group methods by module (or source file).
+        "x-tags": [{ name: tag }],
     };
 };
 
 /** Inputs the OpenRPC emitter needs from a codegen run. */
 interface OpenRpcEmitInput {
     functions: ReadonlyArray<FunctionIR>;
+    /** The app's modules, passed only once it declares one; a method in a module folder is tagged with the module instead of its file namespace. */
+    modules?: ReadonlyArray<ModuleIR>;
     /** `info.version`; defaults to `"0.0.0"` with a TODO when the project version is unknown. */
     version?: string;
 }
@@ -91,10 +109,10 @@ interface OpenRpcEmitInput {
 /**
  * Emit an OpenRPC 1.x document describing Lunora's JSON-RPC surface.
  *
- * Only the RPC `query`/`mutation`/`action` functions become `methods` — one per
- * function, `name` = `file:fn`. `internal` (off the external RPC path) and
- * `stream` (not invocable over the RPC envelope) are excluded, the same filter
- * the OpenAPI emitter applies. Each method's single `args` param is typed from
+ * `query`/`mutation`/`action`/`stream` functions become `methods` — one per
+ * function, `name` = `file:fn`, with the kind in `x-lunora-function-kind`. `internal`
+ * (off the external RPC path) is excluded. A stream's `result` is the description-only
+ * placeholder: it has no single result. Each method's single `args` param is typed from
  * the function's `v.*` validators (`argsObjectSchema`); `result` is the
  * `.output()` schema when declared, else a best-effort inferred schema. The
  * standard `LunoraError` codes ride along under each method's `errors`.
@@ -109,11 +127,14 @@ interface OpenRpcEmitInput {
 const buildOpenRpcDocument = (input: OpenRpcEmitInput): Record<string, unknown> => {
     const version = input.version ?? "0.0.0";
 
-    // Same filter as the OpenAPI emitter: `internal` and `stream` functions are
-    // not invocable over the external RPC envelope.
-    const rpcFunctions = input.functions.filter((definition) => definition.visibility !== "internal" && definition.kind !== "stream");
+    // `internal` functions stay off the external surface. A `stream` is listed so MCP and
+    // other tooling can see it; the OpenAPI emitter still excludes it.
+    const rpcFunctions = input.functions.filter((definition) => definition.visibility !== "internal");
 
-    const methods = rpcFunctions.map((definition) => rpcMethod(definition)).toSorted((a, b) => (a.name as string).localeCompare(b.name as string));
+    const modules = input.modules ?? [];
+    const methods = rpcFunctions
+        .map((definition) => rpcMethod(definition, moduleTagOf(modules, definition.filePath)))
+        .toSorted((a, b) => (a.name as string).localeCompare(b.name as string));
 
     const document = {
         info: {
@@ -137,13 +158,14 @@ const emitOpenRpc = (input: OpenRpcEmitInput): string => `${JSON.stringify(build
 /**
  * Emit the OpenRPC document as an importable TS module
  * (`_generated/openrpc.ts`) the worker entry imports and passes to
- * `createWorker({ openRpcSpec })`. The document object literal is inlined
- * verbatim (same `JSON.stringify` form the `.json` uses), so the `.ts` and
- * `.json` are byte-identical content and regenerate together. `document_` is
+ * `createWorker({ openRpcSpec })`. The document is inlined as a `JSON.parse`
+ * string (see {@link renderJsonData}), so the `.ts` and `.json` carry the same
+ * content and regenerate together; its `methods` array grows with every
+ * procedure, which as a literal fails `tsc` with TS2590 (#823). `document_` is
  * the object returned by {@link buildOpenRpcDocument} (reused, never recomputed).
  */
 const emitOpenRpcModule = (document_: Record<string, unknown>): string =>
-    `${GENERATED_HEADER}export const openRpcSpec: Record<string, unknown> = ${JSON.stringify(document_, undefined, 4)};\n`;
+    `${GENERATED_HEADER}export const openRpcSpec = ${renderJsonData(document_, "Record<string, unknown>")};\n`;
 
 export { buildOpenRpcDocument, emitOpenRpc, emitOpenRpcModule, OPENRPC_VERSION };
 export type { OpenRpcEmitInput };

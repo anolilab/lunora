@@ -4,14 +4,14 @@ import { LunoraError } from "@lunora/errors";
 import { MAX_SEARCH_SCAN } from "@lunora/search-core";
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { CURSOR_PREFIX } from "@lunora/shard-engine";
-import { sql } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SqlCtxExec } from "../src/ctx-db";
 import { createSqlCtxDb, readSqlCdcChanges } from "../src/ctx-db";
 import type { SqlDialect } from "../src/dialect";
 import { BACKFILL_BATCH_SIZE } from "../src/sql-exec";
 import { sqliteEncode } from "../src/value-codec";
+import { createSqliteBatchHarness, createSqliteHarness, makeSqliteDialect } from "./_helpers/sqlite";
 
 /**
  * In-package end-to-end coverage for the dialect-blind store core. The concrete
@@ -20,98 +20,6 @@ import { sqliteEncode } from "../src/value-codec";
  * engine (D1 is SQLite — the generated SQL behaves identically) plus a tiny
  * recording exec for the cross-dialect rendering checks. No workerd required.
  */
-
-/** Both workerd and `node:sqlite` phrase a UNIQUE-index breach as "UNIQUE constraint failed". */
-const UNIQUE_VIOLATION_RE = /unique constraint failed/iu;
-
-const sqlAffinityForKind = (kind: string | undefined): string => {
-    switch (kind) {
-        case "bigint": {
-            return "TEXT";
-        }
-        case "boolean": {
-            return "INTEGER";
-        }
-        case "number": {
-            return "REAL";
-        }
-        default: {
-            return "TEXT";
-        }
-    }
-};
-
-/** A minimal reference SQLite dialect, mirroring `@lunora/d1`'s sqliteDialect (kept local so sql-store has no dependency on a downstream package). */
-
-/**
- * Does this runtime's `node:sqlite` have the FTS5 module compiled in?
- *
- * It is a property of the RUNTIME, not of the dialect: Node 24 bundles a SQLite
- * with FTS5, Node 22 does not. Hard-coding `supportsFts5: true` made these
- * tests pass on one CI matrix leg and fail on the other with
- * `no such module: fts5`.
- *
- * Probing keeps both legs meaningful rather than skipping: where FTS5 exists
- * the suite exercises the `fts5` search layout, and where it does not it
- * exercises the portable `inverted` layout — which is exactly the split the
- * store already models for backends without FTS5.
- */
-const RUNTIME_HAS_FTS5 = ((): boolean => {
-    const probe = new DatabaseSync(":memory:");
-
-    try {
-        probe.exec("CREATE VIRTUAL TABLE __fts5_probe USING fts5(x)");
-
-        return true;
-    } catch {
-        return false;
-    } finally {
-        probe.close();
-    }
-})();
-
-const makeSqliteDialect = (name: SqlDialect["name"] = "sqlite"): SqlDialect => {
-    return {
-        columnType: (kind) => sqlAffinityForKind(kind),
-        companionTypes: {
-            autoincrementPrimaryKey: "INTEGER PRIMARY KEY AUTOINCREMENT",
-            integer: "INTEGER",
-            key: "TEXT",
-            real: "REAL",
-            text: "TEXT",
-        },
-        maxTableColumns: 100,
-        frameworkColumns: () => [
-            { name: "id", type: "TEXT PRIMARY KEY" },
-            { name: "_creationTime", type: "REAL NOT NULL" },
-        ],
-        isUniqueViolation: (error) => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message),
-        name,
-        supportsFts5: RUNTIME_HAS_FTS5,
-        supportsReturning: true,
-        tableExists: (table) => sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${table}`,
-    };
-};
-
-const createSqliteHarness = (): { close: () => void; exec: SqlCtxExec } => {
-    const database = new DatabaseSync(":memory:");
-
-    const all = (query: string, parameters: ReadonlyArray<unknown>): Record<string, unknown>[] => database.prepare(query).all(...(parameters as never[]));
-
-    return {
-        close: () => {
-            database.close();
-        },
-        exec: {
-            all: (query, parameters) => Promise.resolve(all(query, parameters)),
-            run: (query, parameters) => {
-                all(query, parameters);
-
-                return Promise.resolve();
-            },
-        },
-    };
-};
 
 /**
  * Wrap an exec so a bound value over `limitBytes` fails the way the real engine
@@ -161,16 +69,18 @@ const col = (kind: string, extra: Record<string, unknown> = {}): ValidatorLike =
  * branch — the fix for a shipped export/import data-loss bug — was never once
  * executed by it.
  */
-const optionalCol = (innerKind: string): ValidatorLike =>
-    ({ _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: true } }, kind: innerKind } }, kind: "optional" }) as never;
+const optionalCol = (innerKind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: true } }, kind: innerKind } }, kind: "optional" };
+};
 
 /**
  * An `optional(inner.nullable())` column — the case where a stored NULL is a
  * VALUE the column holds rather than an absent field. `.nullable()` is the one
  * thing that clears `notNull`, and it clears it on the INNER validator.
  */
-const nullableOptionalCol = (innerKind: string): ValidatorLike =>
-    ({ _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" }) as never;
+const nullableOptionalCol = (innerKind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" };
+};
 
 const schema: SchemaLike = {
     tables: {
@@ -208,7 +118,7 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
 
         expect(typeof id).toBe("string");
 
-        const doc = await writer.get(id);
+        const doc = await writer.get("notes", id);
 
         expect(doc).toMatchObject({ archived: false, body: "hello", priority: 3, slug: "a" });
         expect(doc?._id).toBe(id);
@@ -244,7 +154,7 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
 
         const writer = makeWriter();
         const id = await writer.insert("notes", { archived: true, body: "x", priority: 7, slug: "b" });
-        const doc = await writer.get(id);
+        const doc = await writer.get("notes", id);
 
         expect(doc?.archived).toBe(true);
         expect(doc?.priority).toBe(7);
@@ -256,9 +166,9 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
         const writer = makeWriter();
         const id = await writer.insert("notes", { archived: false, body: "x", priority: 1, slug: "c" });
 
-        await writer.patch(id, { body: "patched" });
+        await writer.patch("notes", id, { body: "patched" });
 
-        const doc = await writer.get(id);
+        const doc = await writer.get("notes", id);
 
         expect(doc).toMatchObject({ archived: false, body: "patched", priority: 1, slug: "c" });
     });
@@ -274,13 +184,13 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
         const writer = makeWriter();
         const id = await writer.insert("notes", { archived: false, body: "keep-me", priority: 1, slug: "u" });
 
-        await expect(writer.patch(id, { body: undefined })).rejects.toThrow(/Cannot patch field 'body' to undefined/u);
-        await expect(writer.replace(id, { archived: false, body: undefined, priority: 1, slug: "u" })).rejects.toThrow(
+        await expect(writer.patch("notes", id, { body: undefined })).rejects.toThrow(/Cannot patch field 'body' to undefined/u);
+        await expect(writer.replace("notes", id, { archived: false, body: undefined, priority: 1, slug: "u" })).rejects.toThrow(
             /Cannot replace field 'body' to undefined/u,
         );
 
         // …and the stored value is untouched by the refused write.
-        await expect(writer.get(id)).resolves.toMatchObject({ body: "keep-me" });
+        await expect(writer.get("notes", id)).resolves.toMatchObject({ body: "keep-me" });
     });
 
     it("delete removes the row", async () => {
@@ -289,9 +199,9 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
         const writer = makeWriter();
         const id = await writer.insert("notes", { archived: false, body: "x", priority: 1, slug: "d" });
 
-        await writer.delete(id);
+        await writer.delete("notes", id);
 
-        await expect(writer.get(id)).resolves.toBeNull();
+        await expect(writer.get("notes", id)).resolves.toBeNull();
     });
 
     it("maps a UNIQUE-constraint breach to a ConflictError", async () => {
@@ -342,8 +252,8 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
         const writer = makeWriter();
         const id = await writer.insert("notes", { archived: false, body: "x", priority: 1, slug: "idor" });
 
-        // Pin a different (non-existent) table — a branded id must resolve to its own table only.
-        await expect(writer.get(id, "other")).resolves.toBeNull();
+        // A table the schema does not have is refused outright, so an id can only ever be read through a real table.
+        await expect(writer.get("other", id)).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 });
 
@@ -494,16 +404,16 @@ describe("createSqlCtxDb — the column ceiling", () => {
 
         bound.length = 0;
 
-        await writer.patch(softId, { f0: "changed" });
-        await writer.replace(softId, row);
+        await writer.patch("wide", softId, { f0: "changed" });
+        await writer.replace("wide", softId, row);
         // Soft delete (the marker field is declared) and a forced hard delete —
         // both route through the same guard.
-        await writer.delete(softId);
-        await writer.delete(hardId, undefined, { hard: true });
+        await writer.delete("wide", softId);
+        await writer.delete("wide", hardId, { hard: true });
 
         expect(Math.max(...bound)).toBeLessThanOrEqual(100);
         // …and the writes actually landed rather than being silently skipped.
-        await expect(writer.get(hardId)).resolves.toBeNull();
+        await expect(writer.get("wide", hardId)).resolves.toBeNull();
     });
 });
 
@@ -730,7 +640,7 @@ describe("createSqlCtxDb — soft-delete + rank companion", () => {
         const target = await writer.findFirst("notes", { where: { slug: "a" } });
 
         // Soft delete drops the row's rank companion entry.
-        await writer.delete(String(target?._id));
+        await writer.delete("notes", String(target?._id));
 
         const afterDelete = await writer.rankPage("notes", "byPriority", { take: 10 });
 
@@ -738,7 +648,7 @@ describe("createSqlCtxDb — soft-delete + rank companion", () => {
 
         // Previously restore()'s forced re-add double-inserted the companion row
         // and threw a raw UNIQUE-constraint (PRIMARY KEY `__id__`) violation.
-        await expect(writer.restore?.(String(target?._id))).resolves.toBeUndefined();
+        await expect(writer.restore?.("notes", String(target?._id))).resolves.toBeUndefined();
 
         const afterRestore = await writer.rankPage("notes", "byPriority", { take: 10 });
 
@@ -755,11 +665,11 @@ describe("createSqlCtxDb — soft-delete + rank companion", () => {
 
         const target = await writer.findFirst("notes", { where: { slug: "a" } });
 
-        await writer.delete(String(target?._id));
+        await writer.delete("notes", String(target?._id));
 
         // An admin/cascade patch touches a RANK field (priority) of the still
         // soft-deleted row — it must NOT re-add the row to the rank companion.
-        await writer.patch(String(target?._id), { priority: 99 });
+        await writer.patch("notes", String(target?._id), { priority: 99 });
 
         const page = await writer.rankPage("notes", "byPriority", { take: 10 });
 
@@ -884,8 +794,9 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
             await rebuilder.insert("notes", { archived: false, priority: 99, slug: "f" });
 
             // One batch call for the aggregate tally backfill, one for the rank
-            // tuple backfill — never a run()-per-row loop.
-            expect(batchCalls).toBe(2);
+            // tuple backfill — never a run()-per-row loop — and one for the
+            // insert's own aggregate + rank companion writes.
+            expect(batchCalls).toBe(3);
 
             const groups = await rebuilder.groupBy("notes", { agg: { op: "count" }, by: ["archived"] });
 
@@ -896,6 +807,39 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
             expect(page.page).toHaveLength(6);
         } finally {
             database.close();
+        }
+    });
+
+    it("sends a patch's aggregate, rank and CDC companion writes as exactly one batch", async () => {
+        expect.assertions(5);
+
+        const harness = createSqliteBatchHarness();
+
+        try {
+            const writer = createSqlCtxDb({ cdc: true, clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: backfillSchema });
+            // The first write also runs both companion backfills, which batch on their own.
+            const id = await writer.insert("notes", { archived: false, priority: 1, slug: "a" });
+            const batch = vi.spyOn(harness.exec, "batch");
+
+            await writer.patch("notes", id, { archived: true, priority: 2 });
+
+            expect(batch).toHaveBeenCalledTimes(1);
+            // Aggregate: -1 old group, +1 new group, two prunes; rank: DELETE + INSERT; CDC: one append.
+            expect(batch.mock.calls[0]?.[0]).toHaveLength(7);
+
+            const groups = await writer.groupBy("notes", { agg: { op: "count" }, by: ["archived"] });
+
+            expect(groups.map((entry) => [entry.key, entry.value])).toStrictEqual([[{ archived: true }, 1]]);
+
+            const page = await writer.rankPage("notes", "byPriority", { take: 10 });
+
+            expect(page.page.map((row) => row["slug"])).toStrictEqual(["a"]);
+
+            const { changes } = await readSqlCdcChanges(harness.exec, {}, makeSqliteDialect());
+
+            expect(changes.map((change) => change.op)).toStrictEqual(["insert", "update"]);
+        } finally {
+            harness.close();
         }
     });
 
@@ -1032,7 +976,7 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
         const { exec, statements } = recordingExec([snapshotRow]);
         const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(engine), exec, schema });
 
-        await writer.patch("row1", { body: "y" });
+        await writer.patch("notes", "row1", { body: "y" });
 
         const guarded = statements.find((statement) => /update .*notes.* set/iu.test(statement));
 
@@ -1060,7 +1004,7 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
 
             await writer.rankPage("notes", "byPriority", { cursor, take: 2 });
 
-            const seek = statements.find((statement) => /from .*__rank_bypriority.* where/iu.test(statement));
+            const seek = statements.find((statement) => /^select .*from .*__rank_bypriority.* where/iu.test(statement));
 
             expect(seek).toBeDefined();
             expect(seek).toMatch(NULL_SAFE_OPERATOR[engine]);
@@ -1206,7 +1150,12 @@ describe("createSqlCtxDb — _creationTime is server-authoritative", () => {
         expect(insert?.params[1]).toBe(1);
     });
 
-    it("replace() mints clock() and ignores a forged document _creationTime", async () => {
+    it("replace() preserves the stored _creationTime and ignores a forged one", async () => {
+        // `_creationTime` is when the row was INSERTED, and every default order
+        // and keyset cursor is built on it — so a rewrite must not re-stamp it,
+        // or the row jumps to the end of every ordered read and a paginating
+        // client sees it twice or never. `patch` preserves it; the two write
+        // verbs cannot disagree about a system field.
         expect.assertions(3);
 
         // resolveTableName + the OCC snapshot both read; return this row for every SELECT.
@@ -1214,14 +1163,29 @@ describe("createSqlCtxDb — _creationTime is server-authoritative", () => {
         const { calls, exec } = recordingExecWithParams([snapshotRow]);
         const writer = createSqlCtxDb({ clock: () => CLOCK, dialect: makeSqliteDialect(), exec, schema });
 
-        await writer.replace("row1", { _creationTime: 5, archived: false, body: "y", priority: 7, slug: "s" });
+        await writer.replace("notes", "row1", { _creationTime: 5, archived: false, body: "y", priority: 7, slug: "s" });
 
         const update = calls.find((call) => /update .*notes.* set/iu.test(call.sql));
 
         expect(update).toBeDefined();
-        // The SET clause binds `_creationTime = ?` first, so the minted clock() is the leading param — never the forged 5.
-        expect(update?.params[0]).toBe(CLOCK);
+        // The SET clause binds `_creationTime = ?` first, so the stored 42 is the leading param — never the forged 5, never a fresh clock().
+        expect(update?.params[0]).toBe(42);
         expect(update?.params).not.toContain(5);
+    });
+
+    it("replace() WITH allowExplicitId honors the document _creationTime (import/CDC replay)", async () => {
+        expect.assertions(2);
+
+        const snapshotRow = { _creationTime: 42, archived: 0, body: "x", id: "row1", priority: 1, slug: "s" };
+        const { calls, exec } = recordingExecWithParams([snapshotRow]);
+        const writer = createSqlCtxDb({ clock: () => CLOCK, dialect: makeSqliteDialect(), exec, schema });
+
+        await writer.replace("notes", "row1", { _creationTime: 5, archived: false, body: "y", priority: 7, slug: "s" }, { allowExplicitId: true });
+
+        const update = calls.find((call) => /update .*notes.* set/iu.test(call.sql));
+
+        expect(update).toBeDefined();
+        expect(update?.params[0]).toBe(5);
     });
 });
 
@@ -1277,6 +1241,158 @@ describe("createSqlCtxDb — the `.global()` changelog", () => {
 
         expect(next?.tables).toStrictEqual(["notes"]);
         expect(next?.cursor).toBeGreaterThan(head);
+    });
+
+    /**
+     * Rewind the changelog the way a D1 Time Travel restore does — the rows AND
+     * the `sqlite_sequence` bookkeeping that holds the high-watermark, because a
+     * restore reverts the whole database rather than a table in it. `toSeq` is
+     * the watermark at the point restored to.
+     */
+    const restoreLogTo = async (toSeq: number): Promise<void> => {
+        await harness.exec.run(`DELETE FROM "__cdc_log" WHERE "seq" > ?`, [toSeq]);
+        await harness.exec.run(`UPDATE sqlite_sequence SET seq = ? WHERE name = '__cdc_log'`, [toSeq]);
+    };
+
+    it("refuses a cursor above the high-watermark rather than reporting caught-up", async () => {
+        expect.assertions(3);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+        await writer.insert("notes", { archived: false, body: "b", priority: 1, slug: "b" });
+        await writer.insert("notes", { archived: false, body: "c", priority: 1, slug: "c" });
+
+        const consumed = await readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, dialect);
+
+        expect(consumed.cursor).toBe(3);
+
+        await restoreLogTo(0);
+
+        // Post-restore writes climb back through seqs the consumer has already
+        // passed. Served an empty page, it would call itself caught up and skip
+        // both of them permanently.
+        await writer.insert("notes", { archived: false, body: "d", priority: 1, slug: "d" });
+        await writer.insert("notes", { archived: false, body: "e", priority: 1, slug: "e" });
+
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: consumed.cursor }, dialect)).rejects.toThrow(/rolled back/iu);
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: consumed.cursor }, dialect)).rejects.toMatchObject({ code: "CDC_TIMELINE_FORKED" });
+    });
+
+    /**
+     * The residual gap the watermark guard does NOT close, pinned so it is not
+     * mistaken for one that is.
+     *
+     * The guard fires on `sinceSeq > watermark`, and a rewound log re-issues the
+     * seqs it lost. So the proof expires: once post-restore writes have climbed
+     * the AUTOINCREMENT back past a consumer's cursor, that cursor is in range
+     * again and the consumer is served — a page of the NEW timeline, whose
+     * earlier entries are already behind its cursor and unreachable for good.
+     *
+     * Closing it needs a witness that outlives the seq space — an epoch paired
+     * with the cursor, the way the shard plane's subscription frames carry one.
+     * This path has no such channel, and neither does the shard plane's twin of
+     * it: `runShardCdcSync` returns `{ changes, cursor }` and stamps its epoch
+     * only on the refusal. Whether to add one is a wire decision; until it is
+     * made, this is the shape of what gets through.
+     */
+    it("serves a rewound timeline once post-restore writes climb back over the cursor", async () => {
+        expect.assertions(4);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        // Timeline A: five committed writes, all drained by the consumer.
+        for (const slug of ["a", "b", "c", "d", "e"]) {
+            // eslint-disable-next-line no-await-in-loop -- the seqs have to be allocated in order; that ordering is the subject
+            await writer.insert("notes", { archived: false, body: slug, priority: 1, slug });
+        }
+
+        const consumed = await readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, dialect);
+
+        expect(consumed.cursor).toBe(5);
+
+        // Restore to the moment only two writes existed. Timeline A's seqs 3..5
+        // are gone, and so is the watermark that named them.
+        await restoreLogTo(2);
+
+        // Timeline B keeps taking writes while the consumer is between polls,
+        // re-issuing seqs 3..5 for different rows and carrying on past them.
+        for (const slug of ["f", "g", "h", "i", "j", "k"]) {
+            // eslint-disable-next-line no-await-in-loop -- as above
+            await writer.insert("notes", { archived: false, body: slug, priority: 1, slug });
+        }
+
+        const watermark = await harness.exec.all(`SELECT seq FROM sqlite_sequence WHERE name = '__cdc_log'`, []);
+
+        expect(Number(watermark[0]?.["seq"])).toBe(8);
+
+        // 5 <= 8, so the rollback guard does not fire and the page is served.
+        const page = await readSqlCdcChanges(harness.exec, { sinceSeq: consumed.cursor }, dialect);
+
+        expect(page.changes.map((change) => change.doc?.["slug"])).toStrictEqual(["i", "j", "k"]);
+
+        // "f", "g", "h" were committed on the timeline the consumer is now
+        // reading, at seqs its cursor is already past. Nothing will deliver them.
+        const retained = await harness.exec.all(`SELECT doc FROM "__cdc_log" ORDER BY seq`, []);
+
+        expect(retained.map((row) => JSON.parse(String(row["doc"]))["slug"])).toStrictEqual(["a", "b", "f", "g", "h", "i", "j", "k"]);
+    });
+
+    it("treats a changelog that was never written as a watermark of zero", async () => {
+        expect.assertions(2);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        // Provision the log without writing to it. SQLite creates the
+        // `sqlite_sequence` TABLE with the first AUTOINCREMENT table but the ROW
+        // only on the first insert, so this is the shape where the watermark has
+        // to be inferred rather than read.
+        await writer.cdcChangedTables?.(0);
+
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: 0 }, dialect)).resolves.toStrictEqual({ changes: [], cursor: 0 });
+        await expect(readSqlCdcChanges(harness.exec, { sinceSeq: 5 }, dialect)).rejects.toMatchObject({ code: "CDC_TIMELINE_FORKED" });
+    });
+
+    it("serves a consumer sitting exactly at the high-watermark", async () => {
+        expect.assertions(1);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+
+        // The boundary the refusal must NOT claim: a caught-up consumer holds the
+        // watermark itself, and `>` rather than `>=` is what keeps it served.
+        const caughtUp = await readSqlCdcChanges(harness.exec, { sinceSeq: 1 }, dialect);
+
+        expect(caughtUp).toStrictEqual({ changes: [], cursor: 1 });
+    });
+
+    it("does not accuse a caught-up consumer after retention swept the log empty", async () => {
+        expect.assertions(2);
+
+        const dialect = makeSqliteDialect();
+        const writer = makeCdcWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 1, slug: "a" });
+        await writer.insert("notes", { archived: false, body: "b", priority: 1, slug: "b" });
+
+        // A sweep DELETEs rows; it does not rewind the timeline. `MAX(seq)` is
+        // NULL here, which is exactly why the watermark is read from
+        // `sqlite_sequence` — reading the rows would refuse every healthy
+        // consumer of a quiet, fully swept log.
+        await harness.exec.run(`DELETE FROM "__cdc_log"`, []);
+
+        const head = await harness.exec.all(`SELECT MAX(seq) AS seq FROM "__cdc_log"`, []);
+
+        expect(head[0]?.["seq"]).toBeNull();
+
+        const caughtUp = await readSqlCdcChanges(harness.exec, { sinceSeq: 2 }, dialect);
+
+        expect(caughtUp).toStrictEqual({ changes: [], cursor: 2 });
     });
 
     it("round-trips a bigint / bytes post-image through the changelog", async () => {
@@ -1376,6 +1492,120 @@ describe("createSqlCtxDb — the `.global()` changelog", () => {
         // an integer — is never prefixed on either.
         expect(columnsOf(plain)).toBe(`"table", "seq"`);
         expect(plain).not.toMatch(/\(191\)/u);
+    });
+});
+
+/**
+ * Declaring a UNIQUE index over a global table that already holds duplicates is
+ * a migration that cannot succeed. `CREATE UNIQUE INDEX` raises a bare
+ * `UNIQUE constraint failed: <table>.<column>` from inside `ensureMigrated`,
+ * which every read and write on the `.global()` store awaits — and the table
+ * loop bails at the first throw, so one unmigratable index takes the whole
+ * global plane down and leaves every table declared after it unprovisioned.
+ * That has to arrive as a diagnostic naming the table and the remedy.
+ */
+describe("global table UNIQUE index over existing duplicates", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const plain: SchemaLike = {
+        tables: { notes: { indexes: [], shape: { slug: col("string") }, shardMode: { kind: "global" } } },
+    } as never;
+
+    const withUniqueIndex: SchemaLike = {
+        tables: {
+            notes: { indexes: [{ fields: ["slug"], name: "by_slug", unique: true }], shape: { slug: col("string") }, shardMode: { kind: "global" } },
+        },
+    } as never;
+
+    const withUniqueColumn: SchemaLike = {
+        tables: { notes: { indexes: [], shape: { slug: col("string", { unique: true }) }, shardMode: { kind: "global" } } },
+    } as never;
+
+    /** Provision the index-free shape and write two rows sharing a slug. */
+    const seedDuplicates = async (): Promise<void> => {
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema: plain });
+
+        await writer.insert("notes", { slug: "dup" });
+        await writer.insert("notes", { slug: "dup" });
+    };
+
+    /** Force the provisioning pass for `next` and return whatever it threw. */
+    const provision = async (next: SchemaLike): Promise<unknown> => {
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema: next });
+
+        try {
+            await writer.findMany("notes", {});
+        } catch (error) {
+            return error;
+        }
+
+        return undefined;
+    };
+
+    it("refuses a declared unique index whose column list already has duplicates", async () => {
+        expect.assertions(2);
+
+        await seedDuplicates();
+
+        const error = await provision(withUniqueIndex);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as Error).message).toMatch(/notes_by_slug.*duplicates/isu);
+    });
+
+    it("refuses a `.unique()` column whose values already have duplicates", async () => {
+        expect.assertions(2);
+
+        await seedDuplicates();
+
+        const error = await provision(withUniqueColumn);
+
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as Error).message).toMatch(/notes_unique_slug.*duplicates/isu);
+    });
+
+    it("still creates the index when the values are duplicate-free", async () => {
+        expect.assertions(2);
+
+        const writer = createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect: makeSqliteDialect(), exec: harness.exec, schema: plain });
+
+        await writer.insert("notes", { slug: "a" });
+        await writer.insert("notes", { slug: "b" });
+
+        await expect(provision(withUniqueIndex)).resolves.toBeUndefined();
+        await expect(harness.exec.all(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'notes_by_slug'`, [])).resolves.toHaveLength(1);
+    });
+
+    it("leaves an unrelated DDL failure as its own error rather than relabelling it", async () => {
+        expect.assertions(2);
+
+        await seedDuplicates();
+
+        // The index name collides with an existing TABLE, so `CREATE UNIQUE INDEX`
+        // fails for a reason that has nothing to do with the rows — on a table
+        // that DOES hold duplicates, which is the case a probe run unconditionally
+        // would have mislabelled. The dialect does not call this a unique
+        // violation, so the probe never runs and the engine's own error stands.
+        await harness.exec.run(`CREATE TABLE "notes_by_other" ("x" TEXT)`, []);
+
+        const collidingName: SchemaLike = {
+            tables: {
+                notes: { indexes: [{ fields: ["slug"], name: "by_other", unique: true }], shape: { slug: col("string") }, shardMode: { kind: "global" } },
+            },
+        } as never;
+
+        const error = await provision(collidingName);
+
+        expect(error).not.toBeInstanceOf(LunoraError);
+        expect((error as Error).message).toMatch(/already (a table|another table or index) named/iu);
     });
 });
 
@@ -1712,15 +1942,40 @@ describe("createSqlCtxDb — min/max companion over a bigint column", () => {
         await expect(writer.aggregate("payments", { op: "min", field: "amount", where: { tenant: "a" } })).resolves.toBe(7);
 
         // Deleting the row that IS the stored extreme is what forces the recompute.
-        await writer.delete(lowest);
+        await writer.delete("payments", lowest);
 
         await expect(writer.aggregate("payments", { op: "min", field: "amount", where: { tenant: "a" } })).resolves.toBe(42);
 
-        await writer.delete(highest);
+        await writer.delete("payments", highest);
 
         await expect(writer.aggregate("payments", { op: "max", field: "amount", where: { tenant: "a" } })).resolves.toBe(900);
 
         await expect(writer.aggregate("payments", { op: "min", field: "amount", where: { tenant: "b" } })).resolves.toBe(5);
+    });
+
+    it("sends a delete's min/max companion writes in the same batch as the other aggregates", async () => {
+        expect.assertions(2);
+
+        const batchHarness = createSqliteBatchHarness();
+
+        try {
+            const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: batchHarness.exec, schema: bigintExtremeSchema });
+            const lowest = await writer.insert("payments", { amount: 7n, tenant: "a" });
+
+            await writer.insert("payments", { amount: 42n, tenant: "a" });
+
+            const batch = vi.spyOn(batchHarness.exec, "batch");
+            const run = vi.spyOn(batchHarness.exec, "run");
+
+            await writer.delete("payments", lowest);
+
+            // The min/max recompute, group update and prune all commit with the batch, so a
+            // failed batch cannot leave the extreme companion behind the other aggregates.
+            expect(batch).toHaveBeenCalledTimes(1);
+            expect(run).not.toHaveBeenCalled();
+        } finally {
+            batchHarness.close();
+        }
     });
 });
 
@@ -1832,7 +2087,7 @@ describe("createSqlCtxDb — a NULL in an optional column decodes as absent", ()
 
         // An explicit `null` on a `.nullable()` column is a VALUE, not an absent field.
         const id = await writer.insert("drafts", { subtitle: null, title: "t" });
-        const row = await writer.get(id, "drafts");
+        const row = await writer.get("drafts", id);
 
         // `optional(string).parse(null)` throws, so decoding an unset optional
         // column as `null` broke the export/import round trip outright.
@@ -1883,11 +2138,11 @@ describe("createSqlCtxDb — a bigint in an untyped column", () => {
 
         const id = await writer.insert("payments", { amount: 900n, tenant: "a" });
 
-        await expect(writer.get(id)).resolves.toMatchObject({ amount: 900n });
+        await expect(writer.get("payments", id)).resolves.toMatchObject({ amount: 900n });
 
         const negative = await writer.insert("payments", { amount: -900n, tenant: "a" });
 
-        await expect(writer.get(negative)).resolves.toMatchObject({ amount: -900n });
+        await expect(writer.get("payments", negative)).resolves.toMatchObject({ amount: -900n });
     });
 
     it("recomputes both extremes of an untyped column from the decoded bigints", async () => {
@@ -1902,12 +2157,12 @@ describe("createSqlCtxDb — a bigint in an untyped column", () => {
         await writer.insert("payments", { amount: 900n, tenant: "a" });
 
         // Removing the row that IS the stored extreme is what forces the recompute.
-        await writer.delete(lowest);
+        await writer.delete("payments", lowest);
 
         await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(42);
         await expect(writer.aggregate("payments", { field: "amount", op: "max", where: { tenant: "a" } })).resolves.toBe(1234);
 
-        await writer.delete(highest);
+        await writer.delete("payments", highest);
 
         await expect(writer.aggregate("payments", { field: "amount", op: "max", where: { tenant: "a" } })).resolves.toBe(900);
         await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(42);
@@ -1937,12 +2192,12 @@ describe("createSqlCtxDb — a bigint in an untyped column", () => {
         const id = await writer.insert("payments", { amount: collides, tenant: "a" });
 
         // Reads back as the bigint that shape encodes, NOT as the string written.
-        await expect(writer.get(id)).resolves.toMatchObject({ amount: 900n });
+        await expect(writer.get("payments", id)).resolves.toMatchObject({ amount: 900n });
 
         // One character outside the shape is unambiguous and survives as a string.
         const safe = await writer.insert("payments", { amount: `2${"0".repeat(36)}900`, tenant: "a" });
 
-        await expect(writer.get(safe)).resolves.toMatchObject({ amount: `2${"0".repeat(36)}900` });
+        await expect(writer.get("payments", safe)).resolves.toMatchObject({ amount: `2${"0".repeat(36)}900` });
     });
 });
 
@@ -1990,7 +2245,7 @@ describe("createSqlCtxDb — recomputing an extreme over a large group", () => {
         widest = 0;
 
         // Removing the row that IS the stored extreme is what forces the recompute.
-        await writer.delete(lowest);
+        await writer.delete("payments", lowest);
 
         await expect(writer.aggregate("payments", { field: "amount", op: "min", where: { tenant: "a" } })).resolves.toBe(2);
         expect(widest).toBeLessThanOrEqual(BACKFILL_BATCH_SIZE);
@@ -2546,5 +2801,593 @@ describe("createSqlCtxDb — groupBy decodes its group key", () => {
 
         expect(groups.find((group) => group.key["archived"] === true)).toStrictEqual({ key: { archived: true }, value: 2 });
         expect(groups.find((group) => group.key["archived"] === false)).toStrictEqual({ key: { archived: false }, value: 1 });
+    });
+});
+
+describe("createSqlCtxDb — patchIf decides in one conditional UPDATE", () => {
+    const counterSchema: SchemaLike = {
+        tables: {
+            counters: {
+                indexes: [{ fields: ["name"], name: "by_name" }],
+                shape: { name: col("string"), prev: optionalCol("number"), value: col("number") },
+                shardMode: { kind: "global" },
+            },
+        },
+    } as never;
+
+    let database: DatabaseSync;
+
+    /** `node:sqlite` exec; `run` reports the changed-row count so the no-RETURNING (MySQL) path has a real signal. */
+    const execOver = (db: DatabaseSync): SqlCtxExec => {
+        return {
+            all: (query, parameters) => Promise.resolve(db.prepare(query).all(...(parameters as never[]))),
+            run: (query, parameters) => Promise.resolve({ rowsAffected: Number(db.prepare(query).run(...(parameters as never[])).changes) }),
+        };
+    };
+
+    /**
+     * An exec that runs `beforeUpdate` ahead of each UPDATE the writer issues (numbered from 1), standing in for
+     * another writer that wins the row first. Returns the exec and a counter of the UPDATEs seen.
+     */
+    const interceptUpdates = (beforeUpdate: (updateNumber: number) => void): { exec: SqlCtxExec; updates: () => number } => {
+        const base = execOver(database);
+        let updates = 0;
+
+        return {
+            exec: {
+                ...base,
+                all: async (query, parameters) => {
+                    if (/^update/iu.test(query)) {
+                        updates += 1;
+                        beforeUpdate(updates);
+                    }
+
+                    return base.all(query, parameters);
+                },
+            },
+            updates: () => updates,
+        };
+    };
+
+    /** Move the row's version the way a concurrent writer's committed UPDATE would. */
+    const bumpVersion = (set = ""): void => {
+        database.prepare(`UPDATE "counters" SET ${set}"_version" = COALESCE("_version", 0) + 1`).run();
+    };
+
+    const makeWriter = (dialect: SqlDialect = makeSqliteDialect(), exec: SqlCtxExec = execOver(database)) =>
+        createSqlCtxDb({ clock: () => 1_700_000_000_000, dialect, exec, schema: counterSchema });
+
+    /** The no-RETURNING dialect shape: the affected-row count is the CAS signal. */
+    const affectedRowsDialect = (): SqlDialect => {
+        return { ...makeSqliteDialect(), affectedRows: (result) => result.rowsAffected, supportsReturning: false };
+    };
+
+    beforeEach(() => {
+        database = new DatabaseSync(":memory:");
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    it("applies when the stored row matches and returns the decoded row as written", async () => {
+        expect.assertions(2);
+
+        const writer = makeWriter();
+        const id = await writer.insert("counters", { name: "a", value: 1 });
+
+        await expect(writer.patchIf?.("counters", id, { patch: { value: 2 }, where: { value: 1 } })).resolves.toStrictEqual({
+            applied: true,
+            doc: expect.objectContaining({ _id: id, name: "a", value: 2 }),
+        });
+        await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 2 });
+    });
+
+    it("leaves a row that does not match untouched", async () => {
+        expect.assertions(2);
+
+        const writer = makeWriter();
+        const id = await writer.insert("counters", { name: "a", value: 1 });
+
+        await expect(writer.patchIf?.("counters", id, { patch: { value: 9 }, where: { value: 5 } })).resolves.toStrictEqual({
+            applied: false,
+            doc: expect.objectContaining({ _id: id, value: 1 }),
+        });
+        await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 1 });
+    });
+
+    it("matches an absent optional field with a null filter", async () => {
+        expect.assertions(2);
+
+        const writer = makeWriter();
+        const id = await writer.insert("counters", { name: "a", value: 1 });
+
+        await expect(writer.patchIf?.("counters", id, { patch: { prev: 4 }, where: { prev: null, value: 1 } })).resolves.toMatchObject({ applied: true });
+        await expect(writer.patchIf?.("counters", id, { patch: { prev: 5 }, where: { prev: null } })).resolves.toMatchObject({ applied: false });
+    });
+
+    it("reports a missing row as not applied with a null doc", async () => {
+        expect.assertions(1);
+
+        const writer = makeWriter();
+
+        await writer.insert("counters", { name: "a", value: 1 });
+
+        await expect(writer.patchIf?.("counters", "missing", { patch: { value: 2 }, where: {} })).resolves.toStrictEqual({ applied: false, doc: null });
+    });
+
+    it.each([
+        ["RETURNING", makeSqliteDialect],
+        ["affected rows", affectedRowsDialect],
+    ])("lets exactly one of ten concurrent compare-and-set patches win (%s)", async (_label, dialect) => {
+        expect.assertions(2);
+
+        const writer = makeWriter(dialect());
+        const id = await writer.insert("counters", { name: "a", value: 0 });
+
+        const results = await Promise.all(
+            Array.from({ length: 10 }, async () => writer.patchIf?.("counters", id, { patch: { value: 1 }, where: { value: 0 } })),
+        );
+
+        expect(results.filter((result) => result?.applied)).toHaveLength(1);
+        await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 1 });
+    });
+
+    it("gives up with a conflict when every attempt loses the row to another writer", async () => {
+        expect.assertions(2);
+
+        // Every conditional UPDATE finds the row's version moved by someone else first.
+        const { exec: contended, updates } = interceptUpdates(() => {
+            bumpVersion();
+        });
+        const id = await makeWriter().insert("counters", { name: "a", value: 0 });
+
+        await expect(makeWriter(makeSqliteDialect(), contended).patchIf?.("counters", id, { patch: { value: 1 }, where: { value: 0 } })).rejects.toMatchObject({
+            code: "CONFLICT",
+        });
+        expect(updates()).toBe(16);
+    });
+
+    describe("explain", () => {
+        it("describes the statement a read runs, using the engine's own plan", async () => {
+            expect.assertions(4);
+
+            const writer = makeWriter();
+
+            await writer.insert("counters", { name: "a", value: 1 });
+
+            const indexed = await writer.explain("counters", { where: { name: "a" } });
+            const scanned = await writer.explain("counters", { where: { value: 1 } });
+
+            expect(indexed?.sql).toMatch(/^SELECT .* FROM "counters"/u);
+            expect(indexed?.params).toContain("a");
+            expect(indexed?.plan.join("\n")).toContain("by_name");
+            expect(scanned?.plan.join("\n")).not.toContain("by_name");
+        });
+
+        it.each([
+            ["postgres", "EXPLAIN SELECT", { "QUERY PLAN": "Seq Scan on counters" }, "Seq Scan on counters"],
+            ["mysql", "EXPLAIN SELECT", { id: 1, key: null, table: "counters" }, "1 | null | counters"],
+        ] as const)("uses plain EXPLAIN on %s and reads that dialect's plan row", async (name, prefix, row, line) => {
+            expect.assertions(2);
+
+            const statements: string[] = [];
+            const base = execOver(database);
+            const exec: SqlCtxExec = {
+                ...base,
+                all: async (query, parameters) => {
+                    statements.push(query);
+
+                    return query.startsWith("EXPLAIN") ? [row] : base.all(query, parameters);
+                },
+            };
+            const writer = makeWriter({ ...makeSqliteDialect(), name }, exec);
+            const result = await writer.explain("counters", {});
+
+            expect(statements.some((statement) => statement.startsWith(prefix))).toBe(true);
+            expect(result?.plan).toStrictEqual([line]);
+        });
+    });
+
+    describe("atomic field operators", () => {
+        const contendedWriter = (): { updates: () => number; writer: ReturnType<typeof makeWriter> } => {
+            // Every UPDATE finds the row's version moved by someone else first.
+            const { exec, updates } = interceptUpdates(() => {
+                bumpVersion();
+            });
+
+            return { updates, writer: makeWriter(makeSqliteDialect(), exec) };
+        };
+
+        it("applies an increment to the stored value", async () => {
+            expect.assertions(1);
+
+            const writer = makeWriter();
+            const id = await writer.insert("counters", { name: "a", value: 5 });
+
+            await writer.patch("counters", id, { value: { increment: 3 } });
+
+            await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 8 });
+        });
+
+        it("lands every one of ten concurrent increments instead of conflicting", async () => {
+            expect.assertions(1);
+
+            const writer = makeWriter();
+            const id = await writer.insert("counters", { name: "a", value: 0 });
+
+            await Promise.all(Array.from({ length: 10 }, async () => writer.patch("counters", id, { value: { increment: 1 } })));
+
+            await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 10 });
+        });
+
+        it("gives up with a conflict after the bounded number of re-reads", async () => {
+            expect.assertions(2);
+
+            const { updates, writer } = contendedWriter();
+            const id = await makeWriter().insert("counters", { name: "a", value: 0 });
+
+            await expect(writer.patch("counters", id, { value: { increment: 1 } })).rejects.toMatchObject({ code: "CONFLICT" });
+            expect(updates()).toBe(16);
+        });
+
+        it("still reports a plain patch that loses the version check as a conflict straight away", async () => {
+            expect.assertions(2);
+
+            const { updates, writer } = contendedWriter();
+            const id = await makeWriter().insert("counters", { name: "a", value: 0 });
+
+            await expect(writer.patch("counters", id, { value: 1 })).rejects.toMatchObject({ code: "CONFLICT" });
+            expect(updates()).toBe(1);
+        });
+
+        it("takes the post-image verdict on each attempt's own read, so a retry cannot slip past it", async () => {
+            expect.assertions(3);
+
+            const writer = makeWriter();
+            const id = await writer.insert("counters", { name: "a", value: 3 });
+            // The first UPDATE finds another writer already took the value down to 1.
+            const { exec: racing } = interceptUpdates((updateNumber) => {
+                if (updateNumber === 1) {
+                    bumpVersion(`"value" = 1, `);
+                }
+            });
+            const seen: number[] = [];
+            const nonNegative = (_previous: Record<string, unknown>, next: Record<string, unknown>): boolean => {
+                seen.push(next["value"] as number);
+
+                return (next["value"] as number) >= 0;
+            };
+
+            // 3 - 2 = 1 passes on the first read; after the lost race the row holds 1 and 1 - 2 = -1 must not land.
+            await expect(
+                makeWriter(makeSqliteDialect(), racing).patch("counters", id, { value: { decrement: 2 } }, { verify: nonNegative }),
+            ).rejects.toMatchObject({
+                code: "FORBIDDEN",
+            });
+            expect(seen).toStrictEqual([1, -1]);
+            await expect(writer.get("counters", id)).resolves.toMatchObject({ value: 1 });
+        });
+
+        it("rejects an operator the stored value cannot take", async () => {
+            expect.assertions(1);
+
+            const writer = makeWriter();
+            const id = await writer.insert("counters", { name: "a", value: 1 });
+
+            await expect(writer.patch("counters", id, { value: { divide: 0 } })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        });
+    });
+});
+
+describe("createSqlCtxDb — dotted paths into an object column", () => {
+    const leaf = (kind: string, accepts: (value: unknown) => boolean): ValidatorLike => {
+        return {
+            _meta: { column: { notNull: true } },
+            kind,
+            parse: (value: unknown) => {
+                if (!accepts(value)) {
+                    throw new Error(`must be a ${kind}`);
+                }
+
+                return value;
+            },
+        };
+    };
+    const pathSchema: SchemaLike = {
+        tables: {
+            users: {
+                indexes: [],
+                shape: {
+                    name: col("string"),
+                    profile: {
+                        _meta: {
+                            column: { notNull: false },
+                            shape: {
+                                age: leaf("number", (value) => typeof value === "number"),
+                                plan: leaf("string", (value) => typeof value === "string"),
+                            },
+                        },
+                        kind: "object",
+                    },
+                },
+                shardMode: { kind: "global" },
+            },
+        },
+    } as never;
+
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const seed = async (dialect: SqlDialect = makeSqliteDialect(), exec: SqlCtxExec = harness.exec) => {
+        let now = 1_700_000_000_000;
+        const writer = createSqlCtxDb({
+            clock: () => {
+                now += 1000;
+
+                return now;
+            },
+            dialect,
+            exec,
+            schema: pathSchema,
+        });
+
+        await writer.insert("users", { _id: "a", name: "a", profile: { age: 30, plan: "pro" } }, { allowExplicitId: true });
+        await writer.insert("users", { _id: "b", name: "b", profile: { plan: "free" } }, { allowExplicitId: true });
+        await writer.insert("users", { _id: "c", name: "c", profile: { age: "30", plan: "pro" } }, { allowExplicitId: true });
+        await writer.insert("users", { _id: "d", name: "d" }, { allowExplicitId: true });
+
+        return writer;
+    };
+
+    const idsOf = (page: { page: Record<string, unknown>[] }): string[] =>
+        page.page.map((row) => String(row["_id"])).toSorted((left, right) => left.localeCompare(right));
+
+    it.each([
+        ["a string leaf", { "profile.plan": "pro" }, ["a", "c"]],
+        ["a number, not the same digits as text", { "profile.age": 30 }, ["a"]],
+        ["a missing leaf or missing object as null", { "profile.age": null }, ["b", "d"]],
+        ["an in-list on a path", { "profile.plan": { in: ["free"] } }, ["b"]],
+        ["a path beside a column", { name: "c", "profile.plan": "pro" }, ["c"]],
+    ])("finds %s", async (_label, where, expected) => {
+        expect.assertions(1);
+
+        const writer = await seed();
+
+        expect(idsOf(await writer.findMany("users", { where }))).toStrictEqual(expected);
+    });
+
+    it("orders by a path", async () => {
+        expect.assertions(1);
+
+        const writer = await seed();
+        const page = await writer.findMany("users", { orderBy: [{ "profile.plan": "asc" }], where: { "profile.plan": { in: ["free", "pro"] } } } as never);
+
+        expect(page.page.map((row) => row["_id"])).toStrictEqual(["b", "a", "c"]);
+    });
+
+    // The dialect is named Postgres/MySQL but the exec is a stub: this checks the rendered SQL shape only. The
+    // statements run for real in `@lunora/hyperdrive`'s global-json-paths suite, against PGlite and MySQL.
+    it.each([
+        ["postgres", "pg_input_is_valid"],
+        ["mysql", "JSON_VALID"],
+    ] as const)("renders a path on %s as the guarded JSON read, not a refusal", async (name, guard) => {
+        expect.assertions(2);
+
+        const statements: string[] = [];
+        const stub: SqlCtxExec = {
+            all: (query) => {
+                statements.push(query);
+
+                return Promise.resolve([]);
+            },
+            run: (query) => {
+                statements.push(query);
+
+                return Promise.resolve({ rowsAffected: 0 });
+            },
+        };
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: { ...makeSqliteDialect(), name }, exec: stub, schema: pathSchema });
+
+        await writer.findMany("users", { where: { "profile.plan": "pro" } });
+
+        expect(statements.some((query) => query.includes(guard) && query.includes("profile"))).toBe(true);
+        expect(statements.some((query) => query.includes("json_extract"))).toBe(false);
+    });
+
+    it("rejects a path that is too deep before building any SQL", async () => {
+        expect.assertions(1);
+
+        const writer = await seed();
+
+        await expect(writer.findMany("users", { where: { "profile.a.b.c.d": "x" } })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
+    it("does not let a hostile segment break out of the path", async () => {
+        expect.assertions(2);
+
+        const writer = await seed();
+        const hostile = await writer.findMany("users", { where: { "profile.plan') OR 1=1 --": "x" } });
+
+        expect(hostile.page).toStrictEqual([]);
+        expect(idsOf(await writer.findMany("users"))).toStrictEqual(["a", "b", "c", "d"]);
+    });
+
+    it("reads NULL, not an error, where the column holds text that is not JSON (a wire-encoded bigint)", async () => {
+        expect.assertions(2);
+
+        const writer = await seed();
+
+        // A bigint inside an object is stored in a marked, non-JSON form. One such row must not break a path filter
+        // for every other row, the way it would if SQLite's json_extract were left to raise on it.
+        await writer.insert("users", { _id: "e", name: "e", profile: { big: 10n, plan: "pro" } }, { allowExplicitId: true });
+
+        const page = await writer.findMany("users", { where: { "profile.plan": "pro" } });
+
+        expect(idsOf(page)).toStrictEqual(["a", "c"]);
+        expect(idsOf(await writer.findMany("users", { where: { "profile.plan": null } }))).toContain("e");
+    });
+
+    it("pages by a path with no gap and no repeat", async () => {
+        expect.assertions(1);
+
+        const writer = await seed();
+        const ids: string[] = [];
+        let cursor: null | string | undefined;
+
+        for (let guard = 0; guard < 10; guard += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each page needs the previous page's cursor
+            const page = await writer.findMany("users", { cursor, limit: 2, orderBy: [{ "profile.plan": "asc" }] } as never);
+
+            ids.push(...page.page.map((row) => String(row["_id"])));
+
+            if (page.isDone) {
+                break;
+            }
+
+            cursor = page.continueCursor;
+        }
+
+        // `d` has no profile (NULL, first), then free (b), then pro (a, c).
+        expect(ids).toStrictEqual(["d", "b", "a", "c"]);
+    });
+
+    describe("patch", () => {
+        it("sets one nested key and keeps its siblings", async () => {
+            expect.assertions(2);
+
+            const writer = await seed();
+
+            await writer.patch("users", "a", { "profile.plan": "team" });
+
+            const row = await writer.get("users", "a");
+            const untouched = await writer.get("users", "b");
+
+            expect(row?.["profile"]).toStrictEqual({ age: 30, plan: "team" });
+            expect(untouched?.["profile"]).toStrictEqual({ plan: "free" });
+        });
+
+        it("creates the object when the column was empty, and is found by a path filter afterwards", async () => {
+            expect.assertions(2);
+
+            const writer = await seed();
+
+            await writer.patch("users", "d", { "profile.plan": "pro" });
+
+            const row = await writer.get("users", "d");
+
+            expect(row?.["profile"]).toStrictEqual({ plan: "pro" });
+            expect(idsOf(await writer.findMany("users", { where: { "profile.plan": "pro" } }))).toStrictEqual(["a", "c", "d"]);
+        });
+
+        it("re-applies a path patch after losing the version check instead of reporting a conflict", async () => {
+            expect.assertions(2);
+
+            const base = harness.exec;
+            let updates = 0;
+            // The first UPDATE finds a concurrent writer already moved the row's version.
+            const contended: SqlCtxExec = {
+                ...base,
+                all: async (query, parameters) => {
+                    if (/^update/iu.test(query)) {
+                        updates += 1;
+
+                        if (updates === 1) {
+                            await base.all(`UPDATE "users" SET "_version" = COALESCE("_version", 0) + 1`, []);
+                        }
+                    }
+
+                    return base.all(query, parameters);
+                },
+            };
+            const writer = await seed(makeSqliteDialect(), contended);
+
+            await writer.patch("users", "a", { "profile.plan": "team" });
+
+            const row = await writer.get("users", "a");
+
+            expect(row?.["profile"]).toStrictEqual({ age: 30, plan: "team" });
+            expect(updates).toBe(2);
+        });
+
+        it.each([
+            ["a path the schema does not declare", { "profile.nope": 1 }],
+            ["a value of the wrong type", { "profile.age": "old" }],
+            ["a column and a path into it together", { profile: {}, "profile.plan": "x" }],
+        ])("rejects %s and leaves the row alone", async (_label, patch) => {
+            expect.assertions(2);
+
+            const writer = await seed();
+
+            await expect(writer.patch("users", "a", patch as never)).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+            const row = await writer.get("users", "a");
+
+            expect(row?.["profile"]).toStrictEqual({ age: 30, plan: "pro" });
+        });
+    });
+});
+
+describe("createSqlCtxDb — $onUpdateFn on a .global() table", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("patchIf restamps an `$onUpdateFn` column", async () => {
+        expect.assertions(1);
+
+        const touchedSchema = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    shape: { slug: col("string"), touched: col("number", { defaultValue: 0, onUpdateFn: () => 99 }) },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: touchedSchema });
+        const id = await writer.insert("notes", { slug: "a" });
+
+        await writer.patchIf?.("notes", id, { patch: { slug: "b" }, where: { slug: "a" } });
+
+        const row = await writer.get("notes", id);
+
+        expect(row?.touched).toBe(99);
+    });
+
+    it("soft delete restamps an `$onUpdateFn` column like any other update", async () => {
+        expect.assertions(1);
+
+        const touchedSchema = {
+            tables: {
+                notes: {
+                    indexes: [],
+                    shape: { deletedAt: optionalCol("number"), slug: col("string"), touched: col("number", { defaultValue: 0, onUpdateFn: () => 99 }) },
+                    shardMode: { kind: "global" },
+                    softDeleteMode: { field: "deletedAt" },
+                },
+            },
+        } as never;
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: touchedSchema });
+        const id = await writer.insert("notes", { slug: "a" });
+
+        await writer.delete("notes", id);
+
+        const row = await writer.findFirst("notes", { includeDeleted: true, where: { slug: "a" } });
+
+        expect(row?.touched).toBe(99);
     });
 });

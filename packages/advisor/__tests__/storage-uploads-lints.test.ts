@@ -13,29 +13,37 @@ const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: 
 
 const rows: AdvisorStorageUpload[] = [
     // upload with no guards → flagged by both allowlist and max-size.
-    { analyzable: true, exportName: "save", file: "upload", line: 3, method: "upload", presentKeys: [] },
+    { analyzable: true, scope: { kind: "export", name: "save" }, file: "upload", line: 3, method: "upload", presentKeys: [] },
     // store fully guarded → flagged by neither.
-    { analyzable: true, exportName: "safe", file: "store", line: 5, method: "store", presentKeys: ["allowedContentTypes", "maxSize"] },
+    { analyzable: true, scope: { kind: "export", name: "safe" }, file: "store", line: 5, method: "store", presentKeys: ["allowedContentTypes", "maxSize"] },
     // non-analyzable upload (opaque options object) → skipped by both.
-    { analyzable: false, exportName: "opaque", file: "opaque", line: 7, method: "upload", presentKeys: [] },
+    { analyzable: false, scope: { kind: "export", name: "opaque" }, file: "opaque", line: 7, method: "upload", presentKeys: [] },
     // generateUploadUrl with no contentType pin → flagged by the pin lint.
-    { analyzable: true, exportName: "mint", file: "sign", line: 9, method: "generateUploadUrl", presentKeys: [] },
+    { analyzable: true, scope: { kind: "export", name: "mint" }, file: "sign", line: 9, method: "generateUploadUrl", presentKeys: [] },
     // generateUploadUrl WITH contentType → not flagged.
-    { analyzable: true, exportName: "pinned", file: "sign", line: 11, method: "generateUploadUrl", presentKeys: ["contentType"] },
+    { analyzable: true, scope: { kind: "export", name: "pinned" }, file: "sign", line: 11, method: "generateUploadUrl", presentKeys: ["contentType"] },
     // native S3 presigned URL → flagged by the presigned lint.
-    { analyzable: true, exportName: "native", file: "presign", line: 13, method: "getPresignedUrl", presentKeys: [] },
+    { analyzable: true, scope: { kind: "export", name: "native" }, file: "presign", line: 13, method: "getPresignedUrl", presentKeys: [] },
     // worker-signed URL with a near-ceiling TTL → flagged by the presigned lint.
     {
         analyzable: true,
         expiresInSeconds: 604_800,
-        exportName: "longlived",
+        scope: { kind: "export", name: "longlived" },
         file: "presign",
         line: 15,
         method: "getSignedUrl",
         presentKeys: ["expiresInSeconds"],
     },
     // worker-signed URL with a short TTL → not flagged.
-    { analyzable: true, expiresInSeconds: 300, exportName: "shortlived", file: "presign", line: 17, method: "getSignedUrl", presentKeys: ["expiresInSeconds"] },
+    {
+        analyzable: true,
+        expiresInSeconds: 300,
+        scope: { kind: "export", name: "shortlived" },
+        file: "presign",
+        line: 17,
+        method: "getSignedUrl",
+        presentKeys: ["expiresInSeconds"],
+    },
 ];
 
 describe("storage_upload_without_content_type_allowlist", () => {

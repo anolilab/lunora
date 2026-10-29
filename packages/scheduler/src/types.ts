@@ -11,7 +11,7 @@ export type { ArgsOf, FunctionKind, FunctionReference } from "../../../shared/fu
 /**
  * Typed reference to a Lunora durable workflow — either the generated
  * `workflows.<name>` reference object (`_generated/api.ts`, which carries the
- * `WORKFLOW_*` binding + export name) or, structurally, a `defineWorkflow()`
+ * workflow's class name + export name) or, structurally, a `defineWorkflow()`
  * result imported directly. Both are matched by the `isLunoraWorkflow` brand and
  * carry the workflow's `params` in the phantom `__params`, so a `cronJobs()`
  * registration infers them.
@@ -28,8 +28,8 @@ export type { ArgsOf, FunctionKind, FunctionReference } from "../../../shared/fu
 export interface WorkflowReference<Params = Record<string, unknown>> {
     /** Phantom carrier for the workflow's `params` type — drives `cronJobs()` arg inference. Never read at runtime. */
     readonly __params?: Params;
-    /** The `WORKFLOW_*` binding name (present on a generated `workflows.<name>` ref). */
-    readonly binding?: string;
+    /** The workflow's export key — its generated class name, reached as `ctx.exports.<className>` (present on a generated ref). */
+    readonly className?: string;
     readonly isLunoraWorkflow: true;
     /** The workflow's export/stable name (present on a generated ref; a `defineWorkflow({ name })` override otherwise). */
     readonly name?: string;
@@ -184,7 +184,7 @@ export interface ScheduleRecord {
     shardKey?: string;
 
     /**
-     * The `WORKFLOW_*`/`AGENT_*` binding name to start a fresh durable instance
+     * The workflow/agent export key (its generated class name) to start a fresh durable instance
      * of on fire (the {@link ScheduleRecord.args} become its `params`). Set
      * instead of {@link ScheduleRecord.functionPath} when the job targets a
      * workflow/agent {@link WorkflowReference}. The runtime — not the DO — owns
@@ -397,7 +397,7 @@ export interface MessageBatchLike<Body = unknown> {
 /** The wire payload Lunora puts on the queue: a function dispatch. */
 export interface QueueJob {
     /**
-     * The call's arguments in WIRE form (`shared/wire-codec`), so a `bigint`,
+     * The call's arguments in WIRE form (`packages/wire/src/wire-codec`), so a `bigint`,
      * `Date` or bytes survives the queue's own JSON serialisation. The producers
      * encode; the shard's dispatch loop is the single decoder. A custom
      * {@link QueueDispatch} must forward this untouched — decoding it here and
@@ -450,6 +450,29 @@ export type QueueDispatch = (job: QueueJob, messageId?: string) => Promise<void>
 export interface QueueConsumerOptions {
     /** How each job is executed; e.g. the `httpDispatcher`. */
     dispatch: QueueDispatch;
+
+    /**
+     * The consumer's `max_retries` as deployed in `wrangler.jsonc`, which a
+     * consumer cannot read at runtime. Used only to recognise a message's last
+     * delivery, where a declined dispatch is re-enqueued through `requeue` (or
+     * logged as the drop or dead-letter it becomes without one). Defaults to
+     * Cloudflare's default of 3.
+     */
+    maxRetries?: number;
+
+    /**
+     * Re-enqueue a job whose dispatch is declined on its last delivery as a
+     * copy delayed past the in-flight claim, with a fresh retry budget, instead
+     * of letting it be dead-lettered or dropped while its call is still
+     * running. Without it that loss is only logged.
+     *
+     * `queue` is the producer binding of the queue this consumer reads (the
+     * one handed to `createQueueWorkpool`). `secret` keys the MAC the copy
+     * carries — pass the admin token (`LUNORA_ADMIN_TOKEN`). The copy
+     * dispatches under the replaced message's id so the shard serves the
+     * declined call's result, and without a valid MAC no body can claim an id.
+     */
+    requeue?: { queue: QueueLike<QueueJob>; secret: string };
 }
 
 /** Options for the `httpDispatcher` — the default HTTP dispatcher. */

@@ -11,6 +11,39 @@ SemVer promise until the package graduates.
 
 ## `@lunora/platform-node`
 
+### `NODE_SCHEDULER_DISPATCH_PATH` (const)
+
+```ts
+const NODE_SCHEDULER_DISPATCH_PATH: "/_lunora/scheduler/dispatch";
+```
+
+### `NodeDispatchInvocation` (interface)
+
+```ts
+interface NodeDispatchInvocation {
+    args: Record<string, unknown>;
+    functionPath: string;
+    id: string | undefined;
+    identity: {
+        identity?: string;
+        userId?: string;
+    } | undefined;
+    shardKey: string;
+    traceparent: string | undefined;
+}
+```
+
+### `NodeDispatchRouteOptions` (interface)
+
+```ts
+interface NodeDispatchRouteOptions {
+    adminToken?: string;
+    defaultShardKey: string;
+    invoke: (call: NodeDispatchInvocation) => Promise<Response>;
+    schedulerSecret?: string;
+}
+```
+
 ### `NodeGlobalContextDatabaseOptions` (type)
 
 ```ts
@@ -39,6 +72,26 @@ interface NodeGlobalStoreOptions {
 }
 ```
 
+### `NodeHttpServer` (interface)
+
+```ts
+interface NodeHttpServer {
+    close: () => Promise<void>;
+    origin: string;
+}
+```
+
+### `NodeHttpServerOptions` (interface)
+
+```ts
+interface NodeHttpServerOptions {
+    fetch: (request: Request) => Promise<Response> | Response;
+    host?: string;
+    origin?: string;
+    port?: number;
+}
+```
+
 ### `NodePlatform` (interface)
 
 ```ts
@@ -51,6 +104,7 @@ interface NodePlatform<Queues extends Record<string, {
     capabilities: PlatformCapabilities;
     close: () => void;
     directory: ShardDirectory;
+    dispatch: (request: Request) => Promise<Response>;
     drain: () => Promise<void>;
     globalTables?: NodeGlobalStore;
     kv: ShardKvStore;
@@ -63,6 +117,15 @@ interface NodePlatform<Queues extends Record<string, {
 }
 ```
 
+### `NodePlatformDispatchOptions` (interface)
+
+```ts
+interface NodePlatformDispatchOptions {
+    adminToken?: string;
+    schedulerSecret?: string;
+}
+```
+
 ### `NodePlatformOptions` (type)
 
 ```ts
@@ -71,12 +134,27 @@ type NodePlatformOptions<Queues extends Record<string, {
 }> = Record<string, never>, Workflows extends Record<string, {
     isLunoraWorkflow: true;
 }> = Record<string, never>> = {
+    dispatch?: NodePlatformDispatchOptions;
     globalTablesPath?: string;
     objectStorageDirectory?: string;
     onQueueBatch?: NodeQueueHostOptions<Queues>["onBatch"];
     queues?: Queues;
     workflows?: Workflows;
 } & NodeSchedulerHostOptions & NodeShardHostOptions & NodeShardRegistryOptions;
+```
+
+### `NodeProfileHandler` (type)
+
+```ts
+type NodeProfileHandler = (request: Request) => Promise<Response>;
+```
+
+### `NodeProfileHandlerOptions` (interface)
+
+```ts
+interface NodeProfileHandlerOptions {
+    token: string;
+}
 ```
 
 ### `NodeQueueHost` (interface)
@@ -148,6 +226,7 @@ interface NodeSchedulerHostOptions {
 
 ```ts
 interface NodeShard {
+    inbound: Pick<NodeSocketHost, "onClose" | "onMessage">;
     kv: ShardKvStore;
     shard: ShardHost;
     shardKey: string;
@@ -196,6 +275,10 @@ interface NodeShardState {
     id: {
         name?: string;
     };
+    openSocketPair: () => {
+        client: unknown;
+        server: unknown;
+    };
     storage: {
         delete: (key: string) => Promise<boolean>;
         deleteAlarm: () => Promise<void>;
@@ -212,6 +295,7 @@ interface NodeShardState {
         };
         transaction: <T>(closure: () => Promise<T>) => Promise<T>;
     };
+    upgradeResponse: (client: unknown) => Response;
     waitUntil: (promise: Promise<unknown>) => void;
 }
 ```
@@ -220,6 +304,9 @@ interface NodeShardState {
 
 ```ts
 interface NodeSocketHost {
+    drain: () => Promise<void> | undefined;
+    onClose: (handler: (socket: NodeServerEnd, code: number, reason: string, wasClean: boolean) => void | Promise<void>) => void;
+    onMessage: (handler: (socket: NodeServerEnd, data: string | ArrayBuffer) => void) => void;
     readFrames: (handle: SocketHandle) => string[];
     restoreSocket: (id: string, attachment: unknown) => SocketHandle;
     simulateRecycle: () => void;
@@ -254,10 +341,37 @@ interface NodeWorkflowHostOptions<Workflows extends Record<string, {
 }
 ```
 
+### `ShardSocketHooks` (interface)
+
+```ts
+interface ShardSocketHooks {
+    webSocketClose(ws: unknown, code: number, reason: string, wasClean: boolean): unknown;
+    webSocketMessage(ws: unknown, message: string | ArrayBuffer): unknown;
+}
+```
+
+### `bindShardSockets` (const)
+
+```ts
+const bindShardSockets: (shard: ShardSocketHooks, inbound: Pick<NodeShard["inbound"], "onClose" | "onMessage">) => void;
+```
+
+### `createNodeDispatchRoute` (const)
+
+```ts
+const createNodeDispatchRoute: (options: NodeDispatchRouteOptions) => ((request: Request) => Promise<Response>);
+```
+
 ### `createNodeGlobalStore` (const)
 
 ```ts
 const createNodeGlobalStore: (options?: NodeGlobalStoreOptions) => NodeGlobalStore;
+```
+
+### `createNodeHttpServer` (const)
+
+```ts
+const createNodeHttpServer: (options: NodeHttpServerOptions) => Promise<NodeHttpServer>;
 ```
 
 ### `createNodePlatform` (const)
@@ -268,6 +382,12 @@ const createNodePlatform: <Queues extends Record<string, {
 }> = Record<string, never>, Workflows extends Record<string, {
     isLunoraWorkflow: true;
 }> = Record<string, never>>(options?: NodePlatformOptions<Queues, Workflows>) => NodePlatform<Queues, Workflows>;
+```
+
+### `createNodeProfileHandler` (const)
+
+```ts
+const createNodeProfileHandler: ({ token }: NodeProfileHandlerOptions) => NodeProfileHandler;
 ```
 
 ### `createNodeQueueHost` (const)
@@ -305,6 +425,12 @@ const createNodeShardHost: (options?: NodeShardHostOptions) => {
 
 ```ts
 const createNodeShardKvStore: (database: Database.Database) => ShardKvStore;
+```
+
+### `createNodeShardNamespace` (const)
+
+```ts
+const createNodeShardNamespace: (directory: DirectShardDirectory) => ShardNamespaceLike;
 ```
 
 ### `createNodeShardRegistry` (const)
@@ -351,4 +477,19 @@ const createNodeWorkflowStore: (database: Database.Database) => WorkflowStore;
 
 ```ts
 const createNodeConformanceHost: () => ConformanceHost;
+```
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `NodeServerEnd` (interface)
+
+```ts
+interface NodeServerEnd {
+    close: (code?: number, reason?: string) => void;
+    send: (data: string | ArrayBuffer) => void;
+}
 ```

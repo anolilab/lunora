@@ -2,8 +2,8 @@
  * Example internal cron target — added by `lunora registry add crons`.
  *
  * This file is YOURS: a normal Lunora module copied into your project. It lives
- * at `lunora/crons/jobs.ts`, so codegen surfaces its functions under the
- * `crons_jobs` namespace — i.e. `internal.crons_jobs.run` (the ref the sample
+ * at `lunora/crons/jobs.ts`, so codegen surfaces its functions as
+ * `internal.crons.jobs.*` — i.e. `internal.crons.jobs.run` (the ref the sample
  * job in `lunora/crons.ts` fires).
  *
  * `run` is an **internalMutation**: server-only, so a client can never invoke

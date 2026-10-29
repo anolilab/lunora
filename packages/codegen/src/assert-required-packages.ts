@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { CAPABILITIES } from "./capabilities";
 import type { FeatureUsage } from "./discover/feature-usage";
+import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type { SchemaIR } from "./ir";
 
 /** One package the emitted `_generated/` will import, and the schema feature that pulls it in. */
@@ -75,16 +76,14 @@ interface RequiredPackageSignals {
 const requiredPackagesFor = (schema: SchemaIR, signals: RequiredPackageSignals = {}): RequiredPackage[] => {
     const { hasVectors = true, scheduler = false, storage = false, usage } = signals;
     const required: RequiredPackage[] = [];
-    const globalTables = schema.tables.filter((table) => table.shardMode === "global");
-
-    if (globalTables.some((table) => table.globalBackend !== "hyperdrive")) {
+    if (schema.tables.some((table) => isD1GlobalTable(table))) {
         required.push({
             name: "@lunora/d1",
             reason: "`.global()` tables are D1-backed, so `_generated/app.ts` imports the D1 `ctx.db` adapter",
         });
     }
 
-    if (globalTables.some((table) => table.globalBackend === "hyperdrive")) {
+    if (schema.tables.some((table) => isHyperdriveGlobalTable(table))) {
         required.push(
             {
                 name: "@lunora/hyperdrive",

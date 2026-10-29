@@ -19,7 +19,7 @@ const schema = () =>
 
 /** A bare `ctx.db.query(table).collect()` — no index, no filter. */
 const read = (table: string, overrides: Partial<AdvisorQueryRead> = {}): AdvisorQueryRead => {
-    return { exportName: "list", file: "notes", hasFilter: false, hasIndex: false, line: 4, table, terminal: "collect", ...overrides };
+    return { scope: { kind: "export", name: "list" }, file: "notes", hasFilter: false, hasIndex: false, line: 4, table, terminal: "collect", ...overrides };
 };
 
 describe("unbounded_collect", () => {
@@ -94,5 +94,26 @@ describe("unbounded_collect", () => {
         // `filter_without_index` is asserted once, exhaustively, in
         // `filter-scope.test.ts` — it is a property of `Map`, not of either lint.
         expect(unboundedCollect.run({ queries: [read("unknownTable")], schema: schema() })[0]?.detail).toContain("loads every row");
+    });
+
+    it("reports a read in a shared helper once, crediting every export that calls it", () => {
+        expect.assertions(2);
+
+        // The feeder records the helper's read once, carrying its callers.
+        const queries = [read("notes", { scope: { callers: ["list", "search"], kind: "helper", name: "loadNotes" } })];
+        const findings = unboundedCollect.run({ queries, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.metadata).toMatchObject({ callers: ["list", "search"], helper: "loadNotes" });
+    });
+});
+
+describe("filter_without_index", () => {
+    it("reports a filtered read in a shared helper once", () => {
+        expect.assertions(1);
+
+        const queries = [read("notes", { hasFilter: true, scope: { callers: ["list", "search"], kind: "helper", name: "loadNotes" } })];
+
+        expect(filterWithoutIndex.run({ queries, schema: schema() })).toHaveLength(1);
     });
 });

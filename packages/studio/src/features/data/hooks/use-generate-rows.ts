@@ -1,6 +1,6 @@
-import { useLunora } from "@lunora/react";
 import { useState } from "react";
 
+import useStudioClient from "../../../hooks/use-studio-client";
 import type { ColumnMeta, ImportShardResult, TableColumnsResult, TablePage } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
@@ -121,7 +121,7 @@ const composeInsertOutcome = (result: ImportShardResult): InsertBatchOutcome => 
  * Used exclusively by `DataBrowser` — not a shared hook.
  */
 const useGenerateRows = (onRefresh: () => void): UseGenerateRowsModel => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     const [open, setOpen] = useState<boolean>(false);
     const [table, setTable] = useState<string | undefined>(undefined);

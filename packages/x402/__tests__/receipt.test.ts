@@ -8,7 +8,7 @@ import { toPaymentEventRow, toReceipt } from "../src/charge/receipt";
 /** A realistic successful settlement result, overridable per test. */
 const settlement = (overrides: Partial<ProcessSettleSuccessResponse> = {}): ProcessSettleSuccessResponse => {
     return {
-        headers: { "X-PAYMENT-RESPONSE": "eyJ9" },
+        headers: { "PAYMENT-RESPONSE": "eyJ9" },
         network: "eip155:8453",
         payer: "0xPAYER000000000000000000000000000000000000",
         requirements: {

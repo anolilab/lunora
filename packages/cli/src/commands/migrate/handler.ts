@@ -35,18 +35,17 @@ import { Project } from "ts-morph";
 
 import { REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationTable } from "../../../../../shared/reprojection-id";
 import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
-import { normalizeAdminBaseUrl, resolveAdminBaseUrl } from "../../util/admin-url";
-import type { CommandHandler } from "../../util/command";
-import { defineHandler } from "../../util/command";
+import { adminFetch, normalizeAdminBaseUrl, resolveAdminBaseUrl } from "../../util/admin-url";
+import type { Refusal } from "../../util/exit-code";
+import { EXIT_CODE, exitCodeForStatus, isRefusal } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { SchemaSnapshot } from "../../util/migration-diff";
 import { diffSnapshots, renderMigrationFile } from "../../util/migration-diff";
-import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import schemaIrToSnapshot from "../../util/schema-snapshot";
-import { runExportCommand, runImportCommand } from "../data-transfer";
+import { runExportCommand } from "../data-transfer/export";
+import { runImportCommand } from "../data-transfer/import";
 import type { FetchLike } from "../run/handler";
 import { readAndLogBody } from "../run/handler";
-import type { MigrateOptions } from "./index";
 
 interface MigrateGenerateCommandOptions {
     cwd?: string;
@@ -61,6 +60,8 @@ interface MigrateGenerateCommandResult {
     code: number;
     /** Whether the diff was empty (no changes detected). */
     empty: boolean;
+    /** Why it failed, when the reason is known — the shared `CommandResult` contract. */
+    error?: string;
     /** Absolute path to the migration file (empty string when nothing was written). */
     migrationFile: string;
 }
@@ -126,9 +127,11 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
     const schemaPath = join(cwd, "lunora", "schema.ts");
 
     if (!existsSync(schemaPath)) {
-        options.logger.error(`schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`);
+        const error = `schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`;
 
-        return { code: 1, empty: true, migrationFile: "" };
+        options.logger.error(error);
+
+        return { code: EXIT_CODE.NOT_FOUND, empty: true, error, migrationFile: "" };
     }
 
     // Parse the current schema with ts-morph (reusing the codegen discoverer).
@@ -144,9 +147,11 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
     try {
         previousSnapshot = loadSnapshot(snapshotPath);
     } catch (error: unknown) {
-        options.logger.error(error instanceof Error ? error.message : String(error));
+        const message = error instanceof Error ? error.message : String(error);
 
-        return { code: 1, empty: true, migrationFile: "" };
+        options.logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, empty: true, error: message, migrationFile: "" };
     }
 
     const diff = diffSnapshots(previousSnapshot, nextSnapshot);
@@ -382,7 +387,7 @@ const runMigrateCreateCommand = async (options: MigrateCreateCommandOptions): Pr
     if (slug === "") {
         options.logger.error(`invalid migration name: "${options.name}" — must contain at least one alphanumeric character`);
 
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.USAGE, file: "" };
     }
 
     const exportName = camelCase(slug);
@@ -396,13 +401,13 @@ const runMigrateCreateCommand = async (options: MigrateCreateCommandOptions): Pr
             `invalid migration name: "${options.name}" derives the export \`${exportName}\`, which is not a valid identifier — pick a name that starts with a letter and isn't a reserved word`,
         );
 
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.USAGE, file: "" };
     }
 
     const table = await resolveCreateTable(cwd, options);
 
     if (table === undefined) {
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.USAGE, file: "" };
     }
 
     // `table` is written verbatim into generated TypeScript (`table: "..."`),
@@ -411,7 +416,7 @@ const runMigrateCreateCommand = async (options: MigrateCreateCommandOptions): Pr
     if (!IDENTIFIER_PATTERN.test(table)) {
         options.logger.error(`invalid table: "${table}" — must be a valid identifier ([A-Za-z_][A-Za-z0-9_]*)`);
 
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.USAGE, file: "" };
     }
 
     const lunoraDirectory = join(cwd, "lunora");
@@ -422,7 +427,7 @@ const runMigrateCreateCommand = async (options: MigrateCreateCommandOptions): Pr
     if (content.includes(`id: "${slug}"`) || new RegExp(String.raw`\bexport const ${exportName}\b`, "u").test(content)) {
         options.logger.error(`a migration with id "${slug}" (export \`${exportName}\`) already exists in ${file}`);
 
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.CONFLICT, file: "" };
     }
 
     const defineMigrationImport = defineMigrationImportFor(cwd);
@@ -546,25 +551,28 @@ const resolveValidatedTable = (cwd: string, options: MigrateDataCommandOptions):
  * Validate the guards (`--prod`/`--yes`), token, target table, and fetch impl
  * for a data migration. Returns `undefined` after logging when any check fails.
  */
-const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateDataRequest | undefined => {
+const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateDataRequest | Refusal => {
     const cwd = options.cwd ?? process.cwd();
 
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to migrate the implicit localhost worker)");
 
-        return undefined;
+        return { refused: EXIT_CODE.USAGE };
     }
 
     const table = resolveValidatedTable(cwd, options);
 
     if (table === undefined) {
-        return undefined;
+        // The migration id names no table in the project's schema.
+        return { refused: EXIT_CODE.USAGE };
     }
 
     const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
-        return undefined;
+        // `resolveAdminBaseUrl` logged an invalid `--url`, or its refusal to put a
+        // bearer on the wire in cleartext — both are the target you named.
+        return { refused: EXIT_CODE.USAGE };
     }
 
     // Resolved after `baseUrl`, and through the shared resolver, because the
@@ -578,7 +586,7 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
     if (!token) {
         options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
 
-        return undefined;
+        return { refused: EXIT_CODE.AUTH };
     }
 
     // Gated on the RESOLVED destination, not on `--prod`: the flag is the
@@ -587,14 +595,10 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
     if ((options.subcommand === "up" || options.subcommand === "down") && targetsRemoteWorker({ prod: options.prod, url: baseUrl }) && !options.yes) {
         options.logger.error(`migrate ${options.subcommand} runs the migration against ${baseUrl}, which is not local. Re-run with --yes to confirm.`);
 
-        return undefined;
+        return { refused: EXIT_CODE.USAGE };
     }
 
-    const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
-
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
-    }
+    const fetchImpl: FetchLike = options.fetchImpl ?? adminFetch;
 
     return { fetchImpl, requestUrl: `${baseUrl}${MIGRATE_ENDPOINT_PATH}`, table, token };
 };
@@ -671,8 +675,9 @@ const buildMigrateArgs = (options: MigrateDataCommandOptions): Record<string, un
 const runMigrateDataCommand = async (options: MigrateDataCommandOptions): Promise<MigrateDataCommandResult> => {
     const request = resolveMigrateDataRequest(options);
 
-    if (request === undefined) {
-        return { body: undefined, code: 1, requestUrl: "" };
+    if (isRefusal(request)) {
+        // `resolveMigrateDataRequest` logged the reason; its code says which kind.
+        return { body: undefined, code: request.refused, requestUrl: "" };
     }
 
     const { fetchImpl, requestUrl, table, token } = request;
@@ -694,35 +699,75 @@ const runMigrateDataCommand = async (options: MigrateDataCommandOptions): Promis
         options.logger.error(`migrate ${options.subcommand} "${options.id}": ${rollUpFailure}`);
     }
 
-    return { body, code: response.ok && rollUpFailure === undefined ? 0 : 1, requestUrl };
+    // A transport failure carries the worker's status; a per-shard roll-up
+    // failure came back 200 and is a genuine generic failure.
+    const rollUpCode = rollUpFailure === undefined ? 0 : 1;
+
+    return { body, code: response.ok ? rollUpCode : exitCodeForStatus(response.status), requestUrl };
 };
 
-interface MigrateToHyperdriveOptions {
+type MigrateBackendDirection = "d1-to-hyperdrive" | "hyperdrive-to-d1";
+
+interface MigrateBackendOptions {
     batchSize?: number;
+    /** Which way the `.global()` data moves; also picks the backend names the log lines use. */
+    direction: MigrateBackendDirection;
     /** Injected fetch (tests); defaults to the global `fetch` inside the export/import helpers. */
     fetchImpl?: Parameters<typeof runExportCommand>[0]["fetchImpl"];
     fromToken?: string;
-    /** Source deployment (D1-backed). Defaults to `--url`/localhost. */
+    /** Source deployment. Defaults to `--url`/localhost. */
     fromUrl?: string;
     logger: Logger;
     /** Keep the intermediate NDJSON dump at this path instead of a private temp dir. */
     out?: string;
     prod?: boolean;
-    /** Comma-separated `.global()` tables to move; omit to move every global table. */
+    /** Overwrite rows the target already holds instead of reporting them as conflicts. */
+    replace?: boolean;
+    /** Comma-separated `.global()` tables to move; omit to move every table, shard-local ones included (required with `replace`). */
     tables?: string;
     toToken?: string;
-    /** Target deployment (Hyperdrive-backed). Defaults to `--url`/localhost. */
+    /** Target deployment. Defaults to `--url`/localhost. */
     toUrl?: string;
     /** Confirm the bulk write into the target — forwarded to the import leg, which refuses a remote target without it. */
     yes?: boolean;
 }
 
+interface MigrateBackendResult {
+    /** Bytes in the intermediate NDJSON dump (0 when the run failed before exporting). */
+    bytes: number;
+    code: number;
+    /** Why it failed, when the reason is known — the shared `CommandResult` contract. */
+    error?: string;
+    /** Rows read out of the source. */
+    exported: number;
+    /** Rows the target newly inserted. */
+    imported: number;
+    /** Rows the target already held and `--replace` overwrote. */
+    replaced: number;
+}
+
 /** Apply {@link normalizeAdminBaseUrl}, passing an absent URL straight through. */
 const normalizeOptionalUrl = (url: string | undefined): string | undefined => (url === undefined ? undefined : normalizeAdminBaseUrl(url));
 
+const BACKEND_NAMES: Record<MigrateBackendDirection, { source: string; target: string }> = {
+    "d1-to-hyperdrive": { source: "D1", target: "Hyperdrive" },
+    "hyperdrive-to-d1": { source: "Hyperdrive", target: "D1" },
+};
+
+/** Why a backend migration imported fewer rows than it exported, and what the operator can do about it. */
+const shortfallWarning = (replace: boolean, counts: { exported: number; inserted: number; replaced: number }, source: string, target: string): string =>
+    replace
+        ? // With --replace an existing row is overwritten, so a shortfall is rows the import reported as errors.
+          `Imported ${String(counts.inserted)} and replaced ${String(counts.replaced)} of ${String(counts.exported)} exported row(s). The rest were not written; see the errors reported above, then fix them and re-run.`
+        : // Without --replace the import is insert-only: a row the target already holds is a conflict and keeps the
+          // target's values. Said outright, because on a rollback those are exactly the rows edited since cutover.
+          `Imported ${String(counts.inserted)} of ${String(counts.exported)} exported row(s). The rest already exist in the ${target} target and were left unchanged (reported as conflicts above), so this copied rows missing from ${target}, not later edits to rows it already holds. Re-run with --replace to overwrite them with the ${source} values, or keep the dump with --out and reconcile by hand.`;
+
 /**
  * `lunora migrate d1-to-hyperdrive` — copy `.global()` table data from a
- * D1-backed deployment into a Hyperdrive-backed one. A thin, guided
+ * D1-backed deployment into a Hyperdrive-backed one; `hyperdrive-to-d1` is the
+ * rollback. Export/import is direction-agnostic: the target's
+ * `.global({ backend })` decides where the imported rows land. A thin, guided
  * orchestration over the existing admin export/import: it streams the source's
  * global rows to an NDJSON dump, imports them into the target (whose
  * `.global({ backend: "hyperdrive" })` tables route the writes to Hyperdrive
@@ -734,8 +779,9 @@ const normalizeOptionalUrl = (url: string | undefined): string | undefined => (u
  * For an in-place switch, export first (this command, same `--from`/`--to`
  * URL before the schema swap is risky) — the skill documents both.
  */
-const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions): Promise<{ code: number }> => {
+const runMigrateBackendCommand = async (options: MigrateBackendOptions): Promise<MigrateBackendResult> => {
     const { logger } = options;
+    const { source, target } = BACKEND_NAMES[options.direction];
     // Normalized with the SAME rule `resolveAdminBaseUrl` applies to the request
     // it sends, so the guard below compares what the two legs will actually
     // address rather than what the user typed — `https://w/` and `https://w` are
@@ -751,11 +797,22 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
     // `undefined` and both default to the SAME worker, which is exactly the
     // self-migration this refuses — the guard used to skip that case.
     if (fromUrl === toUrl) {
-        logger.error(
-            "source and target are the same deployment — pass distinct --from-url and --to-url so the D1 export and Hyperdrive import don't run against one database",
-        );
+        const error = `source and target are the same deployment — pass distinct --from-url and --to-url so the ${source} export and ${target} import don't run against one database`;
 
-        return { code: 1 };
+        logger.error(error);
+
+        return { bytes: 0, code: EXIT_CODE.USAGE, error, exported: 0, imported: 0, replaced: 0 };
+    }
+
+    // An export with no table list also carries every shard-local table, so `--replace` would overwrite
+    // the target's shard rows with the source's copies. This command promises to move `.global()` data only.
+    if (options.replace === true && (options.tables === undefined || options.tables.trim() === "")) {
+        const error =
+            "--replace needs --tables naming the .global() tables to move: an export without a table list also carries shard-local rows, and --replace would overwrite them in the target";
+
+        logger.error(error);
+
+        return { bytes: 0, code: EXIT_CODE.USAGE, error, exported: 0, imported: 0, replaced: 0 };
     }
 
     // When no --out is given, stage the (plaintext, cross-tenant) dump inside a
@@ -764,7 +821,7 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
     const dumpPath = options.out ?? join(temporaryDirectory as string, "dump.ndjson");
 
     try {
-        logger.info(`Exporting .global() data from the D1 source (${fromUrl ?? "http://localhost:8787"}) …`);
+        logger.info(`Exporting .global() data from the ${source} source (${fromUrl ?? "http://localhost:8787"}) …`);
 
         const exportResult = await runExportCommand({
             fetchImpl: options.fetchImpl,
@@ -777,11 +834,18 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
         });
 
         if (exportResult.code !== 0) {
-            return { code: exportResult.code };
+            return {
+                bytes: exportResult.bytes,
+                code: exportResult.code,
+                exported: exportResult.rows,
+                imported: 0,
+                replaced: 0,
+                ...(exportResult.error === undefined ? {} : { error: exportResult.error }),
+            };
         }
 
         logger.info(`Exported ${String(exportResult.rows)} row(s) (${String(exportResult.bytes)} bytes).`);
-        logger.info(`Importing into the Hyperdrive target (${toUrl ?? "http://localhost:8787"}) …`);
+        logger.info(`Importing into the ${target} target (${toUrl ?? "http://localhost:8787"}) …`);
 
         const importResult = await runImportCommand({
             batchSize: options.batchSize,
@@ -789,26 +853,38 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
             file: dumpPath,
             logger,
             prod: options.prod,
+            replace: options.replace,
             token: options.toToken,
             url: toUrl,
             yes: options.yes,
         });
+        const replaced = importResult.replaced ?? 0;
 
         if (importResult.code !== 0) {
-            return { code: importResult.code };
+            return {
+                bytes: exportResult.bytes,
+                code: importResult.code,
+                exported: exportResult.rows,
+                imported: importResult.inserted,
+                replaced,
+                ...(importResult.error === undefined ? {} : { error: importResult.error }),
+            };
         }
 
-        if (importResult.inserted === exportResult.rows) {
+        if (importResult.inserted + replaced === exportResult.rows) {
+            // Insert and overwrite only: a row deleted on the source since cutover stays in the target, and saying so here
+            // keeps a "counts match" from reading as "the target now mirrors the source".
+            const overwritten =
+                replaced > 0 ? ` (${String(replaced)} existing row(s) overwritten; rows deleted on ${source} since cutover are not removed)` : "";
+
             logger.info(
-                `✓ Migrated ${String(exportResult.rows)} row(s) — counts match. Verify your app reads from Hyperdrive, then decommission the D1 binding.`,
+                `✓ Migrated ${String(exportResult.rows)} row(s)${overwritten} — counts match. Verify your app reads from ${target}, then decommission the ${source} binding.`,
             );
         } else {
-            logger.warn(
-                `Imported ${String(importResult.inserted)} of ${String(exportResult.rows)} exported row(s) — the remainder likely already existed in the target (see conflicts above). Re-run after resolving, or inspect the dump with --out.`,
-            );
+            logger.warn(shortfallWarning(options.replace === true, { exported: exportResult.rows, inserted: importResult.inserted, replaced }, source, target));
         }
 
-        return { code: 0 };
+        return { bytes: exportResult.bytes, code: 0, exported: exportResult.rows, imported: importResult.inserted, replaced };
     } finally {
         // Always shred the private temp dir (and the plaintext, cross-tenant dump
         // inside it) — even when export/import throws or returns early — unless the
@@ -820,77 +896,5 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
     }
 };
 
-/** `lunora migrate <subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(({ argument, cwd, logger, options }) => {
-    const sub = argument[0];
-
-    if (sub === "generate") {
-        return runMigrateGenerateCommand({ cwd, logger, name: argument[1] ?? options.name });
-    }
-
-    if (sub === "d1-to-hyperdrive") {
-        return runMigrateToHyperdriveCommand({
-            batchSize: options.batchSize,
-            fromToken: options.fromToken ?? options.token,
-            fromUrl: options.fromUrl ?? options.url,
-            logger,
-            out: options.out,
-            prod: options.prod === true,
-            tables: options.tables,
-            toToken: options.toToken ?? options.token,
-            toUrl: options.toUrl ?? options.url,
-            yes: options.yes === true,
-        });
-    }
-
-    if (sub === "create") {
-        const name = argument[1] ?? options.name;
-
-        if (!name) {
-            logger.error("migrate create requires a name. Usage: lunora migrate create <name> [--table <table>]");
-
-            return { code: 1 };
-        }
-
-        return runMigrateCreateCommand({ cwd, logger, name, table: options.table });
-    }
-
-    if (sub === "up" || sub === "down" || sub === "status") {
-        const id = argument[1] ?? options.name;
-
-        if (!id) {
-            logger.error(`migrate ${sub} requires a migration id. Usage: lunora migrate ${sub} <id>`);
-
-            return { code: 1 };
-        }
-
-        return runMigrateDataCommand({
-            batchSize: options.batchSize,
-            cwd,
-            dryRun: options.dryRun === true,
-            id,
-            logger,
-            maxBatches: options.steps,
-            prod: options.prod === true,
-            subcommand: sub,
-            token: options.token,
-            url: resolveProductionWorkerUrl({ cwd, prod: options.prod === true, url: options.url }),
-            yes: options.yes === true,
-        });
-    }
-
-    logger.error(`unknown migrate subcommand: "${sub ?? ""}" — expected generate | create | up | down | status`);
-
-    return { code: 1 };
-});
-
-export { execute };
-export type {
-    MigrateCreateCommandOptions,
-    MigrateCreateCommandResult,
-    MigrateDataCommandOptions,
-    MigrateDataCommandResult,
-    MigrateGenerateCommandOptions,
-    MigrateGenerateCommandResult,
-};
-export { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand, runMigrateToHyperdriveCommand };
+export type { MigrateBackendDirection, MigrateDataCommandOptions, MigrateGenerateCommandOptions, MigrateGenerateCommandResult };
+export { runMigrateBackendCommand, runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand };

@@ -1,6 +1,6 @@
 ---
 title: Runtime & bundling
-description: Everything runs on the Workers runtime — what that means for Node APIs, dependencies, and the 10 MB bundle you have to fit into.
+description: Everything runs on the Workers runtime — what that means for Node APIs, dependencies, and the 64 MiB bundle you have to fit into.
 related:
     - to: /docs/concepts/actions
     - to: /docs/concepts/debugging
@@ -25,8 +25,8 @@ scaffolded config enables the compatibility flag:
 ```jsonc
 // wrangler.jsonc
 {
-    "compatibility_date": "2026-04-07",
-    "compatibility_flags": ["nodejs_compat", "web_socket_auto_reply_to_close"],
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
 }
 ```
 
@@ -53,7 +53,7 @@ polyfill.
 
 | Constraint      | Value               | What it means                                       |
 | --------------- | ------------------- | --------------------------------------------------- |
-| Bundle size     | 10 MB               | The whole worker, dependencies included             |
+| Bundle size     | 64 MiB uncompressed | The whole worker, dependencies included             |
 | CPU per request | 30 s                | Long work belongs in an action plus the scheduler   |
 | Subrequests     | 50 free / 1000 paid | Caps outbound `fetch` and fan-out reads per request |
 | Env var size    | 5 KB total          | Larger config belongs in D1 or KV                   |
@@ -75,7 +75,7 @@ same either way. What you control is what goes into it.
 
 ```bash
 lunora analyze
-lunora analyze --json    # for a CI artifact
+lunora analyze --format json    # for a CI artifact
 ```
 
 This runs a wrangler dry-deploy and reports the bundle size, the heaviest

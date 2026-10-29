@@ -14,17 +14,21 @@
  */
 
 import { LunoraError } from "@lunora/errors";
+import { decodeWire, encodeWire, needsWireEncoding } from "@lunora/wire";
 import type { Name, SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
 import type { KindedValidator } from "../../../shared/effective-kind";
 import { effectiveKind } from "../../../shared/effective-kind";
+import type { RangeOperandType } from "../../../shared/json-field-path";
+import { FieldPathError, isFieldPath, splitFieldPath, SQLITE_JSON_TYPE_NAMES } from "../../../shared/json-field-path";
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
-import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { ColumnMetaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
+import { serializeSqlValue } from "./serialize-sql";
 import { sqlComparableProjection } from "./sql-projection";
+import type { WhereSqlStrategy } from "./where-sql";
 
 /** The stored JSON document column every DO table carries alongside `id` / `_creationTime`. */
 const DOC_COLUMN = "__doc__";
@@ -72,7 +76,7 @@ const DOC_ORIGINALS_KEY = "__originals__";
  * keeps the round-trip exact, since the projection is a sort key rather than the
  * value.
  *
- * Second, whatever remains goes through `encodeWire` (`shared/wire-codec.ts`),
+ * Second, whatever remains goes through `encodeWire` (`packages/wire/src/wire-codec.ts`),
  * which covers the nested leaves SQL never addresses — a `bigint` inside a
  * `v.object()`, a `v.bytes()` in an array — plus `Date`/`Map`/`Set`.
  *
@@ -178,12 +182,43 @@ const decodeDocJson = (raw: string): Record<string, unknown> => {
 /** The geohash-companion table name for `.geoIndex(name)` on `table` (mirrors `ftsTableName`'s `__fts_` convention). */
 const geoTableName = (table: string, indexName: string): string => `${table}__geo_${indexName}`;
 
+/** The segments of a dotted field name, as a `VALIDATION_ERROR` when it is malformed or too deep. */
+const pathSegments = (field: string): string[] => {
+    try {
+        return splitFieldPath(field);
+    } catch (error) {
+        if (error instanceof FieldPathError) {
+            throw new LunoraError("VALIDATION_ERROR", error.message);
+        }
+
+        throw error;
+    }
+};
+
 /**
  * Shared body of {@link jsonPath} / {@link qualifiedJsonPath}; `prefix` is `""`
  * or a quoted `"table".` qualifier. Internal columns live alongside the doc;
  * expose them via the dedicated stored column so SQLite can hit the regular
  * index lookup path instead of decoding JSON.
  */
+
+/**
+ * The SQL string literal of a document path: `'$.profile.plan'`. Two grammars, both owed, in this order:
+ * `jsonPathSegment` quotes each key for SQLite's JSON-path grammar, then `'` doubling escapes the finished path for
+ * the literal it sits in. A dotted name is a path into an object column (`profile.plan`): each segment is quoted
+ * on its own and the dots between them stay, so SQLite descends through the objects. A column name is an
+ * identifier, so a dot is never part of one.
+ */
+const jsonPathLiteral = (field: string): string => {
+    const path = isFieldPath(field)
+        ? pathSegments(field)
+              .map((segment) => jsonPathSegment(segment))
+              .join(".")
+        : jsonPathSegment(field);
+
+    return `'$.${path.replaceAll("'", "''")}'`;
+};
+
 const documentPath = (prefix: string, field: string): string => {
     if (field === "_id" || field === "id") {
         return `${prefix}id`;
@@ -193,14 +228,20 @@ const documentPath = (prefix: string, field: string): string => {
         return `${prefix}_creationTime`;
     }
 
-    // Two grammars, both owed, in this order: `jsonPathSegment` quotes for
-    // SQLite's JSON-path grammar (`a.b` is one key, not a nested lookup), then
-    // `'` doubling escapes the finished path for the SQL string literal it sits
-    // in. Doing only the second is what let `$.a.b` read the wrong slot.
-    return `json_extract(${prefix}${DOC_COLUMN}, '$.${jsonPathSegment(field).replaceAll("'", "''")}')`;
+    return `json_extract(${prefix}${DOC_COLUMN}, ${jsonPathLiteral(field)})`;
 };
 
 const jsonPath = (field: string): string => documentPath("", field);
+
+/**
+ * The test that the leaf at path `field` is a JSON value of `type`: `json_type(__doc__, '$.a.b') IN (…)`, built from
+ * the same path literal as {@link jsonPath} so it addresses the leaf the comparison reads. `json_extract` flattens a
+ * boolean to `1` or `0`, so the comparison alone cannot tell `true` from the number `1`; the type can. A JSON `null`
+ * leaf is NULL here, as it is in the comparison, so a `NOT` over the range treats it like a missing key.
+ * @throws LunoraError `VALIDATION_ERROR` for a malformed or too-deep path.
+ */
+const jsonTypeGuard = (field: string, type: RangeOperandType): string =>
+    `NULLIF(json_type(${DOC_COLUMN}, ${jsonPathLiteral(field)}), 'null') IN (${SQLITE_JSON_TYPE_NAMES[type]})`;
 
 /**
  * Drizzle field reference for the DO store. Wraps the string {@link jsonPath} in
@@ -217,6 +258,9 @@ const jsonPath = (field: string): string => documentPath("", field);
  * the wire.
  */
 const jsonPathSql = (field: string): SQL => dsql.raw(jsonPath(field));
+
+/** Drizzle form of {@link jsonTypeGuard}, the `rangeTypeGuard` of the DO `where` strategy. */
+const jsonTypeGuardSql = (field: string, type: RangeOperandType): SQL => dsql.raw(jsonTypeGuard(field, type));
 
 /**
  * Table-qualified twin of {@link jsonPath}, for the correlation refs in a
@@ -413,6 +457,9 @@ const isFtsAvailable = (sql: SqlExec): boolean => {
     return available;
 };
 
+/** DO drizzle `where` strategy (flat): fields via `json_extract`, ranges bracketed by `json_type`, values via {@link serializeSqlValue}. The one root every DO `where` strategy extends. */
+const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, rangeTypeGuard: jsonTypeGuardSql, serialize: serializeSqlValue };
+
 export { quoteIdentifier } from "../../../shared/quote-identifier";
 export {
     AGG_COUNT,
@@ -424,11 +471,14 @@ export {
     decodeGroupKeyValue,
     DOC_COLUMN,
     DOC_ORIGINALS_KEY,
+    doWhereSqlStrategy,
     encodeDocJson,
     geoTableName,
     isFtsAvailable,
     jsonPath,
     jsonPathSql,
+    jsonTypeGuard,
+    jsonTypeGuardSql,
     qualifiedJsonPath,
     qualifiedJsonPathSql,
     rowToDocument,

@@ -35,9 +35,13 @@
 
 import { deserialize, serialize } from "node:v8";
 
+import { LunoraError } from "@lunora/errors";
 import type { SocketHandle, SocketHost } from "@lunora/platform";
+import { findSocketTagBudgetViolation } from "@lunora/platform";
 import type Database from "better-sqlite3";
 
+import type { NodeServerEnd } from "./node-socket-pair";
+import { createNodeSocketPair, NodeClientEnd, upgradeMarkerFor } from "./node-socket-pair";
 import { toArrayBuffer } from "./to-array-buffer";
 
 /** Internal record for one accepted (or restored) socket. */
@@ -85,6 +89,21 @@ const isWeakKey = (value: unknown): value is object => (typeof value === "object
  * from inside a test.
  */
 export interface NodeSocketHost {
+    /**
+     * Wait for every close handler still running, including ones they start. `undefined` when none are,
+     * so a caller can dispose synchronously.
+     */
+    drain: () => Promise<void> | undefined;
+
+    /** Deliver a connection's close to `handler`, which calls `webSocketClose`. One handler per host. */
+    onClose: (handler: (socket: NodeServerEnd, code: number, reason: string, wasClean: boolean) => void | Promise<void>) => void;
+
+    /**
+     * Deliver a connection's inbound frames to `handler`. The handler is the
+     * shard that accepted the connection, so it calls `webSocketMessage`. One
+     * handler per host: a later call replaces the earlier one.
+     */
+    onMessage: (handler: (socket: NodeServerEnd, data: string | ArrayBuffer) => void) => void;
     /** Read back the frames sent to a socket, oldest first, text frames only. */
     readFrames: (handle: SocketHandle) => string[];
 
@@ -257,10 +276,77 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
         return bindHandle(state, handle);
     };
 
+    // Inbound events are routed through these listeners, set by the shard that owns the connection.
+    const listeners: {
+        close?: (socket: NodeServerEnd, code: number, reason: string, wasClean: boolean) => void | Promise<void>;
+        message?: (socket: NodeServerEnd, data: string | ArrayBuffer) => void;
+    } = {};
+
+    // Close handlers still running, so a registry disposing this host can wait for them.
+    const pendingCloses = new Set<Promise<void>>();
+
+    const drain = (): Promise<void> | undefined => (pendingCloses.size === 0 ? undefined : Promise.all(pendingCloses).then(() => drain()));
+
+    const hub = {
+        close: (socket: NodeServerEnd, code: number, reason: string, wasClean: boolean) => {
+            // A handler registered directly on `inbound` may throw synchronously, inside a `ws` event or the marker timer, where nothing
+            // catches it: it is treated as a rejection, so the socket is still released.
+            let handled: Promise<void> | void;
+
+            try {
+                handled = listeners.close?.(socket, code, reason, wasClean);
+            } catch (error) {
+                handled = Promise.reject(error instanceof Error ? error : new Error(String(error)));
+            }
+
+            // The registry drops the socket only after the shard's close handler settles, so the handler can still resolve it.
+            const release = (): void => {
+                const state = byRaw.get(socket);
+
+                if (state !== undefined) {
+                    deregister(state);
+                }
+            };
+
+            const settled: Promise<void> = Promise.resolve(handled)
+                .then(release, release)
+                .catch(() => undefined)
+                .finally(() => {
+                    pendingCloses.delete(settled);
+                });
+
+            pendingCloses.add(settled);
+        },
+        message: (socket: NodeServerEnd, data: string | ArrayBuffer) => {
+            try {
+                listeners.message?.(socket, data);
+            } catch (error) {
+                // eslint-disable-next-line no-console -- a frame handler throwing must not unwind into the `ws` event loop
+                console.error("[@lunora/platform-node] socket message handler threw", error);
+            }
+        },
+    };
+
     const socket: SocketHost = {
+        newPair: () => createNodeSocketPair(hub),
+        upgradeResponse: (client) => {
+            if (!(client instanceof NodeClientEnd)) {
+                throw new TypeError("@lunora/platform-node: upgradeResponse called with a client end this host did not open");
+            }
+
+            return upgradeMarkerFor(client);
+        },
         accept: (raw, attachment, tags) => {
             if (!database.open) {
                 throw new Error("platform closed: cannot accept a socket");
+            }
+
+            // Refuse before the INSERT below, so an over-budget call leaves no row
+            // behind for a socket that never existed.
+            const violation = findSocketTagBudgetViolation(tags);
+
+            if (violation !== undefined) {
+                throw new LunoraError("SOCKET_TAG_BUDGET_EXCEEDED", violation);
             }
 
             const id = crypto.randomUUID();
@@ -355,6 +441,13 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
     };
 
     return {
+        drain,
+        onClose: (handler) => {
+            listeners.close = handler;
+        },
+        onMessage: (handler) => {
+            listeners.message = handler;
+        },
         readFrames: (handle) => (runtimeSockets.get(handleIds.get(handle) ?? "")?.received ?? []).filter((frame): frame is string => typeof frame === "string"),
         restoreSocket: (id, attachment) => {
             const row = database.open ? selectRow.get(id) : undefined;

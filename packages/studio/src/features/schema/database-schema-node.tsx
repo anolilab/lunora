@@ -8,11 +8,14 @@ import type { StorageTier } from "../../components/storage-tier";
 import { StorageTierBadge } from "../../components/storage-tier";
 import { Badge } from "../../components/ui/badge";
 import { BaseNode, BaseNodeContent, BaseNodeHeader } from "../../components/ui/base-node";
+import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import { cn } from "../../lib/utils";
 
 /** One column rendered as a row in a table node. */
 interface DatabaseSchemaColumn {
+    /** Allowed values of a string-literal union column, when codegen named every one. */
+    enumValues?: ReadonlyArray<string>;
     /** `v.storage(...)` column. */
     isStorage?: boolean;
     name: string;
@@ -40,11 +43,32 @@ type DatabaseSchemaNodeData = {
 
 type DatabaseSchemaNodeType = Node<DatabaseSchemaNodeData, "databaseSchema">;
 
-/** The display label for a column's type — appends the FK target for `v.id(ref)`. */
-const typeLabel = (column: DatabaseSchemaColumn): string => {
-    const base = column.ref === undefined ? column.type : `${column.type} → ${column.ref}`;
+/**
+ * Inline cap on an enum union. A wide union would otherwise push the column name
+ * off the node; the full list stays in the row's title.
+ */
+const INLINE_ENUM_VALUES = 3;
 
-    return column.optional === true ? `${base}?` : base;
+/** A string-literal union as written in source, e.g. `"draft" | "live"`. */
+const enumUnion = (values: ReadonlyArray<string>, full: boolean, t: TFunction): string => {
+    const shown = full ? values : values.slice(0, INLINE_ENUM_VALUES);
+    const union = shown.map((value) => JSON.stringify(value)).join(" | ");
+    const hidden = values.length - shown.length;
+
+    return hidden > 0 ? `${union} ${t("+{count} more", { count: hidden })}` : union;
+};
+
+/**
+ * The display label for a column's type — its enum union when the values are
+ * known, else the validator kind — with the FK target for `v.id(ref)` appended.
+ * `full` lifts the inline cap for the row's title.
+ */
+const typeLabel = (column: DatabaseSchemaColumn, full: boolean, t: TFunction): string => {
+    const values = column.enumValues ?? [];
+    const base = values.length === 0 ? column.type : enumUnion(values, full, t);
+    const withRef = column.ref === undefined ? base : `${base} → ${column.ref}`;
+
+    return column.optional === true ? `${withRef}?` : withRef;
 };
 
 /**
@@ -109,8 +133,8 @@ const DatabaseSchemaNode = ({ data, selected }: NodeProps<DatabaseSchemaNodeType
                                       FK
                                   </Badge>
                               )}
-                              <span className="ms-auto truncate text-muted-foreground" title={typeLabel(column)}>
-                                  {typeLabel(column)}
+                              <span className="ms-auto truncate text-muted-foreground" title={typeLabel(column, true, t)}>
+                                  {typeLabel(column, false, t)}
                               </span>
                               <Handle
                                   className="!h-2 !w-2 !-right-1 !border-border !bg-muted-foreground/70"

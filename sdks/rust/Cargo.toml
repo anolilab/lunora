@@ -13,4 +13,7 @@ license = "MIT"
 description = "Protocol-conformant client for a Lunora deployment"
 
 [dependencies]
-serde_json = "1"
+# `float_roundtrip`: without it serde_json's float parser is fast but not
+# correctly rounded, and reads about one `JSON.stringify` double in six one ulp
+# off — a different number than `JSON.parse` reads, so a different stable key.
+serde_json = { version = "1", features = ["float_roundtrip"] }

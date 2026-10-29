@@ -8,7 +8,7 @@ The Cloudflare implementation of the [`@lunora/platform`](../platform) host cont
 import { createShardPlatform } from "@lunora/platform-cloudflare";
 
 // Inside a Durable Object:
-const platform = createShardPlatform(state);
+const platform = createShardPlatform(state, env);
 ```
 
 ## Why it exists

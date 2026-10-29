@@ -1,0 +1,12 @@
+[
+    {
+        "name": "stats:summary",
+        "params": [],
+        "result": {
+            "name": "result",
+            "schema": { "properties": { "total": { "type": "number" } }, "required": ["total"], "type": "object" }
+        },
+        "summary": "query: stats:summary",
+        "x-lunora-function-kind": "query"
+    }
+]

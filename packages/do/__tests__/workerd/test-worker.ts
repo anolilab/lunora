@@ -12,19 +12,28 @@
  * runtime API directly the adapter is gone and `DurableObjectState` is
  * passed straight through — structurally compatible with `ShardDOState`.
  */
+import { LunoraError } from "@lunora/errors";
+import { readRequestLog } from "@lunora/observability";
 import type { DatabaseWriterLike, MutationDelta } from "@lunora/shard-engine";
 import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
+import { v } from "@lunora/values";
 import { DurableObject } from "cloudflare:workers";
 
+import { mergeDurableObjects } from "../../src/merge-durable-objects";
 import { SessionDO } from "../../src/session-do";
 import type { ShardDOState } from "../../src/shard-do";
 import { ShardDO } from "../../src/shard-do";
+import { ShardRegistryDO } from "../../src/shard-registry-do";
 import messagesSchema from "../_helpers/messages-schema";
+import type { DeliveryAuthorizationTestDO } from "./delivery-authorization-worker";
 
 interface Env {
+    AUTHORIZED: DurableObjectNamespace<DeliveryAuthorizationTestDO>;
     COUNTER: DurableObjectNamespace<TestCounterDO>;
     ECHO: DurableObjectNamespace<TestEchoDO>;
+    LIVE_SHARD: DurableObjectNamespace<TestLiveShardDO>;
     LUNORA_ALLOWED_ORIGINS?: string;
+    MERGED: DurableObjectNamespace;
     SESSION: DurableObjectNamespace<TestSessionDO>;
     SHARD: DurableObjectNamespace<TestShardDO>;
     SYNC: DurableObjectNamespace<TestSyncDO>;
@@ -42,6 +51,10 @@ class ConcreteShard extends ShardDO {
     public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
         this.outer.lastRpcCall = { args, functionPath };
 
+        if (this.outer.rpcError !== undefined) {
+            throw this.outer.rpcError;
+        }
+
         return this.outer.rpcResult;
     }
 
@@ -51,6 +64,8 @@ class ConcreteShard extends ShardDO {
 }
 
 class TestShardDO extends DurableObject<Env> {
+    public rpcError: Error | undefined;
+
     public rpcResult: unknown = { ok: true };
 
     public lastRpcCall: { args: Record<string, unknown>; functionPath: string } | undefined;
@@ -60,6 +75,10 @@ class TestShardDO extends DurableObject<Env> {
     public constructor(context: DurableObjectState, env: Env) {
         super(context, env);
         this.shard = new ConcreteShard(context as unknown as ShardDOState, env, this);
+    }
+
+    public setRpcError(error: Error): void {
+        this.rpcError = error;
     }
 
     public override fetch(request: Request): Promise<Response> {
@@ -89,10 +108,84 @@ class TestShardDO extends DurableObject<Env> {
 }
 
 /**
+ * A declared live stream, shaped like the `defineLiveStream` value the generated shard returns from `liveStreams()`: one topic,
+ * `feed`, whose payload validator really parses, so a publish is checked by the same code path a generated shard runs.
+ */
+const feedStream = {
+    validatePublish: (topic: string, payload: unknown): unknown => {
+        if (topic !== "feed") {
+            throw new LunoraError("BAD_REQUEST", `"${topic}" is not a declared topic`, { status: 400 });
+        }
+
+        try {
+            return v.object({ text: v.string() }).parse(payload);
+        } catch (error) {
+            // As `defineLiveStream` does: a validator's own error becomes the publish refusal.
+            throw new LunoraError("BAD_REQUEST", `publish to "${topic}" was refused: ${String(error)}`, { status: 400 });
+        }
+    },
+};
+
+/**
+ * A shard that declares live streams, the way the generated subclass does: `feed` is held from the start, and `late` is
+ * imported on the first publish to it, as a lazy generated shard imports a stream's module (`loadLiveStream`).
+ */
+class ConcreteLiveShard extends ShardDO {
+    private readonly loaded = new Map<string, typeof feedStream>();
+
+    // eslint-disable-next-line class-methods-use-this -- test double: this shard serves publishes only, never an RPC
+    public override async handleRpc(): Promise<unknown> {
+        return null;
+    }
+
+    protected override loadLiveStream(stream: string): Promise<void> | undefined {
+        if (stream !== "late" || this.loaded.has(stream)) {
+            return undefined;
+        }
+
+        const load = async (): Promise<void> => {
+            this.loaded.set(stream, feedStream);
+        };
+
+        return load();
+    }
+
+    protected override liveStreams() {
+        return { feed: feedStream, ...Object.fromEntries(this.loaded) };
+    }
+}
+
+class TestLiveShardDO extends DurableObject<Env> {
+    private readonly shard: ConcreteLiveShard;
+
+    public constructor(context: DurableObjectState, env: Env) {
+        super(context, env);
+        this.shard = new ConcreteLiveShard(context as unknown as ShardDOState, env);
+    }
+
+    public override fetch(request: Request): Promise<Response> {
+        return this.shard.fetch(request);
+    }
+}
+
+/** Paths {@link ConcreteCountingShard} reports as ACTIONS — ungated, so a parked one really is interleavable with a sibling dispatch. */
+const COUNTER_ACTION_PATHS = new Set([
+    "counter:hang",
+    "counter:hangRelease",
+    "counter:hangStats",
+    "counter:park",
+    "counter:release",
+    "counter:reqlog",
+    "counter:slow",
+    "counter:slowRelease",
+    "counter:slowRuns",
+]);
+
+/**
  * A shard whose handler bumps a counter INSIDE a transaction and commits the
  * mutation-replay dedup row atomically with it via `commitMutationBookkeeping`
  * — exactly the pattern generated `handleRpc` mutation branches use
- * (`packages/codegen/src/emit.ts`, the `registered.kind === "mutation"`
+ * (`packages/codegen/src/emit/shard-dispatch.ts`, the `registered.kind === "mutation"`
  * branch), and NOT the post-`handleRpc` `recordPostDispatchBookkeeping`
  * fallback that exists for actions/queries. Real generated mutations commit
  * the dedup row inside the handler's own transaction, so this is the shape
@@ -101,10 +194,109 @@ class TestShardDO extends DurableObject<Env> {
 class ConcreteCountingShard extends ShardDO {
     public runs = 0;
 
+    /**
+     * How many times `counter:slow` has entered its handler. Only the FIRST run
+     * parks; every later one returns at once. That asymmetry is what lets the
+     * in-flight-claim test assert a run COUNT rather than time out — an unfixed
+     * shard runs the second dispatch concurrently, and a second dispatch that
+     * also parked would hang the test instead of failing it.
+     */
+    public slowRuns = 0;
+
+    /** `counter:hang` bookkeeping: handler entries, and how many of them ran to completion. */
+    public hangStats = { finished: 0, released: false, runs: 0 };
+
     private migrated = false;
 
-    public override async handleRpc(): Promise<unknown> {
+    /** Resolver for the in-flight `counter:park` dispatch, fired by `counter:release`. */
+    private releasePark: (() => void) | undefined;
+
+    /** Resolver for the parked first `counter:slow` dispatch, fired by `counter:slowRelease`. */
+    private releaseSlow: (() => void) | undefined;
+
+    public override async handleRpc(functionPath: string): Promise<unknown> {
         this.ensureMigrated();
+
+        // `counter:park` and `counter:release` are ACTIONS (see
+        // `isMutationFunction`), so neither takes the single-writer gate and a
+        // parked one really is interleavable with a sibling dispatch — the
+        // window `restoreRequestScope` exists for.
+        if (functionPath === "counter:park") {
+            await new Promise<void>((resolve) => {
+                this.releasePark = resolve;
+            });
+
+            return { parked: true };
+        }
+
+        if (functionPath === "counter:release") {
+            this.releasePark?.();
+            this.releasePark = undefined;
+
+            return { released: true };
+        }
+
+        // The long ACTION the scheduler's at-least-once re-delivery can land on
+        // top of (#803): ungated, so nothing but the in-flight claim stops a
+        // second delivery of the same `x-lunora-mutation-id` running alongside.
+        if (functionPath === "counter:slow") {
+            this.slowRuns += 1;
+
+            const run = this.slowRuns;
+
+            if (run === 1) {
+                await new Promise<void>((resolve) => {
+                    this.releaseSlow = resolve;
+                });
+            }
+
+            return { run };
+        }
+
+        if (functionPath === "counter:slowRelease") {
+            this.releaseSlow?.();
+            this.releaseSlow = undefined;
+
+            return { released: true };
+        }
+
+        // Parked on real TIMER I/O rather than a bare promise, so the wait is
+        // owned by the request's I/O context the way an outbound call is.
+        if (functionPath === "counter:hang") {
+            this.hangStats.runs += 1;
+
+            while (!this.hangStats.released) {
+                // eslint-disable-next-line no-await-in-loop -- polling a flag is the point: each wait is request-owned timer I/O
+                await new Promise<void>((resolve) => {
+                    setTimeout(resolve, 10);
+                });
+            }
+
+            this.hangStats.finished += 1;
+
+            return { run: this.hangStats.runs };
+        }
+
+        if (functionPath === "counter:hangRelease") {
+            this.hangStats.released = true;
+
+            return { released: true };
+        }
+
+        if (functionPath === "counter:hangStats") {
+            return { ...this.hangStats };
+        }
+
+        if (functionPath === "counter:slowRuns") {
+            return { runs: this.slowRuns };
+        }
+
+        // The durable request log, as the studio and Logpush see it. Read
+        // through the shard's own sql handle so the rows are the ones this DO
+        // actually wrote.
+        if (functionPath === "counter:reqlog") {
+            return readRequestLog(this.sql as Parameters<typeof readRequestLog>[0]);
+        }
 
         return this.runInTransaction(() => {
             this.runs += 1;
@@ -124,6 +316,11 @@ class ConcreteCountingShard extends ShardDO {
 
         runShardMigrations(this.sql as Parameters<typeof runShardMigrations>[0], messagesSchema);
         this.migrated = true;
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- pure predicate over the path, mirroring the codegen override
+    protected override isMutationFunction(functionPath: string): boolean {
+        return !COUNTER_ACTION_PATHS.has(functionPath);
     }
 }
 
@@ -169,16 +366,46 @@ class TestEchoDO extends DurableObject<Env> {
  * echoes the applied `lastMutationId` on the response.
  */
 class ConcreteSyncShard extends ShardDO {
+    /** Every `sockets:wake` dispatch — the wake-up test reads a route frame's arrival here. */
+    public readonly wakeCalls: string[] = [];
+
+    /** Whether `/chat-wake` requires a verified user; the route-gate test flips it to simulate a redeploy. */
+    public wakeRouteAuth = false;
+
     private migrated = false;
+
+    /**
+     * `race:list` — a live query whose FIRST run reads `messages`, then parks on
+     * timer I/O until `race:release`. Timer I/O opens the input gate exactly as
+     * a `.global()` D1 read, `ctx.vectors` or R2 does, so a write can commit and
+     * flush while the seed is parked. `race:failRefreshes` makes every later run
+     * throw (until `race:healRefreshes`), leaving the parked seed as the only
+     * value that can reach the socket.
+     */
+    private readonly race = { calls: 0, failRefreshes: false, released: false, settled: false };
 
     private writer: DatabaseWriterLike | undefined;
 
     public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        if (functionPath === "sockets:wake") {
+            this.wakeCalls.push(JSON.stringify(args));
+
+            return null;
+        }
+
+        if (functionPath.startsWith("race:")) {
+            return this.raceControl(functionPath);
+        }
+
+        if (functionPath === "rooms:notes") {
+            return this.roomNotes(args);
+        }
+
         const writer = this.getWriter();
 
         switch (functionPath) {
             case "messages:remove": {
-                await writer.delete(args["_id"] as string);
+                await writer.delete("messages", args["_id"] as string);
 
                 break;
             }
@@ -202,9 +429,19 @@ class ConcreteSyncShard extends ShardDO {
         return { id: args["_id"], ok: true };
     }
 
+    /** `/chat-wake` is a `defineWebSocket` route; the wake-up test drives its frames. */
+    protected override socketRoute(path: string): { auth: boolean; functionPath: string } | undefined {
+        return path === "/chat-wake" ? { auth: this.wakeRouteAuth, functionPath: "sockets:wake" } : super.socketRoute(path);
+    }
+
     // eslint-disable-next-line class-methods-use-this -- override classifies by `functionPath` alone, no instance state.
     protected override isCustomMutator(functionPath: string): boolean {
         return functionPath === "messages:sendMutator";
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- the room is registered by topic alone, no instance state.
+    protected override roomHandlerPath(topic: string): string | undefined {
+        return topic === "room:notes" ? "rooms:notes" : undefined;
     }
 
     protected override resolveShape(
@@ -229,6 +466,36 @@ class ConcreteSyncShard extends ShardDO {
         return undefined;
     }
 
+    protected override async executeSubscription(functionPath: string): Promise<{ result: unknown; tables: Set<string> } | null> {
+        if (functionPath !== "race:list") {
+            return null;
+        }
+
+        this.ensureMigrated();
+        this.race.calls += 1;
+
+        const first = this.race.calls === 1;
+
+        if (!first && this.race.failRefreshes) {
+            throw new Error("race:list refresh failed");
+        }
+
+        const [row] = (this.sql as { exec: (query: string) => { toArray: () => { n: number }[] } }).exec(`SELECT COUNT(*) AS n FROM "messages"`).toArray();
+
+        if (first) {
+            while (!this.race.released) {
+                // eslint-disable-next-line no-await-in-loop -- polling timer I/O is the point: it opens the input gate
+                await new Promise<void>((resolve) => {
+                    setTimeout(resolve, 10);
+                });
+            }
+
+            this.race.settled = true;
+        }
+
+        return { result: { count: row?.n ?? 0 }, tables: new Set(["messages"]) };
+    }
+
     protected override ensureMigrated(): void {
         if (this.migrated) {
             return;
@@ -250,6 +517,48 @@ class ConcreteSyncShard extends ShardDO {
 
         return this.writer;
     }
+
+    /**
+     * The `notes` room. A `message` writes a row and echoes it to the room only once the
+     * write has committed (`socket.broadcast` queues until then); a `join` replays every
+     * stored note to the joining socket, straight from SQLite.
+     */
+    private async roomNotes(args: Record<string, unknown>): Promise<unknown> {
+        const writer = this.getWriter();
+        const socket = args["socket"] as { broadcast: (payload: unknown) => void };
+
+        if (args["kind"] === "message") {
+            const message = args["message"] as { _id: string; text: string };
+
+            await writer.insert("messages", { _id: message._id, authorId: "room", channelId: "notes", text: message.text }, { allowExplicitId: true });
+            this.recordChangedTable("messages");
+            socket.broadcast({ echo: message.text });
+        }
+
+        if (args["kind"] === "join") {
+            // Rows are stored as a JSON document in `__doc__`, keyed by `id`.
+            const rows = (this.sql as { exec: (query: string) => { toArray: () => { __doc__: string }[] } })
+                .exec(`SELECT "__doc__" FROM "messages" ORDER BY "id"`)
+                .toArray();
+            const notes = rows.map((row) => JSON.parse(row.__doc__) as { channelId: string; text: string }).filter((doc) => doc.channelId === "notes");
+
+            socket.broadcast({ history: notes.map((doc) => doc.text) });
+        }
+
+        return { ok: true };
+    }
+
+    private raceControl(functionPath: string): { calls: number; settled: boolean } {
+        if (functionPath === "race:release") {
+            this.race.released = true;
+        }
+
+        if (functionPath === "race:failRefreshes" || functionPath === "race:healRefreshes") {
+            this.race.failRefreshes = functionPath === "race:failRefreshes";
+        }
+
+        return { calls: this.race.calls, settled: this.race.settled };
+    }
 }
 
 class TestSyncDO extends DurableObject<Env> {
@@ -270,6 +579,21 @@ class TestSyncDO extends DurableObject<Env> {
 
     public override webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
         return this.shard.webSocketClose(ws, code, reason, wasClean);
+    }
+
+    /** Route-handler dispatches seen by this instance (see `sockets:wake`). */
+    public async wakeCalls(): Promise<string[]> {
+        return this.shard.wakeCalls;
+    }
+
+    /** Set `/chat-wake`'s auth requirement, as a redeploy that flips the route would. */
+    public setWakeRouteAuth(auth: boolean): void {
+        this.shard.wakeRouteAuth = auth;
+    }
+
+    /** Whether a socket that upgraded on `socketPath` still receives `topic` (see `socketMayReceiveRouteTopic`). */
+    public routeTopicGate(socketPath: string, userId: string | undefined, topic: string): boolean {
+        return this.shard["socketMayReceiveRouteTopic"]({ socketPath, userId }, topic);
     }
 
     /**
@@ -311,6 +635,61 @@ class TestSessionDO extends DurableObject<Env> {
     }
 }
 
+/** The shard role of {@link TestMergedDO}: answers with its own instance name. */
+class MergedShardRole {
+    readonly #state: DurableObjectState;
+
+    public constructor(state: DurableObjectState) {
+        this.#state = state;
+    }
+
+    public fetch(): Response {
+        return new Response(`shard:${String(this.#state.id.name)}`);
+    }
+}
+
+/**
+ * The scheduler role of {@link TestMergedDO}: `/arm` sets an alarm, the alarm
+ * records which instance name it woke under, `/fired` reads that back. The wake
+ * is the case under test — the merged class re-reads `ctx.id.name` on a cold
+ * start with no request to go by.
+ */
+class MergedSchedulerRole {
+    readonly #state: DurableObjectState;
+
+    public constructor(state: DurableObjectState) {
+        this.#state = state;
+    }
+
+    public async alarm(): Promise<void> {
+        await this.#state.storage.put("fired", `scheduler:${String(this.#state.id.name)}`);
+    }
+
+    public async fetch(request: Request): Promise<Response> {
+        if (new URL(request.url).pathname === "/arm") {
+            await this.#state.storage.setAlarm(Date.now() + 20);
+
+            return new Response("armed");
+        }
+
+        return new Response((await this.#state.storage.get<string>("fired")) ?? "pending");
+    }
+}
+
+/**
+ * The registry refuses any request not signed with the relay secret; this env supplies one without changing the pool's shared bindings.
+ * The merge test signs with the same literal.
+ */
+const TEST_RELAY_SECRET = "workerd-test-relay-secret";
+
+class TestShardRegistryRole extends ShardRegistryDO {
+    public constructor(state: ConstructorParameters<typeof ShardRegistryDO>[0], env: unknown) {
+        super(state, { ...(env as Record<string, unknown>), LUNORA_RELAY_SECRET: TEST_RELAY_SECRET });
+    }
+}
+
+const TestMergedDO = mergeDurableObjects({ scheduler: MergedSchedulerRole, shard: MergedShardRole, shardRegistry: TestShardRegistryRole });
+
 const handler = {
     async fetch(_request: Request, _env: Env): Promise<Response> {
         return new Response("test-worker", { status: 200 });
@@ -318,5 +697,6 @@ const handler = {
 };
 
 export default handler;
-export { TestCounterDO, TestEchoDO, TestSessionDO, TestShardDO, TestSyncDO };
+export { DeliveryAuthorizationTestDO } from "./delivery-authorization-worker";
+export { TestCounterDO, TestEchoDO, TestLiveShardDO, TestMergedDO, TestSessionDO, TestShardDO, TestSyncDO };
 export type { Env };

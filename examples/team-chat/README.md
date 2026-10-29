@@ -57,7 +57,7 @@ wrangler r2 bucket create lunora-example-team-chat-files
 pnpm --filter @lunora-example/team-chat dev
 ```
 
-Open <http://localhost:5173>, create an account, create a channel, then open a
+Open the URL the dev server prints (<http://localhost:5173> in the main checkout), create an account, create a channel, then open a
 second browser profile and watch the roster and the messages move.
 
 better-auth's tables are created on the first request by the builder's `.auth()`
@@ -90,7 +90,8 @@ const { page } = await ctx.db.profiles.findMany({});
 ```
 
 **Signed URLs need somewhere to land.** `generateUploadUrl` mints a URL against
-`publicBaseUrl`; R2 is not on the internet, so something must verify the
+the origin the action's request arrived on (no `publicBaseUrl` is configured,
+so there is no per-environment value to ship); R2 is not on the internet, so something must verify the
 signature and move the bytes. That is the `/files/*` route in
 `src/server/index.ts` (`verifySignedUrl` → `PUT`/`GET` on the bucket). Storage
 keys are prefixed `files/` so the signed pathname matches that route.
@@ -117,7 +118,7 @@ const app = defineApp<Env>()
     .shard((env) => env.SHARD)
     .global({ d1: (env) => env.DB })
     .auth({ d1: (env) => env.DB, options: authOptions })
-    .storage({ bucket: (env) => env.FILES, publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL, signingSecret: (env) => env.STORAGE_SECRET })
+    .storage({ bucket: (env) => env.FILES, signingSecret: (env) => env.STORAGE_SECRET })
     .extend(() => ({ authorizeShard: ({ identity }) => Boolean(identity?.userId) }))
     .build();
 ```

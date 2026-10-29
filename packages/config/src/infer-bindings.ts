@@ -21,20 +21,59 @@
  */
 import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 
-import { init as initLexer, parse as lexModule } from "es-module-lexer";
+import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@lunora/codegen";
+import {
+    capabilitiesUsedBy,
+    CAPABILITY_PROBES,
+    createTargetScope,
+    discoverNotifyChannels,
+    foldCapabilitySignals,
+    mayReadCapabilityContext,
+    NOTIFY_FILENAME,
+    readServiceBindings,
+    sourceCapabilitySignals,
+} from "@lunora/codegen";
+// `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
+import { init as initLexer } from "es-module-lexer";
+import type { SourceFile } from "ts-morph";
+import { Project } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
 import { discoverAgentInfo } from "./agent-info";
-import { readWranglerJsonc, WRANGLER_FILES } from "./cloudflare/wrangler-path";
 import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
 import { escapeRegExp } from "./dev-variables-format";
+import { discoverIr } from "./discover-info";
+import type { DiscoveryCache } from "./discovery-cache";
 import { discoverFlagsInfo } from "./flags-info";
+import isWithinDirectory from "./is-within-directory";
+import { PACKAGE_SECRETS_REGISTRY } from "./package-secrets-registry";
 import join from "./path";
 import type { QueueIR } from "./queue-info";
 import { discoverQueueInfo } from "./queue-info";
+import {
+    constructsEventLogClient,
+    EVENT_LOG_CLIENT,
+    EVENT_LOG_PACKAGE,
+    forwardsReplicaExport,
+    parseModule,
+    resolveBarrel,
+    runtimeSpecifiersOf,
+} from "./replica-export-graph";
+import type { SchemaInfo } from "./schema-info";
 import { discoverSchemaInfo } from "./schema-info";
+import type { DurableObjectSpec } from "./worker-entry";
+import {
+    composedEntryDurableObjects,
+    detectClassExports,
+    detectExportedDurableObjects,
+    DURABLE_OBJECT_BINDINGS,
+    GENERATED_DIRECTORY,
+    isMergedProject,
+    resolveWorkerEntry,
+} from "./worker-entry";
 import type { WorkflowIR } from "./workflow-info";
 import { discoverWorkflowInfo } from "./workflow-info";
 
@@ -42,183 +81,152 @@ import { discoverWorkflowInfo } from "./workflow-info";
 const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
 
 /** Directories never worth descending into during a capability scan. */
-const IGNORED_DIRECTORIES = new Set([".git", ".lunora-cache", ".wrangler", "_generated", "dist", "node_modules"]);
+const IGNORED_DIRECTORIES = new Set([".git", ".lunora-cache", ".wrangler", "dist", GENERATED_DIRECTORY, "node_modules"]);
 
 /** Directories scanned for capability signals when the caller does not override. */
 const DEFAULT_SCAN_DIRECTORIES = ["lunora", "src"] as const;
 
-/** Worker-entry candidates probed when `wrangler.main` is absent. */
-const WORKER_ENTRY_FALLBACKS = ["src/server/index.ts", "src/server/index.tsx", "src/index.ts", "src/worker.ts"] as const;
-
-/**
- * Canonical Durable Object class → binding name. wrangler requires the worker
- * to export a class of this exact name, so detection keys on the class name.
- */
-const DURABLE_OBJECT_BINDINGS = {
-    SchedulerDO: "SCHEDULER",
-    SessionDO: "SESSION",
-    ShardDO: "SHARD",
-} as const;
-
-type DurableObjectClass = keyof typeof DURABLE_OBJECT_BINDINGS;
-
-const DURABLE_OBJECT_CLASSES = Object.keys(DURABLE_OBJECT_BINDINGS) as DurableObjectClass[];
-
 const ENV_DB_PATTERN = /\benv\s*\.\s*DB\b/;
 const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
-// Pipelines ships from `@lunora/bindings/pipelines` but is codegen-wired onto
-// ActionCtx, so apps reach it via `ctx.pipelines` rather than importing the
-// subpath — and a plain `@lunora/bindings/analytics` import must NOT flip the
-// pipelines binding hint. So detect the `ctx.pipelines` access directly,
-// mirroring the codegen feature probe.
-const CTX_PIPELINES_PATTERN = /\bctx\s*\.\s*pipelines\b/;
-// R2 SQL is the same shape as pipelines: `@lunora/bindings/r2sql` is codegen-wired
-// onto ActionCtx, so apps reach it as `ctx.r2sql` and never import the subpath.
-// Its three `R2_SQL_*` secrets had neither a flag nor a registry entry, so
-// `ctx.r2sql` failed silently on the deployed worker.
-const CTX_R2SQL_PATTERN = /\bctx\s*\.\s*r2sql\b/;
-const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
+
+// Provisioning behaviour per capability (see plans 027/028/031/032/035/036):
+//   kv          → kv_namespaces             → written without an id (wrangler creates the namespace on deploy)
+//   hyperdrive  → hyperdrive                → written with a placeholder id (`lunora deploy` creates the config from a connection string)
+//   browser     → browser                   → self-describing (binding name only)
+//   images      → images                    → self-describing (binding name only)
+//   analytics   → analytics_engine_datasets → self-describing (dataset == binding name)
+//   pipelines   → pipelines                 → hint (un-mintable remote pipeline name)
+//   artifacts   → artifacts                 → written with the Worker's name as namespace (a logged-out dev session leaves it out; deploy creates a pinned one)
+//   aiSearch    → ai_search_namespaces      → self-describing (namespace "default" always exists; wrangler creates a missing one)
+//   analyticsSql → analytics                → self-describing (binding name only; wrangler >= 4.145.0)
 
 /**
- * The specifiers the batteries-included `browserTool` sandbox detector treats
- * as `@lunora/agent` — mirrors `discover/sandbox.ts`'s identical constant
- * exactly (both the main entry and the `/sandbox` subpath re-export the tool).
+ * Codegen's capabilities config reports, each as the flag `uses<Key>`. What marks
+ * one used is not restated here: config folds the same per-file signals codegen
+ * reads ({@link sourceCapabilitySignals}) and asks codegen's one matcher
+ * ({@link capabilitiesUsedBy}), so a handler that makes codegen wire `ctx.kv`
+ * always makes config add or hint the KV binding too. The package
+ * {@link secretSourcesFromBindings} reports, and the wording of each hint, are read
+ * off the row's probe ({@link CAPABILITY_PROBES}).
  */
-const SANDBOX_MODULE_SPECIFIERS = new Set(["@lunora/agent", "@lunora/agent/sandbox"]);
+const CODEGEN_CAPABILITIES = [
+    "ai",
+    "aiSearch",
+    "analytics",
+    "analyticsSql",
+    "artifacts",
+    "browser",
+    "hyperdrive",
+    "images",
+    "kv",
+    "mail",
+    // No Cloudflare binding and no secrets of its own: each push channel's secrets
+    // are keyed by the channel `lunora/notify.ts` configures — see SECRET_SOURCE_FLAGS.
+    "notify",
+    "payments",
+    "pipelines",
+    // Its three `R2_SQL_*` secrets are the whole config need (no binding).
+    "r2sql",
+    "scheduler",
+    "storage",
+    "x402",
+] as const satisfies ReadonlyArray<CapabilityKey>;
+
+type CodegenCapability = (typeof CODEGEN_CAPABILITIES)[number];
+
+/** The flag a codegen capability is reported under: `kv` → `usesKv`. */
+const flagOf = <K extends CodegenCapability>(key: K): `uses${Capitalize<K>}` =>
+    // The one cast: TypeScript cannot follow `toUpperCase` into `Capitalize<K>`.
+    `uses${key.charAt(0).toUpperCase()}${key.slice(1)}` as `uses${Capitalize<K>}`;
 
 /**
- * Extracts the specifier list between the FIRST `{` and its matching `}` in
- * an import declaration's sliced text via plain index scans (not a regex),
- * so the two capability checks below each scan that single bounded slice
- * once instead of two overlapping `[^}]*` quantifiers around a shared
- * anchor — the super-linear-backtracking shape `sonarjs/slow-regex` flags.
+ * The config-only flags: packages codegen wires no `ctx.*` helper for, so they
+ * have no row in its table — the package's import is the whole signal.
  */
-const extractImportSpecifierList = (statementText: string): string => {
-    const openBraceIndex = statementText.indexOf("{");
+const CONFIG_ONLY_SOURCES = [
+    // Usually imported statically, but a lazy `import("@lunora/auth")` where the
+    // auth instance is first built needs the same hint — see FLAG_PACKAGES.
+    ["usesAuth", "@lunora/auth"],
+    // The Workers CIMD transport (plan 461). No binding and no signal: it needs a
+    // compatibility flag, which `lunora doctor` checks against the wrangler config
+    // this inference never reads.
+    ["usesCimdWorkers", "@lunora/auth/cimd/workers"],
+    // The x402 charge rail is an opt-in add-on subpath (not part of the `lunorash`
+    // umbrella). It implies no `.dev.vars` secret: the charge recipient is a
+    // user-named `[vars]` entry — hint-only. Often loaded lazily on the paid route
+    // alone, which still needs the hint — see FLAG_PACKAGES.
+    ["usesX402Charge", "@lunora/x402/charge"],
+    // Each `@lunora/payment` adapter is its own subpath, and its import is what
+    // tells which provider's secrets belong in `.dev.vars.example` — the root
+    // import alone cannot say.
+    ["usesPaymentAutumn", "@lunora/payment/autumn"],
+    ["usesPaymentCreem", "@lunora/payment/creem"],
+    ["usesPaymentDodopayments", "@lunora/payment/dodopayments"],
+    ["usesPaymentPolar", "@lunora/payment/polar"],
+    ["usesPaymentStripe", "@lunora/payment/stripe"],
+] as const;
 
-    if (openBraceIndex === -1) {
-        return "";
-    }
+/** The import-driven capability flag names. */
+type CapabilityFlag = (typeof CONFIG_ONLY_SOURCES)[number][0] | `uses${Capitalize<CodegenCapability>}`;
 
-    const closeBraceIndex = statementText.indexOf("}", openBraceIndex + 1);
+/**
+ * Every flag → the package it reports, sorted by flag so
+ * {@link secretSourcesFromBindings} lists sources in a stable order.
+ *
+ * Every row counts a dynamic `import("…")` of its package as well as a static
+ * one — deliberately, for all of them: a lazily loaded package needs its binding
+ * or secret just the same. Codegen ignores dynamic imports (it wires a helper off
+ * a static one), so config detects a superset of codegen here — harmless for a
+ * binding or a secret, where the opposite would build green and throw at runtime.
+ */
+const FLAG_PACKAGES: ReadonlyArray<readonly [CapabilityFlag, string]> = [
+    ...CODEGEN_CAPABILITIES.map((key) => [flagOf(key), CAPABILITY_PROBES[key].moduleSpecifier] as const),
+    ...CONFIG_ONLY_SOURCES,
+].toSorted(([left], [right]) => left.localeCompare(right));
 
-    return closeBraceIndex === -1 ? statementText.slice(openBraceIndex + 1) : statementText.slice(openBraceIndex + 1, closeBraceIndex);
+/**
+ * The `@lunora/notify` push channels → the secrets-registry key their secrets are
+ * listed under. Like a payment adapter's subpath (#1022), the channel — not the
+ * package — says which secrets an app needs, so a `webPush`-only app is not told
+ * to set `FCM_*`. Read from `defineNotify({...})` in `lunora/notify.ts`.
+ */
+const SECRET_SOURCE_FLAGS = [
+    ["usesNotifyFcm", "@lunora/notify:fcm"],
+    ["usesNotifyWebPush", "@lunora/notify:webPush"],
+    // `ShardRegistryDO` refuses unsigned requests, so an app with a registry needs
+    // `LUNORA_RELAY_SECRET` in `.dev.vars` and on deploy, with no package import to say so.
+    ["hostsShardRegistry", "@lunora/do:shardRegistry"],
+    // `EventLogDO` refuses every request without the same secret, and the app that exports it hosts the log.
+    ["hostsEventLog", "@lunora/replica:eventLog"],
+    // A worker that only constructs `EventLogDOClient` takes the host's value, so its line is a template, never minted.
+    ["usesEventLogClient", "@lunora/replica:eventLogClient"],
+    // The secret store behind `requestSecretTool`. The tool's own import is the
+    // signal, not `@lunora/agent`: an app that imports the package for something
+    // else needs no key.
+    ["usesRequestSecretTool", "@lunora/agent:requestSecretTool"],
+] as const;
+
+/** The packages whose sandbox tools (`browserTool`, `jsCodeTool`) provision `BROWSER` / `LOADER` when imported under `lunora/`. */
+const SANDBOX_PACKAGES = ["@lunora/agent", "@lunora/agent/sandbox"] as const;
+
+/**
+ * The parse prefilter: a file naming no capability package in quotes — the form
+ * every static import, re-export and literal dynamic `import()` takes — and
+ * reading no `ctx` helper ({@link mayReadCapabilityContext}) is never handed to
+ * the TypeScript parser. Plain text, so it also holds for a file a module lexer
+ * rejects (JSX, a mid-edit syntax error), which used to be parsed unconditionally.
+ */
+const CAPABILITY_PACKAGE_PATTERN = new RegExp(
+    String.raw`["'\x60](?:${[...FLAG_PACKAGES.map(([, source]) => source), ...SANDBOX_PACKAGES, EVENT_LOG_PACKAGE].map((source) => escapeRegExp(source)).join("|")})["'\x60]`,
+    "u",
+);
+
+/** The hint clause naming what marks a codegen capability used, read off its probe — `@lunora/bindings/kv is imported or ctx.kv is read`. */
+const usageOf = (key: CodegenCapability): string => {
+    const { contextProperty, moduleSpecifier } = CAPABILITY_PROBES[key];
+
+    return contextProperty === undefined ? `${moduleSpecifier} is imported` : `${moduleSpecifier} is imported or ctx.${contextProperty} is read`;
 };
-
-/**
- * A specifier-level `{ type browserTool }` inside an otherwise-value import —
- * compiles away even though the import declaration itself is a value import
- * (e.g. alongside `containerTool`). Mirrors `discover/sandbox.ts`'s
- * `named.isTypeOnly()` guard. Tested against the extracted specifier list, not
- * the whole statement.
- */
-const TYPE_BROWSER_TOOL_SPECIFIER_PATTERN = /\btype\s+browserTool\b/;
-
-/** A named `browserTool` specifier appears in the extracted specifier list. */
-const BROWSER_TOOL_NAME_PATTERN = /\bbrowserTool\b/;
-
-/**
- * Whole-file regex fallback for `hasSandboxBrowserToolImport`, used ONLY when
- * `es-module-lexer` can't parse the file (e.g. mid-edit) — same
- * degrade-gracefully contract as `capabilitiesFromSource`'s
- * `lexCapabilities`/`regexCapabilities` split. Being a blind text sweep, it
- * shares the same comment-blindness every other capability's regex fallback
- * already has; the primary (lexer-based) path below does not.
- */
-const SANDBOX_BROWSER_TOOL_FALLBACK_PATTERN = /import\s+\{[^}]*\bbrowserTool\b[^}]*\}\s+from\s+["']@lunora\/agent(?:\/sandbox)?["']/;
-
-/**
- * True when the sliced text of a SINGLE import declaration is a VALUE
- * (non-type-only) named import of `browserTool` — mirrors
- * `discover/sandbox.ts`'s `declaration.isTypeOnly()` (whole import) and
- * `named.isTypeOnly()` (single specifier) guards exactly.
- */
-const isValueBrowserToolImport = (statementText: string): boolean => {
-    if (TYPE_ONLY_IMPORT_PATTERN.test(statementText)) {
-        return false; // `import type { browserTool } from …` — the whole import compiles away.
-    }
-
-    const specifierList = extractImportSpecifierList(statementText);
-
-    return BROWSER_TOOL_NAME_PATTERN.test(specifierList) && !TYPE_BROWSER_TOOL_SPECIFIER_PATTERN.test(specifierList);
-};
-
-/**
- * Whether `code` contains a VALUE `browserTool` import from `@lunora/agent`
- * (main entry or `/sandbox`). Unlike the old whole-file regex sweep, this
- * walks `es-module-lexer`'s PARSED import records and tests only the sliced
- * text of each matching declaration — a commented-out import (`// import {
- * browserTool } from "@lunora/agent";`) is never parsed as a declaration at
- * all, so it can never match, and a `type`-prefixed specifier is rejected by
- * {@link isValueBrowserToolImport}. This is what makes the detector agree with
- * `discover/sandbox.ts`'s AST-based one on the same fixture matrix.
- */
-const hasSandboxBrowserToolImport = (code: string): boolean => {
-    try {
-        const [imports] = lexModule(code);
-
-        return imports.some(
-            (entry) => entry.n !== undefined && SANDBOX_MODULE_SPECIFIERS.has(entry.n) && isValueBrowserToolImport(code.slice(entry.ss, entry.se)),
-        );
-    } catch {
-        return SANDBOX_BROWSER_TOOL_FALLBACK_PATTERN.test(code);
-    }
-};
-
-/**
- * The single source of truth for import-driven capabilities: each capability
- * flag → the `@lunora/*` package whose import implies it, plus the regex used by
- * the {@link regexCapabilities} fallback when `es-module-lexer` can't parse a
- * mid-edit file. Everything else that enumerates capabilities — the
- * {@link Capabilities} type, {@link NO_CAPABILITIES}, {@link mergeCapabilities},
- * {@link capabilityForImportSource}, {@link regexCapabilities}, and the final
- * {@link InferredBindings} return — is derived from this table, so adding a
- * binding is a one-line entry rather than a seven-site edit.
- */
-// Provisioning behaviour per package (see plans 027/028/031/032/035/036):
-//   @lunora/bindings/kv         → kv_namespaces             → hint (un-mintable namespace id)
-//   @lunora/hyperdrive → hyperdrive                → hint (un-mintable remote id)
-//   @lunora/browser    → browser                   → self-describing (binding name only)
-//   @lunora/bindings/images     → images                    → self-describing (binding name only)
-//   @lunora/bindings/analytics  → analytics_engine_datasets → self-describing (dataset == binding name)
-//   ctx.pipelines               → pipelines                 → hint (un-mintable remote pipeline name; ships from @lunora/bindings/pipelines)
-const CAPABILITY_SOURCES = {
-    usesAi: { pattern: /\bfrom\s+["']@lunora\/ai["']/, source: "@lunora/ai" },
-    usesAnalytics: { pattern: /\bfrom\s+["']@lunora\/bindings\/analytics["']/, source: "@lunora/bindings/analytics" },
-    usesAuth: { pattern: /\bfrom\s+["']@lunora\/auth["']/, source: "@lunora/auth" },
-    usesBrowser: { pattern: /\bfrom\s+["']@lunora\/browser["']/, source: "@lunora/browser" },
-    usesHyperdrive: { pattern: /\bfrom\s+["']@lunora\/hyperdrive["']/, source: "@lunora/hyperdrive" },
-    usesImages: { pattern: /\bfrom\s+["']@lunora\/bindings\/images["']/, source: "@lunora/bindings/images" },
-    usesKv: { pattern: /\bfrom\s+["']@lunora\/bindings\/kv["']/, source: "@lunora/bindings/kv" },
-    usesMail: { pattern: /\bfrom\s+["']@lunora\/mail["']/, source: "@lunora/mail" },
-    // No Cloudflare binding of its own — like `@lunora/mail`, this exists so the
-    // package's declared secrets (the VAPID trio + the two FCM keys) reach
-    // `.dev.vars.example` and the missing-secret pre-flight. `packageNamesFromBindings`
-    // can only emit a source named here, so without this entry those five were
-    // declared and consumed by nothing.
-    usesNotify: { pattern: /\bfrom\s+["']@lunora\/notify["']/, source: "@lunora/notify" },
-    usesPayment: { pattern: /\bfrom\s+["']@lunora\/payment["']/, source: "@lunora/payment" },
-    // Keyed off the `ctx.pipelines` access (not an import) — see CTX_PIPELINES_PATTERN.
-    // Pipelines is codegen-wired onto ActionCtx, so apps reach it via `ctx.pipelines`
-    // rather than importing `@lunora/bindings/pipelines`; `source` names that subpath
-    // for the hint message.
-    usesPipelines: { pattern: CTX_PIPELINES_PATTERN, source: "@lunora/bindings/pipelines" },
-    // Keyed off the `ctx.r2sql` access, not an import — see CTX_R2SQL_PATTERN.
-    usesR2sql: { pattern: CTX_R2SQL_PATTERN, source: "@lunora/bindings/r2sql" },
-    usesScheduler: { pattern: /\bfrom\s+["']@lunora\/scheduler["']/, source: "@lunora/scheduler" },
-    usesStorage: { pattern: /\bfrom\s+["']@lunora\/storage["']/, source: "@lunora/storage" },
-    // x402 rails are opt-in add-on subpaths (not part of the `lunorash` umbrella),
-    // so they key off the exact `@lunora/x402/{charge,pay}` specifiers. Neither
-    // implies a `.dev.vars` secret: the charge recipient is a user-named `[vars]`
-    // entry and the pay wallet key is a Secrets Store binding — both hint-only.
-    usesX402Charge: { pattern: /\bfrom\s+["']@lunora\/x402\/charge["']/, source: "@lunora/x402/charge" },
-    usesX402Pay: { pattern: /\bfrom\s+["']@lunora\/x402\/pay["']/, source: "@lunora/x402/pay" },
-} as const satisfies Record<string, { pattern: RegExp; source: string }>;
-
-/** The import-driven capability flag names (every key of {@link CAPABILITY_SOURCES}). */
-type CapabilityFlag = keyof typeof CAPABILITY_SOURCES;
-
-const CAPABILITY_FLAGS = Object.keys(CAPABILITY_SOURCES) as CapabilityFlag[];
 
 /**
  * The provider secret pairs `@lunora/payment` reads at runtime. The package is
@@ -228,26 +236,21 @@ const CAPABILITY_FLAGS = Object.keys(CAPABILITY_SOURCES) as CapabilityFlag[];
  */
 const PAYMENT_PROVIDER_SECRETS = "STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (Stripe) or POLAR_ACCESS_TOKEN + POLAR_WEBHOOK_SECRET (Polar)";
 
-interface DurableObjectSpec {
-    binding: string;
-    className: string;
-}
-
 /**
  * A `defineContainer` declaration plus whether its generated DO class is
  * exported by the worker entry. Only exported containers are safe to
  * provision — wrangler rejects a `containers[].class_name` (and its Durable
  * Object binding) that the worker doesn't export.
  */
-interface InferredContainer extends ContainerIR {
+type InferredContainer = ContainerIR & {
     exported: boolean;
-}
+};
 
 /**
  * A `defineWorkflow` declaration plus whether its generated
  * `WorkflowEntrypoint` class is exported by the worker entry. Only exported
- * workflows are safe to provision — wrangler rejects a `workflows[].class_name`
- * the worker doesn't export. Workflows are NOT Durable Objects, so this never
+ * workflows are safe to provision — wrangler rejects an `exports.<Class>`
+ * workflow the worker doesn't export. Workflows are NOT Durable Objects, so this never
  * implies a `durable_objects` binding or migration.
  */
 interface InferredWorkflow extends WorkflowIR {
@@ -259,7 +262,7 @@ interface InferredWorkflow extends WorkflowIR {
  * `WorkflowEntrypoint` class (e.g. `SupportAgentWorkflow`) is exported by the
  * worker entry. An agent compiles onto a Cloudflare Workflow, so — exactly like
  * {@link InferredWorkflow} — only exported agents are safe to provision
- * (wrangler rejects a `workflows[].class_name` the worker doesn't export), and
+ * (wrangler rejects an `exports.<Class>` workflow the worker doesn't export), and
  * an agent is NOT a Durable Object (no `durable_objects` binding or migration).
  */
 interface InferredAgent extends AgentIR {
@@ -275,7 +278,7 @@ interface InferredAgent extends AgentIR {
 type InferredQueue = QueueIR;
 
 interface InferredBindings {
-    /** Agents declared in `lunora/agents.ts` (exported or not — see {@link InferredAgent.exported}); reconciled into `workflows[]`. */
+    /** Agents declared in `lunora/agents.ts` (exported or not — see {@link InferredAgent.exported}); reconciled into wrangler `exports`. */
     agents: InferredAgent[];
     /** Containers declared in `lunora/containers.ts` (exported or not — see {@link InferredContainer.exported}). */
     containers: InferredContainer[];
@@ -289,152 +292,119 @@ interface InferredBindings {
      * un-mintable `app_id`, so it is reconciled as a hint, not auto-written.
      */
     flagshipBinding?: string;
+
+    /** The worker entry exports `EventLogDO`, so the app mints the `LUNORA_RELAY_SECRET` the event log checks on every request. */
+    hostsEventLog: boolean;
+
+    /** The app hosts the registry (exports or binds `ShardRegistryDO`, or is merged with its module), so it mints the `LUNORA_RELAY_SECRET` its registry checks. */
+    hostsShardRegistry: boolean;
+
+    /**
+     * The schema's `.jurisdiction("…")`, when it declares one. Read by the binding
+     * hints whose resource takes its residency at creation (Artifacts), so the
+     * hint can name the jurisdiction to create it in.
+     */
+    jurisdiction?: SchemaInfo["jurisdiction"];
     /** Schema declares a `.global()` table → needs the `DB` D1 binding. */
     needsD1: boolean;
     /** Queues declared in `lunora/queues.ts` → reconciled into `queues.producers[]` / `queues.consumers[]`. */
     queues: InferredQueue[];
+
+    /**
+     * Sibling Workers declared in `lunora.config` `services` → reconciled into
+     * `services[]` (plan 457). `undefined` when the declaration is unreadable, so
+     * reconcile leaves every entry alone rather than removing the owned ones.
+     */
+    services: ServiceBindingIR[] | undefined;
     /** Human-readable provenance for each inferred binding / hint, for logging. */
     signals: string[];
-    /** `@lunora/ai` is imported or `env.AI` is used → needs the `ai` Workers AI binding. */
+    /** `@lunora/ai` is imported, `ctx.ai` read, or `env.AI` used → needs the `ai` Workers AI binding. */
     usesAi: boolean;
-    /** `@lunora/bindings/analytics` is imported → self-describing `analytics_engine_datasets` binding (auto-writeable). */
+    /** `@lunora/bindings/ai-search` is value-imported or `ctx.aiSearch` read → self-describing `ai_search_namespaces` binding (`AI_SEARCH` on namespace `default`; auto-writeable). */
+    usesAiSearch: boolean;
+    /** `@lunora/bindings/analytics` is imported or `ctx.analytics` read → self-describing `analytics_engine_datasets` binding (auto-writeable). */
     usesAnalytics: boolean;
+    /** `@lunora/bindings/analytics-sql` is value-imported or `ctx.analyticsSql` read → self-describing `analytics` binding (`{ binding: ANALYTICS_SQL }`; auto-writeable, wrangler >= 4.145.0). */
+    usesAnalyticsSql: boolean;
+
+    /**
+     * `ctx.artifacts` is read or `@lunora/bindings/artifacts` value-imported.
+     * Reconcile writes the binding with the Worker's name as its namespace. The first repo
+     * `create()` against a missing namespace creates it UNRESTRICTED and the jurisdiction can
+     * never change after that, so `lunora deploy` creates a pinned schema's namespace in its
+     * jurisdiction, and stops when it can't.
+     */
+    usesArtifacts: boolean;
     /** `@lunora/auth` is imported (sessions may be D1- or `SessionDO`-backed). */
     usesAuth: boolean;
-    /** `@lunora/browser` is imported → self-describing `browser` binding (auto-writeable). */
+    /** `@lunora/browser` is imported or `ctx.browser` read → self-describing `browser` binding (auto-writeable). */
     usesBrowser: boolean;
+    /** `@lunora/auth/cimd/workers` is imported → needs the `global_fetch_strictly_public` compatibility flag (no binding; `lunora doctor` checks it). */
+    usesCimdWorkers: boolean;
+    /** The app constructs an `EventLogDOClient`, so it needs the `LUNORA_RELAY_SECRET` its host minted, hosting the log or not. */
+    usesEventLogClient: boolean;
     /** `lunora/flags.ts` declares a feature-flag provider (any OpenFeature provider — Flagship or custom). */
     usesFlags: boolean;
-    /** `@lunora/hyperdrive` is imported (binding needs an un-mintable remote `id`; hint-only). */
+    /** `@lunora/hyperdrive` is imported or `ctx.sql` read (reconcile writes `{ binding: "HYPERDRIVE" }` with a placeholder `id`; `lunora deploy` swaps in the created config's). */
     usesHyperdrive: boolean;
-    /** `@lunora/bindings/images` is imported → self-describing `images` binding (auto-writeable). */
+    /** `@lunora/bindings/images` is imported or `ctx.images` read → self-describing `images` binding (auto-writeable). */
     usesImages: boolean;
-    /** `@lunora/bindings/kv` is imported (namespace binding name + id are user-defined; hint-only). */
+    /** `@lunora/bindings/kv` is imported or `ctx.kv` read (reconcile writes `{ binding: "KV" }` without an id and wrangler creates the namespace on deploy, unless the schema pins a jurisdiction). */
     usesKv: boolean;
-    /** `@lunora/mail` is imported (Resend API key must be set in `.dev.vars`; no binding). */
+    /** `@lunora/mail` is imported (Resend API key must be set in `.dev.vars`; no binding). No `ctx.mail` helper exists, so only the import counts. */
     usesMail: boolean;
-    /** `@lunora/notify` is imported (Web Push needs VAPID/FCM secrets in `.dev.vars`; no binding). */
+    /** `@lunora/notify` is imported or `ctx.notify` read (no binding; channel secrets ride `usesNotifyFcm` / `usesNotifyWebPush`). */
     usesNotify: boolean;
-    /** `@lunora/payment` is imported (provider secrets must be set in `.dev.vars`; no binding). */
-    usesPayment: boolean;
-    /** `ctx.pipelines` is used (binding needs an un-mintable remote pipeline name; hint-only). */
+    /** `lunora/notify.ts` configures the `fcm` channel → the `FCM_*` secrets in `.dev.vars`. */
+    usesNotifyFcm: boolean;
+    /** `lunora/notify.ts` configures the `webPush` channel → the `VAPID_*` secrets in `.dev.vars`. */
+    usesNotifyWebPush: boolean;
+    /** `@lunora/payment/autumn` is imported → the Autumn secrets in `.dev.vars` (no binding). */
+    usesPaymentAutumn: boolean;
+    /** `@lunora/payment/creem` is imported → the Creem secrets in `.dev.vars` (no binding). */
+    usesPaymentCreem: boolean;
+    /** `@lunora/payment/dodopayments` is imported → the Dodo Payments secrets in `.dev.vars` (no binding). */
+    usesPaymentDodopayments: boolean;
+    /** `@lunora/payment/polar` is imported → the Polar secrets in `.dev.vars` (no binding). */
+    usesPaymentPolar: boolean;
+    /** `@lunora/payment` is imported or `ctx.payments` read (provider secrets must be set in `.dev.vars`; no binding). */
+    usesPayments: boolean;
+    /** `@lunora/payment/stripe` is imported → the Stripe secrets in `.dev.vars` (no binding). */
+    usesPaymentStripe: boolean;
+    /** `@lunora/bindings/pipelines` is value-imported or `ctx.pipelines` read (binding needs an un-mintable remote pipeline name; hint-only). */
     usesPipelines: boolean;
-    /** `ctx.r2sql` is used (needs the `R2_SQL_*` secrets in `.dev.vars`; no binding). */
+    /** `@lunora/bindings/r2sql` is value-imported or `ctx.r2sql` read (needs the `R2_SQL_*` secrets in `.dev.vars`; no binding). */
     usesR2sql: boolean;
-    /** `@lunora/scheduler` is imported. */
+    /** `lunora/` value-imports `requestSecretTool` from `@lunora/agent` → the `LUNORA_SECRET_VALUE_KEY` secret in `.dev.vars` (no binding). Read off the same rule codegen gates on. */
+    usesRequestSecretTool: boolean;
+    /** `@lunora/scheduler` is imported or `ctx.scheduler` read. */
     usesScheduler: boolean;
-    /** `@lunora/storage` is imported (R2 bucket binding name is user-defined). */
+    /** `@lunora/storage` is imported or `ctx.storage` read under `lunora/` (R2 bucket binding name is user-defined). */
     usesStorage: boolean;
+    /** `jsCodeTool` is imported from `@lunora/agent` in `lunora/` → self-describing `worker_loaders` binding (`LOADER`). */
+    usesWorkerLoader: boolean;
+    /** `@lunora/x402/pay` is imported or `ctx.x402` read — the agent-wallet pay rail signs from a Secrets Store binding paired with a spend policy (ActionCtx-only; hint-only). */
+    usesX402: boolean;
     /** `@lunora/x402/charge` is imported — the charge rail settles USDC to a recipient address (a public `[vars]` entry, user-named; hint-only). */
     usesX402Charge: boolean;
-    /** `@lunora/x402/pay` is imported — the agent-wallet pay rail signs from a Secrets Store binding paired with a spend policy (ActionCtx-only; hint-only). */
-    usesX402Pay: boolean;
     /** Workflows declared in `lunora/workflows.ts` (exported or not — see {@link InferredWorkflow.exported}). */
     workflows: InferredWorkflow[];
 }
 
 /**
- * Which capabilities a unit of source imports. Pure value, no mutation. The
- * import-driven flags are {@link CAPABILITY_SOURCES}'s keys; `needsD1` is the
- * one capability not driven by an import (it comes from `env.DB` / a `.global()`
- * schema), so it is added explicitly.
+ * Which capabilities the scanned project uses. A plain value built once from the
+ * folded signals: the import-driven flags are {@link FLAG_PACKAGES}'s; `needsD1`
+ * (an `env.DB` read) and `usesWorkerLoader` (a sandbox `jsCodeTool` import) are
+ * the two not driven by a package import, so they are added explicitly. A `Pick`
+ * of {@link InferredBindings}, so a flag the result does not declare fails to compile.
  */
-type Capabilities = Record<CapabilityFlag | "needsD1", boolean>;
+type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesEventLogClient" | "usesRequestSecretTool" | "usesWorkerLoader">;
 
-/** Every capability key, including the non-import-driven `needsD1`. */
-const ALL_CAPABILITY_KEYS: ReadonlyArray<keyof Capabilities> = [...CAPABILITY_FLAGS, "needsD1"];
+/** A capability scan and every file it read, so a later walk from the worker entry leaves those files alone. */
+type CapabilityScan = Capabilities & { scannedFiles: ReadonlySet<string> };
 
-/** Build a fresh all-`false` capability set keyed by {@link ALL_CAPABILITY_KEYS}. */
-const emptyCapabilities = (): Capabilities => {
-    const base = {} as Capabilities;
-
-    for (const key of ALL_CAPABILITY_KEYS) {
-        base[key] = false;
-    }
-
-    return base;
-};
-
-const NO_CAPABILITIES: Capabilities = Object.freeze(emptyCapabilities());
-
-const mergeCapabilities = (a: Capabilities, b: Capabilities): Capabilities => {
-    const merged = {} as Capabilities;
-
-    for (const key of ALL_CAPABILITY_KEYS) {
-        merged[key] = a[key] || b[key];
-    }
-
-    return merged;
-};
-
-/** Map a single import source onto the capability it implies. */
-const capabilityForImportSource = (source: string): Capabilities => {
-    for (const flag of CAPABILITY_FLAGS) {
-        if (CAPABILITY_SOURCES[flag].source === source) {
-            return { ...NO_CAPABILITIES, [flag]: true };
-        }
-    }
-
-    return NO_CAPABILITIES;
-};
-
-/**
- * Lex imports with `es-module-lexer` and union the capability each runtime
- * source implies. Type-only imports compile away and imply nothing. Throws on
- * unparseable input so the caller can fall back to a regex sweep.
- */
-const lexCapabilities = (code: string): Capabilities => {
-    const [imports] = lexModule(code);
-
-    let capabilities = NO_CAPABILITIES;
-
-    for (const entry of imports) {
-        const source = entry.n;
-
-        if (!source || TYPE_ONLY_IMPORT_PATTERN.test(code.slice(entry.ss, entry.se))) {
-            continue;
-        }
-
-        capabilities = mergeCapabilities(capabilities, capabilityForImportSource(source));
-    }
-
-    return capabilities;
-};
-
-/** Regex fallback for when `es-module-lexer` cannot parse a mid-edit file. */
-const regexCapabilities = (code: string): Capabilities => {
-    const capabilities = { ...NO_CAPABILITIES };
-
-    for (const flag of CAPABILITY_FLAGS) {
-        capabilities[flag] = CAPABILITY_SOURCES[flag].pattern.test(code);
-    }
-
-    return capabilities;
-};
-
-/** Detect, for a single source file, which Lunora capabilities it pulls in. */
-const capabilitiesFromSource = (code: string): Capabilities => {
-    let capabilities: Capabilities;
-
-    try {
-        capabilities = lexCapabilities(code);
-    } catch {
-        capabilities = regexCapabilities(code);
-    }
-
-    // NOTE: `usesBrowser`'s sandbox-`browserTool` half is intentionally NOT
-    // folded in here — see `scanSandboxBrowserToolUsage` below. Unlike every
-    // other probe, it must be scoped to EXACTLY the `lunora/` file set
-    // `discover/sandbox.ts` scans (never `src/`), so it runs as a separate,
-    // lunora-only pass in `inferLunoraBindings` instead.
-    return mergeCapabilities(capabilities, {
-        ...NO_CAPABILITIES,
-        needsD1: ENV_DB_PATTERN.test(code),
-        usesAi: ENV_AI_PATTERN.test(code),
-        usesPipelines: CTX_PIPELINES_PATTERN.test(code),
-        usesR2sql: CTX_R2SQL_PATTERN.test(code),
-    });
-};
+/** A relative module specifier in an import or re-export: `from "./x"`, `from "../y"`. */
+const RELATIVE_IMPORT_PATTERN = /\bfrom\s+["']\.{1,2}\//u;
 
 /** Recursively collect scannable source files under `directory`. */
 const collectSourceFiles = (directory: string, accumulator: string[]): void => {
@@ -464,6 +434,8 @@ const collectSourceFiles = (directory: string, accumulator: string[]): void => {
 };
 
 interface InferOptions {
+    /** Memoises the source scans, so one CLI invocation parses the project once. */
+    cache?: DiscoveryCache;
     projectRoot: string;
     /** Directories (relative to root) to scan. Defaults to `lunora` + `src`. */
     scanDirs?: ReadonlyArray<string>;
@@ -471,300 +443,86 @@ interface InferOptions {
     schemaDir?: string;
 }
 
-/* eslint-disable no-secrets/no-secrets -- false positive: `frameworkComposePlugin` is a function name in prose, not a credential */
-
-/**
- * The virtual module id `@lunora/vite`'s `frameworkComposePlugin` resolves to a
- * COMPOSED class-A worker entry. Every class-A template sets `wrangler.main` to
- * it and ships no entry file at all, so an fs probe can never find one.
- *
- * Duplicated (not imported) from `@lunora/vite`: `@lunora/vite` depends on
- * `@lunora/config`, so importing back would be a cycle. The literal is the
- * public contract a template's `wrangler.jsonc` writes by hand anyway.
- */
-const LUNORA_WORKER_VIRTUAL_ID = "virtual:lunora/worker";
-
-/* eslint-enable no-secrets/no-secrets -- re-enable after the LUNORA_WORKER_VIRTUAL_ID doc block */
-
-/**
- * What the project's `wrangler.main` (or the fallback probe) resolves to.
- *
- * `composed` is the class-A case: there is no file to lex, and treating that as
- * "no worker entry" is what made every container/workflow/agent read
- * `exported: false` and get filtered out of reconcile — the app then deployed
- * green and failed at runtime on a missing binding. The composed entry's exports
- * are known statically instead (see {@link COMPOSED_ENTRY_DURABLE_OBJECTS} and
- * `@lunora/vite`'s `GENERATED_CLASS_MODULES`).
- */
-interface WorkerEntry {
-    /** `true` when `wrangler.main` is `virtual:lunora/worker` — `@lunora/vite` composes the entry. */
-    composed: boolean;
-    /** Absolute path to a hand-written entry file, or `undefined` for the composed entry / no entry at all. */
-    path?: string;
+/** The schema facts binding inference reads. */
+interface SchemaFacts {
+    /** The schema's `.jurisdiction("…")`, for the creation-time hints. */
+    jurisdiction: SchemaInfo["jurisdiction"];
+    /** A `.global()` table needs the `DB` D1 binding. */
+    needsD1: boolean;
 }
 
 /**
- * The Durable Object classes the composed class-A entry exports. It emits
- * exactly one — `export const ShardDO = app.ShardDO` off the generated
- * `defineApp()` builder — plus star
- * re-exports of the generated container/workflow/agent modules (handled by
- * {@link detectClassExports}). `SchedulerDO`/`SessionDO` are NOT composed in, so
- * they stay unprovisioned, which is honest: binding them would name a class the
- * bundle does not export and `wrangler deploy` would reject it.
+ * The schema-derived signals. Delegates to the shared `discoverSchemaInfo` so
+ * inference and the wrangler validator read the exact same facts. A missing or
+ * unparseable schema yields no D1 need and no jurisdiction — codegen surfaces the
+ * actionable error elsewhere.
  */
-const COMPOSED_ENTRY_DURABLE_OBJECTS: DurableObjectClass[] = ["ShardDO"];
+const schemaFacts = (projectRoot: string, schemaDirectory: string, cache?: DiscoveryCache): SchemaFacts => {
+    const { info } = discoverSchemaInfo(projectRoot, schemaDirectory, cache);
+
+    return { jurisdiction: info?.jurisdiction, needsD1: info?.hasD1GlobalTable ?? false };
+};
 
 /**
- * The class-B composed entry. `lunora deploy` passes this file to wrangler as
- * the positional script whenever it exists, overriding `wrangler.main` — so it
- * is what actually gets bundled and what wrangler checks its DO/Workflow
- * bindings against. `main` in a class-B project names the framework adapter's
- * build output (`.svelte-kit/cloudflare/_worker.js`, `dist/_worker.js`), which
- * exists after `vite build` and exports only the SSR fetch handler. Lexing that
- * instead read every declared class as unexported: nothing provisioned, plus a
- * "add `export * from …`" warning the user cannot silence.
+ * The parse the last {@link scanCapabilities} left, for the project it scanned. A
+ * watch session scans on every codegen pass, and re-parsing every candidate file
+ * each time was most of the scan; a file is re-parsed only when its text changed,
+ * so nothing stale is ever read. Only the latest project is kept: a host scans one,
+ * and one that alternates re-parses on each switch, no worse than not caching.
+ */
+let lastScan: { project: Project; root: string } | undefined;
+
+/** The project {@link lastScan} keeps for `projectRoot`, replacing another root's. */
+const scanProjectOf = (projectRoot: string): Project => {
+    const root = resolve(projectRoot);
+
+    if (lastScan?.root !== root) {
+        lastScan = { project: new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true }), root };
+    }
+
+    return lastScan.project;
+};
+
+/** Parse `code` into `project` as `file`, unless the file is already there with exactly this text. */
+const parseIfChanged = (project: Project, file: string, code: string): void => {
+    if (project.getSourceFile(file)?.getFullText() !== code) {
+        project.createSourceFile(file, code, { overwrite: true });
+    }
+};
+
+/** Drop every file the last scan parsed and this one did not — a deleted file, or one no longer worth parsing. */
+const forgetUnscanned = (project: Project, scanned: ReadonlySet<SourceFile>): void => {
+    for (const sourceFile of project.getSourceFiles()) {
+        if (!scanned.has(sourceFile)) {
+            project.removeSourceFile(sourceFile);
+        }
+    }
+};
+
+/**
+ * Scan every source file under `scanDirectories` and decide the capabilities.
  *
- * Exported, not documented-as-duplicated: the CLI's `resolveComposedWorkerEntry`
- * imports this constant, so the deploy's positional entry and the file this
- * module lexes for exported classes cannot drift apart.
+ * Each file worth parsing (see {@link CAPABILITY_PACKAGE_PATTERN}) contributes
+ * its signals, and the signals are folded ONCE, per file set, before a single
+ * call to codegen's matcher. Two of them count only under `lunoraDirectory`, the
+ * file set codegen probes: `ctx.<property>` reads — that is the only place a read
+ * gets the helper wired, and a hand-written Durable Object in `src/` reading its
+ * own `ctx.storage` (the `DurableObjectState`) must not hint an R2 bucket — and
+ * sandbox-tool imports, since `discoverSandboxUsage` only reads `lunora/`, so a
+ * `src/`-only `browserTool` never registers the dispatcher and a `src/`-only
+ * `jsCodeTool` never reaches the `workerLoaders` gate.
  */
-const COMPOSED_WORKER_ENTRY = "src/worker.ts";
-
-/** Read the worker entry from `wrangler.main`, or probe known fallbacks. */
-const resolveWorkerEntry = (projectRoot: string): WorkerEntry => {
-    for (const candidate of WRANGLER_FILES) {
-        const wranglerPath = join(projectRoot, candidate);
-
-        if (!existsSync(wranglerPath)) {
-            continue;
-        }
-
-        const { parsed } = readWranglerJsonc<{ main?: string }>(wranglerPath);
-        const main = parsed?.main;
-
-        // The class-A composed entry: no file exists (nor ever will), and the
-        // fallback probe below must NOT run — `src/index.ts` in a class-A app is
-        // the client entry, not the worker, so probing it would read the wrong
-        // file's exports.
-        if (main === LUNORA_WORKER_VIRTUAL_ID) {
-            return { composed: true };
-        }
-
-        const composedPath = join(projectRoot, COMPOSED_WORKER_ENTRY);
-
-        if (existsSync(composedPath)) {
-            return { composed: false, path: composedPath };
-        }
-
-        if (typeof main === "string" && existsSync(join(projectRoot, main))) {
-            return { composed: false, path: join(projectRoot, main) };
-        }
-
-        break;
-    }
-
-    for (const fallback of WORKER_ENTRY_FALLBACKS) {
-        const fullPath = join(projectRoot, fallback);
-
-        if (existsSync(fullPath)) {
-            return { composed: false, path: fullPath };
-        }
-    }
-
-    return { composed: false };
-};
-
-/** The inline `type` qualifier immediately before an export entry's local name (`export { type Foo }`). Module-scoped so it compiles once, not per export entry. */
-const INLINE_TYPE_QUALIFIER = /(?:^|[\s,{])type$/u;
-
-/**
- * PRIMARY (lexer-based, per-entry) type-only-export detector. Whether a lexer
- * export entry is the inline `export { type Foo }` (or `export { type Foo as Bar }`)
- * form — the one type-only export shape `es-module-lexer` still lists (it already
- * omits the `export type Foo` declaration and the separate `export type { Foo }`
- * form from its export list). The `type` qualifier sits immediately before the
- * entry's LOCAL name, so we test the source right before `entry.ls` (falling back
- * to `entry.s` when there is no `as` rename). Deciding this PER ENTRY is what keeps
- * a real value export from being suppressed by an unrelated type-only export
- * elsewhere in the entry file — or, as the DO classes used to suffer, by a
- * type-only IMPORT of the same name somewhere else in the entry.
- *
- * The imprecise whole-file counterpart used only when the lexer can't parse the
- * file is {@link isTypeOnlyExportRegexFallback}.
- */
-const isTypeOnlyExportEntry = (code: string, entry: { readonly ls: number; readonly s: number }): boolean => {
-    const localStart = entry.ls >= 0 ? entry.ls : entry.s;
-
-    return INLINE_TYPE_QUALIFIER.test(code.slice(0, localStart).trimEnd());
-};
-
-/**
- * FALLBACK (whole-file regex) type-only-export detector — the imprecise
- * counterpart to {@link isTypeOnlyExportEntry}, used ONLY when `es-module-lexer`
- * cannot parse a mid-edit file. Matches a *type-only* export of `className` —
- * `export type Foo`, the separate `export type { … Foo … }`, or the inline
- * `export { type Foo }`. Every arm is anchored on `export`, so a type-only
- * IMPORT of the same name is not mistaken for one; the class name is escaped and
- * every pattern carries the `u` flag. The primary (lexer) path decides
- * type-only-ness per export entry instead — this blind whole-file sweep cannot tell
- * which `export` a repeated name came from, so a value + separate type export of
- * the same name still (conservatively) reads type-only here; acceptable for the
- * rare unparseable-file fallback.
- */
-const isTypeOnlyExportRegexFallback = (code: string, className: string): boolean => {
-    const name = escapeRegExp(className);
-
-    return (
-        new RegExp(String.raw`\bexport\s+type\s+${name}\b`, "u").test(code) ||
-        new RegExp(String.raw`\bexport\s+type\s*\{[^}]*\b${name}\b`, "u").test(code) ||
-        new RegExp(String.raw`\bexport\s+\{[^}]*\btype\s+${name}\b`, "u").test(code)
-    );
-};
-
-/* eslint-disable no-secrets/no-secrets -- false positive: the two detector names in prose below, not credentials */
-
-/**
- * The Durable Object classes the worker entry exports. Uses `es-module-lexer`'s
- * export list so every form is covered (`export const ShardDO`, `export {
- * SchedulerDO } from "./do"`, aliases). These are the only DO classes safe to
- * bind, since wrangler validates that a binding's `class_name` is exported.
- *
- * Type-only-ness is decided by the same two detectors the generated classes use
- * ({@link isTypeOnlyExportEntry} per lexer entry, {@link isTypeOnlyExportRegexFallback}
- * when the file will not parse). The core classes used to get a weaker,
- * unanchored whole-file `\btype\s+ShardDO\b` instead, which an ordinary
- * `import { type ShardDO, createShardDO }` satisfied — so reconcile refused the
- * SHARD binding and `wrangler-validator` then failed the deploy telling the user
- * their dev server auto-reconciles this on startup.
- */
-/* eslint-enable no-secrets/no-secrets -- re-enable after the detector doc block */
-const detectExportedDurableObjects = (entryPath: string): DurableObjectSpec[] => {
-    const code = readFileSync(entryPath, "utf8");
-    let exportedNames: Set<string>;
-
-    // A candidate counts only when it is exported as a runtime VALUE — an
-    // inline `export { type ShardDO }` lists the name but compiles away, and
-    // binding it would make `wrangler deploy` fail on the missing class.
-    try {
-        const [, exports] = lexModule(code);
-
-        exportedNames = new Set(exports.filter((entry) => !isTypeOnlyExportEntry(code, entry)).map((entry) => entry.n));
-    } catch {
-        exportedNames = new Set(
-            DURABLE_OBJECT_CLASSES.filter(
-                (className) => new RegExp(String.raw`\bexport\b[^\n;]*\b${className}\b`, "u").test(code) && !isTypeOnlyExportRegexFallback(code, className),
-            ),
-        );
-    }
-
-    return DURABLE_OBJECT_CLASSES.filter((className) => exportedNames.has(className)).map((className) => {
-        return {
-            binding: DURABLE_OBJECT_BINDINGS[className],
-            className,
-        };
-    });
-};
-
-/** A discovered definition whose generated class may or may not be exported by the worker entry. */
-interface ClassExportable {
-    className: string;
-}
-
-/**
- * Whether the worker entry exports each definition's generated class: a named
- * export of the class (covered by `es-module-lexer`'s export list) or the
- * conventional `export * from "./lunora/_generated/<generatedModule>"` star
- * re-export — the way a worker entry re-exports every generated class of one
- * kind at once. `es-module-lexer` lists the module request but not the names a
- * star re-export forwards, so the path itself is the signal that every class
- * from that module is exported.
- *
- * One generic replaces what were three near-identical copies
- * (`detectContainerExports`/`detectWorkflowExports`/`detectAgentExports`,
- * differing only in the star-reexport module name and the IR type) — exports
- * are the only safe provisioning signal for all three kinds, since wrangler
- * validates `class_name` against the worker's exports at deploy. Mirrors the
- * same lexer-then-regex-fallback shape as `detectExportedDurableObjects`.
- */
-const detectClassExports = <Definition extends ClassExportable>(
-    entry: WorkerEntry,
-    definitions: ReadonlyArray<Definition>,
-    generatedModule: string,
-): (Definition & { exported: boolean })[] => {
-    if (definitions.length === 0) {
-        return [];
-    }
-
-    // The composed class-A entry star-re-exports `_generated/{agents,containers,
-    // workflows}` for every kind the project declares (`@lunora/vite`'s
-    // `GENERATED_CLASS_MODULES`), so every declaration IS exported. There is no
-    // file to lex — reading it as "unexported" is the bug this branch fixes.
-    if (entry.composed) {
-        return definitions.map((definition) => {
-            return { ...definition, exported: true };
-        });
-    }
-
-    if (entry.path === undefined) {
-        return definitions.map((definition) => {
-            return { ...definition, exported: false };
-        });
-    }
-
-    const code = readFileSync(entry.path, "utf8");
-    const starReexport = new RegExp(String.raw`\bexport\s*\*\s*from\s*["'][^"']*_generated\/${generatedModule}(?:\.js)?["']`).test(code);
-
-    // The names exported as a runtime VALUE — the only ones safe to bind, since
-    // wrangler validates a binding's `class_name` against the worker's exports at
-    // deploy. Type-only exports (which compile away) are rejected per entry.
-    let valueExportedNames: Set<string>;
-
-    try {
-        const [, exports] = lexModule(code);
-
-        // `es-module-lexer` already omits `export type Foo` and the separate
-        // `export type { Foo }` from its export list; the one type-only shape it
-        // still lists is the inline `export { type Foo }`, dropped here per entry.
-        // What remains are the real value exports — so a value `export class Foo {}`
-        // is NOT suppressed by an unrelated `export type { Foo }` elsewhere in the
-        // entry (the prior unanchored whole-file regex's bug).
-        // NB: coupling — `isTypeOnlyExportEntry` reads the source at `exportEntry.ls`/`exportEntry.s`,
-        // the byte offsets `es-module-lexer` reports for THIS `code`, so it must be
-        // passed the same `code` these `exports` were lexed from.
-        valueExportedNames = new Set(exports.filter((exportEntry) => !isTypeOnlyExportEntry(code, exportEntry)).map((exportEntry) => exportEntry.n));
-    } catch {
-        // Fallback for an unparseable (mid-edit) entry: a blind whole-file sweep for
-        // an `export … <className>` that is not a type-only export. Less precise than
-        // the lexer path — see the regex-fallback detector called just below.
-        valueExportedNames = new Set(
-            definitions
-                .map((definition) => definition.className)
-                .filter(
-                    (className) =>
-                        new RegExp(String.raw`\bexport\b[^\n;]*\b${escapeRegExp(className)}\b`, "u").test(code) &&
-                        !isTypeOnlyExportRegexFallback(code, className),
-                ),
-        );
-    }
-
-    return definitions.map((definition) => {
-        const exported = starReexport || valueExportedNames.has(definition.className);
-
-        return { ...definition, exported };
-    });
-};
-
-/**
- * The schema-derived signal: a `.global()` table needs the `DB` D1 binding.
- * Delegates to the shared `discoverSchemaInfo` so inference and the wrangler
- * validator read the exact same fact. A missing or unparseable schema yields
- * `false` — codegen surfaces the actionable error elsewhere.
- */
-const schemaNeedsD1 = (projectRoot: string, schemaDirectory: string): boolean => discoverSchemaInfo(projectRoot, schemaDirectory).info?.hasGlobalTable ?? false;
-
-/** Union the capabilities imported across every scanned source file. */
-const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>): Capabilities => {
-    let merged = NO_CAPABILITIES;
+const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>, lunoraDirectory: string): CapabilityScan => {
+    const lunoraRoot = join(projectRoot, lunoraDirectory);
+    const project = scanProjectOf(projectRoot);
+    const candidates: { file: string; inLunora: boolean }[] = [];
+    const scannedFiles = new Set<string>();
+    const lunoraFiles: SourceCapabilitySignals[] = [];
+    const otherFiles: SourceCapabilitySignals[] = [];
+    // One scope for the whole scan: a target a barrel reaches from several files is parsed once.
+    const targets = createTargetScope();
+    let usesEnvAi = false;
+    let usesEnvDatabase = false;
 
     for (const relativeDirectory of scanDirectories) {
         const absolute = join(projectRoot, relativeDirectory);
@@ -778,34 +536,68 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
         collectSourceFiles(absolute, files);
 
         for (const file of files) {
-            merged = mergeCapabilities(merged, capabilitiesFromSource(readFileSync(file, "utf8")));
+            scannedFiles.add(file);
+
+            const code = readFileSync(file, "utf8");
+            const inLunora = isWithinDirectory(file, lunoraRoot);
+
+            usesEnvAi ||= ENV_AI_PATTERN.test(code);
+            usesEnvDatabase ||= ENV_DB_PATTERN.test(code);
+
+            // A `lunora/` file that imports a relative module can reach a capability through that module (a barrel that
+            // re-exports the agent package's tool), so it is parsed even without a package name or context read there.
+            // A file that names the client may import it from a barrel that is not a candidate, so it is parsed for that import too.
+            if (
+                CAPABILITY_PACKAGE_PATTERN.test(code) ||
+                code.includes(EVENT_LOG_CLIENT) ||
+                (inLunora && (mayReadCapabilityContext(code) || RELATIVE_IMPORT_PATTERN.test(code)))
+            ) {
+                // Registered now, while the program is not built, so the text is not kept for the signal pass. A file
+                // whose text is unchanged since the last scan keeps its parse — and with it codegen's per-file caches.
+                parseIfChanged(project, file, code);
+
+                candidates.push({ file, inLunora });
+            }
         }
     }
 
-    return merged;
-};
+    // Forget what the last scan parsed and this one did not (a deleted file, or one no longer worth parsing), before any
+    // signal is read, so the project holds exactly this scan's file set.
+    // By identity, not by path string: ts-morph stores a standardized absolute path, which a relative root or a
+    // Windows spelling of `file` would never equal.
+    forgetUnscanned(project, new Set(candidates.map(({ file }) => project.getSourceFileOrThrow(file))));
 
-/**
- * Scan ONLY the `lunora/` tree (never `src/`) for a value `browserTool`
- * import — mirrors `discover/sandbox.ts`'s `listLunoraSourceFiles` file set
- * exactly. Kept as a separate pass from {@link scanCapabilities} (which also
- * walks `src/`) so config never auto-writes a `BROWSER` binding codegen will
- * never wire — a `src/`-only `browserTool` import never registers the
- * `sandbox:invoke` dispatcher, since `discoverSandboxUsage` only reads
- * `lunora/`.
- */
-const scanSandboxBrowserToolUsage = (projectRoot: string, lunoraDirectory: string): boolean => {
-    const absolute = join(projectRoot, lunoraDirectory);
-
-    if (!existsSync(absolute) || !statSync(absolute).isDirectory()) {
-        return false;
+    // Each file's signals come from `@lunora/codegen`'s own per-file probe over a parsed AST, so a type-only import, or a
+    // `ctx.kv` inside a comment or a string, implies nothing here, exactly as it implies nothing to codegen. Every candidate
+    // is in the project before any is read: removing a file after its own read made the next relative import re-resolve
+    // against a rebuilt program, which took minutes on a backend with a few hundred files.
+    for (const { file, inLunora } of candidates) {
+        (inLunora ? lunoraFiles : otherFiles).push(sourceCapabilitySignals(project.getSourceFileOrThrow(file), targets));
     }
 
-    const files: string[] = [];
+    const lunora = foldCapabilitySignals(lunoraFiles);
+    const everywhere = foldCapabilitySignals([lunora, ...otherFiles]);
+    // Config counts a dynamic `import()` like a static one (see FLAG_PACKAGES).
+    const imports = new Set([...everywhere.valueImports, ...everywhere.dynamicImports]);
+    const used = capabilitiesUsedBy({ contextReads: lunora.contextReads, valueImports: imports });
+    // The one widening `Object.fromEntries` forces: its keys are exactly the `CapabilityFlag`s.
+    const flags = Object.fromEntries([
+        ...CODEGEN_CAPABILITIES.map((key) => [flagOf(key), used.has(key)] as const),
+        ...CONFIG_ONLY_SOURCES.map(([flag, source]) => [flag, imports.has(source)] as const),
+    ]) as Record<CapabilityFlag, boolean>;
 
-    collectSourceFiles(absolute, files);
-
-    return files.some((file) => hasSandboxBrowserToolImport(readFileSync(file, "utf8")));
+    return {
+        ...flags,
+        needsD1: usesEnvDatabase,
+        usesEventLogClient: candidates.some(({ file }) => constructsEventLogClient(project.getSourceFileOrThrow(file))),
+        usesRequestSecretTool: lunora.requestSecretTool,
+        usesAi: used.has("ai") || usesEnvAi,
+        // A sandbox `browserTool` provisions BROWSER even without a direct
+        // `@lunora/browser` import: the browser op runs on the dispatcher's ctx.
+        usesBrowser: used.has("browser") || lunora.sandboxTools.usesSandboxBrowser,
+        usesWorkerLoader: lunora.sandboxTools.usesSandboxLoader,
+        scannedFiles,
+    };
 };
 
 /** Provenance lines for declared DO containers / workflows / agents. */
@@ -821,58 +613,76 @@ const describeDeclaredExports = (
     ),
     ...workflows.map((workflow) =>
         workflow.exported
-            ? `${workflow.bindingName}/${workflow.className} (workflow "${workflow.exportName}" declared and exported)`
+            ? `exports.${workflow.className} (workflow "${workflow.exportName}" declared and exported)`
             : `hint: workflow "${workflow.exportName}" is declared but ${workflow.className} is not exported by the worker entry — add \`export * from "./lunora/_generated/workflows"\``,
     ),
     ...agents.map((agent) =>
         agent.exported
-            ? `${agent.bindingName}/${agent.className} (agent "${agent.exportName}" declared and exported)`
+            ? `exports.${agent.className} (agent "${agent.exportName}" declared and exported)`
             : `hint: agent "${agent.exportName}" is declared but ${agent.className} is not exported by the worker entry — add \`export * from "./lunora/_generated/agents"\``,
     ),
 ];
 
 /**
  * Provenance lines implied by capability imports. Each entry is a predicate on
- * the scanned capabilities plus the signal it contributes when true.
+ * the scanned capabilities plus the signal it contributes when true; `schema`
+ * supplies the facts a hint needs to name where to create a resource.
  */
-const describeCapabilitySignals = (capabilities: Capabilities, exported: ReadonlySet<string>): string[] => {
+const describeCapabilitySignals = (capabilities: Capabilities, exported: ReadonlySet<string>, schema: SchemaFacts): string[] => {
     const rules: ReadonlyArray<[boolean, string]> = [
-        [capabilities.usesAi, "AI (@lunora/ai imported or env.AI used)"],
+        [capabilities.usesAi, `AI (${usageOf("ai")}, or env.AI is used)`],
         [
             capabilities.usesAuth && !exported.has("SessionDO"),
             "hint: @lunora/auth is imported; its tables are D1-backed by default. For DO-backed auth (what @better-auth/scim needs), pass `namespace` to .auth() and export the generated auth DO class",
         ],
-        [capabilities.usesScheduler && !exported.has("SchedulerDO"), "hint: @lunora/scheduler is imported but no SchedulerDO is exported by the worker entry"],
-        [capabilities.usesStorage, "hint: @lunora/storage is imported; add an r2_buckets binding (bucket binding names are user-defined)"],
-        [capabilities.usesMail, "hint: @lunora/mail is imported; set RESEND_API_KEY in .dev.vars (obtain at https://resend.com/api-keys)"],
-        [capabilities.usesPayment, `hint: @lunora/payment is imported; set the provider secrets in .dev.vars — ${PAYMENT_PROVIDER_SECRETS}`],
+        [capabilities.usesScheduler && !exported.has("SchedulerDO"), `hint: ${usageOf("scheduler")}, but no SchedulerDO is exported by the worker entry`],
+        [capabilities.usesStorage, `hint: ${usageOf("storage")}; add an r2_buckets binding (bucket binding names are user-defined)`],
+        [capabilities.usesMail, `hint: ${usageOf("mail")}; set RESEND_API_KEY in .dev.vars (obtain at https://resend.com/api-keys)`],
+        [capabilities.usesPayments, `hint: ${usageOf("payments")}; set the provider secrets in .dev.vars — ${PAYMENT_PROVIDER_SECRETS}`],
         // Self-describing bindings: the binding name is the whole config (no remote
         // id to mint), so reconcile auto-writes them like the DO/D1 bindings.
-        [capabilities.usesBrowser, "browser (@lunora/browser imported) — self-describing { binding: BROWSER }"],
-        [capabilities.usesImages, "images (@lunora/bindings/images imported) — self-describing { binding: IMAGES }"],
-        [capabilities.usesAnalytics, "analytics_engine_datasets (@lunora/bindings/analytics imported) — self-describing { binding: ANALYTICS, dataset }"],
-        // Hint bindings: each needs a remote resource Lunora can't fabricate (a KV
-        // namespace id, a Hyperdrive id, a Pipelines pipeline name), so they surface
-        // as hints — never an auto-write — exactly like R2's user-defined bucket name.
+        [capabilities.usesBrowser, `browser (${usageOf("browser")}, or a sandbox browserTool imported in lunora/) — self-describing { binding: BROWSER }`],
+        [capabilities.usesImages, `images (${usageOf("images")}) — self-describing { binding: IMAGES }`],
+        [capabilities.usesAnalytics, `analytics_engine_datasets (${usageOf("analytics")}) — self-describing { binding: ANALYTICS, dataset }`],
+        [capabilities.usesWorkerLoader, "worker_loaders (jsCodeTool imported in lunora/) — self-describing { binding: LOADER }"],
+        [
+            capabilities.usesAiSearch,
+            `ai_search_namespaces (${usageOf("aiSearch")}) — self-describing { binding: AI_SEARCH, namespace: "default" }; remote-only, so \`lunora dev\` reaches the deployed AI Search service`,
+        ],
+        [
+            capabilities.usesAnalyticsSql,
+            `analytics (${usageOf("analyticsSql")}) — self-describing { binding: ANALYTICS_SQL }; needs wrangler >= 4.145.0, and is remote-only, so \`lunora dev\` queries the account's live analytics`,
+        ],
+        // Hint bindings: each needs a remote resource Lunora can't fabricate (a
+        // Pipelines pipeline name), so they surface as hints — never an
+        // auto-write — exactly like R2's user-defined bucket name.
         [
             capabilities.usesKv,
-            "hint: @lunora/bindings/kv is imported; add a kv_namespaces binding ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned",
+            schema.jurisdiction === undefined
+                ? `kv_namespaces (${usageOf("kv")}) — { binding: KV } with no id; wrangler creates the namespace on the first deploy`
+                : `hint: ${usageOf("kv")} and the schema pins "${schema.jurisdiction}"; create the namespace with --jurisdiction ${schema.jurisdiction} and add a kv_namespaces binding ({ binding, id })`,
         ],
         [
             capabilities.usesHyperdrive,
-            "hint: @lunora/hyperdrive is imported; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned",
+            `hyperdrive (${usageOf("hyperdrive")}) — { binding: HYPERDRIVE } with a placeholder id; dev uses an embedded Postgres and \`lunora deploy\` creates the config`,
         ],
         [
             capabilities.usesPipelines,
-            "hint: ctx.pipelines is used; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned",
+            `hint: ${usageOf("pipelines")}; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, stream }) — the pipeline resource can't be auto-provisioned`,
+        ],
+        [
+            capabilities.usesArtifacts,
+            schema.jurisdiction === undefined
+                ? `artifacts (${usageOf("artifacts")}) — { binding: ARTIFACTS, namespace }`
+                : `hint: ${usageOf("artifacts")}; the schema pins data to "${schema.jurisdiction}", so create the namespace in that jurisdiction first and add { binding: ARTIFACTS, namespace } yourself — \`lunora deploy\` then checks it (a first create() in dev would make it unrestricted)`,
         ],
         [
             capabilities.usesX402Charge,
             "hint: @lunora/x402/charge is imported; set the recipient wallet address as a [vars] entry (the var name is yours to choose) and pass it to the charge config — the x402 facilitator settles USDC to that address",
         ],
         [
-            capabilities.usesX402Pay,
-            "hint: @lunora/x402/pay is imported (ActionCtx-only, spends real funds); add a secrets_store_secrets[] binding for the agent wallet key (name it to match signer.secretName) and pair the pay rail with a spend policy — ctx.secrets reads a Secrets Store binding, not .dev.vars, so the key can't be auto-provisioned",
+            capabilities.usesX402,
+            `hint: ${usageOf("x402")} (ActionCtx-only, spends real funds); add a secrets_store_secrets[] binding for the agent wallet key (name it to match signer.secretName) and pair the pay rail with a spend policy — ctx.secrets reads a Secrets Store binding, not .dev.vars, so the key can't be auto-provisioned`,
         ],
     ];
 
@@ -882,7 +692,7 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
 /** Build the human-readable provenance list. */
 const describeSignals = (
     durableObjects: DurableObjectSpec[],
-    needsD1: boolean,
+    schema: SchemaFacts,
     capabilities: Capabilities,
     containers: ReadonlyArray<InferredContainer> = [],
     workflows: ReadonlyArray<InferredWorkflow> = [],
@@ -891,14 +701,72 @@ const describeSignals = (
     const exported = new Set(durableObjects.map((object) => object.className));
     const signals = durableObjects.map((object) => `${object.binding}/${object.className} (exported by worker entry)`);
 
-    if (needsD1) {
+    if (schema.needsD1) {
         signals.push("DB (.global() table declared)");
     }
 
-    signals.push(...describeDeclaredExports(containers, workflows, agents), ...describeCapabilitySignals(capabilities, exported));
+    signals.push(...describeDeclaredExports(containers, workflows, agents), ...describeCapabilitySignals(capabilities, exported, schema));
 
     return signals;
 };
+
+/**
+ * Whether the app hosts `ShardRegistryDO`: it exports or binds the class, or a merged app carries the
+ * registry in `LunoraDO`. codegen writes `shardRegistry.ts` for every `.shardBy()` schema, so the file's
+ * presence alone does not host the registry.
+ */
+const hostsShardRegistry = (durableObjects: ReadonlyArray<DurableObjectSpec>, generatedDirectory: string): boolean =>
+    durableObjects.some((object) => object.binding === "SHARD_REGISTRY") ||
+    (isMergedProject(generatedDirectory) && existsSync(join(generatedDirectory, "shardRegistry.ts")));
+
+/**
+ * Whether the worker entry constructs `EventLogDOClient`, in its own file or in a module it reaches through local imports. The entry can
+ * sit outside the scanned directories (a root-level `worker.ts`), and so can the modules it imports, while construction needs the secret
+ * wherever it is. A module `scanCapabilities` already read is a leaf: its constructions were counted there, and it is not parsed twice.
+ * Generated modules are leaves too, since codegen never emits a client construction. Imports are read from the TypeScript parse of each
+ * module, and a file only reaches the ts-morph parse when its text names the client or a capability package.
+ */
+const entryConstructsEventLogClient = (entryPath: string, scannedFiles: ReadonlySet<string>, generatedRoot: string): boolean => {
+    const project = new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true });
+    const pending = [entryPath];
+    const visited = new Set<string>();
+
+    for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+        if (visited.has(file)) {
+            continue;
+        }
+
+        visited.add(file);
+
+        const source = parseModule(file);
+        const code = source.text;
+
+        if (
+            (CAPABILITY_PACKAGE_PATTERN.test(code) || code.includes(EVENT_LOG_CLIENT)) &&
+            constructsEventLogClient(project.createSourceFile(file, code, { overwrite: true }))
+        ) {
+            return true;
+        }
+
+        for (const specifier of runtimeSpecifiersOf(source)) {
+            const target = resolveBarrel(file, specifier);
+
+            if (target !== undefined && !scannedFiles.has(target) && !isWithinDirectory(target, generatedRoot)) {
+                pending.push(target);
+            }
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Whether the worker entry hosts `EventLogDO`. A composed entry star-re-exports only the generated
+ * modules, so it never hosts the log by itself. A hand-written entry can reach the class through a
+ * barrel, so star re-exports are followed rather than reading only the entry's own export list.
+ */
+const hostsEventLog = (entry: ReturnType<typeof resolveWorkerEntry>): boolean =>
+    !entry.composed && entry.path !== undefined && forwardsReplicaExport(entry.path, "EventLogDO", undefined, new Set());
 
 /**
  * Scan a Lunora project and report which Cloudflare bindings its code implies.
@@ -912,34 +780,35 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const schemaDirectory = options.schemaDir ?? "lunora";
     const scanDirectories = options.scanDirs ?? DEFAULT_SCAN_DIRECTORIES;
 
-    const scannedCapabilities = scanCapabilities(options.projectRoot, scanDirectories);
-    // A sandbox `browserTool` import provisions BROWSER even without a direct
-    // `@lunora/browser` import (the browser op runs on the dispatcher's ctx) —
-    // but ONLY when the import lives in `lunora/`, the exact file set
-    // `discover/sandbox.ts` scans; a `src/`-only import never registers the
-    // sandbox dispatcher, so it must not provision the binding either. Folded
-    // into `capabilities` here (not `scanCapabilities`) so both the returned
-    // `usesBrowser` flag AND the provenance signal line agree.
-    const capabilities: Capabilities = {
-        ...scannedCapabilities,
-        usesBrowser: scannedCapabilities.usesBrowser || scanSandboxBrowserToolUsage(options.projectRoot, schemaDirectory),
-    };
+    const scan = (): CapabilityScan => scanCapabilities(options.projectRoot, scanDirectories, schemaDirectory);
+    const { scannedFiles, ...capabilities } =
+        options.cache === undefined ? scan() : options.cache.memo(`capabilities:${options.projectRoot}:${schemaDirectory}:${scanDirectories.join(",")}`, scan);
     const entry = resolveWorkerEntry(options.projectRoot);
     let durableObjects: DurableObjectSpec[];
 
     if (entry.composed) {
-        durableObjects = COMPOSED_ENTRY_DURABLE_OBJECTS.map((className) => {
+        // Plus `SchedulerDO` / `ShardRegistryDO` when codegen wrote the module
+        // that forwards it: the composed entry star-re-exports it, so the class
+        // IS exported and the binding is provisionable. Reading only the base list above left
+        // `reconcile-bindings` telling a correctly-wired class-A app to
+        // "export it so the SCHEDULER binding can be provisioned" — advice that is
+        // both wrong and impossible to follow, on every `lunora dev`.
+        // A merging app exports `LunoraDO` instead.
+        const composedClasses = composedEntryDurableObjects(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY));
+
+        durableObjects = composedClasses.map((className) => {
             return { binding: DURABLE_OBJECT_BINDINGS[className], className };
         });
     } else {
         durableObjects = entry.path === undefined ? [] : detectExportedDurableObjects(entry.path);
     }
 
-    const needsD1 = capabilities.needsD1 || schemaNeedsD1(options.projectRoot, schemaDirectory);
-    const containers = detectClassExports(entry, discoverContainerInfo(options.projectRoot, schemaDirectory).containers, "containers");
+    const discoveredSchema = schemaFacts(options.projectRoot, schemaDirectory, options.cache);
+    const schema: SchemaFacts = { ...discoveredSchema, needsD1: capabilities.needsD1 || discoveredSchema.needsD1 };
+    const containers = detectClassExports(entry, discoverContainerInfo(options.projectRoot, schemaDirectory, options.cache).containers, "containers");
     const workflows = detectClassExports(entry, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows, "workflows");
     // Agents compile onto Cloudflare Workflows, so — like workflows — only an
-    // exported agent WorkflowEntrypoint class is safe to reconcile into `workflows[]`.
+    // exported agent WorkflowEntrypoint class is safe to reconcile into `exports`.
     const agents = detectClassExports(entry, discoverAgentInfo(options.projectRoot, schemaDirectory).agents, "agents");
     // Queues need no worker-entry export (their `queue()` handler rides
     // `createWorker`), so the discovered list is reconcilable as-is.
@@ -948,18 +817,30 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     // Only a Flagship binding-mode provider implies a wrangler `flagship` binding
     // (its `app_id` is un-mintable → reconciled as a hint, never auto-written).
     const { flags } = discoverFlagsInfo(options.projectRoot, schemaDirectory);
+    const notifyIr = discoverIr(options.projectRoot, schemaDirectory, NOTIFY_FILENAME, discoverNotifyChannels);
+    // An unreadable `lunora/notify.ts` still declares notify: report both channels so
+    // their secrets are scaffolded and preflighted rather than silently dropped.
+    const notifyChannels = notifyIr.error === undefined ? notifyIr.value : { hasFcm: true, hasWebPush: true };
     const flagshipBinding = flags?.provider === "flagship" && flags.mode === "binding" ? flags.bindingName : undefined;
 
-    // The import-driven `uses*` flags are projected straight off the scanned
-    // capabilities (keyed by CAPABILITY_SOURCES); `needsD1` is overridden with
-    // the schema-augmented value computed above rather than the raw import flag.
-    const capabilityFlags = {} as Pick<InferredBindings, CapabilityFlag>;
+    const generatedRoot = join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY);
+    const hostsRegistry = hostsShardRegistry(durableObjects, generatedRoot);
+    const hostsLog = hostsEventLog(entry);
+    const entryUsesClient = !entry.composed && entry.path !== undefined && entryConstructsEventLogClient(entry.path, scannedFiles, generatedRoot);
 
-    for (const flag of CAPABILITY_FLAGS) {
-        capabilityFlags[flag] = capabilities[flag];
+    const signals = describeSignals(durableObjects, schema, capabilities, containers, workflows, agents);
+
+    // A hand-written entry opts in by exporting `LunoraDO` itself; with the merge
+    // module written and no such export, `durableObjects.merge` changed nothing.
+    if (
+        !entry.composed &&
+        isMergedProject(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY)) &&
+        !durableObjects.some((object) => object.className === "LunoraDO")
+    ) {
+        signals.push(
+            "hint: durableObjects.merge is set, but the worker entry exports no LunoraDO — export one built with mergeDurableObjects, or the classes stay separate",
+        );
     }
-
-    const signals = describeSignals(durableObjects, needsD1, capabilities, containers, workflows, agents);
 
     if (flagshipBinding !== undefined) {
         signals.push(
@@ -967,68 +848,54 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         );
     }
 
+    // Codegen throws, naming the entry, on a declaration it cannot wire; that
+    // error surfaces there, so inference only reconciles what resolves.
+    const resolved = readServiceBindings(options.projectRoot);
+    const services = resolved.error === undefined ? resolved.services : undefined;
+
+    if (resolved.error !== undefined) {
+        signals.push(`hint: lunora.config \`services\` not reconciled — ${resolved.error}`);
+    }
+
+    signals.push(...resolved.services.map((service) => `${service.binding} → ${service.worker} (lunora.config services.${service.name})`));
+
     return {
+        // The scanned flags first: `needsD1` below replaces the raw `env.DB` flag
+        // with the schema-augmented value computed above.
+        ...capabilities,
+        usesEventLogClient: capabilities.usesEventLogClient || entryUsesClient,
         agents,
         containers,
         durableObjects,
         flagshipBinding,
-        needsD1,
+        ...(schema.jurisdiction === undefined ? {} : { jurisdiction: schema.jurisdiction }),
+        needsD1: schema.needsD1,
         queues,
+        services,
         signals,
         usesFlags: flags !== undefined,
+        usesNotifyFcm: notifyChannels?.hasFcm ?? false,
+        usesNotifyWebPush: notifyChannels?.hasWebPush ?? false,
+        hostsEventLog: hostsLog,
+        hostsShardRegistry: hostsRegistry,
         workflows,
-        ...capabilityFlags,
     };
 };
 
 /**
- * Derive the list of `@lunora/*` package names that are actively used by a
- * project, based on its already-resolved {@link InferredBindings}.
+ * The secret sources a project uses — the {@link PACKAGE_SECRETS_REGISTRY} keys
+ * whose secrets it needs, derived from its already-resolved {@link InferredBindings}.
  *
- * This is the canonical bridge between binding inference and the package-aware
+ * This is the canonical bridge between binding inference and the
  * `.dev.vars.example` scaffolding in `scaffold-dev-variables.ts`. The result is
- * a stable, predictable slice of {@link CAPABILITY_SOURCES} source values,
- * filtered to the flags that are `true` in `bindings` — in CAPABILITY_SOURCES
- * declaration order.
+ * {@link FLAG_PACKAGES}' sources whose flag is `true` in `bindings` — in
+ * flag-name order — followed by the configured `@lunora/notify` channels
+ * ({@link SECRET_SOURCE_FLAGS}), keeping only sources that carry secrets.
  */
-const packageNamesFromBindings = (bindings: InferredBindings): string[] => {
-    const names: string[] = [];
+const secretSourcesFromBindings = (bindings: InferredBindings): string[] =>
+    [...FLAG_PACKAGES, ...SECRET_SOURCE_FLAGS]
+        .filter(([flag, source]) => bindings[flag] && PACKAGE_SECRETS_REGISTRY[source] !== undefined)
+        .map(([, source]) => source);
 
-    for (const flag of CAPABILITY_FLAGS) {
-        if (bindings[flag]) {
-            names.push(CAPABILITY_SOURCES[flag].source);
-        }
-    }
-
-    return names;
-};
-
-export type {
-    DurableObjectClass,
-    DurableObjectSpec,
-    InferOptions,
-    InferredAgent,
-    InferredBindings,
-    InferredContainer,
-    InferredQueue,
-    InferredWorkflow,
-    WorkerEntry,
-};
-// `COMPOSED_WORKER_ENTRY`, `WORKER_ENTRY_FALLBACKS` and `LUNORA_WORKER_VIRTUAL_ID`
-// are shared with the wrangler validator's exported-class check, which answers
-// the same question ("which classes does the entry export as runtime values?")
-// against the same file. The validator keeps its own path resolver because it
-// resolves `main` from the `--env` view relative to the config file, which this
-// one (deliberately projectRoot-relative, and reading the top level) does not.
-//
-// It also keeps its own READER: this side lexes with `es-module-lexer` (it is
-// already lexing the same file's IMPORTS for capability inference), the
-// validator parses with ts-morph. That is a real duplication and the two can
-// disagree — this one PROVISIONS a binding, the other now BLOCKS a deploy on
-// one — so they are worth collapsing onto the ts-morph reader. Not done here:
-// this side feeds `reconcile`, and changing what it provisions is a separate
-// change from fixing what the validator reports.
-// `resolveWorkerEntry` returns a {@link WorkerEntry}, not a path: the class-A
-// composed entry (`main: "virtual:lunora/worker"`) has no file, and reading that
-// as "no worker entry" is what left every container/workflow/agent unprovisioned.
-export { COMPOSED_WORKER_ENTRY, inferLunoraBindings, LUNORA_WORKER_VIRTUAL_ID, packageNamesFromBindings, resolveWorkerEntry, WORKER_ENTRY_FALLBACKS };
+export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow };
+export { inferLunoraBindings, secretSourcesFromBindings };

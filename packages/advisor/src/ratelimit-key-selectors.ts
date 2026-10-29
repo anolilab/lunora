@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One `rateLimit`/`dbRateLimit` middleware call (`@lunora/ratelimit`) whose
  * `key` selector is derived from the handler's `args` with no server-side
@@ -5,8 +7,9 @@
  */
 export interface AdvisorRatelimitKeySelector {
     callee: string;
-    exportName: string;
     file: string;
     limitName: string;
     line: number;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
 }

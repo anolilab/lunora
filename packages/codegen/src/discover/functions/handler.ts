@@ -9,6 +9,8 @@
 import type { ArrowFunction, CallExpression, FunctionExpression, Node as TsNode } from "ts-morph";
 import { Node } from "ts-morph";
 
+import { findObjectProperty } from "../ast";
+
 /** A function whose body we can inspect — an inline arrow or function expression handler. */
 type InspectableHandler = ArrowFunction | FunctionExpression;
 
@@ -36,7 +38,7 @@ const procedureHandler = (initializer: CallExpression): InspectableHandler | und
         return undefined;
     }
 
-    const property = argument.getProperty("handler");
+    const property = findObjectProperty(argument, "handler");
 
     return property !== undefined && Node.isPropertyAssignment(property) ? inlineHandler(property.getInitializer()) : undefined;
 };

@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import { resolveDocumentPath } from "../../../../shared/document-path";
 import { concurrentMap, UPSERT_EMBED_CONCURRENCY } from "./concurrent";
 import type { LunoraVectors, VectorizeVector } from "./types";
@@ -62,15 +64,42 @@ interface VectorUpsertInputLike {
  * wherever a function taking fewer parameters is expected.
  */
 interface VectorSearchLike {
-    deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<void>;
+    /** Set when `deleteByIds` honours its `operation` and `afterDelete` arguments. */
+    deferredDelete?: boolean;
+    deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string, operation?: object, afterDelete?: () => Promise<void>) => Promise<void>;
     getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<VectorRecordLike>>;
     query: (indexName: string, input: VectorQueryInputLike) => Promise<VectorMatchesLike>;
-    upsert: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
+    upsert: (indexName: string, input: VectorUpsertInputLike, operation?: object) => Promise<void>;
+
+    /**
+     * Batch form of `upsert` (at most 1000 inputs, one remote call). Optional so
+     * existing implementors keep compiling; `@lunora/ai`'s RAG indexer uses it
+     * when present. The optional `operation` token on `upsert`/`upsertMany`
+     * groups deferred writes: once one fails, later deferred writes carrying the
+     * same token are skipped; `deleteByIds` with a token is deferred and
+     * guarded the same way, and its optional `afterDelete` hook runs right after
+     * the delete (inline order when there is no token) inside that same closure.
+     */
+    upsertMany?: (indexName: string, inputs: ReadonlyArray<VectorUpsertInputLike>, operation?: object) => Promise<void>;
     upsertNow: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
 }
 
 /** Options for {@link createContextVectors}. */
 interface CreateContextVectorsOptions {
+    /**
+     * Hold `upsert`'s remote write until the caller's storage transaction has
+     * COMMITTED, running it at once when none is open. The shard host supplies
+     * `ShardDO.deferAfterCommit`; codegen wires it.
+     *
+     * This is what separates `upsert` from `upsertNow`. Vectorize is outside the
+     * shard's SQLite and cannot roll back, so an inline `ctx.vectors.upsert` in a
+     * mutation that later throws leaves a vector pointing at a row that does not
+     * exist — and a search surfaces it. Omitted, both methods write inline, which
+     * is correct for a caller that has no transaction to wait for (an action, a
+     * test, the `@lunora/ai` RAG helpers).
+     */
+    deferAfterCommit?: (work: () => Promise<void>) => Promise<void>;
+
     /**
      * The DO's own shard/tenant key, applied as the default `namespace` for
      * an operation against an index in `shardedIndexNames` that doesn't pass
@@ -112,9 +141,16 @@ interface CreateContextVectorsOptions {
 
 /**
  * Bridge `LunoraVectors` (returns Vectorize mutation receipts) to the server's
- * `VectorSearch` contract (void mutations, server match/record shapes). Both
- * `upsert` and `upsertNow` write inline — this design has no post-commit queue,
- * so "now" and "deferred" collapse to the same synchronous call.
+ * `VectorSearch` contract (void mutations, server match/record shapes).
+ *
+ * `upsert` vs `upsertNow` — IMPORTANT: with `options.deferAfterCommit` supplied
+ * (codegen wires the shard host's), `upsert` holds the remote write until the
+ * caller's transaction has committed and `upsertNow` writes inline, which is
+ * what `MutationCtx`'s contract documents. Without it both write inline: a
+ * caller with no transaction open has nothing to wait for. The NAMESPACE is
+ * resolved eagerly either way — before the deferral, not inside it — so a
+ * misconfiguration (the root-instance throw below) still reaches the handler
+ * that made the call instead of a post-commit log line nobody is holding.
  *
  * Tenant isolation (read side) — IMPORTANT: an explicit `namespace` argument
  * on any call (`input.namespace` for `query`/`upsert`/`upsertNow`, the
@@ -177,14 +213,73 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
         );
     };
 
-    const upsert = async (indexName: string, input: VectorUpsertInputLike): Promise<void> => {
+    const deferAfterCommit = options?.deferAfterCommit;
+
+    // Deferred writes run after the handler has returned, so a failure cannot
+    // reach the code that queued it. A caller that passes an `operation` token
+    // (an opaque object, one per logical operation such as a RAG `index()`
+    // call) gets its later deferred writes skipped once one of them fails: a
+    // RAG index queues its chunk #0 (the bookkeeping that marks a document
+    // complete) last, and writing it after a failed batch would make a partial
+    // index look finished. A skipped write rethrows the original error so the
+    // queue logs it. Writes without a token, or with another token, are
+    // independent and run as before.
+    const failedOperations = new WeakMap<object, { error: unknown }>();
+    const guardDeferred = (work: () => Promise<void>, operation?: object) => async (): Promise<void> => {
+        const failure = operation === undefined ? undefined : failedOperations.get(operation);
+
+        if (failure !== undefined) {
+            throw failure.error;
+        }
+
+        try {
+            await work();
+        } catch (error) {
+            if (operation !== undefined) {
+                failedOperations.set(operation, { error });
+            }
+
+            throw error;
+        }
+    };
+
+    const write = async (indexName: string, input: VectorUpsertInputLike, namespace: string | undefined): Promise<void> => {
         await lunora.upsert(indexName, {
             embed: input.embed,
             id: input.id,
             input: input.input,
             metadata: input.metadata,
-            namespace: resolveNamespace(indexName, input.namespace),
+            namespace,
         });
+    };
+
+    const upsertNow = async (indexName: string, input: VectorUpsertInputLike): Promise<void> => {
+        await write(indexName, input, resolveNamespace(indexName, input.namespace));
+    };
+
+    const upsert =
+        deferAfterCommit === undefined
+            ? upsertNow
+            : async (indexName: string, input: VectorUpsertInputLike, operation?: object): Promise<void> => {
+                  // Resolved HERE, not in the deferred closure: `resolveNamespace`
+                  // throws for a sharded index reached from the root instance, and
+                  // that error belongs to the handler that made the call — thrown
+                  // after the commit it is only a log line.
+                  const namespace = resolveNamespace(indexName, input.namespace);
+
+                  await deferAfterCommit(guardDeferred(async () => write(indexName, input, namespace), operation));
+              };
+
+    const upsertMany = async (indexName: string, inputs: ReadonlyArray<VectorUpsertInputLike>, operation?: object): Promise<void> => {
+        // Resolved up front, like `upsert`: a root-instance error must reach the caller.
+        const resolved = inputs.map((input) => {
+            return { embed: input.embed, id: input.id, input: input.input, metadata: input.metadata, namespace: resolveNamespace(indexName, input.namespace) };
+        });
+        const send = async (): Promise<void> => {
+            await lunora.upsertMany(indexName, resolved);
+        };
+
+        await (deferAfterCommit === undefined ? send() : deferAfterCommit(guardDeferred(send, operation)));
     };
 
     // Shared by `getByIds` and `deleteByIds`: fetch the raw records and, when
@@ -208,32 +303,45 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
     };
 
     return {
-        deleteByIds: async (indexName: string, ids: ReadonlyArray<string>, namespace?: string): Promise<void> => {
+        deferredDelete: true,
+        deleteByIds: async (
+            indexName: string,
+            ids: ReadonlyArray<string>,
+            namespace?: string,
+            operation?: object,
+            afterDelete?: () => Promise<void>,
+        ): Promise<void> => {
             const resolved = resolveNamespace(indexName, namespace);
+            const remove = async (): Promise<void> => {
+                const matching = resolved === undefined ? undefined : await getMatchingRecords(indexName, ids, resolved);
 
-            if (resolved === undefined) {
-                await lunora.deleteByIds(indexName, ids);
+                if (matching === undefined) {
+                    await lunora.deleteByIds(indexName, ids);
+                } else if (matching.length > 0) {
+                    await lunora.deleteByIds(
+                        indexName,
+                        matching.map((record) => record.id),
+                    );
+                }
 
-                return;
-            }
+                // Runs inside the same guarded closure, so it is skipped with the delete.
+                await afterDelete?.();
+            };
 
-            const matching = await getMatchingRecords(indexName, ids, resolved);
-
-            if (matching.length === 0) {
-                return;
-            }
-
-            await lunora.deleteByIds(
-                indexName,
-                matching.map((record) => record.id),
-            );
+            // With an `operation` token the delete joins that operation's deferred
+            // writes (after the ones queued so far, skipped if one failed);
+            // without one it runs inline, as before.
+            await (operation !== undefined && deferAfterCommit !== undefined ? deferAfterCommit(guardDeferred(remove, operation)) : remove());
         },
         getByIds: async (indexName: string, ids: ReadonlyArray<string>, namespace?: string): Promise<ReadonlyArray<VectorRecordLike>> => {
             const resolved = resolveNamespace(indexName, namespace);
             const records = await getMatchingRecords(indexName, ids, resolved);
 
             return records.map((record) => {
-                return { id: record.id, metadata: record.metadata, namespace: record.namespace, values: record.values };
+                // `Array.from`: the binding's own `values` may be a typed array
+                // (`VectorValues`), and `VectorRecordLike` — the ctx-facing shape — is
+                // a plain number array.
+                return { id: record.id, metadata: record.metadata, namespace: record.namespace, values: [...record.values] };
             });
         },
         query: async (indexName: string, input: VectorQueryInputLike): Promise<VectorMatchesLike> => {
@@ -259,7 +367,8 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
             };
         },
         upsert,
-        upsertNow: upsert,
+        upsertMany,
+        upsertNow,
     };
 };
 
@@ -275,20 +384,30 @@ type WriteHook = (event: WriteEvent) => Promise<void>;
 
 /** Inline vector index declared via `.vectorize(field, ...)` (DSL Shape A). */
 interface TableVectorIndexLike {
+    dimensions?: number;
     embed: VectorEmbedderLike;
     field: string;
     metadata?: ReadonlyArray<string>;
+    metric?: string;
+    /** Declared identifier of what `embed` produces; part of the backfill fingerprint. */
+    model?: string;
     name: string;
 }
 
 interface TableDefinitionLike {
+    /** `.softDelete()` marker column. A row whose marker is set is hidden from `ctx.db`, so it must have no vector. */
+    softDeleteMode?: { field: string };
     vectorIndexes?: ReadonlyArray<TableVectorIndexLike>;
 }
 
 /** Standalone vector index declared via `defineVectorIndex(...)` (DSL Shape B). */
 interface VectorIndexDefinitionLike {
+    dimensions?: number;
     embed: VectorEmbedderLike;
     metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
+    metric?: string;
+    /** Declared identifier of what `embed` produces; part of the backfill fingerprint. */
+    model?: string;
     select: (row: Record<string, unknown>) => string;
     table: string;
 }
@@ -358,11 +477,122 @@ const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string
     return result;
 };
 
+/** One index's upsert for a row, with the source text already resolved. */
+interface PlannedUpsert {
+    embed: VectorEmbedderLike;
+    input: string;
+    metadata?: Record<string, unknown>;
+    name: string;
+}
+
+/** What a row write means for every index sourced from its table. */
+interface RowSyncPlan {
+    /** Index names the row's vector must be removed from. */
+    deletes: string[];
+    upserts: PlannedUpsert[];
+}
+
+/**
+ * Queue `upsert` — or, when its text is blank (empty or whitespace only), the
+ * purge of the row's vector from that index: there is nothing to embed.
+ */
+const place = (plan: RowSyncPlan, upsert: PlannedUpsert): void => {
+    if (upsert.input.trim() === "") {
+        plan.deletes.push(upsert.name);
+    } else {
+        plan.upserts.push(upsert);
+    }
+};
+
+/** A Shape A index's source text, or `undefined` when the field is nullish. */
+const inlineSource = (row: Record<string, unknown>, index: TableVectorIndexLike, table: string): string | undefined => {
+    const value = resolveDocumentPath(row, index.field);
+
+    if (value === undefined || value === null) {
+        return undefined;
+    }
+
+    if (typeof value !== "string") {
+        throw new TypeError(
+            `@lunora/bindings/vectors: inline index "${index.name}" expects a string source at "${index.field}" on table "${table}" (got ${typeof value}); use a standalone defineVectorIndex with a select() to derive text from non-string columns`,
+        );
+    }
+
+    return value;
+};
+
+/**
+ * Decide what one row write means for its vector indexes — shared by the live
+ * write hook and the backfill, so the two cannot disagree about which rows have
+ * a vector. `undefined` when no index is sourced from the table (or an update
+ * carries no document).
+ *
+ * Throws a `TypeError` for an inline index whose source is not a string: the
+ * embedder takes text, and a JSON column coerced through `String()` would embed
+ * "[object Object]" — an unsearchable vector with no error anywhere.
+ */
+const planRowSync = (schema: SchemaLike, event: WriteEvent): RowSyncPlan | undefined => {
+    const tableDefinition = schema.tables[event.table];
+    const inlineIndexes = tableDefinition?.vectorIndexes ?? [];
+    const standaloneIndexes = Object.entries(schema.vectorIndexes).filter(([, definition]) => definition.table === event.table);
+
+    if (inlineIndexes.length === 0 && standaloneIndexes.length === 0) {
+        return undefined;
+    }
+
+    // A soft-deleted row is hidden from `ctx.db`, so it must not be findable
+    // through its vector either — `query` would hand back its id and metadata.
+    // Soft delete itself arrives as `op: "delete"`, but the row stays writable:
+    // a later `patch`/`replace` arrives as `update` carrying the still-set
+    // marker, and upserting it would put the hidden row back into search. So
+    // decide from the ROW, not the op: any write that leaves the marker set is
+    // a delete, whichever order the writes come in. `restore()` clears the
+    // marker, which is what re-embeds it.
+    const softField = tableDefinition?.softDeleteMode?.field;
+    const hidden = softField !== undefined && event.doc?.[softField] !== undefined && event.doc[softField] !== null;
+
+    if (event.op === "delete" || hidden) {
+        return { deletes: [...inlineIndexes.map((index) => index.name), ...standaloneIndexes.map(([name]) => name)], upserts: [] };
+    }
+
+    const row = event.doc;
+
+    if (!row) {
+        return undefined;
+    }
+
+    const plan: RowSyncPlan = { deletes: [], upserts: [] };
+
+    // event.doc on update is the FULL merged row, so an inline (Shape A) index
+    // whose source field was just cleared (now nullish) must be PURGED —
+    // skipping the upsert would leave the stale vector searchable. Shape B has
+    // no per-field source to clear; its `select` defines the value.
+    //
+    // Blank text (empty or whitespace only) is a delete too, for both shapes:
+    // there is nothing to embed, and an embedder refuses it on every attempt —
+    // which, across a whole page of such rows, reads as the service being down.
+    for (const index of inlineIndexes) {
+        const input = inlineSource(row, index, event.table);
+
+        if (input === undefined) {
+            plan.deletes.push(index.name);
+        } else {
+            place(plan, { embed: index.embed, input, metadata: index.metadata ? pickMetadata(row, index.metadata) : undefined, name: index.name });
+        }
+    }
+
+    for (const [name, definition] of standaloneIndexes) {
+        place(plan, { embed: definition.embed, input: definition.select(row), metadata: definition.metadata?.(row), name });
+    }
+
+    return plan;
+};
+
 /**
  * Build a {@link WriteHook} that keeps Vectorize in sync with row writes. On
  * insert/update it embeds each matching index's source (Shape A `row[field]`,
  * Shape B `select(row)`) and upserts; on delete it removes the row's id from
- * every index sourced from the table. Runs inline within the write path.
+ * every index sourced from the table. {@link planRowSync} makes the decision.
  *
  * Tenant isolation — IMPORTANT: Vectorize indexes are account-global and shared
  * by every shard DO. Without a `namespace`, a multi-tenant sharded app has NO
@@ -383,8 +613,8 @@ const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string
  * AND the identical `shardedIndexNames` — so `ctx.vectors.query`/`getByIds`/
  * `deleteByIds` are scoped without any app code changes. One consequence of
  * sharing that instance: this hook's own internal `deleteByIds` calls (on row
- * delete, on a cleared inline field, and on compensation after a failed
- * upsert) now also go through the namespace-verifying path described on
+ * delete and on a cleared inline field) now also go through the
+ * namespace-verifying path described on
  * {@link createContextVectors} — an extra `getByIds` subrequest per
  * delete-shaped write, not a behavior change (the row being deleted was
  * written under this same shard's namespace, so the verification passes).
@@ -393,124 +623,366 @@ const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string
  * processes a write for a sharded index, this instance IS a real per-tenant
  * shard (not root) — `namespace` here is never `undefined` for that index.
  *
- * Consistency — IMPORTANT: this hook runs inline within the mutation but talks
- * to Vectorize, which is external and non-transactional. The per-index calls
- * fan out; if one fails after others have already applied, the SQLite write may
- * roll back while the applied Vectorize mutations cannot — leaving SQLite and
- * Vectorize diverged. We mitigate, not eliminate: upserts/deletes are
- * idempotent (keyed by row id), so a retry of the same write converges; and on
- * a fan-out failure we attempt a best-effort compensating delete of the row's
- * id from every affected index before re-throwing. A delete after a failed
- * upsert can itself fail — this is best-effort, the authoritative recovery is
- * re-running the (idempotent) write.
+ * Consistency — IMPORTANT: Vectorize is external and non-transactional, so this
+ * hook runs AFTER the mutation's transaction has committed, never inside it (the
+ * shard host holds it — `ShardDO.deferAfterCommit`). That ordering is what stops
+ * a rolled-back write from leaving a vector for a row that does not exist, and a
+ * rolled-back delete from leaving a live row with its vector already purged.
+ *
+ * Two commits to the same row do not race: the shard host drains one
+ * transaction's held work entirely before the next transaction's, so the hooks
+ * apply in COMMIT order even though each may take hundreds of milliseconds. Fan
+ * out within a single hook is still unordered — the indexes are independent.
+ *
+ * What remains is the opposite divergence, and it is the one worth having: the
+ * row is committed and this hook may still fail — fully, or partway through a
+ * fan-out that already applied to some indexes. The row is then indexed in some
+ * indexes and not others. Nothing is compensated, deliberately: the row SURVIVES
+ * a failure here, so purging the indexes that did apply would turn a partially
+ * indexed row into an unsearchable one. Upserts and deletes are idempotent
+ * (keyed by row id), so re-running the same write converges.
  */
 const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespace?: string; schema: SchemaLike; vectors: VectorSearchLike }): WriteHook => {
     const { allowSharedNamespace, namespace, schema, vectors } = options;
 
     return async (event: WriteEvent): Promise<void> => {
-        const tableDefinition = schema.tables[event.table];
-        const inlineIndexes = tableDefinition?.vectorIndexes ?? [];
-        const standaloneIndexes = Object.entries(schema.vectorIndexes).filter(([, definition]) => definition.table === event.table);
+        const plan = planRowSync(schema, event);
 
-        if (inlineIndexes.length === 0 && standaloneIndexes.length === 0) {
+        if (!plan) {
             return;
         }
 
-        // Every index sourced from this table, by name — used both to fan out
-        // deletes and to compensate after a partial upsert failure.
-        const allIndexNames = [...inlineIndexes.map((index) => index.name), ...standaloneIndexes.map(([name]) => name)];
-
-        if (event.op === "delete") {
-            // Each Vectorize index is independent: a delete on index A can't
-            // observe a delete on index B, so the per-index calls run in
-            // parallel rather than serially.
-            await Promise.all(allIndexNames.map((name) => vectors.deleteByIds(name, [event.id])));
-
-            return;
-        }
-
-        const row = event.doc;
-
-        if (!row) {
-            return;
-        }
-
-        // event.doc on update is the FULL merged row, so an inline (Shape A)
-        // index whose source field was just cleared (now nullish) must be
-        // PURGED — skipping the upsert would otherwise leave the stale vector
-        // searchable. Read each source field once, then split inline indexes
-        // into "has a value -> upsert" and "cleared -> delete". Shape B has no
-        // per-field source to clear; its `select` defines the value, so it
-        // always upserts.
-        const inlineWithValue = inlineIndexes.map((index) => {
-            return { index, value: resolveDocumentPath(row, index.field) };
-        });
-        const inlineToUpsert = inlineWithValue.filter((entry) => entry.value !== undefined && entry.value !== null);
-        const inlineToClear = inlineWithValue.filter((entry) => entry.value === undefined || entry.value === null);
-
-        // The embedder takes text. A non-string source (e.g. a JSON column
-        // holding an object/array) would otherwise be coerced via `String()`
-        // into "[object Object]"/comma-joined garbage, embedding meaningless
-        // text and silently producing an unsearchable vector. Surface it as a
-        // descriptive error instead of the silent footgun.
-        for (const { index, value } of inlineToUpsert) {
-            if (typeof value !== "string") {
-                throw new TypeError(
-                    `@lunora/bindings/vectors: inline index "${index.name}" expects a string source at "${index.field}" on table "${event.table}" (got ${typeof value}); use a standalone defineVectorIndex with a select() to derive text from non-string columns`,
-                );
-            }
-        }
-
-        // Same per-index independence on the write path — fan the upserts out
-        // (plus any clears) and run as a group. Embedders may make remote
-        // calls, so the serial loop was a hidden N× latency multiplier. Bound
-        // the fan-out with the same cap as `upsertMany`: a table with many
-        // vector indexes (or a bulk apply reusing this hook) must not spawn an
-        // unbounded number of concurrent embedder + Vectorize subrequests.
+        // Each index is independent, so the calls fan out — bounded, since an
+        // embedder is usually a remote call and a table may carry many indexes.
+        // A partial failure is left partial (see the docblock).
         const operations: (() => Promise<void>)[] = [
-            ...inlineToClear.map((entry) => async (): Promise<void> => {
-                await vectors.deleteByIds(entry.index.name, [event.id]);
+            ...plan.deletes.map((name) => async (): Promise<void> => {
+                await vectors.deleteByIds(name, [event.id]);
             }),
-            ...inlineToUpsert.map((entry) => async (): Promise<void> => {
+            ...plan.upserts.map((upsert) => async (): Promise<void> => {
                 if (!allowSharedNamespace && namespace === undefined) {
-                    warnSharedNamespace(entry.index.name);
+                    warnSharedNamespace(upsert.name);
                 }
 
-                await vectors.upsert(entry.index.name, {
-                    embed: entry.index.embed,
-                    id: event.id,
-                    input: entry.value as string,
-                    metadata: entry.index.metadata ? pickMetadata(row, entry.index.metadata) : undefined,
-                    namespace,
-                });
-            }),
-            ...standaloneIndexes.map(([name, definition]) => async (): Promise<void> => {
-                if (!allowSharedNamespace && namespace === undefined) {
-                    warnSharedNamespace(name);
-                }
-
-                await vectors.upsert(name, {
-                    embed: definition.embed,
-                    id: event.id,
-                    input: definition.select(row),
-                    metadata: definition.metadata?.(row),
-                    namespace,
-                });
+                // `upsertNow`, not `upsert`: the shard host already holds this
+                // whole hook until the commit lands, and deferring again from
+                // inside the drain would be a second hop to nowhere.
+                await vectors.upsertNow(upsert.name, { embed: upsert.embed, id: event.id, input: upsert.input, metadata: upsert.metadata, namespace });
             }),
         ];
 
+        await concurrentMap(operations, UPSERT_EMBED_CONCURRENCY, async (operation) => operation());
+    };
+};
+
+/** A row the backfill could not index, and why. */
+interface VectorBackfillFailure {
+    error: unknown;
+    id: string;
+}
+
+/**
+ * Index one page of rows for the shard's vector backfill. Resolves with the rows
+ * that failed on their own; REJECTS when the failure is the service's rather than
+ * a row's, so the caller holds its cursor and retries the page — with a
+ * `SERVICE_UNAVAILABLE` `LunoraError` when the error shows the failure to be
+ * transient, and with the raw error when only the whole page failing suggests it.
+ */
+type VectorBackfillSync = (table: string, rows: ReadonlyArray<{ doc: Record<string, unknown>; id: string }>) => Promise<ReadonlyArray<VectorBackfillFailure>>;
+
+/** Vectorize's ceiling on one upsert or id-batch call. */
+const MAX_BATCH = 1000;
+
+const chunk = <T>(items: ReadonlyArray<T>, size: number): T[][] => {
+    const chunks: T[][] = [];
+
+    for (let start = 0; start < items.length; start += size) {
+        chunks.push(items.slice(start, start + size));
+    }
+
+    return chunks;
+};
+
+/**
+ * What one failed call says, as far as the error itself tells.
+ *
+ * `row` — the request was refused as invalid: an HTTP 4xx other than 408/429, or
+ * a `TypeError`/`RangeError` raised before anything was sent. It fails the same
+ * way on every retry.
+ *
+ * `service` — the call itself failed: an HTTP 5xx, 408 or 429, or a
+ * `TimeoutError`/`AbortError`. Retrying can succeed.
+ *
+ * `unknown` — anything else. The Workers AI and Vectorize bindings throw plain
+ * `Error`s whose only detail is the message, so this is the common case for them.
+ */
+const classifyFailure = (error: unknown): "row" | "service" | "unknown" => {
+    if (typeof error !== "object" || error === null) {
+        return "unknown";
+    }
+
+    const { name, status, statusCode } = error as { name?: unknown; status?: unknown; statusCode?: unknown };
+    const code = typeof status === "number" ? status : statusCode;
+
+    if (typeof code === "number") {
+        // 401/403 are the shared credential or permission failing, not the
+        // row: writing them off would skip every row a bad token touched.
+        if (code >= 500 || code === 401 || code === 403 || code === 408 || code === 429) {
+            return "service";
+        }
+
+        if (code >= 400) {
+            return "row";
+        }
+    }
+
+    if (name === "TimeoutError" || name === "AbortError") {
+        return "service";
+    }
+
+    return error instanceof TypeError || error instanceof RangeError ? "row" : "unknown";
+};
+
+/**
+ * Run `attempt` over each item and split the results into rows that went
+ * through and rows that failed on their own. Rejects instead — so the caller
+ * holds its cursor and retries the page — when the failure is the service's.
+ *
+ * That is any failure classified `service` ({@link classifyFailure}): that row
+ * was never really tried, and recording it as failed would move past it.
+ *
+ * It is also two or more items tried and EVERY one failed, unless every failure
+ * is classified `row`. With no status to go on, a whole group failing is far
+ * more likely an outage than a set of bad rows. A group that fails this way
+ * deterministically is written off by the backfill's strike count instead.
+ */
+const settleEach = async <T, U>(
+    items: ReadonlyArray<T>,
+    attempt: (item: T) => Promise<U>,
+): Promise<{ failed: { error: unknown; item: T }[]; ok: { item: T; value: U }[] }> => {
+    const settled = await concurrentMap(items, UPSERT_EMBED_CONCURRENCY, async (item) => {
         try {
-            await concurrentMap(operations, UPSERT_EMBED_CONCURRENCY, async (operation) => operation());
+            return { item, ok: true as const, value: await attempt(item) };
         } catch (error) {
-            // Best-effort compensation: a partial fan-out leaves some indexes
-            // mutated. Purge this row's id from every affected index so the
-            // diverged state is at least empty rather than stale-but-present,
-            // then surface the original failure to the write path.
-            await Promise.allSettled(allIndexNames.map((name) => vectors.deleteByIds(name, [event.id])));
+            return { error, item, ok: false as const };
+        }
+    });
+    const ok = settled.flatMap((entry) => (entry.ok ? [{ item: entry.item, value: entry.value }] : []));
+    const failed = settled.flatMap((entry) => (entry.ok ? [] : [{ error: entry.error, item: entry.item }]));
+
+    const service = failed.find(({ error }) => classifyFailure(error) === "service");
+
+    if (service) {
+        throw service.error;
+    }
+
+    if (items.length >= 2 && ok.length === 0 && failed.some(({ error }) => classifyFailure(error) !== "row")) {
+        throw failed[0]?.error;
+    }
+
+    return { failed, ok };
+};
+
+/**
+ * The backfill's counterpart to {@link createVectorSyncHook}: the same
+ * {@link planRowSync} decision for a whole page of rows, with the remote calls
+ * batched — every row is embedded (bounded concurrency), then each index takes
+ * ONE `upsertMany` and ONE `deleteByIds` per 1000 rows instead of a call per row.
+ * That is what keeps a page short enough to hold the shard's write-hook chain.
+ *
+ * Failures are split in two, because they need opposite handling.
+ *
+ * A ROW failure is deterministic and would fail on every retry: a non-string
+ * source, a `select()` that throws, text the model rejects, metadata Vectorize
+ * refuses. The row is reported and the page moves on — the live hook only logs
+ * these too, and a backfill that stopped on one would never finish.
+ *
+ * A SERVICE failure is transient: the embedder or Vectorize is unreachable. The
+ * call rejects, so the page is retried. It is recognised by the error where the
+ * error says (an HTTP 5xx/408/429 status, a timeout — see {@link classifyFailure};
+ * these reject as `SERVICE_UNAVAILABLE`), and otherwise as every attempt in a
+ * group of two or more failing, and as a failed `deleteByIds` (which has no row
+ * content to blame). A batch `upsertMany` that fails is retried one row at a
+ * time to tell the two apart. A group that fails whole on every retry — each
+ * row refused for the same reason, with no status to show it — rejects each
+ * time too; the backfill writes such a page off after a few consecutive tries.
+ *
+ * `upsertMany` is the raw binding call, so the namespace is passed explicitly —
+ * the same `namespace` the live hook scopes by.
+ */
+type BackfillSyncOptions = {
+    allowSharedNamespace?: boolean;
+    namespace?: string;
+    schema: SchemaLike;
+    upsertMany: LunoraVectors["upsertMany"];
+    vectors: VectorSearchLike;
+};
+
+/** Plan every row of a page; a row whose plan throws is recorded in `failed` and contributes nothing. */
+const planPage = (
+    schema: SchemaLike,
+    table: string,
+    rows: ReadonlyArray<{ doc: Record<string, unknown>; id: string }>,
+    failed: Map<string, unknown>,
+): { deletes: Map<string, string[]>; pending: { id: string; upsert: PlannedUpsert }[] } => {
+    const deletes = new Map<string, string[]>();
+    const pending: { id: string; upsert: PlannedUpsert }[] = [];
+
+    for (const { doc, id } of rows) {
+        let plan: RowSyncPlan | undefined;
+
+        try {
+            plan = planRowSync(schema, { doc, id, op: "update", table });
+        } catch (error) {
+            failed.set(id, error);
+            continue;
+        }
+
+        for (const name of plan?.deletes ?? []) {
+            deletes.set(name, [...(deletes.get(name) ?? []), id]);
+        }
+
+        for (const upsert of plan?.upserts ?? []) {
+            pending.push({ id, upsert });
+        }
+    }
+
+    return { deletes, pending };
+};
+
+/**
+ * Write one index's embedded rows: one `upsertMany` per {@link MAX_BATCH}, and
+ * — when a batch is refused — one `upsertNow` per row of it, so the refused rows
+ * can be told from the rest and recorded in `failed`.
+ */
+const writeIndex = async (
+    options: BackfillSyncOptions,
+    name: string,
+    entries: ReadonlyArray<{ id: string; upsert: PlannedUpsert; values: ReadonlyArray<number> }>,
+    failed: Map<string, unknown>,
+): Promise<void> => {
+    const { allowSharedNamespace, namespace, upsertMany, vectors } = options;
+
+    if (!allowSharedNamespace && namespace === undefined) {
+        warnSharedNamespace(name);
+    }
+
+    // The vector is already computed, so the "embedder" handed on just returns
+    // it: the batch call does no embedding of its own.
+    const inputs = entries.map(({ id, upsert, values }) => {
+        return { embed: () => values, id, input: upsert.input, metadata: upsert.metadata, namespace };
+    });
+
+    for (const batch of chunk(inputs, MAX_BATCH)) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- one batch call per index at a time keeps the subrequest count flat
+            await upsertMany(name, batch);
+        } catch {
+            // eslint-disable-next-line no-await-in-loop -- the fallback for one refused batch
+            const single = await settleEach(batch, async (input) => vectors.upsertNow(name, input));
+
+            for (const { error, item } of single.failed) {
+                failed.set(item.id, error);
+            }
+        }
+    }
+};
+
+const syncPage = async (
+    options: BackfillSyncOptions,
+    table: string,
+    rows: ReadonlyArray<{ doc: Record<string, unknown>; id: string }>,
+): Promise<ReadonlyArray<VectorBackfillFailure>> => {
+    const failed = new Map<string, unknown>();
+    const { deletes, pending } = planPage(options.schema, table, rows, failed);
+    const embedded = await settleEach(pending, async ({ upsert }) => upsert.embed(upsert.input));
+    const byIndex = new Map<string, { id: string; upsert: PlannedUpsert; values: ReadonlyArray<number> }[]>();
+
+    for (const { error, item } of embedded.failed) {
+        failed.set(item.id, error);
+    }
+
+    for (const { item, value } of embedded.ok) {
+        byIndex.set(item.upsert.name, [...(byIndex.get(item.upsert.name) ?? []), { ...item, values: value }]);
+    }
+
+    for (const [name, ids] of deletes) {
+        for (const batch of chunk(ids, MAX_BATCH)) {
+            // eslint-disable-next-line no-await-in-loop -- one batch call per index at a time keeps the subrequest count flat
+            await options.vectors.deleteByIds(name, batch);
+        }
+    }
+
+    for (const [name, entries] of byIndex) {
+        // eslint-disable-next-line no-await-in-loop -- indexes one at a time keeps the subrequest count flat
+        await writeIndex(options, name, entries, failed);
+    }
+
+    return [...failed].map(([id, error]) => {
+        return { error, id };
+    });
+};
+
+const createVectorBackfillSync =
+    (options: BackfillSyncOptions): VectorBackfillSync =>
+    async (table, rows) => {
+        try {
+            return await syncPage(options, table, rows);
+        } catch (error) {
+            // A failure the error itself shows to be transient is re-thrown as
+            // `SERVICE_UNAVAILABLE`, so the backfill holds its cursor on it without
+            // counting it toward writing the page off.
+            if (classifyFailure(error) === "service") {
+                throw new LunoraError("SERVICE_UNAVAILABLE", error instanceof Error ? error.message : String(error), { cause: error });
+            }
 
             throw error;
         }
     };
+
+/**
+ * Every table with a vector index sourced from it, each with a fingerprint of
+ * what its stored vectors were built from — the input to the shard's vector
+ * backfill, which re-walks a table whose fingerprint changed.
+ *
+ * Covers what the schema can see: index names, the inline source field,
+ * dimensions, metric, inline metadata fields, the declared `model`, and the
+ * table's `.softDelete()` field — a row hidden by a newly chosen marker keeps
+ * its vector until the table is walked again. A
+ * function (`embed`, a Shape B `select`/`metadata`) has no stable identity to
+ * fingerprint — its source text changes with unrelated rebuilds of the bundle,
+ * which would re-embed whole tables for nothing — so the declared `model` string
+ * stands in for `embed`, and any other change is announced by calling the
+ * backfill with `restart: true`.
+ *
+ * `model` joins a descriptor only when declared, and the soft-delete field only
+ * when the table has one, so an index without either keeps the fingerprint it
+ * was recorded under and is not re-embedded for it.
+ */
+const vectorBackfillTargets = (schema: SchemaLike): { profile: string; table: string }[] => {
+    const byTable = new Map<string, string[]>();
+    const add = (table: string, descriptor: unknown[], model: string | undefined): void => {
+        const described = model === undefined ? descriptor : [...descriptor, model];
+
+        byTable.set(table, [...(byTable.get(table) ?? []), JSON.stringify(described)]);
+    };
+
+    for (const [table, definition] of Object.entries(schema.tables)) {
+        for (const index of definition.vectorIndexes ?? []) {
+            add(table, [index.name, index.field, index.dimensions, index.metric, index.metadata ?? []], index.model);
+        }
+    }
+
+    for (const [name, index] of Object.entries(schema.vectorIndexes)) {
+        add(index.table, [name, "(select)", index.dimensions, index.metric], index.model);
+    }
+
+    return [...byTable].map(([table, descriptors]) => {
+        const softDeleteField = schema.tables[table]?.softDeleteMode?.field;
+        const described = softDeleteField === undefined ? descriptors : [...descriptors, JSON.stringify(["(softDelete)", softDeleteField])];
+
+        return { profile: described.toSorted((a, b) => a.localeCompare(b)).join("|"), table };
+    });
 };
 
 export type {
@@ -518,6 +990,8 @@ export type {
     SchemaLike,
     TableDefinitionLike,
     TableVectorIndexLike,
+    VectorBackfillFailure,
+    VectorBackfillSync,
     VectorEmbedderLike,
     VectorIndexDefinitionLike,
     VectorMatchesLike,
@@ -529,4 +1003,4 @@ export type {
     WriteEvent,
     WriteHook,
 };
-export { createContextVectors, createVectorSyncHook };
+export { createContextVectors, createVectorBackfillSync, createVectorSyncHook, vectorBackfillTargets };

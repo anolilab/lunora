@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { Badge } from "../../components/ui/badge";
 import { useT } from "../../i18n/i18n-context";
 import type { TraceSpan } from "../../lib/admin";
-import { formatTimestamp } from "../../lib/internal";
+import { formatTimestamp, jsonRowReplacer } from "../../lib/internal";
 import { formatSpanDuration } from "./trace-geometry";
 
 /**
@@ -19,7 +19,7 @@ const formatValue = (value: unknown): string => {
     }
 
     try {
-        return JSON.stringify(value);
+        return JSON.stringify(value, jsonRowReplacer);
     } catch {
         return String(value);
     }

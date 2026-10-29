@@ -14,6 +14,26 @@ const dispatch = async (route: LunoraRouteHandler, method: string, path: string,
     return app.fetch(request, { __lunoraCtx: context });
 };
 
+describe("httpRoute error response", () => {
+    it("keeps a LunoraError's operator-only internal context out of the response", async () => {
+        expect.assertions(4);
+
+        const SENTINEL = "INTERNAL_CONTEXT_SENTINEL_7f3a";
+        const route = httpRoute.get("/api/fail").handler(() => {
+            throw new LunoraError("CONFLICT", "stale", { internal: { query: SENTINEL }, why: "row moved" });
+        });
+
+        const response = await dispatch(route, "GET", "/api/fail", new Request("https://x/api/fail"));
+        const text = await response.text();
+
+        // This envelope is `{ code, error, why }`: the client-visible explanation reaches the caller.
+        expect(response.status).toBe(409);
+        expect(JSON.parse(text)).toStrictEqual({ code: "CONFLICT", error: "stale", why: "row moved" });
+        expect(text).not.toContain(SENTINEL);
+        expect(JSON.stringify([...response.headers])).not.toContain(SENTINEL);
+    });
+});
+
 describe("httpRoute terminal shape", () => {
     it("yields a hono handler mountable on httpRouter", async () => {
         expect.assertions(2);
@@ -257,7 +277,7 @@ describe("httpRoute output", () => {
             .handler(() => ({ id: 123 }) as unknown as { id: string });
 
         const response = await dispatch(route, "GET", "/api/me", new Request("https://x/api/me"));
-        const body = (await response.json()) as { error: string };
+        const body = await response.json<{ error: string }>();
 
         expect(response.status).toBe(500);
         expect(body).toMatchObject({ code: "INTERNAL_SERVER_ERROR", error: "Internal error" });
@@ -274,7 +294,7 @@ describe("httpRoute error redaction", () => {
         });
 
         const response = await dispatch(route, "GET", "/api/boom", new Request("https://x/api/boom"));
-        const body = (await response.json()) as { error: string };
+        const body = await response.json<{ error: string }>();
 
         expect(response.status).toBe(500);
         expect(body).toEqual({ code: "INTERNAL_SERVER_ERROR", error: "Internal error" });

@@ -23,7 +23,7 @@ Install dependencies with your package manager (`npm`, `pnpm`, `yarn`, or `bun`)
 
 Create a D1 database for the better-auth identity/session tables and paste the
 printed id into `wrangler.jsonc` (`d1_databases[0].database_id`, replacing
-`REPLACE_WITH_D1_ID`):
+`<replace-with-d1-create-id>`):
 
 ```bash
 npx wrangler d1 create {{name}}
@@ -79,10 +79,12 @@ if you must, and only as a secret with the deployed HTTPS URL:
 ## Running on web
 
 The app bundles for the browser via `react-native-web`, and the live chat works
-the same on web as on native. Auth is a **bearer** token, not a cookie: the HTTP
-RPC carries it in the `Authorization` header and the WebSocket carries it in the
-`?token=` query param, so nothing depends on the browser cookie jar or on the
-worker being same-origin. One web-specific note:
+the same on web as on native. On native, auth is a **bearer** token, not a
+cookie: HTTP RPC and the WebSocket upgrade both carry it in the `Authorization`
+header, never in the URL. A browser socket cannot set that header, so on web the
+live socket is authenticated by the better-auth session cookie instead — serve
+the worker same-site with the web app (or behind the same origin) so the cookie
+reaches the upgrade. One more web-specific note:
 
 - **Auth storage:** `expo-secure-store` has no web build, so `src/auth-client.ts`
   falls back to `localStorage` on web to persist the session.

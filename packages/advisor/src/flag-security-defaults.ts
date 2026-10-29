@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One `ctx.flags.boolean("key", <boolean-literal>)` read — the
  * `flag_gates_security_with_unsafe_default` lint input. OpenFeature returns the
@@ -12,12 +14,12 @@
 export interface AdvisorFlagSecurityDefault {
     /** The boolean-literal default returned on a provider outage (fail-open value). */
     defaultValue: boolean;
-    /** The exported binding name of the procedure performing the flag read, or `"<module>"` at file scope. */
-    exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
     /** The flag key — the first string-literal argument of `ctx.flags.boolean`. */
     key: string;
     /** 1-based line of the `ctx.flags.boolean` call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
 }

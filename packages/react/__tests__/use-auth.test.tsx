@@ -71,12 +71,10 @@ describe("useAuth", () => {
         expect(mock.setAuthToken).toHaveBeenLastCalledWith(null);
     });
 
-    it("user is null when no token is set", () => {
-        expect.assertions(2);
+    it("still asks the server who is signed in when no token is held", async () => {
+        expect.hasAssertions();
 
         const mock = createMockClient();
-
-        mock.setCurrentUser({ id: "u_1" });
 
         render(
             <LunoraProvider client={mock.asClient}>
@@ -84,9 +82,18 @@ describe("useAuth", () => {
             </LunoraProvider>,
         );
 
-        // No token ⇒ getCurrentUser is short-circuited, user stays anon.
+        // A cookie session carries no bearer token, so "no token" is not an
+        // answer about who is signed in — only the server has one. Skipping the
+        // round trip here is what left `identityFingerprint()` null for every
+        // user of every cookie app, and a fingerprint nobody differs on is what
+        // collapsed the identity gates into `null === null`.
+        await waitFor(() => {
+            expect(mock.getCurrentUser).toHaveBeenCalledTimes(1);
+        });
+
+        // The mock answers "no session", so the user settles anon — reached by
+        // asking, not by assuming.
         expect(screen.getByTestId("display").textContent).toBe("null|anon");
-        expect(mock.getCurrentUser).not.toHaveBeenCalled();
     });
 
     it("populates user after a token is set and the session fetch resolves", async () => {
@@ -143,46 +150,6 @@ describe("useAuth", () => {
         await waitFor(() => {
             expect(screen.getByTestId("display").textContent).toBe("null|anon");
         });
-    });
-
-    it("unsubscribes the store's token-change listener once the last hook unmounts", async () => {
-        expect.hasAssertions();
-
-        const mock = createMockClient();
-
-        mock.setCurrentUser({ id: "u_9" });
-
-        const view = render(
-            <LunoraProvider client={mock.asClient}>
-                <Display />
-            </LunoraProvider>,
-        );
-
-        // Resolve identity once so the store is live.
-        act(() => {
-            setTokenHandle!("tok-1");
-        });
-
-        await waitFor(() => {
-            expect(screen.getByTestId("display").textContent).toBe("tok-1|u_9");
-        });
-
-        const callsBeforeUnmount = mock.getCurrentUser.mock.calls.length;
-
-        // Unmount the only hook: the store's token-change listener must be torn
-        // down so it no longer fires (no dangling fetch-on-change side effect).
-        view.unmount();
-
-        // A token rotation after unmount must NOT trigger another identity
-        // resolve — the listener is gone. (The cached store stays in the WeakMap;
-        // only its live subscription comes and goes with subscriber presence.)
-        act(() => {
-            mock.asClient.setAuthToken("tok-2");
-        });
-
-        await Promise.resolve();
-
-        expect(mock.getCurrentUser).toHaveBeenCalledTimes(callsBeforeUnmount);
     });
 
     // Against a REAL `LunoraClient`, not the mock: `setToken` takes no subject

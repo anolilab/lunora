@@ -19,7 +19,7 @@ const authConfig = (overrides: Partial<AdvisorAuthConfig> = {}): AdvisorAuthConf
         analyzable: true,
         disableCsrfCheck: false,
         emailPasswordEnabled: false,
-        exportName: "auth",
+        scope: { kind: "export", name: "auth" },
         file: "auth",
         line: 1,
         requireEmailVerification: false,

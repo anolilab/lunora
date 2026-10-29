@@ -398,7 +398,9 @@ describe("offline lifecycle (e2e)", () => {
 
         await vi.advanceTimersByTimeAsync(0);
         latestSocket().open();
-        await vi.runAllTimersAsync();
+        // Stops short of the backoff retry the failure schedules (>= 500ms): this
+        // session is torn down before that retry fires.
+        await vi.advanceTimersByTimeAsync(100);
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
         await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toHaveLength(1);
@@ -463,6 +465,52 @@ describe("offline lifecycle (e2e)", () => {
         // is the ONLY channel that can tell the UI the write was dropped.
         expect(settled[0]?.hadAwaiter).toBe(false);
         // The poison write is purged from durable storage (no replay loop).
+        await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([]);
+
+        client.close();
+    });
+
+    it("7b. settles a replayed write whose handler merged to a null result as committed, not rejected", async () => {
+        expect.assertions(5);
+
+        vi.useFakeTimers();
+
+        const storage = createFakeAsyncStorage();
+
+        await createAsyncStoragePersistence({ storage }).append({
+            args: { email: "a@b.c", name: "again" },
+            functionPath: "users:addUser",
+            id: "m2",
+            identity: null,
+        });
+
+        // The handler used `insert(…, { skipDuplicates: true })`: the duplicate
+        // is a no-op, the wire result is `null`, and the replay succeeds. The
+        // client must not treat that as a failure.
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: null }));
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            persistence: createAsyncStoragePersistence({ storage }),
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        const settled: { code?: string; functionPath: string; hadAwaiter: boolean; status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        await vi.advanceTimersByTimeAsync(0);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(settled).toHaveLength(1);
+        expect(settled[0]?.status).toBe("committed");
+        expect(settled[0]?.code).toBeUndefined();
+        // Committed means the record leaves durable storage, as for any success.
         await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([]);
 
         client.close();
@@ -541,9 +589,12 @@ describe("offline lifecycle (e2e)", () => {
         // tick later, once the app's own token read resolves. Signed-out is the
         // normal state of EVERY reload up to that point — not a different user.
         const client = new LunoraClient({
+            // The React Native transport: its upgrade carries the bearer.
+            authTokenOnUpgrade: true,
             fetch: fetchMock,
             persistence: createAsyncStoragePersistence({ storage }),
             queryCache: createIndexedDbQueryCache({ indexedDB }),
+            reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
             url: "https://app.example",
             WebSocket: createMockWebSocket(),
         });
@@ -567,7 +618,11 @@ describe("offline lifecycle (e2e)", () => {
         await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toHaveLength(1);
 
         // --- The app's session resolves — as the SAME user -------------------
+        // A bearer landing on an anonymous socket reconnects it, so the bearer
+        // rides the next upgrade; the held write replays once that socket opens.
         client.setAuthToken("token-a", "user-a");
+        await flushMicrotasks();
+        latestSocket().open();
         await settleIndexedDb();
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -661,6 +716,67 @@ describe("offline lifecycle (e2e)", () => {
         client.close();
     });
 
+    it("10b. requeues a queued write whose batch slot body is unreadable instead of throwing the flush", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        // Slot 0 has a null body and slot 2 has an empty object. Neither is an
+        // envelope, so the server never answered those writes and they must stay
+        // queued. Slot 1 is a real result and must settle committed. Before the
+        // fix, the null body threw out of the batch settlement and no slot settled.
+        const fetchMock = vi.fn<typeof fetch>(async (input) => {
+            const url = input as string;
+
+            if (url.endsWith("/_lunora/rpc-batch")) {
+                return jsonResponse({
+                    results: [
+                        { body: null, id: 0 },
+                        { body: { commitCursor: 102, result: { id: "b" } }, id: 1 },
+                        { body: {}, id: 2 },
+                    ],
+                });
+            }
+
+            throw new Error(`unexpected single-call fetch to ${url}`);
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        const settled: { functionPath: string; status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const writes = [
+            client.mutation(fnRef("posts:create"), { title: "a" }).catch(() => "rejected"),
+            client.mutation(fnRef("posts:create"), { title: "b" }),
+            client.mutation(fnRef("posts:create"), { title: "c" }).catch(() => "rejected"),
+        ];
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        // Bounded advance, not runAllTimers: a requeued write must not spin the test.
+        await vi.advanceTimersByTimeAsync(50);
+
+        expect(fetchMock.mock.calls.filter(([url]) => (url as string).endsWith("/_lunora/rpc-batch"))).toHaveLength(1);
+        expect(settled.map((event) => event.status)).toStrictEqual(["committed"]);
+        expect(client.pendingCount()).toBe(2);
+        await expect(writes[1]).resolves.toStrictEqual({ id: "b" });
+
+        client.close();
+    });
+
     it("10. coalesces a multi-write outbox flush into ONE rpc-batch round trip (plan 088 follow-on)", async () => {
         expect.assertions(7);
 
@@ -735,6 +851,50 @@ describe("offline lifecycle (e2e)", () => {
         expect(results).toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
         // FIFO order preserved in the request.
         expect(sentCalls.map((call) => call.id)).toEqual([0, 1, 2]);
+
+        client.close();
+    });
+
+    it("settles every write in a whole-batch rejection with the batch reply's headers", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        // A terminal verdict on the whole flush (a 400, not a retryable 429), so each write settles rather than re-queues.
+        const fetchMock = vi.fn<typeof fetch>(async (input) => {
+            const url = input as string;
+
+            if (url.endsWith("/_lunora/rpc-batch")) {
+                return jsonResponse({ error: { code: "BAD_REQUEST", message: "nope" } }, { headers: { "x-edge": "cf" }, status: 400 });
+            }
+
+            throw new Error(`unexpected single-call fetch to ${url}`);
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = Promise.allSettled([client.mutation(fnRef("posts:create"), { title: "a" }), client.mutation(fnRef("posts:create"), { title: "b" })]);
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        const settled = await pending;
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(settled.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+        expect(settled).toMatchObject([{ reason: { headers: { "x-edge": "cf" } } }, { reason: { headers: { "x-edge": "cf" } } }]);
 
         client.close();
     });
@@ -1418,6 +1578,125 @@ describe("outbox replay backoff", () => {
         expect(settled.map((event) => event.status)).toEqual(["rejected"]);
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
+
+    it("keeps a whole batch queued when a gateway answers 502 with a non-object error slot", async () => {
+        expect.assertions(5);
+
+        vi.useFakeTimers();
+
+        // A proxy's own JSON error page: the `error` key is there, but it holds a
+        // STRING, so there is no envelope to read a verdict out of. Read unchecked
+        // it produced an `Error` with no `code`, and `settleWholeBatchError`
+        // requires a code before it will keep a write — so every durable write in
+        // the chunk was DROPPED over a gateway blip, silently, while the same
+        // reply classified by its 502 re-queues them.
+        let attempt = 0;
+        const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+            attempt += 1;
+
+            if (attempt === 1) {
+                return jsonResponse({ error: "bad gateway" }, { status: 502 });
+            }
+
+            const { calls } = JSON.parse((init as RequestInit).body as string) as { calls: { id: number }[] };
+
+            return jsonResponse({
+                results: calls.map((call) => {
+                    return { body: { result: { ok: true } }, id: call.id };
+                }),
+            });
+        });
+
+        const client = offlineClient(fetchMock);
+        const settled: { status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        // Two writes take the batch path.
+        const pending = Promise.all([
+            client.mutation(fnRef("posts:create"), { title: "one" }).catch((error: unknown) => error),
+            client.mutation(fnRef("posts:create"), { title: "two" }).catch((error: unknown) => error),
+        ]);
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Nothing settled: both writes are still durable, waiting for the next flush.
+        expect(settled).toEqual([]);
+        expect(client.pendingCount()).toBe(2);
+
+        // Next reconnect → the same two writes replay and commit.
+        latestSocket().triggerClose();
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        await expect(pending).resolves.toEqual([{ ok: true }, { ok: true }]);
+        expect(settled.map((event) => event.status)).toEqual(["committed", "committed"]);
+        expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
+
+    it("keeps a batch slot queued when its body carries a null error slot", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        // Per-slot version of the same shape: the slot body has an `error` key
+        // holding `null`. Read unchecked it threw a `TypeError` out of the flush,
+        // which nothing catches — and the writes had already left the queue.
+        let attempt = 0;
+        const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+            attempt += 1;
+
+            const { calls } = JSON.parse((init as RequestInit).body as string) as { calls: { id: number }[] };
+
+            return jsonResponse({
+                results: calls.map((call) => {
+                    return { body: attempt === 1 ? { error: null } : { result: { ok: true } }, id: call.id };
+                }),
+            });
+        });
+
+        const client = offlineClient(fetchMock);
+        const settled: { status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = Promise.all([
+            client.mutation(fnRef("posts:create"), { title: "one" }).catch((error: unknown) => error),
+            client.mutation(fnRef("posts:create"), { title: "two" }).catch((error: unknown) => error),
+        ]);
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(settled).toEqual([]);
+        expect(client.pendingCount()).toBe(2);
+
+        latestSocket().triggerClose();
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        await expect(pending).resolves.toEqual([{ ok: true }, { ok: true }]);
+        expect(settled.map((event) => event.status)).toEqual(["committed", "committed"]);
 
         client.close();
     });

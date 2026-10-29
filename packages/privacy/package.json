@@ -1,0 +1,95 @@
+{
+    "name": "@lunora/privacy",
+    "version": "1.0.0-alpha.40",
+    "description": "Reusable data-subject rights for Lunora apps: export, erasure and retention holds (GDPR Art. 15, 17, 20).",
+    "keywords": [
+        "data-subject-rights",
+        "dsar",
+        "dsgvo",
+        "gdpr",
+        "lunora",
+        "privacy",
+        "retention"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/privacy"
+    },
+    "files": [
+        "./dist",
+        "README.md",
+        "LICENSE.md"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.mjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./eu": {
+            "types": "./dist/eu.d.ts",
+            "import": "./dist/eu.mjs"
+        },
+        "./de": {
+            "types": "./dist/de.d.ts",
+            "import": "./dist/de.mjs"
+        },
+        "./workflow": {
+            "types": "./dist/workflow.d.ts",
+            "import": "./dist/workflow.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
+    },
+    "dependencies": {
+        "@cantoo/pdf-lib": "catalog:privacy",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/server": "1.0.0-alpha.249",
+        "@lunora/wire": "1.0.0-alpha.3",
+        "fflate": "catalog:privacy"
+    },
+    "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "esbuild": "catalog:build",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@lunora/auth": ">=1.0.0-alpha.202 <2.0.0-0"
+    },
+    "peerDependenciesMeta": {
+        "@lunora/auth": {
+            "optional": true
+        }
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.10.0"
+    }
+}

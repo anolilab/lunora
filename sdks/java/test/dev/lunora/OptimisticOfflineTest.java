@@ -17,6 +17,7 @@ import dev.lunora.Submit.MutationStatus;
 import dev.lunora.Submit.SubmitOptions;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -54,13 +55,32 @@ final class OptimisticOfflineTest {
         loneWriteSurvivesAnEnvelopeLess502();
         rateLimitedReplayRequeuesAndDefersTheNextFlush();
         offlineQueueIdentityGateRejectsReplay();
+        offlineWriteHeldForCredentialReplaysAfterTokenRefresh();
         offlineFlushReplaysAndConfirmsOptimistic();
         offlineFlushBatchesMultipleWrites();
         batchEntryCapMatchesProtocol();
+        onlineOnlyWriteIsRefusedWhenDisconnected();
+        onlineOnlyWriteIsSentWhenConnected();
+        onlineOnlyTransportFailureIsRefused();
+        onlineOnlyWriteWhoseCallbackDropsTheSocketIsRefused();
+        normalWriteStillQueuesBesideAnOnlineOnlyOne();
         offlineFlushUnencodableWriteSettlesTerminal();
         clientIdIsPerInstanceAndPersisted();
         consumerCallbacksRunOutsideTheLock();
         emptyShardKeyNeverReachesTheWire();
+        offlineFlushEmptyShardKeyRoutesToDefault();
+        offlineFlushUndecodableResultSettlesCommitted();
+        flushNeverLosesDrainedWrites();
+        offlineFlushClassifiesSingleAndBatchAlike();
+        offlineFlushBatchSplitsOnEnvelopelessPayloadTooLarge();
+        offlineUnsetIdentityStampsTokenDigest();
+        verdictsForPlainTokenAndLegacyStamps();
+        aWriteQueuedUnderATokenIsHeldOnceTheTokenIsCleared();
+        anIdentitySpelledLikeADigestNeverMatchesATokenStamp();
+        aTokenStampSurvivesPersistence();
+        aTokenSwappedMidFlushDoesNotCarryTheRestOfIt();
+        legacyStampsUnderAHeldToken();
+        aNewTokenWithoutAnIdentityEvictsThePreviousSession();
     }
 
     /**
@@ -71,7 +91,7 @@ final class OptimisticOfflineTest {
      * — its monitor is REENTRANT, so a callback running inside the critical section neither hangs
      * nor deadlocks, which is why the violation was invisible for as long as it was. The re-entrant
      * call is the shape that hard-deadlocks the sibling ports whose lock is not reentrant, kept
-     * here so all seven suites drive the same scenario.
+     * here so all eight suites drive the same scenario.
      */
     private static void assertUnlocked(Client client, List<String> violations, String name) {
         if (Thread.holdsLock(client.lock)) {
@@ -85,7 +105,7 @@ final class OptimisticOfflineTest {
     /**
      * No callback a consumer supplies runs while the client holds its lock.
      *
-     * <p>{@code sdks/README.md} states this for all seven ports: not the optimistic update, not a
+     * <p>{@code sdks/README.md} states this for all eight ports: not the optimistic update, not a
      * queue entry's precondition, not {@code onSettled}, not a subscription handler. The transform
      * runs and the precondition is evaluated outside the critical section; the lock is taken only
      * to install the result — in ONE section with the offline decision and the enqueue, so the
@@ -102,7 +122,7 @@ final class OptimisticOfflineTest {
                         "https://app.example",
                         (url, headers, body) -> new Response(200, CODED_ERROR));
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
         client.subscribe(
                 "messages:list",
                 new LinkedHashMap<>(),
@@ -110,7 +130,7 @@ final class OptimisticOfflineTest {
                 null,
                 null);
         client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
-        client.detachSocket();
+        client.detachSocket(null, null);
 
         client.submit(
                 new SubmitOptions("messages:list", new LinkedHashMap<>())
@@ -140,7 +160,7 @@ final class OptimisticOfflineTest {
                                 })
                         .onSettled(event -> assertUnlocked(client, violations, "onSettled")));
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
 
         FlushReport report = client.flushOfflineQueue(null);
 
@@ -168,9 +188,9 @@ final class OptimisticOfflineTest {
         Client client = new Client("https://app.example", null);
 
         check(!empty.containsKey("shardKey"), "an empty shard key is omitted from the RPC body");
-        check(!client.wsUrl("", null).contains("shard="), "and from the socket URL");
+        check(!client.wsUrl("").contains("shard="), "and from the socket URL");
         check("room-1".equals(named.get("shardKey")), "while a real one still rides the body");
-        check(client.wsUrl("room-1", null).contains("shard=room-1"), "and the socket URL");
+        check(client.wsUrl("room-1").contains("shard=room-1"), "and the socket URL");
 
         // End to end, because the omission has to hold on the path a consumer actually takes.
         List<String> posted = new ArrayList<>();
@@ -183,7 +203,7 @@ final class OptimisticOfflineTest {
                             return new Response(200, "{\"result\":null}");
                         });
 
-        live.attachSocket(frame -> {});
+        live.attachSocket(frame -> {}, null);
         live.submit(new SubmitOptions("messages:send", new LinkedHashMap<>()).shardKey(""));
 
         check(
@@ -356,7 +376,7 @@ final class OptimisticOfflineTest {
                     new Client(
                             "https://app.example",
                             (url, headers, payload) -> new Response(200, body[0]));
-            client.attachSocket(frame -> {});
+            client.attachSocket(frame -> {}, null);
             client.subscribe("messages:list", args, seen::add, null, null);
             client.onMutationSettled(settled::add);
         }
@@ -384,11 +404,11 @@ final class OptimisticOfflineTest {
 
         /** Submits with the socket down, so the write queues and its overlay stays pending. */
         MutationOutcome queue(SubmitOptions options) {
-            client.detachSocket();
+            client.detachSocket(null, null);
 
             MutationOutcome outcome = client.submit(options);
 
-            client.attachSocket(frame -> {});
+            client.attachSocket(frame -> {}, null);
 
             return outcome;
         }
@@ -676,6 +696,256 @@ final class OptimisticOfflineTest {
                 "so the confirm at that cursor drops the overlay instead of stranding it");
     }
 
+    /** The credential-shaped argument an online-only write carries; it must never reach storage. */
+    private static final String ONLINE_ONLY_SECRET = "sentinel-secret-7731";
+
+    private static SubmitOptions onlineOnlyWrite() {
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("token", ONLINE_ONLY_SECRET);
+
+        return new SubmitOptions("auth:setPassword", args).onlineOnly(true);
+    }
+
+    /** With the socket down, an online-only write is refused before anything is queued or sent. */
+    private static void onlineOnlyWriteWhoseCallbackDropsTheSocketIsRefused() {
+        covers("offline_online_only_refused_when_disconnected_in_callback");
+        int[] posts = {0};
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            posts[0]++;
+
+                            return new Response(
+                                    200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}");
+                        });
+
+        client.offlineQueue(
+                new OfflineQueue().persistence(new MemoryStore()).queueBeforeFirstConnect(true));
+
+        // The subscriber sees the overlay, and the connection goes down inside its notification.
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("token", ONLINE_ONLY_SECRET);
+        client.attachSocket(frame -> {}, null);
+        client.subscribe(
+                "auth:setPassword",
+                args,
+                value -> {
+                    if (value instanceof List && ((List<?>) value).contains("c")) {
+                        client.detachSocket(null, null);
+                    }
+                },
+                null,
+                null);
+        client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
+
+        OfflineException refused = null;
+
+        try {
+            client.submit(
+                    new SubmitOptions("auth:setPassword", args)
+                            .onlineOnly(true)
+                            .optimistic(appender("c")));
+        } catch (OfflineException error) {
+            refused = error;
+        }
+
+        check(
+                refused != null && Offline.OFFLINE_NOT_QUEUED.equals(refused.code),
+                "an online-only write whose callback drops the socket is refused with"
+                        + " OFFLINE_NOT_QUEUED");
+        check(posts[0] == 0, "a refused write never reaches the wire");
+    }
+
+    private static void onlineOnlyWriteIsRefusedWhenDisconnected() {
+        covers("offline_online_only_refused_when_disconnected");
+        int[] posts = {0};
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            posts[0]++;
+
+                            return new Response(
+                                    200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}");
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store).queueBeforeFirstConnect(true));
+
+        // A subscription on the write's own path and args, primed with a server value, so an
+        // overlay the write applied would be displayed.
+        Map<String, Object> args = new LinkedHashMap<>();
+        List<Object> seen = new ArrayList<>();
+
+        args.put("token", ONLINE_ONLY_SECRET);
+        client.attachSocket(frame -> {}, null);
+        client.subscribe("auth:setPassword", args, seen::add, null, null);
+        client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
+        client.detachSocket(null, null);
+
+        OfflineException refused = null;
+
+        try {
+            client.submit(
+                    new SubmitOptions("auth:setPassword", args)
+                            .onlineOnly(true)
+                            .optimistic(appender("c")));
+        } catch (OfflineException error) {
+            refused = error;
+        }
+
+        check(
+                refused != null && Offline.OFFLINE_NOT_QUEUED.equals(refused.code),
+                "an online-only write is refused with OFFLINE_NOT_QUEUED");
+        check(client.pendingMutationCount() == 0, "and nothing is queued");
+        check(store.appended.isEmpty(), "the persistence adapter never sees the write");
+        check(
+                !Json.write(store.records).contains(ONLINE_ONLY_SECRET),
+                "the arguments never reach storage");
+        check(posts[0] == 0, "and a refused write never reaches the wire");
+        check(
+                !seen.contains(List.of("a", "c")),
+                "and a refused write's overlay is never displayed");
+    }
+
+    /** With the socket up, an online-only write is sent normally and commits. */
+    private static void onlineOnlyWriteIsSentWhenConnected() {
+        covers("offline_online_only_sends_when_connected");
+        List<String> bodies = new ArrayList<>();
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            bodies.add(new String(body, StandardCharsets.UTF_8));
+
+                            return new Response(
+                                    200, "{\"commitCursor\":3,\"result\":{\"ok\":true}}");
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store).queueBeforeFirstConnect(true));
+        client.attachSocket(frame -> {}, null);
+
+        MutationOutcome outcome = client.submit(onlineOnlyWrite());
+
+        check(
+                outcome.status() == MutationStatus.COMMITTED,
+                "a connected online-only write commits");
+        check(bodies.size() == 1, "and goes out once");
+        check(bodies.get(0).contains(ONLINE_ONLY_SECRET), "with its arguments on the wire");
+        check(store.appended.isEmpty(), "and is never persisted");
+    }
+
+    /**
+     * A client that never connected sends an online-only write directly, and the transport fails
+     * before any reply. That is refused as OFFLINE_NOT_QUEUED with the transport error as its
+     * cause, with the overlay rolled back. A coded reply to the same write surfaces as itself.
+     */
+    private static void onlineOnlyTransportFailureIsRefused() {
+        covers("offline_online_only_transport_failure_refused");
+        UncheckedIOException transport =
+                new UncheckedIOException(new IOException("connection refused"));
+        int[] posts = {0};
+        MemoryStore store = new MemoryStore();
+        List<Object> seen = new ArrayList<>();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            posts[0]++;
+
+                            throw transport;
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store));
+
+        // No socket is ever attached, so the shard never connected and the write goes direct.
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("token", ONLINE_ONLY_SECRET);
+        client.subscribe("auth:setPassword", args, seen::add, null, null);
+        client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
+
+        RuntimeException thrown = null;
+
+        try {
+            client.submit(
+                    new SubmitOptions("auth:setPassword", args)
+                            .onlineOnly(true)
+                            .optimistic(appender("c")));
+        } catch (RuntimeException error) {
+            thrown = error;
+        }
+
+        OfflineException refused = thrown instanceof OfflineException offline ? offline : null;
+
+        check(posts[0] == 1, "the write reaches the wire once, on the direct path");
+        check(
+                refused != null && Offline.OFFLINE_NOT_QUEUED.equals(refused.code),
+                "a transport failure is refused with OFFLINE_NOT_QUEUED");
+        check(
+                refused != null && refused.getCause() == transport,
+                "and the transport error rides along as its cause");
+        check(client.pendingMutationCount() == 0, "and nothing is queued");
+        check(store.appended.isEmpty(), "the persistence adapter never sees the write");
+        check(
+                seen.get(seen.size() - 1).equals(List.of("a")),
+                "the overlay is rolled back to the server value");
+        check(client.subscriptionState("sub_1").layers.isEmpty(), "and no layer survives");
+
+        // A coded reply is the server's verdict, so it is not a transport failure, even for a
+        // transient code.
+        Client rejecting =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) ->
+                                new Response(
+                                        503,
+                                        "{\"error\":{\"code\":\"SHARD_UNAVAILABLE\",\"message\":\"busy\"}}"));
+
+        rejecting.offlineQueue(new OfflineQueue().persistence(new MemoryStore()));
+
+        RuntimeException verdict = null;
+
+        try {
+            rejecting.submit(new SubmitOptions("auth:setPassword", args).onlineOnly(true));
+        } catch (RuntimeException error) {
+            verdict = error;
+        }
+
+        check(
+                verdict instanceof Client.ApiException api && "SHARD_UNAVAILABLE".equals(api.code),
+                "a coded server rejection surfaces as itself, not as OFFLINE_NOT_QUEUED");
+    }
+
+    /** A normal write made with the socket down still queues beside an online-only one. */
+    private static void normalWriteStillQueuesBesideAnOnlineOnlyOne() {
+        covers("offline_online_only_leaves_normal_writes_queued");
+        int[] posts = {0};
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            posts[0]++;
+
+                            return new Response(200, "{\"result\":null}");
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store).queueBeforeFirstConnect(true));
+
+        MutationOutcome outcome =
+                client.submit(new SubmitOptions("messages:send", new LinkedHashMap<>()));
+
+        check(outcome.status() == MutationStatus.QUEUED, "a normal write still queues offline");
+        check(client.pendingMutationCount() == 1, "and the queue holds it");
+        check(store.appended.size() == 1, "and it is persisted");
+        check(posts[0] == 0, "and nothing is sent");
+    }
+
     /**
      * A persistence adapter that records every call.
      *
@@ -684,7 +954,7 @@ final class OptimisticOfflineTest {
      * serialise, so a record carrying the codec's native wrappers either raises here or is written
      * as something that does not read back. Holding references made this suite blind to both.
      */
-    private static final class MemoryStore implements PersistenceAdapter {
+    private static class MemoryStore implements PersistenceAdapter {
         final List<Map<String, Object>> records = new ArrayList<>();
         final List<Map<String, Object>> appended = new ArrayList<>();
         final List<String> removed = new ArrayList<>();
@@ -1393,9 +1663,22 @@ final class OptimisticOfflineTest {
     @SuppressWarnings("unchecked")
     private static void offlineFlushBatchesMultipleWrites() throws IOException {
         covers("offline_flush_batches_multiple_writes");
+        covers("offline_flush_unreadable_slot_is_retried");
 
         Map<String, Object> testCase = scenario("offlineQueue", "batchReplay");
         List<Object> slots = list(testCase.get("slots"));
+        int unreadable = 0;
+
+        // A slot the fixture no longer describes is a case that asserts nothing.
+        for (Object raw : slots) {
+            Map<String, Object> slot = map(raw);
+
+            if ("unreadable-error".equals(slot.get("outcome")) && slot.containsKey("rawError")) {
+                unreadable++;
+            }
+        }
+
+        check(unreadable == 1, "batchReplay must carry one unreadable slot");
         List<String> urls = new ArrayList<>();
         List<Object> calls = new ArrayList<>();
         List<Long> confirmed = new ArrayList<>();
@@ -1422,6 +1705,19 @@ final class OptimisticOfflineTest {
                                     answers.append(",\"body\":{\"commitCursor\":")
                                             .append(count(slot.get("commitCursor")))
                                             .append(",\"result\":null}}");
+
+                                    continue;
+                                }
+
+                                if ("unreadable-error".equals(slot.get("outcome"))) {
+                                    // An `error` key holding a NON-object: no envelope to read
+                                    // a verdict out of, and no per-slot HTTP status to fall back
+                                    // on. Written from the fixture's own value, so a port cannot
+                                    // pass by answering itself a shape the spec does not
+                                    // describe.
+                                    answers.append(",\"body\":{\"error\":")
+                                            .append(Json.write(slot.get("rawError")))
+                                            .append("}}");
 
                                     continue;
                                 }
@@ -1573,10 +1869,14 @@ final class OptimisticOfflineTest {
                 stamped = Identity.of(stampedRaw.toString());
             }
 
-            String current = spec.get("current") == null ? null : spec.get("current").toString();
+            Identity current =
+                    spec.get("current") == null
+                            ? Identity.signedOut()
+                            : Identity.of(spec.get("current").toString());
 
             check(
-                    Offline.identityAllowsReplay(stamped, current)
+                    (Offline.replayIdentityVerdict(stamped, current, null)
+                                    == Offline.ReplayVerdict.MATCH)
                             == Boolean.TRUE.equals(spec.get("replays")),
                     "identity gate: " + spec.get("name"));
         }
@@ -1592,7 +1892,7 @@ final class OptimisticOfflineTest {
                             return new Response(200, "{\"result\":null}");
                         });
 
-        client.identity = "user-b";
+        client.identity("user-b");
 
         QueuedMutation queued =
                 new QueuedMutation("messages:send", new LinkedHashMap<>(), null, "m1");
@@ -1610,6 +1910,83 @@ final class OptimisticOfflineTest {
         // the current one.
         check(posts.isEmpty(), "the write never reaches the server");
         check(codes.equals(List.of(testCase.get("code"))), "and it carries the documented code");
+    }
+
+    /**
+     * A write refused for its CREDENTIAL is held, and replays under the next token set for the same
+     * user: the bearer is read when the replay is SENT, never the one the write was queued under.
+     * This port never flushes on its own, so the app's second flush follows the refresh.
+     */
+    private static void offlineWriteHeldForCredentialReplaysAfterTokenRefresh() throws IOException {
+        covers("offline_write_held_for_credential_replays_after_token_refresh");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "credentialRefresh");
+        String identity = (String) testCase.get("identity");
+        String staleBearer = "Bearer " + testCase.get("staleToken");
+        Map<String, Object> refusal = map(testCase.get("refusal"));
+        int refusalStatus = count(refusal.get("status"));
+        String refusalBody = Json.write(refusal.get("body"));
+        List<String> authorizations = new ArrayList<>();
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            String authorization = headers.get("authorization");
+
+                            authorizations.add(authorization);
+
+                            return staleBearer.equals(authorization)
+                                    ? new Response(refusalStatus, refusalBody)
+                                    : new Response(200, "{\"result\":null}");
+                        });
+
+        client.identity(identity);
+        client.authToken((String) testCase.get("staleToken"));
+        client.offlineQueue(new OfflineQueue().persistence(store));
+
+        for (String id : strings(testCase.get("queued"))) {
+            QueuedMutation queued =
+                    new QueuedMutation("messages:send", new LinkedHashMap<>(), null, id);
+
+            queued.identity = Identity.of(identity);
+            client.offlineQueue().enqueue(queued);
+        }
+
+        Map<String, Object> afterRefusal = map(testCase.get("afterRefusal"));
+        FlushReport refused = client.flushOfflineQueue(null);
+
+        check(
+                refused.committed.equals(strings(afterRefusal.get("committed"))),
+                "refused: committed, got " + refused.committed);
+        check(
+                refused.rejected.equals(strings(afterRefusal.get("rejected"))),
+                "refused: rejected, got " + refused.rejected);
+        check(
+                ids(client.offlineQueue().items())
+                        .equals(strings(afterRefusal.get("queuedAfterFlush"))),
+                "refused: the write is held, got " + ids(client.offlineQueue().items()));
+        check(store.removed.isEmpty(), "refused: the durable record survives");
+
+        // A refresh, not an account switch: same identity, new token, then the app's own flush.
+        client.authToken((String) testCase.get("freshToken"));
+
+        Map<String, Object> afterRefresh = map(testCase.get("afterRefresh"));
+        FlushReport replayed = client.flushOfflineQueue(null);
+
+        check(
+                replayed.committed.equals(strings(afterRefresh.get("committed"))),
+                "refreshed: committed, got " + replayed.committed);
+        check(
+                replayed.rejected.equals(strings(afterRefresh.get("rejected"))),
+                "refreshed: rejected, got " + replayed.rejected);
+        check(
+                ids(client.offlineQueue().items())
+                        .equals(strings(afterRefresh.get("queuedAfterFlush"))),
+                "refreshed: nothing left queued, got " + ids(client.offlineQueue().items()));
+        check(
+                authorizations.equals(strings(testCase.get("authorizationHeaders"))),
+                "the replay carries the token current when it is sent, got " + authorizations);
     }
 
     private static void offlineFlushReplaysAndConfirmsOptimistic() throws IOException {
@@ -1729,11 +2106,11 @@ final class OptimisticOfflineTest {
 
         args.put("channel", "general");
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
         client.subscribe("messages:list", args, seen::add, null, null);
         // Prime the subscription with a server value, then drop the socket.
         client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
-        client.detachSocket();
+        client.detachSocket(null, null);
 
         MutationOutcome outcome =
                 client.submit(new SubmitOptions("messages:list", args).optimistic(appender("c")));
@@ -1744,7 +2121,7 @@ final class OptimisticOfflineTest {
         check(posts[0] == 0, "nothing reaches the wire while the socket is down");
         check(client.pendingMutationCount() == 1, "and the queue depth reflects it");
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
         client.flushOfflineQueue(null);
 
         check(posts[0] == 1, "the flush replays it");
@@ -1839,7 +2216,7 @@ final class OptimisticOfflineTest {
                                         200,
                                         "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"gone\"}}"));
 
-        client.attachSocket(frame -> {});
+        client.attachSocket(frame -> {}, null);
         client.subscribe("messages:list", new LinkedHashMap<>(), seen::add, null, null);
         client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
 
@@ -1855,5 +2232,731 @@ final class OptimisticOfflineTest {
 
         check(threw, "the server's verdict reaches the caller");
         check(seen.get(seen.size() - 1).equals(List.of("a")), "and the overlay is gone");
+    }
+
+    /** A client whose poster records every request body and answers it with {@code answer}. */
+    private static Client recordingClient(
+            List<String> bodies, java.util.function.Function<byte[], Response> answer) {
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, payload) -> {
+                            bodies.add(new String(payload, StandardCharsets.UTF_8));
+
+                            return answer.apply(payload);
+                        });
+
+        client.clientId = "c-1";
+
+        return client;
+    }
+
+    /** Queues {@code ids} as default-shard writes. */
+    private static void enqueueAll(Client client, List<String> ids) {
+        for (String id : ids) {
+            client.offlineQueue().enqueue(entry(id, null));
+        }
+    }
+
+    /** The error code a settled event carries, or null. */
+    private static String settledCode(MutationSettled event) {
+        if (event.error() instanceof Client.ApiException api) {
+            return api.code;
+        }
+
+        return event.error() instanceof OfflineException coded ? coded.code : null;
+    }
+
+    /**
+     * An empty shard key is the default shard on EVERY replay path: neither the single-call body
+     * nor a batch entry may carry a {@code shardKey} key for it.
+     */
+    private static void offlineFlushEmptyShardKeyRoutesToDefault() throws IOException {
+        covers("offline_flush_empty_shard_key_routes_to_default");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "emptyShardKey");
+
+        for (String path : List.of("batch", "lone")) {
+            Map<String, Object> run = map(testCase.get(path));
+            List<String> bodies = new ArrayList<>();
+            Client client =
+                    recordingClient(
+                            bodies, body -> new Response(200, echoBatchSlots(body, "null", 1L)));
+
+            for (Object raw : list(run.get("queued"))) {
+                Map<String, Object> queued = map(raw);
+
+                client.offlineQueue()
+                        .enqueue(entry((String) queued.get("id"), (String) queued.get("shardKey")));
+            }
+
+            FlushReport report = client.flushOfflineQueue((String) run.get("flushShardKey"));
+
+            check(
+                    report.committed.equals(strings(run.get("committed"))),
+                    path + ": every write commits on the default shard, got " + report.committed);
+            check(!bodies.isEmpty(), path + ": the flush sent something");
+
+            for (String body : bodies) {
+                check(!body.contains("shardKey"), path + ": no body carries a shardKey: " + body);
+            }
+        }
+    }
+
+    /**
+     * A write the server committed whose result does not decode settles COMMITTED, carrying the
+     * coded decode error — never retried, never requeued, never lost with the rest of its batch.
+     */
+    private static void offlineFlushUndecodableResultSettlesCommitted() throws IOException {
+        covers("offline_flush_undecodable_result_settles_committed");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "undecodableResult");
+        String rawResult = Json.write(testCase.get("rawResult"));
+        String code = (String) testCase.get("code");
+
+        for (String path : List.of("batch", "lone")) {
+            Map<String, Object> run = map(testCase.get(path));
+            int undecodable =
+                    run.containsKey("undecodableSlot") ? count(run.get("undecodableSlot")) : 0;
+            List<String> bodies = new ArrayList<>();
+            List<String> log = new ArrayList<>();
+            List<MutationSettled> settled = new ArrayList<>();
+            List<Long> confirmed = new ArrayList<>();
+            Client client =
+                    recordingClient(
+                            bodies,
+                            body -> {
+                                List<Object> calls = batchCalls(body);
+
+                                if (calls.isEmpty()) {
+                                    return new Response(
+                                            200,
+                                            "{\"commitCursor\":1,\"result\":" + rawResult + "}");
+                                }
+
+                                StringBuilder slots = new StringBuilder();
+
+                                for (int index = 0; index < calls.size(); index++) {
+                                    slots.append(index > 0 ? "," : "")
+                                            .append("{\"id\":")
+                                            .append(index)
+                                            .append(",\"body\":{\"commitCursor\":")
+                                            .append(index + 1)
+                                            .append(",\"result\":")
+                                            .append(index == undecodable ? rawResult : "\"ok\"")
+                                            .append("}}");
+                                }
+
+                                return new Response(200, "{\"results\":[" + slots + "]}");
+                            });
+            MemoryStore store =
+                    new MemoryStore() {
+                        @Override
+                        public void remove(String mutationId) {
+                            log.add("remove:" + mutationId);
+                            super.remove(mutationId);
+                        }
+                    };
+
+            client.offlineQueue(new OfflineQueue().persistence(store));
+            client.onMutationSettled(
+                    event -> {
+                        log.add("settle:" + event.mutationId());
+                        settled.add(event);
+                    });
+
+            for (String id : strings(run.get("queued"))) {
+                QueuedMutation item = entry(id, null);
+
+                item.onCommit = confirmed::add;
+                client.offlineQueue().enqueue(item);
+            }
+
+            FlushReport report = client.flushOfflineQueue(null);
+
+            check(
+                    report.committed.equals(strings(run.get("committed"))),
+                    path + ": every write commits, got " + report.committed);
+            check(
+                    report.rejected.equals(strings(run.get("rejected"))),
+                    path + ": nothing is rejected");
+            check(
+                    ids(client.offlineQueue().items()).equals(strings(run.get("queuedAfterFlush"))),
+                    path + ": nothing is left queued");
+            check(
+                    store.removed.equals(strings(run.get("persistRemoveCalls"))),
+                    path + ": every durable record is removed, got " + store.removed);
+            check(
+                    confirmed.size() == strings(run.get("committed")).size(),
+                    path + ": every overlay is confirmed against its echoed cursor");
+
+            List<String> decodeFailed = new ArrayList<>();
+
+            for (MutationSettled event : settled) {
+                check(event.status() == MutationStatus.COMMITTED, path + ": settles committed");
+
+                if (event.error() != null) {
+                    check(code.equals(settledCode(event)), path + ": carrying " + code);
+                    check(event.value() == null, path + ": with no value");
+                    decodeFailed.add(event.mutationId());
+                }
+
+                // The outcome is decided (decode) before the record goes, and the record goes
+                // before the settle: never the reverse.
+                check(
+                        log.indexOf("remove:" + event.mutationId())
+                                < log.indexOf("settle:" + event.mutationId()),
+                        path + ": the record is removed before the settle");
+            }
+
+            check(
+                    decodeFailed.equals(strings(run.get("decodeFailed"))),
+                    path + ": the decode error rides the undecodable write, got " + decodeFailed);
+
+            if (run.containsKey("requestsAfterSecondFlush")) {
+                client.flushOfflineQueue(null);
+                check(
+                        bodies.size() == count(run.get("requestsAfterSecondFlush")),
+                        path + ": a second flush sends nothing");
+
+                // The direct call raises the same coded SDK error, not the codec's exception.
+                try {
+                    client.mutation("messages:send", null, null, null);
+                    check(false, "an undecodable result must raise");
+                } catch (Client.ApiException error) {
+                    check(code.equals(error.code), "a direct call raises " + code);
+                }
+            }
+        }
+    }
+
+    /** An unexpected failure nothing classifies, thrown from inside the replay. */
+    private static final class InjectedFailure extends Error {
+        private static final long serialVersionUID = 1L;
+
+        InjectedFailure() {
+            super("injected");
+        }
+    }
+
+    /**
+     * A flush that leaves its replay loop on an unexpected exception puts every drained write it
+     * had not yet settled back on the queue, in order, instead of losing it.
+     */
+    private static void flushNeverLosesDrainedWrites() {
+        int[] requests = {0};
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            requests[0]++;
+
+                            if (batchCalls(body).size() > 1) {
+                                return new Response(
+                                        413,
+                                        "{\"error\":{\"code\":\"PAYLOAD_TOO_LARGE\",\"message\":\"big\"}}");
+                            }
+
+                            // The first lone slot commits; the next request blows up.
+                            if (requests[0] > 2) {
+                                throw new InjectedFailure();
+                            }
+
+                            return new Response(200, echoBatchSlots(body, "null", 1L));
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store));
+        enqueueAll(client, List.of("f1", "f2", "f3"));
+
+        boolean escaped = false;
+
+        try {
+            client.flushOfflineQueue(null);
+        } catch (InjectedFailure expected) {
+            escaped = true;
+        }
+
+        check(escaped, "the unexpected failure still reaches the caller");
+        check(
+                ids(client.offlineQueue().items()).equals(List.of("f2", "f3")),
+                "the drained writes it never settled are back on the queue, in order, got "
+                        + ids(client.offlineQueue().items()));
+        check(store.removed.equals(List.of("f1")), "only the settled write lost its record");
+    }
+
+    /**
+     * ONE predicate classifies a replay failure on both paths: a coded envelope by its code alone
+     * whatever the status, an envelope-less reply by its status.
+     */
+    private static void offlineFlushClassifiesSingleAndBatchAlike() throws IOException {
+        covers("offline_flush_classifies_single_and_batch_alike");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "replayClassification");
+        Map<String, Object> paths = map(testCase.get("paths"));
+
+        for (Object raw : list(testCase.get("cases"))) {
+            Map<String, Object> scenario = map(raw);
+            String body =
+                    scenario.containsKey("rawBody")
+                            ? (String) scenario.get("rawBody")
+                            : Json.write(scenario.get("body"));
+            int status = count(scenario.get("status"));
+
+            for (String path : List.of("single", "batch")) {
+                String label = scenario.get("name") + " (" + path + ")";
+                List<String> queued = strings(paths.get(path));
+                List<MutationSettled> settled = new ArrayList<>();
+                Client client =
+                        recordingClient(new ArrayList<>(), payload -> new Response(status, body));
+
+                client.onMutationSettled(settled::add);
+                enqueueAll(client, queued);
+
+                FlushReport report = client.flushOfflineQueue(null);
+
+                if ("rejected".equals(scenario.get("outcome"))) {
+                    check(
+                            report.rejected.equals(queued),
+                            label + ": rejected, got " + report.rejected);
+                    check(client.offlineQueue().items().isEmpty(), label + ": nothing requeued");
+
+                    for (MutationSettled event : settled) {
+                        check(
+                                scenario.get("code").equals(settledCode(event)),
+                                label + ": carrying the server's code");
+                    }
+                } else {
+                    check(
+                            report.requeued.equals(queued),
+                            label + ": requeued, got " + report.requeued);
+                    check(
+                            ids(client.offlineQueue().items()).equals(queued),
+                            label + ": left queued in order");
+                    check(settled.isEmpty(), label + ": nothing settled");
+                }
+            }
+        }
+    }
+
+    /**
+     * A 413 is a verdict on the request whatever its body: a batch splits on ANY 413, and a lone
+     * write still refused settles terminally with PAYLOAD_TOO_LARGE.
+     */
+    private static void offlineFlushBatchSplitsOnEnvelopelessPayloadTooLarge() throws IOException {
+        covers("offline_flush_batch_splits_on_envelopeless_413");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "envelopelessPayloadTooLarge");
+        String rawBody = (String) testCase.get("rawBody");
+
+        for (String name : List.of("split", "alwaysRefused", "lone")) {
+            Map<String, Object> run = map(testCase.get(name));
+            int above =
+                    run.containsKey("refuseCallsAbove") ? count(run.get("refuseCallsAbove")) : -1;
+            List<MutationSettled> settled = new ArrayList<>();
+            Client client =
+                    recordingClient(
+                            new ArrayList<>(),
+                            body ->
+                                    above >= 0 && batchCalls(body).size() <= above
+                                            ? new Response(200, echoBatchSlots(body, "null", 1L))
+                                            : new Response(413, rawBody));
+
+            client.onMutationSettled(settled::add);
+            enqueueAll(client, strings(run.get("queued")));
+
+            FlushReport report = client.flushOfflineQueue(null);
+
+            check(
+                    report.committed.equals(strings(run.get("committed"))),
+                    name + ": committed, got " + report.committed);
+            check(
+                    report.rejected.equals(strings(run.get("rejected"))),
+                    name + ": rejected, got " + report.rejected);
+            check(
+                    ids(client.offlineQueue().items()).equals(strings(run.get("queuedAfterFlush"))),
+                    name + ": nothing left queued, got " + ids(client.offlineQueue().items()));
+
+            for (MutationSettled event : settled) {
+                if (event.status() == MutationStatus.REJECTED) {
+                    check(
+                            testCase.get("code").equals(settledCode(event)),
+                            name + ": refused with " + testCase.get("code"));
+                }
+            }
+        }
+    }
+
+    // --- Token-digest identity: with no identity set, the token's digest is who a write belongs
+    // to. Every write goes through `submit`, the path that stamps it, and every flush is the app's.
+
+    /** Sets the bearer token; the one place these cases touch it. */
+    private static void token(Client client, String value) {
+        client.authToken(value);
+    }
+
+    /** A client whose poster records each request's authorization header and commits it. */
+    private static Client tokenClient(String identity, String bearer, List<String> authorizations) {
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            authorizations.add(headers.get("authorization"));
+
+                            return new Response(200, "{\"result\":null}");
+                        });
+
+        client.identity(identity);
+        token(client, bearer);
+        client.offlineQueue(new OfflineQueue().queueBeforeFirstConnect(true));
+
+        return client;
+    }
+
+    private static MutationOutcome queueOne(Client client) {
+        return client.submit(new SubmitOptions("messages:send", new LinkedHashMap<>()));
+    }
+
+    /** The fixture's digest of {@code token}. */
+    private static String fixtureDigest(String token) throws IOException {
+        for (Object raw : list(scenario("offlineQueue", "tokenIdentity").get("digests"))) {
+            if (token.equals(map(raw).get("token"))) {
+                return (String) map(raw).get("digest");
+            }
+        }
+
+        throw new AssertionError("no fixture digest for " + token);
+    }
+
+    /**
+     * With no identity set, a write queued under one token is never sent with another: an account
+     * switch followed by the app's flush rejects it rather than sending user A's write with user
+     * B's bearer, and the same token replays it.
+     */
+    private static void offlineUnsetIdentityStampsTokenDigest() throws IOException {
+        covers("offline_unset_identity_stamps_token_digest");
+
+        Map<String, Object> tokenIdentity = scenario("offlineQueue", "tokenIdentity");
+
+        for (Object raw : list(tokenIdentity.get("digests"))) {
+            String token = (String) map(raw).get("token");
+
+            check(
+                    Offline.tokenDigest(token).equals(map(raw).get("digest")),
+                    "digest of a " + token.length() + "-unit token");
+        }
+
+        // Java strings are UTF-16, so a lone surrogate is a real token here. These cannot live in
+        // the shared fixture: serde_json and Swift's JSONSerialization refuse to parse them. The
+        // values are the reference algorithm's, over code units.
+        check(Offline.tokenDigest("\uD800").equals("1:190qvz:4zol"), "a lone high surrogate");
+        check(Offline.tokenDigest("a\uDC00b").equals("3:2wutaq:38auaw"), "a lone low surrogate");
+        Map<String, Object> accountSwitch = map(tokenIdentity.get("accountSwitch"));
+        String queuedUnder = (String) accountSwitch.get("queuedUnder");
+        String flushedUnder = (String) accountSwitch.get("flushedUnder");
+        String code = (String) scenario("offlineQueue", "identityGate").get("code");
+
+        List<String> authorizations = new ArrayList<>();
+        List<MutationSettled> settled = new ArrayList<>();
+        Client switched = tokenClient(null, queuedUnder, authorizations);
+
+        switched.onMutationSettled(settled::add);
+        queueOne(switched);
+        token(switched, flushedUnder);
+
+        FlushReport report = switched.flushOfflineQueue(null);
+
+        check(authorizations.isEmpty(), "user A's write must not travel with user B's bearer");
+        check(
+                report.rejected.size() == 1,
+                "the switched write is rejected, got " + report.rejected);
+        check(settled.size() == 1 && code.equals(settledCode(settled.get(0))), "with " + code);
+        check(switched.pendingMutationCount() == 0, "and nothing is left queued");
+
+        List<String> same = new ArrayList<>();
+        Client kept = tokenClient(null, queuedUnder, same);
+
+        queueOne(kept);
+
+        FlushReport replayed = kept.flushOfflineQueue(null);
+
+        check(same.equals(List.of("Bearer " + queuedUnder)), "the same token replays, got " + same);
+        check(replayed.committed.size() == 1, "and commits");
+    }
+
+    /** The three verdicts, over every kind of stamp, as the reference judges them. */
+    private static void verdictsForPlainTokenAndLegacyStamps() {
+        Identity tokenA = Identity.tokenStamp("token-a");
+        Identity digestSpelled = Identity.of(Offline.tokenDigest("token-a"));
+        Object[][] cases = {
+            {Identity.of("user-a"), Identity.of("user-a"), null, Offline.ReplayVerdict.MATCH},
+            {Identity.of("user-a"), Identity.of("user-b"), null, Offline.ReplayVerdict.MISMATCH},
+            {Identity.of("user-a"), Identity.signedOut(), null, Offline.ReplayVerdict.UNKNOWN},
+            {Identity.signedOut(), Identity.signedOut(), null, Offline.ReplayVerdict.MATCH},
+            {Identity.signedOut(), Identity.of("user-a"), null, Offline.ReplayVerdict.MISMATCH},
+            {
+                Identity.signedOut(),
+                Identity.tokenStamp("token-b"),
+                "token-b",
+                Offline.ReplayVerdict.MISMATCH
+            },
+            {Identity.absent(), Identity.of("user-a"), null, Offline.ReplayVerdict.MATCH},
+            {tokenA, Identity.tokenStamp("token-a"), "token-a", Offline.ReplayVerdict.MATCH},
+            {tokenA, Identity.of("user-a"), "token-a", Offline.ReplayVerdict.MATCH},
+            {tokenA, Identity.tokenStamp("token-b"), "token-b", Offline.ReplayVerdict.MISMATCH},
+            {tokenA, Identity.signedOut(), null, Offline.ReplayVerdict.UNKNOWN},
+            {tokenA, digestSpelled, null, Offline.ReplayVerdict.MISMATCH},
+            {digestSpelled, tokenA, "token-a", Offline.ReplayVerdict.MISMATCH},
+        };
+
+        for (Object[] spec : cases) {
+            check(
+                    Offline.replayIdentityVerdict(
+                                    (Identity) spec[0], (Identity) spec[1], (String) spec[2])
+                            == spec[3],
+                    "verdict for " + spec[0] + " under " + spec[1]);
+        }
+
+        QueuedMutation stamped =
+                new QueuedMutation("messages:send", new LinkedHashMap<>(), null, "m1");
+
+        stamped.identity = tokenA;
+
+        QueuedMutation restored =
+                QueuedMutation.fromRecord(map(Json.parse(Json.write(stamped.record(null)))));
+
+        check(restored.identity.equals(tokenA), "a token stamp survives the record round trip");
+    }
+
+    /** Nobody signed in: whose write it is cannot be told, so it is held, neither sent nor lost. */
+    private static void aWriteQueuedUnderATokenIsHeldOnceTheTokenIsCleared() {
+        List<String> authorizations = new ArrayList<>();
+        List<MutationSettled> settled = new ArrayList<>();
+        MemoryStore store = new MemoryStore();
+        Client client = tokenClient(null, "token-a", authorizations);
+
+        client.offlineQueue(new OfflineQueue().queueBeforeFirstConnect(true).persistence(store));
+        client.onMutationSettled(settled::add);
+        queueOne(client);
+        token(client, null);
+
+        FlushReport report = client.flushOfflineQueue(null);
+
+        check(authorizations.isEmpty(), "held: nothing is sent, got " + authorizations);
+        check(settled.isEmpty() && report.rejected.isEmpty(), "held: nothing settles");
+        check(client.pendingMutationCount() == 1, "held: the write stays queued");
+        check(store.removed.isEmpty(), "held: the durable record survives");
+
+        token(client, "token-a");
+        client.flushOfflineQueue(null);
+
+        check(authorizations.equals(List.of("Bearer token-a")), "the token back replays it");
+    }
+
+    /**
+     * A token write is stamped as a token stamp and an identity as itself, so neither can be taken
+     * for the other however the identity is spelled.
+     */
+    private static void anIdentitySpelledLikeADigestNeverMatchesATokenStamp() throws IOException {
+        String digest = fixtureDigest("token-a");
+        List<String> forward = new ArrayList<>();
+        Client tokenFirst = tokenClient(null, "token-a", forward);
+
+        queueOne(tokenFirst);
+        token(tokenFirst, null);
+        tokenFirst.identity(digest);
+        tokenFirst.flushOfflineQueue(null);
+        check(forward.isEmpty(), "a digest-spelled identity does not own a token's write");
+
+        List<String> backward = new ArrayList<>();
+        Client identityFirst = tokenClient(digest, null, backward);
+
+        queueOne(identityFirst);
+        identityFirst.identity(null);
+        token(identityFirst, "token-a");
+        identityFirst.flushOfflineQueue(null);
+        check(backward.isEmpty(), "a token does not own a digest-spelled identity's write");
+    }
+
+    /** The typed stamp survives the persistence round trip, and still gates the replay. */
+    private static void aTokenStampSurvivesPersistence() throws IOException {
+        MemoryStore store = new MemoryStore();
+        Client client = tokenClient(null, "token-a", new ArrayList<>());
+
+        client.offlineQueue(new OfflineQueue().queueBeforeFirstConnect(true).persistence(store));
+        queueOne(client);
+
+        check(
+                Map.of("tokenDigest", fixtureDigest("token-a"))
+                        .equals(store.records.get(0).get("identity")),
+                "the record is stamped with the token's digest, got "
+                        + store.records.get(0).get("identity"));
+
+        for (String bearer : List.of("token-a", "token-b")) {
+            List<String> authorizations = new ArrayList<>();
+            Client restored = tokenClient(null, bearer, authorizations);
+
+            restored.offlineQueue(new OfflineQueue().persistence(new MemoryStore(store.records)));
+            restored.hydrateOfflineQueue();
+            restored.flushOfflineQueue(null);
+
+            check(
+                    authorizations.equals(
+                            bearer.equals("token-a") ? List.of("Bearer token-a") : List.of()),
+                    "restored under " + bearer + ", got " + authorizations);
+        }
+    }
+
+    /**
+     * The gate judged the pass against one token, so every request in that pass carries it: a later
+     * chunk, and both halves of a 413 split, never go out with a token set mid-flush.
+     */
+    private static void aTokenSwappedMidFlushDoesNotCarryTheRestOfIt() {
+        List<String> seen = new ArrayList<>();
+        Client[] holder = new Client[1];
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            seen.add(headers.get("authorization") + " x" + batchCalls(body).size());
+                            token(holder[0], "token-b");
+
+                            return new Response(200, echoBatchSlots(body, "null", 1L));
+                        });
+
+        holder[0] = client;
+        token(client, "token-a");
+        client.offlineQueue(
+                new OfflineQueue()
+                        .maxItems(Offline.MAX_BATCH_ENTRIES + 1)
+                        .queueBeforeFirstConnect(true));
+
+        for (int index = 0; index <= Offline.MAX_BATCH_ENTRIES; index++) {
+            queueOne(client);
+        }
+
+        client.flushOfflineQueue(null);
+
+        check(
+                seen.equals(
+                        List.of(
+                                "Bearer token-a x" + Offline.MAX_BATCH_ENTRIES,
+                                "Bearer token-a x1")),
+                "every chunk carries the snapshotted token, got " + seen);
+
+        List<String> split = new ArrayList<>();
+        Client splitting =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            int size = batchCalls(body).size();
+
+                            split.add(headers.get("authorization") + " x" + size);
+                            token(holder[0], "token-b");
+
+                            return size > 1
+                                    ? new Response(413, "too large")
+                                    : new Response(200, echoBatchSlots(body, "null", 1L));
+                        });
+
+        holder[0] = splitting;
+        token(splitting, "token-a");
+        splitting.offlineQueue(new OfflineQueue().queueBeforeFirstConnect(true));
+        queueOne(splitting);
+        queueOne(splitting);
+        splitting.flushOfflineQueue(null);
+
+        check(
+                split.equals(
+                        List.of("Bearer token-a x2", "Bearer token-a x1", "Bearer token-a x1")),
+                "both halves of a 413 split carry the snapshotted token, got " + split);
+    }
+
+    /**
+     * A record an earlier build stamped signed-out whatever token was held says nothing about whose
+     * it is: under a token it is a mismatch. A record with no stamp at all still replays.
+     */
+    private static void legacyStampsUnderAHeldToken() {
+        List<String> authorizations = new ArrayList<>();
+        Client client = tokenClient(null, "token-b", authorizations);
+        QueuedMutation signedOut =
+                new QueuedMutation("messages:send", new LinkedHashMap<>(), null, "m1");
+        QueuedMutation unstamped =
+                new QueuedMutation("messages:send", new LinkedHashMap<>(), null, "m2");
+
+        signedOut.identity = Identity.signedOut();
+        unstamped.identity = Identity.absent();
+        client.offlineQueue().enqueue(signedOut);
+        client.offlineQueue().enqueue(unstamped);
+
+        FlushReport report = client.flushOfflineQueue(null);
+
+        check(
+                report.rejected.equals(List.of("m1")),
+                "a null stamp is rejected, got " + report.rejected);
+        check(report.committed.equals(List.of("m2")), "the unstamped record replays");
+        check(authorizations.equals(List.of("Bearer token-b")), "only the unstamped write is sent");
+    }
+
+    /**
+     * With no identity the token's digest is the identity, so a token change retires the previous
+     * session as an identity change does. Only a change FROM a token evicts.
+     */
+    @SuppressWarnings("unchecked")
+    private static void aNewTokenWithoutAnIdentityEvictsThePreviousSession() throws IOException {
+        Map<String, Object> document = fixture("ws-frames.json");
+        Map<String, Object> testCase = (Map<String, Object>) document.get("identityChange");
+        Map<String, Object> shape = (Map<String, Object>) document.get("shape");
+        Object[][] transitions = {
+            {"token-a", "token-b", null, true},
+            {"token-a", null, null, true},
+            {"token-a", "token-a", null, false},
+            {null, "token-a", null, false},
+            {"token-a", "token-b", "user-a", false},
+        };
+
+        for (Object[] transition : transitions) {
+            String label = transition[0] + " -> " + transition[1] + " as " + transition[2];
+            Client client = new Client("https://app.example", null);
+            List<Map<String, Object>> sent = new ArrayList<>();
+            List<List<Object>> delivered = new ArrayList<>();
+
+            client.identity((String) transition[2]);
+            token(client, (String) transition[0]);
+            client.attachSocket(sent::add, null);
+            client.subscribe("messages:list", new LinkedHashMap<>(), value -> {}, null, null);
+            client.handleFrame(Json.write(testCase.get("queryFrame")));
+            client.subscribeShape("roomMessages", Map.of("room", "general"), delivered::add, null);
+
+            for (Object frame : (List<Object>) shape.get("pokeSequence")) {
+                client.handleFrame(Json.write(frame));
+            }
+
+            delivered.clear();
+            token(client, (String) transition[1]);
+            sent.clear();
+            client.resendSubscriptions();
+
+            boolean evicts = (Boolean) transition[3];
+            Map<String, Object> query = null;
+            Map<String, Object> shapeFrame = null;
+
+            for (Map<String, Object> frame : sent) {
+                if ("sub_1".equals(frame.get("id"))) {
+                    query = (Map<String, Object>) frame.get("query");
+                } else if ("shape_1".equals(frame.get("id"))) {
+                    shapeFrame = frame;
+                }
+            }
+
+            check(query != null && shapeFrame != null, "both resend, " + label);
+            check(
+                    !query.containsKey("sinceSeq") == evicts,
+                    "query cursor, " + label + ": " + query);
+            check(
+                    !shapeFrame.containsKey("sinceCheckpoint") == evicts,
+                    "shape checkpoint, " + label + ": " + shapeFrame);
+            check(!delivered.isEmpty() == evicts, "shape callback, " + label);
+        }
     }
 }

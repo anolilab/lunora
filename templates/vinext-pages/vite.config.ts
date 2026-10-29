@@ -65,8 +65,10 @@ const ssrOrigin = (): Plugin => {
 export default defineConfig({
     // `allowUnauthenticatedShardAccess: true` is a DEMO default: the composed
     // worker default-denies client-named shard access (403), so the scaffold's
-    // auth-less `.shardBy("channelId")` schema needs this to work — data is
-    // protected by per-row RLS. A PRODUCTION sharded app should drop it and
-    // configure `authorizeShard` in a hand-written worker instead.
+    // auth-less `.shardBy("channelId")` schema needs this to work. Nothing else
+    // guards the data: the demo schema declares no RLS, so any caller can read and
+    // write every row. Before deploying, add auth and row-level security
+    // (`.rls(...)` in lunora/schema.ts), drop this flag, and configure
+    // `authorizeShard` in a hand-written worker instead.
     plugins: [vinext(), cloudflare(), lunora({ allowUnauthenticatedShardAccess: true, cloudflare: false }), ssrOrigin()],
 });

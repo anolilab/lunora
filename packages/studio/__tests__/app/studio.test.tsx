@@ -1,4 +1,4 @@
-import type { AnalyticsSqlResult } from "@lunora/bindings/analytics";
+import type { AnalyticsSqlQueryResult, FunctionUsagePanel } from "@lunora/bindings/analytics-sql";
 import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -103,6 +103,8 @@ const STUDIO_FEATURE_KEYS = [
     "mail",
     "notifications",
     "payments",
+    "privacy",
+    "platform",
     "queues",
     "scheduler",
     "storage",
@@ -121,9 +123,9 @@ const STUDIO_FEATURES_KEY_GUARD: KeysMatch<keyof StudioFeaturesResult, (typeof S
  * way as `StudioFeaturesResult`. The studio `QueuesPanel` reads these fields off
  * the wire, so a field added on one side and not the other would surface as a
  * silent `undefined` cell rather than a type error; this guard fails the build on
- * drift instead. `deadLetterQueue` is optional (push-only), so it's in the set.
+ * drift instead. `deadLetterQueue` (push-only) and `topic` (subscriptions only) are optional, so both are in the set.
  */
-const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name"] as const;
+const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name", "topic"] as const;
 
 const QUEUE_METADATA_KEY_GUARD: KeysMatch<keyof QueueMetadata, (typeof QUEUE_METADATA_KEYS)[number]> = true;
 
@@ -280,17 +282,17 @@ describe("studio", () => {
         expect(scheduledJobs).toBeDefined();
     });
 
-    it("runs the Analytics tab against the host-supplied analyticsQuery", async () => {
+    it("runs the Analytics tab against the host-supplied analyticsSqlQuery", async () => {
         // `waitFor` retries the assertion, so the count is not fixed.
         expect.hasAssertions();
 
-        const analyticsQuery = vi.fn<(sql: string) => Promise<AnalyticsSqlResult>>(async () => {
-            return { columns: [], rowCount: 0, rows: [] };
+        const analyticsSqlQuery = vi.fn<(panel: FunctionUsagePanel) => Promise<AnalyticsSqlQueryResult>>(async () => {
+            return { rowCount: 0, rows: [] };
         });
 
         render(
             <LunoraProvider client={createClient().asClient}>
-                <Studio analyticsQuery={analyticsQuery} />
+                <Studio analyticsSqlQuery={analyticsSqlQuery} />
             </LunoraProvider>,
         );
 
@@ -300,7 +302,7 @@ describe("studio", () => {
         // never fetches — the tab had no prop path to one at all.
         await waitFor(
             () => {
-                expect(analyticsQuery).toHaveBeenCalledWith(expect.stringContaining("FROM ANALYTICS"));
+                expect(analyticsSqlQuery).toHaveBeenCalledWith("volume");
             },
             { timeout: 5000 },
         );
@@ -378,6 +380,28 @@ describe("studio", () => {
         expect(screen.getByTestId("dash-tab-logs")).toBeDefined();
     });
 
+    it("hides the privacy requests page when the app does not declare @lunora/privacy", async () => {
+        expect.hasAssertions();
+
+        render(renderStudio(createClient({ privacy: false })));
+
+        await screen.findByTestId("dash-tab-logs");
+
+        await waitFor(() => {
+            expect(screen.queryByTestId("dash-tab-privacyRequests")).toBeNull();
+        });
+    });
+
+    it("shows the privacy requests page when the app declares @lunora/privacy", async () => {
+        expect.hasAssertions();
+
+        render(renderStudio(createClient({ privacy: true })));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("dash-tab-privacyRequests")).toBeDefined();
+        });
+    });
+
     it("hides the notifications page when @lunora/notify isn't wired", async () => {
         expect.hasAssertions();
 
@@ -433,6 +457,8 @@ describe("studio", () => {
             "mail",
             "notifications",
             "payments",
+            "privacy",
+            "platform",
             "queues",
             "scheduler",
             "storage",
@@ -445,7 +471,7 @@ describe("studio", () => {
         expect.assertions(2);
 
         expect(QUEUE_METADATA_KEY_GUARD).toBe(true);
-        expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name"]);
+        expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name", "topic"]);
     });
 
     it("keeps the studio's getTraces mirrors in lockstep with @lunora/do's contract", () => {

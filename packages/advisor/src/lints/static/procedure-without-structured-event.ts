@@ -24,7 +24,8 @@ const procedureWithoutStructuredEvent: Lint = {
     facing: "INTERNAL",
     level: "INFO",
     name: "procedure_without_structured_event",
-    remediation: 'Emit one event on the primary path: `ctx.log.info("<verb>", { … })`, or wrap the handler in `ctx.span("<name>", …)` to attach timing too.',
+    remediation:
+        'Emit one event on the primary path: `ctx.log.info("<verb>", { … })`, or attach the facts to the request\'s span with `ctx.span.setAttributes({ … })`, and time a step with `ctx.trace("<name>", …)`.',
     run: (context) => {
         if (context.procedureProtections === undefined) {
             return [];

@@ -161,7 +161,9 @@ const ForgotPasswordCard = ({ resetPath, signInHref }: ForgotPasswordCardProps =
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
-                <SubmitButton pending={state.status === "submitting"}>{t.forgotPassword}</SubmitButton>
+                <SubmitButton availableAt={state.resendAvailableAt} pending={state.status === "submitting"}>
+                    {t.forgotPassword}
+                </SubmitButton>
             </form>
         </AuthCard>
     );
@@ -240,7 +242,7 @@ const MagicLinkCard = ({ signInHref }: MagicLinkCardProps = {}): ReactElement | 
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
-                <SubmitButton pending={state.status === "submitting"}>
+                <SubmitButton availableAt={state.resendAvailableAt} pending={state.status === "submitting"}>
                     {t.magicLink}
                     {lastUsed === LAST_METHOD_MAGIC_LINK ? <LastUsedBadge /> : null}
                 </SubmitButton>
@@ -300,7 +302,9 @@ const EmailOtpCard = (): ReactElement | null => {
                     onChange={actions.setEmail}
                     type="email"
                 />
-                <SubmitButton pending={pending}>{t.emailOtp}</SubmitButton>
+                <SubmitButton availableAt={state.resendAvailableAt} pending={pending}>
+                    {t.emailOtp}
+                </SubmitButton>
             </form>
         </AuthCard>
     );

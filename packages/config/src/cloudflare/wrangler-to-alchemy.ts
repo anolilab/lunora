@@ -20,7 +20,7 @@
  * `wrangler`, `miniflare`, `esbuild`, `execa`, `find-process`, `glob`, `open`,
  * `proper-lockfile`, `signal-exit`. `@lunora/config` is imported by
  * `@lunora/vite`, so importing Alchemy here would push that tree into every
- * project that merely wanted to read `lunora.json`, and into any bundle
+ * project that merely wanted to read `lunora.config.*`, and into any bundle
  * targeting workerd — where none of it survives.
  *
  * Emitting text keeps this module pure and dependency-free. Alchemy is invoked
@@ -180,29 +180,39 @@ const collectVariables = (config: WranglerConfigShape, bindings: string[]): void
  * Every wrangler field this translation drops, named individually so the message
  * is actionable.
  *
- * The list is the set Lunora itself can write into `wrangler.jsonc` minus the
- * kinds emitted above — because a field that is dropped AND unreported is the
- * exact failure `unsupported` exists to prevent, and this list once held only
- * the fields with a top-level array. `queues` is the awkward one: the producers
+ * The list is every binding-shaped wrangler field this translation drops —
+ * whether Lunora writes it into `wrangler.jsonc` or a user declares it by hand
+ * (`k2`, which Lunora does not model) — because a field that is dropped AND
+ * unreported is the exact failure `unsupported` exists to prevent, and this
+ * list once held only the fields with a top-level array. `queues` is the awkward one: the producers
  * ARE emitted, so only a `consumers` entry is dropped, and it is reported under
  * its own path.
  */
 const UNSUPPORTED_FIELDS = [
     "ai",
+    "ai_search",
+    "ai_search_namespaces",
+    "analytics",
     "analytics_engine_datasets",
+    "artifacts",
     "assets",
     "browser",
     "containers",
     "flagship",
     "hyperdrive",
     "images",
+    "k2",
     "pipelines",
     "secrets_store_secrets",
     "send_email",
     "services",
     "tail_consumers",
     "vectorize",
+    "worker_loaders",
     "workflows",
+    // Lunora declares its workflows and agents here; the translation has no
+    // workflow construct, so they are reported rather than silently dropped.
+    "exports",
 ] as const;
 
 const collectUnsupported = (config: WranglerConfigShape, unsupported: string[]): void => {

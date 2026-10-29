@@ -1,7 +1,9 @@
+import { decodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
-import type { SqlCursor, SqlExec } from "../src/ctx-db";
+import type { SchemaLike, SqlCursor, SqlExec } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import type { FilterClause } from "../src/introspect";
 import {
     createFanoutCounters,
     datePrefixRange,
@@ -315,6 +317,26 @@ describe("introspect", () => {
             expect(page.columns).toEqual(["__id__", "text", "votes"]);
         });
 
+        // A SQL surface (the console's autocomplete, its linter, a dump of
+        // INSERTs) has to know which of the displayed names a statement may
+        // actually write. Handed only the display list it offered `title` and
+        // `authorId` as columns — names SQLite rejects, or, on workerd, silently
+        // resolves to the string literal of their own spelling.
+        it("reports the physical columns alongside the expanded display list", () => {
+            expect.assertions(2);
+
+            const page = readTablePage(database.sql, { table: "posts" });
+
+            expect(page.sqlColumns).toEqual(["id", "_creationTime", "__doc__"]);
+            expect(page.columns).toEqual(["id", "_creationTime", "title", "authorId"]);
+        });
+
+        it("reports the same list for a non-doc table, where the two coincide", () => {
+            expect.assertions(1);
+
+            expect(readTablePage(database.sql, { table: "messages" }).sqlColumns).toEqual(["__id__", "text", "votes"]);
+        });
+
         /** A canonical doc-stored table holding exactly one row with `doc` as its blob. */
         const seedDocTable = (name: string, doc: string): void => {
             database.raw(`CREATE TABLE "${name}" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
@@ -414,6 +436,56 @@ describe("introspect", () => {
 
             expect(page.total).toBe(1);
             expect(page.rows).toEqual([{ _creationTime: 1, authorId: "u1", id: "p1", title: "Hi" }]);
+        });
+
+        // A facet summarises a column's NULL group like any other value and a
+        // click has to bring those rows back. Bound as a parameter, `= ?` with
+        // NULL is neither true nor false for any row in the table, so the
+        // sidebar read "∅ (2)" over a grid that said the table was empty.
+        it("matches the NULL group when a clause asks for it, on a doc field", () => {
+            expect.assertions(2);
+
+            database.raw(`INSERT INTO "posts" VALUES ('p3', 3, '{"title":"No author","authorId":null}'), ('p4', 4, '{"title":"Absent"}')`);
+
+            const page = readTablePage(database.sql, { filters: [{ column: "authorId", operator: "eq", value: null }], table: "posts" });
+
+            // Both the JSON `null` and the absent key: `json_extract` answers
+            // NULL for each, and the facet groups them together too.
+            expect(page.total).toBe(2);
+            expect(page.rows.map((row) => (row as { id: string }).id)).toEqual(["p3", "p4"]);
+        });
+
+        it("matches everything else when a clause asks for `ne` NULL", () => {
+            expect.assertions(1);
+
+            database.raw(`INSERT INTO "posts" VALUES ('p3', 3, '{"title":"No author","authorId":null}')`);
+
+            expect(readTablePage(database.sql, { filters: [{ column: "authorId", operator: "ne", value: null }], table: "posts" }).total).toBe(2);
+        });
+
+        // A boolean is stored as a JSON true/false, which `json_extract` returns as
+        // 1/0. The bound value must be that integer: a raw JS boolean is not a
+        // bindable SQLite value, so an unconverted `true` would not match its row.
+        it("matches a boolean doc field by its JSON truth value", () => {
+            expect.assertions(2);
+
+            database.raw(`INSERT INTO "posts" VALUES ('p5', 5, '{"title":"On","published":true}'), ('p6', 6, '{"title":"Off","published":false}')`);
+
+            const idsWhere = (value: boolean): string[] =>
+                readTablePage(database.sql, { filters: [{ column: "published", operator: "eq", value }], table: "posts" }).rows.map(
+                    (row) => (row as { id: string }).id,
+                );
+
+            expect(idsWhere(true)).toEqual(["p5"]);
+            expect(idsWhere(false)).toEqual(["p6"]);
+        });
+
+        it("matches the NULL group on a physical column too", () => {
+            expect.assertions(1);
+
+            database.raw(`INSERT INTO "messages" VALUES ('m4', 'quiet', NULL)`);
+
+            expect(readTablePage(database.sql, { filters: [{ column: "votes", operator: "eq", value: null }], table: "messages" }).total).toBe(1);
         });
 
         it("aND-combines structured filters with the substring search", () => {
@@ -729,6 +801,21 @@ describe("introspect", () => {
                 totalSubscriptions: 0,
             });
         });
+
+        it("leaves a socket still awaiting its connect frame out of the connection count", () => {
+            expect.assertions(1);
+
+            expect(
+                summarizeSubscriptions([
+                    { authenticated: false, subs: {} },
+                    { authenticated: true, subs: {} },
+                ]),
+            ).toEqual({
+                connections: [{ admin: false, id: 0, subscriptions: [] }],
+                totalConnections: 1,
+                totalSubscriptions: 0,
+            });
+        });
     });
 
     describe("summarizeFanoutTopics", () => {
@@ -736,6 +823,12 @@ describe("introspect", () => {
             expect.assertions(1);
 
             expect(summarizeFanoutTopics([])).toEqual({ peakSubscribers: 0, topics: [], totalConnections: 0 });
+        });
+
+        it("keeps a socket still awaiting its connect frame out of the connection count", () => {
+            expect.assertions(1);
+
+            expect(summarizeFanoutTopics([{ authenticated: false }, { authenticated: true }]).totalConnections).toBe(1);
         });
 
         it("counts shapes by name and whispers by topic, busiest first", () => {
@@ -859,5 +952,105 @@ describe("datePrefixRange", () => {
         expect(datePrefixRange("2026-13")).toBeUndefined();
         expect(datePrefixRange("2026-07-32")).toBeUndefined();
         expect(datePrefixRange("")).toBeUndefined();
+    });
+});
+
+describe("admin filters over a v.bigint() / v.bytes() field", () => {
+    const schema = {
+        tables: {
+            payments: { indexes: [], shape: { amountMinor: { kind: "bigint" }, receipt: { kind: "bytes" } } },
+        },
+    } as unknown as SchemaLike;
+    const columnKinds = { amountMinor: "bigint", receipt: "bytes" };
+
+    let database: ReturnType<typeof createSqliteExec>;
+
+    beforeEach(async () => {
+        database = createSqliteExec();
+        runShardMigrations(database.sql, schema);
+
+        const writer = createShardContextDatabase({ schema, sql: database.sql });
+
+        for (const [id, amount, byte] of [
+            ["s9", 9n, 9],
+            ["s10", 10n, 10],
+            ["s200", 200n, 200],
+            ["neg", -5n, 5],
+        ] as const) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed writes
+            await writer.insert("payments", { _id: id, amountMinor: amount, receipt: new Uint8Array([byte]).buffer }, { allowExplicitId: true });
+        }
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const ids = (filters: FilterClause[]): string[] =>
+        readTablePage(database.sql, { columnKinds, filters, table: "payments" })
+            .rows.map((row) => String(row["_id"]))
+            .toSorted((a, b) => a.localeCompare(b));
+
+    it("binds a typed number through the stored sort key", () => {
+        expect.assertions(5);
+
+        expect(ids([{ column: "amountMinor", operator: "eq", value: 10 }])).toStrictEqual(["s10"]);
+        expect(ids([{ column: "amountMinor", operator: "gt", value: 100 }])).toStrictEqual(["s200"]);
+        expect(ids([{ column: "amountMinor", operator: "lt", value: 0 }])).toStrictEqual(["neg"]);
+        expect(ids([{ column: "amountMinor", operator: "gte", value: "10" }])).toStrictEqual(["s10", "s200"]);
+        expect(ids([{ column: "amountMinor", operator: "eq", value: 10n }])).toStrictEqual(["s10"]);
+    });
+
+    it("selects exactly the matching ids for a bulk delete", () => {
+        expect.assertions(1);
+
+        expect(
+            selectMatchingIds(database.sql, { columnKinds, filters: [{ column: "amountMinor", operator: "gt", value: 100 }], table: "payments" }),
+        ).toStrictEqual({
+            hasMore: false,
+            ids: ["s200"],
+        });
+    });
+
+    it("decodes bigint facet keys, and a clicked value filters back to its row", () => {
+        expect.assertions(3);
+
+        const amounts = facetColumn(database.sql, { column: "amountMinor", columnKinds, table: "payments" }).values.map((entry) => entry.value);
+
+        expect(amounts.toSorted((a, b) => Number(a) - Number(b))).toStrictEqual([-5n, 9n, 10n, 200n]);
+
+        // A bytes facet keeps its base64 key, which binds straight back.
+        const receipt = facetColumn(database.sql, {
+            column: "receipt",
+            columnKinds,
+            filters: [{ column: "amountMinor", operator: "eq", value: 9 }],
+            table: "payments",
+        }).values[0]?.value;
+
+        expect(receipt).toBe("CQ==");
+        expect(ids([{ column: "receipt", operator: "eq", value: receipt }])).toStrictEqual(["s9"]);
+    });
+
+    it("refuses a substring or fractional filter on a bigint", () => {
+        expect.assertions(2);
+
+        expect(() =>
+            selectMatchingIds(database.sql, { columnKinds, filters: [{ column: "amountMinor", operator: "contains", value: "100" }], table: "payments" }),
+        ).toThrow(/contains/u);
+        expect(() =>
+            selectMatchingIds(database.sql, { columnKinds, filters: [{ column: "amountMinor", operator: "gt", value: 1.5 }], table: "payments" }),
+        ).toThrow(/integer/u);
+    });
+
+    it("refuses a boolean, array or object on a bigint instead of matching every row", () => {
+        expect.assertions(3);
+
+        // Bound raw, each of these compares against the TEXT sort key so that
+        // gt/lt/ne select the whole table — the set a bulk delete removes.
+        for (const value of [true, ["1"], {}]) {
+            expect(() =>
+                selectMatchingIds(database.sql, { columnKinds, filters: [{ column: "amountMinor", operator: "gt", value }], table: "payments" }),
+            ).toThrow(/integer/u);
+        }
     });
 });

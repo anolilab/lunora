@@ -324,7 +324,5 @@ const resolveImportSource = async (options: ImportSourceOptions, cwd: string): P
     return { kind: "convex", snapshot, tables };
 };
 
-export type { ImportSource, ImportSourceName, ImportSourceOptions };
+export type { ImportSource, ImportSourceName };
 export { IMPORT_SOURCE_NAMES, readConvexExport, resolveImportSource };
-
-export { CONVEX_STORAGE_TABLE, isConvexSystemTable } from "../convex-snapshot";

@@ -3,7 +3,7 @@ title: "@lunora/payment"
 description: Provider-agnostic payments for Lunora — Stripe/Polar/Autumn/Dodo/Creem adapters, webhook sync, and a payment/subscription state machine.
 related:
     - to: /docs/packages/server
-      note: "`ctx.payments`, mirror tables into your schema"
+      note: "`ctx.payments`, schema extensions"
     - to: /docs/packages/scheduler
       note: "drive the reconciliation sweep"
     - to: /docs/packages/studio
@@ -46,6 +46,18 @@ bun add @lunora/payment stripe
 
 ## Configure
 
+Merge the store's tables into your schema with one `.extend`:
+
+```ts
+// lunora/schema.ts
+import { paymentExtension } from "@lunora/payment";
+import { defineSchema } from "@lunora/server";
+
+export default defineSchema({
+    // ... your app tables
+}).extend(paymentExtension);
+```
+
 `ctx.payments` is wired by codegen onto `ActionCtx` whenever a `lunora/` source
 imports `@lunora/payment` or reads `ctx.payments`. The adapter, which carries
 provider secrets, comes from a `config.payment(env)` thunk you pass to
@@ -65,8 +77,10 @@ export const ShardDO = createShardDO({
             client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }),
             webhookSecret: env.STRIPE_WEBHOOK_SECRET,
         }),
-        // Override the default "caller owns the referenceId" rule for org/workspace keys.
-        // authorize: (referenceId) => referenceId === ctx.auth.orgId,
+        // Override the default "caller owns the referenceId" rule for org/workspace keys. It runs per
+        // request with the caller's `userId` and the request's `ctx.db`.
+        // authorize: async (orgId, { db, userId }) =>
+        //     (await db.findFirst("members", { where: { orgId, role: "owner", userId } })) !== null,
         entitlements: {
             plans: {
                 pro: { features: ["export"], limits: { api_calls: 1000 }, priceIds: ["price_123"] },
@@ -79,12 +93,12 @@ export const ShardDO = createShardDO({
 
 The thunk returns `PaymentsFromContextOptions`:
 
-| Option          | Type                 | Notes                                                                                                                                           |
-| --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `adapter`       | `PaymentAdapter`     | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter` / `createCreemAdapter`. Required. |
-| `authorize`     | `AuthorizeReference` | `(referenceId) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                                            |
-| `entitlements`  | `EntitlementsConfig` | Plan → features/limits map. Required to use `check` / `listBalances`.                                                                           |
-| `observability` | `PaymentObserver`    | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                                                    |
+| Option          | Type                        | Notes                                                                                                                                                       |
+| --------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `adapter`       | `PaymentAdapter`            | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter` / `createCreemAdapter`. Required.             |
+| `authorize`     | `AuthorizeContextReference` | `(referenceId, { db, userId }) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                                        |
+| `entitlements`  | `EntitlementsConfig`        | Plan → features/limits map. Required for a `featureId` check and for `listBalances` on providers without native entitlements; a `priceId` check needs none. |
+| `observability` | `PaymentObserver`           | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                                                                |
 
 ### Provider adapters
 
@@ -261,8 +275,10 @@ export const checkout = action.input({ priceId: v.string() }).action(async ({ ct
 ```
 
 `createCheckout` reuses a reference's stored provider customer, minting a new
-one only on first checkout, and attaches an outbound idempotency key
-automatically (override via `input.idempotencyKey`).
+one only on first checkout (the customer is never caller-supplied), and attaches
+an outbound idempotency key automatically (override via `input.idempotencyKey`).
+A key you pass is hashed and namespaced to the authorized reference before it
+reaches the provider, so two tenants choosing the same key never collide.
 
 ### Entitlements: `check` and `track`
 
@@ -276,14 +292,17 @@ active plans cap the same limit, the most-generous value wins.
 - A **boolean feature** check (`featureId`, no numeric limit) returns
   `unlimited: true` when granted.
 - A **metered feature** check (`featureId` with a plan `limit`) subtracts usage
-  tracked this period and returns `{ allowed, balance, limit, used }`.
+  tracked this period and returns `{ allowed, balance, limit, used }`. "This
+  period" is the billing period of the subscription whose plan grants that
+  limit, so an unrelated subscription renewing never resets it.
 
 ```ts
 export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
-    // `mode: "add"` (default) increments; `"set"` reconciles the period total.
+    // `mode: "add"` (default) increments; `"set"` reconciles the LOCAL period total.
     // Both are a single append — a `"set"` records the absolute target as a marker
     // the period fold resets to, so concurrent or replayed `"set"` calls resolve
     // last-writer-wins instead of double-applying. Neither mode needs a lock.
+    // `"set"` throws on a provider that meters usage upstream — see the callout below.
     const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
 
     return { recorded: result.recorded };
@@ -303,9 +322,17 @@ failure is observed, never thrown, and the local ledger `check` reads is always
 updated.
 
 <Callout type="warn">
-    **Deduping a retry is opt-in.** Pass your own `idempotencyKey` — a unique index over `(provider, idempotencyKey)` then makes the append exactly-once, so a
-    retried call records once. Omit it (as the example above does) and `track` mints a fresh `crypto.randomUUID()` per call, which means "always record": the
-    same call retried after a timeout counts twice. Derive the key from whatever identifies the unit of work — the request id, the message id, the job id.
+    **Deduping a retry is opt-in.** Pass your own `idempotencyKey` — namespaced to the reference and feature, it makes the append exactly-once, so a retried
+    call records once. Omit it (as the example above does) and `track` mints a fresh `crypto.randomUUID()` per call, which means "always record": the same call
+    retried after a timeout counts twice. Derive the key from whatever identifies the unit of work — the request id, the message id, the job id.
+</Callout>
+
+<Callout type="warn">
+    **`mode: "set"` is local-only, and throws where the provider meters.** Provider meters are additive: they take events, not period totals, so a `"set"` can
+    only be forwarded as a delta against the total just read — and a `"set"` that LOWERS usage has no negative delta to send. `set 10 → set 5 → set 8` would
+    forward `10` then `3`, billing 13 upstream against a local period total of 8. Rather than over-bill silently, `track` rejects `"set"` with a
+    `VALIDATION_ERROR` on any provider whose `capabilities.usageMetering` is `true` (Stripe, Polar, Dodo, Autumn). Use `mode: "add"`, which is exact on both
+    sides. `"set"` stays available where usage is enforced locally.
 </Callout>
 
 ## Webhooks
@@ -360,7 +387,10 @@ export const processWebhook = internalAction
 `WebhookAction` (e.g. `subscription.active`, `payment.captured`,
 `payment.refunded`), and applies it through the state machine. A duplicate or
 no-op event is acknowledged with `200`, not re-applied. The inbound provider
-event id keys an append-only `events` log for idempotency and audit.
+event id keys an append-only `events` log for idempotency and audit. A
+subscription event older than the last one applied to its row (a redelivery
+after a `5xx`) is acknowledged as `stale` and ignored, so a late `active` cannot
+re-entitle a subscription that has since gone `past_due`.
 
 There is one deliberate non-200. An **orphaned** event — one that patches a row
 whose create event has not arrived yet, which is how providers deliver
@@ -371,6 +401,12 @@ route must return `webhookResponse(result)` rather than `Response.json(result)` 
 the status does not survive the `runAction` hop on its own. Malformed deliveries
 (a missing provider event id) likewise surface as a `5xx` rather than a `400`,
 so every provider retries them instead of some treating a `400` as "stop".
+
+A money amount the store cannot hold — one beyond 2^53 minor units — is the other
+event that is acknowledged with `200` although nothing was written. A retry would
+fail the same way, so the result is `unstorable`, and the observer receives a
+`webhook.applied` with `reason: "unstorable"`. The amount is not in the ledger:
+recover it from the provider, and alert on that observer event.
 
 The orphan retry is **bounded to exactly one**. The row may never appear at all —
 a subscription created before the integration existed, a store reset, a
@@ -392,72 +428,37 @@ rows with `reconcile` as below.
 
 ## Data it stores
 
-Codegen discovers tables by parsing your `lunora/schema.ts` AST, so it **cannot**
-resolve a cross-package `defineSchema({ ...paymentTables })` spread. Declare the
-tables you use **inline** in your own `lunora/schema.ts`, mirroring the columns
-in `@lunora/payment`'s exported `paymentTables` (the canonical column reference
-the store reads/writes). Declaring them locally also lets you chain `.global()`
-on read-heavy tables (e.g. `subscriptions`) for cross-region reads from D1.
+`paymentExtension` ships the store's five tables with the package. `.extend()`
+namespaces them with the `payment` key, and codegen reads them from the
+installed package, so a new column or index reaches your app when you upgrade
+`@lunora/payment`: there is nothing to copy into your schema.
 
-`paymentTables` is exactly **five** tables — mirror only these:
+| Table                   | Holds                                                                                   |
+| ----------------------- | --------------------------------------------------------------------------------------- |
+| `payment_customers`     | one row per `(provider, referenceId)`, carrying the provider's customer id              |
+| `payment_subscriptions` | one row per provider subscription: price, quantity, state, current period               |
+| `payment_sessions`      | one row per payment: `amountMinor`, `capturedMinor`, `refundedMinor`, `currency`, state |
+| `payment_events`        | the append-only webhook log — inbound idempotency, audit, debugging                     |
+| `payment_usageEvents`   | the append-only metered-usage ledger `check` folds over                                 |
 
-| Table             | Holds                                                                                   |
-| ----------------- | --------------------------------------------------------------------------------------- |
-| `customers`       | one row per `(provider, referenceId)`, carrying the provider's customer id              |
-| `subscriptions`   | one row per provider subscription: price, quantity, state, current period               |
-| `paymentSessions` | one row per payment: `amountMinor`, `capturedMinor`, `refundedMinor`, `currency`, state |
-| `events`          | the append-only webhook log — inbound idempotency, audit, debugging                     |
-| `usageEvents`     | the append-only metered-usage ledger `check` folds over                                 |
-
-Money is stored as `(amountMinor: bigint, currency: string)` columns; every row
-carries a `provider` discriminator so multiple providers can coexist during a
+Money is stored as `(amountMinor: number, currency: string)` columns. A number
+holds every integer up to 2^53 exactly (about 90 trillion dollars in cents), and
+the store refuses to write an amount outside that range rather than round it.
+Every row carries a `provider` discriminator so multiple providers can coexist during a
 migration. A **capture or refund is not its own table**: both fold into the
-payment's `paymentSessions` row as `capturedMinor` / `refundedMinor` plus a
+payment's `payment_sessions` row as `capturedMinor` / `refundedMinor` plus a
 state (`refunded` / `partially_refunded`). Products, prices, checkouts and
 invoices stay with the provider — the store does not mirror them.
 
-### Backfilling money columns written before the storage fix
+Extension tables live on the shard. Chaining `.global()` on one of them is not
+available, so the per-table D1 opt-in an inline table had does not carry over.
 
-Rows written between 2026-08-03 and the `v.bigint()` storage fix stored their
-money columns in a form SQL could not read. Such a row **reads back correctly**
-(`ctx.db.get` returns the right `bigint`) but is invisible to comparison:
+### Upgrading
 
-```ts
-// A settled session whose amountMinor was written in the affected window.
-await ctx.db
-    .query("paymentSessions")
-    .filter((q) => q.gte("amountMinor", 1000n))
-    .collect();
-// ^ silently omits it. `ORDER BY amountMinor` mis-sorts it, and `sum` counts it as 0.
-```
-
-Any write heals the row, so the exposure is the rows nobody writes again, which
-for `paymentSessions` is precisely the **settled** sessions, the ones most likely
-to be queried by amount and least likely to be touched.
-
-A reserved data migration re-projects them, one per affected table. Preview it
-first:
-
-```bash
-lunora migrate up __lunora_reproject__paymentSessions --dry-run
-lunora migrate up __lunora_reproject__paymentSessions
-lunora migrate status __lunora_reproject__paymentSessions
-```
-
-It runs through the normal writer path, so triggers fire and live subscribers are
-notified; it is resumable and safe to interrupt, and rows already in the current
-form are skipped rather than rewritten. Repeat for any other **shard-local**
-table of yours declaring a `v.bigint()` or `v.bytes()` column; the id is always
-`__lunora_reproject__<table>`.
-
-`.global()` tables were never affected: their rows live in the D1/Hyperdrive
-store, which has always had a per-column codec. Running the migration against one
-returns `MIGRATION_NOT_FOUND`, which is the expected answer, not a problem to
-work around.
-
-**Confirming it is complete**: a second `--dry-run` reporting `0` rows to change
-means nothing is left in the old form. Apps that only ever ran on the fixed
-version have nothing to do and the dry run reports `0` on the first try.
+- **Caller idempotency keys are now namespaced and hashed** before they reach
+  the provider. A retry that spans the deploy reaches the provider under a new
+  key, so it is not deduplicated against the attempt made before it — avoid
+  retrying a payment operation across the deploy.
 
 ## Studio
 

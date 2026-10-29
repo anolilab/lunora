@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCodegen } from "@lunora/codegen";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { consumeStudioWrite, STUDIO_WRITE_TEMP_SUFFIX } from "@lunora/config/studio-host";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { startCodegenWatch } from "../../src/util/codegen-watch";
 import type { Logger } from "../../src/util/logger";
@@ -14,6 +15,21 @@ vi.mock("@lunora/codegen", async (importOriginal) => {
     const actual = await importOriginal<typeof import("@lunora/codegen")>();
 
     return { ...actual, runCodegen: vi.fn<typeof actual.runCodegen>() };
+});
+
+// Whether an event is the echo of a studio handler's write is `@lunora/config`'s
+// to decide and test; here a test only says which answer it gets.
+vi.mock(import("@lunora/config/studio-host"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, consumeStudioWrite: vi.fn<typeof actual.consumeStudioWrite>() };
+});
+
+// Real by default; a test that needs exact events replaces one call with a listener it drives itself.
+vi.mock(import("node:fs"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, watch: vi.fn<typeof actual.watch>(actual.watch) as unknown as typeof actual.watch };
 });
 
 const silentLogger = (): { errors: string[]; logger: Logger; warns: string[] } => {
@@ -55,12 +71,306 @@ describe("startCodegenWatch", () => {
 
         vi.mocked(runCodegen).mockReset();
         vi.mocked(runCodegen).mockImplementation(actual.runCodegen);
+
+        const studioHost = await vi.importActual<typeof import("@lunora/config/studio-host")>("@lunora/config/studio-host");
+
+        vi.mocked(consumeStudioWrite).mockReset();
+        vi.mocked(consumeStudioWrite).mockImplementation(studioHost.consumeStudioWrite);
+
+        const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
+
+        vi.mocked(watch).mockReset();
+        vi.mocked(watch).mockImplementation(fs.watch);
     });
+
+    afterEach(() => {
+        vi.unstubAllEnvs();
+    });
+
+    /** Counts the watcher's codegen runs, and resolves once the Nth has happened: the test waits on the run, not a poll. */
+    const runCounter = (): { reached: (count: number) => Promise<void>; report: () => void } => {
+        let runs = 0;
+        const waiting = new Map<number, () => void>();
+
+        return {
+            report: (): void => {
+                runs += 1;
+                waiting.get(runs)?.();
+            },
+            reached: (count: number): Promise<void> =>
+                new Promise((resolve) => {
+                    if (runs >= count) {
+                        resolve();
+                    } else {
+                        waiting.set(count, resolve);
+                    }
+                }),
+        };
+    };
 
     /** Stub codegen to a clean run, so a test can reach the hook without a real project. */
     const codegenSucceeds = (): void => {
         vi.mocked(runCodegen).mockReturnValue({ platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>);
     };
+
+    it("forwards lazy function mode to startup codegen", async () => {
+        expect.assertions(1);
+
+        codegenSucceeds();
+
+        const workdir = projectWithPostCodegen();
+        const { spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+        const handle = startCodegenWatch({ lazyFunctions: true, logger, lunoraDirectory: ".", projectRoot: workdir, spawner });
+
+        try {
+            await handle.ready;
+
+            expect(runCodegen).toHaveBeenCalledWith(expect.objectContaining({ lazyFunctions: true }));
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("honors the lazy environment opt-in when its flag is absent", async () => {
+        expect.assertions(1);
+
+        vi.stubEnv("LUNORA_LAZY_FUNCTIONS", "1");
+        codegenSucceeds();
+        const workdir = projectWithPostCodegen();
+        const { spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+        const handle = startCodegenWatch({ logger, lunoraDirectory: ".", projectRoot: workdir, spawner });
+        try {
+            await handle.ready;
+
+            expect(runCodegen).toHaveBeenCalledWith(expect.objectContaining({ lazyFunctions: true }));
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("reuses one codegen project across runs and drops it after a failed run", async () => {
+        expect.hasAssertions();
+
+        // No `postcodegen` script, so no settle window delays the reruns.
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-project-"));
+
+        writeFileSync(join(workdir, "schema.ts"), "", "utf8");
+
+        // Each run reports itself, so the test waits for the run its edit caused instead of polling the mock.
+        const runs = runCounter();
+
+        vi.mocked(runCodegen).mockImplementationOnce(() => {
+            runs.report();
+            throw new Error("schema.ts is not parseable");
+        });
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        const projectOf = (call: number): unknown => vi.mocked(runCodegen).mock.calls[call]?.[0].project;
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir });
+
+        try {
+            await handle.ready;
+
+            writeFileSync(join(workdir, "schema.ts"), "// edit 1", "utf8");
+            await runs.reached(2);
+
+            writeFileSync(join(workdir, "schema.ts"), "// edit 2", "utf8");
+            await runs.reached(3);
+
+            expect(projectOf(0)).toBeDefined();
+            expect(projectOf(1)).not.toBe(projectOf(0));
+            expect(projectOf(2)).toBe(projectOf(1));
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("rebuilds the project when a tsconfig it extends changes", async () => {
+        expect.assertions(2);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-extends-"));
+
+        writeFileSync(join(workdir, "base.json"), JSON.stringify({ compilerOptions: { strict: false } }), "utf8");
+        writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ extends: "./base.json" }), "utf8");
+        writeFileSync(join(workdir, "schema.ts"), "", "utf8");
+
+        const runs = runCounter();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        const projectOf = (call: number): unknown => vi.mocked(runCodegen).mock.calls[call]?.[0].project;
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir });
+
+        try {
+            await handle.ready;
+
+            // The extended file changes its settings; the selected tsconfig's own bytes do not.
+            writeFileSync(join(workdir, "base.json"), JSON.stringify({ compilerOptions: { strict: true } }), "utf8");
+            writeFileSync(join(workdir, "schema.ts"), "// edit", "utf8");
+            await runs.reached(2);
+
+            expect(projectOf(1)).toBeDefined();
+            expect(projectOf(1)).not.toBe(projectOf(0));
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("rebuilds the project when the dependencies are installed again", async () => {
+        expect.assertions(2);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-install-"));
+
+        writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({}), "utf8");
+        mkdirSync(join(workdir, "node_modules"), { recursive: true });
+        writeFileSync(join(workdir, "node_modules", ".modules.yaml"), "layoutVersion: 5\n", "utf8");
+        writeFileSync(join(workdir, "schema.ts"), "", "utf8");
+
+        const runs = runCounter();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        const projectOf = (call: number): unknown => vi.mocked(runCodegen).mock.calls[call]?.[0].project;
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir });
+
+        try {
+            await handle.ready;
+
+            // `pnpm install` rewrites its marker; the next schema save must not reuse declarations read before it.
+            writeFileSync(join(workdir, "node_modules", ".modules.yaml"), "layoutVersion: 5\nupdated: true\n", "utf8");
+            writeFileSync(join(workdir, "schema.ts"), "// edit", "utf8");
+            await runs.reached(2);
+
+            expect(projectOf(1)).toBeDefined();
+            expect(projectOf(1)).not.toBe(projectOf(0));
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("rebuilds the project when the workspace above it is installed again", async () => {
+        expect.assertions(2);
+
+        // A pnpm workspace keeps its lockfile and `node_modules` at the root, above the project that `lunora dev` runs in.
+        const workspace = mkdtempSync(join(tmpdir(), "lunora-cw-workspace-"));
+        const projectRoot = join(workspace, "app");
+
+        mkdirSync(projectRoot, { recursive: true });
+        writeFileSync(join(workspace, "pnpm-lock.yaml"), "lockfileVersion: 9\n", "utf8");
+        mkdirSync(join(workspace, "node_modules"), { recursive: true });
+        writeFileSync(join(workspace, "node_modules", ".modules.yaml"), "layoutVersion: 5\n", "utf8");
+        writeFileSync(join(projectRoot, "tsconfig.json"), JSON.stringify({}), "utf8");
+        writeFileSync(join(projectRoot, "schema.ts"), "", "utf8");
+
+        const runs = runCounter();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        const projectOf = (call: number): unknown => vi.mocked(runCodegen).mock.calls[call]?.[0].project;
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot });
+
+        try {
+            await handle.ready;
+
+            writeFileSync(join(workspace, "node_modules", ".modules.yaml"), "layoutVersion: 5\nupdated: true\n", "utf8");
+            writeFileSync(join(projectRoot, "schema.ts"), "// edit", "utf8");
+            await runs.reached(2);
+
+            expect(projectOf(1)).toBeDefined();
+            expect(projectOf(1)).not.toBe(projectOf(0));
+        } finally {
+            await handle.close();
+            rmSync(workspace, { force: true, recursive: true });
+        }
+    });
+
+    it("rebuilds the project when the include globs of its tsconfig change", async () => {
+        expect.assertions(2);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-include-edit-"));
+
+        writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ include: ["src"] }), "utf8");
+        writeFileSync(join(workdir, "schema.ts"), "", "utf8");
+
+        const runs = runCounter();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        const projectOf = (call: number): unknown => vi.mocked(runCodegen).mock.calls[call]?.[0].project;
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir });
+
+        try {
+            await handle.ready;
+
+            writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ include: ["lib"] }), "utf8");
+            writeFileSync(join(workdir, "schema.ts"), "// edit", "utf8");
+            await runs.reached(2);
+
+            expect(projectOf(1)).toBeDefined();
+            expect(projectOf(1)).not.toBe(projectOf(0));
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
+    it("keeps the project when a file the include globs newly match is added, until the next rebuild", async () => {
+        expect.assertions(1);
+
+        const workdir = mkdtempSync(join(tmpdir(), "lunora-cw-include-"));
+
+        writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ include: ["src", "schema.ts"] }), "utf8");
+        mkdirSync(join(workdir, "src"), { recursive: true });
+        writeFileSync(join(workdir, "src", "a.ts"), "export const a = 1;\n", "utf8");
+        writeFileSync(join(workdir, "schema.ts"), "", "utf8");
+
+        const runs = runCounter();
+        vi.mocked(runCodegen).mockImplementation(() => {
+            runs.report();
+
+            return { platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>;
+        });
+
+        const projectOf = (call: number): unknown => vi.mocked(runCodegen).mock.calls[call]?.[0].project;
+        const handle = startCodegenWatch({ debounceMs: 0, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir });
+
+        try {
+            await handle.ready;
+
+            // A new file under `src/` is matched by the include glob, but the settings-only check does not glob the tree on a save.
+            writeFileSync(join(workdir, "src", "globals.d.ts"), "declare const x: number;", "utf8");
+            writeFileSync(join(workdir, "schema.ts"), "// edit", "utf8");
+            await runs.reached(2);
+
+            expect(projectOf(1)).toBe(projectOf(0));
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
 
     describe("postcodegen hook", () => {
         it("runs the project's postcodegen after a successful generate", async () => {
@@ -220,6 +530,123 @@ describe("startCodegenWatch", () => {
 
                 expect(calls).toHaveLength(1);
             } finally {
+                await handle.close();
+                rmSync(workdir, { force: true, recursive: true });
+            }
+        });
+
+        it("runs only the hook for a studio write, whose handler already ran codegen", async () => {
+            expect.assertions(1);
+
+            codegenSucceeds();
+
+            // `lunora dev` serves Studio from this process, and its schema and
+            // policy handlers run codegen in the request that writes the file.
+            // Their write is a temporary file renamed over the source, which raises
+            // an event for the temporary file and (on macOS) two for the source.
+            const workdir = projectWithPostCodegen();
+            const schemaPath = join(workdir, "schema.ts");
+            const hookRuns = runCounter();
+            const spawner = (): Promise<{ code: number }> => {
+                hookRuns.report();
+
+                return Promise.resolve({ code: 0 });
+            };
+
+            vi.mocked(consumeStudioWrite).mockImplementation((path) => path === schemaPath);
+
+            // The watcher's listener, driven by hand: a real watch also reports the fixture files written just before it started
+            // (macOS), and only becomes active some time after `watch()` returns.
+            let emit: ((event: string, filename: string) => void) | undefined;
+
+            vi.mocked(watch).mockImplementationOnce(((_path: string, _options: unknown, listener: (event: string, filename: string) => void) => {
+                emit = listener;
+
+                return { close: () => {} };
+            }) as unknown as typeof watch);
+
+            // Only the clock the settle window reads: the debounce timer stays real.
+            vi.useFakeTimers({ toFake: ["Date"] });
+
+            const handle = startCodegenWatch({ debounceMs: 50, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir, spawner });
+
+            try {
+                await handle.ready;
+
+                // Past HOOK_SETTLE_MS (300), or the watcher would treat this write as the startup hook's own.
+                vi.setSystemTime(Date.now() + 301);
+
+                emit?.("rename", `schema.ts${STUDIO_WRITE_TEMP_SUFFIX}`);
+                emit?.("rename", "schema.ts");
+                emit?.("change", "schema.ts");
+
+                await hookRuns.reached(2);
+
+                // Startup only: the studio write ran the hook without codegen.
+                expect(runCodegen).toHaveBeenCalledTimes(1);
+            } finally {
+                vi.useRealTimers();
+                await handle.close();
+                rmSync(workdir, { force: true, recursive: true });
+            }
+        });
+
+        it("runs the hook after the current one for a studio write made while it runs", async () => {
+            expect.assertions(1);
+
+            codegenSucceeds();
+
+            // Events that land while a hook runs are dropped as its own writes, but a studio write is not one, and its handler ran
+            // codegen without the hook.
+            const workdir = projectWithPostCodegen();
+            const schemaPath = join(workdir, "schema.ts");
+            const hookRuns = runCounter();
+            let releaseStartupHook: (() => void) | undefined;
+            const startupHook = new Promise<void>((resolve) => {
+                releaseStartupHook = resolve;
+            });
+            let spawned = 0;
+            const spawner = async (): Promise<{ code: number }> => {
+                spawned += 1;
+                hookRuns.report();
+
+                if (spawned === 1) {
+                    await startupHook;
+                }
+
+                return { code: 0 };
+            };
+
+            vi.mocked(consumeStudioWrite).mockImplementation((path) => path === schemaPath);
+
+            let emit: ((event: string, filename: string) => void) | undefined;
+
+            vi.mocked(watch).mockImplementationOnce(((_path: string, _options: unknown, listener: (event: string, filename: string) => void) => {
+                emit = listener;
+
+                return { close: () => {} };
+            }) as unknown as typeof watch);
+
+            vi.useFakeTimers({ toFake: ["Date"] });
+
+            const handle = startCodegenWatch({ debounceMs: 50, logger: silentLogger().logger, lunoraDirectory: ".", projectRoot: workdir, spawner });
+
+            try {
+                // Not `handle.ready`: it waits for the startup hook, which is held open here.
+                await hookRuns.reached(1);
+
+                emit?.("rename", `schema.ts${STUDIO_WRITE_TEMP_SUFFIX}`);
+                emit?.("rename", "schema.ts");
+                emit?.("change", "schema.ts");
+
+                releaseStartupHook?.();
+
+                await hookRuns.reached(2);
+
+                // Startup only: the studio handler already ran codegen for its write.
+                expect(runCodegen).toHaveBeenCalledTimes(1);
+            } finally {
+                vi.useRealTimers();
                 await handle.close();
                 rmSync(workdir, { force: true, recursive: true });
             }

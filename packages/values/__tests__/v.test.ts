@@ -2,7 +2,7 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { describe, expect, it } from "vitest";
 
 import type { Id, Infer } from "../src/index";
-import { isOrWrapsFromValidator, v, ValidationError } from "../src/index";
+import { isOrWrapsFromValidator, isStringValidator, v, ValidationError } from "../src/index";
 import type { Assert, Equal } from "./__helpers__/type-assert";
 
 const assertOk: (condition: unknown, message: string) => asserts condition = (condition, message) => {
@@ -53,13 +53,36 @@ describe("primitives", () => {
         expect(() => v.null().parse(undefined)).toThrow(ValidationError);
     });
 
-    it("bytes accepts ArrayBuffer only", () => {
+    it("bytes passes an ArrayBuffer through and rejects a non-buffer", () => {
         expect.assertions(2);
 
         const buffer = new ArrayBuffer(4);
 
         expect(v.bytes().parse(buffer)).toBe(buffer);
-        expect(() => v.bytes().parse(new Uint8Array(4))).toThrow(ValidationError);
+        expect(() => v.bytes().parse("nope")).toThrow(ValidationError);
+    });
+
+    it("bytes normalises a view to an ArrayBuffer", () => {
+        expect.assertions(3);
+
+        const parsed = v.bytes().parse(new Uint8Array([1, 2, 3]));
+
+        expect(parsed).toBeInstanceOf(ArrayBuffer);
+        expect(parsed.byteLength).toBe(3);
+        expect([...new Uint8Array(parsed)]).toStrictEqual([1, 2, 3]);
+    });
+
+    it("bytes copies only a view's own window, not its parent buffer", () => {
+        expect.assertions(2);
+
+        // A subarray views a slice of a larger buffer. Returning `view.buffer`
+        // would hand the column every byte of the parent — the neighbouring
+        // records' bytes included.
+        const parent = new Uint8Array([9, 9, 1, 2, 3, 9, 9]);
+        const parsed = v.bytes().parse(parent.subarray(2, 5));
+
+        expect(parsed.byteLength).toBe(3);
+        expect([...new Uint8Array(parsed)]).toStrictEqual([1, 2, 3]);
     });
 
     it("literal", () => {
@@ -109,6 +132,36 @@ describe("composites", () => {
         expect(schema.parse({ name: "a" })).toEqual({ name: "a" });
         expect(schema.parse({ name: "a", nickname: "b" })).toEqual({ name: "a", nickname: "b" });
         expect(() => schema.parse({ name: "a", nickname: 7 })).toThrow(ValidationError);
+    });
+
+    it("parses an absent bare `v.any()` field, so the key is optional and not required (issue #688)", () => {
+        expect.assertions(3);
+
+        // `v.any()`'s parser returns its input unchanged, so `undefined` is a
+        // perfectly good value for it — an absent field parses. That is why
+        // `ObjectShapeType` types the key `data?: unknown` and `toJsonSchema`
+        // leaves it out of `required`; `@lunora/codegen` used to disagree and
+        // emit a REQUIRED `data: unknown` into `_generated/api.ts`, which made
+        // two procedures declaring the identical validator fail to typecheck
+        // against each other.
+        const schema = v.object({ data: v.any(), id: v.string() });
+
+        expect(schema.safeParse({ id: "x" }).ok).toBe(true);
+        expect(schema.parse({ id: "x" })).toEqual({ id: "x" });
+        // A declared `v.any()` still round-trips a supplied value untouched.
+        expect(schema.parse({ data: { nested: 1 }, id: "x" })).toEqual({ data: { nested: 1 }, id: "x" });
+    });
+
+    it("parses an absent field of a `v.union(...)` with an `any` member (issue #688)", () => {
+        expect.assertions(2);
+
+        // The union tries its members; `v.any()` accepts `undefined`, so the
+        // field is absent-tolerant exactly like a bare `v.any()`.
+        const schema = v.object({ id: v.string(), payload: v.union(v.string(), v.any()) });
+
+        expect(schema.safeParse({ id: "x" }).ok).toBe(true);
+        // A union of only absent-INTOLERANT members still requires the field.
+        expect(v.object({ flag: v.union(v.string(), v.number()) }).safeParse({}).ok).toBe(false);
     });
 
     it("object reads declared fields as own-properties, not through the prototype chain", () => {
@@ -796,6 +849,46 @@ describe("v.union() edge cases", () => {
         expect(plain.error.received).toBe('string "Draft"');
     });
 
+    it("a nullable literal member still accepts null", () => {
+        expect.assertions(2);
+
+        const schema = v.union(v.literal("a"), v.literal("b").nullable());
+
+        expect(schema.parse(null)).toBeNull();
+        expect(schema.parse("b")).toBe("b");
+    });
+
+    it("a refined literal member still runs its refinement", () => {
+        expect.assertions(2);
+
+        const schema = v.union(
+            v.literal("a").check(() => false, "never"),
+            v.string(),
+        );
+
+        // The refined member is tried first and fails its check, so the string branch wins.
+        expect(schema.parse("a")).toBe("a");
+        expect(() =>
+            v
+                .union(
+                    v.literal("a").check(() => false, "never"),
+                    v.literal("b"),
+                )
+                .parse("a"),
+        ).toThrow(ValidationError);
+    });
+
+    it("an all-literal union miss keeps its full diagnostic", () => {
+        expect.hasAssertions();
+
+        const result = v.union(v.literal("admin"), v.literal("user"), v.literal("guest")).safeParse("root");
+
+        assertOk(!result.ok, "expected parse to fail");
+
+        expect(result.error.message).toBe('Expected union of 3 member(s) (closest: expected literal(admin) at <root>) at <root>, received string "root"');
+        expect(result.error.expected).toBe("union of 3 member(s) (closest: expected literal(admin) at <root>)");
+    });
+
     it("a single-member union accepts a valid value", () => {
         expect.assertions(1);
 
@@ -964,5 +1057,45 @@ describe("v.partial", () => {
         expect(doneCheck).toBe(true);
         expect(empty).toStrictEqual({});
         expect(some).toStrictEqual({ title: "a" });
+    });
+});
+
+describe("isStringValidator", () => {
+    it("is true only when every accepted value is a string", () => {
+        expect.assertions(9);
+
+        expect(isStringValidator(v.string())).toBe(true);
+        expect(isStringValidator(v.id("posts"))).toBe(true);
+        expect(isStringValidator(v.literal("a"))).toBe(true);
+        expect(isStringValidator(v.union(v.literal("a"), v.string()))).toBe(true);
+        expect(isStringValidator(v.literal(1))).toBe(false);
+        expect(isStringValidator(v.union(v.literal("a"), v.literal(2)))).toBe(false);
+        expect(isStringValidator(v.number())).toBe(false);
+        expect(isStringValidator(v.optional(v.string()))).toBe(false);
+        expect(isStringValidator(v.union(v.string(), v.number()))).toBe(false);
+    });
+});
+
+describe("rejectUnknownKeys diagnostics", () => {
+    it("names every undeclared key in input order, at the object's path", () => {
+        expect.hasAssertions();
+
+        const schema = v.object({ inner: v.object({ a: v.string(), b: v.number() }) });
+        const result = schema.safeParse({ inner: { a: "x", b: 1, zeta: 1, alpha: 2 } }, { rejectUnknownKeys: true });
+
+        assertOk(!result.ok, "expected parse to fail");
+
+        expect(result.error.message).toBe(
+            "object has 2 undeclared key(s): zeta, alpha. Add them to the validator, or call .strip() on it to drop them on purpose.",
+        );
+        expect(result.error.expected).toBe("only the declared keys (a, b)");
+        expect(result.error.received).toBe("zeta, alpha");
+        expect(result.error.path).toStrictEqual(["inner"]);
+    });
+
+    it("accepts an input carrying only declared keys", () => {
+        expect.assertions(1);
+
+        expect(v.object({ a: v.string(), b: v.optional(v.number()) }).parse({ a: "x" }, { rejectUnknownKeys: true })).toStrictEqual({ a: "x" });
     });
 });

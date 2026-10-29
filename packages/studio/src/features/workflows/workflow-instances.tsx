@@ -1,29 +1,75 @@
 import type { WorkflowInstanceAction, WorkflowInstanceDetail, WorkflowInstanceStatus, WorkflowInstanceSummary } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { ConfirmButton } from "../../components/confirm-button";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget } from "../../lib/internal";
+import { errorMessage, fireAndForget, jsonRowReplacer } from "../../lib/internal";
 
 /** The status values offered as table filters (the common lifecycle states). */
-const STATUS_FILTERS: WorkflowInstanceStatus[] = ["queued", "running", "paused", "waiting", "complete", "errored", "terminated"];
+const STATUS_FILTERS: WorkflowInstanceStatus[] = ["queued", "running", "rollingBack", "paused", "waiting", "complete", "errored", "terminated"];
 
 /** The lifecycle mutations exposed as per-instance buttons (the REST `PATCH .../status` set). */
-const ACTIONS: WorkflowInstanceAction[] = ["pause", "resume", "terminate"];
+const ACTIONS: WorkflowInstanceAction[] = ["pause", "resume", "restart", "terminate"];
+
+interface InstanceActionsProps {
+    readonly busy: boolean;
+    readonly id: string;
+    readonly onAct: (action: WorkflowInstanceAction) => void;
+}
+
+/** The per-instance lifecycle buttons. Restart re-runs every step from the start (side-effecting steps run again), so it asks for confirmation first. */
+const InstanceActions = ({ busy, id, onAct }: InstanceActionsProps): ReactElement => {
+    const t = useT();
+
+    return (
+        <>
+            {ACTIONS.map((action) =>
+                action === "restart" ? (
+                    <ConfirmButton
+                        confirmLabel={t("Restart?")}
+                        disabled={busy}
+                        key={action}
+                        onConfirm={() => {
+                            onAct(action);
+                        }}
+                        testId={`workflow-instance-${action}-${id}`}
+                    >
+                        {t(action)}
+                    </ConfirmButton>
+                ) : (
+                    <Button
+                        data-testid={`workflow-instance-${action}-${id}`}
+                        disabled={busy}
+                        key={action}
+                        onClick={() => {
+                            onAct(action);
+                        }}
+                        size="sm"
+                        type="button"
+                        variant="ghost"
+                    >
+                        {t(action)}
+                    </Button>
+                ),
+            )}
+        </>
+    );
+};
 
 interface WorkflowInstanceHistoryProps {
     /** Load one instance's full detail (steps). Defaults to `client.getWorkflowInstance`. */
     readonly loadDetail?: (args: { id: string; name: string }) => Promise<WorkflowInstanceDetail>;
     /** Load the instance list. Defaults to `client.listWorkflowInstances`. A custom loader makes the view read-only. */
     readonly loadInstances?: (args: { name: string; status?: WorkflowInstanceStatus }) => Promise<WorkflowInstanceSummary[]>;
-    /** Force-hide the lifecycle (pause/resume/terminate) buttons even when a handler is available — an explicit override of the default capability gate. */
+    /** Force-hide the lifecycle (pause/resume/restart/terminate) buttons even when a handler is available — an explicit override of the default capability gate. */
     readonly readOnly?: boolean;
-    /** Pause/resume/terminate an instance. Defaults to `client.setWorkflowInstanceStatus`. */
+    /** Pause/resume/restart/terminate an instance. Defaults to `client.setWorkflowInstanceStatus`. */
     readonly runAction?: (args: { action: WorkflowInstanceAction; id: string; name: string }) => Promise<{ status: WorkflowInstanceStatus }>;
     /** The deployed Cloudflare workflow name to inspect (`workflows[].name`). */
     readonly workflowName: string;
@@ -43,7 +89,7 @@ const formatStepPayload = (step: { error?: unknown; output?: unknown }): string 
     }
 
     try {
-        return JSON.stringify(value);
+        return JSON.stringify(value, jsonRowReplacer);
     } catch {
         return "(unserializable)";
     }
@@ -54,7 +100,7 @@ const formatStepPayload = (step: { error?: unknown; output?: unknown }): string 
  * (`/_lunora/admin/workflows*`) — the cross-instance list and per-step timeline
  * the `Workflow` binding can't expose (it only reads a single instance's
  * top-level status). Filter by status, open an instance to see its step
- * timeline, and (when client-owned) pause / resume / terminate it.
+ * timeline, and (when client-owned) pause / resume / restart / terminate it.
  *
  * Requires the worker to be built with a `workflowsClient` (a Cloudflare account
  * id + API token); absent it, the list responds with `configured: false` (an
@@ -65,7 +111,7 @@ const formatStepPayload = (step: { error?: unknown; output?: unknown }): string 
  * loader props to override the transport (a custom `loadInstances` ⇒ read-only).
  */
 export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, runAction, workflowName }: WorkflowInstanceHistoryProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [instances, setInstances] = useState<null | WorkflowInstanceSummary[]>(null);
@@ -74,6 +120,13 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
     const [error, setError] = useState<null | string>(null);
     const [notConfigured, setNotConfigured] = useState(false);
     const [busyId, setBusyId] = useState<null | string>(null);
+    // Staleness guards, compared after each await. `scopeSeq` bumps when the
+    // workflow or status filter changes; `listSeq` / `detailSeq` bump per request.
+    // Without them a slow response for the previous workflow (its list, an open
+    // step timeline, or an action's follow-up reload) painted over the current one.
+    const scopeSeq = useRef(0);
+    const listSeq = useRef(0);
+    const detailSeq = useRef(0);
 
     const detailImpl = loadDetail ?? ((arguments_: { id: string; name: string }) => client.getWorkflowInstance(arguments_));
     // Lifecycle actions are available only when the list is client-sourced (a
@@ -85,6 +138,9 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
     const actionImpl = readOnly ? undefined : (runAction ?? clientAction);
 
     const load = async (): Promise<void> => {
+        listSeq.current += 1;
+        const seq = listSeq.current;
+
         setError(null);
         setNotConfigured(false);
 
@@ -100,6 +156,10 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
             if (loadInstances === undefined) {
                 const page = await client.listWorkflowInstances({ name: workflowName, status });
 
+                if (seq !== listSeq.current) {
+                    return;
+                }
+
                 if (page.configured === false) {
                     setInstances(null);
                     setNotConfigured(true);
@@ -112,8 +172,16 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
                 return;
             }
 
-            setInstances(await loadInstances({ name: workflowName, status }));
+            const instancesPage = await loadInstances({ name: workflowName, status });
+
+            if (seq === listSeq.current) {
+                setInstances(instancesPage);
+            }
         } catch (error_) {
+            if (seq !== listSeq.current) {
+                return;
+            }
+
             setInstances(null);
 
             if (isNotConfigured(error_)) {
@@ -126,6 +194,8 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
 
     useEffect(() => {
         /* eslint-disable react-x/set-state-in-effect, react-you-might-not-need-an-effect/no-chain-state-updates, react-you-might-not-need-an-effect/no-adjust-state-on-prop-change -- the effect drives an async reload; closing any open detail is coupled to that fetch (no render-derivable value, and a key-reset would remount and drop the status filter) */
+        scopeSeq.current += 1;
+        detailSeq.current += 1;
         // react-doctor-disable-next-line react-hooks-js/set-state-in-effect, react-doctor/no-chain-state-updates -- async reload; the coupled detail close is justified in the eslint-disable above
         setDetail(null);
         fireAndForget(load());
@@ -134,13 +204,27 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
     }, [workflowName, statusFilter]);
 
     const openDetail = async (id: string): Promise<void> => {
+        detailSeq.current += 1;
+        const seq = detailSeq.current;
+
         setError(null);
 
         try {
-            setDetail(await detailImpl({ id, name: workflowName }));
+            const next = await detailImpl({ id, name: workflowName });
+
+            if (seq === detailSeq.current) {
+                setDetail(next);
+            }
         } catch (error_) {
-            setError(errorMessage(error_));
+            if (seq === detailSeq.current) {
+                setError(errorMessage(error_));
+            }
         }
+    };
+
+    const closeDetail = (): void => {
+        detailSeq.current += 1;
+        setDetail(null);
     };
 
     const act = async (id: string, action: WorkflowInstanceAction): Promise<void> => {
@@ -148,12 +232,19 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
             return;
         }
 
+        const scope = scopeSeq.current;
+
         setBusyId(id);
         setError(null);
 
         try {
             await actionImpl({ action, id, name: workflowName });
-            await load();
+
+            // Reload only while the same workflow + filter is on screen: this
+            // closure's `load` would list the one the action started in.
+            if (scope === scopeSeq.current) {
+                await load();
+            }
         } catch (error_) {
             setError(errorMessage(error_));
         }
@@ -239,22 +330,17 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
                                                 >
                                                     {t("Steps")}
                                                 </Button>
-                                                {actionImpl !== undefined &&
-                                                    ACTIONS.map((action) => (
-                                                        <Button
-                                                            data-testid={`workflow-instance-${action}-${instance.id}`}
-                                                            disabled={busyId === instance.id}
-                                                            key={action}
-                                                            onClick={() => {
-                                                                fireAndForget(act(instance.id, action));
-                                                            }}
-                                                            size="sm"
-                                                            type="button"
-                                                            variant="ghost"
-                                                        >
-                                                            {t(action)}
-                                                        </Button>
-                                                    ))}
+                                                {actionImpl !== undefined && (
+                                                    // Keyed by workflow so an armed restart confirmation never survives a workflow switch.
+                                                    <InstanceActions
+                                                        busy={busyId === instance.id}
+                                                        id={instance.id}
+                                                        key={workflowName}
+                                                        onAct={(action) => {
+                                                            fireAndForget(act(instance.id, action));
+                                                        }}
+                                                    />
+                                                )}
                                             </div>
                                         </TableCell>
                                     </TableRow>
@@ -272,15 +358,7 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
                             <span className="font-mono text-xs">
                                 {t("Steps")} · {detail.id}
                             </span>
-                            <Button
-                                data-testid="workflow-instance-detail-close"
-                                onClick={() => {
-                                    setDetail(null);
-                                }}
-                                size="xs"
-                                type="button"
-                                variant="ghost"
-                            >
+                            <Button data-testid="workflow-instance-detail-close" onClick={closeDetail} size="xs" type="button" variant="ghost">
                                 {t("Close")}
                             </Button>
                         </div>

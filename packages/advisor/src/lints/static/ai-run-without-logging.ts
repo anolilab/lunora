@@ -23,7 +23,7 @@ const aiRunWithoutLogging: Lint = {
     facing: "INTERNAL",
     level: "INFO",
     name: "ai_run_without_logging",
-    remediation: 'Emit an event around the generation — `ctx.span("<name>", …)`, or a `ctx.log` line carrying the model and token usage.',
+    remediation: 'Emit an event around the generation — `ctx.trace("<name>", …)`, or a `ctx.log` line carrying the model and token usage.',
     run: (context) => {
         if (context.procedureProtections === undefined) {
             return [];

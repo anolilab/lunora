@@ -52,6 +52,7 @@ interface CreateNotifyOptions {
 
 ```ts
 interface D1Like {
+    batch: (statements: D1PreparedLike[]) => Promise<unknown>;
     prepare: (query: string) => D1PreparedLike;
 }
 ```
@@ -285,6 +286,7 @@ interface ResolvedProviders {
 interface RoutingPushOptions {
     allowedPushOrigins?: string[];
     fcm?: Provider<unknown, PushPayload>;
+    retryBaseDelay?: number;
     webPush?: Provider<unknown, PushPayload>;
 }
 ```
@@ -327,6 +329,19 @@ interface SubscriptionFilter {
 type SubscriptionKind = "fcm" | "web-push";
 ```
 
+### `SubscriptionOutcomes` (interface)
+
+```ts
+interface SubscriptionOutcomes {
+    failed: {
+        error?: string;
+        id: string;
+    }[];
+    gone: string[];
+    ok: string[];
+}
+```
+
 ### `SubscriptionStatus` (type)
 
 ```ts
@@ -337,6 +352,7 @@ type SubscriptionStatus = "expired" | "failed" | "ok";
 
 ```ts
 interface SubscriptionStore {
+    applyOutcomes?: (outcomes: SubscriptionOutcomes) => Promise<void>;
     delete: (id: string) => Promise<void>;
     deleteOwned: (id: string, userId: string | null) => Promise<boolean>;
     get: (id: string) => Promise<StoredSubscription | undefined>;
@@ -470,6 +486,12 @@ const webPushId: (endpoint: string) => string;
 ```
 
 ## `@lunora/notify/web`
+
+### `READY_WAIT_TIMEOUT_MS` (const)
+
+```ts
+const READY_WAIT_TIMEOUT_MS = 3e4;
+```
 
 ### `SerializedPushSubscription` (interface)
 

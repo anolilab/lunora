@@ -5,9 +5,9 @@
  * end has to encode: without it a `bigint` throws in `JSON.stringify` before the
  * request leaves, and a `Date` reaches the handler as an ISO string.
  */
+import { decodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import { createQueueRunContext } from "../src/run-context";
 import type { FunctionReference } from "../src/types";
 

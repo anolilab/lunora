@@ -1,6 +1,8 @@
 import type { CallExpression, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { bindingKeyName } from "../../ast";
+
 /**
  * Depth bound for {@link resolveExpressionToCall} so an aliased/cyclic reference
  * (`export const a = b; export const b = a`) can't loop forever.
@@ -82,7 +84,7 @@ const resolveDeclarationToCall = (declaration: Node, depth: number): CallExpress
     if (Node.isBindingElement(declaration)) {
         // `const { check } = component.functions` — the value comes from the
         // right-hand side's `check` property, not from the binding element.
-        const propertyName = declaration.getPropertyNameNode()?.getText() ?? declaration.getName();
+        const propertyName = bindingKeyName(declaration);
         const variableDeclaration = declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration);
         const rightHandSide = variableDeclaration?.getInitializer();
         const propertyDeclaration = rightHandSide?.getType().getProperty(propertyName)?.getValueDeclaration();
@@ -101,13 +103,13 @@ const resolveDeclarationToCall = (declaration: Node, depth: number): CallExpress
  * destructured element). Pairs whose call isn't a Lunora registration are
  * filtered out downstream by `discoverFromCall`.
  */
-const exportCallsOfDeclaration = (declaration: VariableDeclaration): [string, CallExpression][] => {
+const exportCallsOfDeclaration = (declaration: VariableDeclaration, isExported: (localName: string) => boolean = () => true): [string, CallExpression][] => {
     const nameNode = declaration.getNameNode();
 
     if (Node.isObjectBindingPattern(nameNode)) {
         const pairs: [string, CallExpression][] = [];
 
-        for (const element of nameNode.getElements()) {
+        for (const element of nameNode.getElements().filter((candidate) => isExported(candidate.getName()))) {
             const call = resolveExpressionToCall(element.getNameNode());
 
             if (call) {
@@ -116,6 +118,10 @@ const exportCallsOfDeclaration = (declaration: VariableDeclaration): [string, Ca
         }
 
         return pairs;
+    }
+
+    if (!isExported(declaration.getName())) {
+        return [];
     }
 
     const initializer = declaration.getInitializer();

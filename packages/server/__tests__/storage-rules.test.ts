@@ -421,48 +421,117 @@ describe("storageRules — bucket scoping", () => {
     });
 });
 
-describe("storageRules — allowlist (privileged methods dropped)", () => {
-    it("drops upload / list / getPresignedUrl / multipart so they can't evade the rules", async () => {
-        expect.assertions(5);
+/**
+ * A backing storage carrying every action-surface member, each recording the
+ * call. The privileged R2 escape hatches sit alongside `store` so a test can
+ * prove each one is either gated or refused — never passed through.
+ */
+const makePrivilegedBacking = (calls: string[]) => {
+    return {
+        bucketName: "avatars",
+        createMultipartUpload: async (key: string) => {
+            calls.push(`createMultipartUpload:${key}`);
 
-        // A write rule that denies everything; were `upload` passed through it would bypass it.
-        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "write", when: () => false });
+            return { key, uploadId: "u-1" };
+        },
+        getPresignedUrl: async () => {
+            calls.push("getPresignedUrl");
 
-        // A backing storage carrying the privileged R2 escape hatches alongside `store`.
-        const backing = {
-            bucketName: "avatars",
-            createMultipartUpload: () => {
-                return {};
-            },
-            getPresignedUrl: async () => "https://r2.example/presigned",
-            list: async () => {
-                return { objects: [] };
-            },
-            resumeMultipartUpload: () => {
-                return {};
-            },
-            store: async (key: string) => {
-                return { etag: "e", key };
-            },
-            upload: async (key: string) => {
-                return { etag: "e", key };
-            },
-        };
+            return "https://r2.example/presigned";
+        },
+        list: async () => {
+            calls.push("list");
 
-        let exposed: Record<string, unknown> = {};
-        const context = { auth: { userId: "u1" }, storage: backing };
-        const handler = lunora.action.use(rulesForTest([rule])).action(async ({ ctx }) => {
-            exposed = ctx.storage;
+            return { objects: [] };
+        },
+        resumeMultipartUpload: (key: string, uploadId: string) => {
+            calls.push(`resumeMultipartUpload:${key}`);
+
+            return { key, uploadId };
+        },
+        store: async (key: string) => {
+            calls.push(`store:${key}`);
+
+            return { etag: "e", key };
+        },
+        upload: async (key: string) => {
+            calls.push(`upload:${key}`);
+
+            return { etag: "e", key };
+        },
+    };
+};
+
+/** Run `body` as a guarded action over `backing`, returning the `ctx.storage` it saw. */
+const exposeGuardedStorage = async (rules: ReadonlyArray<StorageRule<TestContext>>, backing: unknown): Promise<Record<string, any>> => {
+    let exposed: Record<string, any> = {};
+    const handler = lunora.action.use(rulesForTest(rules)).action(async ({ ctx }) => {
+        exposed = ctx.storage;
+    });
+
+    await handler.handler({ auth: { userId: "u1" }, storage: backing }, {});
+
+    return exposed;
+};
+
+describe("storageRules — privileged methods gated or refused", () => {
+    it("gates upload and both multipart entry points as `write`", async () => {
+        expect.assertions(4);
+
+        const calls: string[] = [];
+        // Writes are allowed only under `user/u1/`.
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "write", prefix: "user/u1", when: () => true });
+        const storage = await exposeGuardedStorage([rule], makePrivilegedBacking(calls));
+
+        // Called from an async function, as a handler does: the gate's throw surfaces as a rejection.
+        await expect((async () => storage.upload("user/u2/a.png", "x"))()).rejects.toThrow(/storage write on "user\/u2\/a.png"/);
+        await expect((async () => storage.createMultipartUpload("user/u2/big.bin"))()).rejects.toThrow(/storage write on "user\/u2\/big.bin"/);
+        // Synchronous: the gate throws, rather than returning a rejected promise.
+        expect(() => storage.resumeMultipartUpload("user/u2/big.bin", "u-1")).toThrow(/storage write on "user\/u2\/big.bin"/);
+        expect(calls).toStrictEqual([]);
+    });
+
+    it("delegates upload and multipart when a write rule allows the key", async () => {
+        expect.assertions(4);
+
+        const calls: string[] = [];
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "write", prefix: "user/u1", when: () => true });
+        const storage = await exposeGuardedStorage([rule], makePrivilegedBacking(calls));
+
+        await expect(storage.upload("user/u1/a.png", "x")).resolves.toStrictEqual({ etag: "e", key: "user/u1/a.png" });
+        await expect(storage.createMultipartUpload("user/u1/big.bin")).resolves.toStrictEqual({ key: "user/u1/big.bin", uploadId: "u-1" });
+        // Stays synchronous through the wrapper: the handle, not a promise.
+        expect(storage.resumeMultipartUpload("user/u1/big.bin", "u-1")).toStrictEqual({ key: "user/u1/big.bin", uploadId: "u-1" });
+        expect(calls).toStrictEqual(["upload:user/u1/a.png", "createMultipartUpload:user/u1/big.bin", "resumeMultipartUpload:user/u1/big.bin"]);
+    });
+
+    it("refuses list and getPresignedUrl with FORBIDDEN instead of dropping them", async () => {
+        expect.assertions(4);
+
+        const calls: string[] = [];
+        // No rule governs anything they could touch — they are refused regardless.
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", when: () => true });
+        const storage = await exposeGuardedStorage([rule], makePrivilegedBacking(calls));
+
+        const listing = storage.list("user/") as Promise<unknown>;
+        const presigned = storage.getPresignedUrl("user/u1/a.png") as Promise<unknown>;
+
+        await expect(listing).rejects.toBeInstanceOf(LunoraError);
+        await expect(listing).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining('ctx.db.system.query("_storage")') });
+        await expect(presigned).rejects.toMatchObject({
+            code: "FORBIDDEN",
+            message: expect.stringContaining("getPresignedUrl is not available under storageRules"),
         });
+        expect(calls).toStrictEqual([]);
+    });
 
-        await handler.handler(context, {});
+    it("installs no stub for a member the backing storage lacks", async () => {
+        expect.assertions(2);
 
-        // The gated alias survives (and would enforce); the raw siblings are gone.
-        expect(typeof exposed.store).toBe("function");
-        expect(exposed.upload).toBeUndefined();
-        expect(exposed.list).toBeUndefined();
-        expect(exposed.getPresignedUrl).toBeUndefined();
-        expect(exposed.createMultipartUpload).toBeUndefined();
+        const storage = await exposeGuardedStorage([], { bucketName: "avatars", download: async () => null });
+
+        expect(storage.list).toBeUndefined();
+        expect(storage.getPresignedUrl).toBeUndefined();
     });
 });
 

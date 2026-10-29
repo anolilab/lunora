@@ -2,13 +2,12 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
-import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
-import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
-import { createWorker, resolveLogArchiveFromEnv } from "lunorash/runtime";
+import type * as LunoraAuthModule from "./authModule.js";
+import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
+import { createWorker, resolveLogArchiveFromEnv, memoizeIdentity } from "lunorash/runtime";
 
 import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
-import { openApiSpec } from "./openapi.js";
 import { createShardDO } from "./shard.js";
 
 /** Read a value off the per-request `env`. Returns `undefined` to leave the capability unconfigured (its `ctx.*`/admin surface stays a clear-error stub). */
@@ -16,6 +15,26 @@ type Selector<Env, T> = (env: Env) => T | undefined;
 
 /** The generated `createShardDO` config — `.observability()`, `.maxRelationKeys()` and the long-tail `.ai()` / `.kv()` / … methods pass straight through to it. */
 type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
+
+/** The identity memo per `env` object, owned by one assembled worker. */
+type IdentityMemoStore = WeakMap<object, ReturnType<typeof memoizeIdentity>>;
+
+/** What the worker reads only once a request arrives: loaded then, not at isolate startup (Cloudflare caps startup at 1 s of CPU). */
+interface DeferredModules {
+    auth: typeof LunoraAuthModule;
+    openApiSpec: unknown;
+}
+
+let deferredModules: Promise<DeferredModules> | undefined;
+
+/** Loads {@link DeferredModules} once per isolate; every entry that builds the worker awaits it first. */
+const loadDeferredModules = (): Promise<DeferredModules> =>
+    (deferredModules ??= (async (): Promise<DeferredModules> => {
+        return {
+            auth: await import("./authModule.js"),
+            openApiSpec: (await import("./openapi.js")).openApiSpec,
+        };
+    })());
 
 /** `.auth(...)` declaration — better-auth options plus the storage the adapter reads. Give it `d1` (the default) or `namespace` (a Durable Object that hosts the auth tables), never both. The builder owns the lazy build + `ensureMigrated` dance and wires `authHandler` / `resolveIdentity` / `authAdmin`. */
 interface AuthDeclaration<Env> {
@@ -49,6 +68,7 @@ class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private authDeclaration?: AuthDeclaration<Env>;
     private cdcEnabled = false;
+    private deliveryAuthorizationSelector?: ShardConfig["deliveryAuthorization"];
     private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
     private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];
     private observabilitySink?: ShardConfig["observability"];
@@ -112,6 +132,13 @@ class AppBuilder<Env extends object> {
     /** Resolution policy for a relation-crossing `where` whose child is co-located in this shard: `"auto"` (cost-based, the engine default), `"always"` (inline correlated EXISTS) or `"never"` (universal semijoin). All three return identical rows. */
     public relationExistsPushDown(mode: NonNullable<ShardConfig["relationExistsPushDown"]>): this {
         this.relationExistsPushDownMode = mode;
+
+        return this;
+    }
+
+    /** Authorize each RPC/subscription read and fence its eventual delivery against durable authority epochs. */
+    public deliveryAuthorization(selector: (env: Env) => ReturnType<NonNullable<ShardConfig["deliveryAuthorization"]>>): this {
+        this.deliveryAuthorizationSelector = selector as NonNullable<ShardConfig["deliveryAuthorization"]>;
 
         return this;
     }
@@ -187,6 +214,7 @@ class AppBuilder<Env extends object> {
             reactiveCache: this.reactiveCacheConfig,
             ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),
             ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),
+            ...(this.deliveryAuthorizationSelector === undefined ? {} : { deliveryAuthorization: this.deliveryAuthorizationSelector }),
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
         });
 
@@ -196,6 +224,9 @@ class AppBuilder<Env extends object> {
         let worker: LunoraWorker | null = null;
         let auth: LunoraAuth | null = null;
         let authInit: Promise<void> | null = null;
+        // One memo per env for THIS assembled worker: a framework-hosted worker rebuilds its options per
+        // request and must reuse it, but a second `assemble()` has its own auth closure and must not share.
+        const identityMemos: IdentityMemoStore = new WeakMap();
 
         const initAuth = async (env: Env): Promise<void> => {
             if (!this.authDeclaration) {
@@ -215,12 +246,26 @@ class AppBuilder<Env extends object> {
             // migrator). For production run the migrate command ahead of deploy.
             // The migration instance takes the RAW binding: better-auth migrates
             // only through Kysely and rejects the adapter the request instance uses.
-            await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
-            // Assigned after the schema exists, never before. Assigning first is
-            // what let a concurrent request see a non-null `auth` and serve
-            // `/api/auth/*` against tables the migrator had not created yet —
-            // `no such table: rateLimit`, from the isolate that was mid-migration.
-            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
+            //
+            // CONSTRUCTED BEFORE THE MIGRATION, ASSIGNED AFTER IT. Both halves matter:
+            // building it first gives `ensureMigrated`'s schema-check invalidation a
+            // registered check to invalidate, and assigning it only afterwards keeps a
+            // concurrent request from serving `/api/auth/*` against tables the
+            // migrator has not created yet. See `emit-app.ts` in @lunora/codegen for
+            // the full reasoning.
+            //
+            // On a first boot against an unmigrated database this means better-auth's
+            // eager schema check runs BEFORE the migration, so one
+            // "the auth tables do not match…" line on a cold start is expected.
+            const { createAuth, lunoraD1Adapter } = (await loadDeferredModules()).auth;
+            const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
+
+            // Loaded on first request, not at module evaluation: the migrator pulls in kysely and
+            // the better-auth migrator, which would otherwise sit in the worker startup closure.
+            const { createMigrationAuth, ensureMigrated } = await import("@lunora/auth/migrate");
+            await ensureMigrated(createMigrationAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
+
+            auth = requestAuth;
         };
 
         // Single-flighted on the PROMISE, not on `auth`. Every `fetch` awaits this
@@ -236,24 +281,27 @@ class AppBuilder<Env extends object> {
                 throw error;
             }));
 
-        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth));
+        const buildWorker = (env: Env, deferred: DeferredModules): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth, identityMemos, deferred));
 
         const composed: ComposedApp = {
             ShardDO,
             fetch: async (request: Request, rawEnv: unknown, context: ExecutionContextLike): Promise<Response> => {
                 const env = rawEnv as Env;
+                const deferred = await loadDeferredModules();
                 await ensureAuth(env);
-                worker ??= buildWorker(env);
+                worker ??= buildWorker(env, deferred);
 
                 return worker.fetch(request, rawEnv, context);
             },
             scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
-                worker ??= buildWorker(rawEnv as Env);
+                const deferred = await loadDeferredModules();
+                worker ??= buildWorker(rawEnv as Env, deferred);
 
                 return worker.scheduled(controller, rawEnv, context);
             },
-            serverQuery: (request, rawEnv, reference, args, options) => {
-                worker ??= buildWorker(rawEnv as Env);
+            serverQuery: async (request, rawEnv, reference, args, options) => {
+                const deferred = await loadDeferredModules();
+                worker ??= buildWorker(rawEnv as Env, deferred);
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
             },
@@ -269,27 +317,40 @@ class AppBuilder<Env extends object> {
     }
 
     /** Fan the recorded declarations into the worker-side `createWorker` options. */
-    private buildWorkerOptions(env: Env, getAuth: () => LunoraAuth | null): WorkerOptions {
+    private buildWorkerOptions(env: Env, getAuth: () => LunoraAuth | null, identityMemos: IdentityMemoStore, deferred: DeferredModules): WorkerOptions {
         const options: WorkerOptions = {
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
-            openApiSpec,
+            openApiSpec: deferred.openApiSpec,
             ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),
             routes: this.routeMap,
             shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),
         };
 
-        if (this.adminToken) {
-            options.adminToken = this.adminToken(env);
+        const adminToken = this.adminToken?.(env);
+
+        if (adminToken !== undefined) {
+            options.adminToken = adminToken;
         }
 
-        options.listSchemaTables = () => ["messages", "ratelimit_buckets"];
+        const tableSharding = new Map<string, ShardingInfo>([
+            ["messages", { mode: { kind: "root" } }],
+            ["ratelimit_buckets", { mode: { kind: "root" } }],
+        ]);
 
-        options.logArchive = resolveLogArchiveFromEnv(env);
+        options.listSchemaTables = () => [...tableSharding.keys()];
+        options.resolveTableSharding = (table) => tableSharding.get(table);
+
+        const logArchive = resolveLogArchiveFromEnv(env);
+
+        if (logArchive !== undefined) {
+            options.logArchive = logArchive;
+        }
 
         // Captured before the branch so the narrowing survives — reading
         // `this.authDeclaration.namespace` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
+        const { authDiscoveryPathsFor, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
@@ -299,17 +360,31 @@ class AppBuilder<Env extends object> {
             // to it. `createDoAuthWiring` is a tested function in `@lunora/auth` rather
             // than more emitted code: request-path logic in generated output can only be
             // typechecked, never unit-tested.
+            const discoveryPaths = authDiscoveryPathsFor(authDeclaration, env);
+            const internalSecret = authDeclaration.internalSecret?.(env);
+            const namespace = authNamespace(env);
+            const objectName = authDeclaration.objectName?.(env);
             const authWiring = createDoAuthWiring({
-                internalSecret: authDeclaration.internalSecret?.(env),
-                namespace: authNamespace(env),
-                objectName: authDeclaration.objectName?.(env),
+                // The OAuth discovery documents (an `mcp()` resource's metadata, the
+                // issuer's) are derived here from the declared options, so the worker
+                // forwards only those exact paths and no other probe reaches the object.
+                // Memoised on the declaration: a framework-hosted worker rebuilds these
+                // options per request, and `options(env)` rebuilds every plugin.
+                discoveryPaths,
+                internalSecret,
+                namespace,
+                ...(objectName === undefined ? {} : { objectName }),
             });
 
             options.authHandler = authWiring.authHandler;
+            options.authDiscoveryHandler = authWiring.discoveryHandler;
             options.resolveIdentity = authWiring.resolveIdentity;
             // The audit log lives in the object like every other auth table, so the feed
             // reads through it rather than querying D1.
             options.authAuditReader = authWiring.auditReader;
+            // Set only once auth is pinned to a jurisdiction: copies the users left in the
+            // un-pinned object across (`__lunora_admin__:copyAuthToJurisdiction`).
+            options.authJurisdictionMove = authWiring.jurisdictionMove;
             // `authAdmin` stays D1-only: its ~30 methods read the auth tables directly
             // from the worker, which DO storage does not allow. The studio's auth pages
             // therefore report "not configured" in this mode rather than silently
@@ -319,6 +394,13 @@ class AppBuilder<Env extends object> {
                 const auth = getAuth();
 
                 return auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined);
+            };
+            // The OAuth discovery documents outside `/api/auth` (served only with an
+            // `mcp()` or `oauthProvider()` plugin, and only after the app's own routes).
+            options.authDiscoveryHandler = (request) => {
+                const auth = getAuth();
+
+                return auth ? handleAuthDiscoveryRequest(auth, request) : Promise.resolve(undefined);
             };
             options.resolveIdentity = async (request) => {
                 const auth = getAuth();
@@ -363,8 +445,92 @@ class AppBuilder<Env extends object> {
             };
             const authInstance = getAuth();
 
-            options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
+            if (authInstance) {
+                options.authAdmin = createAuthAdmin(authInstance);
+            }
             options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));
+        }
+
+        // Both modes pay a session lookup per request (the auth object hop, or a D1
+        // read), and the runtime resolves identity once per RPC and per fan-out leg.
+        // Memoise per credential. The default window is the shorter of 60s and
+        // better-auth's cookie-cache `maxAge`; `LUNORA_IDENTITY_CACHE_MS` overrides it, `0`
+        // disables the cross-request cache. The memoised `getSession` result may itself
+        // come from better-auth's cookie cache, so the worst case is the two stacked: a
+        // revoked session or a changed role can resolve for up to the memo window PLUS the
+        // cookie-cache `maxAge` (about 120s with the presets).
+        //
+        // An app that switched the cookie cache OFF (the `strict` session preset) asked
+        // for fast revocation, so its default is per-request memoisation only; the env var
+        // still opts back in. Read from the declared options at runtime, the one place
+        // the chosen policy is visible.
+        //
+        // Built once per `env` object and kept for this assembled worker: a framework-hosted
+        // worker rebuilds these options on every request, and a fresh memo per build
+        // would never hit. A different `env` object gets its own memo.
+        if (options.resolveIdentity) {
+            let memo = identityMemos.get(env);
+
+            if (!memo) {
+                // A wrangler var may be a JSON number (`0`) or a string. A blank string is
+                // unset, not `0` (`Number("")` is 0); anything else non-numeric is unset too.
+                const identityCacheRaw = (env as { LUNORA_IDENTITY_CACHE_MS?: unknown }).LUNORA_IDENTITY_CACHE_MS;
+                let identityCacheMs = Number.NaN;
+
+                if (typeof identityCacheRaw === "number") {
+                    identityCacheMs = identityCacheRaw;
+                } else if (typeof identityCacheRaw === "string" && identityCacheRaw.trim() !== "") {
+                    identityCacheMs = Number(identityCacheRaw);
+                }
+
+                // `options(env)` is application code. A scheduled, queue or serverQuery event must
+                // not fail to construct — and so never run — because that callback throws, so a
+                // throw is caught rather than escaping.
+                let defaultMs: number;
+
+                try {
+                    const cookieCache = authDeclaration?.options(env).session?.cookieCache;
+                    // better-auth's `maxAge` is in SECONDS; createAuth fills 60 when it is unset.
+                    const cookieCacheSeconds = typeof cookieCache?.maxAge === "number" && cookieCache.maxAge >= 0 ? cookieCache.maxAge : 60;
+
+                    // createAuth fills `{ enabled: true, maxAge: 60 }` only when `cookieCache` is absent; a partial
+                    // object without `enabled: true` has NO cookie cache, so the memo stays per-request there.
+                    defaultMs = cookieCache === undefined || cookieCache.enabled === true ? Math.min(60_000, cookieCacheSeconds * 1000) : 0;
+                } catch {
+                    // The policy is unreadable. Fall back to PER-REQUEST memoisation, not the 60s
+                    // window: a 60s cross-request cache would let a revoked session keep
+                    // resolving for a minute, which is exactly what the `strict` preset turned
+                    // off. Construction still does not fail, so the event still runs.
+                    defaultMs = 0;
+                }
+
+                memo = memoizeIdentity(options.resolveIdentity, {
+                    // better-auth resolves the session from ALL request headers, so the key
+                    // must cover every header a supported plugin authenticates on: the
+                    // session cookie, `Authorization` (bearer / jwt) and `x-api-key` (apiKey).
+                    cacheKey: (request: Request) => {
+                        const parts = ["authorization", "cookie", "x-api-key"].map((name) => request.headers.get(name) ?? "");
+
+                        if (parts.every((part) => part === "")) {
+                            return undefined;
+                        }
+
+                        const key = parts.join("\u0000");
+
+                        // The map is bounded in ENTRIES, not in key size, so a client with one
+                        // valid session could add a junk cookie per request and grow it without
+                        // bound. Skip the cache for an oversized credential set rather than
+                        // truncating the key, which could collide with a different credential and
+                        // hand back the wrong identity.
+                        return key.length > 4_096 ? undefined : key;
+                    },
+                    maxEntries: 2_000,
+                    ttlMs: Number.isFinite(identityCacheMs) && identityCacheMs >= 0 ? identityCacheMs : defaultMs,
+                });
+                identityMemos.set(env, memo);
+            }
+
+            options.resolveIdentity = memo;
         }
 
         for (const fn of this.extendFns) {
@@ -373,6 +539,31 @@ class AppBuilder<Env extends object> {
 
         return options;
     }
+}
+
+/**
+ * Shape of the project's root `lunora.config.*`.
+ *
+ * Declared HERE, not in a package, so the `app` hook is typed against THIS
+ * project's builder with no annotation to keep in step — and so the config file
+ * needs only a type-only import, which is erased. That matters: the hook is
+ * bundled into the worker, and a runtime import in that file ships with it.
+ */
+interface LunoraConfig<Env extends object = object> {
+    /** Codegen's static advisor. `minSeverity` is the lowest level it reports and writes into `_generated/shard.ts`; an `"error"` is never dropped, so the gate that fails codegen stays on. `accept` demotes a reviewed ERROR to INFO when its rule, file and export all match. A literal, for the same reason as `target`. */
+    advisor?: { accept?: ReadonlyArray<{ exportName: string; file: string; reason: string; rule: string }>; minSeverity?: "error" | "info" | "warn" };
+    /** Receives this project's `defineApp()` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
+    app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
+    /** Codegen's source walk. `exclude` adds globs (relative to `lunora/`, e.g. `"seed/**"`) to skip on top of the built-in test-file patterns. A literal array of strings, for the same reason as `target`. */
+    codegen?: { exclude?: string[] };
+    /** Host the shard, scheduler and shard registry in ONE Durable Object class (`merge: true`, plan 462) — before the first deploy only. A literal, for the same reason as `target`. */
+    durableObjects?: { merge?: boolean };
+    /** Opt into remote-binding dev without `--remote` or `LUNORA_REMOTE` on every run. A literal, for the same reason as `target`. */
+    remote?: boolean;
+    /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported `WorkerEntrypoint` class (`rpc: false` binds that class but calls it with plain `fetch`, without importing the service's sources). Becomes `ctx.services.<key>` in actions, a wrangler `services[]` entry, one `lunora dev` session and a services-first `lunora deploy`. Literals, for the same reason as `target`. */
+    services?: Record<string, { dir: string; entrypoint?: string; rpc?: false }>;
+    /** Deploy target id — `lunora deploy`/`verify` read it when no `--target` is passed. Must be a literal: `runCodegen` resolves it synchronously by PARSING this file, so a computed value is not seen — `lunora verify` reports `platform_unreadable_target` rather than defaulting in silence. */
+    target?: string;
 }
 
 /**
@@ -388,4 +579,4 @@ class AppBuilder<Env extends object> {
 const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
 export { AppBuilder, defineApp };
-export type { AuthDeclaration, ComposedApp, Selector };
+export type { AuthDeclaration, ComposedApp, LunoraConfig, Selector };

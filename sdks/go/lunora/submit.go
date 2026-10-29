@@ -18,11 +18,13 @@ import (
 // TransientErrorCodes are the coded errors a replay must NOT treat as the
 // server's final word.
 //
-// The shard was momentarily unreachable, so the identical call under the same
-// idempotency key is expected to succeed later, and dropping the write would lose
+// The shard was momentarily unreachable, or its delivery authorization changed
+// before the reply could be released (DELIVERY_FENCED: the write may have
+// committed), so the identical call under the same idempotency key is expected
+// to succeed or replay its stored result later, and dropping the write would lose
 // it to a transient condition. Every other coded error IS a verdict: replaying it
 // would only re-trigger the same failure, which is a poison-message loop.
-var TransientErrorCodes = map[string]bool{"SHARD_ERROR": true, "SHARD_UNAVAILABLE": true}
+var TransientErrorCodes = map[string]bool{"DELIVERY_FENCED": true, "SHARD_ERROR": true, "SHARD_UNAVAILABLE": true}
 
 // RateLimitErrorCodes are the codes that say "not now" rather than "no".
 //
@@ -31,6 +33,14 @@ var TransientErrorCodes = map[string]bool{"SHARD_ERROR": true, "SHARD_UNAVAILABL
 // dropping it loses data for being punctual. The delay comes from the envelope's
 // data.retryAfterMs (see protocol/fixtures/rpc.json's responseError.with-data).
 var RateLimitErrorCodes = map[string]bool{"RATE_LIMITED": true, "TOO_MANY_REQUESTS": true}
+
+// AuthHoldErrorCodes are the codes that refuse the CREDENTIAL, not the write.
+//
+// A write queued offline replays with whatever bearer the client held when it
+// went offline, which has very often expired by the reconnect; settling it
+// would destroy the user's own durable write over a problem one token refresh
+// fixes. So a replay HOLDS it — re-queued like a transient code.
+var AuthHoldErrorCodes = map[string]bool{"TOKEN_EXPIRED": true, "UNAUTHENTICATED": true, "UNAUTHORIZED": true}
 
 // CodePayloadTooLarge is the worker's answer to a body over its cap. Coded, so
 // it arrives as a whole-batch envelope — which every other coded envelope is a
@@ -129,8 +139,23 @@ type SubmitOptions struct {
 	// Precondition is re-evaluated just before a QUEUED write replays; false
 	// drops it rather than replaying a write that can only fail.
 	Precondition func() bool
+	// OnlineOnly is never queued, persisted or replayed. Where a normal write
+	// would be queued, Submit returns an OfflineError coded CodeOfflineNotQueued
+	// and the arguments never reach the queue or the persistence adapter. A send
+	// that gets no reply while the socket is down is refused the same way, with
+	// the transport error as its cause. It does not wait for a queue flush or
+	// queue behind pending writes, so it may overtake them. For a credential or a
+	// one-time token.
+	OnlineOnly bool
 	// OnSettled reports the eventual verdict on a queued write.
 	OnSettled func(MutationSettled)
+}
+
+// onlineOnlyNotQueued is the refusal of an OnlineOnly write that would be queued.
+// cause is the transport error when the write was sent and got no reply, nil when
+// it was refused before anything was sent.
+func onlineOnlyNotQueued(functionPath string, cause error) OfflineError {
+	return OfflineError{Code: CodeOfflineNotQueued, Message: "'" + functionPath + "' is online-only and the connection is not live, so it was not queued", Err: cause}
 }
 
 // ErrClientClosed is returned by Submit after Close.
@@ -188,14 +213,24 @@ func (c *Client) OnMutationSettled(listener func(MutationSettled)) func() {
 //
 // It returns as soon as the write is either committed or durably queued. A queued
 // write's optimistic overlay stays displayed until the replay's commit cursor is
-// reached by a server frame; a failed one rolls back.
+// reached by a server frame; a failed one rolls back. A write that committed but
+// whose result could not be decoded returns its committed outcome together with
+// an APIError coded CodeWireDecodeFailed.
 func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 	c.mu.Lock()
 	closed := c.closed
+	// Read before any overlay is applied, so a refused online-only write leaves
+	// nothing to roll back. A socket that detaches after this read is caught by the
+	// check under the lock below.
+	queuesNow := c.send == nil && (c.wasEverConnected || c.offline.QueueBeforeFirstConnect())
 	c.mu.Unlock()
 
 	if closed {
 		return MutationOutcome{}, ErrClientClosed
+	}
+
+	if options.OnlineOnly && queuesNow {
+		return MutationOutcome{}, onlineOnlyNotQueued(options.FunctionPath, nil)
 	}
 
 	writeID := options.MutationID
@@ -226,6 +261,15 @@ func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 	queue := c.offline
 	queueIt := c.send == nil && (c.wasEverConnected || queue.QueueBeforeFirstConnect())
 
+	// Refused with the layers rolled back, which is what a closed client does
+	// above. The layers were installed before the lock, so they cannot be skipped.
+	if queueIt && options.OnlineOnly {
+		c.mu.Unlock()
+		c.settleLayers(nil, rollbacks, nil)
+
+		return MutationOutcome{}, onlineOnlyNotQueued(options.FunctionPath, nil)
+	}
+
 	var evicted []Discarded
 
 	if queueIt {
@@ -244,19 +288,27 @@ func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 
 	// No client id argument: rpcFull falls back to Client.ClientID(), which is the
 	// id issuing this write.
-	value, commitCursor, err := c.rpcFull(options.FunctionPath, options.Args, options.ShardKey, writeID, "")
-	if err != nil {
+	value, commitCursor, err := c.rpcFull(options.FunctionPath, options.Args, options.ShardKey, writeID, "", c.AuthToken())
+	if err != nil && !isUndecodableResult(err) {
 		c.settleLayers(nil, rollbacks, nil)
+
+		// An online-only write that got no reply while the socket is down is refused
+		// as a queued write would have been, the transport failure as its cause. A
+		// coded reply, and any failure while connected, surface as they are.
+		if options.OnlineOnly && !c.Online() && c.isTransportFailure(err, options.Args) {
+			return MutationOutcome{}, onlineOnlyNotQueued(options.FunctionPath, err)
+		}
 
 		return MutationOutcome{}, err
 	}
 
 	// Confirmed against the write's COMMITTED cursor, so the overlay drops when
 	// (or once) a frame at that cursor lands — never on this call's return, which
-	// races the socket broadcast.
+	// races the socket broadcast. A write whose result would not decode still
+	// committed: its overlay confirms, and the outcome comes back WITH the error.
 	c.settleLayers(confirms, nil, commitCursor)
 
-	return MutationOutcome{CommitCursor: commitCursor, MutationID: writeID, Status: MutationCommitted, Value: value}, nil
+	return MutationOutcome{CommitCursor: commitCursor, MutationID: writeID, Status: MutationCommitted, Value: value}, err
 }
 
 // HydrateOfflineQueue restores writes persisted in a prior session and returns
@@ -290,13 +342,15 @@ func (c *Client) HydrateOfflineQueue() ([]string, error) {
 // confirms its optimistic overlay against the ECHOED commit cursor; a coded
 // verdict is terminal; a transient failure — a raw transport error, or one of
 // TransientErrorCodes — stops the flush and re-queues that write and every
-// unreplayed one, in order, for the next attempt.
-func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
-	var report FlushReport
-
+// unreplayed one, in order, for the next attempt. Before any of that, each write
+// passes the identity gate (ReplayIdentityVerdict): a write queued as someone
+// else is rejected CodeOfflineIdentityChanged, and one whose owner cannot be
+// told because nobody is signed in is held, unsettled.
+func (c *Client) FlushOfflineQueue(shardKey string) (report FlushReport) {
 	c.mu.Lock()
 	queue := c.offline
-	identity := c.identity
+	identity := c.identityFingerprintLocked()
+	token := c.authToken
 	remaining := time.Until(c.flushNotBefore)
 	c.mu.Unlock()
 
@@ -326,24 +380,64 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 		return report
 	}
 
-	// Gated against ONE identity snapshot: a flush is a single authenticated
-	// burst, so every write in it necessarily runs under one identity.
-	sendable := make([]*QueuedMutation, 0, len(drained))
+	// EVERY drained write that did not settle goes back to the FRONT, in order:
+	// a held write, a transient failure, a slot the server never answered, the
+	// chunks after a stop — and whatever was still in hand when a panic nothing
+	// anticipated (a consumer's poster, a callback) unwound the flush. The replay
+	// paths never requeue themselves; doing it once, here, is what keeps a panic
+	// from losing drained writes that were no longer in the queue and not yet
+	// settled. Over `drained`, not the replayable ones, so a held write keeps its
+	// place in line.
+	defer func() {
+		recovered := recover()
+		settled := map[string]bool{}
 
-	for _, item := range drained {
-		if IdentityAllowsReplay(item.Identity, identity) {
-			sendable = append(sendable, item)
-
-			continue
+		for _, ids := range [][]string{report.Committed, report.Rejected} {
+			for _, id := range ids {
+				settled[id] = true
+			}
 		}
 
-		report.Rejected = append(report.Rejected, item.ID)
-		c.dropTerminally(queue, item, CodeOfflineIdentityChanged, "offline mutation skipped: auth identity changed before replay")
-	}
+		var leftover []*QueuedMutation
 
-	replayable := make([]*QueuedMutation, 0, len(sendable))
+		for _, item := range drained {
+			if !settled[item.ID] {
+				leftover = append(leftover, item)
+				report.Requeued = append(report.Requeued, item.ID)
+			}
+		}
 
-	for _, item := range sendable {
+		if len(leftover) > 0 {
+			c.mu.Lock()
+			queue.Requeue(leftover)
+			c.mu.Unlock()
+		}
+
+		if recovered != nil {
+			panic(recovered)
+		}
+	}()
+
+	// Gated against ONE identity snapshot: a flush is a single authenticated
+	// burst, so every write in it runs under one identity — and is SENT with the
+	// token snapshotted beside it, never the one held when its request goes out,
+	// or a token swapped mid-flush would carry the rest of the pass. A write
+	// whose owner cannot be told (nobody signed in) is HELD: back on the queue,
+	// still persisted, unsettled — the reference's "unknown" verdict.
+	replayable := make([]*QueuedMutation, 0, len(drained))
+
+	for _, item := range drained {
+		switch ReplayIdentityVerdict(item.Identity, identity, token) {
+		case ReplayUnknown:
+			continue
+		case ReplayMismatch:
+			report.Rejected = append(report.Rejected, item.ID)
+			c.dropTerminally(queue, item, CodeOfflineIdentityChanged, "offline mutation skipped: auth identity changed before replay")
+
+			continue
+		case ReplayMatch:
+		}
+
 		// A write whose arguments cannot be wire-encoded can never reach the
 		// server, and a codec failure carries no code — so the transient rule
 		// ("anything uncoded is a transport blip, re-queue it") would replay it on
@@ -364,40 +458,18 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 	// more coalesce into batch round trips — the flaky-reconnect win, where N
 	// queued writes cost a handful of hops instead of N.
 	if len(replayable) == 1 {
-		c.replaySequential(queue, replayable, &report)
+		c.replaySequential(queue, replayable, &report, token)
 
 		return report
 	}
 
-	var toRequeue []*QueuedMutation
-
-	chunks := chunkBatches(replayable)
-
-	for index, chunk := range chunks {
-		// Chunks replay sequentially, which is what preserves FIFO across a flush
-		// longer than one batch.
-		requeue, stop := c.replayBatched(queue, chunk, &report)
-		toRequeue = append(toRequeue, requeue...)
-
-		if stop {
-			// A whole-chunk transport failure. Leave every write not yet sent
-			// queued, in order, rather than sending on into a connection that
-			// just failed.
-			for _, later := range chunks[index+1:] {
-				toRequeue = append(toRequeue, later...)
-			}
-
+	// Chunks replay sequentially, which is what preserves FIFO across a flush
+	// longer than one batch. A whole-chunk transport failure stops the flush,
+	// leaving every write not yet sent queued, in order, rather than sending on
+	// into a connection that just failed.
+	for _, chunk := range chunkBatches(replayable) {
+		if c.replayBatched(queue, chunk, &report, token) {
 			break
-		}
-	}
-
-	if len(toRequeue) > 0 {
-		c.mu.Lock()
-		queue.Requeue(toRequeue)
-		c.mu.Unlock()
-
-		for _, pending := range toRequeue {
-			report.Requeued = append(report.Requeued, pending.ID)
 		}
 	}
 
@@ -513,14 +585,21 @@ func (c *Client) noteRetryAfter(report *FlushReport, err error) {
 	}
 }
 
-// replaySequential replays writes one at a time. FIFO is preserved by the loop.
-func (c *Client) replaySequential(queue *OfflineQueue, replayable []*QueuedMutation, report *FlushReport) {
-	for index, item := range replayable {
-		value, commitCursor, err := c.rpcFull(item.FunctionPath, item.Args, item.ShardKey, item.ID, item.ClientID)
-		if err == nil {
+// replaySequential replays writes one at a time, each with token. FIFO is
+// preserved by the loop: a transient failure stops it, and the flush requeues
+// that write and every one after it, in order.
+func (c *Client) replaySequential(queue *OfflineQueue, replayable []*QueuedMutation, report *FlushReport, token string) {
+	for _, item := range replayable {
+		value, commitCursor, err := c.rpcFull(item.FunctionPath, item.Args, item.ShardKey, item.ID, item.ClientID, token)
+		if err == nil || isUndecodableResult(err) {
+			// An undecodable result is still a commit: re-sending returns the same
+			// unreadable result, so it settles committed carrying the error.
 			c.unpersist(queue, item.ID)
-			c.settleCommitted(item, value, commitCursor)
+			// Recorded BEFORE the settle runs its callbacks: the flush guard
+			// requeues whatever the report does not name, and this write's durable
+			// record is already gone — requeued, it would be sent twice.
 			report.Committed = append(report.Committed, item.ID)
+			c.settleCommitted(item, value, commitCursor, err)
 
 			continue
 		}
@@ -530,20 +609,12 @@ func (c *Client) replaySequential(queue *OfflineQueue, replayable []*QueuedMutat
 
 			// Nothing after this write may go out ahead of it: replaying out of
 			// order is how a durable queue corrupts the data it was protecting.
-			c.mu.Lock()
-			queue.Requeue(replayable[index:])
-			c.mu.Unlock()
-
-			for _, pending := range replayable[index:] {
-				report.Requeued = append(report.Requeued, pending.ID)
-			}
-
 			return
 		}
 
 		c.unpersist(queue, item.ID)
-		c.settleRejected(item, err)
 		report.Rejected = append(report.Rejected, item.ID)
+		c.settleRejected(item, err)
 	}
 }
 
@@ -554,10 +625,10 @@ func (c *Client) replaySequential(queue *OfflineQueue, replayable []*QueuedMutat
 // in-order application are inherited from the proven route rather than
 // re-implemented here.
 //
-// It returns the writes to put back and whether the caller should STOP because
-// the whole chunk failed at the transport level. Re-queuing is the caller's,
-// once and in order, so a write cannot land twice in the queue.
-func (c *Client) replayBatched(queue *OfflineQueue, items []*QueuedMutation, report *FlushReport) ([]*QueuedMutation, bool) {
+// token is the bearer the pass was gated against. It returns whether the caller
+// should STOP because the whole chunk failed at the transport level. A write it
+// does not settle is requeued by the flush, once and in order.
+func (c *Client) replayBatched(queue *OfflineQueue, items []*QueuedMutation, report *FlushReport, token string) bool {
 	calls := make([]map[string]any, 0, len(items))
 
 	for index, item := range items {
@@ -566,7 +637,7 @@ func (c *Client) replayBatched(queue *OfflineQueue, items []*QueuedMutation, rep
 			// Unreachable: the caller already partitioned the unencodable writes
 			// out. Re-queue rather than drop, so a future encoder change cannot
 			// silently lose a durable write here.
-			return items, true
+			return true
 		}
 
 		clientID := item.ClientID
@@ -594,45 +665,38 @@ func (c *Client) replayBatched(queue *OfflineQueue, items []*QueuedMutation, rep
 		calls = append(calls, call)
 	}
 
-	body, err := c.rpcBatch(calls)
+	status, body, err := c.rpcBatch(calls, token)
 	if err != nil {
 		// Transport failure — nothing committed, so retry everything.
-		return items, true
+		return true
 	}
 
 	if results, ok := body["results"].([]any); ok {
-		return c.settleBatchSlots(queue, items, results, report), false
+		c.settleBatchSlots(queue, items, results, report)
+
+		return false
 	}
 
-	// No per-slot results. A coded envelope is a verdict on the WHOLE batch — a
-	// bad request, an authorization denial — and therefore terminal for every
-	// entry; anything else is transport, and transient.
-	envelope, ok := body["error"].(map[string]any)
-	if !ok {
-		return items, true
+	// No per-slot results: one verdict on the whole batch, classified by the
+	// predicate the single-call path uses. A coded envelope by its code alone —
+	// a bad request, an authorization denial, a coded 5xx are terminal for every
+	// entry; a reply with no envelope by its status — transport, except a 413.
+	batchError := envelopelessError(status, "no error envelope")
+	if envelope, ok := body["error"].(map[string]any); ok {
+		batchError = batchSlotError(envelope, "batch rejected")
 	}
-
-	batchError := batchSlotError(envelope, "batch rejected")
 
 	// The body was too big, not wrong — every entry in it would have committed
-	// alone. Halve and retry; the estimate chunkBatches used cannot see the
-	// framing the worker actually measured, and only the answer can.
+	// alone. Halve and retry, whether or not the 413 carried an envelope (an edge
+	// in front of the worker refuses with its own page): the estimate
+	// chunkBatches used cannot see the framing actually measured, and only the
+	// answer can. A chunk of one falls through to the terminal verdict below.
 	if batchError.Code == CodePayloadTooLarge && len(items) > 1 {
 		middle := len(items) / 2
-		left, stop := c.replayBatched(queue, items[:middle], report)
 
-		requeue := make([]*QueuedMutation, 0, len(items))
-		requeue = append(requeue, left...)
-
-		if stop {
-			// The left half stopped the flush, so the right half is re-queued
-			// unsent, in order, rather than sent past a failure.
-			return append(requeue, items[middle:]...), true
-		}
-
-		right, stop := c.replayBatched(queue, items[middle:], report)
-
-		return append(requeue, right...), stop
+		// A left half that stopped the flush leaves the right half unsent, and
+		// the flush requeues it in order rather than sending past a failure.
+		return c.replayBatched(queue, items[:middle], report, token) || c.replayBatched(queue, items[middle:], report, token)
 	}
 
 	// A shard blip or a rate limit is not a verdict on the batch's contents.
@@ -641,22 +705,22 @@ func (c *Client) replayBatched(queue *OfflineQueue, items []*QueuedMutation, rep
 	if isTransient(batchError) {
 		c.noteRetryAfter(report, batchError)
 
-		return items, true
+		return true
 	}
 
 	for _, item := range items {
 		c.unpersist(queue, item.ID)
-		c.settleRejected(item, batchError)
 		report.Rejected = append(report.Rejected, item.ID)
+		c.settleRejected(item, batchError)
 	}
 
-	return nil, false
+	return false
 }
 
 // settleBatchSlots demuxes a batch reply back onto the writes it replayed, in
 // input order, classifying each slot exactly as replaySequential classifies a
-// whole response. It returns the writes the caller must re-queue.
-func (c *Client) settleBatchSlots(queue *OfflineQueue, items []*QueuedMutation, results []any, report *FlushReport) []*QueuedMutation {
+// whole response. A write it leaves unsettled is requeued by the flush.
+func (c *Client) settleBatchSlots(queue *OfflineQueue, items []*QueuedMutation, results []any, report *FlushReport) {
 	bySlot := make(map[int]map[string]any, len(results))
 
 	for _, entry := range results {
@@ -673,19 +737,27 @@ func (c *Client) settleBatchSlots(queue *OfflineQueue, items []*QueuedMutation, 
 		}
 	}
 
-	var requeue []*QueuedMutation
-
 	for index, item := range items {
 		payload, answered := bySlot[index]
 		if !answered {
 			// The server never returned this slot. It may or may not have
 			// committed, so retry it — the mutationId makes that safe.
-			requeue = append(requeue, item)
-
 			continue
 		}
 
-		if envelope, failed := payload["error"].(map[string]any); failed {
+		if raw, present := payload["error"]; present {
+			envelope, isObject := raw.(map[string]any)
+			if !isObject {
+				// An `error` key holding a string, a null, an array or a number
+				// is no envelope (protocol/README.md 4.2), and a slot carries no
+				// HTTP status of its own to classify it by — so nothing readable
+				// came back about this entry, which is exactly the position of a
+				// slot the server never returned. 4.3 retries that one. Falling
+				// through to the commit branch below settled a durable write
+				// COMMITTED with a null result and un-persisted it.
+				continue
+			}
+
 			slotError := batchSlotError(envelope, "request failed")
 
 			// The SAME predicate the whole-batch and single-call paths use, not a
@@ -697,14 +769,12 @@ func (c *Client) settleBatchSlots(queue *OfflineQueue, items []*QueuedMutation, 
 			if isTransient(slotError) {
 				c.noteRetryAfter(report, slotError)
 
-				requeue = append(requeue, item)
-
 				continue
 			}
 
 			c.unpersist(queue, item.ID)
-			c.settleRejected(item, slotError)
 			report.Rejected = append(report.Rejected, item.ID)
+			c.settleRejected(item, slotError)
 
 			continue
 		}
@@ -716,24 +786,22 @@ func (c *Client) settleBatchSlots(queue *OfflineQueue, items []*QueuedMutation, 
 			commitCursor = &exact
 		}
 
+		// Decoded BEFORE the durable record goes, so the outcome is decided first.
+		// A slot whose result will not decode still COMMITTED: replaying it can
+		// only return the identical unreadable result, so it settles committed,
+		// carrying the decode error, and the loop carries on to the next slot.
+		var settleErr error
+
 		value, err := DecodeWire(payload["result"])
 		if err != nil {
-			// A slot whose payload will not decode is a server answer this client
-			// cannot read. Terminal, like any other verdict: replaying it produces
-			// the identical undecodable payload.
-			c.unpersist(queue, item.ID)
-			c.settleRejected(item, APIError{Code: "INTERNAL", Message: "batch slot result could not be decoded: " + err.Error()})
-			report.Rejected = append(report.Rejected, item.ID)
-
-			continue
+			settleErr = APIError{Code: CodeWireDecodeFailed, Message: "batch slot result could not be decoded: " + err.Error()}
 		}
 
 		c.unpersist(queue, item.ID)
-		c.settleCommitted(item, value, commitCursor)
 		report.Committed = append(report.Committed, item.ID)
+		c.settleCommitted(item, value, commitCursor, settleErr)
 	}
 
-	return requeue
 }
 
 // batchSlotError rebuilds an APIError from a slot's or a batch's error envelope,
@@ -844,6 +912,30 @@ func (c *Client) settleRejected(entry *QueuedMutation, err error) {
 	}, entry.OnSettled)
 }
 
+// isUndecodableResult reports a call that committed but whose result could not
+// be decoded — a commit, never a failure to retry.
+func isUndecodableResult(err error) bool {
+	var apiError APIError
+
+	return errors.As(err, &apiError) && apiError.resultUndecodable
+}
+
+// isTransportFailure reports a direct send that got no HTTP reply: the injected
+// poster itself failed. A coded reply is an APIError, and an unconfigured poster
+// and arguments the codec refuses fail before anything is sent, so none of those
+// count.
+func (c *Client) isTransportFailure(err error, args any) bool {
+	var apiError APIError
+
+	if errors.As(err, &apiError) || c.Post == nil {
+		return false
+	}
+
+	_, encodeErr := EncodeWire(argsOrEmpty(args))
+
+	return encodeErr == nil
+}
+
 // isTransient reports whether a failed replay may be retried rather than dropped.
 //
 // A raw error from the injected poster is the network, not the server: no verdict
@@ -852,7 +944,7 @@ func isTransient(err error) bool {
 	var apiError APIError
 
 	if errors.As(err, &apiError) {
-		return apiError.Transient || TransientErrorCodes[apiError.Code] || RateLimitErrorCodes[apiError.Code]
+		return apiError.Transient || TransientErrorCodes[apiError.Code] || RateLimitErrorCodes[apiError.Code] || AuthHoldErrorCodes[apiError.Code]
 	}
 
 	return true
@@ -972,11 +1064,6 @@ func (c *Client) newQueuedWriteLocked(
 	confirms []func(*int64, *[]func()),
 	rollbacks []func(*[]func()),
 ) *QueuedMutation {
-	stamped := SignedOut()
-	if c.identity != nil {
-		stamped = IdentityOf(*c.identity)
-	}
-
 	return &QueuedMutation{
 		Args:         options.Args,
 		ClientID:     c.clientID,
@@ -984,7 +1071,7 @@ func (c *Client) newQueuedWriteLocked(
 		ID:           writeID,
 		// Bound at enqueue time, so the write can only ever replay as whoever
 		// made it.
-		Identity:    stamped,
+		Identity:    c.identityFingerprintLocked(),
 		LiveAwaiter: true,
 		OnCommit: func(commitCursor *int64) {
 			c.settleLayers(confirms, nil, commitCursor)
@@ -997,13 +1084,15 @@ func (c *Client) newQueuedWriteLocked(
 }
 
 // settleCommitted confirms the overlay BEFORE the caller is told, so the gapless
-// drop is already in place when the confirming frame lands.
-func (c *Client) settleCommitted(item *QueuedMutation, value any, commitCursor *int64) {
+// drop is already in place when the confirming frame lands. err is non-nil only
+// for a commit whose result could not be decoded (CodeWireDecodeFailed).
+func (c *Client) settleCommitted(item *QueuedMutation, value any, commitCursor *int64, err error) {
 	if item.OnCommit != nil {
 		item.OnCommit(commitCursor)
 	}
 
 	c.emitSettled(MutationSettled{
+		Err:        err,
 		HadAwaiter: item.LiveAwaiter,
 		MutationID: item.ID,
 		Status:     MutationCommitted,

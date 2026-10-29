@@ -6,7 +6,7 @@
 import { DatabaseSync } from "node:sqlite";
 
 import type { DatabaseWriterLike, SchemaLike, SocketAttachment, SqlExec, SubscriptionEnvelope } from "@lunora/shard-engine";
-import { createShardCtxDb as createShardContextDatabase, ReactiveCache, reactiveCacheKey, runShardMigrations } from "@lunora/shard-engine";
+import { CompanionMemo, createShardCtxDb as createShardContextDatabase, ReactiveCache, reactiveCacheKey, runShardMigrations } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { QueryReadScope, ShardDOOptions, ShardDOState, SubscriptionOutcome } from "../src/shard-do";
@@ -113,7 +113,7 @@ describe("ctx-db + reactiveCache integration", () => {
         });
         await cache.run("scan", new Set(["users:*scan"]), async () => [{ name: "alice" }]);
 
-        await writer.patch(u1, { name: "ALICE" });
+        await writer.patch("users", u1, { name: "ALICE" });
 
         // Both go: per-id (u1 was patched) and *scan (predicate might flip).
         expect(cache.size().entries).toBe(0);
@@ -132,7 +132,7 @@ describe("ctx-db + reactiveCache integration", () => {
         });
         await cache.run("scan", new Set(["users:*scan"]), async () => [{ name: "alice" }]);
 
-        await writer.delete(u1);
+        await writer.delete("users", u1);
 
         expect(cache.size().entries).toBe(0);
     });
@@ -174,7 +174,7 @@ describe("ctx-db + reactiveCache integration", () => {
         const u1 = await writer.insert("users", { name: "alice" });
 
         reads.length = 0;
-        await writer.get(u1);
+        await writer.get("users", u1);
 
         expect(reads).toEqual([{ idOrScan: u1, table: "users" }]);
     });
@@ -812,7 +812,7 @@ describe("shardDO + reactiveCache: range-precise cached-query invalidation (plan
     // Regression for the missed-invalidation gap: a query that reads the SAME
     // table through BOTH a provable range (`.withIndex(...).eq(...)`, which
     // reports through `onReadRange` and deps nothing on its own) AND a by-id
-    // read (`writer.get(id)`, which reports through `onRead` and marks the
+    // read (`writer.get(table, id)`, which reports through `onRead` and marks the
     // table unnarrowable). Before the fix, `ReadFootprint.ranges()` drops the
     // table's slice entirely once it is marked unnarrowable, so the cache
     // entry ends up with deps `{messages:<seededId>}` and an EMPTY range set —
@@ -834,7 +834,7 @@ describe("shardDO + reactiveCache: range-precise cached-query invalidation (plan
                 .query("messages")
                 .withIndex("by_channel", (q) => q.eq("channelId", "A"))
                 .collect();
-            const byId = await writer.get(seeded);
+            const byId = await writer.get("messages", seeded);
 
             return { byId, ranged };
         });
@@ -926,7 +926,7 @@ describe("shardDO + reactiveCache: base dispatch wiring", () => {
         }
 
         // eslint-disable-next-line class-methods-use-this -- test stub override: classifies by `functionPath` alone, no instance state.
-        protected override isQueryFunction(functionPath: string): boolean {
+        protected override isCacheableQuery(functionPath: string): boolean {
             return REGISTRY[functionPath] === "query";
         }
     }
@@ -1055,10 +1055,10 @@ describe("shardDO + reactiveCache: base dispatch wiring", () => {
         const tuned = new GeneratedLikeShard(createFakeState(), {}, { maxRelationKeys: 9000, relationExistsPushDown: "never" });
         const bare = new GeneratedLikeShard(createFakeState(), {});
 
-        expect(tuned.tuning()).toStrictEqual({ maxRelationKeys: 9000, relationExistsPushDown: "never" });
+        expect(tuned.tuning()).toStrictEqual({ companionMemo: expect.any(CompanionMemo), maxRelationKeys: 9000, relationExistsPushDown: "never" });
         // Unset knobs are ABSENT, not `undefined` — spreading the slice must not
         // clobber an engine default with an explicit undefined.
-        expect(bare.tuning()).toStrictEqual({});
+        expect(bare.tuning()).toStrictEqual({ companionMemo: expect.any(CompanionMemo) });
     });
 });
 

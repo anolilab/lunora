@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
 import type { Middleware, Policy } from "../src/index";
-import { definePolicy, initLunora, rls } from "../src/index";
+import { bindTableFacade, definePolicy, initLunora, rls } from "../src/index";
 
 /**
  * What does `.use(rls(policies))` cost per query call? The middleware
@@ -110,6 +110,21 @@ const buildContext = (): BenchContext => {
     return { auth: { roles: [], userId: "user_42" }, db: database.writer };
 };
 
+// 60 facade-bound tables: the per-request rebind cost scales with schema size.
+const buildFacadeContext = (): BenchContext => {
+    const context = buildContext();
+    const db = context.db as unknown as Record<string, unknown>;
+
+    for (let index = 0; index < 60; index += 1) {
+        db[`table${String(index)}`] = bindTableFacade(context.db as never, `table${String(index)}`);
+    }
+
+    return context;
+};
+
+// Built once: the cost under test is the per-request rebind, not the runtime's own binding.
+const facadeContext = buildFacadeContext();
+
 // The procedure builder types `ctx.db` nominally; the RLS middleware signature
 // is structural, so a permissive cast is needed in the bench harness to attach
 // it without dragging the full DataModel typing in here. Same pattern the test
@@ -166,6 +181,10 @@ describe("rls() middleware — per-query overhead", () => {
 
     bench("rls(true): wrapper installs, no baseWhere merged", async () => {
         await rlsTrueHandler.handler(buildContext(), {});
+    });
+
+    bench("rls(true) over a 60-table schema: facade rebind cost", async () => {
+        await rlsTrueHandler.handler(facadeContext, {});
     });
 
     bench("rls(predicate): full WhereInput AND-merge per read", async () => {

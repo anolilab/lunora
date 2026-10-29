@@ -1,10 +1,8 @@
+import { stableStringify, stableWireKey } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { stableStringify } from "../../../shared/stable-key";
-import { stableWireKey } from "../../../shared/wire-key";
-
 /**
- * The wire-faithful cache-key encoder (`shared/wire-key.ts`) — the composition
+ * The wire-faithful cache-key encoder (`packages/wire/src/wire-key.ts`) — the composition
  * `stableStringify(encodeWire(value))` every reactive cache key (subscription
  * registry, `useQuery` memo keys, DO reactive cache, shape routing) rides on.
  * Two load-bearing properties are pinned here: identity for pure JSON

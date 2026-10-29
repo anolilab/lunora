@@ -9,6 +9,7 @@
 import { isDeterministicDispatchFailure } from "@lunora/dispatch";
 import { parseValidatorMap } from "@lunora/values";
 
+import { pinDedupId } from "./dedup-id";
 import { RESERVED_EVENT_TYPE_PREFIX } from "./define-event";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
 import { convertNonRetryableError, raiseNonRetryable } from "./errors";
@@ -26,6 +27,7 @@ import type {
     WorkflowStepLike,
     WorkflowStepRollbackOptionsLike,
 } from "./types";
+import { stepWaitDeadline, waitOutDeclines } from "./wait-out-declines";
 
 /**
  * Validate a step's args through its validator map, prefixing any
@@ -39,13 +41,20 @@ const validateStepArgs = (validators: StepArgsValidator, source: Record<string, 
 
 /** Dependencies needed to run a step: the native step API plus the workflow's env / runner / logger. */
 interface RunStepDeps {
+    /** The instance's `dedupNamespace(exportName, instanceId)` — the prefix of the replay-dedup ids the steps' dispatches carry (see `dedup-id.ts`). */
+    dedupNamespace: string;
     /** The Worker environment bindings, surfaced on the step context. */
     env: Record<string, unknown>;
     /** Structured logger surfaced on the step context. */
     log: WorkflowLogger;
     /** Native `cloudflare:workflows` `NonRetryableError` constructor — injected by `src/do`; absent in Node tests. */
     nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
-    /** The Lunora function runner, surfaced on the step context. */
+
+    /**
+     * The bare Lunora function runner. Each step attempt (and each rollback)
+     * surfaces it wrapped in `waitOutDeclines`, bounded by that attempt's own
+     * timeout.
+     */
     run: WorkflowRunFunction;
     /** The native Cloudflare durable-step API. */
     step: WorkflowStepLike;
@@ -57,9 +66,22 @@ interface RunStepDeps {
  * result (when `returns` is declared), with any portable `NonRetryableError`
  * converted to the native one and any declared rollback forwarded to Cloudflare.
  */
-const createRunStep =
-    (deps: RunStepDeps): WorkflowRunStepFunction =>
-    async <A extends StepArgsValidator, Result>(step: StepDefinition<A, Result>, args: InferStepArgs<A>, options?: RunStepOptions): Promise<Result> => {
+const createRunStep = (deps: RunStepDeps): WorkflowRunStepFunction => {
+    /**
+     * Ordinal of the NEXT `ctx.runStep` call in this execution of the body —
+     * the per-step namespace for replay-dedup ids (see `dedup-id.ts` for why
+     * this rather than the native `step.count`). Allocated synchronously below,
+     * before the call awaits anything, so concurrently-awaited steps still take
+     * their positions in source order. Rebuilt on every replay along with the
+     * context, which is what makes a replay re-derive the same ordinals.
+     */
+    let invocations = 0;
+
+    return async <A extends StepArgsValidator, Result>(step: StepDefinition<A, Result>, args: InferStepArgs<A>, options?: RunStepOptions): Promise<Result> => {
+        const dedupScope = `${deps.dedupNamespace}#step${String(invocations)}`;
+
+        invocations += 1;
+
         const config = options?.config ?? step.config;
         const stepName = options?.name ?? step.name;
 
@@ -88,7 +110,13 @@ const createRunStep =
                 config: nativeContext.config,
                 env: deps.env,
                 log: deps.log,
-                run: deps.run,
+                // Pinned INSIDE the callback on purpose: Cloudflare retries a
+                // failed step body in place, so the counter has to restart at
+                // `.1` for each attempt. That is what makes attempt 2 re-issue
+                // attempt 1's ids and the shard apply the mutation once instead
+                // of once per attempt — the double-charge this closes. A decline
+                // is waited out only until just before this attempt's timeout.
+                run: pinDedupId(waitOutDeclines(deps.run, stepWaitDeadline(nativeContext.config, Date.now())), dedupScope),
                 step: nativeContext.step,
             };
 
@@ -141,7 +169,13 @@ const createRunStep =
                           error: rollbackContext.error,
                           log: deps.log,
                           output: rollbackContext.output,
-                          run: deps.run,
+                          // A rollback is a SECOND durable replay with its own
+                          // retry budget, so its dispatches need the same pin —
+                          // built per invocation so a retried rollback reproduces
+                          // its ids. Its own scope, never the forward step's: a
+                          // refund sharing the charge's id would dedup against it
+                          // and silently never run.
+                          run: pinDedupId(waitOutDeclines(deps.run, stepWaitDeadline(step.rollbackConfig, Date.now())), `${dedupScope}rollback`),
                       });
                   },
                   rollbackConfig: step.rollbackConfig,
@@ -150,5 +184,6 @@ const createRunStep =
 
         return config === undefined ? deps.step.do(stepName, callback, rollbackOptions) : deps.step.do(stepName, config, callback, rollbackOptions);
     };
+};
 
 export { createRunStep, validateStepArgs };

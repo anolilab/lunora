@@ -74,6 +74,8 @@ class AuthStorageDO extends LunoraAuthDO {
 
 interface TestEnv {
     AUTH_DO: DurableObjectNamespace;
+    /** Used by the D1 migration suite directly from `cloudflare:test`, not by this worker. */
+    TEST_DB: D1Database;
 }
 
 const testWorker = {

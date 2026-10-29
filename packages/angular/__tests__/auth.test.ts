@@ -90,14 +90,21 @@ describe(auth, () => {
 });
 
 describe(authGate, () => {
-    it("is neither loading nor authenticated before a token is set (signed out)", () => {
+    it("loads with no token held, then settles signed out once the server answers", async () => {
         const fake = createFakeClient();
         const destroy = createFakeDestroyRef();
 
         const { isAuthenticated, isLoading } = authGate({ client: fake.asClient, destroyRef: destroy.asDestroyRef });
 
+        // A cookie session holds no bearer token, so an absent token says
+        // nothing about who is signed in. The gate loads until the server does.
+        expect(isLoading()).toBe(true);
         expect(isAuthenticated()).toBe(false);
+
+        await flushAsync();
+
         expect(isLoading()).toBe(false);
+        expect(isAuthenticated()).toBe(false);
     });
 
     it("is loading once a token is set but the user hasn't resolved yet", () => {

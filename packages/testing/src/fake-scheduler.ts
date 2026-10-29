@@ -1,8 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import { assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
 import type { ScheduledJob, Scheduler } from "@lunora/server";
-
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
 /** A pending job entry in the fake scheduler queue. */
 interface FakeScheduledJob extends ScheduledJob {
@@ -220,7 +219,7 @@ const createFakeScheduler = (
             return target.__lunoraRef;
         }
 
-        return target.name ?? target.binding ?? "";
+        return target.name ?? target.className ?? "";
     };
 
     const scheduler: Scheduler = {

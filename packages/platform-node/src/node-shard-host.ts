@@ -18,6 +18,8 @@ import { LunoraError } from "@lunora/errors";
 import type { ShardAlarms, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "@lunora/platform";
 import Database from "better-sqlite3";
 
+import preparedStatement from "./prepared-statement";
+
 /**
  * Largest delay `setTimeout` accepts as a 32-bit signed integer. Any delay
  * above this (~24.8 days) is clamped to 1 ms with a `TimeoutOverflowWarning`,
@@ -26,15 +28,24 @@ import Database from "better-sqlite3";
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /**
- * How many times a throwing alarm handler is re-delivered before the wakeup is
- * abandoned, and the first backoff step. workerd retries a Durable Object's
- * `alarm()` with exponential backoff and gives up after a bounded number of
- * attempts; this host mirrors the shape, not the constants — its backoff starts
- * an order of magnitude shorter because a redelivery here is a `setTimeout` in
- * a process that is already warm, not a cold object wake.
+ * How many times a throwing alarm handler is re-delivered, and how many times an
+ * alarm claim that hits a locked database is retried, before the wakeup is
+ * abandoned. workerd retries a Durable Object's `alarm()` with exponential
+ * backoff and gives up after a bounded number of attempts; this host mirrors the
+ * shape, not the constants — its backoff starts an order of magnitude shorter
+ * because a redelivery here is a `setTimeout` in a process that is already warm,
+ * not a cold object wake.
  */
 const ALARM_RETRY_LIMIT = 6;
 const ALARM_RETRY_BASE_MS = 100;
+
+/**
+ * How long an alarm timer waits before looking again when a transaction is open
+ * on the connection. The timer is not a boundary, so its statements would join
+ * that `BEGIN`, and a rollback would restore a row the alarm had already
+ * consumed and delivered.
+ */
+const FOREIGN_TRANSACTION_RETRY_MS = 10;
 
 /**
  * A `better-sqlite3` binding value. `null` (not `undefined`) is the native
@@ -78,29 +89,68 @@ const createSql = (database: Database.Database, assertOwnTurn: (action: string) 
         exec: <Row = SqlRow>(query: string, ...bindings: ReadonlyArray<unknown>): ShardSqlCursor<Row> => {
             assertOwnTurn("run SQL");
 
-            const statement = database.prepare(query);
+            const statement = preparedStatement(database, query);
             const normalized = bindings.map((value) => normalizeBinding(value));
 
-            const rows = (
-                statement.reader
-                    ? statement.all(...normalized)
-                    : ((): unknown[] => {
-                          statement.run(...normalized);
+            // A read-only statement is left unrun until `raw()` streams it, which the SQL console does so its row cap can stop a
+            // large result early. Every other access buffers on first use: an iterator over a live better-sqlite3 statement would
+            // keep the connection busy, so engine code that writes inside a loop over a read would fail. Writers (and `RETURNING`,
+            // which must not be re-run) still execute now.
+            const lazy = statement.reader && statement.readonly;
+            let rows: Row[] | undefined;
 
-                          return [];
-                      })()
-            ) as Row[];
+            const materialize = (): Row[] => {
+                if (rows === undefined) {
+                    // A deferred read runs when the caller consumes it, which can be after another task opened a transaction.
+                    assertOwnTurn("run SQL");
+
+                    if (statement.reader) {
+                        rows = statement.all(...normalized) as Row[];
+                    } else {
+                        statement.run(...normalized);
+                        rows = [];
+                    }
+                }
+
+                return rows;
+            };
+
+            if (!lazy) {
+                materialize();
+            }
+
+            // The statement is shared through the cache, so positional mode lasts only as long as this read, and ends even when the caller
+            // stops early.
+            const positionalRows = function* (): Generator<unknown[]> {
+                // Runs on the first `next()`, so the check applies to the consumer's turn, not the `exec` call.
+                assertOwnTurn("run SQL");
+                statement.raw(true);
+
+                try {
+                    yield* statement.iterate(...normalized) as Iterable<unknown[]>;
+                } finally {
+                    statement.raw(false);
+                }
+            };
 
             return {
-                [Symbol.iterator]: () => rows[Symbol.iterator](),
+                // Both optional cursor capabilities are answered only for a reader, since `columns()` throws on a statement that returns
+                // no data. `columnNames` runs nothing; `raw` streams, and is offered only where it can run the statement once.
+                get columnNames(): string[] | undefined {
+                    return statement.reader ? statement.columns().map((column) => column.name) : undefined;
+                },
+                [Symbol.iterator]: () => materialize()[Symbol.iterator](),
                 one: () => {
-                    if (rows.length !== 1) {
-                        throw new Error(`expected exactly one row, got ${String(rows.length)}`);
+                    const all = materialize();
+
+                    if (all.length !== 1) {
+                        throw new Error(`expected exactly one row, got ${String(all.length)}`);
                     }
 
-                    return rows[0] as Row;
+                    return all[0] as Row;
                 },
-                toArray: () => [...rows],
+                ...(lazy ? { raw: positionalRows } : {}),
+                toArray: () => [...materialize()],
             };
         },
     };
@@ -157,21 +207,200 @@ const createAlarms = (
 
     database.exec("CREATE TABLE IF NOT EXISTS _lunora_alarm (id INTEGER PRIMARY KEY CHECK (id = 0), scheduled_for INTEGER NOT NULL)");
 
+    // Prepared after the `CREATE TABLE` above, which they need to compile against.
+    const deleteAlarm = database.prepare("DELETE FROM _lunora_alarm WHERE id = 0");
+    const upsertAlarm = database.prepare<[number]>(
+        "INSERT INTO _lunora_alarm (id, scheduled_for) VALUES (0, ?) ON CONFLICT (id) DO UPDATE SET scheduled_for = excluded.scheduled_for",
+    );
+    const insertAlarmIfEmpty = database.prepare<[number]>("INSERT INTO _lunora_alarm (id, scheduled_for) VALUES (0, ?) ON CONFLICT (id) DO NOTHING");
+    const selectAlarm = database.prepare<[], { scheduled_for: number }>("SELECT scheduled_for FROM _lunora_alarm WHERE id = 0");
+    const deleteFiredAlarm = database.prepare<[number]>("DELETE FROM _lunora_alarm WHERE id = 0 AND scheduled_for = ?");
+
     const persist = (timestamp: number | undefined): void => {
         if (timestamp === undefined) {
-            database.prepare("DELETE FROM _lunora_alarm WHERE id = 0").run();
+            deleteAlarm.run();
         } else {
-            database
-                .prepare("INSERT INTO _lunora_alarm (id, scheduled_for) VALUES (0, ?) ON CONFLICT (id) DO UPDATE SET scheduled_for = excluded.scheduled_for")
-                .run(timestamp);
+            upsertAlarm.run(timestamp);
         }
     };
+
+    const persistIfEmpty = (timestamp: number): boolean => insertAlarmIfEmpty.run(timestamp).changes > 0;
+
+    /**
+     * Claim the alarm that just fired by deleting its row, and report whether
+     * this call is the one that did. The delete is conditional on the timestamp
+     * and atomic in SQLite, so when two processes share one database file and
+     * both re-armed the same row, exactly one sees `changes === 1` and delivers.
+     */
+    const consume = (firedAt: number): boolean => deleteFiredAlarm.run(firedAt).changes > 0;
+
+    /**
+     * Set while the armed timer is only waiting for another task's transaction to
+     * end, so a rollback can deliver straight away instead of waiting it out.
+     */
+    let waitingOnTransaction = false;
+    let resyncTimeout: ReturnType<typeof setTimeout> | undefined;
 
     const clearAlarmTimeout = (): void => {
         if (alarmTimeout !== undefined) {
             clearTimeout(alarmTimeout);
             alarmTimeout = undefined;
         }
+
+        waitingOnTransaction = false;
+    };
+
+    /**
+     * Hold `step` in the alarm timer slot until the open transaction ends. A
+     * fresh `set` or `delete` replaces the wait, and either one owns the next
+     * wakeup instead.
+     */
+    const afterTransaction = (step: () => void): void => {
+        alarmTimeout = setTimeout(() => {
+            alarmTimeout = undefined;
+            waitingOnTransaction = false;
+            step();
+        }, FOREIGN_TRANSACTION_RETRY_MS);
+        waitingOnTransaction = true;
+    };
+
+    /** Arm the timer for whatever alarm the durable row holds, if it holds one. */
+    const armFromRow = (): void => {
+        const durable = selectAlarm.get();
+
+        if (durable !== undefined) {
+            alarmAt = durable.scheduled_for;
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `arm` and the delivery steps are mutually recursive (a delivery re-arms, an arm delivers)
+            arm(durable.scheduled_for);
+        }
+    };
+
+    /**
+     * Re-arm a consumed alarm whose handler threw, with backoff. A throwing
+     * handler must not become an unhandled rejection that takes the process
+     * down, but it must not lose the wakeup either. workerd isolates a throwing
+     * `alarm()` AND re-delivers it with backoff; a host that only isolated it
+     * deleted the row before delivery and then swallowed the rejection, so
+     * nothing re-armed and the loop that alarm drives (a TTL sweep, a
+     * global-shape poll, a scheduler GC) stopped for good.
+     */
+    const retryFailedDelivery = (): void => {
+        if (!database.open || alarmAt !== undefined) {
+            // Nothing to retry against, or the handler rescheduled
+            // before it failed — that alarm owns the next wakeup.
+            return;
+        }
+
+        // A retry row written inside another task's transaction would vanish
+        // with its rollback, and the wakeup with it.
+        if (database.inTransaction) {
+            afterTransaction(retryFailedDelivery);
+
+            return;
+        }
+
+        attempts += 1;
+
+        if (attempts > ALARM_RETRY_LIMIT) {
+            attempts = 0;
+
+            return;
+        }
+
+        const retryAt = Date.now() + ALARM_RETRY_BASE_MS * 2 ** (attempts - 1);
+
+        // Only into an empty slot: another process over this file may have
+        // scheduled a newer alarm since this one was consumed, and its timer
+        // delivers only while the row still holds its timestamp. That alarm
+        // owns the next wakeup, so follow it instead of overwriting it.
+        if (persistIfEmpty(retryAt)) {
+            alarmAt = retryAt;
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `arm` and the delivery steps are mutually recursive (a delivery re-arms, an arm delivers)
+            arm(retryAt);
+
+            return;
+        }
+
+        attempts = 0;
+        armFromRow();
+    };
+
+    /**
+     * Deliver the alarm armed for `ms`, once no other task holds a transaction
+     * open. `claimFailures` counts claims of this same timestamp that threw.
+     */
+    const fire = (ms: number, claimFailures = 0): void => {
+        // The timer is not a boundary, so the consume below would join an open
+        // `BEGIN`: delivered now, then restored by that transaction's rollback
+        // and delivered again.
+        if (database.open && database.inTransaction) {
+            afterTransaction(() => {
+                fire(ms, claimFailures);
+            });
+
+            return;
+        }
+
+        alarmAt = undefined;
+
+        // A caller may close the database before this timer fires — e.g.
+        // it set a future alarm, then tore the platform down (process
+        // shutdown, test cleanup). `persist` runs a prepared statement
+        // against `database`; on a closed better-sqlite3 connection that
+        // throws synchronously *inside* the `setTimeout` callback, which
+        // is an uncaught exception Node has no way to route back to a
+        // caller's try/catch — it crashes the process. Guard on the
+        // connection's own open/closed state rather than trying to track
+        // "did dispose() already run" separately, since `close()` is the
+        // one fact that actually determines whether `.run()` is safe.
+        if (!database.open) {
+            return;
+        }
+
+        // Clear the durable row BEFORE delivering. An `onAlarm` that throws
+        // (or that itself schedules the next alarm, which is the normal
+        // pattern) must not race a stale row: the timestamp this timer just
+        // consumed is spent either way, and leaving it behind would re-fire
+        // it on the next construction over this database. Conditional on
+        // the timestamp: a transaction may have persisted a newer alarm
+        // while this timer was still armed, and that row is not ours.
+        try {
+            if (!consume(ms)) {
+                // Another process over this file claimed the row first (or a
+                // newer alarm replaced it); delivering again would fire it twice.
+                // A replacing alarm is armed by its own commit, but a timer that
+                // was armed for it may have been dropped, so re-arm from the row.
+                armFromRow();
+
+                return;
+            }
+        } catch {
+            // Another process holds the file's lock (`SQLITE_BUSY`) during the
+            // claim or the row lookup. A throw here is uncaught in a timer
+            // callback and ends the process.
+            // The failed delete left the row in place, so back off and claim it
+            // again; past the limit the row stays for the next construction.
+            alarmAt = ms;
+
+            if (claimFailures < ALARM_RETRY_LIMIT) {
+                alarmTimeout = setTimeout(
+                    () => {
+                        alarmTimeout = undefined;
+                        fire(ms, claimFailures + 1);
+                    },
+                    ALARM_RETRY_BASE_MS * 2 ** claimFailures,
+                );
+            }
+
+            return;
+        }
+
+        (async (): Promise<void> => {
+            await onAlarm?.();
+            attempts = 0;
+        })().catch(() => {
+            retryFailedDelivery();
+        });
     };
 
     /**
@@ -198,61 +427,8 @@ const createAlarms = (
         }
 
         alarmTimeout = setTimeout(() => {
-            alarmAt = undefined;
             alarmTimeout = undefined;
-
-            // A caller may close the database before this timer fires — e.g.
-            // it set a future alarm, then tore the platform down (process
-            // shutdown, test cleanup). `persist` runs a prepared statement
-            // against `database`; on a closed better-sqlite3 connection that
-            // throws synchronously *inside* the `setTimeout` callback, which
-            // is an uncaught exception Node has no way to route back to a
-            // caller's try/catch — it crashes the process. Guard on the
-            // connection's own open/closed state rather than trying to track
-            // "did dispose() already run" separately, since `close()` is the
-            // one fact that actually determines whether `.run()` is safe.
-            if (!database.open) {
-                return;
-            }
-
-            // Clear the durable row BEFORE delivering. An `onAlarm` that throws
-            // (or that itself schedules the next alarm, which is the normal
-            // pattern) must not race a stale row: the timestamp this timer just
-            // consumed is spent either way, and leaving it behind would re-fire
-            // it on the next construction over this database.
-            persist(undefined);
-
-            (async (): Promise<void> => {
-                await onAlarm?.();
-                attempts = 0;
-            })().catch(() => {
-                // A throwing handler must not become an unhandled rejection
-                // that takes the process down — but it must not lose the wakeup
-                // either. workerd isolates a throwing `alarm()` AND re-delivers
-                // it with backoff; a host that only isolated it deleted the row
-                // before delivery and then swallowed the rejection, so nothing
-                // re-armed and the loop that alarm drives (a TTL sweep, a
-                // global-shape poll, a scheduler GC) stopped for good.
-                if (!database.open || alarmAt !== undefined) {
-                    // Nothing to retry against, or the handler rescheduled
-                    // before it failed — that alarm owns the next wakeup.
-                    return;
-                }
-
-                attempts += 1;
-
-                if (attempts > ALARM_RETRY_LIMIT) {
-                    attempts = 0;
-
-                    return;
-                }
-
-                const retryAt = Date.now() + ALARM_RETRY_BASE_MS * 2 ** (attempts - 1);
-
-                alarmAt = retryAt;
-                persist(retryAt);
-                arm(retryAt);
-            });
+            fire(ms);
         }, delay);
     };
 
@@ -330,25 +506,60 @@ const createAlarms = (
     };
 
     /**
-     * Discard an alarm mutation whose transaction rolled back. The durable row
-     * rolled back with it and the in-memory state was never touched, so
-     * dropping the pending value is the whole undo.
+     * Re-sync the timer with the durable row a rollback restored. A timer that
+     * came due while the transaction was open is waiting it out, and only the
+     * restored row says whether the alarm is still due.
      */
+    const resync = (): void => {
+        resyncTimeout = undefined;
+
+        if (!database.open) {
+            return;
+        }
+
+        // Still inside a transaction (a failed `ROLLBACK`, or another `BEGIN` on
+        // the connection): the row read here would be its uncommitted view.
+        if (database.inTransaction) {
+            resyncTimeout = setTimeout(resync, FOREIGN_TRANSACTION_RETRY_MS);
+
+            return;
+        }
+
+        const durable = selectAlarm.get();
+
+        // A timer waiting out the transaction is re-armed too, so the alarm is delivered now that it has ended.
+        if (durable !== undefined && (alarmTimeout === undefined || waitingOnTransaction || alarmAt !== durable.scheduled_for)) {
+            alarmAt = durable.scheduled_for;
+            arm(durable.scheduled_for);
+        }
+    };
+
+    /** Discard an alarm mutation whose transaction rolled back. Called after the `ROLLBACK`. */
     const rollback = (): void => {
         pending = undefined;
+
+        if (resyncTimeout !== undefined) {
+            clearTimeout(resyncTimeout);
+        }
+
+        resync();
+    };
+
+    const dispose = (): void => {
+        clearAlarmTimeout();
+
+        if (resyncTimeout !== undefined) {
+            clearTimeout(resyncTimeout);
+            resyncTimeout = undefined;
+        }
     };
 
     // Re-arm whatever the last process left behind. `Math.max(0, …)` inside
     // `arm` means an alarm whose time passed while nothing was running fires on
     // the next tick rather than never — late, but delivered.
-    const restored = database.prepare<[], { scheduled_for: number }>("SELECT scheduled_for FROM _lunora_alarm WHERE id = 0").get();
+    armFromRow();
 
-    if (restored !== undefined) {
-        alarmAt = restored.scheduled_for;
-        arm(restored.scheduled_for);
-    }
-
-    return { alarms, commit, dispose: clearAlarmTimeout, rollback };
+    return { alarms, commit, dispose, rollback };
 };
 
 /** Options for {@link createNodeShardHost}. */
@@ -387,25 +598,59 @@ interface NodeShardHostOptions {
 /**
  * Build a `ShardHost` over a real `better-sqlite3` database.
  *
- * `runSerialized` chains onto a single `tail` promise rather than the
- * reference host's explicit job-array-plus-drain-loop: every queued closure
- * runs once `tail` settles, and `tail` is reset to a version that always
- * resolves (never rejects) so one job's failure cannot wedge the queue for
- * every job after it — the same "no two closures interleave" guarantee,
- * fewer moving parts to get wrong.
+ * `runSerialized` and `transaction` share **one** boundary lock, because they
+ * write **one** `better-sqlite3` connection. `transaction` issues raw
+ * `BEGIN`/`COMMIT`/`ROLLBACK` — legal here (unlike inside a Cloudflare Durable
+ * Object, where the runtime forbids it and callers must use
+ * `storage.transaction`) because better-sqlite3 is a plain embedded database
+ * with no platform-level transaction primitive layered over it.
  *
- * `transaction` issues raw `BEGIN`/`COMMIT`/`ROLLBACK` — legal here (unlike
- * inside a Cloudflare Durable Object, where the runtime forbids it and
- * callers must use `storage.transaction`) because better-sqlite3 is a plain
- * embedded database with no platform-level transaction primitive layered over
- * it. It runs on its own private `transactionTail` chain, the same shape as
- * `runSerialized`'s but never shared with it: two bare, overlapping
- * `transaction()` calls on this host serialize against each other rather than
- * corrupting each other's commits (raw `BEGIN` on a connection already inside
- * a transaction throws, or worse, interleaves). Routing `transaction` through
- * `runSerialized` itself would deadlock, since the engine already composes
- * `runSerialized(() => transaction(work))` — the inner enqueue would then wait
- * on the outer closure awaiting it.
+ * ## Why one lane and not two
+ *
+ * This host shipped with two private tail chains, one per entry point, so each
+ * serialized against itself and neither against the other. `runSerialized`
+ * issues no `BEGIN` of its own, so one of its closures overlapping a bare
+ * `transaction()` wrote straight into that transaction's span. `assertOwnTurn`
+ * below catches the write — it is the only reason this host never silently lost
+ * one the way an unguarded connection would — but catching it is not the same
+ * as preventing it, and the refusal lands in the wrong place:
+ *
+ * 1. A `runSerialized` closure writes a row. Nothing is open, so it commits.
+ * 2. It awaits (a scheduler hop, an `onShardInit` read, any real I/O).
+ * 3. A bare `transaction()` runs `BEGIN` while it is parked. `transaction` is
+ * a public contract surface, and `./node-shard-state` re-exports it as the
+ * `storage.transaction` member `ShardDO` documents as "the platform
+ * primitive", so a subclass reaches one without going through the engine.
+ * 4. The closure resumes and its next write is refused with
+ * `SHARD_UNAVAILABLE`, so `runSerialized` **rejects** — with step 1 already
+ * durable.
+ *
+ * The boundary the contract promises is atomic-or-nothing to its caller tore in
+ * half: a rejection the caller will retry, on top of a write the retry now
+ * re-applies. That is `runSerialized`'s "no two closures interleave" guarantee
+ * broken by a `transaction` it was never serialized against.
+ *
+ * ## Why the lock is re-entrant, and why `AsyncLocalStorage` is what makes it so
+ *
+ * The engine composes the two, and stacks them: `ShardRunner.runInTransaction`
+ * is `runSerialized(() => transaction(work))` (`@lunora/shard-engine`), and
+ * `ShardDO.fetch` widens a mutation dispatch carrying `x-lunora-mutation-id`
+ * into a *further* `runSerialized` span around it (`@lunora/do`). Under two
+ * plain FIFO chains that outer span is already fatal on this host — the inner
+ * `runSerialized` waits on a `tail` that only settles when the outer closure it
+ * is running inside resolves, and because nothing ever resets that `tail`, the
+ * shard's write lane is wedged for the life of the process rather than for the
+ * life of the request.
+ *
+ * So the lock is skipped for a boundary opened from inside a boundary, and
+ * `AsyncLocalStorage` is the only thing that can tell that case from the one
+ * that must queue: its store follows a single call's own await chain without
+ * leaking into a sibling chain. A held boolean cannot — it reads `true` for an
+ * unrelated *second top-level* `transaction()` too, which would then nest a raw
+ * `BEGIN` on a connection already inside one. This is the same distinction
+ * workerd's `blockConcurrencyWhile` draws natively with "does not queue events
+ * initiated as part of the callback itself", which is what
+ * `@lunora/platform-cloudflare` leans on for the identical composition.
  *
  * The returned `dispose()` is this host's lifecycle owner: it clears the
  * pending alarm `setTimeout` (so it can never fire against a connection this
@@ -475,36 +720,68 @@ const createNodeShardHost = (
      */
     const background = new Set<Promise<unknown>>();
 
-    let tail: Promise<unknown> = Promise.resolve();
+    /**
+     * Set for the duration of a boundary's closure, and readable only from that
+     * closure's own await chain. See this module's `createNodeShardHost`
+     * docstring for why a plain boolean would be wrong here.
+     *
+     * Deliberately NOT `transactionScope`, which is a different question with a
+     * different answer. `transactionScope` means "my chain owns the open
+     * `BEGIN`", and two things read it: `assertOwnTurn`, to decide whether SQL
+     * is refused, and `createAlarms`' `inside`, to decide whether an alarm
+     * mutation is held until commit. Widening it to every `runSerialized`
+     * closure would re-open the hazard this fix closes from the other side — a
+     * plain serialized closure would be waved through `assertOwnTurn` while an
+     * unrelated transaction is open — and would strand every alarm it set in
+     * `pending`, since nothing commits a transaction that was never begun.
+     * `transactionScope` is a strict subset of this store, not a synonym for it.
+     */
+    const insideBoundary = new AsyncLocalStorage<true>();
 
-    const runSerialized: ShardHost["runSerialized"] = (function_) => {
-        const started = tail.then(function_, function_);
+    /**
+     * Tail of the one boundary queue. Only ever a `release` promise, so it
+     * cannot reject and one failed boundary cannot wedge every boundary behind
+     * it — the property the two `tail` chains this replaced got from resetting
+     * themselves to a never-rejecting version.
+     */
+    let boundaryTail: Promise<void> = Promise.resolve();
 
-        tail = started.then(
-            () => undefined,
-            () => undefined,
-        );
+    /**
+     * Hold the shard's single-writer lock for `function_`, or run it in place
+     * when the caller's own chain already holds it.
+     *
+     * The re-entrant branch takes no queue slot at all, so it cannot deadlock on
+     * the lock its own caller is holding. The queueing branch claims its slot
+     * synchronously — everything up to `await previous` runs on the calling tick
+     * — so boundaries are admitted in call order.
+     */
+    const withBoundary = async <T>(function_: () => Promise<T>): Promise<T> => {
+        if (insideBoundary.getStore() === true) {
+            return await function_();
+        }
 
-        return started;
+        const previous = boundaryTail;
+
+        let release: () => void = () => {};
+
+        boundaryTail = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        await previous;
+
+        try {
+            // `return await`, not a bare `return`: the rejection has to reach
+            // the `finally`, or a boundary whose closure threw never releases
+            // the lock and the shard wedges for good. `await` re-throws by
+            // identity, which `ShardHost`'s error-identity requirement pins.
+            return await insideBoundary.run(true, function_);
+        } finally {
+            release();
+        }
     };
 
-    // A second, private tail chain of the exact same shape as `runSerialized`
-    // above, used ONLY by `transaction`. Raw BEGIN/COMMIT/ROLLBACK on a shared
-    // connection is not safe under overlap — a second `transaction()` call
-    // that starts before the first commits either throws "cannot start a
-    // transaction within a transaction" on the second BEGIN, or (worse) its
-    // COMMIT commits the first's uncommitted writes and the first's ROLLBACK
-    // then discards work that already reported success.
-    //
-    // Routing `transaction` through the SAME `runSerialized`/`tail` chain
-    // would deadlock: the engine composes them as
-    // `runSerialized(() => transaction(work))` (`shard-runner.ts`), so the
-    // inner enqueue would wait on the outer closure that is awaiting it. This
-    // dedicated lane serializes bare, overlapping `transaction()` calls
-    // against each other (the actual bug) while leaving `runInTransaction`'s
-    // composition free of self-deadlock (the outer gate is `runSerialized`,
-    // the inner lane is always empty when it runs).
-    let transactionTail: Promise<unknown> = Promise.resolve();
+    const runSerialized: ShardHost["runSerialized"] = <T>(function_: () => Promise<T>): Promise<T> => withBoundary(function_);
 
     const runTransaction = async <T>(function_: () => Promise<T>): Promise<T> => {
         database.exec("BEGIN");
@@ -520,7 +797,6 @@ const createNodeShardHost = (
             return result;
         } catch (error) {
             transactionOpen = false;
-            rollbackAlarms();
 
             try {
                 database.exec("ROLLBACK");
@@ -532,23 +808,14 @@ const createNodeShardHost = (
                 // harness copy of this guards it; the two host copies did not.
             }
 
+            // After the ROLLBACK, so it re-syncs the timer with the restored row.
+            rollbackAlarms();
+
             throw error;
         }
     };
 
-    const transaction: ShardHost["transaction"] = <T>(function_: () => Promise<T>): Promise<T> => {
-        const started = transactionTail.then(
-            () => runTransaction(function_),
-            () => runTransaction(function_),
-        );
-
-        transactionTail = started.then(
-            () => undefined,
-            () => undefined,
-        );
-
-        return started;
-    };
+    const transaction: ShardHost["transaction"] = <T>(function_: () => Promise<T>): Promise<T> => withBoundary(async () => runTransaction(function_));
 
     const host: ShardHost = {
         alarms,

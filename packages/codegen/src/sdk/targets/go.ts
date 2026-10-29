@@ -125,7 +125,55 @@ const renderNamespace = (namespace: SdkNamespace): string => {
     ].join("\n");
 };
 
-const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
+/**
+ * The models that do not survive `encoding/json`, and every model that reaches
+ * one.
+ *
+ * A union of scalars (`v.union(v.string(), v.number())`) renders as a struct of
+ * one untagged pointer per branch, and under `just-types` it gets no
+ * `UnmarshalJSON`/`MarshalJSON` to map it onto the bare JSON value — so a `"x"`
+ * result failed with "cannot unmarshal string into Go value of type
+ * ItemsPickResult", and as an argument it would be sent as
+ * `{"Double":null,"String":"x"}`. quicktype's full mode has that pair but
+ * references types it never declares for other shapes, so it is not an option.
+ * A struct with a field and no `json:` tag is that union; anything whose
+ * declaration names one, directly or through another, inherits the defect.
+ */
+const unionModels = (models: string): Set<string> => {
+    const declarations = new Map<string, string>();
+
+    for (const match of models.matchAll(/^type (\w+) (struct \{\n[\s\S]*?^\}|.*)$/gmu)) {
+        declarations.set(match[1] as string, match[2] as string);
+    }
+
+    const broken = new Set([...declarations].filter(([, body]) => body.startsWith("struct {\n\t") && !body.includes("`")).map(([name]) => name));
+    let grew = true;
+
+    while (grew) {
+        grew = false;
+
+        for (const [name, body] of declarations) {
+            if (!broken.has(name) && [...broken].some((other) => new RegExp(String.raw`\b${other}\b`, "u").test(body))) {
+                broken.add(name);
+                grew = true;
+            }
+        }
+    }
+
+    return broken;
+};
+
+const render = ({ models, namespaces: declared }: SdkRenderInput): Record<string, string> => {
+    const broken = unionModels(models);
+    const usable = (name: string | undefined): string | undefined => (name !== undefined && broken.has(name) ? undefined : name);
+    const namespaces = declared.map((namespace) => {
+        return {
+            methods: namespace.methods.map((method) => {
+                return { ...method, argsType: usable(method.argsType), resultType: usable(method.resultType) };
+            }),
+            name: namespace.name,
+        };
+    });
     const fields = namespaces.map((namespace) => `\t${toPascalCase(namespace.name)} *${toPascalCase(namespace.name)}API`).join("\n");
     const assignments = namespaces.map((namespace) => `\t\t${toPascalCase(namespace.name)}: &${toPascalCase(namespace.name)}API{client: client},`).join("\n");
 

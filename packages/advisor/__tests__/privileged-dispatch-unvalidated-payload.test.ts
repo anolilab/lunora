@@ -13,7 +13,7 @@ const dispatch = (overrides: Partial<AdvisorPrivilegedDispatch> = {}): AdvisorPr
     return {
         dispatchKind: "workflow",
         file: "workflows",
-        handlerExport: "onboard",
+        scope: { kind: "export", name: "onboard" },
         line: 4,
         targetExport: "send",
         targetFile: "messages",
@@ -53,6 +53,27 @@ describe("privileged_dispatch_unvalidated_payload", () => {
             name: "privileged_dispatch_unvalidated_payload",
         });
         expect(findings[0]?.detail).toContain("messages.send");
+    });
+
+    it("matches a target in an index.ts or a hyphenated folder by its api.* path", () => {
+        expect.assertions(2);
+
+        // `internal.ratelimit.send` → target file `ratelimit`; the procedure lives in `ratelimit/index`.
+        expect(
+            privilegedDispatchUnvalidatedPayload.run({
+                privilegedDispatches: [dispatch({ targetFile: "ratelimit" })],
+                rlsProcedures: [procedure({ file: "ratelimit/index" })],
+                schema: schema(),
+            }),
+        ).toHaveLength(1);
+        // `internal.my_module.messages.send` → `my_module/messages`; the procedure lives in `my-module/messages`.
+        expect(
+            privilegedDispatchUnvalidatedPayload.run({
+                privilegedDispatches: [dispatch({ targetFile: "my_module/messages" })],
+                rlsProcedures: [procedure({ file: "my-module/messages" })],
+                schema: schema(),
+            }),
+        ).toHaveLength(1);
     });
 
     it("does not flag when the dispatched target does not enforce RLS", () => {
@@ -95,7 +116,7 @@ describe("privileged_dispatch_unvalidated_payload", () => {
         expect.assertions(1);
 
         const findings = privilegedDispatchUnvalidatedPayload.run({
-            privilegedDispatches: [dispatch({ dispatchKind: "queue", file: "queues", handlerExport: "emailQueue" })],
+            privilegedDispatches: [dispatch({ dispatchKind: "queue", file: "queues", scope: { kind: "export", name: "emailQueue" } })],
             rlsProcedures: [procedure()],
             schema: schema(),
         });

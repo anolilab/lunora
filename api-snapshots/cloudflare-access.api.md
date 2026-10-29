@@ -36,7 +36,7 @@ interface AccessJwtFallbackOptions extends Omit<RequestVerifyOptions, "aud" | "t
 ### `AccessKeySet` (type)
 
 ```ts
-type AccessKeySet = CryptoKey | JWTVerifyGetKey | KeyObject | Uint8Array;
+type AccessKeySet = CryptoKey | JWTVerifyGetKey | KeyObject;
 ```
 
 ### `AccessRoleMap` (type)
@@ -220,6 +220,7 @@ interface ExecutionContextLike {
             tags?: string[];
         }) => Promise<unknown>;
     };
+    exports?: unknown;
     passThroughOnException?: () => void;
     waitUntil?: (promise: Promise<unknown>) => void;
 }

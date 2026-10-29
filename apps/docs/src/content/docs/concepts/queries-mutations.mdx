@@ -50,6 +50,64 @@ you get a `DatabaseWriter` with `insert`, `patch`, `replace` and `delete` (plus
 the batch forms below). Both are typed by your schema, so
 `ctx.db.insert("messages", ...)` errors at compile time if the shape is wrong.
 
+### Atomic updates
+
+A number column accepts an operator in place of a value, and a boolean column
+accepts `{ toggle: true }`. The store applies it to the value the row holds when
+the write runs, so you do not read the row first and a concurrent writer cannot
+make you overwrite its change:
+
+```ts
+await ctx.db.counters.patch(id, { hits: { increment: 1 } });
+await ctx.db.accounts.patch(id, { balance: { decrement: 25 }, frozen: { toggle: true } });
+```
+
+`increment`, `decrement`, `multiply` and `divide` take a finite number. The column
+must already hold a number: patching a `null` field, dividing by zero, or a result
+that is not finite is rejected with a `VALIDATION_ERROR` and the row is left alone.
+Operators work in `patch`, `patchIf`, `patchMany` and the `update` side of `upsert`.
+Your RLS update policy is checked against the row the store actually writes, with
+the operator already applied, not against the operator.
+
+A column takes arithmetic operators when it is a `v.number()`, `v.timestamp()` or
+`v.date()` (so `expiresAt: { increment: ttlMs }` works), or a `v.union` of one of
+those with `v.null()` (optional or not), and `{ toggle: true }` when it is a
+`v.boolean()`. Any other column, such as `v.any()`, `v.object(...)`, a `v.literal(...)`
+or a union of a number and a string, stores `{ increment: 1 }` as the plain value it
+is.
+
+On a `.global()` table a write that loses its version check re-reads the row and
+applies the operator again, up to 16 times, instead of reporting a conflict. (A
+Durable Object runs one mutation at a time, so a shard table does not race; only a
+before-update trigger that awaits outside I/O can let another write in there.) A
+`.before` update trigger therefore runs once per attempt, so keep it free of side
+effects. RLS and `.dropStalePatches()` treat an operator as relative: the update
+policy is checked against the row each attempt produces, and a patch is never
+dropped as stale because the counter it increments moved.
+
+`applyPlanToCollections` applies operators to the local copy, so a mutator whose
+optimistic body and server body share a plan stays in agreement. In a hand-written
+optimistic update you do the arithmetic yourself.
+
+### Updating one key inside an object column
+
+A dotted key in `patch` sets one value inside an object column and keeps the rest of the object:
+
+```ts
+await ctx.db.users.patch(id, { "profile.plan": "team", "profile.address.city": "Paris" });
+```
+
+Several paths into the same column fold into one write. Missing objects on the way down are created. Every
+path is checked against the schema first (each step must name a field of the nested `v.object`, and the
+value must satisfy its validator), so a typo or a wrong type is a `VALIDATION_ERROR` rather than a stray key.
+Setting a column and a path into it in the same patch is refused as ambiguous, and an operator such as
+`increment` applies to a top-level column only.
+
+The merge is made against the row the store reads when the write runs, and on a `.global()` table a
+lost version check re-reads and re-applies it rather than reporting a conflict. A path patch works with `patchIf`
+and `patchMany`, your RLS update policy sees the merged row, and `.dropStalePatches()` judges it by
+the value at the end of the path, so someone else editing a different key of the same object is not a conflict.
+
 ### Batch writes
 
 `insertMany` / `deleteMany` / `patchMany` apply many rows in **one** call. That
@@ -60,8 +118,8 @@ Each is available both flat and per-table:
 ```ts
 // flat
 const ids = await ctx.db.insertMany("messages", [{ body: "a" }, { body: "b" }]);
-await ctx.db.patchMany([{ id: ids[0], patch: { body: "edited" } }]);
-await ctx.db.deleteMany([ids[1]]);
+await ctx.db.patchMany("messages", [{ id: ids[0], patch: { body: "edited" } }]);
+await ctx.db.deleteMany("messages", [ids[1]]);
 
 // per-table (scopes every id to this table)
 await ctx.db.messages.deleteMany([ids[0]]);
@@ -95,6 +153,7 @@ It still applies column defaults, maintains all indexes and companions
 (search/aggregate/rank/CDC + live subscriptions), and **still enforces RLS**:
 secure-by-default and your table's insert policy apply exactly as for `insertMany`
 (there is no RLS-bypassing writer). `allowExplicitId` preserves a supplied `_id`.
+An id that contains a NUL character (U+0000) is refused with `BAD_REQUEST`, on every store.
 Use it only for data you control; reach for `insertMany` for anything user-supplied.
 
 ## `ctx.auth`

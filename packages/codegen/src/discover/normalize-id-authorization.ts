@@ -2,17 +2,22 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { NormalizeIdAuthorizationIR } from "../ir";
-import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { chainRootOf, descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { chainUsesWrappedCall } from "./builder-chain";
+import { contextSurfaceNodesIn, contextSurfacePathOf } from "./context-root";
+import { isDatabaseAccessor } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 import type { InspectableHandler } from "./functions/handler";
 import { procedureHandler } from "./functions/handler";
 
 /**
- * `ctx.db` id-first row operations that resolve a whole row by its primitive id:
- * `get(id)`, `patch(id, …)`, `delete(id)`. Each takes the id as argument 0, so a
- * `normalizeId` result flowing into `arg[0]` reaches the row directly — with no
- * ownership predicate in the read itself.
+ * `ctx.db` row operations that resolve a whole row by its primitive id:
+ * `get(table, id)`, `patch(table, id, …)`, `delete(table, id)`. On the generic
+ * writer the table comes first, so the id is argument 1; on a table facade
+ * (`ctx.db.posts.patch(id, …)`) the id is argument 0. A `normalizeId` result flowing
+ * into that argument reaches the row directly, with no ownership predicate in the
+ * read itself.
  */
 const SINK_METHODS = new Set<NormalizeIdAuthorizationIR["sinkMethod"]>(["delete", "get", "patch"]);
 
@@ -121,11 +126,11 @@ const hasNullGate = (handler: InspectableHandler, name: string): boolean =>
 
 /**
  * The id-first `ctx.db` sink method (`get`/`patch`/`delete`) the handler applies to
- * `name` as its first argument (`ctx.db.get(id)` / `ctx.db.<table>.patch(id, …)`), or
+ * `name` as its id argument (`ctx.db.get(table, id)` / `ctx.db.<table>.patch(id, …)`), or
  * `undefined` when the normalized id never reaches such a sink.
  */
 const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAuthorizationIR["sinkMethod"] | undefined => {
-    for (const call of handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(handler, SyntaxKind.CallExpression)) {
         const callee = call.getExpression();
 
         if (!Node.isPropertyAccessExpression(callee)) {
@@ -139,16 +144,22 @@ const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAut
         }
 
         const receiver = callee.getExpression();
-        // Generic form `ctx.db.get(id)` or facade form `ctx.db.<table>.get(id)`.
-        const onDatabase = isDatabaseAccessor(receiver) || (Node.isPropertyAccessExpression(receiver) && isDatabaseAccessor(receiver.getExpression()));
+        // Generic form `ctx.db.get(table, id)` or facade form `ctx.db.<table>.get(id)`.
+        const genericDatabase = isDatabaseAccessor(receiver);
+        const onDatabase = genericDatabase || (Node.isPropertyAccessExpression(receiver) && isDatabaseAccessor(receiver.getExpression()));
 
         if (!onDatabase) {
             continue;
         }
 
-        const first = call.getArguments()[0];
+        // The generic writer takes the table first, so the id is its second argument; a
+        // receiver named `db` can also be a table facade (`const db = ctx.db.posts`), whose
+        // by-id sinks take the id first. Check both positions, so neither spelling hides it.
+        const idPositions = genericDatabase ? 2 : 1;
 
-        if (first !== undefined && Node.isIdentifier(first) && first.getText() === name) {
+        const idArguments = call.getArguments().slice(0, idPositions);
+
+        if (idArguments.some((argument) => Node.isIdentifier(argument) && argument.getText() === name)) {
             return method;
         }
     }
@@ -157,36 +168,16 @@ const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAut
 };
 
 /**
- * The leftmost identifier of a dotted / indexed / awaited expression — `ctx` in
- * `ctx.auth.userId`, `viewer` in `viewer.teamId`, `undefined` for a literal or a
- * more complex head.
- */
-const rootIdentifierName = (node: TsNode): string | undefined => {
-    let current: TsNode = node;
-
-    while (
-        Node.isPropertyAccessExpression(current) ||
-        Node.isElementAccessExpression(current) ||
-        Node.isNonNullExpression(current) ||
-        Node.isParenthesizedExpression(current) ||
-        Node.isAsExpression(current) ||
-        Node.isAwaitExpression(current)
-    ) {
-        current = current.getExpression();
-    }
-
-    return Node.isIdentifier(current) ? current.getText() : undefined;
-};
-
-/**
  * True when the handler passes `ctx` (or any `ctx.`-rooted value) into a function
  * call — `getViewer(ctx)`, `requireUser(ctx)`, `authorize(ctx, id)`. Delegating the
  * whole context to a helper is a strong tell that identity/authorization is resolved
- * out of line, so the handler is doing more than a shape check. A `ctx.db.get(id)`
+ * out of line, so the handler is doing more than a shape check. A `ctx.db.get(table, id)`
  * method call does NOT match: there `ctx` is the receiver, not an argument.
  */
 const delegatesContextToHelper = (handler: InspectableHandler): boolean =>
-    handler.getDescendantsOfKind(SyntaxKind.CallExpression).some((call) => call.getArguments().some((argument) => rootIdentifierName(argument) === "ctx"));
+    handler
+        .getDescendantsOfKind(SyntaxKind.CallExpression)
+        .some((call) => call.getArguments().some((argument) => contextSurfacePathOf(chainRootOf(argument)) !== undefined));
 
 /**
  * True when the handler contains an equality comparison with a property-access
@@ -221,18 +212,15 @@ const comparesRowProperty = (handler: InspectableHandler): boolean =>
  * SECURITY-category finding never fires on genuinely-authorized code.
  */
 const handlerMentionsOwnership = (handler: InspectableHandler): boolean => {
-    for (const identifier of handler.getDescendantsOfKind(SyntaxKind.Identifier)) {
+    for (const identifier of descendantsOfKind(handler, SyntaxKind.Identifier)) {
         if (OWNERSHIP_IDENTIFIER_NAMES.has(identifier.getText())) {
             return true;
         }
     }
 
-    for (const access of handler.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
-        const root = access.getExpression();
-
-        if (Node.isIdentifier(root) && root.getText() === "ctx" && IDENTITY_ACCESSORS.has(access.getName())) {
-            return true;
-        }
+    // `ctx.auth` read through any spelling of the ctx (renamed, destructured `{ auth }`).
+    if ([...IDENTITY_ACCESSORS].some((accessor) => contextSurfaceNodesIn(handler, accessor).length > 0)) {
+        return true;
     }
 
     return delegatesContextToHelper(handler) || comparesRowProperty(handler);
@@ -269,7 +257,7 @@ const normalizeIdAuthorizationsInDeclaration = (declaration: TsNode, relativePat
     const seen = new Set<string>();
     const rows: NormalizeIdAuthorizationIR[] = [];
 
-    for (const call of handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(handler, SyntaxKind.CallExpression)) {
         const table = normalizeIdTable(call);
 
         if (table === undefined) {
@@ -290,7 +278,7 @@ const normalizeIdAuthorizationsInDeclaration = (declaration: TsNode, relativePat
 
         seen.add(name);
         rows.push({
-            exportName: declaration.getName(),
+            exportName: exportedNameOf(declaration) ?? declaration.getName(),
             file: relativePath,
             line: call.getStartLineNumber(),
             mentionsOwnership,
@@ -324,14 +312,8 @@ const discoverNormalizeIdAuthorization = (project: Project, lunoraDirectory: str
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        for (const statement of sourceFile.getVariableStatements()) {
-            if (!statement.isExported()) {
-                continue;
-            }
-
-            for (const declaration of statement.getDeclarations()) {
-                rows.push(...normalizeIdAuthorizationsInDeclaration(declaration, relativePath));
-            }
+        for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+            rows.push(...normalizeIdAuthorizationsInDeclaration(declaration, relativePath));
         }
     }
 

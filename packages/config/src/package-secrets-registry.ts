@@ -1,16 +1,23 @@
 /**
- * Per-package secret-requirements registry for `.dev.vars` scaffolding.
+ * Secret-requirements registry for `.dev.vars` scaffolding, keyed by SECRET SOURCE.
  *
- * Each entry maps a `@lunora/*` package name → the secrets it requires at
- * runtime, expressed as `{ key, description, docsUrl }` records. The scaffolder
- * in {@link ./scaffold-dev-variables} reads this registry to emit package-aware
- * `.dev.vars.example` entries (placeholders + inline doc-pointer comments).
+ * Each entry maps a secret source → the secrets it requires at runtime,
+ * expressed as `{ key, description, docsUrl }` records. A source is usually a
+ * `@lunora/*` import specifier — a package name (`@lunora/mail`) or, when the
+ * subpath decides which secrets apply, a subpath (`@lunora/payment/stripe`). A
+ * secret need that no import can tell apart is keyed `<package>:<detail>`
+ * (`@lunora/notify:webPush`, the channel `defineNotify` configures); `:` keeps
+ * it from reading as an import specifier or a Node `#imports` alias.
+ * `secretSourcesFromBindings` (in `infer-bindings.ts`) reports the sources a
+ * project uses, and the scaffolder in {@link ./scaffold-dev-variables} reads this
+ * registry to emit the matching `.dev.vars.example` entries (placeholders +
+ * inline doc-pointer comments).
  *
  * ## Adding a new add-on
  *
  * When a new `@lunora/*` package requires runtime secrets, add one entry to
- * {@link PACKAGE_SECRETS_REGISTRY} keyed by its exact npm package name. Each
- * `SecretEntry` in the array needs:
+ * {@link PACKAGE_SECRETS_REGISTRY} keyed by the source that reports it (see
+ * above). Each `SecretEntry` in the array needs:
  *
  * - `key`         — the env-var name the package reads from `env` (e.g. `RESEND_API_KEY`).
  * - `description` — one line describing the secret and how to obtain it.
@@ -65,6 +72,14 @@ const CORE_SECRETS: ReadonlyArray<SecretEntry> = [
     },
 ];
 
+/** The relay secret's key, and the registry sources that declare it: the host mints it, a client takes the host's value. */
+const SHARD_RELAY_SECRET_KEY = "LUNORA_RELAY_SECRET";
+/** The value a host's `.dev.vars` carries for the relay key until it is generated. A client's line carries its angle-bracket template instead, so it is never generated. */
+const SHARD_RELAY_HOST_PLACEHOLDER = "replace-with-openssl-rand-hex-32";
+/** The sources of the sources that host a relay-secured DO: the host mints the relay key, a client takes its value. */
+const RELAY_HOST_SOURCES: ReadonlySet<string> = new Set(["@lunora/do:shardRegistry", "@lunora/replica:eventLog"]);
+const RELAY_CLIENT_SOURCE = "@lunora/replica:eventLogClient";
+
 /**
  * Secret keys Lunora mints locally that no PACKAGE declares, so
  * {@link MINTABLE_SECRET_KEYS} cannot derive them from the map below: they
@@ -106,7 +121,33 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "http://localhost:8787",
         },
     ],
-    // Keyed by the SUBPATH, because that is what `CAPABILITY_SOURCES` emits for
+    // `requestSecretTool` seals the value a human supplies under this key. It is
+    // base64 of 32 random bytes, not hex: a hex value is 64 characters that also
+    // decode as base64, but to 48 bytes, which the host refuses. The angle-bracket
+    // placeholder keeps the key out of MINTABLE_SECRET_KEYS, so nothing generates
+    // it and the operator runs the openssl command below.
+    "@lunora/agent:requestSecretTool": [
+        {
+            description:
+                "AES-256 key that seals secret values held for one agent step, base64 of 32 bytes. Generate with: openssl rand -base64 32. Rotate by moving the old value to LUNORA_SECRET_VALUE_KEY_PREVIOUS first.",
+            docsUrl: "https://lunora.sh/docs/packages/agent#secret-values",
+            key: "LUNORA_SECRET_VALUE_KEY",
+            placeholderValue: "<your-base64-32-byte-key>",
+        },
+    ],
+    // Keyed `<package>:<detail>` because nothing imports it: `ShardRegistryDO` is bound by
+    // wrangler and called from generated code, so `secretSourcesFromBindings` reports it
+    // off the registry binding (`hostsShardRegistry`).
+    "@lunora/do:shardRegistry": [
+        {
+            description:
+                "Signs every request to ShardRegistryDO, which refuses unsigned ones, and the shard-to-shard control channel. Set the same value on the worker and every Durable Object. Generate with: openssl rand -hex 32",
+            docsUrl: "https://lunora.sh/docs/concepts/sharding#the-shard-registry",
+            key: SHARD_RELAY_SECRET_KEY,
+            placeholderValue: SHARD_RELAY_HOST_PLACEHOLDER,
+        },
+    ],
+    // Keyed by the SUBPATH, because that is what `FLAG_PACKAGES` reports for
     // `ctx.r2sql` (the surface is codegen-wired onto ActionCtx; nothing imports
     // the package). Without these three the emitted ctx-builder fell through to
     // `r2sqlStub` and every `ctx.r2sql` call threw on the deployed worker, with
@@ -140,7 +181,46 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "<your-resend-api-key>",
         },
     ],
-    "@lunora/notify": [
+    // Keyed by the event-log DO an app exports rather than a package import: `EventLogDO` refuses
+    // every request without this secret, and `EventLogDOClient` throws at construction without it.
+    "@lunora/replica:eventLog": [
+        {
+            description:
+                "Signs every request to EventLogDO, which refuses unsigned ones, and the calls from the worker that reads or appends the log. Set the same value on the worker and every Durable Object. Generate with: openssl rand -hex 32",
+            docsUrl: "https://lunora.sh/docs/packages/replica#eventlogdo",
+            key: SHARD_RELAY_SECRET_KEY,
+            placeholderValue: SHARD_RELAY_HOST_PLACEHOLDER,
+        },
+    ],
+    // A worker that only constructs `EventLogDOClient` takes the value its host minted. Not a relay host source, so it never mints one.
+    "@lunora/replica:eventLogClient": [
+        {
+            description:
+                "The LUNORA_RELAY_SECRET of the worker that hosts EventLogDO. EventLogDOClient throws at construction without it, and the log refuses every request signed with another value.",
+            docsUrl: "https://lunora.sh/docs/packages/replica#eventlogdo",
+            key: SHARD_RELAY_SECRET_KEY,
+            placeholderValue: "<your-eventlogdo-host-relay-secret>",
+        },
+    ],
+    // `@lunora/notify` itself needs no secret: each push channel's are keyed by the
+    // channel `defineNotify` configures, so a webPush-only app is not told to set
+    // FCM_* (#1039) — the same reason the payment adapters are keyed by subpath.
+    "@lunora/notify:fcm": [
+        {
+            description: "Firebase project id for FCM (HTTP v1) push. Found in the Firebase console project settings.",
+            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
+            key: "FCM_PROJECT_ID",
+            placeholderValue: "<your-firebase-project-id>",
+        },
+        {
+            description:
+                "OAuth2 access token for FCM (HTTP v1). Convenient for dev but expires — in production supply a getAccessToken() in defineNotify instead. Obtain via the Google Cloud SDK / a service account.",
+            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
+            key: "FCM_ACCESS_TOKEN",
+            placeholderValue: "<your-fcm-access-token>",
+        },
+    ],
+    "@lunora/notify:webPush": [
         {
             description:
                 "Public VAPID key (base64url) for Web Push. Generate a keypair once with: npx web-push generate-vapid-keys — the public key is also shipped to the browser to subscribe.",
@@ -160,45 +240,11 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             key: "VAPID_SUBJECT",
             placeholderValue: "mailto:you@example.com",
         },
-        {
-            description: "Firebase project id for FCM (HTTP v1) push. Found in the Firebase console project settings.",
-            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
-            key: "FCM_PROJECT_ID",
-            placeholderValue: "<your-firebase-project-id>",
-        },
-        {
-            description:
-                "OAuth2 access token for FCM (HTTP v1). Convenient for dev but expires — in production supply a getAccessToken() in defineNotify instead. Obtain via the Google Cloud SDK / a service account.",
-            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
-            key: "FCM_ACCESS_TOKEN",
-            placeholderValue: "<your-fcm-access-token>",
-        },
     ],
-    "@lunora/payment": [
-        {
-            description: "Stripe secret key (sk_test_…). Required when using the Stripe adapter. Obtain at https://dashboard.stripe.com/apikeys",
-            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
-            key: "STRIPE_SECRET_KEY",
-            placeholderValue: "<your-stripe-secret-key>",
-        },
-        {
-            description: "Stripe webhook signing secret (whsec_…) for verifying event payloads. Obtain at https://dashboard.stripe.com/webhooks",
-            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
-            key: "STRIPE_WEBHOOK_SECRET",
-            placeholderValue: "<your-stripe-webhook-secret>",
-        },
-        {
-            description: "Polar access token for the Polar payment adapter. Obtain at https://polar.sh/settings/tokens",
-            docsUrl: "https://lunora.sh/docs/packages/payment#polar",
-            key: "POLAR_ACCESS_TOKEN",
-            placeholderValue: "<your-polar-access-token>",
-        },
-        {
-            description: "Polar webhook secret for verifying event payloads from Polar. Obtain at https://polar.sh/settings/webhooks",
-            docsUrl: "https://lunora.sh/docs/packages/payment#polar",
-            key: "POLAR_WEBHOOK_SECRET",
-            placeholderValue: "<your-polar-webhook-secret>",
-        },
+    // `@lunora/payment` itself needs no secret: each provider's pair is keyed by
+    // the adapter SUBPATH an app imports, so `.dev.vars.example` lists only the
+    // provider in use (#1022), not all five.
+    "@lunora/payment/autumn": [
         {
             description: "Autumn secret key (am_sk_…) for the Autumn payment adapter. Obtain at https://app.useautumn.com/dev",
             docsUrl: "https://lunora.sh/docs/packages/payment#autumn",
@@ -211,6 +257,22 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             key: "AUTUMN_WEBHOOK_SECRET",
             placeholderValue: "<your-autumn-webhook-secret>",
         },
+    ],
+    "@lunora/payment/creem": [
+        {
+            description: "Creem API key for the Creem payment adapter. Obtain at https://www.creem.io/dashboard/developers",
+            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
+            key: "CREEM_API_KEY",
+            placeholderValue: "<your-creem-api-key>",
+        },
+        {
+            description: "Creem webhook signing secret for verifying the creem-signature header. Obtain from your Creem dashboard webhook settings.",
+            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
+            key: "CREEM_WEBHOOK_SECRET",
+            placeholderValue: "<your-creem-webhook-secret>",
+        },
+    ],
+    "@lunora/payment/dodopayments": [
         {
             description: "Dodo Payments API key (bearer token) for the Dodo Payments adapter. Obtain at https://app.dodopayments.com/developer/api-keys",
             docsUrl: "https://lunora.sh/docs/packages/payment#dodo-payments",
@@ -224,17 +286,33 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             key: "DODO_PAYMENTS_WEBHOOK_KEY",
             placeholderValue: "<your-dodo-payments-webhook-secret>",
         },
+    ],
+    "@lunora/payment/polar": [
         {
-            description: "Creem API key for the Creem payment adapter. Obtain at https://www.creem.io/dashboard/developers",
-            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
-            key: "CREEM_API_KEY",
-            placeholderValue: "<your-creem-api-key>",
+            description: "Polar access token for the Polar payment adapter. Obtain at https://polar.sh/settings/tokens",
+            docsUrl: "https://lunora.sh/docs/packages/payment#polar",
+            key: "POLAR_ACCESS_TOKEN",
+            placeholderValue: "<your-polar-access-token>",
         },
         {
-            description: "Creem webhook signing secret for verifying the creem-signature header. Obtain from your Creem dashboard webhook settings.",
-            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
-            key: "CREEM_WEBHOOK_SECRET",
-            placeholderValue: "<your-creem-webhook-secret>",
+            description: "Polar webhook secret for verifying event payloads from Polar. Obtain at https://polar.sh/settings/webhooks",
+            docsUrl: "https://lunora.sh/docs/packages/payment#polar",
+            key: "POLAR_WEBHOOK_SECRET",
+            placeholderValue: "<your-polar-webhook-secret>",
+        },
+    ],
+    "@lunora/payment/stripe": [
+        {
+            description: "Stripe secret key (sk_test_…). Required when using the Stripe adapter. Obtain at https://dashboard.stripe.com/apikeys",
+            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
+            key: "STRIPE_SECRET_KEY",
+            placeholderValue: "<your-stripe-secret-key>",
+        },
+        {
+            description: "Stripe webhook signing secret (whsec_…) for verifying event payloads. Obtain at https://dashboard.stripe.com/webhooks",
+            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
+            key: "STRIPE_WEBHOOK_SECRET",
+            placeholderValue: "<your-stripe-webhook-secret>",
         },
     ],
 };
@@ -253,7 +331,9 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
  * Every secret key Lunora can mint a value for locally (a random 32-byte hex,
  * like `openssl rand -hex 32`) — the registry entries whose placeholder is that
  * marker rather than an angle-bracket `<your-…>` one (which means the value comes
- * from a provider's dashboard), plus {@link EXTRA_MINTABLE_SECRET_KEYS}.
+ * from a provider's dashboard), plus {@link EXTRA_MINTABLE_SECRET_KEYS}. The relay
+ * key is left out: {@link mintableSecretKeysFor} adds it back for every project
+ * that does not only construct the client.
  *
  * This set, not a key's NAME, is what makes a value safe to generate. A
  * secret-LOOKING key nothing here declares (`OPENAI_API_KEY`, a project's own
@@ -264,18 +344,30 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
 const MINTABLE_SECRET_KEYS: ReadonlySet<string> = new Set([
     ...EXTRA_MINTABLE_SECRET_KEYS,
     ...[...CORE_SECRETS, ...Object.values(PACKAGE_SECRETS_REGISTRY).flat()]
-        .filter((entry) => isSecretKeyName(entry.key) && !entry.placeholderValue.startsWith("<"))
+        .filter((entry) => isSecretKeyName(entry.key) && !entry.placeholderValue.startsWith("<") && entry.key !== SHARD_RELAY_SECRET_KEY)
         .map((entry) => entry.key),
 ]);
+
+/**
+ * The keys a project may mint, given its secret sources. The relay key is withheld only from a project that just constructs
+ * `EventLogDOClient`: that worker must take its host's value, so a fresh one would only be refused. Every other project mints it,
+ * including one with no relay source at all, where a generated value is never read and so does no harm.
+ */
+const mintableSecretKeysFor = (packageNames: ReadonlyArray<string>): ReadonlySet<string> => {
+    const clientOnly = packageNames.includes(RELAY_CLIENT_SOURCE) && !packageNames.some((name) => RELAY_HOST_SOURCES.has(name));
+
+    return clientOnly ? MINTABLE_SECRET_KEYS : new Set([...MINTABLE_SECRET_KEYS, SHARD_RELAY_SECRET_KEY]);
+};
 
 const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] => {
     const result: SecretEntry[] = [];
 
     for (const name of packageNames) {
-        const entries = PACKAGE_SECRETS_REGISTRY[name];
-
-        if (entries !== undefined) {
-            result.push(...entries);
+        for (const entry of PACKAGE_SECRETS_REGISTRY[name] ?? []) {
+            // Two sources can declare one key (a host with both the registry and the log): list it once.
+            if (!result.some((existing) => existing.key === entry.key)) {
+                result.push(entry);
+            }
         }
     }
 
@@ -283,4 +375,12 @@ const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] 
 };
 
 export type { SecretEntry };
-export { CORE_SECRETS, MINTABLE_SECRET_KEYS, PACKAGE_SECRETS_REGISTRY, secretsForPackages };
+export {
+    CORE_SECRETS,
+    MINTABLE_SECRET_KEYS,
+    mintableSecretKeysFor,
+    PACKAGE_SECRETS_REGISTRY,
+    secretsForPackages,
+    SHARD_RELAY_HOST_PLACEHOLDER,
+    SHARD_RELAY_SECRET_KEY,
+};

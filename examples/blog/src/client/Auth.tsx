@@ -6,7 +6,7 @@ import { authClient } from "./auth-client.js";
 /**
  * Email/password sign-in + sign-up. Talks to the `/api/auth/*` routes
  * mounted by `@lunora/auth` (better-auth). better-auth sets an HttpOnly
- * session cookie on the response; the authenticated view in {@link App.tsx}
+ * session cookie on the response; the authenticated view in `App.tsx`
  * picks that up via `authClient.useSession()`.
  */
 export const Auth = (): ReactElement => {
@@ -48,9 +48,10 @@ export const Auth = (): ReactElement => {
         >
             <h1>{mode === "signin" ? "Sign in" : "Sign up"}</h1>
             {mode === "signup" ? (
-                <label>
+                <label htmlFor="auth-field1">
                     Name
                     <input
+                        id="auth-field1"
                         onChange={(event) => {
                             setName(event.target.value);
                         }}
@@ -58,10 +59,11 @@ export const Auth = (): ReactElement => {
                     />
                 </label>
             ) : null}
-            <label>
+            <label htmlFor="auth-field2">
                 Email
                 <input
                     autoComplete="email"
+                    id="auth-field2"
                     onChange={(event) => {
                         setEmail(event.target.value);
                     }}
@@ -70,10 +72,11 @@ export const Auth = (): ReactElement => {
                     value={email}
                 />
             </label>
-            <label>
+            <label htmlFor="auth-field3">
                 Password
                 <input
                     autoComplete={mode === "signin" ? "current-password" : "new-password"}
+                    id="auth-field3"
                     minLength={8}
                     onChange={(event) => {
                         setPassword(event.target.value);

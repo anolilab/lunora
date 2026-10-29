@@ -143,6 +143,15 @@ export const packages: PackageInfo[] = [
         slug: "values",
     },
     {
+        accentColor: categoryColors["Core Runtime"]!,
+        category: "Core Runtime",
+        description: "Wire codec and stable keys shared by every Lunora tier",
+        features: [],
+        name: "Wire",
+        npmName: "@lunora/wire",
+        slug: "wire",
+    },
+    {
         accentColor: categoryColors["Platform Hosts"]!,
         category: "Platform Hosts",
         description: "The Cloudflare host: the platform contracts over Durable Object primitives.",
@@ -161,6 +170,16 @@ export const packages: PackageInfo[] = [
         name: "Node Host",
         npmName: "@lunora/platform-node",
         slug: "platform-node",
+    },
+    {
+        accentColor: categoryColors["Platform Hosts"]!,
+        category: "Platform Hosts",
+        description:
+            "celld implementation of the Lunora platform contracts: the Cloudflare host adapters recomposed for celld (self-hosted distributed Durable Objects) under an honest capability matrix",
+        features: [],
+        name: "Platform Celld",
+        npmName: "@lunora/platform-celld",
+        slug: "platform-celld",
     },
     {
         accentColor: categoryColors["Platform Hosts"]!,
@@ -301,6 +320,16 @@ export const packages: PackageInfo[] = [
         name: "Vue",
         npmName: "@lunora/vue",
         slug: "vue",
+    },
+    {
+        accentColor: categoryColors["Build & Tooling"]!,
+        category: "Build & Tooling",
+        description: "Rspack/webpack plugin — codegen, binding provisioning, wrangler validator.",
+        docsPath: "/docs/packages/rspack",
+        features: ["Codegen on save", "Binding provisioning", "Wrangler config validator"],
+        name: "Rspack Plugin",
+        npmName: "@lunora/rspack",
+        slug: "rspack",
     },
     {
         accentColor: categoryColors["Build & Tooling"]!,
@@ -455,6 +484,16 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Add-ons"]!,
         category: "Add-ons",
+        description: "Bring your own auth: verify Clerk, WorkOS, Auth0, Supabase or any OIDC JWT against its JWKS and feed the identity into ctx.auth / RLS.",
+        docsPath: "/docs/packages/jwt-auth",
+        features: ["Clerk, WorkOS, Auth0, Supabase presets", "Any OIDC issuer via discovery", "Feeds ctx.auth & RLS"],
+        name: "JWT Auth",
+        npmName: "@lunora/jwt-auth",
+        slug: "jwt-auth",
+    },
+    {
+        accentColor: categoryColors["Add-ons"]!,
+        category: "Add-ons",
         description: "Resend adapter, TSX templates, queue-backed sends.",
         docsPath: "/docs/packages/mail",
         features: ["Resend adapter", "TSX email templates", "Queue-backed sends"],
@@ -491,6 +530,16 @@ export const packages: PackageInfo[] = [
         name: "Payment",
         npmName: "@lunora/payment",
         slug: "payment",
+    },
+    {
+        accentColor: categoryColors["Add-ons"]!,
+        category: "Add-ons",
+        description: "Reusable data-subject rights for Lunora apps: export, erasure and retention holds (GDPR Art. 15, 17, 20).",
+        docsPath: "/docs/packages/privacy",
+        features: [],
+        name: "Privacy",
+        npmName: "@lunora/privacy",
+        slug: "privacy",
     },
     {
         accentColor: categoryColors["Add-ons"]!,

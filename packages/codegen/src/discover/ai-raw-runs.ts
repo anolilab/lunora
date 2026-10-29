@@ -1,9 +1,11 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { AiRawRunIR } from "../ir";
 import { collectCallRows } from "./ast";
+import { callSiteScopeOf } from "./attribution";
+import { isContextSurface } from "./context-root";
 
 /**
  * True when `node` is a `ctx.ai.run` call callee — the raw Workers AI binding
@@ -17,7 +19,7 @@ const isContextAiRunCallee = (node: TsNode): boolean => {
         return false;
     }
 
-    return node.getExpression().getText() === "ctx.ai";
+    return isContextSurface(node.getExpression(), ["ai"]);
 };
 
 /**
@@ -45,7 +47,7 @@ const aiRawRunInCall = (call: CallExpression, relativePath: string): AiRawRunIR 
         return undefined;
     }
 
-    return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber() };
+    return { scope: callSiteScopeOf(call), file: relativePath, line: call.getStartLineNumber() };
 };
 
 /**

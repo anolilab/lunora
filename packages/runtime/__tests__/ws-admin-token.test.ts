@@ -216,19 +216,20 @@ describe("createWorker — scheduled admin WS gate accepts the ephemeral token",
         expect(calls).toEqual([]);
     });
 
-    it("accepts the raw master token via ?token= only when explicitly opted out", async () => {
-        expect.assertions(1);
+    it("refuses the raw master token via ?token= even when the env asks for it (no opt-out)", async () => {
+        expect.assertions(2);
 
         const { calls, namespace } = recordingScheduler();
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, requireEphemeralWsToken: false, schedulerDO: namespace, shardDO: noopNamespace });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
-        await worker.fetch(
+        const response = await worker.fetch(
             new Request(`https://app.example/_lunora/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { headers: { Upgrade: "websocket" } }),
-            {},
+            { LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN: "off" },
             fakeContext,
         );
 
-        expect(calls).toEqual(["/ws"]);
+        expect(response.status).toBe(403);
+        expect(calls).toEqual([]);
     });
 
     it("rejects an expired minted token on the scheduled WS upgrade (403)", async () => {
@@ -249,14 +250,14 @@ describe("createWorker — scheduled admin WS gate accepts the ephemeral token",
     });
 });
 
-describe("createWorker — requireEphemeralWsToken enforcement (phase 3)", () => {
+describe("createWorker — ephemeral WS token enforcement", () => {
     const SCHEDULED_WS_URL = "https://app.example/_lunora/admin/scheduled/ws";
 
-    it("rejects the raw master token in ?token= when the option is on (403)", async () => {
+    it("rejects the raw master token in ?token= (403)", async () => {
         expect.assertions(2);
 
         const { calls, namespace } = recordingScheduler();
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, requireEphemeralWsToken: true, schedulerDO: namespace, shardDO: noopNamespace });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
         const response = await worker.fetch(new Request(`${SCHEDULED_WS_URL}?token=${ADMIN_TOKEN}`, { headers: { Upgrade: "websocket" } }), {}, fakeContext);
 
@@ -264,11 +265,11 @@ describe("createWorker — requireEphemeralWsToken enforcement (phase 3)", () =>
         expect(calls).toEqual([]);
     });
 
-    it("still accepts a minted ephemeral token with the option on", async () => {
+    it("still accepts a minted ephemeral token", async () => {
         expect.assertions(2);
 
         const { calls, namespace } = recordingScheduler();
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, requireEphemeralWsToken: true, schedulerDO: namespace, shardDO: noopNamespace });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
         const minted = await mintWsAdminToken(ADMIN_TOKEN);
 
         const response = await worker.fetch(
@@ -281,44 +282,14 @@ describe("createWorker — requireEphemeralWsToken enforcement (phase 3)", () =>
         expect(calls).toEqual(["/ws"]);
     });
 
-    it("still accepts the master token in the Authorization HEADER with the option on", async () => {
-        expect.assertions(1);
-
-        const { calls, namespace } = recordingScheduler();
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, requireEphemeralWsToken: true, schedulerDO: namespace, shardDO: noopNamespace });
-
-        await worker.fetch(new Request(SCHEDULED_WS_URL, { headers: { Upgrade: "websocket", authorization: `Bearer ${ADMIN_TOKEN}` } }), {}, fakeContext);
-
-        expect(calls).toEqual(["/ws"]);
-    });
-
-    it("honors a DISABLING env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN when the option is unset", async () => {
+    it("still accepts the master token in the Authorization HEADER", async () => {
         expect.assertions(1);
 
         const { calls, namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
-        await worker.fetch(
-            new Request(`${SCHEDULED_WS_URL}?token=${ADMIN_TOKEN}`, { headers: { Upgrade: "websocket" } }),
-            { LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN: "off" },
-            fakeContext,
-        );
+        await worker.fetch(new Request(SCHEDULED_WS_URL, { headers: { Upgrade: "websocket", authorization: `Bearer ${ADMIN_TOKEN}` } }), {}, fakeContext);
 
         expect(calls).toEqual(["/ws"]);
-    });
-
-    it("an explicit option:true wins over a disabling env value", async () => {
-        expect.assertions(1);
-
-        const { namespace } = recordingScheduler();
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, requireEphemeralWsToken: true, schedulerDO: namespace, shardDO: noopNamespace });
-
-        const response = await worker.fetch(
-            new Request(`${SCHEDULED_WS_URL}?token=${ADMIN_TOKEN}`, { headers: { Upgrade: "websocket" } }),
-            { LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN: "off" },
-            fakeContext,
-        );
-
-        expect(response.status).toBe(403);
     });
 });

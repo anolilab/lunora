@@ -152,7 +152,6 @@ export const indexesReferencingIssuer = (indexes: Iterable<{ name: string; sql?:
  * @param accountTable Physical name of the account table (`account` unless renamed via `account.modelName`).
  * @param indexNames Indexes to drop first, from {@link indexesReferencingIssuer}.
  * @returns The `DROP INDEX` statements followed by the `DROP COLUMN`.
- * @experimental
  */
 export const legacyIssuerCleanupStatements = (accountTable = "account", indexNames: Iterable<string> = []): string[] => [
     ...[...indexNames].map((name) => `DROP INDEX IF EXISTS ${quoteIdentifier(name)}`),

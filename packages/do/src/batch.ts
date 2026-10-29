@@ -7,6 +7,7 @@
  */
 
 import type { BatchEntry } from "../../../shared/batch-wire";
+import { WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 
 /**
  * Header names copied verbatim from the batch request onto each per-entry `/rpc`
@@ -19,8 +20,10 @@ const SHARED_BATCH_HEADERS = [
     "x-lunora-identity",
     "x-d1-bookmark",
     "x-lunora-client-ip",
+    "x-lunora-origin",
     "x-lunora-system",
     "x-lunora-shard-binding",
+    WANT_ERROR_DETAIL_HEADER,
 ] as const;
 
 /**
@@ -51,6 +54,14 @@ const buildBatchEntryRequest = (batchRequest: Request, entry: BatchEntry): Reque
 
     if (entry.clientSeq !== undefined) {
         headers.set("x-lunora-client-seq", String(entry.clientSeq));
+    }
+
+    // Per entry, for the same reason `clientSeq` is: the batch's writes were
+    // composed at different cursors, so a `.dropStalePatches()` table has to judge
+    // each against its own. `!== undefined`, not truthiness — `0` is a valid
+    // baseline ("had seen nothing").
+    if (entry.baselineSeq !== undefined) {
+        headers.set("x-lunora-base-seq", String(entry.baselineSeq));
     }
 
     return new Request("https://shard.internal/rpc", {

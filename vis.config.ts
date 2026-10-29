@@ -9,10 +9,23 @@ export default defineConfig({
     // affected and `vis affected build` died with `spawn E2BIG`. This also
     // fixes local `vis affected`, which merge-bases against the same default.
     defaultBase: "alpha",
+    // Paths outside every project root that change nothing any project builds or
+    // tests. Without this, each of them marks EVERY project affected (above), so a
+    // PR that only updates an API snapshot ran the whole suite: anolilab/lunora#1051
+    // went from 29 affected projects to all 78 because of `api-snapshots/`.
+    // Matched only against files no project owns, so a pattern can never hide a
+    // change inside a package. `api-snapshots/` has its own `api:check` job; `*.md`
+    // is root-level only (`*` doesn't cross `/`). Never list `shared/`,
+    // `protocol/`, `registry/`, `tools/` or `.vis/`: their changes do affect
+    // projects.
+    affectedIgnore: ["api-snapshots/**", "marketing/**", "plans/**", "*.md"],
     namedInputs: {
         default: ["sharedGlobals", "{projectRoot}/**/*", "!{projectRoot}/**/*.md"],
-        production: ["default", "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)"],
-        testing: ["default", "{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)"],
+        production: ["default", "workspaceSources", "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)"],
+        testing: ["default", "workspaceSources", "{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)"],
+        // Hashed, not affected-scoped: CI restores the task cache between runs, so a
+        // change here must invalidate builds and tests that inline or import it.
+        workspaceSources: ["{workspaceRoot}/shared/**/*", "{workspaceRoot}/protocol/**/*", "{workspaceRoot}/registry/**/*", "{workspaceRoot}/tools/**/*"],
         public: [
             "default",
             "{workspaceRoot}/dist",
@@ -21,6 +34,11 @@ export default defineConfig({
             "!{workspaceRoot}/.storybook/**/*",
             "!{workspaceRoot}/**/*.stories.@(js|jsx|ts|tsx|mdx)",
         ],
+        // Keep `shared/`, `protocol/`, `registry/` and `tools/` out of `sharedGlobals`:
+        // they sit outside every project root, so a change already marks every project
+        // affected. They are hashed through `workspaceSources` instead. A dirty but
+        // uncommitted edit there selects nothing locally (`--uncommitted` drops
+        // non-project paths); commit or pass `--base origin/alpha` first.
         sharedGlobals: ["{workspaceRoot}/.nvmrc", "{workspaceRoot}/package.json", "{workspaceRoot}/tsconfig.json", "{workspaceRoot}/tsconfig.base.json"],
     },
     tasks: {
@@ -187,7 +205,9 @@ export default defineConfig({
     staged: {
         // Reject a raw NUL byte (which turns a source file binary, hiding it from
         // diff/blame/review), then Prettier-format every staged file, repo-wide.
-        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["node scripts/no-nul-bytes.mjs", "pnpm exec prettier --write"],
+        // `--ignore-unknown`: Prettier has no TOML parser here, so a staged
+        // `.toml` would otherwise fail the hook instead of just the NUL check.
+        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["node scripts/no-nul-bytes.mjs", "pnpm exec prettier --write --ignore-unknown"],
         // ESLint lives only in packages/* (each owns an eslint.config.js).
         // @anolilab/eslint-config picks plugins from the cwd's package.json, so
         // staged package files must be linted from INSIDE their package.

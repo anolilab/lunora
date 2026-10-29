@@ -38,7 +38,7 @@
 
 import { sqliteDialect } from "@lunora/d1";
 import type { SchemaLike } from "@lunora/shard-engine";
-import type { SqlCtxDbOptions, SqlCtxExec } from "@lunora/sql-store";
+import type { SqlCtxDbOptions, SqlCtxExec, SqlDialect } from "@lunora/sql-store";
 import {
     backfillSqlSearchIndexes,
     createSqlCtxDb,
@@ -50,34 +50,13 @@ import {
 } from "@lunora/sql-store";
 import Database from "better-sqlite3";
 
+import preparedStatement from "./prepared-statement";
+
 /**
- * Per-connection cache of compiled statements, keyed by SQL text.
- *
- * `database.prepare(sql)` recompiles the statement on every call, and this
- * exec wraps every read and write the `.global()` table core issues through
- * `SqlCtxExec` — so the same SQL text would otherwise be recompiled repeatedly
- * on a hot path. The `WeakMap` key keeps a cache from ever pinning a closed
- * connection.
+ * D1's dialect, with the one thing that differs on this host: how a search index
+ * still backfilling is completed. `migrate()` here walks every index to the end.
  */
-const statementCache = new WeakMap<Database.Database, Map<string, Database.Statement>>();
-
-const preparedStatement = (database: Database.Database, statement: string): Database.Statement => {
-    let cache = statementCache.get(database);
-
-    if (cache === undefined) {
-        cache = new Map();
-        statementCache.set(database, cache);
-    }
-
-    let prepared = cache.get(statement);
-
-    if (prepared === undefined) {
-        prepared = database.prepare(statement);
-        cache.set(statement, prepared);
-    }
-
-    return prepared;
-};
+const nodeDialect: SqlDialect = { ...sqliteDialect, searchBackfillHint: "run the global store's migrate(), which backfills every search index to completion" };
 
 /**
  * The Node store options — the shared store options minus the two this binding
@@ -90,18 +69,27 @@ export type NodeGlobalContextDatabaseOptions = Omit<SqlCtxDbOptions, "dialect" |
 /**
  * Wrap a `better-sqlite3` connection as the async exec the store core consumes.
  *
- * `batch` is deliberately **not** implemented. The contract lets an exec that
- * omits it fall back to a sequential `run()` loop, and that fallback is already
- * optimal here: `batch` exists to collapse network round trips (D1 does it
- * atomically in one request; the Hyperdrive adapters dispatch concurrently over
- * a pool), and an embedded database has no round trip to collapse. Declaring it
- * would buy nothing and would opt this exec into the "MAY reorder or
- * parallelize" licence for no reason.
+ * `batch` runs the statements in order inside one `better-sqlite3`
+ * transaction, which is synchronous, so nothing else runs between them. There is
+ * no round trip to save; atomicity is the point. The store core's FTS5 search
+ * companion writes each document as an ordered list of statements, and without
+ * this two async writers interleaved at every `await` between them: one could
+ * move a document's mapping while the other's entry was mid-write, leaving an
+ * entry no later write or purge could reach. The `sqlite` dialect's contract
+ * requires an ordered, atomic `batch` for exactly that reason.
  */
 export const createNodeSqlExec = (database: Database.Database): SqlCtxExec => {
     return {
         // eslint-disable-next-line @typescript-eslint/require-await -- the exec seam is async so a networked engine can await; better-sqlite3 is synchronous
         all: async (statement, parameters) => preparedStatement(database, statement).all(...(parameters as unknown[])) as Record<string, unknown>[],
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `all`
+        batch: async (statements) => {
+            database.transaction(() => {
+                for (const { params, sql } of statements) {
+                    preparedStatement(database, sql).run(...(params as unknown[]));
+                }
+            })();
+        },
         // eslint-disable-next-line @typescript-eslint/require-await -- see `all`
         run: async (statement, parameters) => {
             const result = preparedStatement(database, statement).run(...(parameters as unknown[]));
@@ -167,20 +155,20 @@ export const createNodeGlobalStore = (options: NodeGlobalStoreOptions = {}): Nod
         },
         exec,
         migrate: async (schema, migrateOptions = {}) => {
-            await runSqlGlobalTableMigrations(exec, schema, sqliteDialect);
-            await runSqlAggregateMigrations(exec, schema, sqliteDialect);
-            await runSqlRankMigrations(exec, schema, sqliteDialect);
-            await runSqlSearchMigrations(exec, schema, sqliteDialect);
-            await backfillSqlSearchIndexes(exec, schema, sqliteDialect);
+            await runSqlGlobalTableMigrations(exec, schema, nodeDialect);
+            await runSqlAggregateMigrations(exec, schema, nodeDialect);
+            await runSqlRankMigrations(exec, schema, nodeDialect);
+            await runSqlSearchMigrations(exec, schema, nodeDialect);
+            await backfillSqlSearchIndexes(exec, schema, nodeDialect);
 
             if (migrateOptions.cdc === true) {
-                await runSqlCdcMigration(exec, sqliteDialect);
+                await runSqlCdcMigration(exec, nodeDialect);
             }
         },
         // `exec` doubles as the provisioning scope: it is built once per store
         // (closed over above, not per call), while the host builds a writer per
         // request — so without it each writer would re-run the whole
         // CREATE-IF-NOT-EXISTS sweep before its first `.global()` access.
-        writer: (writerOptions) => createSqlCtxDb({ ...writerOptions, dialect: sqliteDialect, exec, provisionScope: exec }),
+        writer: (writerOptions) => createSqlCtxDb({ ...writerOptions, dialect: nodeDialect, exec, provisionScope: exec }),
     };
 };

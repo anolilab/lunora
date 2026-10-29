@@ -1,7 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { API_SPEC_HELP } from "../../util/api-spec";
-import { TARGET_OPTION } from "../../util/deploy-target";
+import TARGET_OPTION from "../../util/deploy-target";
 
 const prepareCommand: Command = {
     description: "Run codegen + binding reconcile + wrangler validation (no Vite) — for CI",
@@ -20,6 +20,13 @@ const prepareCommand: Command = {
             type: Boolean,
         },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        { description: "Use per-module lazy function imports (opt-in; default eager)", name: "lazy-functions", type: Boolean },
+        {
+            description: "Evaluate every lazy function module in workerd before passing (default; nothing to check for an eager registry)",
+            name: "smoke-load",
+            type: Boolean,
+        },
+        { description: "Skip evaluating lazy function modules before passing", name: "no-smoke-load", type: Boolean },
         // Both forms declared explicitly, for the reason `lunora deploy` spells
         // out at its identical pair: letting cerebro synthesize the positive
         // flag clones the `no-*` description and gives it a `defaultValue`, so
@@ -49,6 +56,8 @@ export { prepareCommand };
 export type PrepareOptions = CreateOptions<{
     "allow-schema-drift": boolean | undefined;
     "api-spec": string | undefined;
+    "lazy-functions": boolean | undefined;
+    "smoke-load": boolean | undefined;
     "strict-advisories": boolean | undefined;
     target: string | undefined;
     "update-schema-baseline": boolean | undefined;

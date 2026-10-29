@@ -1,11 +1,11 @@
 import type { KvNamespaceSummary } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
 import KvKeyList from "./kv-key-list";
@@ -28,7 +28,7 @@ interface KvBrowserProps {
  * keyed on its identity so a selection change remounts (and resets) it.
  */
 export const KvBrowser = ({ loadNamespaces }: KvBrowserProps = {}): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [namespaces, setNamespaces] = useState<KvNamespaceSummary[] | null>(null);

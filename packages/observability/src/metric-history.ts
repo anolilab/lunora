@@ -20,10 +20,10 @@
  * prefix auto-hides the table from the data browser.
  */
 import type { SqlExec } from "@lunora/shard-engine";
+import { stableStringify } from "@lunora/wire";
 
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
-import { stableStringify } from "../../../shared/stable-key";
 // Shared so the durable history and the live buffer agree byte-for-byte on what
 // "one series" is — the studio joins the two on this identity.
 import { metricSeriesKey } from "./metric-buffer";

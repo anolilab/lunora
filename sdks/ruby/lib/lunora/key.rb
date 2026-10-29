@@ -47,75 +47,48 @@ module Lunora
   end
 
   # Renders a float exactly as +String(v)+ does in JavaScript, which is what
-  # JSON.stringify emits for a finite number. Ruby's Float#to_s uses exponent
-  # notation from 1e16 upward and below 1e-4, and spells it "1.0e-05";
-  # ECMAScript uses positional notation up to 1e21, switches below 1e-7, and
-  # never pads. Those spellings must match or the key differs.
+  # JSON.stringify emits for a finite number (ECMA-262 Number::toString).
+  #
+  # The DIGITS come from Float#to_s, which is already the shortest string that
+  # reads back as the same double; only their LAYOUT differs (Ruby writes
+  # "1.0e-05" and switches to exponent form at 1e16). Re-laying those digits is
+  # the whole job. Searching a fixed number of decimal places instead capped the
+  # output at 20 places, so three adjacent doubles near -6.07e-6 all keyed as
+  # "-0.00000607387560669604" and one subscription received another's frames.
   def format_number(value)
     return "null" if value.nan? || value.infinite?
-    return integral(value) if value == value.truncate && value.abs < 1e21
 
-    magnitude = value.abs
-    return positional(value) if magnitude >= 1e-6 && magnitude < 1e21
+    # A negative zero keys as "-0": the sign is taken from the bits, not from
+    # a comparison, which -0.0 < 0 would get wrong.
+    sign = value.negative? || (value.zero? && (1.0 / value).negative?) ? "-" : ""
+    digits, point = shortest_digits(value.abs)
+    return "#{sign}0" if digits.empty?
 
-    exponential(value)
+    sign + ecma_layout(digits, point)
   end
 
-  # Positional rendering of an integral double, ECMAScript-style: the SHORTEST
-  # digit string that reads back as the same double, zero-padded out to the
-  # decimal point. +String(2**60)+ is "1152921504606847000", not the exact
-  # expansion "1152921504606846976" that +to_i+ yields — and +String()+ of a
-  # negative zero inside a key is "-0", which every integer conversion drops.
-  def integral(value)
-    (0..17).each do |precision|
-      candidate = format("%.#{precision}e", value)
-      next unless candidate.to_f == value
+  # The shortest round-trip digits of a finite non-negative double, and n such
+  # that the value is 0.<digits> x 10^n.
+  def shortest_digits(magnitude)
+    mantissa, exponent = magnitude.to_s.split("e")
+    whole, fraction = mantissa.split(".")
+    digits = whole + fraction.to_s
+    point = whole.length + exponent.to_i
+    leading = digits[/\A0*/].length
 
-      mantissa, exponent = candidate.split("e")
-      sign = mantissa.start_with?("-") ? "-" : ""
-      digits = mantissa.delete("-").delete(".").sub(/0+\z/, "")
-      digits = "0" if digits.empty?
-
-      return sign + digits.ljust(exponent.to_i + 1, "0")
-    end
-
-    value.to_i.to_s
+    [digits[leading..].sub(/0+\z/, ""), point - leading]
   end
 
-  # Positional (non-exponent) rendering at the shortest precision that still
-  # parses back to the same double — ECMAScript's "shortest round-trip" rule.
-  # Deliberately not %g, which switches to exponent notation on its own and
-  # would undo the threshold chosen above.
-  def positional(value)
-    (0..20).each do |precision|
-      candidate = format("%.#{precision}f", value)
-      return trim_trailing_zeros(candidate) if candidate.to_f == value
-    end
-    trim_trailing_zeros(format("%.20f", value))
-  end
+  # ECMA-262 Number::toString, steps for k digits and decimal exponent n.
+  def ecma_layout(digits, point)
+    count = digits.length
+    return digits + ("0" * (point - count)) if point.between?(count, 21)
+    return "#{digits[0, point]}.#{digits[point..]}" if point.positive? && point <= 21
+    return "0.#{"0" * -point}#{digits}" if point > -6 && point <= 0
 
-  def trim_trailing_zeros(text)
-    return text unless text.include?(".")
-
-    text.sub(/0+\z/, "").sub(/\.\z/, "")
-  end
-
-  def exponential(value)
-    (0..17).each do |precision|
-      candidate = format("%.#{precision}e", value)
-      return normalise_exponent(candidate) if candidate.to_f == value
-    end
-    normalise_exponent(format("%.17e", value))
-  end
-
-  # "1.000000e-07" -> "1e-7": drop trailing mantissa zeros and the exponent's
-  # zero padding, neither of which ECMAScript emits.
-  def normalise_exponent(text)
-    mantissa, exponent = text.split("e")
-    mantissa = trim_trailing_zeros(mantissa)
-    sign = exponent.start_with?("-") ? "-" : "+"
-    digits = exponent.sub(/\A[-+]/, "").sub(/\A0+(?=\d)/, "")
-    "#{mantissa}e#{sign}#{digits}"
+    exponent = point - 1
+    mantissa = count == 1 ? digits : "#{digits[0]}.#{digits[1..]}"
+    "#{mantissa}e#{exponent.negative? ? "-" : "+"}#{exponent.abs}"
   end
 
   # Quotes a string the way JSON.stringify does. Ruby's JSON generator already

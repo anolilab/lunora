@@ -83,19 +83,20 @@ IDOR & unscoped access (a user-derived key/id reaches a resource without a serve
 
 RLS, masking & output shape:
 
-| Lint                                         | Level   | Flags                                                                                                            |
-| -------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------- |
-| `external_source_unscoped`                   | `ERROR` | A `.source()` + `.shardBy()` table with no `tenantBy`; every tenant DO replicates the whole multitenant table    |
-| `unrestricted_where_branch`                  | `ERROR` | A shape/policy predicate arm returning `{}` or `undefined` — a filter matching EVERY row, where a deny was meant |
-| `rls_uncovered_table`                        | `WARN`  | An RLS-gated table read without the `rls()` middleware                                                           |
-| `policy_references_unknown_table`            | `WARN`  | An RLS policy bound to a table that doesn't exist                                                                |
-| `public_table_rls_optout_confusion`          | `WARN`  | A `.public()` table that opts out of RLS but carries sensitive columns                                           |
-| `allow_unauthenticated_shard_access_enabled` | `WARN`  | Unauthenticated shard access enabled on an RLS-gapped schema                                                     |
-| `mask_uncovered_pii_column`                  | `WARN`  | A maskable column returned without the `mask()` middleware                                                       |
-| `mask_weak_hash_strategy_on_pii`             | `WARN`  | A `mask()` `"hash"` strategy (unsalted FNV-1a) on a PII column; the value is recoverable                         |
-| `masked_relation_leak_via_with`              | `INFO`  | A masked table surfaced unmasked through a `with`-relation on a public read                                      |
-| `output_projection_missing_on_public_read`   | `INFO`  | A public query returns raw rows with PII columns and no `.output(...)` projection                                |
-| `soft_delete_include_deleted_from_args`      | `INFO`  | Soft-deleted rows resurfaced via `includeDeleted` on a public read                                               |
+| Lint                                         | Level   | Flags                                                                                                                            |
+| -------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `external_source_unscoped`                   | `ERROR` | A `.source()` + `.shardBy()` table with no `tenantBy`; every tenant DO replicates the whole multitenant table                    |
+| `unrestricted_where_branch`                  | `ERROR` | A shape/policy predicate arm returning `{}` or `undefined` — a filter matching EVERY row, where a deny was meant                 |
+| `rls_uncovered_table`                        | `WARN`  | An RLS-gated table read without the `rls()` middleware                                                                           |
+| `policy_references_unknown_table`            | `WARN`  | An RLS policy bound to a table that doesn't exist                                                                                |
+| `public_table_rls_optout_confusion`          | `WARN`  | A `.public()` table that opts out of RLS but carries sensitive columns                                                           |
+| `allow_unauthenticated_shard_access_enabled` | `WARN`  | Unauthenticated shard access enabled on an RLS-gapped schema                                                                     |
+| `open_shard_access`                          | `ERROR` | the open-shard option set to anything but a literal `false` in the app; `lunora deploy` refuses it without `--allow-open-shards` |
+| `mask_uncovered_pii_column`                  | `WARN`  | A maskable column returned without the `mask()` middleware                                                                       |
+| `mask_weak_hash_strategy_on_pii`             | `WARN`  | A `mask()` `"hash"` strategy (unsalted FNV-1a) on a PII column; the value is recoverable                                         |
+| `masked_relation_leak_via_with`              | `INFO`  | A masked table surfaced unmasked through a `with`-relation on a public read                                                      |
+| `output_projection_missing_on_public_read`   | `INFO`  | A public query returns raw rows with PII columns and no `.output(...)` projection                                                |
+| `soft_delete_include_deleted_from_args`      | `INFO`  | Soft-deleted rows resurfaced via `includeDeleted` on a public read                                                               |
 
 Auth configuration (`createAuth`):
 
@@ -150,17 +151,27 @@ Storage, AI, containers & payments:
 
 ### Performance
 
-| Lint                           | Level  | Flags                                                                                                        |
-| ------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------ |
-| `filter_without_index`         | `WARN` | A query filter on a column no index covers                                                                   |
-| `filter_on_primary_key`        | `WARN` | A query filtering on `_id`; `ctx.db.get(id)` fetches the row directly instead of walking the table           |
-| `unbounded_collect`            | `WARN` | A `.collect()` with no index and no filter: the whole table, re-sent to every live subscriber on every write |
-| `shape_targets_global_table`   | `WARN` | A shape replicating from a global (cross-shard) table                                                        |
-| `unindexed_foreign_key`        | `INFO` | A foreign-key column with no index on the owning table                                                       |
-| `unindexed_relation_target`    | `INFO` | The `many`-side foreign key of a relation is unindexed                                                       |
-| `duplicate_index`              | `INFO` | A redundant index already covered by another                                                                 |
-| `container_oversized_instance` | `INFO` | A container instance larger than its workload needs                                                          |
-| `ai_run_without_logging`       | `INFO` | An AI generation with no structured event; spend can't be attributed and a bad answer can't be traced        |
+| Lint                               | Level   | Flags                                                                                                                                                                                                                      |
+| ---------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unbounded_loop`                   | `ERROR` | A `while (true)` / `for (;;)` / `do … while (true)` with no `break`, `return` or `throw` that can leave it                                                                                                                 |
+| `dispatch_cycle`                   | `ERROR` | Functions that call or schedule each other (or themselves) with no guard on any hop: an endless chain                                                                                                                      |
+| `queue_dispatch_cycle`             | `ERROR` | A queue consumer, or a function it runs, re-enqueues to its own queue (or through a topic) on every message, with no guard on any hop                                                                                      |
+| `filter_without_index`             | `WARN`  | A query `.filter()` with no `.withIndex()` at all: every row is loaded and filtered in memory                                                                                                                              |
+| `count_without_index`              | `WARN`  | A `count()` on a table with no aggregate index whose `where` no ordinary index covers (a bare count included): every call scans every row of the table to count them                                                       |
+| `filter_on_primary_key`            | `WARN`  | A query filtering on `_id`; `ctx.db.get(table, id)` fetches the row directly instead of walking the table                                                                                                                  |
+| `unbounded_collect`                | `WARN`  | A `.collect()` with no index and no filter: the whole table, re-sent to every live subscriber on every write                                                                                                               |
+| `unbounded_collect_on_open_range`  | `WARN`  | A server-driven `.collect()` on a `withIndex` range with no `lt`/`lte` bound, in a function that nothing else removes rows from                                                                                            |
+| `filter_after_index_scan`          | `INFO`  | A `.filter()` after `.withIndex()` on a field the index does not cover: extend the index so the read seeks                                                                                                                 |
+| `self_reschedule_without_progress` | `WARN`  | A guarded `runAfter` of the same function under one second, passing no cursor and removing no rows it selects. From one second to a minute it is an `INFO` poll, and a row rewrite on each tick does not count as progress |
+| `shape_targets_global_table`       | `WARN`  | A shape replicating from a global (cross-shard) table                                                                                                                                                                      |
+| `unindexed_foreign_key`            | `INFO`  | A foreign-key column with no index on the owning table                                                                                                                                                                     |
+| `unindexed_relation_target`        | `INFO`  | The `many`-side foreign key of a relation is unindexed                                                                                                                                                                     |
+| `duplicate_index`                  | `INFO`  | A redundant index already covered by another                                                                                                                                                                               |
+| `container_oversized_instance`     | `INFO`  | A container instance larger than its workload needs                                                                                                                                                                        |
+| `container_long_sleep_after`       | `WARN`  | A container's idle window (`sleepAfter`, capped by `hardTimeout`) is over an hour, so each idle instance bills for that long                                                                                               |
+| `ai_run_without_logging`           | `INFO`  | An AI generation with no structured event; spend can't be attributed and a bad answer can't be traced                                                                                                                      |
+| `topic_too_many_subscriptions`     | `INFO`  | A topic with more than 10 subscriptions; every publish sends to each, at most six at a time                                                                                                                                |
+| `cron_every_minute`                | `INFO`  | A cron job on the fastest cadence (every minute): a Worker and target dispatch billed per fire, work or not                                                                                                                |
 
 ### Schema
 
@@ -169,6 +180,7 @@ Storage, AI, containers & payments:
 | `index_references_unknown_field`             | `ERROR` | An index naming a field the table doesn't have                                                                 |
 | `relation_references_unknown_field`          | `ERROR` | A relation pointing at a field that doesn't exist                                                              |
 | `relation_references_unknown_table`          | `ERROR` | A relation pointing at a table that doesn't exist                                                              |
+| `through_relation_missing_unique_index`      | `ERROR` | A many-to-many join table with no unique index over its two keys (a repeated connect stores the link twice)    |
 | `shape_unknown_table`                        | `ERROR` | A shape bound to a table that doesn't exist                                                                    |
 | `workflow_unknown_target`                    | `ERROR` | A workflow call naming a workflow that doesn't exist                                                           |
 | `workflow_duplicate_step_name`               | `ERROR` | A durable step name reused across two call sites in one workflow (which cache each gets becomes positional)    |
@@ -178,12 +190,14 @@ Storage, AI, containers & payments:
 | `geo_index_field_not_geopoint`               | `ERROR` | A `.geoIndex(name, { field })` whose field is not a `v.geoPoint()`                                             |
 | `ttl_field_not_timestamp`                    | `ERROR` | A `.ttl(field)` pointing at a column that is not an epoch-millisecond timestamp                                |
 | `circular_fk`                                | `WARN`  | A circular foreign-key dependency between tables                                                               |
+| `cross_module_table_write`                   | `WARN`  | A function writes to a table another module declares it owns, directly or through a helper                     |
 | `empty_index`                                | `WARN`  | An index declared with no fields                                                                               |
 | `nondeterministic_query_mutation`            | `WARN`  | `fetch` / `Date.now` / `Math.random` in a query or mutation                                                    |
 | `hyperdrive_outside_action`                  | `WARN`  | `ctx.sql` used outside an action                                                                               |
 | `r2sql_outside_action`                       | `WARN`  | `ctx.r2sql` used outside an action                                                                             |
 | `flag_read_in_subscription`                  | `WARN`  | `ctx.flags` read in a query; a flag flip re-runs no subscription, so the branch goes stale                     |
 | `mutator_full_row_replace`                   | `WARN`  | A mutator `server` impl overwriting a whole row with `replace`                                                 |
+| `mutator_without_owner_scope`                | `WARN`  | A `defineMutator` with no `owner`; a client-callable write endpoint that ties no write to its caller           |
 | `queue_without_dlq`                          | `WARN`  | A `defineQueue` with no `deadLetterQueue`; exhausted messages are dropped, not captured                        |
 | `global_table_near_column_limit`             | `WARN`  | A `.global()` table approaching D1's 100-column ceiling, past which it cannot be created                       |
 | `error_without_catalog`                      | `WARN`  | A bare `new Error(...)` thrown from a procedure; opaque to the caller and unfingerprintable                    |
@@ -228,7 +242,7 @@ for (const finding of findings) {
 
 `runAdvisor(context, options)` returns a flat `Finding[]` in lint-declaration
 order. Each finding has `level`, `name`, `title`, `detail`, `description`,
-`remediation`, `categories`, `source`, and `metadata`. Options:
+`remediation`, `categories`, `facing`, `cacheKey`, and `metadata`. Options:
 
 - `lints`: the set to run. Defaults to `ALL_LINTS`; `STATIC_LINTS` and
   `RUNTIME_LINTS` are also exported, as is each lint by name (e.g.
@@ -282,10 +296,20 @@ costs the same as one hitting a single call site.
 
 Severity is the only input — a lint carries no per-lint weight of its own, so
 two rules at the same level cost the same. Those per-procedure scores roll into
-a weighted mean: **public** handlers count double, **internal**
-ones and **queries** count half. Findings that name no procedure (schema shape,
-`wrangler.jsonc` config) land in a **project** bucket weighted against the
-procedure population, so schema debt still moves the grade.
+a weighted mean over two factors:
+
+- **Shape.** **Public** handlers count double, **internal** ones and **queries**
+  count half. Kind wins over visibility, so a public `query` counts half, not
+  double.
+- **Sensitivity.** A procedure whose `classifySensitivity` says `high` then
+  **doubles again** — visibility says who can reach a handler, sensitivity says
+  what it touches. So a public sensitive mutation pulls 4×, while an internal
+  sensitive one — or a sensitive query — pulls 1× instead of the half its shape
+  alone would buy.
+
+Findings that name no procedure (schema shape, `wrangler.jsonc` config) land in
+a **project** bucket weighted against the procedure population, so schema debt
+still moves the grade.
 
 | Verdict   | Meaning                                        |
 | --------- | ---------------------------------------------- |

@@ -1,14 +1,14 @@
-import type { LunoraClient } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createMcpFetchHandler } from "../src/http";
 import { DEFAULT_MAX_REQUEST_BYTES } from "../src/serve-stateless";
 
 /** Minimal mock exposing only the methods the tools touch. */
-const mockClient = (): LunoraClient => {
+const mockClient = (): LunoraAdminClient => {
     const listFunctions = vi.fn<() => Promise<{ kind: string; path: string }[]>>(async () => [{ kind: "query", path: "messages:list" }]);
 
-    return { listFunctions } as unknown as LunoraClient;
+    return { listFunctions } as unknown as LunoraAdminClient;
 };
 
 /**
@@ -105,7 +105,7 @@ describe("createMcpFetchHandler", () => {
 
     /**
      * The public-function registry memo in `./tools` is keyed by client identity,
-     * so a handler that builds a `LunoraClient` per request never hits it and
+     * so a handler that builds a `LunoraAdminClient` per request never hits it and
      * every tool call pays the admin round trip again.
      */
     it("shares one client across requests, so the function registry is fetched once", async () => {

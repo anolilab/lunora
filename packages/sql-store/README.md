@@ -61,8 +61,9 @@ global table carries, column and companion-table types, `RETURNING` availability
 (with an affected-rows fallback for MySQL), unique-violation detection, the MySQL index
 key-prefix, and the system-catalog (`tableExists`) probe. The value codec is
 **not** a dialect member — every engine stores SQLite-shaped values through the
-core's own `sqliteEncode`/`sqliteDecode`. Full-text search is not part of the
-dialect either — the core probes FTS5 availability on the `exec` at runtime.
+core's own `sqliteEncode`/`sqliteDecode`. Full-text search is declared, not
+probed: the dialect carries `supportsFts5`, and the core picks the FTS5 or
+portable inverted-index layout from it.
 
 Reactivity is engine-independent: the writer is injected as `globalDb` into
 `createShardCtxDb`, whose `broadcast` hook drives live queries no matter which

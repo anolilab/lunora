@@ -1,12 +1,13 @@
 import { LunoraError } from "@lunora/errors";
 
 import { classifyStatement } from "../../../shared/sql-readonly";
-import type { SqlExec } from "./ctx-db";
+import type { SqlCursor, SqlExec } from "./ctx-db";
 
 /**
- * Result of a `__lunora_admin__:runSql` read-only query: the column names (from
- * the first row), the rows (capped), the total row count the query produced, and
- * whether the rows were truncated to the cap.
+ * Result of a `__lunora_admin__:runSql` read-only query: the column names, the
+ * rows, and `rowCount` — the rows returned, at most {@link MAX_SQL_ROWS}, NOT the
+ * total the query would produce (the rest is never read). `truncated` says
+ * whether more rows existed.
  */
 interface SqlConsoleResult {
     columns: string[];
@@ -17,6 +18,53 @@ interface SqlConsoleResult {
 
 /** Most rows the SQL console returns in one query, so a `SELECT *` on a huge table can't blow up the response. */
 const MAX_SQL_ROWS = 1000;
+
+/**
+ * Read at most {@link MAX_SQL_ROWS} items from `source`, never materialising the
+ * rest. `truncated` is set only when a further item was actually seen, so a
+ * result of exactly the cap is not reported as cut short.
+ *
+ * There is deliberately no wall-clock budget here. On workerd `Date.now()` only
+ * advances at I/O, and a DO SQLite cursor is drained without any, so a deadline
+ * checked between rows never fires there. The row cap is the bound that holds on
+ * every host.
+ */
+const takeCapped = <T>(source: Iterable<T>): { items: T[]; truncated: boolean } => {
+    const items: T[] = [];
+
+    for (const item of source) {
+        if (items.length === MAX_SQL_ROWS) {
+            return { items, truncated: true };
+        }
+
+        items.push(item);
+    }
+
+    return { items, truncated: false };
+};
+
+/**
+ * Make a result's column names unique for display, suffixing every repeat after
+ * the first with `:2`, `:3`, ….
+ *
+ * SQL lets two result columns share a name — `SELECT u.id, o.id` declares two
+ * columns both called `id` — but a row object cannot hold the same key twice.
+ * Renaming the repeats is what lets both values be shown at all; the alternative
+ * is to keep one and drop the other silently. The suffix uses `:` because a bare
+ * SQLite identifier cannot contain one, so a renamed column is always
+ * distinguishable from a column the query really named.
+ */
+const dedupeColumnNames = (names: ReadonlyArray<string>): string[] => {
+    const seen = new Map<string, number>();
+
+    return names.map((name) => {
+        const occurrence = (seen.get(name) ?? 0) + 1;
+
+        seen.set(name, occurrence);
+
+        return occurrence === 1 ? name : `${name}:${String(occurrence)}`;
+    });
+};
 
 /**
  * Reject anything that isn't a single read-only statement. Throws a 400
@@ -47,23 +95,54 @@ const assertReadonly = (query: string): void => {
  * schema-aware writer and desync the FTS / aggregate / rank shadow tables.
  * Admin-gated by `ShardDO.handleAdminRpc` like every other introspection RPC.
  *
- * Rows are capped at {@link MAX_SQL_ROWS}; `rowCount` reports the true total and
- * `truncated` flags when more rows existed than were returned.
+ * Rows are capped at {@link MAX_SQL_ROWS} and read off the cursor one at a time,
+ * so a `SELECT *` over a huge table never builds the full result; `rowCount` is
+ * the rows returned and `truncated` flags when more existed.
  *
  * **Values are returned verbatim — deliberately not wire-decoded.** This surface
  * shows the DATABASE; the studio's data browser shows the MODEL and decodes
  * there. Decoding here would disagree with the `json_extract(__doc__, …)` the
  * same operator types next, and would change what an existing saved query
  * returns. Reasoning in full in `plans/README.md`, row 303.
+ *
+ * ## Columns come from the statement, not from the first row
+ *
+ * The columns a result HAS and the keys its first row happens to carry are not
+ * the same list, and reading the second for the first loses information in two
+ * ways the operator cannot see. A zero-row result has no first row, so the grid
+ * rendered no header at all — the query's shape is exactly what someone
+ * debugging an empty result needs. And two result columns may share a name
+ * (`SELECT u.id, o.id FROM users u JOIN orders o …` declares two `id`s), which
+ * a row object collapses to the last one — so `u.id` vanished with nothing to
+ * suggest a column had been dropped.
+ *
+ * Where the reader exposes them, the statement's own {@link SqlCursor.columnNames}
+ * and positional {@link SqlCursor.raw} rows are used instead, with repeats
+ * renamed by {@link dedupeColumnNames}. A reader exposing neither keeps the old
+ * behaviour rather than losing the result; see those fields for which ones do.
  */
 const runReadonlySql = (sql: SqlExec, query: string): SqlConsoleResult => {
     assertReadonly(query);
 
-    const all = sql.exec(query).toArray();
-    const rows = all.length > MAX_SQL_ROWS ? all.slice(0, MAX_SQL_ROWS) : all;
-    const columns = rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>) : [];
+    const cursor = sql.exec(query);
+    const { columnNames, raw } = cursor;
 
-    return { columns, rowCount: all.length, rows, truncated: all.length > MAX_SQL_ROWS };
+    if (columnNames === undefined || raw === undefined) {
+        const { items: rows, truncated } = takeCapped(cursor);
+
+        return {
+            columns: rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>) : [],
+            rowCount: rows.length,
+            rows,
+            truncated,
+        };
+    }
+
+    const columns = dedupeColumnNames(columnNames);
+    const { items, truncated } = takeCapped(raw.call(cursor));
+    const rows = items.map((values) => Object.fromEntries(columns.map((column, index) => [column, values[index]])));
+
+    return { columns, rowCount: rows.length, rows, truncated };
 };
 
 /**

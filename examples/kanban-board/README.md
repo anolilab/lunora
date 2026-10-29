@@ -40,7 +40,7 @@ pnpm install
 pnpm --filter @lunora-example/kanban-board dev
 ```
 
-Vite + Wrangler in Miniflare; open <http://localhost:5173> in two windows and
+Vite + Wrangler in Miniflare; open the URL the dev server prints (<http://localhost:5173> in the main checkout) in two windows and
 drag a card in one.
 
 ## Key snippets
@@ -77,7 +77,7 @@ export const move = mutation
         const neighbours = cards.filter((row) => row._id !== id);
         const position = Math.max(0, Math.min(index, neighbours.length));
 
-        await ctx.db.patch(id, { order: midpoint(neighbours[position - 1]?.order ?? null, neighbours[position]?.order ?? null), status: column });
+        await ctx.db.patch("tasks", id, { order: midpoint(neighbours[position - 1]?.order ?? null, neighbours[position]?.order ?? null), status: column });
     });
 ```
 

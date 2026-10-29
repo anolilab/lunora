@@ -124,6 +124,7 @@ const createResendVerificationController = (context: ControllerContext, options:
                       return typeof email === "string" ? { email } : {};
                   }
                 : undefined,
+        resendCooldown: true,
         submit: async (values, context_) => {
             // `postAuthDestination`, not the raw field: this link is followed
             // from a mail client, so the current page's `?redirectTo=` is the

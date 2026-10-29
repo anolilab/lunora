@@ -1,3 +1,4 @@
+import { createWorker } from "@lunora/runtime";
 import { describe, expect, it, vi } from "vitest";
 
 import { LunoraClient } from "../src/lunora-client";
@@ -89,10 +90,31 @@ const createMockWebSocket = (): typeof WebSocket => {
     return WS as unknown as typeof WebSocket;
 };
 
-const unauthorizedResponse = (): Response =>
-    Response.json({ error: { code: "UNAUTHORIZED", message: "token expired" } }, { headers: { "content-type": "application/json" }, status: 401 });
+const unauthenticatedResponse = (): Response =>
+    Response.json({ error: { code: "UNAUTHENTICATED", message: "token expired" } }, { headers: { "content-type": "application/json" }, status: 401 });
 
 const okResponse = (): Response => Response.json({ result: { ok: true } }, { headers: { "content-type": "application/json" }, status: 200 });
+
+const replayMutationIds = (call: [string, RequestInit] | undefined): string[] => {
+    if (call === undefined) {
+        throw new Error("expected a replay request");
+    }
+
+    const [url, init] = call;
+
+    if (url.endsWith("/_lunora/rpc-batch")) {
+        if (typeof init.body !== "string") {
+            throw new TypeError("expected a JSON replay body");
+        }
+        const body = JSON.parse(init.body) as { calls: { mutationId: string }[] };
+
+        return body.calls.map(({ mutationId }) => mutationId);
+    }
+
+    const mutationId = new Headers(init.headers).get("x-lunora-mutation-id");
+
+    return mutationId === null ? [] : [mutationId];
+};
 
 describe("durable replay under an expired bearer", () => {
     it("holds the write, notifies onTokenExpired, and commits it once the token is refreshed", async () => {
@@ -100,7 +122,7 @@ describe("durable replay under an expired bearer", () => {
 
         sockets.length = 0;
 
-        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () => unauthorizedResponse());
+        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () => unauthenticatedResponse());
         const persistence = createInMemoryPersistence();
         const client = new LunoraClient({
             fetch: fetchImpl as unknown as typeof fetch,
@@ -157,5 +179,422 @@ describe("durable replay under an expired bearer", () => {
         });
 
         client.close();
+    });
+
+    // With no subject the identity is the token hash, so a refresh cannot be
+    // told from an account switch: dropping the held write is the safe answer.
+    // The warning is what tells the app how to keep it.
+    it("discards the held write on a refresh that names no subject, and warns how to keep it", async () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () => unauthenticatedResponse());
+        const client = new LunoraClient({
+            fetch: fetchImpl as unknown as typeof fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence: createInMemoryPersistence(),
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.setAuthToken("jwt-issued-before-going-offline");
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+
+        const outcome = client.mutation(fnRef("todos.add"), { text: "written offline" }).then(
+            () => "committed",
+            (error: unknown) => `rejected:${String((error as { code?: string }).code)}`,
+        );
+
+        await settle();
+        sockets.at(-1)?.open();
+        await settle();
+
+        expect(warn).not.toHaveBeenCalled();
+
+        client.setAuthToken("refreshed-jwt");
+        await settle();
+
+        // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a credential
+        await expect(outcome).resolves.toBe("rejected:OFFLINE_IDENTITY_CHANGED");
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]?.[0]).toContain("setAuthToken(token, user.id)");
+
+        // A later token change unrelated to a refusal stays quiet.
+        client.setAuthToken("another-jwt");
+
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
+        client.close();
+    });
+
+    // `UNAUTHORIZED` is the app's own "you may not do this" (`throw new
+    // LunoraError("UNAUTHORIZED", "Sign in to post")`): a verdict on the write,
+    // which no refresh changes. Holding it stranded the write, and asked an app
+    // that may hold no token at all to refresh one.
+    it("settles a write the app refused UNAUTHORIZED instead of holding it for a refresh", async () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+
+        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () =>
+            Response.json({ error: { code: "UNAUTHORIZED", message: "you are not playing in this game" } }, { status: 401 }),
+        );
+        const persistence = createInMemoryPersistence();
+        const client = new LunoraClient({
+            fetch: fetchImpl as unknown as typeof fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(),
+        });
+        const settled: { code?: string; status: string }[] = [];
+        const expired = vi.fn<() => void>();
+
+        client.onMutationSettled((event) => {
+            settled.push({ code: (event.error as { code?: string } | undefined)?.code, status: event.status });
+        });
+        client.onTokenExpired(expired);
+        client.setAuthToken("jwt", "user-1");
+        client.subscribe(fnRef("games.get"), {}, () => {});
+
+        const outcome = client.mutation(fnRef("games.move"), { to: "e4" }).then(
+            () => "committed",
+            (error: unknown) => `rejected:${String((error as { code?: string }).code)}`,
+        );
+
+        await settle();
+        sockets.at(-1)?.open();
+        await settle();
+
+        expect(settled).toStrictEqual([{ code: "UNAUTHORIZED", status: "rejected" }]);
+        await expect(outcome).resolves.toBe("rejected:UNAUTHORIZED");
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        expect(expired).not.toHaveBeenCalled();
+        await expect(persistence.load()).resolves.toHaveLength(0);
+
+        client.close();
+    });
+});
+
+describe("durable replay after a delivery fence", () => {
+    it.each([1, 2])("settles %s epoch-fenced committed receipts without retrying their native mutations", async (writeCount) => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers();
+        sockets.length = 0;
+        const fetchImpl = vi.fn<typeof fetch>(async () => {
+            const error = { code: "DELIVERY_RECEIPT_FENCED", message: "committed under old authority" };
+            return writeCount === 1
+                ? Response.json({ error }, { status: 409 })
+                : Response.json({
+                      results: Array.from({ length: writeCount }, (_, id) => {
+                          return { id, status: 409, body: { error } };
+                      }),
+                  });
+        });
+        const persistence = createInMemoryPersistence();
+        const client = new LunoraClient({
+            fetch: fetchImpl,
+            persistence,
+            url: "http://app.test",
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            WebSocket: createMockWebSocket(),
+        });
+        try {
+            client.setAuthToken("jwt", "user-1");
+            client.subscribe(fnRef("todos.list"), {}, () => {});
+            const outcomes = Array.from({ length: writeCount }, () => client.mutation(fnRef("todos.add"), {}).catch((error: unknown) => error));
+            await vi.advanceTimersByTimeAsync(0);
+            sockets.at(-1)?.open();
+            await vi.advanceTimersByTimeAsync(0);
+
+            await expect(Promise.all(outcomes)).resolves.toEqual(
+                Array.from({ length: writeCount }, () => expect.objectContaining({ code: "DELIVERY_RECEIPT_FENCED" })),
+            );
+            await expect(persistence.load()).resolves.toHaveLength(0);
+
+            await vi.advanceTimersByTimeAsync(60_000);
+
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+        } finally {
+            client.close();
+            vi.useRealTimers();
+        }
+    });
+
+    it.each([
+        { mode: "single-call", writeCount: 1 },
+        { mode: "batched", writeCount: 2 },
+    ])("retries a fenced $mode write under its original mutation IDs", async ({ writeCount }) => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers();
+        sockets.length = 0;
+
+        let requestCount = 0;
+        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () => {
+            requestCount += 1;
+
+            if (requestCount === 1) {
+                const error = { code: "DELIVERY_FENCED", message: "operation may have committed" };
+                return writeCount === 1
+                    ? Response.json({ error }, { status: 409 })
+                    : Response.json({
+                          results: Array.from({ length: writeCount }, (_, id) => {
+                              return { id, status: 409, body: { error } };
+                          }),
+                      });
+            }
+
+            return writeCount === 1
+                ? okResponse()
+                : Response.json({
+                      results: Array.from({ length: writeCount }, (_, id) => {
+                          return { body: { result: { ok: true } }, id };
+                      }),
+                  });
+        });
+        const persistence = createInMemoryPersistence();
+        const client = new LunoraClient({
+            fetch: fetchImpl as unknown as typeof fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(),
+        });
+
+        try {
+            client.setAuthToken("jwt", "user-1");
+            client.subscribe(fnRef("todos.list"), {}, () => {});
+
+            const outcomes = Array.from({ length: writeCount }, (_, index) =>
+                client.mutation(fnRef("todos.add"), { index }).then(
+                    () => "committed",
+                    (error: unknown) => `rejected:${String((error as { code?: string }).code)}`,
+                ),
+            );
+
+            await vi.advanceTimersByTimeAsync(0);
+            sockets.at(-1)?.open();
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+            await expect(persistence.load()).resolves.toHaveLength(writeCount);
+
+            const firstIds = replayMutationIds(fetchImpl.mock.calls[0]);
+
+            expect(firstIds).toHaveLength(writeCount);
+            expect(firstIds.every((id) => id.length > 0)).toBe(true);
+
+            // DELIVERY_FENCED is an answered retryable response, so the healthy
+            // socket retries after backoff without needing a reconnect.
+            await vi.advanceTimersByTimeAsync(1000 * writeCount);
+
+            await expect(Promise.all(outcomes)).resolves.toStrictEqual(Array.from({ length: writeCount }).fill("committed"));
+            expect(fetchImpl).toHaveBeenCalledTimes(2);
+            expect(replayMutationIds(fetchImpl.mock.calls[1])).toStrictEqual(firstIds);
+            await expect(persistence.load()).resolves.toHaveLength(0);
+        } finally {
+            client.close();
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe("durable replay against a real worker under a lapsed bearer", () => {
+    it("is refused with TOKEN_EXPIRED before the shard runs it, held, and committed after setAuthToken", async () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const shardCalls: string[] = [];
+        // The resolver an app ships for its JWTs: it verifies the token and hands
+        // back the identity WITH its `exp`, lapsed or not.
+        const worker = createWorker({
+            resolveIdentity: (request) => {
+                const bearer = request.headers.get("authorization");
+
+                if (bearer === null) {
+                    return null;
+                }
+
+                return { exp: bearer === "Bearer stale-jwt" ? nowSeconds - 60 : nowSeconds + 3600, userId: "user-1" };
+            },
+            shardDO: {
+                get: () => {
+                    return {
+                        fetch: async (request: Request) => {
+                            shardCalls.push(request.headers.get("authorization") ?? "");
+
+                            return okResponse();
+                        },
+                    };
+                },
+                idFromName: (name) => name,
+            },
+        });
+        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async (url, init) =>
+            worker.fetch(new Request(url, init), {}, { passThroughOnException: () => undefined, waitUntil: () => undefined }),
+        );
+        const persistence = createInMemoryPersistence();
+        const client = new LunoraClient({
+            fetch: fetchImpl as unknown as typeof fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(),
+        });
+        const expired = vi.fn<() => void>();
+
+        client.onTokenExpired(expired);
+        client.setAuthToken("stale-jwt", "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+
+        const outcome = client.mutation(fnRef("todos.add"), { text: "written offline" }).then(
+            () => "committed",
+            (error: unknown) => `rejected:${String((error as { code?: string }).code)}`,
+        );
+
+        await settle();
+        sockets.at(-1)?.open();
+        await settle();
+
+        // Refused at the worker: the lapsed credential never ran the write.
+        expect(shardCalls).toStrictEqual([]);
+        await expect(persistence.load()).resolves.toHaveLength(1);
+        expect(expired).toHaveBeenCalledTimes(1);
+
+        client.setAuthToken("fresh-jwt", "user-1");
+        await settle();
+
+        await expect(outcome).resolves.toBe("committed");
+        expect(shardCalls).toStrictEqual(["Bearer fresh-jwt"]);
+        await expect(persistence.load()).resolves.toHaveLength(0);
+
+        client.close();
+    });
+});
+
+describe("durable batch replay with a refused slot", () => {
+    it("asks the app to refresh once when a batch interleaves refused and accepted slots", async () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+
+        const refusedSlot = { error: { code: "TOKEN_EXPIRED", message: "authentication token expired" } };
+        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () =>
+            Response.json({
+                results: [
+                    { body: refusedSlot, id: 0 },
+                    { body: { result: { ok: true } }, id: 1 },
+                    { body: refusedSlot, id: 2 },
+                ],
+            }),
+        );
+        const client = new LunoraClient({
+            fetch: fetchImpl as unknown as typeof fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence: createInMemoryPersistence(),
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(),
+        });
+        const expired = vi.fn<() => void>();
+
+        client.onTokenExpired(expired);
+        client.setAuthToken("jwt", "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+
+        for (const text of ["one", "two", "three"]) {
+            client.mutation(fnRef("todos.add"), { text }).catch(() => undefined);
+        }
+
+        await settle();
+        sockets.at(-1)?.open();
+        await settle();
+
+        expect(fetchImpl.mock.calls.some(([url]) => url.includes("rpc-batch"))).toBe(true);
+        expect(expired).toHaveBeenCalledTimes(1);
+
+        client.close();
+    });
+});
+
+// A cookie (or Access edge) session keeps `authToken` at `null` across its
+// refresh, so neither `setAuthToken` nor a changed bearer ever re-flushes the
+// queue: a write refused for the lapsed cookie sat queued until the next
+// reconnect, which a healthy socket never makes.
+describe("durable replay under an expired cookie session", () => {
+    it("re-sends a refused write on a backoff with the refreshed cookie, asking the app to refresh once", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers();
+        sockets.length = 0;
+
+        let cookieFresh = false;
+        const rpcCalls: string[] = [];
+        const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async (url) => {
+            if (url.includes("get-session")) {
+                return Response.json({ session: { id: "s" }, user: { id: "user-1" } });
+            }
+
+            rpcCalls.push(url);
+
+            return cookieFresh ? okResponse() : Response.json({ error: { code: "TOKEN_EXPIRED", message: "authentication token expired" } }, { status: 401 });
+        });
+        const persistence = createInMemoryPersistence();
+        const client = new LunoraClient({
+            fetch: fetchImpl as unknown as typeof fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(),
+        });
+        const expired = vi.fn<() => void>();
+
+        client.onTokenExpired(expired);
+        client.setAuthToken(null, "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+
+        const outcome = client.mutation(fnRef("todos.add"), { text: "written offline" }).then(
+            () => "committed",
+            (error: unknown) => `rejected:${String((error as { code?: string }).code)}`,
+        );
+
+        await vi.advanceTimersByTimeAsync(0);
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(rpcCalls).toHaveLength(1);
+        expect(expired).toHaveBeenCalledTimes(1);
+
+        // Still expired for a while: re-sent on a backoff, not in a loop, and
+        // the app is not asked to refresh again for the same session.
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        expect(rpcCalls.length).toBeGreaterThan(1);
+        expect(rpcCalls.length).toBeLessThanOrEqual(5);
+        expect(expired).toHaveBeenCalledTimes(1);
+        await expect(persistence.load()).resolves.toHaveLength(1);
+
+        // The browser's cookie is renewed; nothing on the client changes.
+        cookieFresh = true;
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        await expect(outcome).resolves.toBe("committed");
+        await expect(persistence.load()).resolves.toHaveLength(0);
+
+        client.close();
+        vi.useRealTimers();
     });
 });

@@ -82,8 +82,8 @@ describe("emitOpenRpc", () => {
         expect(withoutArgs.methods[0]!.params[0]!.required).toBe(false);
     });
 
-    it("excludes internal and stream functions, like the OpenAPI emitter", () => {
-        expect.assertions(3);
+    it("excludes internal functions but lists a stream with its kind and no RPC-envelope description", () => {
+        expect.assertions(4);
 
         const document = JSON.parse(
             emitOpenRpc({
@@ -95,9 +95,13 @@ describe("emitOpenRpc", () => {
             }),
         ) as OpenRpcDocument;
 
-        expect(document.methods).toHaveLength(1);
-        expect(document.methods[0]!.name).toBe("messages:list");
-        expect(document.methods.some((method) => method.name === "messages:purge" || method.name === "messages:feed")).toBe(false);
+        expect(document.methods.map((method) => method.name)).toStrictEqual(["messages:feed", "messages:list"]);
+
+        const feed: unknown = document.methods.find((method) => method.name === "messages:feed");
+
+        expect(feed).toMatchObject({ "x-lunora-function-kind": "stream" });
+        expect(feed).toMatchObject({ description: expect.not.stringContaining("POST /_lunora/rpc") });
+        expect(feed).toMatchObject({ result: { name: "result", schema: { description: expect.any(String) } } });
     });
 
     it("enumerates the standard Lunora error codes under each method's errors", () => {
@@ -150,6 +154,20 @@ describe("emitOpenRpc", () => {
         expect.assertions(2);
 
         const document = JSON.parse(emitOpenRpc({ functions: [makeFunction()] })) as OpenRpcDocument;
+        const { schema } = document.methods[0]!.result;
+
+        expect(schema["type"]).toBeUndefined();
+        expect(schema["description"]).toContain("no `.output()` declared");
+    });
+
+    it("gives a stream the placeholder result, since its chunks do not form one result", () => {
+        expect.assertions(2);
+
+        const document = JSON.parse(
+            emitOpenRpc({
+                functions: [makeFunction({ kind: "stream", output: { kind: "object", shape: { count: { kind: "number" } } } })],
+            }),
+        ) as OpenRpcDocument;
         const { schema } = document.methods[0]!.result;
 
         expect(schema["type"]).toBeUndefined();

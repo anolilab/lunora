@@ -33,13 +33,26 @@ interface AgentApi {
 }
 ```
 
+### `AgentApprovalGrant` (interface)
+
+```ts
+interface AgentApprovalGrant {
+    createdAt: number;
+    toolName: string;
+}
+```
+
 ### `AgentChatApi` (interface)
 
 ```ts
 interface AgentChatApi {
     agents: {
+        agentApprovalGrants: AgentApprovalGrantsReference;
+        agentDeclineSecret: AgentDeclineSecretReference;
         agentMessages: AgentMessagesReference$1;
         agentResolveApproval: AgentApprovalReference;
+        agentRevokeApprovalGrant: AgentRevokeApprovalGrantReference;
+        agentSupplySecret: AgentSupplySecretReference;
         agentThread: AgentThreadReference;
     };
 }
@@ -49,13 +62,18 @@ interface AgentChatApi {
 
 ```ts
 interface AgentChatHandle {
+    approvalGrants: Readable<ReadonlyArray<AgentApprovalGrant>>;
     approve: (toolCallId: string, note?: string) => Promise<void>;
+    approveForThread: (toolCallId: string, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
+    declineSecret: (toolCallId: string) => Promise<void>;
     messages: Readable<ReadonlyArray<AgentChatMessage>>;
     reject: (toolCallId: string, note?: string) => Promise<void>;
+    revokeGrant: (toolName: string) => Promise<void>;
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: Readable<AgentThreadStatus | undefined>;
     streamingText: Readable<string>;
+    supplySecret: (toolCallId: string, secret: string) => Promise<void>;
     teardown: () => void;
 }
 ```
@@ -69,7 +87,7 @@ interface AgentChatMessage {
     optimistic?: boolean;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
-    status?: "approved" | "awaiting_approval" | "rejected";
+    status?: "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
     toolCallId?: string;
     toolCalls?: ReadonlyArray<{
         id: string;
@@ -173,7 +191,7 @@ interface AgentStateOptions {
 ```ts
 interface AgentThreadRecord {
     createdAt?: number;
-    error?: string;
+    error?: null | string;
     instanceId?: string;
     messageCount?: number;
     owner?: string;
@@ -225,6 +243,11 @@ type AgentToolEvent = {
     toolCallId?: string;
     toolName?: string;
     type: "awaiting-approval";
+} | {
+    seq: number;
+    toolCallId?: string;
+    toolName?: string;
+    type: "awaiting-secret";
 };
 ```
 
@@ -275,6 +298,7 @@ interface AuthGateStore {
 ```ts
 interface AuthStore {
     setToken: (token: string | null) => void;
+    status: Readable<AuthStatus>;
     token: Readable<string | null>;
     user: Readable<User | null>;
 }
@@ -344,6 +368,15 @@ type ListPresentReference = FunctionReference<"query", {
 }>;
 ```
 
+### `LiveTopicState` (interface)
+
+```ts
+interface LiveTopicState<Payload = unknown> {
+    error: LiveStreamSubscribeError | undefined;
+    lastEvent: Payload | undefined;
+}
+```
+
 ### `LunoraClient` (class)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -358,7 +391,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 interface MutationHandle<F extends FunctionReference> {
     data: Readable<ReturnOf<F> | undefined>;
     error: Readable<Error | undefined>;
-    mutate: (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
+    mutate: (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>) => Promise<ReturnOf<F>>;
     pending: Readable<boolean>;
     reset: () => void;
 }
@@ -545,7 +578,7 @@ interface SubscriptionHandle<T> {
 
 ```ts
 interface SubscriptionStoreOptions {
-    onError?: (error: Error) => void;
+    onError?: SubscriptionErrorCallback;
     shardKey?: string;
 }
 ```
@@ -689,7 +722,7 @@ const getLunoraClient: () => LunoraClient;
 ```ts
 const hydratePreloaded: <T>(preloaded: Preloaded<T>, client?: LunoraClient, options?: {
     onError?: SubscriptionErrorCallback;
-}) => Readable<T>;
+}) => Readable<T | undefined>;
 ```
 
 ### `infiniteQuery` (function)
@@ -698,6 +731,12 @@ const hydratePreloaded: <T>(preloaded: Preloaded<T>, client?: LunoraClient, opti
 function infiniteQuery<F extends FunctionReference>(function_: F, args: "skip" | PaginatedArgs<F>, options: InfiniteQueryOptions): InfiniteQueryHandle<PageItemOf<F>>;
 
 function infiniteQuery<F extends FunctionReference>(client: LunoraClient, function_: F, args: "skip" | PaginatedArgs<F>, options: InfiniteQueryOptions): InfiniteQueryHandle<PageItemOf<F>>;
+```
+
+### `liveTopic` (const)
+
+```ts
+const liveTopic: <Payload>(topic: LiveTopicRef<Payload> | Readable<LiveTopicRef<Payload>>, options?: LiveTopicOptions<Payload> | Readable<LiveTopicOptions<Payload>>) => Readable<LiveTopicState<Payload>>;
 ```
 
 ### `mutation` (function)
@@ -936,13 +975,32 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
+### `AgentApprovalGrantsReference` (type)
+
+```ts
+type AgentApprovalGrantsReference = FunctionReference<"query", {
+    key: string;
+}, ReadonlyArray<AgentApprovalGrant>>;
+```
+
 ### `AgentApprovalReference` (type)
 
 ```ts
 type AgentApprovalReference = FunctionReference<"mutation", {
-    decision: "approve" | "reject";
+    decision: "approve" | "approve_for_thread" | "reject";
     instanceId: string;
     note?: string;
+    threadKey: string;
+    toolCallId: string;
+}, {
+    resolved: boolean;
+}>;
+```
+
+### `AgentDeclineSecretReference` (type)
+
+```ts
+type AgentDeclineSecretReference = FunctionReference<"mutation", {
     threadKey: string;
     toolCallId: string;
 }, {
@@ -974,6 +1032,29 @@ type AgentMessagesReference$1 = FunctionReference<"query", {
     key: string;
     limit?: number;
 }, ReadonlyArray<Record<string, unknown>>>;
+```
+
+### `AgentRevokeApprovalGrantReference` (type)
+
+```ts
+type AgentRevokeApprovalGrantReference = FunctionReference<"mutation", {
+    threadKey: string;
+    toolName: string;
+}, {
+    revoked: boolean;
+}>;
+```
+
+### `AgentSupplySecretReference` (type)
+
+```ts
+type AgentSupplySecretReference = FunctionReference<"mutation", {
+    secret: string;
+    threadKey: string;
+    toolCallId: string;
+}, {
+    resolved: boolean;
+}>;
 ```
 
 ### `AgentThreadReference` (type)

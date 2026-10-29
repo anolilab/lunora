@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "../src/ctx-db";
+import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { ConflictError } from "../src/transaction";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -74,7 +74,7 @@ describe("ctx-db constraints", () => {
             const { writer } = setup();
 
             const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-            const doc = await writer.get(id);
+            const doc = await writer.get("items", id);
 
             expect(doc?.["status"]).toBe("todo");
             expect(doc?.["seq"]).toBe(7);
@@ -86,7 +86,7 @@ describe("ctx-db constraints", () => {
             const { writer } = setup();
 
             const id = await writer.insert("items", { _id: "i1", seq: 99, slug: "a", status: "done", title: "first" }, { allowExplicitId: true });
-            const doc = await writer.get(id);
+            const doc = await writer.get("items", id);
 
             expect(doc?.["status"]).toBe("done");
             expect(doc?.["seq"]).toBe(99);
@@ -98,14 +98,184 @@ describe("ctx-db constraints", () => {
             const { revCalls, writer } = setup();
 
             const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-            const doc = await writer.get(id);
+            const doc = await writer.get("items", id);
 
             expect(doc?.["rev"]).toBeUndefined();
             expect(revCalls()).toBe(0);
         });
     });
 
+    describe("atomic field operators", () => {
+        const operatorSetup = () => {
+            const schema: SchemaLike = {
+                tables: {
+                    counters: {
+                        indexes: [],
+                        shape: {
+                            flag: col("boolean", { defaultValue: false }),
+                            meta: col("any", { notNull: false }),
+                            n: col("number", { defaultValue: 0 }),
+                        },
+                    },
+                },
+            };
+
+            runShardMigrations(harness.sql, schema);
+
+            return createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
+        };
+
+        it("resolves operators against the stored row on patch, patchIf and patchMany", async () => {
+            expect.assertions(4);
+
+            const writer = operatorSetup();
+
+            await writer.insert("counters", { _id: "c1", n: 10 }, { allowExplicitId: true });
+
+            await writer.patch("counters", "c1", { flag: { toggle: true }, n: { increment: 5 } });
+
+            const afterPatch = await writer.get("counters", "c1");
+
+            expect(afterPatch).toMatchObject({ flag: true, n: 15 });
+
+            await writer.patchIf?.("counters", "c1", { patch: { n: { multiply: 2 } }, where: { n: 15 } });
+
+            const afterPatchIf = await writer.get("counters", "c1");
+
+            expect(afterPatchIf?.["n"]).toBe(30);
+
+            await writer.patchMany?.("counters", [{ id: "c1", patch: { n: { decrement: 10 } } }]);
+
+            const afterPatchMany = await writer.get("counters", "c1");
+
+            expect(afterPatchMany?.["n"]).toBe(20);
+
+            await writer.patch("counters", "c1", { n: { divide: 4 } });
+
+            const afterDivide = await writer.get("counters", "c1");
+
+            expect(afterDivide?.["n"]).toBe(5);
+        });
+
+        it("stores an operator-shaped value on an `any` column verbatim", async () => {
+            expect.assertions(1);
+
+            const writer = operatorSetup();
+
+            await writer.insert("counters", { _id: "c1" }, { allowExplicitId: true });
+            await writer.patch("counters", "c1", { meta: { increment: 1 } });
+
+            const row = await writer.get("counters", "c1");
+
+            expect(row?.["meta"]).toStrictEqual({ increment: 1 });
+        });
+
+        it("takes the caller's post-image verdict on the row it actually writes", async () => {
+            expect.assertions(4);
+
+            const writer = operatorSetup();
+            const seen: [number, number][] = [];
+            const nonNegative = (previous: Record<string, unknown>, next: Record<string, unknown>): boolean => {
+                seen.push([previous["n"] as number, next["n"] as number]);
+
+                return (next["n"] as number) >= 0;
+            };
+
+            await writer.insert("counters", { _id: "c1", n: 3 }, { allowExplicitId: true });
+
+            await writer.patch("counters", "c1", { n: { decrement: 1 } }, { verify: nonNegative });
+
+            await expect(writer.patch("counters", "c1", { n: { decrement: 5 } }, { verify: nonNegative })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+            const row = await writer.get("counters", "c1");
+
+            // The verdict saw the stored value and the RESOLVED result, never the operator.
+            expect(seen).toStrictEqual([
+                [3, 2],
+                [2, -3],
+            ]);
+            expect(row?.["n"]).toBe(2);
+
+            // patchIf threads the same verdict.
+            await expect(writer.patchIf?.("counters", "c1", { patch: { n: { decrement: 9 } }, verify: nonNegative, where: {} })).rejects.toMatchObject({
+                code: "FORBIDDEN",
+            });
+        });
+
+        it("hands the post-image verdict to the .global() writer, which is where the row actually lives", async () => {
+            expect.assertions(2);
+
+            const globalSchema: SchemaLike = {
+                tables: { counters: { indexes: [], shape: { n: col("number") }, shardMode: { kind: "global" } } },
+            };
+            const globalPatch = vi.fn<NonNullable<DatabaseWriterLike["patch"]>>(async () => undefined);
+            const writer = createShardContextDatabase({
+                clock: () => FIXED_CLOCK,
+                globalDb: { patch: globalPatch } as unknown as DatabaseWriterLike,
+                schema: globalSchema,
+                sql: harness.sql,
+            });
+            const options = { verify: () => true };
+
+            await writer.patch("counters", "g1", { n: { increment: 1 } }, options);
+
+            expect(globalPatch).toHaveBeenCalledTimes(1);
+            expect(globalPatch.mock.calls[0]?.[3]).toBe(options);
+        });
+
+        it("rejects an unusable operator and leaves the row alone", async () => {
+            expect.assertions(2);
+
+            const writer = operatorSetup();
+
+            await writer.insert("counters", { _id: "c1", n: 1 }, { allowExplicitId: true });
+
+            await expect(writer.patch("counters", "c1", { n: { divide: 0 } })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+            const row = await writer.get("counters", "c1");
+
+            expect(row?.["n"]).toBe(1);
+        });
+    });
+
     describe("$onUpdateFn", () => {
+        it("restamps the column when delete flips the marker", async () => {
+            expect.assertions(2);
+
+            let revs = 0;
+            const schema: SchemaLike = {
+                tables: {
+                    items: {
+                        indexes: [],
+                        shape: {
+                            deletedAt: col("number", { notNull: false }),
+                            rev: col("number", {
+                                onUpdateFn: () => {
+                                    revs += 1;
+
+                                    return revs;
+                                },
+                            }),
+                            title: col("string"),
+                        },
+                        softDeleteMode: { field: "deletedAt" },
+                    },
+                },
+            };
+
+            runShardMigrations(harness.sql, schema);
+
+            const writer = createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
+
+            await writer.insert("items", { _id: "i1", title: "first" }, { allowExplicitId: true });
+            await writer.delete("items", "i1");
+
+            const doc = await writer.get("items", "i1");
+
+            expect(doc?.["deletedAt"]).toBe(FIXED_CLOCK);
+            expect(doc?.["rev"]).toBe(1);
+        });
+
         it("recomputes on each patch that omits the field", async () => {
             expect.assertions(3);
 
@@ -113,18 +283,39 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
 
-            await writer.patch("i1", { title: "second" });
+            await writer.patch("items", "i1", { title: "second" });
 
-            const afterFirstPatch = await writer.get("i1");
+            const afterFirstPatch = await writer.get("items", "i1");
 
             expect(afterFirstPatch?.["rev"]).toBe(1);
 
-            await writer.patch("i1", { title: "third" });
+            await writer.patch("items", "i1", { title: "third" });
 
-            const afterSecondPatch = await writer.get("i1");
+            const afterSecondPatch = await writer.get("items", "i1");
 
             expect(afterSecondPatch?.["rev"]).toBe(2);
             expect(revCalls()).toBe(2);
+        });
+
+        it("recomputes through patchIf and patchWhere as well", async () => {
+            expect.assertions(3);
+
+            const { writer } = setup();
+
+            await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+
+            await writer.patchIf?.("items", "i1", { patch: { title: "second" }, where: { title: "first" } });
+
+            const afterPatchIf = await writer.get("items", "i1");
+
+            expect(afterPatchIf?.["rev"]).toBe(1);
+
+            await writer.patchWhere?.("items", { patch: { title: "third" }, where: { slug: "a" } });
+
+            const afterPatchWhere = await writer.get("items", "i1");
+
+            expect(afterPatchWhere?.["rev"]).toBe(2);
+            expect(afterPatchWhere?.["title"]).toBe("third");
         });
 
         it("is skipped when the patch sets the field explicitly", async () => {
@@ -134,9 +325,9 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
 
-            await writer.patch("i1", { rev: 99 });
+            await writer.patch("items", "i1", { rev: 99 });
 
-            const afterExplicitPatch = await writer.get("i1");
+            const afterExplicitPatch = await writer.get("items", "i1");
 
             expect(afterExplicitPatch?.["rev"]).toBe(99);
             expect(revCalls()).toBe(0);
@@ -149,15 +340,15 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
 
-            await writer.replace("i1", { slug: "a", title: "auto" });
+            await writer.replace("items", "i1", { slug: "a", title: "auto" });
 
-            const afterAutoReplace = await writer.get("i1");
+            const afterAutoReplace = await writer.get("items", "i1");
 
             expect(afterAutoReplace?.["rev"]).toBe(1);
 
-            await writer.replace("i1", { rev: 42, slug: "a", title: "manual" });
+            await writer.replace("items", "i1", { rev: 42, slug: "a", title: "manual" });
 
-            const afterManualReplace = await writer.get("i1");
+            const afterManualReplace = await writer.get("items", "i1");
 
             expect(afterManualReplace?.["rev"]).toBe(42);
         });
@@ -185,7 +376,7 @@ describe("ctx-db constraints", () => {
             await writer.insert("items", { _id: "i1", slug: "one", title: "first" }, { allowExplicitId: true });
             await writer.insert("items", { _id: "i2", slug: "two", title: "second" }, { allowExplicitId: true });
 
-            await expect(writer.patch("i2", { slug: "one" })).rejects.toBeInstanceOf(ConflictError);
+            await expect(writer.patch("items", "i2", { slug: "one" })).rejects.toBeInstanceOf(ConflictError);
         });
 
         it("distinct unique values insert cleanly", async () => {
@@ -253,7 +444,7 @@ describe("ctx-db constraints", () => {
             await writer.insert("pages", { _id: "p1", slug: "a", tenantId: "t1", title: "A" }, { allowExplicitId: true });
             await writer.insert("pages", { _id: "p2", slug: "b", tenantId: "t1", title: "B" }, { allowExplicitId: true });
 
-            await expect(writer.patch("p2", { slug: "a" })).rejects.toBeInstanceOf(ConflictError);
+            await expect(writer.patch("pages", "p2", { slug: "a" })).rejects.toBeInstanceOf(ConflictError);
         });
     });
 
@@ -327,9 +518,9 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("orders", { _id: "o1", amount: 10, sku: "X" }, { allowExplicitId: true });
 
-            await expect(writer.patch("o1", { amount: -5 })).rejects.toThrow(/non-negative/u);
+            await expect(writer.patch("orders", "o1", { amount: -5 })).rejects.toThrow(/non-negative/u);
             // Prior row must remain unchanged after the rejection.
-            await expect(writer.get("o1")).resolves.toMatchObject({ amount: 10 });
+            await expect(writer.get("orders", "o1")).resolves.toMatchObject({ amount: 10 });
         });
 
         it("replace runs refinements after applyOnUpdate so defaulted fields are checked", async () => {
@@ -339,7 +530,7 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("orders", { _id: "o1", amount: 10, sku: "X" }, { allowExplicitId: true });
 
-            await expect(writer.replace("o1", { amount: -1, sku: "X" })).rejects.toThrow(/non-negative/u);
+            await expect(writer.replace("orders", "o1", { amount: -1, sku: "X" })).rejects.toThrow(/non-negative/u);
         });
 
         /**
@@ -387,13 +578,13 @@ describe("ctx-db constraints", () => {
 
             await writer.insert("notes", { _id: "n1", title: "first" }, { allowExplicitId: true });
             // Put the column into the state `onDelete: "set null"` and a D1 read produce.
-            await writer.patch("n1", { note: null });
+            await writer.patch("notes", "n1", { note: null });
 
             // The patch below touches only `title`; before the fix the untouched `note`
             // rode along in the merged document and failed validation.
-            await writer.patch("n1", { title: "second" });
+            await writer.patch("notes", "n1", { title: "second" });
 
-            await expect(writer.get("n1")).resolves.toMatchObject({ title: "second" });
+            await expect(writer.get("notes", "n1")).resolves.toMatchObject({ title: "second" });
             await expect(writer.count("notes")).resolves.toBe(1);
         });
 
@@ -419,7 +610,7 @@ describe("ctx-db constraints", () => {
 
             // `title` is required, so a null there is a genuine violation and must throw
             // — the skip above is scoped to optional columns only.
-            await expect(writer.patch("n2", { title: null })).rejects.toThrow(/title must be a string/u);
+            await expect(writer.patch("notes", "n2", { title: null })).rejects.toThrow(/title must be a string/u);
         });
     });
 });

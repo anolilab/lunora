@@ -1,9 +1,10 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName } from "../argument-taint";
 import type { StorageUploadIR } from "../ir";
-import { collectCallRows } from "./ast";
+import { collectCallRows, propertyKeyName } from "./ast";
+import { callSiteScopeOf } from "./attribution";
+import { matchesContextReceiver } from "./context-root";
 
 /**
  * `ctx.storage.<bucket>.<method>` calls this feeder inspects, mapped to the
@@ -57,7 +58,7 @@ const readOptionsArgument = (argument: TsNode | undefined): StorageUploadEvidenc
         }
 
         if (Node.isPropertyAssignment(property)) {
-            const name = property.getName();
+            const name = propertyKeyName(property);
 
             presentKeys.push(name);
 
@@ -70,7 +71,7 @@ const readOptionsArgument = (argument: TsNode | undefined): StorageUploadEvidenc
 
         // A shorthand (`{ contentType }`) or method (`contentType() {}`) still declares the key.
         if (Node.isShorthandPropertyAssignment(property) || Node.isMethodDeclaration(property)) {
-            presentKeys.push(property.getName());
+            presentKeys.push(propertyKeyName(property));
         }
     }
 
@@ -97,9 +98,11 @@ const storageUploadMethod = (node: TsNode): { method: string; optionsIndex: numb
         return undefined;
     }
 
-    const receiver = node.getExpression().getText();
+    // `ctx.storage` or anything under it, as written (`ctx.storage.bucket("a")`, also in a helper outside any
+    // handler) or as the ctx surface it denotes (`c.storage.avatars`, a destructured `storage`).
+    const isStorage = matchesContextReceiver(node.getExpression(), (receiver) => receiver === "ctx.storage" || receiver.startsWith("ctx.storage."));
 
-    return receiver === "ctx.storage" || receiver.startsWith("ctx.storage.") ? { method, optionsIndex } : undefined;
+    return isStorage ? { method, optionsIndex } : undefined;
 };
 
 /** The IR row for a tracked `ctx.storage.<bucket>.<method>(...)` call, or `undefined`. */
@@ -111,7 +114,7 @@ const storageUploadInCall = (call: CallExpression, relativePath: string): Storag
     }
 
     return {
-        exportName: enclosingExportName(call),
+        scope: callSiteScopeOf(call),
         file: relativePath,
         line: call.getStartLineNumber(),
         method: matched.method as StorageUploadIR["method"],

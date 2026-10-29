@@ -46,11 +46,13 @@ interface AiRunBinding {
 ```ts
 interface AppendRequestLogEntry {
     cacheHit?: boolean;
+    deploymentId?: string;
     durationMs: number;
     errorMessage?: string;
     functionPath: string;
     identity?: Record<string, unknown>;
     outcome: RequestOutcome;
+    rayId?: string;
     redactedArgs?: unknown;
     shardKey?: string;
     subscriptionsReRun?: number;
@@ -59,6 +61,7 @@ interface AppendRequestLogEntry {
     traceId?: string;
     ts: number;
     userId?: string;
+    versionTag?: string;
 }
 ```
 
@@ -167,6 +170,7 @@ interface DatabaseTelemetryDeps {
     functionPath: string;
     mode: DatabaseInstrumentation;
     record: (span: SpanEvent) => void;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     tally: DatabaseTally;
     userId: () => string | undefined;
@@ -315,7 +319,16 @@ interface FunctionMetricIndexHit {
 ```ts
 interface HostSpanLike {
     readonly isTraced: boolean;
-    setAttribute: (key: string, value: boolean | number | string | undefined) => void;
+    recordException?: (exception: {
+        message: string;
+        name: string;
+    }) => unknown;
+    setAttribute: (key: string, value: boolean | number | string | undefined) => unknown;
+    setAttributes?: (attributes: Record<string, boolean | number | string>) => unknown;
+    setStatus?: (status: {
+        code: "error" | "ok" | "unset";
+        message?: string;
+    }) => unknown;
 }
 ```
 
@@ -324,6 +337,7 @@ interface HostSpanLike {
 ```ts
 interface HostTracingLike {
     enterSpan: <T>(name: string, callback: (span: HostSpanLike) => T) => T;
+    getActiveSpan?: () => HostSpanLike | undefined;
 }
 ```
 
@@ -559,8 +573,15 @@ interface MetricSeries {
 interface MetricsDeps {
     functionPath: string;
     record: (event: MetricEvent) => void;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
 }
+```
+
+### `NO_SENSITIVE_SCOPE` (const)
+
+```ts
+const NO_SENSITIVE_SCOPE: SensitiveScope;
 ```
 
 ### `QueryInsightBucket` (interface)
@@ -656,12 +677,26 @@ interface RecordAuthEventInput {
 
 ```ts
 interface RecordFunctionMetricInput {
+    calls?: number;
     conflicted?: boolean;
+    conflicts?: number;
+    durationMaxMs?: number;
+    durationMinMs?: number;
     durationMs: number;
+    durationTotalMs?: number;
     errored: boolean;
     errorMessage?: string;
+    errors?: number;
+    indexHitCounts?: ReadonlyArray<IndexHit & {
+        count: number;
+    }>;
     indexHits?: ReadonlyArray<IndexHit>;
+    lastErrorAt?: number | null;
     path: string;
+    scanCounts?: ReadonlyArray<{
+        count: number;
+        table: string;
+    }>;
     scannedTables?: ReadonlyArray<string>;
     ts: number;
 }
@@ -672,6 +707,7 @@ interface RecordFunctionMetricInput {
 ```ts
 interface RequestLogEntry {
     cacheHit?: boolean;
+    deploymentId?: string;
     durationMs: number;
     errorMessage?: string;
     functionPath: string;
@@ -686,6 +722,7 @@ interface RequestLogEntry {
     traceId?: string;
     ts: number;
     userId?: string;
+    versionTag?: string;
 }
 ```
 
@@ -710,6 +747,12 @@ interface RequestLogWriteOptions {
 
 ```ts
 type RequestOutcome = "error" | "ok";
+```
+
+### `SENSITIVE_ARG_MASK` (const)
+
+```ts
+const SENSITIVE_ARG_MASK = "«sensitive»";
 ```
 
 ### `SecurityAuditResult` (interface)
@@ -740,6 +783,20 @@ type SecurityFindingKind = "admin-token-weak" | "auth-secret-weak" | "cookies-in
 
 ```ts
 type SecurityFindingLevel = "error" | "info" | "warning";
+```
+
+### `SensitiveScope` (interface)
+
+```ts
+interface SensitiveScope {
+    add: (values: ReadonlyArray<string>, names?: ReadonlyArray<string>) => void;
+    clear: () => void;
+    fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
+    hold: () => () => void;
+    name: (name: string) => string;
+    text: (text: string) => string;
+    value: <T>(value: T) => T;
+}
 ```
 
 ### `SpanBuffer` (class)
@@ -793,6 +850,8 @@ interface SpanEvent {
     ok: boolean;
     parentSpanId: string;
     dispatch?: boolean;
+    rayId?: string;
+    sampled?: boolean;
     shardKey?: string;
     spanId: string;
     startTs: number;
@@ -851,10 +910,26 @@ interface SpanOptions {
 }
 ```
 
+### `SqlClientLike` (interface)
+
+```ts
+interface SqlClientLike {
+    readonly dbSystem?: string;
+    query: (text: string, params?: ReadonlyArray<unknown>) => Promise<unknown>;
+}
+```
+
+### `TallySurface` (type)
+
+```ts
+type TallySurface = "db" | "sql";
+```
+
 ### `TraceAnchor` (interface)
 
 ```ts
 interface TraceAnchor {
+    rayId?: string;
     rootSpanId: string;
     sampled?: boolean;
     traceId: string;
@@ -906,6 +981,7 @@ interface TracedFetchDeps {
     functionPath: string;
     propagate?: ((url: URL) => boolean) | boolean;
     record: (span: SpanEvent) => void;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     userId: () => string | undefined;
 }
@@ -921,6 +997,7 @@ interface TracerDeps {
     fuseHostSpans?: boolean;
     record: (span: SpanEvent) => void;
     resolveHostTracing?: HostTracingResolver;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     userId: () => string | undefined;
 }
@@ -930,6 +1007,18 @@ interface TracerDeps {
 
 ```ts
 const appendRequestLogEntry: (sql: SqlExec, entry: AppendRequestLogEntry, options?: RequestLogWriteOptions) => void;
+```
+
+### `applyHostRootSpan` (const)
+
+```ts
+const applyHostRootSpan: (tracing: HostTracingLike | undefined, root: {
+    attributes?: Record<string, LogFields[string]>;
+    error?: {
+        message: string;
+        serverFault: boolean;
+    };
+}) => void;
 ```
 
 ### `buildSecurityAudit` (const)
@@ -952,10 +1041,16 @@ const createDatabaseTally: () => DatabaseTally;
 const createMetrics: (deps: MetricsDeps) => ContextMetrics;
 ```
 
+### `createSensitiveScope` (const)
+
+```ts
+const createSensitiveScope: (values: ReadonlyArray<string>, names?: ReadonlyArray<string>) => SensitiveScope;
+```
+
 ### `createSpanCollector` (const)
 
 ```ts
-const createSpanCollector: (ids: SpanContextIds, captureRaw?: boolean) => SpanCollector;
+const createSpanCollector: (ids: SpanContextIds, captureRaw?: boolean, scope?: SensitiveScope) => SpanCollector;
 ```
 
 ### `createTracedFetch` (const)
@@ -982,6 +1077,7 @@ const dispatchRootSpan: (input: {
         thrown: unknown;
     } | undefined;
     functionPath: string;
+    scope?: SensitiveScope;
     shardKey: string | undefined;
     startTs: number;
     userId: string | undefined;
@@ -1041,13 +1137,31 @@ const foldTraces: (spans: ReadonlyArray<SpanEvent>, limit?: number) => FoldedTra
 ### `formatTally` (const)
 
 ```ts
-const formatTally: (tally: DatabaseTally) => LogFields;
+const formatTally: (tally: DatabaseTally, surface?: TallySurface) => LogFields;
 ```
 
 ### `instrumentDatabase` (const)
 
 ```ts
 const instrumentDatabase: <T extends object>(database: T, deps: DatabaseTelemetryDeps) => T;
+```
+
+### `instrumentSqlClient` (const)
+
+```ts
+const instrumentSqlClient: <T extends SqlClientLike>(client: T, deps: DatabaseTelemetryDeps) => T;
+```
+
+### `latencyBucketIndex` (const)
+
+```ts
+const latencyBucketIndex: (durationMs: number) => number;
+```
+
+### `maskSensitiveArgs` (const)
+
+```ts
+const maskSensitiveArgs: (args: Record<string, unknown>, sensitive: ReadonlySet<string>) => Record<string, unknown>;
 ```
 
 ### `mergeScanAttribution` (const)
@@ -1174,14 +1288,36 @@ const recordQueryMetric: (sql: SqlExec, rawSql: string, durationMs: number, rows
 const redactArgs: (value: unknown, captureRaw?: boolean) => unknown;
 ```
 
+### `redactCredentials` (const)
+
+```ts
+const redactCredentials: (value: unknown, captureRaw?: boolean) => unknown;
+```
+
 ### `resolveTraceAnchor` (const)
 
 ```ts
-const resolveTraceAnchor: (traceparent: string | undefined) => {
-    rootSpanId: string;
+const resolveTraceAnchor: (traceparent: string | undefined, rayHeader?: null | string) => TraceAnchor & {
     sampled: boolean;
-    traceId: string;
 };
+```
+
+### `sensitiveNames` (const)
+
+```ts
+const sensitiveNames: (args: Record<string, unknown>, sensitive: ReadonlySet<string>) => string[];
+```
+
+### `sensitiveValues` (const)
+
+```ts
+const sensitiveValues: (args: Record<string, unknown>, sensitive: ReadonlySet<string>) => string[];
+```
+
+### `setHostSpanAttributes` (const)
+
+```ts
+const setHostSpanAttributes: (span: HostSpanLike, attributes: Record<string, LogFields[string]>) => void;
 ```
 
 ### `upsertIssueState` (const)
@@ -1195,6 +1331,18 @@ const upsertIssueState: (sql: SqlExec, hash: string, patch: IssueStatePatch, upd
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `ErrorDetail` (interface)
+
+```ts
+interface ErrorDetail {
+    code?: string;
+    internal?: Record<string, unknown>;
+    message: string;
+    name: string;
+    stack?: string;
+}
+```
 
 ### `EvaluationInput` (interface)
 
@@ -1230,11 +1378,13 @@ interface ExplainIssueSuccess extends ExplainIssueGrounding {
 ```ts
 interface LogEvent {
     args: unknown[];
+    error?: ErrorDetail;
     eventName?: string;
     fields?: LogFields;
     functionPath: string;
     level: ContextLogLevel;
     message: string;
+    rayId?: string;
     shardKey?: string;
     spanId?: string;
     traceId?: string;

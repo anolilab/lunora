@@ -41,14 +41,115 @@ messages = client.query("messages:list", { "channel" => "general" })
 client.mutation("messages:send", { "channel" => "general", "text" => "hi" })
 client.mutation("ledger:add", { "amount" => Lunora::WireBigInt.new(1000) })
 
-# Live subscription: attach your socket, then feed it frames.
+# Live subscription: attach your socket (it sends connect first), then feed it frames.
 client.attach_socket(->(frame) { socket.send(JSON.generate(frame)) })
 unsubscribe = client.subscribe("messages:list", { "channel" => "general" }, method(:render))
 ```
 
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. `Net::HTTP` does not follow
+redirects on its own; keep it that way and do not add a redirect-following wrapper
+around the poster.
+
 `client.handle_frame(raw)` is what you call with each inbound WebSocket message;
 `client.resend_subscriptions` re-subscribes everything after a reconnect —
 queries and shape views alike — carrying each one's resume cursor or checkpoint.
+
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`handle_frame` returns the frame's type). `attach_socket` sends the `connect` frame
+first on each socket open, then the whisper joins; `resend_subscriptions` follows it
+with the queries and shape views, and the loop then replays this shard's queued writes:
+
+```ruby
+client.session_token = session # the WebSocket session credential; see "Token expiry" below
+client.on_token_expired(-> { client.session_token = refresh_session }) # your refresh; assumed to return the new credential
+
+attempt = 0
+loop do
+  retry_thread = nil
+  retry_stop = false # set in ensure, so the retry thread does not flush after the run ends
+  socket = nil
+  close_code = close_reason = nil # the close frame that ended the run; nil when the socket dropped without one
+  begin
+    socket = connect # your socket library
+    client.attach_socket(->(frame) { socket.send(JSON.generate(frame)) }) # sends connect first, under session_token
+    client.resend_subscriptions
+    report = client.flush_offline_queue # HTTP replay; transient failures stay queued
+    if report.retry_after_ms || report.requeued.any?
+      # requeued writes never stop the read loop: retry on a thread, stopped in ensure
+      retry_thread = Thread.new do
+        backoff = 1.0
+        wait = report.retry_after_ms ? report.retry_after_ms / 1000.0 : backoff / 2 + rand * backoff / 2
+        loop do
+          break if retry_stop # the run ended during the last flush: do not sleep before exiting
+          sleep(wait)
+          break if retry_stop
+          again = client.flush_offline_queue
+          break if again.requeued.empty? && again.retry_after_ms.nil?
+          # a persistent transient failure backs off instead of replaying every second
+          backoff = [backoff * 2, 30.0].min
+          wait = again.retry_after_ms ? again.retry_after_ms / 1000.0 : backoff / 2 + rand * backoff / 2
+        end
+      end
+    end
+    while (raw = socket.receive)
+      attempt = 0 if client.handle_frame(raw) == "ack"
+    end
+    close_code, close_reason = socket.close_frame # assumed: your socket library reports the close code and reason
+  rescue StandardError
+    nil
+  ensure
+    retry_stop = true
+    begin
+      retry_thread&.wakeup # end a pending sleep; an in-flight flush finishes first
+    rescue ThreadError
+      nil # the thread finished between the last check and this wakeup
+    end
+    retry_thread&.join # so a requeued write is seen by the next run's flush
+    socket&.close # assumed: connect returns an IO-like socket; close it so each reconnect frees the last one
+  end
+  client.detach_socket(close_code, close_reason)
+  delay = [30.0, 2.0**[attempt, 5].min].min
+  sleep(delay / 2 + rand * delay / 2)
+  attempt += 1
+end
+```
+
+A requeued or rate-limited replay must not stop the read loop: the retry runs on a thread that is killed when the socket run ends, so live updates keep flowing meanwhile.
+
+`attach_socket(sender, context = nil)` sends `connect` as the first frame of every socket open: the client id, the `context` when you pass one, and the session credential as `token` when one is set. The session credential is `client.session_token`, separate from the RPC bearer (`auth_token`), and it never goes in the socket URL. A deployment that sets `LUNORA_WS_BEARER` closes a socket whose first frame is not that `connect` with a matching `token` (close code 4003). The only `?token=` a client sends is an admin ticket.
+
+### Token expiry
+
+`detach_socket(close_code, close_reason)` takes the close frame that ended the socket (`nil` for none), marks the client offline, and notifies the `on_token_expired` listeners when the credential needs replacing:
+
+- A `4001` close always notifies.
+- A `4003` close notifies once per credential generation. A new `session_token` starts a new generation. A socket that opened under a credential you have since replaced notifies nothing. A `4003` whose reason is exactly `connect deadline` notifies nothing, because that socket never sent `connect`.
+- A `TOKEN_EXPIRED` error frame notifies, and is not routed to its subscription. An `UNAUTHENTICATED` error frame is routed to its subscription like any other error.
+
+`client.on_token_expired(listener)` returns a handle that unregisters the listener. A listener that raises does not stop the others or the socket read loop.
+
+### Whispers and rooms
+
+`client.whisper_subscribe(topic) { |value| ... }` joins a topic: the first listener sends `whisper_subscribe`, and removing the last one sends `whisper_unsubscribe`. Each attach rejoins every topic after `connect`. `client.whisper(topic, data)` relays `data` to the topic's other members. It is not queued: it returns `false`, and sends nothing, when no socket is attached. `client.connect_room(name) { |message| ... }` joins the topic `room:<name>` and returns a handle whose `send(message)` relays to the room and whose `close` leaves it. A room is never acknowledged, so there is nothing to wait for before sending.
+
+`handle_frame` never raises into your read loop: a frame that is not JSON, or
+JSON not shaped like a server frame, is ignored (a non-integer `cursor` is not
+tracked), and a consumer callback that raises is contained so the others still
+run. A poke applies to each shape whole or not at all — a row that does not
+decode leaves that shape's view and checkpoint untouched and reaches its error
+callback as `WIRE_DECODE_FAILED`. A poke whose `baseCheckpoint` (or epoch) does
+not match where the view is — the server diffed past rows this client never
+applied — empties the view (its callback receives `[]`), skips the ops and sends
+a cold `shape_subscribe` so the server re-seeds it.
+
+`my_poster.call(url, headers, body)` returns `[status, body]`, `body` being the
+parsed JSON response — or the raw text when it is not JSON. A body that is not a
+JSON object raises `Lunora::ApiError` `INTERNAL`, never a `NoMethodError`.
+
+`client.close` rejects every queued write and ends every `stream` enumerator
+once it has yielded what it already received. The client's `inspect` (and so
+`p`/`pp`) never shows the auth token.
 
 ## Optimistic updates and offline writes
 
@@ -67,10 +168,16 @@ client.subscribe("messages:list", { "channel" => "general" }, method(:render))
 outcome = client.submit(
   "messages:send",
   { "channel" => "general", "text" => "hi" },
-  # Layered onto the subscription registered under the same (path, args, shard).
-  # Re-run on every server frame, so derive from `current` rather than closing
-  # over a value.
-  optimistic: ->(current) { [*current, { "text" => "hi", "pending" => true }] },
+  # Names the query the write affects. `optimistic:` is the shorthand for the
+  # narrower case where the write and the subscription share a path and args
+  # (a counter, a document by id) — it patches nothing here, where `send` and
+  # `list` are different functions. Each transform is re-run on every server
+  # frame, so derive from what it is handed rather than closing over a value.
+  optimistic_update: lambda { |store, args|
+    current = store.get_query("messages:list", { "channel" => args["channel"] }) || []
+    store.set_query("messages:list", { "channel" => args["channel"] },
+                    [*current, { "text" => args["text"], "pending" => true }])
+  },
   # Re-checked just before a QUEUED write replays: false drops it instead of
   # replaying a write that can only fail.
   precondition: -> { channel_still_exists?("general") },
@@ -91,6 +198,16 @@ flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
 discard — including one the capacity cap evicts out of a _restored_ queue, which
 has no caller left to tell — reaches `client.on_mutation_settled`.
 
+A write that must never sit on disk — a credential, a one-time token — passes
+`online_only: true`. It is never queued, persisted or replayed: where a normal
+write would be queued, `submit` raises `Lunora::OfflineError` coded
+`OFFLINE_NOT_QUEUED` before any optimistic layer is installed, and its arguments
+never reach the persistence adapter. It does not wait for a flush or queue behind
+pending writes, so it may land before an older queued write to the same document.
+A send that fails with no server reply while the socket is down (a refused
+connection, a DNS failure, a timeout) raises the same `OfflineError`, with the
+transport error as its `cause`.
+
 The durable record holds the **wire** form of the args, so a store that
 serialises (a file, a SQLite text column) round-trips a `WireBigInt`,
 `WireBytes`, `WireDate` or `WireMap` argument unchanged. A restored record whose
@@ -102,9 +219,49 @@ re-queued, never dropped; `FlushReport#retry_after_ms` carries the envelope's
 `data.retryAfterMs`, and a flush inside that window is a no-op that reports the
 time remaining.
 
+A replay is classified the same way whether the write went out alone or in a
+batch: a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
+the rate-limit codes and a refused credential — `UNAUTHORIZED`, `TOKEN_EXPIRED`,
+`UNAUTHENTICATED`, held until a token refresh: nothing flushes on its own when
+`client.auth_token` changes, so call `flush_offline_queue` after setting it, as
+on a reconnect — re-queue; every other code, a
+coded 5xx included, is terminal), a reply with no envelope as transport
+(re-queued). An envelope whose `data` does not decode is still that coded error,
+raised with `data` nil. A 413 is `PAYLOAD_TOO_LARGE` whatever its body: a batch
+splits and retries, and a single write still refused settles rejected with that
+code. A write the server committed whose result this client cannot decode
+settles `committed` with a `Lunora::ResultDecodeError` (code
+`WIRE_DECODE_FAILED`) and no value, and is never replayed; a server that itself
+answers `WIRE_DECODE_FAILED` has refused the write, which settles rejected. Should anything
+unexpected raise out of a flush, every write it had drained but not yet settled
+is put back at the front of the queue before the exception propagates.
+
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
-replays, so a restart cannot push one user's queued writes as another.
+replays, so a restart cannot push one user's queued writes as another. Left
+`nil`, a write is stamped with a `Lunora::TokenStamp` — a digest of
+`client.auth_token` (the reference client's, never the token itself), persisted
+as `{"tokenDigest" => …}` — and `nil` only when there is no token either, so a
+write queued under one token is never sent with another. Under a different
+token it is rejected `OFFLINE_IDENTITY_CHANGED`; with no token at all it is
+held, still queued and persisted and unsettled, in its place in line, until one
+is set. A flush sends each write with the token its identity was checked
+against, so a token set mid-flush applies from the next flush, never to the
+rest of the current one. Setting `identity` is what lets a token refresh keep
+the queue. A record persisted by an earlier build with a `nil` stamp is rejected
+the same way once a token is held, since `nil` then said nothing about whose
+write it was. `identity` may be any string: a token stamp is its own type, so no
+identity, however it is spelled, can match a token's writes, nor a token stamp
+an identity's. Changing `identity` from one set value to another (signing out
+included) drops every subscription's resume cursor and epoch and empties every
+shape view (its callback receives `[]`), and with `identity` unset setting a
+different `auth_token` (or clearing it) does the same, since the token's digest
+is then the identity. Reconnect your socket under the new credential and the
+resubscribe is a cold one.
+
+Ruby strings cannot hold a lone UTF-16 surrogate, so a token digests over the
+UTF-16 code units of its characters; bytes that are not valid in its encoding
+digest as replacement characters instead of raising.
 
 Ruby's `Mutex` is **not reentrant**, so every consumer callback — a transform, a
 `precondition`, a settled listener — runs with the client's lock released. That
@@ -127,6 +284,12 @@ plain values map to JSON directly:
 | `URL`                                  | `Lunora::WireUrl.new("https://…")`                                 |
 
 `decode_wire` returns these same wrappers so values round-trip exactly.
+
+A number off the wire is a float64 whatever its spelling: `decode_wire` turns an
+integer literal past ±(2**53 − 1) — which `JSON.stringify` writes for every
+double in [2**53, 1e21) — into the `Float` `JSON.parse` would read. An `Integer`
+you build yourself past that range is still refused on encode; wrap it in
+`WireBigInt`.
 
 ## Tests
 

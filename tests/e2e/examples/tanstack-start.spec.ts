@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
 /**
@@ -13,11 +14,54 @@ import { expect, test } from "@playwright/test";
  * is the page's own signal that the client is up, so every interaction waits on
  * it rather than on a sleep.
  */
-const waitForLive = async (page: import("@playwright/test").Page): Promise<void> => {
+const waitForLive = async (page: Page): Promise<void> => {
     await expect(page.getByText("live", { exact: true })).toBeVisible();
 };
 
 const uniqueBody = (): string => `ssr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+/**
+ * Everything the pages threw or logged as an error during the current test.
+ *
+ * Module scope is safe here: the examples config runs `workers: 1` with
+ * `fullyParallel: false`, so exactly one test is ever in flight.
+ */
+let pageErrors: string[] = [];
+
+/**
+ * Fail the test on anything a page reports as an error.
+ *
+ * Both assertions below survive a hydration mismatch — the JS-free check reads
+ * the server's HTML, and a live push re-renders whichever tree React ended up
+ * with. So this example ran for a while emitting "Hydration failed because the
+ * server rendered HTML didn't match the client" on every single load, React
+ * discarding the server tree and re-rendering the page from scratch (the exact
+ * opposite of the claim in the header comment), with every test green. An
+ * error is the one signal that tells the two apart, so every page a test opens
+ * is watched.
+ */
+const watchForErrors = (page: Page): Page => {
+    page.on("pageerror", (error) => {
+        pageErrors.push(`pageerror: ${error.message}`);
+    });
+
+    page.on("console", (message) => {
+        if (message.type() === "error") {
+            pageErrors.push(`console.error: ${message.text()}`);
+        }
+    });
+
+    return page;
+};
+
+test.beforeEach(({ page }) => {
+    pageErrors = [];
+    watchForErrors(page);
+});
+
+test.afterEach(() => {
+    expect(pageErrors).toEqual([]);
+});
 
 test("renders the board on the server, before any JavaScript runs", async ({ browser, page }) => {
     const body = uniqueBody();
@@ -42,7 +86,7 @@ test("pushes a new message to an already-open page", async ({ browser, page }) =
     await page.goto("/");
     await waitForLive(page);
 
-    const writer = await browser.newPage();
+    const writer = watchForErrors(await browser.newPage());
     const body = uniqueBody();
 
     await writer.goto("/");

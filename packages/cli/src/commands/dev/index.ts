@@ -1,7 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { API_SPEC_HELP } from "../../util/api-spec";
-import { TARGET_OPTION } from "../../util/deploy-target";
+import TARGET_OPTION from "../../util/deploy-target";
 
 const devCommand: Command = {
     argument: {
@@ -17,11 +17,15 @@ const devCommand: Command = {
         ["lunora dev status", "Report the running dev server (URL, PID, uptime, ready/starting)"],
         ["lunora dev status --json", "Same as JSON — poll `.ready` to gate a dependent step in a task graph"],
         ["lunora dev logs", "Print the captured dev-server log (background runs)"],
-        ["lunora dev --json", "Machine-readable JSON log lines (also LUNORA_LOG_JSON=1)"],
+        ["lunora dev --json", "Stream machine-readable JSON log LINES (a stream, not a --format json document)"],
         ["lunora dev --emit-bindings dev-manifest.json", "Write what this worker needs + where it serves, for a task runner"],
         ["lunora dev --no-studio", "Skip the embedded studio server"],
         ["lunora dev --worker-port 8080", "Use a custom wrangler dev port"],
+        ["lunora dev --inspector-port 9235", "Pin wrangler's devtools inspector port instead of letting it walk up from 9229"],
         ["lunora dev --remote", "Proxy D1/KV/R2 to the deployed worker (also LUNORA_REMOTE=1)"],
+        ["lunora dev --local", "Start no remote proxy session, e.g. in CI where a service's `ai` binding has no credentials"],
+        ["lunora dev --tunnel", "Share the worker on a public *.trycloudflare.com URL (needs cloudflared ≥ 2026.9.3)"],
+        ["lunora dev --tunnel --allow-mail you@example.com", "Same, but visitors must confirm an allowed email with a one-time PIN"],
     ],
     group: "Develop",
     loader: () =>
@@ -29,14 +33,21 @@ const devCommand: Command = {
             return { default: m.execute as CommandExecute<Toolbox> };
         }),
     name: "dev",
-    // KEEP IN SYNC with `daemonArguments` in `./lifecycle.ts`: a new flag that
+    // KEEP IN SYNC with `daemonArguments` in `./daemon-arguments.ts`: a new flag that
     // must reach a `--background` daemon has to be forwarded there explicitly.
     options: [
         { description: `Which API spec(s) codegen emits: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        { description: "Use per-module lazy imports for codegen (opt-in; default eager)", name: "lazy-functions", type: Boolean },
         {
             description: "Write the binding manifest (plus the dev origin) to <file>, for a supervisor that owns the rest of the graph",
             name: "emit-bindings",
             type: String,
+        },
+        {
+            description:
+                "wrangler dev inspector port, for `wrangler dev` only (defaults to `dev.inspector_port` in wrangler.jsonc; unset, wrangler probes upward from 9229 and can take a sibling worker's pinned port)",
+            name: "inspector-port",
+            type: Number,
         },
         { description: "Studio server port (default 6173)", name: "port", type: Number },
         TARGET_OPTION,
@@ -46,7 +57,18 @@ const devCommand: Command = {
             name: "background",
             type: Boolean,
         },
-        { description: "Emit machine-readable JSON log lines (also LUNORA_LOG_JSON=1; auto-enabled for AI agents)", name: "json", type: Boolean },
+        {
+            // Deliberately `--json`, not `--format json`: this selects a streaming
+            // LOG-LINE format for a long-running process, where `--format json`
+            // promises stdout carries exactly one JSON document. `dev status` /
+            // `dev stop` do print one — but they share this command's option
+            // table, and two format flags on one command is worse for a caller
+            // than one flag whose meaning is stated.
+            description:
+                "Machine-readable JSON log lines while the server runs, and a JSON result for `dev status`/`dev stop` (also LUNORA_LOG_JSON=1; auto-enabled for AI agents)",
+            name: "json",
+            type: Boolean,
+        },
         { description: "How many trailing lines `lunora dev logs` prints (default 100, 0 = all)", name: "lines", type: Number },
         // Both halves of each negatable boolean are declared explicitly, the way
         // `codegen`/`deploy` do it. Declaring ONLY the `no-*` name makes cerebro
@@ -64,12 +86,32 @@ const devCommand: Command = {
         { description: "Run codegen on startup and watch for changes (default)", name: "codegen", type: Boolean },
         { description: "Don't run codegen — no watch, no startup generate (or set LUNORA_CODEGEN=0)", name: "no-codegen", type: Boolean },
         { description: "Proxy D1/KV/R2 bindings to the deployed worker (or set LUNORA_REMOTE=1)", name: "remote", type: Boolean },
+        {
+            description:
+                "Pass --local to wrangler dev: no remote proxy session, so an `ai` binding (in the app or a service) cannot stop dev from starting without Cloudflare credentials — it fails when called instead",
+            name: "local",
+            type: Boolean,
+        },
+        {
+            description:
+                "Share the worker through a Cloudflare quick tunnel (*.trycloudflare.com, needs cloudflared ≥ 2026.9.3). PUBLIC unless --allow-mail is given",
+            name: "tunnel",
+            type: Boolean,
+        },
+        {
+            description:
+                "With --tunnel: only these emails get in, after a one-time PIN (passed to cloudflared as --allowed-mail). Repeatable; accepts a comma list and '*@domain'",
+            lazyMultiple: true,
+            name: "allow-mail",
+            type: String,
+        },
     ],
 };
 
 export { devCommand };
 
 export type DevOptions = CreateOptions<{
+    "allow-mail": string[] | undefined;
     "api-spec": string | undefined;
     background: boolean | undefined;
     // Each of `codegen` / `studio` / `worker` is declared TWICE in `options` (the
@@ -79,12 +121,16 @@ export type DevOptions = CreateOptions<{
     // side — every reader treats that as "on" via `!== false`.
     codegen: boolean | undefined;
     "emit-bindings": string | undefined;
+    "inspector-port": number | undefined;
     json: boolean | undefined;
+    "lazy-functions": boolean | undefined;
     lines: number | undefined;
+    local: boolean | undefined;
     port: number | undefined;
     remote: boolean | undefined;
     studio: boolean | undefined;
     target: string | undefined;
+    tunnel: boolean | undefined;
     worker: boolean | undefined;
     "worker-port": number | undefined;
 }>;

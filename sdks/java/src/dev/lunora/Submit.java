@@ -69,6 +69,10 @@ public final class Submit {
      * submitted it is gone, so this event is the ONLY report it produces. It is read from the
      * entry's own {@code liveAwaiter} field at the settle site rather than restated here, so the
      * two cannot desync.
+     *
+     * <p>{@code error} is set on a {@code COMMITTED} event too, in one case: the server committed
+     * the write but its result does not decode. It is then an {@link ApiException} coded {@link
+     * Client#CODE_WIRE_DECODE_FAILED}, and {@code value} is null.
      */
     public record MutationSettled(
             String mutationId,
@@ -132,6 +136,17 @@ public final class Submit {
          */
         public Supplier<Boolean> precondition;
 
+        /**
+         * Never queued, persisted or replayed. Where a normal write would be queued, submit throws
+         * an {@link OfflineException} coded {@link Offline#OFFLINE_NOT_QUEUED} before any
+         * optimistic layer is installed, so the arguments never reach the queue or the persistence
+         * adapter. It does not wait for a queue flush or queue behind pending writes, so it may
+         * overtake them. A transport failure sent directly while the connection is down is refused
+         * the same way, with the transport error as its cause. For a credential or a one-time
+         * token.
+         */
+        public boolean onlineOnly;
+
         /** Reports the eventual verdict on a queued write. */
         public Consumer<MutationSettled> onSettled;
 
@@ -160,6 +175,12 @@ public final class Submit {
 
         public SubmitOptions precondition(Supplier<Boolean> precondition) {
             this.precondition = precondition;
+
+            return this;
+        }
+
+        public SubmitOptions onlineOnly(boolean onlineOnly) {
+            this.onlineOnly = onlineOnly;
 
             return this;
         }
@@ -200,6 +221,16 @@ public final class Submit {
                 throw new OfflineException(Offline.CLIENT_CLOSED, "client is closed");
             }
 
+            queueIt =
+                    client.sender == null
+                            && (client.wasEverConnected
+                                    || client.offlineQueue.queueBeforeFirstConnect);
+
+            // Refused before any layer is installed, so no overlay outlives the call.
+            if (queueIt && options.onlineOnly) {
+                throw notQueued(options.functionPath, null);
+            }
+
             for (PendingLayer layer : pending) {
                 Optimistic.Handle handle =
                         Optimistic.installLayer(
@@ -208,11 +239,6 @@ public final class Submit {
                 confirms.add(handle::confirm);
                 rollbacks.add(handle::rollback);
             }
-
-            queueIt =
-                    client.sender == null
-                            && (client.wasEverConnected
-                                    || client.offlineQueue.queueBeforeFirstConnect);
 
             if (queueIt) {
                 evicted = enqueueWrite(client, options, writeId, confirms, rollbacks);
@@ -227,14 +253,61 @@ public final class Submit {
             return new MutationOutcome(MutationStatus.QUEUED, writeId, null, null);
         }
 
+        // The callbacks above are consumer code, and one may have dropped the socket. An
+        // online-only
+        // write that would now queue is refused here, with its overlays rolled back, rather than
+        // sent
+        // while the shard is down.
+        if (options.onlineOnly) {
+            boolean wouldQueue;
+
+            synchronized (client.lock) {
+                wouldQueue =
+                        client.sender == null
+                                && (client.wasEverConnected
+                                        || client.offlineQueue.queueBeforeFirstConnect);
+            }
+
+            if (wouldQueue) {
+                settleLayers(client, List.of(), rollbacks, null);
+
+                throw notQueued(options.functionPath, null);
+            }
+        }
+
         RpcReply reply;
 
         try {
             reply =
                     client.rpcFull(
-                            options.functionPath, options.args, options.shardKey, writeId, null);
+                            options.functionPath,
+                            options.args,
+                            options.shardKey,
+                            writeId,
+                            null,
+                            client.authToken());
+        } catch (Client.ResultDecodeException undecodable) {
+            // Committed, with a result that will not decode: the overlay confirms like any other
+            // committed write's, and the caller still learns the result is unreadable.
+            settleLayers(client, confirms, List.of(), undecodable.commitCursor);
+
+            throw undecodable;
         } catch (RuntimeException error) {
             settleLayers(client, List.of(), rollbacks, null);
+
+            // An online-only write is never queued, so a transport failure while the shard has no
+            // open connection is refused as the queued path refuses it. A coded reply is the
+            // server's verdict, and an ApiException is the only error carrying one.
+            boolean wireFailure = !(error instanceof ApiException) && isTransient(error);
+            boolean disconnected;
+
+            synchronized (client.lock) {
+                disconnected = client.sender == null;
+            }
+
+            if (options.onlineOnly && wireFailure && disconnected) {
+                throw notQueued(options.functionPath, error);
+            }
 
             throw error;
         }
@@ -267,7 +340,8 @@ public final class Submit {
     static FlushReport flush(Client client, String shardKey) {
         FlushReport report = new FlushReport();
         OfflineQueue queue;
-        String current;
+        Identity current;
+        String token;
         List<QueuedMutation> snapshot;
 
         synchronized (client.lock) {
@@ -283,7 +357,8 @@ public final class Submit {
             }
 
             queue = client.offlineQueue;
-            current = client.identity;
+            current = client.identityFingerprint();
+            token = client.authToken();
             snapshot = queue.items();
         }
 
@@ -302,13 +377,26 @@ public final class Submit {
         }
 
         // Gated against ONE identity snapshot: a flush is a single authenticated burst, so every
-        // write in it necessarily runs under one identity.
+        // write in it runs under one identity — and is SENT with the token snapshotted beside it,
+        // never the one held when its request goes out, or a token swapped mid-flush would carry
+        // the rest of the pass. A write whose owner cannot be told (nobody signed in) is HELD:
+        // back on the queue in its place, still persisted, unsettled.
         List<QueuedMutation> sendable = new ArrayList<>();
+        List<QueuedMutation> held = new ArrayList<>();
         List<Offline.Discarded> mismatched = new ArrayList<>();
 
         for (QueuedMutation item : drained) {
-            if (Offline.identityAllowsReplay(item.identity, current)) {
+            Offline.ReplayVerdict verdict =
+                    Offline.replayIdentityVerdict(item.identity, current, token);
+
+            if (verdict == Offline.ReplayVerdict.MATCH) {
                 sendable.add(item);
+
+                continue;
+            }
+
+            if (verdict == Offline.ReplayVerdict.UNKNOWN) {
+                held.add(item);
 
                 continue;
             }
@@ -320,10 +408,49 @@ public final class Submit {
                             "offline mutation skipped: auth identity changed before replay"));
         }
 
-        settleTerminal(client, queue, mismatched, report);
-        replay(client, queue, encodableOrSettleTerminal(client, queue, sendable, report), report);
+        try {
+            settleTerminal(client, queue, mismatched, report);
+            replay(
+                    client,
+                    queue,
+                    encodableOrSettleTerminal(client, queue, sendable, report),
+                    report,
+                    token);
+        } finally {
+            requeueHeld(client, queue, drained, held, report);
+        }
 
         return report;
+    }
+
+    /**
+     * Puts the held writes back, keeping every unsettled write of this pass in its original place
+     * in line: whatever the replay re-queued is drained back out and re-queued together with the
+     * held writes, in drain order.
+     */
+    private static void requeueHeld(
+            Client client,
+            OfflineQueue queue,
+            List<QueuedMutation> drained,
+            List<QueuedMutation> held,
+            FlushReport report) {
+        if (held.isEmpty()) {
+            return;
+        }
+
+        Set<String> requeued = new HashSet<>(report.requeued);
+
+        synchronized (client.lock) {
+            List<QueuedMutation> back = queue.drain(item -> requeued.contains(item.id));
+
+            back.addAll(held);
+            back.sort(java.util.Comparator.comparingInt(drained::indexOf));
+            queue.requeue(back);
+        }
+
+        for (QueuedMutation item : held) {
+            report.requeued.add(item.id);
+        }
     }
 
     /**
@@ -423,13 +550,66 @@ public final class Submit {
         reportDiscarded(client, discarded);
     }
 
+    /**
+     * Replays the drained writes, and guarantees none is lost: if control leaves the replay by an
+     * exception nothing classified, every drained write that was neither settled nor re-queued goes
+     * back on the FRONT of the queue, in order, for the next flush. A write's verdict is recorded
+     * in {@code report} as soon as it is decided, so the report is exactly the set of writes this
+     * guard must leave alone.
+     */
     private static void replay(
+            Client client,
+            OfflineQueue queue,
+            List<QueuedMutation> sendable,
+            FlushReport report,
+            String token) {
+        boolean completed = false;
+
+        try {
+            replayAll(client, queue, sendable, report, token);
+            completed = true;
+        } finally {
+            if (!completed) {
+                requeueUnsettled(client, queue, sendable, report);
+            }
+        }
+    }
+
+    private static void requeueUnsettled(
             Client client, OfflineQueue queue, List<QueuedMutation> sendable, FlushReport report) {
+        Set<String> handled = new HashSet<>(report.committed);
+
+        handled.addAll(report.rejected);
+        handled.addAll(report.requeued);
+
+        List<QueuedMutation> unsettled = new ArrayList<>();
+
+        for (QueuedMutation item : sendable) {
+            if (!handled.contains(item.id)) {
+                unsettled.add(item);
+            }
+        }
+
+        synchronized (client.lock) {
+            queue.requeue(unsettled);
+        }
+
+        for (QueuedMutation item : unsettled) {
+            report.requeued.add(item.id);
+        }
+    }
+
+    private static void replayAll(
+            Client client,
+            OfflineQueue queue,
+            List<QueuedMutation> sendable,
+            FlushReport report,
+            String token) {
         // A lone write rides the single-call path, which is the proven one. Two or more coalesce
         // into batch round trips — the flaky-reconnect win, where N queued writes cost a handful
         // of hops instead of N.
         if (sendable.size() < 2) {
-            replaySequential(client, queue, sendable, report);
+            replaySequential(client, queue, sendable, report, token);
 
             return;
         }
@@ -440,7 +620,7 @@ public final class Submit {
         for (int index = 0; index < chunks.size(); index++) {
             // Chunks replay sequentially, which is what preserves FIFO across a flush longer than
             // one batch.
-            BatchOutcome outcome = replayBatched(client, queue, chunks.get(index), report);
+            BatchOutcome outcome = replayBatched(client, queue, chunks.get(index), report, token);
 
             toRequeue.addAll(outcome.requeue());
 
@@ -572,7 +752,11 @@ public final class Submit {
 
     /** Replays writes one at a time. FIFO is preserved by the loop itself. */
     private static void replaySequential(
-            Client client, OfflineQueue queue, List<QueuedMutation> sendable, FlushReport report) {
+            Client client,
+            OfflineQueue queue,
+            List<QueuedMutation> sendable,
+            FlushReport report,
+            String token) {
         for (int index = 0; index < sendable.size(); index++) {
             QueuedMutation item = sendable.get(index);
             RpcReply reply;
@@ -584,15 +768,17 @@ public final class Submit {
                                 item.args,
                                 item.shardKey,
                                 item.id,
-                                item.clientId);
+                                item.clientId,
+                                token);
+            } catch (Client.ResultDecodeException undecodable) {
+                // The server COMMITTED it; only the result is unreadable, and a replay can only
+                // return the same one.
+                commit(client, queue, item, null, undecodable.commitCursor, undecodable, report);
+
+                continue;
             } catch (RuntimeException error) {
                 if (!isTransient(error)) {
-                    synchronized (client.lock) {
-                        queue.unpersist(item.id);
-                    }
-
-                    settleRejected(client, item, error);
-                    report.rejected.add(item.id);
+                    reject(client, queue, item, error, report);
 
                     continue;
                 }
@@ -615,13 +801,44 @@ public final class Submit {
                 return;
             }
 
-            synchronized (client.lock) {
-                queue.unpersist(item.id);
-            }
-
-            settleCommitted(client, item, reply.result(), reply.commitCursor());
-            report.committed.add(item.id);
+            commit(client, queue, item, reply.result(), reply.commitCursor(), null, report);
         }
+    }
+
+    /**
+     * Settles one replayed write committed. Its verdict is decided before this is called; the
+     * durable record goes next and the settle last — and the report records it before the settle
+     * runs any consumer code, so {@link #replay}'s guard never re-queues a write that committed.
+     */
+    private static void commit(
+            Client client,
+            OfflineQueue queue,
+            QueuedMutation item,
+            Object value,
+            Long commitCursor,
+            RuntimeException error,
+            FlushReport report) {
+        synchronized (client.lock) {
+            queue.unpersist(item.id);
+        }
+
+        report.committed.add(item.id);
+        settleCommitted(client, item, value, commitCursor, error);
+    }
+
+    /** Settles one replayed write rejected: record removed, reported, then settled. */
+    private static void reject(
+            Client client,
+            OfflineQueue queue,
+            QueuedMutation item,
+            RuntimeException error,
+            FlushReport report) {
+        synchronized (client.lock) {
+            queue.unpersist(item.id);
+        }
+
+        report.rejected.add(item.id);
+        settleRejected(client, item, error);
     }
 
     /**
@@ -636,7 +853,11 @@ public final class Submit {
      * cannot land twice in the queue.
      */
     private static BatchOutcome replayBatched(
-            Client client, OfflineQueue queue, List<QueuedMutation> items, FlushReport report) {
+            Client client,
+            OfflineQueue queue,
+            List<QueuedMutation> items,
+            FlushReport report,
+            String token) {
         List<Object> calls = new ArrayList<>();
 
         for (int index = 0; index < items.size(); index++) {
@@ -660,34 +881,36 @@ public final class Submit {
             calls.add(call);
         }
 
-        Map<String, Object> body;
+        Client.BatchReply reply;
 
         try {
-            body = client.rpcBatch(calls);
+            reply = client.rpcBatch(calls, token);
         } catch (RuntimeException error) {
             // Transport failure — nothing committed, so retry everything.
             return new BatchOutcome(new ArrayList<>(items), true);
         }
 
+        Map<String, Object> body = reply.body();
+
         if (body.get("results") instanceof List<?> results) {
             return new BatchOutcome(settleBatchSlots(client, queue, items, results, report), false);
         }
 
-        // No per-slot results. A coded envelope is a verdict on the WHOLE batch — a bad request,
-        // an authorization denial — and therefore terminal for every entry; anything else is
-        // transport, and transient.
-        if (!(body.get("error") instanceof Map<?, ?> envelope)) {
-            return new BatchOutcome(new ArrayList<>(items), true);
-        }
-
-        ApiException error = batchSlotError(envelope, "batch rejected");
+        // No per-slot results, so the reply is about the WHOLE batch, and it is classified exactly
+        // as the single-call path classifies a lone write's reply: a coded envelope by its code
+        // alone, an envelope-less one by its status (transport, except a 413).
+        ApiException error =
+                body.get("error") instanceof Map<?, ?> envelope
+                        ? batchSlotError(envelope, "batch rejected")
+                        : Client.envelopeless(reply.status());
 
         // The body was too big, not wrong — every entry in it would have committed alone. Halve and
         // retry; the estimate the chunker used cannot see the framing the worker actually measured,
         // and only the answer can.
         if (Offline.PAYLOAD_TOO_LARGE.equals(error.code) && items.size() > 1) {
             int middle = items.size() / 2;
-            BatchOutcome left = replayBatched(client, queue, items.subList(0, middle), report);
+            BatchOutcome left =
+                    replayBatched(client, queue, items.subList(0, middle), report, token);
 
             if (left.stop()) {
                 List<QueuedMutation> requeue = new ArrayList<>(left.requeue());
@@ -698,7 +921,8 @@ public final class Submit {
             }
 
             BatchOutcome right =
-                    replayBatched(client, queue, items.subList(middle, items.size()), report);
+                    replayBatched(
+                            client, queue, items.subList(middle, items.size()), report, token);
             List<QueuedMutation> requeue = new ArrayList<>(left.requeue());
 
             requeue.addAll(right.requeue());
@@ -715,12 +939,7 @@ public final class Submit {
         }
 
         for (QueuedMutation item : items) {
-            synchronized (client.lock) {
-                queue.unpersist(item.id);
-            }
-
-            settleRejected(client, item, error);
-            report.rejected.add(item.id);
+            reject(client, queue, item, error, report);
         }
 
         return new BatchOutcome(new ArrayList<>(), false);
@@ -762,6 +981,18 @@ public final class Submit {
                 continue;
             }
 
+            if (slot.containsKey("error") && !(slot.get("error") instanceof Map<?, ?>)) {
+                // An `error` key holding a string, a null, an array or a number is no envelope
+                // (§4.2), and a slot carries no HTTP status of its own to classify it by — so
+                // nothing readable came back about this entry, which is exactly the position of a
+                // slot the server never returned. §4.3 retries that one. Falling through to the
+                // commit branch below settled a durable write COMMITTED with a null result and
+                // un-persisted it.
+                requeue.add(item);
+
+                continue;
+            }
+
             if (slot.get("error") instanceof Map<?, ?> envelope) {
                 ApiException error = batchSlotError(envelope, "request failed");
 
@@ -777,25 +1008,26 @@ public final class Submit {
                     continue;
                 }
 
-                synchronized (client.lock) {
-                    queue.unpersist(item.id);
-                }
-
-                settleRejected(client, item, error);
-                report.rejected.add(item.id);
+                reject(client, queue, item, error, report);
 
                 continue;
             }
 
             Long cursor =
                     slot.get("commitCursor") instanceof Number number ? number.longValue() : null;
+            Object value = null;
+            RuntimeException undecodable = null;
 
-            synchronized (client.lock) {
-                queue.unpersist(item.id);
+            // Decoded FIRST, inside a guard: the outcome is decided before the durable record goes,
+            // and one bad slot never aborts the loop and strands every slot after it. The server
+            // committed this write either way, so an unreadable result settles it committed.
+            try {
+                value = Wire.decode(slot.get("result"));
+            } catch (RuntimeException error) {
+                undecodable = new Client.ResultDecodeException(error, cursor);
             }
 
-            settleCommitted(client, item, Wire.decode(slot.get("result")), cursor);
-            report.committed.add(item.id);
+            commit(client, queue, item, value, cursor, undecodable, report);
         }
 
         return requeue;
@@ -809,12 +1041,23 @@ public final class Submit {
         return new ApiException(
                 envelope.get("code") instanceof String code ? code : "INTERNAL",
                 envelope.get("message") instanceof String message ? message : fallback,
-                envelope.get("data") == null ? null : Wire.decode(envelope.get("data")),
+                Client.decodeErrorData(envelope.get("data")),
                 // The HTTP status is not in scope on the batch path — `rpcBatch` returns the parsed
                 // body only — so a batch envelope is classified by its CODE alone. That is enough:
                 // an envelope-less non-2xx never reaches here (it parses to no `results` and no
                 // `error`, which the caller already treats as transport).
                 false);
+    }
+
+    /** The refusal an online-only write gets when it cannot go out over a live connection. */
+    private static OfflineException notQueued(String functionPath, Throwable cause) {
+        return new OfflineException(
+                Offline.OFFLINE_NOT_QUEUED,
+                "'"
+                        + functionPath
+                        + "' is online-only and the connection is not live, so it was not"
+                        + " queued",
+                cause);
     }
 
     /**
@@ -828,7 +1071,8 @@ public final class Submit {
         if (error instanceof ApiException api) {
             return api.transientFailure
                     || Offline.TRANSIENT_ERROR_CODES.contains(api.code)
-                    || Offline.RATE_LIMIT_ERROR_CODES.contains(api.code);
+                    || Offline.RATE_LIMIT_ERROR_CODES.contains(api.code)
+                    || Offline.AUTH_REPLAY_ERROR_CODES.contains(api.code);
         }
 
         return !(error instanceof OfflineException) && !(error instanceof Wire.WireFormatException);
@@ -919,8 +1163,7 @@ public final class Submit {
         // than whatever a later session minted.
         entry.clientId = client.clientId;
         // Bound at enqueue time, so the write can only ever replay as whoever made it.
-        entry.identity =
-                client.identity == null ? Identity.signedOut() : Identity.of(client.identity);
+        entry.identity = client.identityFingerprint();
         entry.liveAwaiter = true;
         entry.precondition = options.precondition;
         entry.onSettled = options.onSettled;
@@ -950,7 +1193,11 @@ public final class Submit {
      * the confirming frame lands.
      */
     private static void settleCommitted(
-            Client client, QueuedMutation item, Object value, Long commitCursor) {
+            Client client,
+            QueuedMutation item,
+            Object value,
+            Long commitCursor,
+            RuntimeException error) {
         if (item.onCommit != null) {
             item.onCommit.accept(commitCursor);
         }
@@ -958,7 +1205,7 @@ public final class Submit {
         emitSettled(
                 client,
                 new MutationSettled(
-                        item.id, MutationStatus.COMMITTED, value, null, item.liveAwaiter),
+                        item.id, MutationStatus.COMMITTED, value, error, item.liveAwaiter),
                 item.onSettled);
     }
 

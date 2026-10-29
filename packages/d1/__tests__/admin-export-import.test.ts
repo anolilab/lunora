@@ -47,15 +47,16 @@ const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike 
  * the inner one would refuse — `optional(string).parse(null)` throws, which is
  * exactly what made an unset optional column unrestorable.
  */
-const optional = (inner: ValidatorLike): ValidatorLike =>
-    ({
+const optional = (inner: ValidatorLike): ValidatorLike => {
+    return {
         _meta: { column: { notNull: true }, inner },
         kind: "optional",
 
         parse(value: unknown) {
             return value === undefined ? value : inner.parse?.(value);
         },
-    }) as unknown as ValidatorLike;
+    };
+};
 
 // The D1 writer is the global-tables view; only the `.global()` table is in
 // its schema (the DO ctx-db owns shard-local tables). The import helper still
@@ -216,6 +217,22 @@ describe("d1 admin export/import globals", () => {
             expect(result.conflicts).toBe(0);
         });
 
+        it("a dry run reports the shape error and writes none of the rows, the good one included", async () => {
+            expect.assertions(3);
+
+            const result = await importGlobalRows(writer, schema, {
+                dryRun: true,
+                rows: [
+                    { doc: { _id: "s1", name: "theme", value: "dark" }, table: "settings" },
+                    { doc: { _id: "s2", name: 42, value: "en" }, table: "settings" },
+                ],
+            });
+
+            expect(result.errors).toHaveLength(1);
+            expect(result.errors[0]).toMatchObject({ code: "VALIDATION_ERROR", line: 2, table: "settings" });
+            await expect(writer.get("settings", "s1")).resolves.toBeNull();
+        });
+
         it("reports a row with no usable `table` as BAD_ROW rather than skipping it", async () => {
             expect.assertions(3);
 
@@ -290,6 +307,25 @@ describe("d1 admin export/import globals", () => {
             });
         });
 
+        it("rejects a malformed _id or _creationTime instead of inserting the row under a new identity", async () => {
+            // Dropped and regenerated, a bad _id would restore the row as a different document and still report success.
+            expect.assertions(3);
+
+            const result = await importGlobalRows(writer, schema, {
+                rows: [
+                    { doc: { _id: 42, name: "ok", value: "x" }, table: "settings" },
+                    { doc: { _creationTime: "yesterday", _id: "s2", name: "ok2", value: "y" }, table: "settings" },
+                ],
+            });
+
+            expect(result.inserted).toEqual({});
+            expect(result.errors.map((error) => error.message)).toStrictEqual([
+                'field "_id": must be a non-empty string',
+                'field "_creationTime": must be a finite number',
+            ]);
+            expect(result.errors.every((error) => error.code === "VALIDATION_ERROR")).toBe(true);
+        });
+
         it("rejects a prototype-named field the table does not declare", async () => {
             expect.assertions(2);
 
@@ -327,6 +363,30 @@ describe("d1 admin export/import globals", () => {
             expect(result.errors.map((error) => error.line)).toStrictEqual([5, 6]);
         });
 
+        it("refuses an _id another global table holds, probing tables the import has not written yet", async () => {
+            expect.assertions(2);
+
+            // Neither table exists yet: the import provisions both before it asks them who owns an id.
+            const fresh = createD1Exec();
+            const twoTables: SchemaLike = {
+                tables: {
+                    flags: { indexes: [], shape: { label: col("string") }, shardMode: { kind: "global" } as never },
+                    notes: { indexes: [], shape: { label: col("string") }, shardMode: { kind: "global" } as never },
+                },
+            };
+
+            try {
+                const freshWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema: twoTables });
+                const first = await importGlobalRows(freshWriter, twoTables, { exec: fresh.exec, rows: [{ doc: { _id: "n1", label: "a" }, table: "notes" }] });
+                const second = await importGlobalRows(freshWriter, twoTables, { exec: fresh.exec, rows: [{ doc: { _id: "n1", label: "b" }, table: "flags" }] });
+
+                expect(first).toMatchObject({ errors: [], inserted: { notes: 1 } });
+                expect(second).toMatchObject({ errors: [{ code: "ID_COLLISION", line: 1, table: "flags" }], inserted: {} });
+            } finally {
+                fresh.close();
+            }
+        });
+
         it("counts _id collisions as conflicts and skips them", async () => {
             expect.assertions(3);
 
@@ -342,9 +402,32 @@ describe("d1 admin export/import globals", () => {
             expect(result.conflicts).toBe(1);
             expect(result.inserted).toEqual({ settings: 1 });
 
-            const reloaded = await writer.get("s1");
+            const reloaded = await writer.get("settings", "s1");
 
             expect(reloaded).toMatchObject({ value: "dark" });
+        });
+
+        it('overwrites an existing _id under onConflict: "replace" (a rollback after the source changed)', async () => {
+            expect.assertions(3);
+
+            await writer.insert("settings", { _id: "s1", name: "theme", value: "copied" }, { allowExplicitId: true });
+
+            const result = await importGlobalRows(writer, schema, {
+                exec: harness.exec,
+                onConflict: "replace",
+                rows: [{ doc: { _creationTime: 42, _id: "s1", name: "theme", value: "changed on the source" }, table: "settings" }],
+            });
+
+            expect(result).toMatchObject({ conflicts: 0, errors: [], inserted: {}, replaced: 1 });
+            await expect(writer.get("settings", "s1")).resolves.toMatchObject({ _creationTime: 42, value: "changed on the source" });
+
+            // The default stays insert-only: the same row is a conflict, left as it is.
+            const again = await importGlobalRows(writer, schema, {
+                exec: harness.exec,
+                rows: [{ doc: { _id: "s1", name: "theme", value: "third" }, table: "settings" }],
+            });
+
+            expect(again).toMatchObject({ conflicts: 1, replaced: 0 });
         });
 
         it("roundtrip: a bigint / bytes row survives JSON egress and comes back real", async () => {
@@ -413,7 +496,7 @@ describe("d1 admin export/import globals", () => {
 
             expect(result.errors).toEqual([]);
 
-            const reload = await freshWriter.get("l1");
+            const reload = await freshWriter.get("ledger", "l1");
 
             expect(reload?.["cents"]).toBe(9_007_199_254_740_993n);
             expect([...new Uint8Array(reload?.["blob"] as ArrayBuffer)]).toStrictEqual([7, 8, 9]);
@@ -457,7 +540,7 @@ describe("d1 admin export/import globals", () => {
             expect(result.inserted).toEqual({ settings: 2 });
             expect(result.errors).toEqual([]);
 
-            const reload = await freshWriter.get("s1");
+            const reload = await freshWriter.get("settings", "s1");
 
             expect(reload).toMatchObject({ name: "theme", value: "dark" });
 
@@ -505,7 +588,7 @@ describe("d1 admin export/import globals", () => {
 
             expect(result.errors).toEqual([]);
             expect(result.inserted).toEqual({ settings: 1 });
-            await expect(freshWriter.get("s1")).resolves.toMatchObject({ name: "theme", value: "dark" });
+            await expect(freshWriter.get("settings", "s1")).resolves.toMatchObject({ name: "theme", value: "dark" });
 
             fresh.close();
         });
@@ -522,7 +605,7 @@ describe("d1 admin export/import globals", () => {
             expect(result.errors).toEqual([]);
             expect(result.inserted).toEqual({ settings: 1 });
             // Restored as the absence it was, not as a null.
-            await expect(writer.get("s1")).resolves.not.toHaveProperty("nickname");
+            await expect(writer.get("settings", "s1")).resolves.not.toHaveProperty("nickname");
         });
 
         it("keeps a nullable column's null through the round trip", async () => {
@@ -557,7 +640,7 @@ describe("d1 admin export/import globals", () => {
 
             expect(result.errors).toEqual([]);
 
-            const restored = await freshWriter.get("s1");
+            const restored = await freshWriter.get("settings", "s1");
 
             expect(restored?.["note"]).toBeNull();
 

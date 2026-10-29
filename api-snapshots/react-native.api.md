@@ -19,6 +19,10 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
+### `AgentApprovalGrant` (interface)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
 ### `AgentChatMessage` (interface)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
@@ -105,15 +109,15 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `HttpStreamArgsOf` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `HttpStreamChunkOf` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `HttpStreamRef` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `ListPresentReference` (type)
 
@@ -137,7 +141,7 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `LunoraQueryOptions` (interface)
 
-Re-exported from `@lunora/react` — signature tracked at its source.
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `MutationHook` (interface)
 
@@ -178,6 +182,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `PaginationStatus` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `PendingApproval` (interface)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `Preloaded` (interface)
 
@@ -224,6 +232,18 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ### `UseAgentApi` (interface)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `UseAgentApprovalsApi` (interface)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `UseAgentApprovalsOptions` (interface)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `UseAgentApprovalsResult` (interface)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
@@ -301,11 +321,11 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ### `UseHttpStreamOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `UseHttpStreamResult` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `UseImpersonateResult` (interface)
 
@@ -316,6 +336,14 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `UseInfiniteQueryResult` (interface)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `UseLiveTopicOptions` (type)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `UseLiveTopicResult` (interface)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
@@ -469,13 +497,17 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `lunoraQueryOptions` (const)
 
-Re-exported from `@lunora/react` — signature tracked at its source.
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `useAction` (const)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `useAgent` (const)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `useAgentApprovals` (const)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
@@ -533,13 +565,17 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `useHttpStream` (const)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `useImpersonate` (const)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `useInfiniteQuery` (const)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `useLiveTopic` (function)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
@@ -599,6 +635,10 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 Re-exported from `@lunora/react` — signature tracked at its source.
 
+### `useSuspenseQuery` (const)
+
+Re-exported from `@lunora/react` — signature tracked at its source.
+
 ### `useTusUpload` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
@@ -610,6 +650,12 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `useVoiceAgent` (const)
 
 Re-exported from `@lunora/react` — signature tracked at its source.
+
+### `withoutAmbientCookies` (const)
+
+```ts
+const withoutAmbientCookies: (fetchImpl: typeof fetch) => typeof fetch;
+```
 
 ## `@lunora/react-native/auth`
 

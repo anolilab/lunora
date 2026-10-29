@@ -102,10 +102,13 @@ UI strings (`locale` / `i18n` props).
 
 Everything that reads or shapes stored state.
 
-- **Data**: _Browse and edit rows across your shard and global tables._ A
-  full-height table editor: pick a table, page through rows (table or JSON view),
-  filter, and (when `dataEditable` is on) insert, patch, and delete. It covers
-  both shard tables and `.global()` (D1-backed) tables. Three extra tools:
+- **Data**: _Browse rows across your shard and global tables, and edit the shard
+  ones._ A full-height table editor: pick a table, page through rows (table or
+  JSON view), filter, and — on **shard** tables, when `dataEditable` is on —
+  insert, patch, and delete. `.global()` (D1-backed) tables are **read-only
+  here**: the browser offers no write affordances for them, and the shard would
+  refuse one anyway (`GLOBAL_TABLE_NOT_EDITABLE`) because a global table is
+  edited through D1, not through the shard that reads it. Three extra tools:
     - **Mask preview**: a "Mask sensitive columns" toggle that previews
       redact/hash/custom output client-side and flags masked columns in the grid
       header, mirroring what [data masking](/docs/concepts/masking) does on the
@@ -131,7 +134,7 @@ Everything that reads or shapes stored state.
   data-migration run-state and kick one off.
 - **Vectors**: _Browse Vectorize indexes and run similarity searches._
 - **Time Travel**: _Restore a shard to a point in the last 30 days_ (PITR).
-- **Export / Import**: _Export a shard to NDJSON, or import rows from it._
+- **Export / Import**: _Export a shard to NDJSON, or import NDJSON rows, or a CSV file into a table you pick. Rows whose `_id` already exists are left unchanged and counted as conflicts unless you tick "Overwrite"._
 
 ## Functions
 
@@ -144,12 +147,13 @@ Everything that reads or shapes stored state.
 - **Workflows**: _Inspect declared Cloudflare Workflows and their bindings._
   Lists every [durable workflow](/docs/packages/workflow) with its export name,
   generated class, binding, and deployed name; starts an instance from a
-  JSON-params form; and tracks instances with their live status (queued /
+  JSON-params form; sends an event (type plus JSON payload) to a waiting
+  instance, validated against the app's `defineWorkflowEvent` declaration of that
+  type, so an undeclared type or a payload that does not parse is refused before
+  anything is sent; and tracks instances with their live status (queued /
   running / complete / errored) and output.
 - **Queues**: _Inspect declared Cloudflare Queues: their producer bindings,
   consumer mode, and dead-letter queue_ ([`@lunora/queue`](/docs/packages/queue)).
-- **Containers**: _Live Cloudflare Containers: current lifecycle state per
-  container from the log stream_ ([`@lunora/container`](/docs/packages/container)).
 
 ## Auth
 
@@ -190,7 +194,8 @@ Operational streams and per-shard signal from a running deployment.
 - **Metrics**: _Per-shard health and aggregate metrics_ (request/error counts,
   uptime, DB size, reactive-cache hit rate).
 - **Analytics**: _Usage and latency from Analytics Engine_ (request volume,
-  p50/p95, and hot shards).
+  p50/p95, and hot shards). Needs the `analyticsSqlQuery` prop: see
+  [Studio usage panels](/docs/packages/bindings#studio-usage-panels).
 - **Health**: _At-a-glance connection, error, and shard signals._
 - **Deployment health**: _Live liveness, readiness, and per-binding health_ from
   the deployment's `/_lunora/health` endpoint.
@@ -212,12 +217,18 @@ schema, functions, and runtime signal.
 ## Operations
 
 The optional package-backed operational pages: scheduling, email, log
-forwarding, payments, and feature flags.
+forwarding, push notifications, payments, and feature flags.
 
 - **Scheduled**: _Inspect and cancel scheduled jobs_ ([`@lunora/scheduler`](/docs/packages/scheduler)).
 - **Mail**: _Email your app sent, captured in dev_ ([`@lunora/mail`](/docs/packages/mail)).
 - **Log drains**: _Forward logs to Logpush, Tail Workers, or a webhook
   collector._
+- **Notifications**: _The registered push devices and their last delivery
+  outcome_ ([`@lunora/notify`](/docs/packages/notify)). One row per device —
+  kind, target endpoint, owning user, last register/send touch, and any delivery
+  error. Delivery secrets are stripped server-side. The store is a worker option
+  rather than shard state, so this page is a one-shot read with a manual
+  Refresh.
 - **Payments**: _Synced customers, subscriptions, and webhook events._
 - **Flags**: _Inspect feature flags and their live evaluation under a
   targeting context_ ([`@lunora/flags`](/docs/packages/flags)).
@@ -234,12 +245,28 @@ The studio reaches the backend two ways: reserved `__lunora_admin__:*` RPCs that
 admin-gated worker endpoints under `/_lunora/admin/*` for things that live
 outside the shard (scheduler, storage, functions, global tables, auth).
 
-**Both are disabled unless the server sets `LUNORA_ADMIN_TOKEN`**, and the client
-must present a matching `Authorization: Bearer` token. The components issue no
-credentials of their own. Configure the client's auth token at the host.
+The two planes are **not** gated the same way, and the difference matters when
+you deploy behind an identity provider:
+
+- The **`__lunora_admin__:*` RPCs are token-only.** `ShardDO` compares a bearer
+  against `LUNORA_ADMIN_TOKEN` and nothing else, so with no token set they are
+  disabled outright — there is no second way in.
+- The **`/_lunora/admin/*` worker endpoints** accept that same bearer _or_ a
+  per-request grant from [`adminGate`](/docs/packages/cloudflare-access) — the
+  seam `accessAdminGate(...)` plugs Cloudflare Access into. An Access-authorized
+  admin carries a `Cf-Access-Jwt-Assertion`, not a bearer, so this plane opens
+  with no token at all.
+
+Running Access alone therefore leaves the shard-served pages (data, schema,
+metrics, logs, migrations, export) dark: the worker still needs a static
+`LUNORA_ADMIN_TOKEN` to reach `ShardDO` — it is also what the cross-shard
+orchestrators mint into their forwarded calls for an Access-only request.
+
+The components issue no credentials of their own. Configure the client's auth
+token at the host.
 
 ```ts
-// worker entry — every admin surface is gated by adminToken
+// worker entry — token-only, so both planes are gated by adminToken
 createWorker({
     shardDO: env.SHARD,
     adminToken: env.LUNORA_ADMIN_TOKEN,
@@ -288,3 +315,23 @@ only ever hidden once the worker positively reports its feature as unused, so th
 worst case is an extra empty page, never a missing working one. No configuration
 is required; re-run codegen (`lunora dev` does this on save) after adding or
 removing a package and the nav updates itself.
+
+## Host capability gating
+
+A second gate sits beside the usage flags: whether the worker's _host_ can serve
+a page at all. Codegen knows the deploy target (`target` in `lunora.config.*`)
+and adds it to the same `studioFeatures` payload, together with the
+`@lunora/platform` capabilities that target's matrix rates `unsupported`. So a
+studio hosted apart from the worker still learns which host it is talking to.
+On a Node worker, for example, Time Travel (point-in-time recovery), Agents,
+Vectors, Containers, Analytics and Mail are backed by capabilities that host
+does not have.
+
+Such a page stays in the nav, dimmed, with a one-line reason as its tooltip
+("Point-in-time recovery is not supported on Node."). It is left out of the ⌘K
+palette, and its URL renders that reason instead of the panel, so none of the
+panel's admin calls are made. Unlike the usage gate, this one **fails closed**
+while the payload is in flight: a capability-gated page shows a loading skeleton
+until the worker answers, rather than mounting a panel that calls an op the host
+cannot answer. A worker that reports no target (an unregistered one, or one
+built before the field existed) gets no capability gating at all.

@@ -1,11 +1,14 @@
 import type { Expression, Node as TsNode, ObjectLiteralExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
+import { globalTtlMessage } from "../../../../../../shared/global-ttl";
+import { isInternalTableName } from "../../../../../../shared/internal-table-name";
 import { diagnosticAt } from "../../../diagnostics";
 import type {
     ExternalSourceIR,
     GeoIndexIR,
     IndexIR,
+    KeyedRelationIR,
     RankIndexIR,
     RankSortKeyIR,
     RelationIR,
@@ -16,98 +19,74 @@ import type {
     VectorIndexIR,
 } from "../../../ir";
 import { parseObjectShape, resolveObjectLiteral } from "../../../parse-validator";
-import {
-    asMetric,
-    getBooleanProperty,
-    getNumberProperty,
-    getStringArrayProperty,
-    getStringProperty,
-    indexNameOf,
-    stringArrayPropertyOf,
-    stripQuotes,
-} from "./properties";
+import { RESERVED_JS_WORDS } from "../../../reserved-words";
+import { findObjectProperty, propertyKeyName } from "../../ast";
+import { asMetric, getBooleanProperty, getNumberProperty, getStringArrayProperty, getStringProperty, indexNameOf, stringArrayPropertyOf } from "./properties";
 
 const ON_DELETE_ACTIONS = new Set(["cascade", "restrict", "set null"]);
 
 /**
- * Table names that collide with members of `ctx.db` (the typed reader/writer the
- * generated `_generated/server.ts` widens with the per-table facade). A table so
- * named would shadow the corresponding `ctx.db.<member>` and silently corrupt
- * the emitted type, so codegen rejects it up front with a clear diagnostic.
- */
-const RESERVED_TABLE_NAMES = new Set(["delete", "get", "insert", "normalizeId", "patch", "query", "replace", "system"]);
-
-/**
- * ES reserved words. `emit.ts` interpolates the table name raw into a bare
- * `const ${name} = sqliteTable(...)` binding (and into `.references((): AnySQLiteColumn => ${name}._id)`
- * for every FK) — a table named after a keyword produces a syntax error in the
- * generated Drizzle module, not a type error, so this must be rejected at
- * discovery time. Kept as a separate set from `RESERVED_TABLE_NAMES`: that one
- * is about `ctx.db` member shadowing, this one is about generated-code syntax.
- * If `emit.ts` ever stops emitting table names as bare `const` bindings, this
- * check becomes unnecessary.
+ * Every member of `@lunora/shard-engine`'s `DatabaseWriterLike` — the writer the
+ * generated `_generated/shard.ts` widens with the per-table facade.
  *
- * Scope is "illegal as a `const` binding in an ES module", which is wider than
- * the unconditional keyword list: `await` and `yield` are reserved only in a
- * module / strict-mode context, and `eval` / `arguments` are not reserved words
- * at all yet `const eval = …` is still a SyntaxError under strict mode (which an
- * ES module always is). All four fail identically in the emitted Drizzle module.
+ * The facade is assigned onto the writer ITSELF
+ * (`facade[<table>] = bindTableFacade(db, <table>)`), so a table whose name
+ * matches a member replaces that method with a `FacadeEntry` at runtime: every
+ * flat `ctx.db.<member>(...)` call then throws "is not a function". Codegen
+ * rejects such a name up front instead.
+ *
+ * The list is restated here rather than derived, because codegen must not take a
+ * runtime dependency on the engine (and interface members are erased anyway).
+ * `__tests__/discover/reserved-table-names.test.ts` parses `DatabaseWriterLike`
+ * from source and fails when the two diverge — the drift is the thing gated, and
+ * it went unnoticed long enough for twenty-plus members to accumulate unguarded.
  */
-const RESERVED_JS_WORDS = new Set([
-    "arguments",
-    "await",
-    "break",
-    "case",
-    "catch",
-    "class",
-    "const",
-    "continue",
-    "debugger",
-    "default",
+const RESERVED_TABLE_NAMES = new Set([
+    "aggregate",
+    "asId",
+    "assertPatchAllowed",
+    "cdcChangedTables",
+    "count",
     "delete",
-    "do",
-    "else",
-    "enum",
-    "eval",
-    "export",
-    "extends",
-    "false",
-    "finally",
-    "for",
-    "function",
-    "if",
-    "implements",
-    "import",
-    "in",
-    "instanceof",
-    "interface",
-    "let",
-    "new",
-    "null",
-    "package",
-    "private",
-    "protected",
-    "public",
-    "return",
-    "static",
-    "super",
-    "switch",
-    "this",
-    "throw",
-    "true",
-    "try",
-    "typeof",
-    "var",
-    "void",
-    "while",
-    "with",
-    "yield",
+    "deleteAll",
+    "deleteMany",
+    "deleteRereadTables",
+    "deleteWhere",
+    "explain",
+    "findFirst",
+    "findFirstOrThrow",
+    "findMany",
+    "get",
+    "groupBy",
+    "insert",
+    "insertMany",
+    "insertManyUnsafe",
+    "inTransaction",
+    "lookupById",
+    "normalizeId",
+    "patch",
+    "patchIf",
+    "patchMany",
+    "patchWhere",
+    "query",
+    "rank",
+    "rankBefore",
+    "rankPage",
+    "rankPageRows",
+    "related",
+    "relationEdges",
+    "relationWrites",
+    "replace",
+    "restore",
+    "softDeleteFields",
+    "system",
+    "wipeShard",
 ]);
 
 /**
  * Table names are interpolated raw into generated type names (`Doc_${name}`)
  * and unquoted property keys — they must be JS identifiers. Must stay in
- * sync with `IDENTIFIER_RE` in `emit.ts` (the emit-side E1 gate is
+ * sync with `IDENTIFIER_RE` in `emit/shared.ts` (the emit-side E1 gate is
  * defense-in-depth behind this check).
  */
 const TABLE_NAME_IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
@@ -119,32 +98,37 @@ const TABLE_NAME_IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
  * offending declaration.
  */
 const assertTableNameAllowed = (name: string, node: Node): void => {
-    const unquoted = stripQuotes(name);
-
-    if (RESERVED_TABLE_NAMES.has(unquoted)) {
+    if (RESERVED_TABLE_NAMES.has(name)) {
         throw diagnosticAt(
             node,
-            `table name "${unquoted}" is reserved — it collides with a \`ctx.db\` member (one of ${[...RESERVED_TABLE_NAMES].map((reserved) => `"${reserved}"`).join(", ")}). Rename the table.`,
+            `table name "${name}" is reserved — the generated shard binds each table's facade onto the same object that carries \`ctx.db\`'s own members, so this table would overwrite \`ctx.db.${name}\` and every use of it would break. Rename the table.`,
         );
     }
 
-    if (RESERVED_JS_WORDS.has(unquoted)) {
+    if (RESERVED_JS_WORDS.has(name)) {
         throw diagnosticAt(
             node,
-            `table name "${unquoted}" is a reserved JavaScript word — codegen interpolates table names into a bare \`const ${unquoted} = sqliteTable(...)\` binding in the generated Drizzle module, which is a syntax error for a keyword. Rename the table.`,
+            `table name "${name}" is a reserved JavaScript word — codegen interpolates table names into a bare \`const ${name} = sqliteTable(...)\` binding in the generated Drizzle module, which is a syntax error for a keyword. Rename the table.`,
         );
     }
 
-    if (!TABLE_NAME_IDENTIFIER_RE.test(unquoted)) {
+    if (!TABLE_NAME_IDENTIFIER_RE.test(name)) {
         throw diagnosticAt(
             node,
-            `table name ${JSON.stringify(unquoted)} is not a valid JS identifier — table names are used in generated type names (Doc_<name>) and must match [A-Za-z_$][A-Za-z0-9_$]*. Rename the table.`,
+            `table name ${JSON.stringify(name)} is not a valid JS identifier — table names are used in generated type names (Doc_<name>) and must match [A-Za-z_$][A-Za-z0-9_$]*. Rename the table.`,
+        );
+    }
+
+    if (isInternalTableName(name)) {
+        throw diagnosticAt(
+            node,
+            `table name ${JSON.stringify(name)} is reserved for framework tables — a leading \`__\` and the \`__agg_\`/\`__rank_\`/\`__geo_\`/\`__fts_\` infixes name Lunora's own bookkeeping and index companions, so the Studio and the admin API hide and refuse such a table. Rename the table.`,
         );
     }
 };
 
-const asOnDelete = (value: string | undefined): RelationIR["onDelete"] =>
-    value && ON_DELETE_ACTIONS.has(value) ? (value as RelationIR["onDelete"]) : undefined;
+const asOnDelete = (value: string | undefined): KeyedRelationIR["onDelete"] =>
+    value && ON_DELETE_ACTIONS.has(value) ? (value as KeyedRelationIR["onDelete"]) : undefined;
 
 /**
  * Unwrap a `.relations((r) => …)` arrow body to the object literal it returns,
@@ -167,6 +151,49 @@ const relationsObjectBody = (argument: Node): ObjectLiteralExpression | undefine
     }
 
     return Node.isObjectLiteralExpression(body) ? body : undefined;
+};
+
+/**
+ * Lift the `through: { table, from, to }` option of `r.many(target, { through })` into a {@link RelationIR}. The
+ * three names feed the advisor's join-table lints, so like the target table they must be string literals.
+ */
+const throughRelation = (throughProperty: Node, name: string, table: string): RelationIR => {
+    const literal = Node.isPropertyAssignment(throughProperty) ? throughProperty.getInitializer() : undefined;
+
+    if (!literal || !Node.isObjectLiteralExpression(literal)) {
+        throw diagnosticAt(throughProperty, "relation `through` must be an object literal `{ table, from, to }` — codegen resolves it statically.");
+    }
+
+    const [joinTable, from, to] = ["table", "from", "to"].map((key) => getStringProperty(literal, key));
+
+    if (joinTable === undefined || from === undefined || to === undefined) {
+        throw diagnosticAt(literal, "relation `through` needs string-literal `table`, `from` and `to` — codegen resolves them statically.");
+    }
+
+    if (from === to) {
+        throw diagnosticAt(literal, `relation \`through\` has \`from\` and \`to\` both set to "${from}"; a link needs two different columns.`);
+    }
+
+    return { kind: "many", name, table, through: { from, table: joinTable, to } };
+};
+
+/** Build the {@link RelationIR} for `r.one`/`r.many` from its (possibly absent) options object: a `through` join table, or a foreign-key `field`. */
+const relationFromOptions = (method: "many" | "one", name: string, table: string, options: Node | undefined): RelationIR => {
+    const literal = options && Node.isObjectLiteralExpression(options) ? options : undefined;
+    const throughProperty = method === "many" ? literal?.getProperty("through") : undefined;
+
+    if (throughProperty) {
+        return throughRelation(throughProperty, name, table);
+    }
+
+    return {
+        field: (literal && getStringProperty(literal, "field")) ?? "_unknown_",
+        kind: method,
+        name,
+        onDelete: method === "one" && literal ? asOnDelete(getStringProperty(literal, "onDelete")) : undefined,
+        references: (literal && getStringProperty(literal, "references")) ?? "_id",
+        table,
+    };
 };
 
 /** Lift one `name: r.one(table, opts)` / `r.many(...)` property into a {@link RelationIR}, or `undefined`. */
@@ -196,7 +223,7 @@ const relationFromProperty = (property: Node): RelationIR | undefined => {
     const [tableArgument, optionsExpression] = initializer.getArguments();
 
     // The relation's target table feeds straight into the generated
-    // `OneRelation<"...">` / `ManyRelation<"...">` type (see `emit.ts`'s
+    // `OneRelation<"...">` / `ManyRelation<"...">` type (see `emit/data-model.ts`'s
     // relation-type emission) — codegen resolves it statically, so a
     // non-literal (or missing) target must fail loudly rather than degrade to
     // a placeholder that still compiles.
@@ -209,17 +236,7 @@ const relationFromProperty = (property: Node): RelationIR | undefined => {
 
     const table = tableArgument.getLiteralText();
 
-    let field = "_unknown_";
-    let references = "_id";
-    let onDelete: RelationIR["onDelete"];
-
-    if (optionsExpression && Node.isObjectLiteralExpression(optionsExpression)) {
-        field = getStringProperty(optionsExpression, "field") ?? field;
-        references = getStringProperty(optionsExpression, "references") ?? references;
-        onDelete = method === "one" ? asOnDelete(getStringProperty(optionsExpression, "onDelete")) : undefined;
-    }
-
-    return { field, kind: method, name: property.getName(), onDelete, references, table };
+    return relationFromOptions(method, propertyKeyName(property), table, optionsExpression);
 };
 
 /**
@@ -272,6 +289,8 @@ const assertTopLevelIndexField = (element: TsNode, field: string, indexName: str
         element,
         `index "${indexName}" indexes the nested path ${JSON.stringify(field)} — Lunora indexes only top-level columns. ` +
             `Denormalise the value into its own column (e.g. \`${denormalised}\`), index that instead, and keep it in sync with a table \`.triggers()\` beforeInsert/beforeUpdate.`,
+        // Same code `defineSchema` throws at runtime, so the CLI maps either path to exit 2.
+        { code: "INDEX_FIELD_NESTED_PATH", name: "LunoraError", status: 500 },
     );
 };
 
@@ -288,7 +307,7 @@ const parseIndexUniqueOption = (optionsExpression: Node | undefined): boolean =>
         return false;
     }
 
-    const property = optionsExpression.getProperty("unique");
+    const property = findObjectProperty(optionsExpression, "unique");
 
     if (!property || !Node.isPropertyAssignment(property)) {
         return false;
@@ -410,7 +429,7 @@ const parseRankIndexCall = (args: ReadonlyArray<Node>): RankIndexIR => {
     let partitionBy: string[] | undefined;
 
     if (optionsExpression && Node.isObjectLiteralExpression(optionsExpression)) {
-        const sortByProperty = optionsExpression.getProperty("sortBy");
+        const sortByProperty = findObjectProperty(optionsExpression, "sortBy");
 
         if (sortByProperty && Node.isPropertyAssignment(sortByProperty)) {
             const initializer = sortByProperty.getInitializer();
@@ -465,6 +484,7 @@ const parseGlobalBackend = (args: ReadonlyArray<Node>): TableIR["globalBackend"]
 
 /** Accumulator the builder-chain walk mutates as it unwinds a `defineTable(...)` chain. */
 interface TableBuilderAccumulator {
+    aggregateIndexed: boolean;
     commitOrdered: boolean;
     externallyManaged: boolean;
     externalSource?: ExternalSourceIR;
@@ -478,25 +498,45 @@ interface TableBuilderAccumulator {
     searchIndexes: SearchIndexIR[];
     shardMode: TableIR["shardMode"];
     softDelete?: { field: string };
+    /** One entry per `.timestamps()` call; more than one is refused. */
+    timestampsFields: string[];
     ttl?: TtlIR;
     vectorIndexes: VectorIndexIR[];
 }
 
-/** Read the marker-column name off a `.softDelete({ field })` options arg; defaults to `deletedAt`. */
-const softDeleteFieldOf = (optionsArgument: Node | undefined): string => {
-    if (optionsArgument && Node.isObjectLiteralExpression(optionsArgument)) {
-        const fieldProperty = optionsArgument.getProperty("field");
-
-        if (fieldProperty && Node.isPropertyAssignment(fieldProperty)) {
-            const initializer = fieldProperty.getInitializer();
-
-            if (initializer && Node.isStringLiteral(initializer)) {
-                return initializer.getLiteralText();
-            }
-        }
+/**
+ * Read the column name off a `.softDelete({ field })` / `.timestamps({ field })` options arg; `fallback` when absent.
+ * Codegen cannot evaluate an expression, and silently falling back would generate types for a column the runtime
+ * never creates, so a `field` that is not a string literal is refused.
+ */
+const fieldOptionOf = (optionsArgument: Node | undefined, fallback: string): string => {
+    if (optionsArgument === undefined) {
+        return fallback;
     }
 
-    return "deletedAt";
+    if (!Node.isObjectLiteralExpression(optionsArgument)) {
+        throw diagnosticAt(
+            optionsArgument,
+            "the options must be an object literal — codegen reads the column name from the source and cannot evaluate a variable or an expression here.",
+        );
+    }
+
+    const fieldProperty = findObjectProperty(optionsArgument, "field");
+
+    if (fieldProperty === undefined) {
+        return fallback;
+    }
+
+    const initializer = Node.isPropertyAssignment(fieldProperty) ? fieldProperty.getInitializer() : undefined;
+
+    if (initializer && Node.isStringLiteral(initializer)) {
+        return initializer.getLiteralText();
+    }
+
+    throw diagnosticAt(
+        fieldProperty,
+        "`field` must be a string literal — codegen reads the column name from the source and cannot evaluate a constant or an expression here.",
+    );
 };
 
 /**
@@ -523,9 +563,9 @@ const parseSourceCall = (args: ReadonlyArray<Node>): ExternalSourceIR => {
     return {
         binding: getStringProperty(first, "binding") ?? "",
         columns: stringArrayPropertyOf(first, "columns"),
-        hasReconcile: first.getProperty("reconcileEveryMs") !== undefined,
-        hasSoftDelete: first.getProperty("softDeleteColumn") !== undefined,
-        hasTenantBy: first.getProperty("tenantBy") !== undefined,
+        hasReconcile: findObjectProperty(first, "reconcileEveryMs") !== undefined,
+        hasSoftDelete: findObjectProperty(first, "softDeleteColumn") !== undefined,
+        hasTenantBy: findObjectProperty(first, "tenantBy") !== undefined,
         idColumn: getStringProperty(first, "idColumn"),
         mode: getStringProperty(first, "mode"),
         query: getStringProperty(first, "query"),
@@ -535,6 +575,13 @@ const parseSourceCall = (args: ReadonlyArray<Node>): ExternalSourceIR => {
 /** Apply one chained method call (`.index`, `.shardBy`, …) to the accumulator. */
 const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, args: ReadonlyArray<Node>, name: string): void => {
     switch (method) {
+        case "aggregateIndex": {
+            // The index's options are read by the runtime; codegen needs only that one exists.
+            accumulator.aggregateIndexed = true;
+
+            break;
+        }
+
         case "commitOrdered": {
             // `.commitOrdered()` takes no arguments — its presence is the whole
             // declaration. The `_commitSeq` field it adds is NOT injected into
@@ -566,7 +613,9 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
         }
 
         case "index": {
-            accumulator.indexes.push(parseIndexCall(args));
+            // The chain is unwound outermost-first, so each index is prepended to land in declaration order: the
+            // planner lets an earlier index claim a shared column, so the order is part of the schema.
+            accumulator.indexes.unshift(parseIndexCall(args));
 
             break;
         }
@@ -617,7 +666,7 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
         case "softDelete": {
             // `.softDelete()` or `.softDelete({ field: "removedAt" })` — read the
             // optional marker-column name off the options object (default `deletedAt`).
-            accumulator.softDelete = { field: softDeleteFieldOf(args[0]) };
+            accumulator.softDelete = { field: fieldOptionOf(args[0], "deletedAt") };
 
             break;
         }
@@ -628,6 +677,13 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
             // ingest loop, not a discoverable `ctx.db.insert`).
             accumulator.externalSource = parseSourceCall(args);
             accumulator.externallyManaged = true;
+
+            break;
+        }
+
+        case "timestamps": {
+            // `.timestamps()` or `.timestamps({ field: "modifiedAt" })`.
+            accumulator.timestampsFields.push(fieldOptionOf(args[0], "updatedAt"));
 
             break;
         }
@@ -716,8 +772,62 @@ const assertNoFtsShadowCollision = (expression: Expression, table: string, searc
     }
 };
 
+/**
+ * Reject `.ttl()` on a `.global()` table — mirrors `defineSchema`'s runtime
+ * refusal, so the build fails at the table rather than the emitter quietly
+ * generating no sweep for rows no shard alarm can reach.
+ */
+const assertNoGlobalTtl = (expression: Expression, table: string, accumulator: TableBuilderAccumulator): void => {
+    if (accumulator.ttl !== undefined && accumulator.shardMode === "global") {
+        throw diagnosticAt(expression, globalTtlMessage(table));
+    }
+};
+
+/**
+ * `.softDelete()` and `.timestamps()` inject a column into the shape, mirroring the runtime builder, so `Doc_*` /
+ * `Insert_*` carry it. A column the author declared wins, and the runtime builder's refusals are repeated here so
+ * a schema that throws at load fails at codegen too: a second `.timestamps()`, the soft-delete field reused, or a
+ * declared column that would not restamp on update.
+ */
+const withInjectedColumns = (expression: Expression, shape: Record<string, ValidatorIR>, accumulator: TableBuilderAccumulator): Record<string, ValidatorIR> => {
+    const { softDelete, timestampsFields } = accumulator;
+    const injected: Record<string, ValidatorIR> = {};
+
+    if (softDelete && !(softDelete.field in shape)) {
+        injected[softDelete.field] = { inner: { column: { notNull: false }, kind: "number" }, kind: "optional" };
+    }
+
+    const [timestamps] = timestampsFields;
+
+    if (timestamps === undefined) {
+        return { ...shape, ...injected };
+    }
+
+    if (timestampsFields.length > 1) {
+        throw diagnosticAt(expression, "`.timestamps()` was called more than once; one table tracks one last-change column.");
+    }
+
+    if (timestamps === softDelete?.field) {
+        throw diagnosticAt(expression, `\`.softDelete()\` and \`.timestamps()\` both use "${timestamps}"; give one of them another field.`);
+    }
+
+    const declared = shape[timestamps];
+
+    if (declared === undefined) {
+        injected[timestamps] = { column: { hasDefault: true, hasOnUpdate: true, notNull: true }, kind: "timestamp" };
+    } else if (declared.kind !== "timestamp" || declared.column?.hasOnUpdate !== true || declared.column.hasDefault !== true) {
+        throw diagnosticAt(
+            expression,
+            `\`.timestamps()\` would add "${timestamps}", but the table already declares it as something other than \`v.timestamp().defaultNow().$onUpdateFn(() => Date.now())\`; remove the column or declare it that way.`,
+        );
+    }
+
+    return { ...shape, ...injected };
+};
+
 const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     const accumulator: TableBuilderAccumulator = {
+        aggregateIndexed: false,
         commitOrdered: false,
         externallyManaged: false,
         geoIndexes: [],
@@ -728,6 +838,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         relations: [],
         searchIndexes: [],
         shardMode: "root",
+        timestampsFields: [],
         vectorIndexes: [],
     };
     let shape: Record<string, ValidatorIR> = {};
@@ -767,17 +878,14 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         }
     }
 
-    // `.softDelete()` injects the marker column into the shape (mirrors the
-    // runtime builder) so `Doc_*`/`Insert_*` carry it — optional + nullable
-    // (`number | null | undefined`), absent on a live row. The user's own
-    // declaration of the column wins (matches the runtime `if (!(field in shape))`).
-    if (accumulator.softDelete && !(accumulator.softDelete.field in shape)) {
-        shape = { ...shape, [accumulator.softDelete.field]: { inner: { kind: "number" }, kind: "optional" } };
-    }
+    shape = withInjectedColumns(expression, shape, accumulator);
 
     assertNoFtsShadowCollision(expression, name, accumulator.searchIndexes);
 
+    assertNoGlobalTtl(expression, name, accumulator);
+
     return {
+        ...(accumulator.aggregateIndexed ? { aggregateIndexed: true as const } : {}),
         commitOrdered: accumulator.commitOrdered,
         externallyManaged: accumulator.externallyManaged,
         externalSource: accumulator.externalSource,
@@ -802,8 +910,8 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
  * Parse the base `defineSchema({ table: defineTable(...) })` object literal into
  * {@link TableIR}s.
  *
- * A spread is followed when it names a readable table map — `registry/payment`
- * exports `paymentTables` as exactly that — so those tables reach the data model
+ * A spread is followed when it names a readable table map (a local
+ * `const sharedTables = { ... }`), so those tables reach the data model
  * instead of vanishing from it. One built by a CALL (`...authTables(options)`,
  * the documented `@lunora/auth` wiring) has no literal to read and is skipped,
  * exactly as every spread was before. Not an error: that path has no inline form
@@ -834,20 +942,18 @@ const parseBaseTables = (object: ObjectLiteralExpression, tables: TableIR[] = []
         const initializer = property.getInitializer();
 
         if (initializer) {
-            const name = property.getName();
+            const name = propertyKeyName(property);
 
             assertTableNameAllowed(name, property.getNameNode());
 
-            const unquoted = stripQuotes(name);
-
-            if (seenNames.has(unquoted)) {
+            if (seenNames.has(name)) {
                 throw diagnosticAt(
                     property.getNameNode(),
-                    `defineSchema({...}): table "${unquoted}" is declared more than once — the earlier declaration would be silently discarded. Remove the duplicate.`,
+                    `defineSchema({...}): table "${name}" is declared more than once — the earlier declaration would be silently discarded. Remove the duplicate.`,
                 );
             }
 
-            seenNames.add(unquoted);
+            seenNames.add(name);
             tables.push(parseTableBuilder(initializer, name));
         }
     }
@@ -855,4 +961,4 @@ const parseBaseTables = (object: ObjectLiteralExpression, tables: TableIR[] = []
     return tables;
 };
 
-export { assertTableNameAllowed, parseBaseTables, parseTableBuilder, TABLE_NAME_IDENTIFIER_RE };
+export { assertTableNameAllowed, parseBaseTables, parseTableBuilder, RESERVED_TABLE_NAMES, TABLE_NAME_IDENTIFIER_RE };

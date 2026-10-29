@@ -1,7 +1,8 @@
 import type { CallExpression, Project, PropertyAccessExpression } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { isContextIdentifier, listLunoraSourceFiles } from "./ast";
+import { descendantsOfKind, listLunoraSourceFiles } from "./ast";
+import { isContextSurface } from "./context-root";
 
 /** The four typed flag reads `ctx.flags.<type>(…)` / `ctx.flags.details.<type>(…)` expose. */
 const FLAG_TYPES = new Set(["boolean", "number", "object", "string"]);
@@ -29,28 +30,8 @@ const flagTypeFromAccess = (access: PropertyAccessExpression): FlagKey["type"] |
 
     const receiver = access.getExpression();
 
-    if (!Node.isPropertyAccessExpression(receiver)) {
-        return undefined;
-    }
-
-    // `ctx.flags.<type>(...)`
-    if (receiver.getName() === "flags" && isContextIdentifier(receiver.getExpression())) {
-        return name as FlagKey["type"];
-    }
-
-    // `ctx.flags.details.<type>(...)`
-    const inner = receiver.getExpression();
-
-    if (
-        receiver.getName() === "details" &&
-        Node.isPropertyAccessExpression(inner) &&
-        inner.getName() === "flags" &&
-        isContextIdentifier(inner.getExpression())
-    ) {
-        return name as FlagKey["type"];
-    }
-
-    return undefined;
+    // `ctx.flags.<type>(...)` / `ctx.flags.details.<type>(...)`, through any spelling of the ctx (`c.flags`, a destructured `flags`).
+    return isContextSurface(receiver, ["flags"]) || isContextSurface(receiver, ["flags", "details"]) ? (name as FlagKey["type"]) : undefined;
 };
 
 /**
@@ -96,7 +77,7 @@ const discoverFlagKeys = (project: Project, lunoraDirectory: string): FlagKey[] 
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
             const candidate = flagKeyFromCall(call);
 
             if (candidate && !found.has(candidate.key)) {

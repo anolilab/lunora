@@ -1,0 +1,211 @@
+import type { PlatformCapabilities } from "./types";
+
+/**
+ * The Cloudflare capability matrix — the reference implementation.
+ *
+ * `native` means the platform itself provides the feature; `emulated` means
+ * Lunora builds it on top of lower-level platform primitives (or a third-party
+ * service) rather than consuming a first-class product. Codegen and Studio read
+ * this distinction to report parity honestly, so a feature Lunora implements
+ * itself must not be reported as native even when it works flawlessly.
+ */
+const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
+    id: "cloudflare",
+    name: "Cloudflare",
+    features: {
+        shardedState: { level: "native", note: "Durable Objects with SQLite" },
+        globalTables: {
+            level: "native",
+            note: "D1 with Sessions API. D1 has a documented, expected baseline error rate — Cloudflare's own team calls a handful of transient errors every few hours 'not unexpected' on a healthy database — so read-only statements are retried automatically; writes are not, because every one of those errors is ambiguous about whether the statement applied and D1 has no interactive transactions to resolve it",
+        },
+        websocketHibernation: { level: "native", note: "DO WebSocket hibernation" },
+        liveStreams: {
+            level: "native",
+            note: "The shard DO streams the SSE response. `ctx.live.publish` reaches the SSE subscribers of the shard it names: from an HTTP action or a queue consumer through the Worker's shard forward, and from a scheduled job's action in-process on the DO it runs in (no hop). A queue consumer has no shard of its own, so it always forwards. There is no cross-shard live fan-out. An in-shard action publish naming another shard is refused, so it reaches no subscriber; the HTTP and queue paths above forward to the shard they name instead",
+        },
+        typedWebSockets: { level: "native", note: "Route and room sockets ride DO WebSocket hibernation" },
+        durableStreams: {
+            level: "emulated",
+            note: "Lunora persists each chunk to the shard's SQLite under a monotonic seq and keeps the producer alive past the socket via waitUntil; the platform has no streaming primitive of its own, and a run whose DO is evicted mid-flight ends as STREAM_INTERRUPTED rather than resuming. From compatibility_date 2026-10-01 (or the durable_object_io_tasks_prevent_eviction flag) that pending waitUntil holds off idle eviction for up to 15 minutes, so a client disconnect no longer interrupts a shorter run, unless durable_object_io_tasks_do_not_prevent_eviction opts out. Deployed Workers apply it by date; a local workerd older than 1.20261001 ignores the date and needs the explicit durable_object_io_tasks_prevent_eviction flag (it rejects the durable_object_io_tasks_do_not_prevent_eviction opt-out at startup)",
+        },
+        commitOrderedTables: {
+            level: "native",
+            note: "`state.storage.transaction` makes the `__commit_seq` bump atomic with the rows it stamps, and a Durable Object executes one event at a time — so the allocation order IS the commit order, with no lock of ours in the path",
+        },
+        deliveryAuthorization: {
+            level: "emulated",
+            note: "Lunora builds it: the platform has no such primitive. Permits ride DO WebSocket attachments, fences and receipts live in the shard's SQLite, and the fence install is a signed sibling fetch; all of it runs against the real engine in the workerd suite, including hibernation",
+        },
+        conditionalWrites: {
+            level: "native",
+            note: "Shard-local: one synchronous state.storage.sql run. .global(): one conditional UPDATE on D1, so concurrent callers stay atomic although D1 calls do not hold the Durable Object's input gate",
+        },
+        objectColumnPaths: {
+            level: "native",
+            note: "json_extract over the Durable Object's document, and over the JSON-text column of a .global() table on D1; both run against the real engines (workerd and a D1 binding) in the test suite. A Hyperdrive Postgres or MySQL .global() backend reads paths with its own JSON operators, checked against PGlite (Postgres 18, so 16+ is required) and MySQL 8.0 in the hyperdrive suite, `contains` included",
+        },
+        queryExplain: {
+            level: "native",
+            note: "EXPLAIN QUERY PLAN over state.storage.sql for a shard-local table and over the D1 binding for .global() on D1; both run against the real engines (workerd and a D1 binding) in the test suite. A Hyperdrive Postgres or MySQL .global() backend uses plain EXPLAIN and is checked against canned plan rows only",
+        },
+        localSql: { level: "native", note: "state.storage.sql (SQLite)" },
+        serverReactors: {
+            level: "emulated",
+            note: "The wake-up is Lunora's, not the platform's: reactors ride the existing post-write refresh drain, which already exists to push subscription frames. Cloudflare supplies the two properties that make it correct — one event at a time per Durable Object, and `waitUntil` to keep the drain alive past the response — but has no notion of a server-side subscription of its own",
+        },
+        memoryTables: {
+            level: "emulated",
+            note: "The lifetime is real — an eviction drops the DO's heap and the framework clears every `.memory()` table on reconstruction, so the rows behave exactly like heap state, and their writes stay out of the CDC changelog. The STORAGE is not: workerd exposes one SQL handle and no memory-backed database, so a memory row is still written to the DO's SQLite and then deleted. `.memory()` buys the semantics, not the write",
+        },
+        alarmRearmBreaker: {
+            level: "emulated",
+            note: "Lunora's own counter, not a platform primitive: the poll alarm's re-arms that are due sooner than the 2 s floor are counted in one row of the shard's SQL (ShardHost.sql) over a sliding window, and a re-arm past the budget is refused, leaves one recovery wake a window out, and is logged once per trip. Re-arms at or beyond the floor are checked against that row and never written to it, so a poll at 2 s or slower costs no SQL write. The arm it gates is ShardHost.alarms, so it runs wherever the shard has durable SQL and alarms",
+        },
+        scheduleRateBreaker: {
+            level: "emulated",
+            note: "Lunora's own counter, not a platform primitive: each ctx.scheduler target's schedules are counted per shard in one row of the shard's SQL (ShardHost.sql) over a sliding window, once per invocation, and a schedule past the budget is deferred one window instead of being refused or dropped. The schedules it defers are stored through SchedulerDO, so it runs wherever the shard has durable SQL and a scheduler",
+        },
+        shardAlarms: { level: "native", note: "state.storage.setAlarm" },
+        shardPlacement: {
+            level: "native",
+            note: "DurableObjectNamespace.get/getByName locationHint — best-effort, and honoured only by the resolution that creates the object",
+        },
+        shardReadReplicas: {
+            level: "emulated",
+            note: "Lunora follows the shard's CDC changelog into a replica DO placed in the reader's region; the platform replicates for durability, not for reads, so the follow loop is ours",
+        },
+        crossShardFanout: {
+            level: "emulated",
+            note: "Lunora query coordinator + relay tier over Durable Objects. The shard keys a fan-out reaches come from ShardRegistryDO, which each shard registers with on its first write to a .shardBy() table; a shard written before the registry was bound is not listed until it is written again",
+        },
+        queues: { level: "native", note: "Cloudflare Queues" },
+        relationGraph: {
+            level: "emulated",
+            note: "The graph is Lunora's, built on reads Cloudflare already serves: the edge set is derived from the schema's v.id(...) columns, and each hop is one batched WHERE ... IN (...) against the shard's SQLite, all inside the Durable Object's single-threaded request. There is no graph engine being consumed — workerd offers none — so native would misreport who does the work",
+        },
+        workerLoaders: {
+            level: "native",
+            note: "The `worker_loaders` binding (Dynamic Workers, in open beta): `load()` compiles a script into its own isolate, `globalOutbound: null` removes its network, and `limits.cpuMs` bounds it",
+        },
+        workflowRollback: { level: "native", note: "Workflows step rollback (the step.do rollback option)" },
+        workflowSchedules: {
+            level: "native",
+            note: "wrangler workflows[].schedules — Cloudflare creates an instance on each cron tick, no scheduled() handler involved",
+        },
+        workflows: {
+            level: "native",
+            note: "Cloudflare Workflows declared in wrangler `exports` (no workflows[] binding) and reached through `ctx.exports.<Class>` from the shard DO, the Worker and every WorkflowEntrypoint; needs Wrangler >= 4.142 / @cloudflare/vite-plugin >= 1.61 locally",
+        },
+        scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
+        cronTriggers: {
+            level: "native",
+            note: "wrangler triggers.crons, reconciled from the declared crons at build time, delivered to the worker's scheduled() handler — which is the one cron dispatch that ships: it walks the generated LUNORA_CRONS map itself",
+        },
+        authJurisdictionMove: {
+            level: "native",
+            note: "Durable Object jurisdictions. The un-pinned and the pinned auth object are two objects on one namespace (namespace.jurisdiction()), and the __lunora_admin__:copyAuthToJurisdiction / purgeUnpinnedAuth admin ops copy between them over the objects' secret-gated internal route, driven from the worker. Present only for DO-backed auth pinned with .jurisdiction(…, { pinAuth: true })",
+        },
+        agents: {
+            level: "emulated",
+            note: "The durable agent loop is Lunora's: each defineAgent compiles onto a Cloudflare Workflow declared in wrangler `exports` and reached through `ctx.exports` (a voice-enabled agent additionally gets a VoiceSessionDO), and the loop drives Workers AI. Cloudflare supplies the workflow engine, the Durable Object and the inference; the agent is built on them, not consumed as a product",
+        },
+        objectStorage: {
+            level: "native",
+            note: "R2. Resumable end-user uploads (`@lunora/storage/upload`) run over the binding: TUS / chunked-REST chunks are coalesced into equal 5 MiB multipart parts, and the upload's offset, parts and buffered tail live in conditional-put state objects in the same bucket, so a request can land on any isolate. Identical under miniflare; no S3 credentials",
+        },
+        objectStorageBackups: {
+            level: "emulated",
+            note: "`lunora backup create|list|restore --bucket` writes NDJSON snapshots + a manifest sidecar per snapshot through the admin storage routes (checksum-verified upload, admin-gated object read), and `backupCron`/`backupStore` runs the same layout unattended on a Cron Trigger. Both are bounded by what a single request body / a Worker isolate can hold, not by R2. `emulated` because every part of that is Lunora's — R2 supplies a bucket, and Cloudflare has no backup product being consumed here; the snapshot format, the manifest, the checksum gate and the retention report are all ours",
+        },
+        objectStorageCdcArchive: {
+            level: "emulated",
+            note: "R2 supplies the bucket and the `startAfter` listing the segment keys are indexed on; everything above that is Lunora's — the segment format, the archive-before-trim ordering the sweep defers behind `waitUntil`, and the de-overlapping read-back. The platform has no notion of a changelog to tier, so this is not a product being consumed",
+        },
+        keyValueStore: { level: "native", note: "Workers KV" },
+        vectorStore: {
+            level: "native",
+            note: "Vectorize; query/upsert namespace scoping is native (remote filter), but getByIds/deleteByIds id-path tenant isolation is facade-enforced (client-side verification) since Vectorize's id operations take no namespace option. Write sync and the `backfillVectors` admin op (paged embedding of pre-existing rows; re-walks a table only when its fingerprinted config changes: index names, source field, dimensions, metric, metadata keys, declared `model`, or the table's soft-delete field. A Shape B `select`/`metadata` edit, or an `embed` swap with no declared `model`, still needs `restart: true`) are Lunora's, carried by ShardHost: pages are read under `runSerialized` and synced on the shard's after-commit chain. Shard-local tables only: `.global()` plus a vector index is rejected, since D1/Hyperdrive writes never reach that chain",
+        },
+        ai: {
+            level: "native",
+            note: "Workers AI; `<provider>/<model>` and `dynamic/<route>` ids route through AI Gateway over the same binding (Unified Billing for unified-catalog providers, a key stored on the gateway for gateway-path-only ones; `LUNORA_AI_GATEWAY_ID` else the account's `default` gateway). `rejectIfBusy` on `ctx.ai.model` / `ctx.ai.run` is the binding's own option, forwarded as is. `ctx.ai.websearch` is the binding's `websearch()` (Web Search API, beta: Ceramic / Exa / Linkup) on the same gateway, billed to a provider key stored there (the `default` alias unless `byokAlias` names another) or else AI Gateway credits. `ctx.ai.toMarkdown` is the binding's toMarkdown() (Markdown Conversion API), and `ctx.ai.images.generate` runs `@cf/…` image ids through the binding and `openai/` / `google/` slugs through the gateway",
+        },
+        aiSearch: {
+            level: "native",
+            note: "AI Search (formerly AutoRAG) through the `ai_search_namespaces` binding (conventionally `AI_SEARCH` on namespace `default`), passed through as-is: `ctx.aiSearch.get(name)` reaches any instance in the namespace, alongside `create` / `delete` / `list` and multi-instance `search` / `chatCompletions`. ActionCtx only. Remote-only even in dev: there is no local simulator, and miniflare proxies the binding to the service. Text-only over the binding — image and file content parts need the REST API. Usage-billed from 2026-11-01",
+        },
+        browser: {
+            level: "native",
+            note: "Browser Run: Playwright sessions (allowedHosts forwarded as session guardrails), Quick Actions through the binding's quickAction, and /crawl over the account REST API (no binding method; needs an API token)",
+        },
+        images: { level: "native", note: "Cloudflare Images binding" },
+        containers: {
+            level: "native",
+            note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container Durable Object answers through the runtime's native ctx.container.exec() (the image serves the route itself only on a runtime without native exec). spawn() and terminal() stream a process (stdin, a PTY, kill and resize) through the same native exec, and have no fallback on a runtime without it",
+        },
+        containerEgressPolicy: { level: "native", note: "@cloudflare/containers outbound interception (allowedHosts / deniedHosts / interceptHttps)" },
+        containerRuntimeScheduling: {
+            level: "native",
+            note: "Cloudflare Containers' durable_object scheduling policy and container snapshots (both public beta): LunoraContainer resolves the named image through ctx.container.images and forwards image / instance / containerSnapshot to ctx.container.start() through the patched @cloudflare/containers base",
+        },
+        containerSandboxTools: {
+            level: "native",
+            note: "@cloudflare/sandbox (Sandbox SDK 1.0): Files, DirectoryBackup and S3Mount drive the sandbox-shim helper in the image through the native ctx.container.exec(), and the backup and mount gateways are WorkerEntrypoints the container reaches through interceptOutboundHttp. The image must ship /usr/local/bin/sandbox-shim, copied from Cloudflare's shim-only cloudflare/sandbox image",
+        },
+        analytics: { level: "native", note: "Analytics Engine" },
+        analyticsSql: {
+            level: "native",
+            note: "Analytics SQL binding (wrangler `analytics` key, wrangler >= 4.145.0): read-only SQL over the account's Analytics SQL API — Analytics Engine datasets as `events.analyticsEngine.<dataset>`, plus Cloudflare's own `events.` / `states.` / `logs.` datasets — with the account derived from the Worker. ActionCtx only. One statement and one dataset per query, a lower `timestamp` bound required. Remote-only even in dev: there is no local simulator, and miniflare proxies the binding to the service. Without the binding, `createAnalyticsSqlRest` runs the same dialect over the REST endpoint with an API token",
+        },
+        artifacts: {
+            level: "native",
+            note: "Cloudflare Artifacts binding (open beta, Workers Paid): repo create/import/fork/list/delete, repo-scoped Git tokens, and reads of commits, trees, blobs and files. It has no write method; writes are a `git push` from a Git client with a minted token. No local simulator, so `lunora dev` reaches the remote service. Namespace jurisdiction is `eu` or `us`, fixed when the namespace is created; a `fedramp` schema using it is a codegen error",
+        },
+        edgeRequestMetadata: {
+            level: "native",
+            note: 'request.cf — the edge stamps placement (colo, country) and, where an mTLS-enabled hostname is configured, the verified client certificate under tlsClientAuth. Unforgeable because it is not a header: trustInboundTraceContext: "mtls" and the OTLP placement resource detector both read it directly',
+        },
+        hostTraceFusion: {
+            level: "native",
+            note: "cloudflare:workers' tracing.enterSpan, behind the sink's fuseCloudflareTraces opt-in. Feature-detected on top: span.recordException and span.setStatus (status error) for failed spans (redacted message only; a successful span stays unset). The invocation root span is marked failed when an RPC dispatch answers 5xx, with or without recorded telemetry, and whenever a trigger throws; a 4xx RPC leaves it unset. Also feature-detected: span.setAttributes for the attribute mirror, and tracing.getActiveSpan to put the ctx.span wide event on the invocation's root span. Leave it off unless you want the CF-native nesting: with it on, a deployment that also ships onSpan to a collector emits the same logical span down two pipelines. Fused or not, the edge's cf-ray Ray ID links the two: Lunora stamps it as cloudflare.ray_id (the attribute CF's own Workers traces use) on its spans and as rayId on its request and ctx.log events, informational only. Off Cloudflare no host sets cf-ray, so it is simply absent",
+        },
+        logArchive: {
+            level: "native",
+            note: "R2 Data Catalog (Iceberg) written by pipelineLogSink and queried back over R2 SQL, which the admin route runs server-side because R2 SQL needs a Cloudflare API token that must never reach the browser",
+        },
+        pipelines: { level: "native", note: "Cloudflare Pipelines" },
+        pointInTimeRecovery: {
+            level: "native",
+            note: "SQLite-backed Durable Object bookmarks (getBookmarkForTime / onNextSessionRestoreBookmark) restore SQL and KV to any moment in the last 30 days. Absent under local wrangler dev, where the ops answer PITR_UNAVAILABLE",
+        },
+        mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
+        secrets: { level: "native", note: "Secrets Store" },
+        secretValues: {
+            level: "native",
+            note: "Held in the shard's own Durable Object key-value storage under a reserved key prefix, so the value stays inside the shard. Sealed with AES-256-GCM under the `LUNORA_SECRET_VALUE_KEY` Worker secret before it is stored, so the stored record is `{ keyId, iv, ciphertext }`. The reserved prefix is hidden from `ShardKvStore`. Point-in-time recovery covers key-value put() data for the last 30 days, so a restore to an earlier bookmark returns the sealed record, and it opens while the sealing key is still configured: erasure is `discard` plus rotating the key out",
+        },
+        services: {
+            level: "native",
+            note: "Cloudflare service bindings: the bound Worker runs on the same thread of the same server, with no extra request fee. Fetch services and WorkerEntrypoint RPC both work, in deploy and in local dev (auxiliary Workers / multiple wrangler configs)",
+        },
+        topics: {
+            level: "emulated",
+            note: "Lunora's fan-out over Cloudflare Queues — a queue allows one consumer, so each subscription is its own queue (own retries and dead-letter queue) and a publish sends to every one in parallel. Not atomic: a failed send rejects the publish and a retry re-delivers to the subscriptions that already got it. No ordering key",
+        },
+        hyperdrive: { level: "native", note: "Cloudflare Hyperdrive" },
+        httpCache: {
+            level: "native",
+            note: "The colo cache via caches.default. Worker-generated responses are NOT stored by it automatically — the runtime has to caches.default.put() them — and it honours Vary for Accept-Encoding only, so a varying response has to fold those header values into the cache key itself. A 206, a Vary: *, or a Set-Cookie-bearing response is refused by put()",
+        },
+        requestOrigin: {
+            level: "native",
+            note: "request.url carries the hostname the edge routed the request on (a route, custom domain or workers.dev name bound to this Worker), so a caller cannot point it at a host the Worker does not serve",
+        },
+        identityProxy: {
+            level: "native",
+            note: "Cloudflare Access. A policy attached to the Worker covers its custom domains, routes, workers.dev and preview URLs at once, and the authenticated identity arrives on the execution context as ctx.access — no header to verify, and nothing a request can forge to manufacture one. A hostname-scoped Access application instead stamps the Cf-Access-Jwt-Assertion header, which needs no host support at all",
+        },
+    },
+};
+
+export default CLOUDFLARE_CAPABILITIES;

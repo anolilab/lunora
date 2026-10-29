@@ -38,22 +38,98 @@ retries and socket library:
 
 ```dart
 final client = LunoraClient(url: 'https://my-app.example.com', post: myPoster, authToken: '…')
-  ..attachSocket((frame) => socket.add(jsonEncode(frame)))
+  ..sessionToken = session // the WebSocket credential: sent as `connect.token`, never in the URL
+  ..attachSocket((frame) => socket.add(jsonEncode(frame))) // writes `connect` first
   ..setConnected(true);
 
 final messages = await client.query('messages:list', args: {'channel': 'general'});
 await client.mutation('messages:send', args: {'channel': 'general', 'text': 'hi'});
 ```
 
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. With `dart:io`, set
+`request.followRedirects = false` on the `HttpClientRequest`.
+
 `client.handleFrame(raw)` is what you call with each inbound WebSocket message;
 `client.resendSubscriptions()` re-subscribes everything after a reconnect,
 carrying each subscription's resume cursor.
 
+`attachSocket(send)` writes the `connect` frame as the socket's first frame, then
+rejoins every whisper topic. `connect` carries the `sessionToken` and, when you
+pass one, `attachSocket(send, context: {…})`. `detachSocket(code, reason)` takes
+the close frame the socket ended with, or nothing when there was none. Pass the
+code and reason so the client can tell an expired or refused session apart from
+an ordinary drop. It reports the first to `onTokenExpired(listener)`, which
+returns a handle that unregisters it, and it reports a refusal once per
+`sessionToken`. A refusal is a 4003 close, except the connect deadline's, which
+refuses no credential. Set a fresh `sessionToken` in the listener, and the next
+`attachSocket` carries it.
+
+Whispers are ephemeral, unacknowledged messages between the members of a topic.
+`whisperSubscribe(topic, listener)` joins a topic and returns the handle that
+leaves it. `whisper(topic, data)` sends to it and returns `false`, without
+queueing, when no socket is attached. `connectRoom(name, listener)` joins the
+topic `room:<name>` and returns a handle with `send` and `close`.
+
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`handleFrame` returns the frame's type). Each socket open sends the `connect` frame
+first, then resubscribes; `setConnected(true)` starts the flush of this shard's queued
+writes, which never throws:
+
+```dart
+var attempt = 0;
+while (!client.closed) {
+  int? closeCode;
+  String? closeReason;
+  try {
+    final socket = await connect(); // your socket library
+    if (client.closed) {
+      socket.close(); // closed while dialing: never attach a socket to a closed client
+      break;
+    }
+    // attachSocket writes `connect` first, so the server's onConnect hook fires before any subscription.
+    client.attachSocket((frame) => socket.add(jsonEncode(frame)));
+    client.resendSubscriptions();
+    client.setConnected(true);
+    await for (final raw in socket) {
+      if (client.closed) {
+        socket.close(); // the app closed the client: stop reading (also close the socket there, or an idle read never ends)
+        break;
+      }
+      // Dispatch runs application callbacks. A throw there is a bug in the app,
+      // not a dead socket, so report it and keep reading.
+      try {
+        if (client.handleFrame(raw as String) == 'ack') attempt = 0;
+      } catch (error, stack) {
+        stderr.writeln('lunora: subscription callback threw: $error\n$stack');
+      }
+    }
+    closeCode = socket.closeCode; // dart:io's WebSocket; a 4001 or 4003 close reports the expired or refused session
+    closeReason = socket.closeReason;
+  } catch (_) {}
+  client.setConnected(false);
+  client.detachSocket(closeCode, closeReason); // subscriptions made during backoff wait for the next resend
+  if (client.closed) break; // the app closed the client: stop, do not back off and dial again
+  final ms = min(30000, 1000 * (1 << min(attempt++, 5)));
+  await Future<void>.delayed(Duration(milliseconds: ms ~/ 2 + Random().nextInt(ms ~/ 2)));
+}
+```
+
+The `connect` frame carries the session credential as `token`; a deployment that sets `LUNORA_WS_BEARER` closes a socket whose first frame is not that `connect` with a matching `token` (close code 4003). The session credential never goes in the socket URL; the only `?token=` a client sends is an admin ticket.
+
+A shape poke is applied whole or not at all: a row the codec refuses leaves the
+view as it was and reaches the shape's `onError` coded `WIRE_DECODE_FAILED`. A
+poke whose `baseCheckpoint` is not the view's checkpoint (or whose epoch forked)
+and is not a reset empties the view, calls `onRows([])`, and re-subscribes the
+shape cold on the attached socket so the server re-seeds it.
+
 ### A live query is a `Stream`
 
-The row that is the reason this port exists. `watch` subscribes on first listen
-and unsubscribes when the last listener cancels, so disposing the widget disposes
-the subscription and there is no `dispose()` override to forget:
+The row that is the reason this port exists. Each listener opens its own
+subscription, which starts when it listens and is torn down when it cancels, so
+disposing the widget disposes exactly its own subscription and there is no
+`dispose()` override to forget — at the price of one server subscription, and one
+re-execution per write, for every listener:
 
 ```dart
 StreamBuilder<Object?>(
@@ -63,7 +139,15 @@ StreamBuilder<Object?>(
 ```
 
 The callback-shaped `client.subscribe(...)` every sibling port has is there too,
-for a value whose lifetime is not a widget's.
+for a value whose lifetime is not a widget's. `client.close()` ends every
+`watch()` stream still open, so a listener sees `done` rather than waiting on a
+client that will never feed it again.
+
+Changing the identity from a set one — `authSubject` or, with no subject,
+`authToken` — to a different one or to none retires the previous session: every
+subscription resubscribes cold (no `sinceSeq`/`sinceCheckpoint`), and every
+shape view is emptied, its `onRows` called with `[]`. A first sign-in and
+re-setting the same identity change nothing.
 
 ## Optimistic updates and offline writes
 
@@ -113,6 +197,46 @@ retried forever, and every discard — including one the capacity cap evicts out
 a _restored_ queue, which has no caller left to tell — reaches the queue's
 `onSettled`.
 
+A write that must never sit on disk — a credential, a one-time token — passes
+`onlineOnly: true` to `mutation`. It is never queued, persisted or replayed:
+where a normal write would be queued, the Future fails at once with a
+`LunoraApiException` coded `offlineNotQueued` (`OFFLINE_NOT_QUEUED`), before any
+optimistic layer is applied, and its arguments never reach the persistence
+adapter. It does not wait for a flush or queue behind pending writes, so it may
+land before an older queued write to the same document. A send that fails with no
+server reply while the socket is down (a refused connection, a DNS failure, a
+timeout) raises the same exception, with the transport error as its `cause`.
+
+How a replay reads the reply is one rule for a lone write and a batch alike: a
+coded envelope is the server's verdict whatever its HTTP status (so a coded 5xx
+is terminal), and only the transient codes (`SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
+`RATE_LIMITED`, `TOO_MANY_REQUESTS`) re-queue; a reply with no envelope re-queues,
+except a `413`, which splits a batch and settles a lone write
+`PAYLOAD_TOO_LARGE`. A refused credential (`UNAUTHORIZED`, `TOKEN_EXPIRED`,
+`UNAUTHENTICATED`) HOLDS the write — queued and persisted, not settled — and
+setting a fresh token replays it: a token or subject change re-flushes every
+connected shard with writes queued, as the reference's `setAuthToken` does,
+because a socket that stays up never reconnects to flush them. An envelope whose `data` does not
+decode is still that coded error, with the `data` dropped. A write the server
+committed whose result does not decode is still committed: its overlay confirms,
+and it settles with `WIRE_DECODE_FAILED` (the same code a direct call throws)
+instead of a value, never retried — that is decided by where the decode failed,
+so a server that itself answers `WIRE_DECODE_FAILED` has refused the write. A
+flush that fails unexpectedly part-way puts every write it had not yet settled
+back on the queue, and never throws.
+
+**Behaviour change for batch replays of an empty shard key.** An earlier version
+of this port sent `"shardKey": ""` on each batch entry whose shard key was
+empty, while a write replayed alone went to the default shard. The runtime
+routes `""` to a Durable Object literally named `""`, so writes replayed in a
+batch by that version landed there. This client now sends no shard key for an
+empty one, and reads and writes the default shard. Data already written to the
+`""` Durable Object is not migrated.
+
+Every RPC fails with `LunoraApiException` — coded `INTERNAL` when the body is not
+a JSON object (an HTML error page, `null`, `[]`) — never with a raw
+`FormatException` or cast error.
+
 ### Three things this port does differently
 
 Each follows from what this transport is rather than from taste, and
@@ -138,7 +262,31 @@ Each follows from what this transport is rather than from taste, and
 It is persisted with every queued write and re-checked before that write replays,
 so a restart cannot push one user's queued writes as another. Leave it unset to
 fall back to a digest of `authToken`; a null token then means signed out, which
-is a real identity rather than "unstamped".
+is a real identity rather than "unstamped". Without a subject, a new token is a
+new identity, so a refresh rejects the queued writes `OFFLINE_IDENTITY_CHANGED`,
+as the reference client does; a subject is what keeps them.
+
+A subject names the holder of a TOKEN, so set it again whenever the token
+changes:
+
+```dart
+client
+  ..authToken = refreshed
+  ..authSubject = userId; // the same id for a refresh, the new user's for a switch
+```
+
+Until it is, the new token may be the same user's or someone else's, and queued
+writes are HELD — not sent, not dropped. The same subject then replays them
+under the new token; a different one rejects them unsent. A write queued under a
+token before any subject was set replays once a subject names that same token.
+Nobody signed in (no subject, no token) holds a stamped write as well, rather
+than rejecting it. `OfflineQueue(onHeld: ...)` is told the writes each such flush held, so a
+queue waiting on a subject can be found.
+
+**Behaviour change.** A token set with a subject in place used to keep the queue
+replaying under that subject straight away. Setting `authToken` alone now holds
+it until `authSubject` is set again, since a token alone cannot say whether it
+is a refresh or another user's sign-in.
 
 ## Wire types
 
@@ -155,6 +303,12 @@ plain values map to JSON directly:
 | `URL`                                  | `WireUrl('https://…')`                                               |
 
 `decodeWire` returns these same wrappers so values round-trip exactly.
+
+A number off the wire is a float64, whatever its spelling: `JSON.stringify`
+writes a double in [2^53, 1e21) as an integer literal, which `jsonDecode` types
+as an `int`, so `decodeWire` turns an `int` past ±(2^53−1) into the `double`
+`JSON.parse` would have read. An `int` you construct past that range is still
+refused by `encodeWire` — wrap it in a `BigInt`.
 
 ### Two things to know about generated models
 

@@ -16,20 +16,22 @@
  * config it reports which binding entries are eligible for remote mode. The
  * stateless storage + service bindings whose wrangler schema accepts
  * `"remote": true` qualify (D1, KV, R2, Vectorize, Queue producers, Services,
- * AI); Durable Objects are never remoted, because a Lunora shard's
+ * AI, AI Search); Durable Objects are never remoted, because a Lunora shard's
  * authoritative state is its DO SQLite and CF has no remote-DO mode — shards run
  * locally while their data deps point at production (the PLAN5 §5.3 boundary).
  *
- * {@link materializeRemoteWranglerConfig} writes a sibling temp config with
+ * {@link materializeDevWranglerConfig} writes a sibling temp config with
  * `"remote": true` injected onto each eligible binding, comment-preservingly, so
  * `lunora dev` can point `wrangler dev --config` at it without ever mutating the
- * user's checked-in `wrangler.jsonc`. It returns a {@link MaterializeResult.cleanup}
- * disposer so the caller can unlink the generated temp dir when dev exits.
+ * user's checked-in `wrangler.jsonc`. It returns a `cleanup` disposer so the caller
+ * can remove the file when dev exits.
  */
-import { rmSync, writeFileSync } from "node:fs";
-
 import { applyModify } from "../jsonc-edit";
-import join from "../path";
+import { hasCloudflareCredentials } from "./credentials";
+import type { WithheldBinding } from "./dev-config";
+import { noopCleanup, withheldBindings, writeDevConfig } from "./dev-config";
+import { readManifest } from "./lunora-manifest";
+import { ownedServiceBindings } from "./reconcile-services";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 /**
@@ -52,6 +54,14 @@ import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
  */
 const REMOTE_ELIGIBLE_KEYS = {
     ai: { label: "AI", shape: "object" },
+    // Both AI Search sections are remote in plain `wrangler dev` already (wrangler
+    // rates them "never has a local simulator"); tagging them here only silences
+    // its "may incur usage charges" warning under `LUNORA_REMOTE`.
+    ai_search: { label: "AI Search", shape: "array" },
+    ai_search_namespaces: { label: "AI Search namespace", shape: "array" },
+    // Analytics SQL is likewise remote-only in plain `wrangler dev` (never a local
+    // simulator, wrangler >= 4.145.0); tagging it only silences the usage warning.
+    analytics: { label: "Analytics SQL", shape: "object" },
     d1_databases: { label: "D1", shape: "array" },
     kv_namespaces: { label: "KV", shape: "array" },
     queues: { label: "Queue", shape: "producers" },
@@ -62,11 +72,21 @@ const REMOTE_ELIGIBLE_KEYS = {
 
 type RemoteEligibleKey = keyof typeof REMOTE_ELIGIBLE_KEYS;
 
+/**
+ * The eligible sections of one structural `shape` — a mapped key type over the
+ * table, so a section narrowed by {@link hasShape} indexes
+ * {@link RemoteWranglerShape} at its real type, without a cast.
+ */
+type RemoteSectionOfShape<Shape> = {
+    [Key in RemoteEligibleKey]: (typeof REMOTE_ELIGIBLE_KEYS)[Key]["shape"] extends Shape ? Key : never;
+}[RemoteEligibleKey];
+
 const REMOTE_ELIGIBLE_KEY_LIST = Object.keys(REMOTE_ELIGIBLE_KEYS) as RemoteEligibleKey[];
 
 /** One binding object as it appears in any eligible section. */
 interface BindingEntry {
     binding?: string;
+    id?: unknown;
     remote?: boolean;
 }
 
@@ -91,6 +111,10 @@ interface RemoteBindingPlan {
 /** The structural slice of a wrangler config the remote planner reads. */
 interface RemoteWranglerShape {
     ai?: BindingEntry | null;
+    ai_search?: ReadonlyArray<BindingEntry | null | undefined>;
+    ai_search_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
+    analytics?: BindingEntry | null;
+    artifacts?: ReadonlyArray<BindingEntry | null | undefined>;
     d1_databases?: ReadonlyArray<BindingEntry | null | undefined>;
     kv_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     queues?: { producers?: ReadonlyArray<BindingEntry | null | undefined> } | null;
@@ -120,30 +144,39 @@ const planArrayEntries = (
             continue;
         }
 
+        // An id-less KV namespace is one wrangler has not created yet: there is no deployed one to proxy to.
+        if (section === "kv_namespaces" && (typeof entry.id !== "string" || entry.id === "")) {
+            continue;
+        }
+
         plans.push({ binding: entryName(entry, `#${String(index)}`), kind, path: [...pathPrefix, index], section });
     }
 
     return plans;
 };
 
+/** Narrow `section` to the eligible sections of `shape`. */
+const hasShape = <Shape extends (typeof REMOTE_ELIGIBLE_KEYS)[RemoteEligibleKey]["shape"]>(
+    section: RemoteEligibleKey,
+    shape: Shape,
+): section is RemoteSectionOfShape<Shape> => REMOTE_ELIGIBLE_KEYS[section].shape === shape;
+
 /** Plans for one eligible section, dispatched on its declared structural shape. */
 const planSection = (section: RemoteEligibleKey, parsed: RemoteWranglerShape): RemoteBindingPlan[] => {
-    const { label, shape } = REMOTE_ELIGIBLE_KEYS[section];
+    const { label } = REMOTE_ELIGIBLE_KEYS[section];
 
-    if (shape === "array") {
-        const entries = (parsed[section] as ReadonlyArray<BindingEntry | null | undefined> | undefined) ?? [];
-
-        return planArrayEntries(section, entries, label, []);
+    if (hasShape(section, "array")) {
+        return planArrayEntries(section, parsed[section] ?? [], label, []);
     }
 
-    if (shape === "producers") {
-        return planArrayEntries(section, parsed.queues?.producers ?? [], label, ["producers"]);
+    if (hasShape(section, "object")) {
+        // Single-object section (`ai`, `analytics`): one binding, edit path is the section key itself.
+        const entry = parsed[section];
+
+        return entry === null || entry === undefined ? [] : [{ binding: entryName(entry, section), kind: label, path: [], section }];
     }
 
-    // Single-object section (`ai`): one binding, edit path is the section key itself.
-    const entry = parsed.ai;
-
-    return entry === null || entry === undefined ? [] : [{ binding: entryName(entry, section), kind: label, path: [], section }];
+    return planArrayEntries(section, parsed.queues?.producers ?? [], label, ["producers"]);
 };
 
 /**
@@ -171,134 +204,75 @@ const injectRemoteFlags = (text: string, plans: ReadonlyArray<RemoteBindingPlan>
     return next;
 };
 
-interface MaterializeOptions {
-    /** When `false`, the call is a no-op (returns `enabled: false`). */
-    enabled: boolean;
+interface MaterializeDevOptions {
+    /** Whether wrangler can authenticate; defaults to a probe of `projectRoot`. */
+    hasCredentials?: () => boolean;
     projectRoot: string;
+    /** Proxy the eligible bindings to the deployed resources (`--remote` / `LUNORA_REMOTE`). Off, only the logged-out `ai` withholding applies. */
+    remote: boolean;
 }
 
-interface MaterializeResult {
-    /**
-     * Removes the generated temp config file. Always present and always safe to
-     * call: it is idempotent, a no-op when nothing was written (disabled /
-     * fall-through cases), and never throws if the path is already gone. The dev
-     * command calls this on every exit path (normal, signal, error).
-     */
+interface MaterializeDevResult {
+    /** Removes the temp config. Always safe to call: idempotent, and a no-op when nothing was written. */
     cleanup: () => void;
-
-    /**
-     * Absolute path to the generated temp config to pass to
-     * `wrangler dev --config`. `undefined` when remote mode is disabled, no
-     * wrangler config was found, it failed to parse, or it declared no eligible
-     * binding (nothing to remote — run plain local dev).
-     */
+    /** The temp config to pass to `wrangler dev --config`, or `undefined` to run the user's file unchanged. */
     configPath?: string;
-    /** Whether remote mode was requested at all. */
-    enabled: boolean;
-    /** Why no temp config was produced, for logging (only set when none was). */
+    /** Why remote mode produced no temp config, for the dev log. Only set when nothing was written. */
     reason?: string;
     /** The bindings flipped to remote, for the dev banner. */
     remoteBindings: RemoteBindingPlan[];
+    /** The `ai` binding name left out for lack of Cloudflare credentials, for the dev warning. */
+    withheld: WithheldBinding[];
 }
 
-/** A disposer that does nothing — the cleanup for every fall-through (no temp file written). */
-const noopCleanup = (): void => {};
-
 /**
- * Build an idempotent disposer that removes the generated temp config file.
- * Guards against a double call (the flag) and a missing path (`force: true` +
- * try/catch), so the dev command can wire it onto multiple exit paths without
- * ever crashing the shutdown.
+ * Write the temp wrangler config a dev session runs with: the user's file with any
+ * eligible bindings flipped to `"remote": true` (when `remote` is set), and the
+ * `ai` binding removed when the session has no Cloudflare login. See `dev-config.ts`
+ * for why the `ai` removal exists.
+ *
+ * The temp file sits beside the source `wrangler.jsonc`, not in an OS temp dir,
+ * because wrangler resolves a config's relative `main`/`assets`/`migrations_dir`
+ * paths against the config file's own directory. Returns no `configPath` when there
+ * is nothing to change, so the caller runs the user's file unchanged.
  */
-const createCleanup = (path: string): (() => void) => {
-    let done = false;
-
-    return () => {
-        if (done) {
-            return;
-        }
-
-        done = true;
-
-        try {
-            rmSync(path, { force: true, recursive: true });
-        } catch {
-            /* already gone / unremovable — nothing actionable on shutdown */
-        }
+const materializeDevWranglerConfig = (options: MaterializeDevOptions): MaterializeDevResult => {
+    const unchanged = (reason?: string): MaterializeDevResult => {
+        return { cleanup: noopCleanup, reason, remoteBindings: [], withheld: [] };
     };
-};
-
-/**
- * Per-process counter appended to every materialized temp config's name — the
- * "generation" half of {@link remoteConfigBasename}.
- *
- * A pid alone is NOT unique within one dev process. Vite's `restartServer`
- * resolves the new config (building new plugin instances, which materialize a
- * fresh temp file) BEFORE closing the old server, so the old generation's
- * `buildEnd` disposer fired last — against a constant path — and deleted the
- * file the NEW generation had just written. With `remote: true` the worker then
- * booted against empty local D1/KV/R2 after every restart. Giving each
- * materialization its own filename makes the disposer's ownership structural: it
- * can only ever unlink the file it wrote.
- */
-let remoteConfigGeneration = 0;
-
-/**
- * Filename for a Lunora-generated remote-dev config. A dotfile (less likely to
- * be committed / shown), unique per process AND per materialization so
- * concurrent `lunora dev` runs — and successive dev-server generations within
- * one run — never share a path; the cleanup disposer unlinks it on exit.
- */
-const remoteConfigBasename = (): string => {
-    remoteConfigGeneration += 1;
-
-    return `.wrangler.lunora-remote.${String(process.pid)}.${String(remoteConfigGeneration)}.jsonc`;
-};
-
-/**
- * Produce a temporary wrangler config with `"remote": true` on every eligible
- * binding, so `lunora dev` can run `wrangler dev --config <temp>` against the
- * deployed D1/KV/R2 without touching the user's file.
- *
- * The temp file is written as a sibling of the source `wrangler.jsonc` (in the
- * project root), NOT an OS temp dir: wrangler resolves a config's relative paths
- * (`main`, `assets`, `migrations_dir`, …) against the **config file's own
- * directory**, so a temp config in `/tmp` would make wrangler look for
- * `/tmp/src/server.ts` and fail to start the worker. Keeping it beside the real
- * config preserves those relative paths. Returns `configPath: undefined` (with a
- * `reason`) for every fall-through case so the caller degrades to plain local
- * dev instead of failing.
- */
-const materializeRemoteWranglerConfig = (options: MaterializeOptions): MaterializeResult => {
-    if (!options.enabled) {
-        return { cleanup: noopCleanup, enabled: false, remoteBindings: [] };
-    }
-
     const wranglerPath = findWranglerFile(options.projectRoot);
 
     if (!wranglerPath) {
-        return { cleanup: noopCleanup, enabled: true, reason: "wrangler.jsonc not found", remoteBindings: [] };
+        return unchanged("wrangler.jsonc not found");
     }
 
     const { parsed, text } = readWranglerJsonc<RemoteWranglerShape>(wranglerPath);
 
     if (parsed === undefined) {
-        return { cleanup: noopCleanup, enabled: true, reason: `failed to parse ${wranglerPath} as JSONC`, remoteBindings: [] };
+        return unchanged(`failed to parse ${wranglerPath} as JSONC`);
     }
 
-    const plans = planRemoteBindings(parsed);
+    // A Lunora-owned service binding (plan 457) runs locally beside the app in the
+    // same dev session, so remoting it would call the deployed Worker instead.
+    const localServices = ownedServiceBindings(readManifest(options.projectRoot));
+    const plans = options.remote ? planRemoteBindings(parsed).filter((plan) => plan.section !== "services" || !localServices.has(plan.binding)) : [];
+    const withheld = withheldBindings(parsed, options.hasCredentials ?? (() => hasCloudflareCredentials({ projectRoot: options.projectRoot })));
+    const remoteBindings = withheld.some(({ kind }) => kind === "ai") ? plans.filter((plan) => plan.section !== "ai") : plans;
 
-    if (plans.length === 0) {
-        return { cleanup: noopCleanup, enabled: true, reason: "no remote-eligible bindings to proxy", remoteBindings: [] };
+    if (remoteBindings.length === 0 && withheld.length === 0) {
+        return unchanged(options.remote ? "no remote-eligible bindings to proxy" : undefined);
     }
 
-    // Sibling of the source config (same directory) so wrangler resolves the
-    // config's relative `main`/`assets`/`migrations_dir` paths correctly.
-    const configPath = join(options.projectRoot, remoteConfigBasename());
+    let withoutWithheld = text;
 
-    writeFileSync(configPath, injectRemoteFlags(text, plans), "utf8");
+    for (const { kind } of withheld) {
+        withoutWithheld = applyModify(withoutWithheld, [kind], undefined);
+    }
 
-    return { cleanup: createCleanup(configPath), configPath, enabled: true, remoteBindings: plans };
+    const contents = remoteBindings.length > 0 ? injectRemoteFlags(withoutWithheld, remoteBindings) : withoutWithheld;
+    const written = writeDevConfig(options.projectRoot, "dev", contents);
+
+    return { cleanup: written.cleanup, configPath: written.configPath, remoteBindings, withheld };
 };
 
 /**
@@ -319,7 +293,7 @@ const isRemoteEnvEnabled = (value: string | undefined): boolean => {
 /** The three inputs that can switch remote-binding dev on, in precedence order. */
 interface RemoteEnableInputs {
     /**
-     * The `remote` preference from `lunora.json` (the lowest-priority signal).
+     * The `remote` preference from `lunora.config.*` (the lowest-priority signal).
      * `undefined` means "no project preference"; an explicit `false` here loses
      * to neither the flag nor the env when those are absent — it just stays off.
      */
@@ -335,7 +309,7 @@ interface RemoteEnableInputs {
  *
  * 1. an explicit `--remote` flag (highest — a deliberate per-invocation choice),
  * 2. then `LUNORA_REMOTE` in the environment,
- * 3. then the `remote` key in `lunora.json` (lowest — a project default).
+ * 3. then the `remote` key in `lunora.config.*` (lowest — a project default).
  *
  * The flag and env are one-directional (they can only turn remote *on*); only
  * the config preference carries a meaningful `false`, and it applies solely when
@@ -354,5 +328,5 @@ const resolveRemoteEnabled = (inputs: RemoteEnableInputs): boolean => {
     return inputs.configPreference ?? false;
 };
 
-export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape };
-export { injectRemoteFlags, isRemoteEnvEnabled, materializeRemoteWranglerConfig, planRemoteBindings, REMOTE_ELIGIBLE_KEYS, resolveRemoteEnabled };
+export type { MaterializeDevOptions, MaterializeDevResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape };
+export { injectRemoteFlags, isRemoteEnvEnabled, materializeDevWranglerConfig, planRemoteBindings, REMOTE_ELIGIBLE_KEYS, resolveRemoteEnabled };

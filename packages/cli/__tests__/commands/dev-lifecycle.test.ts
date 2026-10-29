@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { claimDevServerState, clearDevServerState, DEV_LOG_FILE, readDevServerState, writeDevServerState } from "@lunora/config";
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DevOptions } from "../../src/commands/dev/index";
 import { runDevBackground, runDevLogs, runDevStatus, runDevStop, startBackground } from "../../src/commands/dev/lifecycle";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 interface RecordingLogger {
@@ -32,6 +34,7 @@ describe("lunora dev lifecycle", () => {
     });
 
     afterEach(() => {
+        vi.unstubAllEnvs();
         vi.restoreAllMocks();
         rmSync(workdir, { force: true, recursive: true });
     });
@@ -296,6 +299,40 @@ describe("lunora dev lifecycle", () => {
             expect(readDevServerState(workdir)).toBeUndefined();
         });
 
+        it("warns about a cloudflare.config.ts in this terminal and claims the guard before spawning the child", async () => {
+            expect.assertions(3);
+
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+            writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            const { lines, logger } = recordingLogger();
+            let claimedAtSpawn: string | undefined;
+
+            try {
+                await startBackground({
+                    cwd: workdir,
+                    jsonLogs: false,
+                    logger,
+                    options: {} as DevOptions,
+                    remote: false,
+                    run: () => {
+                        // The detached child inherits process.env at spawn time.
+                        claimedAtSpawn = process.env[CLOUDFLARE_CLI_CONFIG_WARNING_ENV];
+
+                        return Promise.resolve({ code: 0 });
+                    },
+                });
+            } finally {
+                vi.unstubAllEnvs();
+            }
+
+            const warnings = lines.filter((line) => line.level === "warn" && line.message.includes("cloudflare.config.ts"));
+
+            expect(warnings).toHaveLength(1);
+            expect(warnings[0]?.message).toContain("https://github.com/anolilab/lunora/issues/964");
+            expect(claimedAtSpawn).toBe("1");
+        });
+
         it("forwards --target to the daemon", async () => {
             expect.assertions(2);
 
@@ -320,6 +357,104 @@ describe("lunora dev lifecycle", () => {
             // the default way to lose the flag.
             expect(args).toContain("--target");
             expect(args?.[(args.indexOf("--target") ?? 0) + 1]).toBe("aws");
+        });
+
+        it.each([
+            ["vite", { "@lunora/vite": "1.0.0" }],
+            ["wrangler", {}],
+        ])("forwards lazy functions only when enabled for %s", async (flavor, dependencies) => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies, name: "app" }), "utf8");
+
+            const seen: ReadonlyArray<string>[] = [];
+            const environments: (Record<string, string | undefined> | undefined)[] = [];
+            const run = (options: { command: { args: ReadonlyArray<string> }; env?: Record<string, string | undefined> }): Promise<{ code: number }> => {
+                seen.push(options.command.args);
+                environments.push(options.env);
+
+                return Promise.resolve({ code: 0 });
+            };
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: { lazyFunctions: true } as DevOptions,
+                remote: false,
+                run,
+            });
+
+            clearDevServerState(workdir, process.pid);
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: {} as DevOptions,
+                remote: false,
+                run,
+            });
+
+            expect(environments[0]?.LUNORA_LAZY_FUNCTIONS).toBe(flavor === "vite" ? "1" : undefined);
+            expect(environments[1]?.LUNORA_LAZY_FUNCTIONS).toBeUndefined();
+            expect(seen[0]?.includes("--lazy-functions")).toBe(flavor === "wrangler");
+            expect(seen[1]).not.toContain("--lazy-functions");
+        });
+
+        it.each([
+            ["vite", { "@lunora/vite": "1.0.0" }],
+            ["wrangler", {}],
+        ])("forwards the lazy environment opt-in to the %s background child", async (flavor, dependencies) => {
+            expect.assertions(2);
+
+            vi.stubEnv("LUNORA_LAZY_FUNCTIONS", " True ");
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies, name: "app" }));
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: {} as DevOptions,
+                remote: false,
+                run: (options) => {
+                    expect(options.env?.LUNORA_LAZY_FUNCTIONS).toBe(flavor === "vite" ? "1" : undefined);
+                    expect(options.command.args.includes("--lazy-functions")).toBe(flavor === "wrangler");
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
+        });
+
+        it("forwards --inspector-port to the daemon, and omits it when unset", async () => {
+            expect.assertions(3);
+
+            const seen: ReadonlyArray<string>[] = [];
+
+            const run = (options: { command: { args: ReadonlyArray<string> } }): Promise<{ code: number }> => {
+                seen.push(options.command.args);
+
+                return Promise.resolve({ code: 0 });
+            };
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: { inspectorPort: 9235 } as DevOptions,
+                remote: false,
+                run,
+            });
+
+            clearDevServerState(workdir, process.pid);
+
+            await startBackground({ cwd: workdir, jsonLogs: false, logger: recordingLogger().logger, options: {} as DevOptions, remote: false, run });
+
+            // The daemon re-parses argv, so the flag has to be spelled out here —
+            // `--background` is the automatic path for an AI agent, which makes
+            // this the default way the pinned inspector port gets lost.
+            expect(seen[0]).toContain("--inspector-port");
+            expect(seen[0]?.[(seen[0]?.indexOf("--inspector-port") ?? 0) + 1]).toBe("9235");
+            expect(seen[1]).not.toContain("--inspector-port");
         });
 
         it("forwards --no-codegen to the vite child as LUNORA_CODEGEN=0", async () => {
@@ -374,7 +509,7 @@ describe("lunora dev lifecycle", () => {
                 },
             });
 
-            // Absent, not empty-string: the daemon re-reads `lunora.json`, so
+            // Absent, not empty-string: the daemon re-reads `lunora.config.ts`, so
             // passing `--target ""` would override a project setting with junk.
             expect(args).not.toContain("--target");
         });
@@ -546,7 +681,7 @@ describe("lunora dev lifecycle", () => {
                 },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
             expect(lines.some((line) => line.level === "warn" && line.message.includes("lunora dev logs"))).toBe(true);
             // The child's pid is surfaced in the warning so an agent (or human)
             // knows which process to inspect without a separate `dev status`.
@@ -581,7 +716,7 @@ describe("lunora dev lifecycle", () => {
                 },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
             // The record now points at the detached child, not the parent that
             // is about to return — `dev status`/`stop`/`logs` can still find
             // and signal it instead of reporting "No dev server running".
@@ -630,7 +765,7 @@ describe("lunora dev lifecycle", () => {
                 },
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
 
             const state = readDevServerState(workdir);
 

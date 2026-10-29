@@ -1,7 +1,7 @@
 import type { Validator } from "@lunora/values";
 
 import applyOutput from "../apply-output";
-import { validateArgs } from "../functions";
+import { admitSensitiveArgs, validateArgs } from "../functions";
 import { unionMaskColumns } from "../mask/policy-tag";
 import type { RlsTag } from "../rls/policy-tag";
 import { readRlsTags } from "../rls/policy-tag";
@@ -15,6 +15,8 @@ import type {
     QueryCtx as QueryContext,
     X402ProcedureConfig,
 } from "../types";
+import extendContext from "./extend-context";
+import { isPerDispatchMiddleware } from "./per-dispatch-tag";
 import runMiddlewareChain from "./run-middleware";
 import type {
     ActionBuilder,
@@ -88,7 +90,7 @@ const withCallContext = (context: unknown, meta: Record<string, unknown> | undef
         return context;
     }
 
-    return Object.assign(Object.create(Object.getPrototypeOf(context) as object | null) as object, context, {
+    return extendContext(context, {
         args: Object.freeze({ ...args }),
         ...(meta === undefined ? {} : { meta }),
     });
@@ -121,6 +123,9 @@ const makeHandler =
     ) =>
     async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
         const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
+
+        admitSensitiveArgs(context, args, parsed);
+
         const resolvedContext = await runMiddleware(middlewares, withCallContext(context, meta, parsed, middlewares.length));
         const result = await userHandler({ args: parsed, ctx: resolvedContext });
 
@@ -145,6 +150,8 @@ const makeStreamHandler =
         // Args validation runs synchronously at call time so a bad envelope
         // surfaces before the iterator is consumed.
         const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
+
+        admitSensitiveArgs(context, args, parsed);
 
         // The middleware chain may be async, but we don't want to block the
         // caller before returning an iterable — defer the chain to the first
@@ -209,6 +216,21 @@ const collectRls = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): u
 
     return tags.length > 0 ? { tags } : undefined;
 };
+
+/**
+ * Whether the chain carries a step with a per-dispatch effect — limiter budget
+ * consumed, a single-use token burned — that a memoized response cannot stand
+ * in for. Hoisted onto the registered function as `perDispatch: true`; the
+ * generated `isCacheableQuery` refuses such a query, because a reactive-cache
+ * hit answers without running the chain at all and the effect would silently
+ * happen once for an unbounded number of requests.
+ *
+ * Read off the DIRECT elements of the `.use(...)` chain, exactly like the
+ * `rls()` / `mask()` tags — which is why `composeMiddleware` re-stamps it onto
+ * the arrow it folds a chain into.
+ */
+const collectPerDispatch = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): boolean =>
+    middlewares.some((middleware) => isPerDispatchMiddleware(middleware));
 
 /**
  * Shadow the mutators `Object.freeze` cannot reach.
@@ -316,6 +338,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
         [kind]: <R>(userHandler: (options: { args: Record<string, unknown>; ctx: unknown }) => Promise<R> | R) => {
             const rls = collectRls(state.middlewares);
             const maskedTables = unionMaskColumns(state.middlewares);
+            const perDispatch = collectPerDispatch(state.middlewares);
 
             return {
                 args: state.args,
@@ -323,6 +346,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                 handler: makeHandler(state.args, state.middlewares, userHandler, state.output, state.meta),
                 kind,
                 ...(maskedTables ? { maskedTables } : {}),
+                ...(perDispatch ? { perDispatch } : {}),
                 ...(rls ? { rls } : {}),
                 ...(visibility ? { visibility } : {}),
                 ...(state.x402 ? { x402: state.x402 } : {}),
@@ -356,6 +380,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                   ) => {
                       const rls = collectRls(state.middlewares);
                       const maskedTables = unionMaskColumns(state.middlewares);
+                      const perDispatch = collectPerDispatch(state.middlewares);
                       // `durable: true` and `durable: { … }` are the same thing to
                       // the runtime — normalise here so it only ever sees the object
                       // (and `false`/omitted collapse to "not durable").
@@ -368,6 +393,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                           handler: makeStreamHandler(state.args, state.middlewares, userHandler, state.meta),
                           kind: "stream" as const,
                           ...(maskedTables ? { maskedTables } : {}),
+                          ...(perDispatch ? { perDispatch } : {}),
                           ...(rls ? { rls } : {}),
                           ...(visibility ? { visibility } : {}),
                           ...(state.x402 ? { x402: state.x402 } : {}),

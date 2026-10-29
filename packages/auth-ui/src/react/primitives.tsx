@@ -1,9 +1,10 @@
 "use client";
 
 import type { ComponentType, ReactElement, ReactNode } from "react";
-import { useId } from "react";
+import { useEffect, useId, useState } from "react";
 
 import type { AvailabilityStatus, FieldState } from "../core";
+import { cooldownLabel, watchCooldown } from "../core/cooldown";
 import { providerLabel } from "../core/labels";
 import { passwordRequirements, passwordScore } from "../core/password-policy";
 import { useAuthUI, useAuthUILink } from "./provider";
@@ -96,18 +97,28 @@ const Field = ({ autoComplete, field, inputMode, label, name, onBlur, onChange, 
     );
 };
 
-/** Primary submit button with a pending state. */
+/** Primary submit button with a pending state and an optional resend cooldown. */
 interface SubmitButtonProps {
+    /** A send/resend flow's `resendAvailableAt`: disabled, with a countdown, until then. */
+    availableAt?: number;
     children: ReactNode;
     pending: boolean;
 }
 
-const SubmitButton = ({ children, pending }: SubmitButtonProps): ReactElement => (
-    <button className="lunora-auth-button" disabled={pending} type="submit">
-        {pending ? <span aria-hidden="true" className="lunora-auth-button__spinner" /> : null}
-        {children}
-    </button>
-);
+const SubmitButton = ({ availableAt, children, pending }: SubmitButtonProps): ReactElement => {
+    const { localization: t } = useAuthUI();
+    const [wait, setWait] = useState(0);
+
+    useEffect(() => watchCooldown(availableAt, setWait), [availableAt]);
+
+    return (
+        <button className="lunora-auth-button" disabled={pending || wait > 0} type="submit">
+            {pending ? <span aria-hidden="true" className="lunora-auth-button__spinner" /> : null}
+            {children}
+            {wait > 0 ? <span className="lunora-auth-button__cooldown">{cooldownLabel(t, wait)}</span> : null}
+        </button>
+    );
+};
 
 /** Top-level error / success banner (error is announced via `role="alert"`). */
 interface FormBannerProps {

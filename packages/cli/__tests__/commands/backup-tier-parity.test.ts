@@ -17,9 +17,9 @@ import { join } from "node:path";
 
 import type { BackupStore, QueryCoordinator, ShardNamespaceLike } from "@lunora/runtime";
 import { backupObjectKey, createWorker } from "@lunora/runtime";
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { decodeWire, encodeWire } from "../../../../shared/wire-codec";
 import { runBackupCommand } from "../../src/commands/backup/handler";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import type { Logger } from "../../src/util/logger";
@@ -127,6 +127,33 @@ const workerDoubleOver = (bucket: Bucket): { fetchImpl: StreamingFetchLike; impo
     const imported: string[] = [];
     const puts: { bucket: string | undefined; key: string }[] = [];
 
+    /** A `dryRun` POST is the check before the import: it records nothing. A real POST records its rows and reports every document inserted. */
+    const importAnswer = (url: URL, body: string): Awaited<ReturnType<StreamingFetchLike>> => {
+        if (url.searchParams.get("dryRun") === "true") {
+            return {
+                body: null,
+                json: async () => {
+                    return { dryRun: true, inserted: {}, received: 0 };
+                },
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
+        }
+
+        imported.push(body);
+
+        return {
+            body: null,
+            json: async () => {
+                return { inserted: { users: DOCUMENTS.length }, received: DOCUMENTS.length };
+            },
+            ok: true,
+            status: 200,
+            text: async () => "",
+        };
+    };
+
     const fetchImpl: StreamingFetchLike = async (input, init) => {
         const url = new URL(input);
         const method = init?.method ?? "GET";
@@ -141,9 +168,7 @@ const workerDoubleOver = (bucket: Bucket): { fetchImpl: StreamingFetchLike; impo
         }
 
         if (url.pathname === "/_lunora/admin/import") {
-            imported.push(String(init?.body ?? ""));
-
-            return json({ inserted: { users: DOCUMENTS.length }, received: DOCUMENTS.length });
+            return importAnswer(url, String(init?.body ?? ""));
         }
 
         if (url.pathname === "/_lunora/admin/storage/object") {

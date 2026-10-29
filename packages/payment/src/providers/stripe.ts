@@ -14,8 +14,8 @@ import type { Stripe } from "stripe";
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
 import { idempotencyKey } from "../idempotency";
-import { asRecord, readBoolean, readNumber, readString } from "../json";
-import { compareMoney, money, zeroMoney } from "../money";
+import { asRecord, readBoolean, readNumber, readString, secondsToMs } from "../json";
+import { compareMoney, moneyFromMinor, zeroMoney } from "../money";
 import type {
     CaptureInput,
     CheckoutInput,
@@ -39,7 +39,6 @@ import stateToEventType from "./subscription-event";
  * The Stripe SDK surface the adapter uses, as a structural type — a real `Stripe` instance satisfies
  * it without a cast. Resources are `unknown` here (the adapter re-types the client as the real
  * `Stripe` internally); this keeps the SDK's full type out of the published declaration files.
- * @experimental
  */
 interface StripeClientLike {
     readonly billing: unknown;
@@ -48,14 +47,12 @@ interface StripeClientLike {
     readonly customers: unknown;
     readonly paymentIntents: unknown;
     readonly refunds: unknown;
+    /** Only reached when a subscription's embedded `items` list is paginated — see `itemsComplete`. */
+    readonly subscriptionItems: unknown;
     readonly subscriptions: unknown;
     readonly webhooks: unknown;
 }
 
-/**
- * `StripeAdapterOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 interface StripeAdapterOptions {
     readonly client: StripeClientLike;
     readonly webhookSecret: string;
@@ -93,44 +90,78 @@ const SUBSCRIPTION_STATE_BY_STRIPE_STATUS: Record<string, SubscriptionState> = {
 const readReferenceId = (object: Record<string, unknown>): string | undefined =>
     readString(asRecord(object.metadata), "referenceId") ?? readString(object, "client_reference_id");
 
-const firstItem = (object: Record<string, unknown>): Record<string, unknown> => {
+const subscriptionItems = (object: Record<string, unknown>): ReadonlyArray<unknown> => {
     const items = asRecord(object.items);
-    const data = Array.isArray(items.data) ? items.data : [];
 
-    return asRecord(data[0]);
+    return Array.isArray(items.data) ? items.data : [];
 };
 
+const firstItem = (object: Record<string, unknown>): Record<string, unknown> => asRecord(subscriptionItems(object)[0]);
+
 const firstPriceId = (object: Record<string, unknown>): string | undefined => readString(asRecord(firstItem(object).price), "id");
+
+/**
+ * The price ids on the embedded item page, in Stripe's item order.
+ *
+ * A Stripe subscription is a LIST of items: a base plan alongside an add-on or a metered price is
+ * ordinary, and the customer is paying for all of them. Keeping only `items.data[0]` denied every
+ * non-first price — `check({ priceId })` said no and a plan keyed on it never resolved.
+ *
+ * This reads one PAGE. Pair it with {@link itemsComplete} before reporting the result as the whole
+ * set; `getSubscriptionStatus` fetches the rest when it isn't.
+ */
+const pagePriceIds = (object: Record<string, unknown>): string[] => {
+    const ids: string[] = [];
+
+    for (const item of subscriptionItems(object)) {
+        const id = readString(asRecord(asRecord(item).price), "id");
+
+        if (id !== undefined && id !== "") {
+            ids.push(id);
+        }
+    }
+
+    return ids;
+};
+
+/**
+ * Whether `items` is the complete set rather than the first page of a longer one.
+ *
+ * `Subscription.items` is an `ApiList`, not a plain array: Stripe's list default is 10 per page
+ * (`PaginationParams.limit`) and it sets `has_more` when there are more. So a subscription with
+ * enough items embeds only its first page.
+ *
+ * An INCOMPLETE page must never be reported as the price set. `sync.ts` applies a reported set as a
+ * wholesale replacement, so handing it a truncated one would delete the prices past the first page
+ * from a row that already had them — turning this fix into the same entitlement loss it closes, just
+ * at a higher item count. Every caller that cannot paginate (the webhook mapper, and the
+ * cancel/resume/update responses) therefore reports no set at all and leaves the stored one standing.
+ */
+const itemsComplete = (object: Record<string, unknown>): boolean => readBoolean(asRecord(object.items), "has_more") !== true;
+
+/** The full price set when the embedded list carries it, else `undefined` — never a partial set. */
+const completePriceIds = (object: Record<string, unknown>): string[] | undefined => (itemsComplete(object) ? pagePriceIds(object) : undefined);
 
 const firstQuantity = (object: Record<string, unknown>): number | undefined => readNumber(firstItem(object), "quantity");
 
 // The current billing period moved from the top-level Subscription to the subscription item in
 // Stripe API 2025-03-31.basil (`items.data[].current_period_*`). Read the item first, falling back
 // to the top level for apps pinned to an older API version.
-const periodEndMs = (object: Record<string, unknown>): number | undefined => {
-    const seconds = readNumber(firstItem(object), "current_period_end") ?? readNumber(object, "current_period_end");
-
-    return seconds === undefined ? undefined : seconds * 1000;
-};
-
-const periodStartMs = (object: Record<string, unknown>): number | undefined => {
-    const seconds = readNumber(firstItem(object), "current_period_start") ?? readNumber(object, "current_period_start");
-
-    return seconds === undefined ? undefined : seconds * 1000;
-};
+const periodMs = (object: Record<string, unknown>, key: "current_period_end" | "current_period_start"): number | undefined =>
+    secondsToMs(readNumber(firstItem(object), key) ?? readNumber(object, key));
 
 /** Normalize a Stripe PaymentIntent (typed return read defensively) into a {@link PaymentSession}. */
 const intentToSession = (input: unknown): PaymentSession => {
     const intent = asRecord(input);
     const currency = readString(intent, "currency") ?? "usd";
     const amountValue = readNumber(intent, "amount") ?? 0;
-    const amount = money(BigInt(Math.round(amountValue)), currency);
+    const amount = moneyFromMinor(amountValue, currency);
     const state = PAYMENT_STATE_BY_STRIPE_STATUS[readString(intent, "status") ?? ""] ?? "initiated";
     const now = Date.now();
 
     return {
         amount,
-        capturedAmount: state === "captured" ? money(BigInt(Math.round(readNumber(intent, "amount_received") ?? amountValue)), currency) : zeroMoney(currency),
+        capturedAmount: state === "captured" ? moneyFromMinor(readNumber(intent, "amount_received") ?? amountValue, currency) : zeroMoney(currency),
         createdAt: now,
         id: readString(intent, "id") ?? "",
         provider: "stripe",
@@ -149,10 +180,16 @@ const subscriptionFromStripe = (input: unknown): Subscription => {
     return {
         cancelAtPeriodEnd: readBoolean(subscription, "cancel_at_period_end") ?? false,
         createdAt: now,
-        currentPeriodEnd: periodEndMs(subscription),
-        currentPeriodStart: periodStartMs(subscription),
+        currentPeriodEnd: periodMs(subscription, "current_period_end"),
+        currentPeriodStart: periodMs(subscription, "current_period_start"),
         id: readString(subscription, "id") ?? "",
+        // Always the first item, which the first page always carries — truncation cannot move it.
         priceId: firstPriceId(subscription) ?? "",
+        // Carry the whole set, not just the primary: `resolveEntitlements` tests membership here, so
+        // an add-on or metered item is only granted when it is reported. Absent when the embedded
+        // list is only the first page — `getSubscriptionStatus` is the one caller that can fetch
+        // the rest, and it fills this in.
+        priceIds: completePriceIds(subscription),
         provider: "stripe",
         quantity: firstQuantity(subscription) ?? 1,
         referenceId: readReferenceId(subscription) ?? "",
@@ -208,7 +245,7 @@ const checkoutSessionAction = ({ base, currency, object }: StripeEvent): Webhook
     //
     // Only when an intent is actually coming, though: a fully discounted session settles as
     // `no_payment_required` and Stripe creates NO PaymentIntent for it, so deferring would drop the
-    // order entirely and an app fulfilling off `paymentSessions` would silently stop serving free
+    // order entirely and an app fulfilling off `payment_sessions` would silently stop serving free
     // orders. Those keep the cs_… id — the only id that payment ever has.
     if (paymentIntentId === undefined && paymentStatus !== "no_payment_required") {
         return { ...base, type: "unhandled" };
@@ -218,7 +255,7 @@ const checkoutSessionAction = ({ base, currency, object }: StripeEvent): Webhook
 
     return {
         ...base,
-        amount: amountTotal === undefined ? undefined : money(BigInt(Math.round(amountTotal)), currency),
+        amount: amountTotal === undefined ? undefined : moneyFromMinor(amountTotal, currency),
         customerId: readString(object, "customer"),
         referenceId: readReferenceId(object),
         sessionId: paymentIntentId ?? readString(object, "id"),
@@ -251,7 +288,7 @@ const disputeClosedAction = ({ base, currency, object }: StripeEvent): WebhookAc
         // The disputed amount, which can be less than the charge (partial dispute, currency drift).
         // It is this event's own delta, not a cumulative total, so the default `"delta"` kind applies
         // — as with the `charge.refunded` total it may follow.
-        amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
+        amount: moneyFromMinor(readNumber(object, "amount") ?? 0, currency),
         referenceId: readReferenceId(object),
         // Not a refund the facade issued, so the dispute id can never consume a local refund marker
         // and have its reversal silently dropped — see `sync.ts`.
@@ -279,7 +316,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             // layer sets — rather than adds — the running refunded total and never over-counts.
             return {
                 ...base,
-                amount: money(BigInt(Math.round(readNumber(object, "amount_refunded") ?? 0)), currency),
+                amount: moneyFromMinor(readNumber(object, "amount_refunded") ?? 0, currency),
                 amountKind: "absolute",
                 referenceId: readReferenceId(object),
                 sessionId: readString(object, "payment_intent") ?? readString(object, "id"),
@@ -325,10 +362,15 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             return {
                 ...base,
                 cancelAtPeriodEnd: readBoolean(object, "cancel_at_period_end"),
-                currentPeriodEnd: periodEndMs(object),
-                currentPeriodStart: periodStartMs(object),
+                currentPeriodEnd: periodMs(object, "current_period_end"),
+                currentPeriodStart: periodMs(object, "current_period_start"),
                 customerId: readString(object, "customer"),
                 priceId: firstPriceId(object),
+                // Absent when the event embeds only the first page of a longer item list: a webhook
+                // cannot paginate, and a partial set would DELETE the prices past page one from the
+                // stored row (`sync.ts` replaces wholesale). The stored set stands until the next
+                // reconcile sweep, which can fetch the rest.
+                priceIds: completePriceIds(object),
                 quantity: firstQuantity(object),
                 referenceId: readReferenceId(object),
                 subscriptionId: readString(object, "id"),
@@ -346,7 +388,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "payment_intent.amount_capturable_updated": {
             return {
                 ...base,
-                amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
+                amount: moneyFromMinor(readNumber(object, "amount") ?? 0, currency),
                 referenceId: readReferenceId(object),
                 sessionId: readString(object, "id"),
                 type: "payment.authorized",
@@ -360,7 +402,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "payment_intent.succeeded": {
             return {
                 ...base,
-                amount: money(BigInt(Math.round(readNumber(object, "amount_received") ?? readNumber(object, "amount") ?? 0)), currency),
+                amount: moneyFromMinor(readNumber(object, "amount_received") ?? readNumber(object, "amount") ?? 0, currency),
                 customerId: readString(object, "customer"),
                 referenceId: readReferenceId(object),
                 sessionId: readString(object, "id"),
@@ -374,10 +416,6 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
     }
 };
 
-/**
- * `createStripeAdapter` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
     // Use the injected client as the real `Stripe` internally so every call below is checked against
@@ -421,6 +459,9 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                     // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
                     metadata: { ...input.metadata, referenceId: input.referenceId },
                     mode: input.mode,
+                    // The PaymentIntent needs the reference too: `payment_intent.succeeded` can land
+                    // before `checkout.session.completed` and is mapped from the intent alone.
+                    payment_intent_data: input.mode === "payment" ? { metadata: { ...input.metadata, referenceId: input.referenceId } } : undefined,
                     subscription_data: input.mode === "subscription" ? { metadata: { referenceId: input.referenceId } } : undefined,
                     success_url: input.successUrl,
                 },
@@ -447,7 +488,30 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
 
         getPaymentStatus: async (sessionId) => intentToSession(await client.paymentIntents.retrieve(sessionId)),
 
-        getSubscriptionStatus: async (subscriptionId) => subscriptionFromStripe(await client.subscriptions.retrieve(subscriptionId)),
+        getSubscriptionStatus: async (subscriptionId) => {
+            const raw = await client.subscriptions.retrieve(subscriptionId);
+            const subscription = subscriptionFromStripe(raw);
+
+            if (subscription.priceIds !== undefined) {
+                return subscription;
+            }
+
+            // Only here — when the retrieve embedded `has_more: true` — does this cost a second
+            // round-trip. `limit: 100` is the endpoint's maximum, so one request covers any
+            // subscription in practice; the async iterator pages further only if one ever exceeds
+            // it, and stops as soon as Stripe reports no more.
+            const priceIds: string[] = [];
+
+            for await (const item of client.subscriptionItems.list({ limit: 100, subscription: subscriptionId })) {
+                const priceId = readString(asRecord(asRecord(item).price), "id");
+
+                if (priceId !== undefined && priceId !== "") {
+                    priceIds.push(priceId);
+                }
+            }
+
+            return { ...subscription, priceIds };
+        },
 
         identifier: "stripe",
 
@@ -471,7 +535,8 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
 
             const object = asRecord(asRecord(event.data).object);
 
-            return mapEvent(event.id, event.type, object);
+            // `event.created` is Unix seconds.
+            return { ...mapEvent(event.id, event.type, object), occurredAt: secondsToMs(readNumber(asRecord(event), "created")) };
         },
 
         refundPayment: async (input: RefundInput) => {
@@ -484,12 +549,28 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                 { idempotencyKey: input.idempotencyKey },
             );
 
-            const intent = await client.paymentIntents.retrieve(input.sessionId);
+            // Expand the charge for its cumulative `amount_refunded` — the same total `charge.refunded`
+            // reports, which may already have booked this refund by the time we return.
+            const intent = await client.paymentIntents.retrieve(input.sessionId, { expand: ["latest_charge"] });
             const session = intentToSession(intent);
             const refundedAmount = input.amount ?? session.capturedAmount;
+            const charge = asRecord(intent.latest_charge);
+            const amountRefunded = readNumber(charge, "amount_refunded");
             const partial = input.amount !== undefined && compareMoney(input.amount, session.capturedAmount) < 0;
 
-            return { ...session, refundedAmount, refundId: refund.id, state: partial ? "partially_refunded" : "refunded" };
+            // Not every Stripe refund settles synchronously (`pending`, `requires_action`, …); the
+            // facade holds its ledger back until `charge.refunded` confirms one that has not.
+            return {
+                ...session,
+                pending: refund.status !== "succeeded",
+                refundedAmount,
+                refundId: refund.id,
+                refundedTotal:
+                    amountRefunded === undefined
+                        ? undefined
+                        : moneyFromMinor(amountRefunded, readString(charge, "currency") ?? session.capturedAmount.currency),
+                state: partial ? "partially_refunded" : "refunded",
+            };
         },
 
         reportUsage: async (input: ReportUsageInput) => {
@@ -507,12 +588,13 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         },
 
         resumeSubscription: async (subscriptionId, resumeOptions) => {
-            // Its own operation name: `cancel_subscription`'s key on the same subscription would make a
-            // resume replay the cancel's cached response instead of clearing the pending cancellation.
+            // No derived default key: this sets absolute state, so a plain retry is already idempotent,
+            // while a stable key would make cancel → resume → cancel → resume inside Stripe's 24h window
+            // replay the first resume's cached response and silently leave the second cancel standing.
             const subscription = await client.subscriptions.update(
                 subscriptionId,
                 { cancel_at_period_end: false },
-                { idempotencyKey: resumeOptions?.idempotencyKey ?? idempotencyKey("resume_subscription", "stripe", subscriptionId) },
+                { idempotencyKey: resumeOptions?.idempotencyKey },
             );
 
             return subscriptionFromStripe(subscription);
@@ -529,13 +611,11 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                 parameters.items = [{ id: current.items.data[0]?.id, price: patch.priceId, quantity: patch.quantity }];
             }
 
-            // A plan change prorates, so an un-keyed retry charges twice. The TARGET is part of the key:
-            // this is the one call whose parameters vary, and reusing one key across two of them makes
-            // Stripe reject the second as a mismatch — while an identical retry must still replay.
-            const subscription = await client.subscriptions.update(subscriptionId, parameters, {
-                idempotencyKey:
-                    patch.idempotencyKey ?? idempotencyKey("update_subscription", "stripe", subscriptionId, patch.priceId ?? "", patch.quantity ?? ""),
-            });
+            // No derived default key: the update sets the item to an absolute price/quantity, so a retry
+            // of an already-applied change is a no-op (no second proration). A key derived from the
+            // target would make plan A → B → A inside Stripe's 24h window replay the first A response
+            // and silently leave the subscription on B.
+            const subscription = await client.subscriptions.update(subscriptionId, parameters, { idempotencyKey: patch.idempotencyKey });
 
             return subscriptionFromStripe(subscription);
         },

@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import type { Notification, Provider, Receipt } from "@visulima/notification";
 
 import type { ResolvedProviders } from "./providers";
-import { buildEngine } from "./providers";
+import { buildEngine, checkPushTtl, checkPushUrgency } from "./providers";
 import { memorySubscriptionStore } from "./subscriptions/memory-store";
 import { isGoneError, normalizeRegisterInput, targetOf } from "./subscriptions/normalize";
 import type {
@@ -22,6 +22,7 @@ import type {
     RegisterInput,
     StoredSubscription,
     SubscriptionFilter,
+    SubscriptionOutcomes,
     SubscriptionStore,
 } from "./types";
 
@@ -269,9 +270,10 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
      * `allowedPushOrigins` allowlist. Without it the posture is defence-in-depth
      * rather than a guarantee: a STRING classifier at register time
      * (`assertPushEndpoint` → shared `isPrivateHost`) plus a best-effort
-     * resolved-address re-check at send time. Both can be defeated (a DoH outage
-     * falls back to the string guard, and resolution is TOCTOU-imperfect); an
-     * exact-origin allowlist cannot.
+     * resolved-address re-check at send time (which refuses when the lookup
+     * fails). The re-check is TOCTOU-imperfect — the push service is re-resolved
+     * when the request goes out — and a DoH outage stops sends; an exact-origin
+     * allowlist has neither problem.
      * Guarded on the per-isolate runtime, mirroring the no-store fallback warning.
      */
     const warnNoPushOriginAllowlist = (): void => {
@@ -327,7 +329,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
     const deliver = async (
         subscription: StoredSubscription,
         payload: PushContent,
-        countInline: boolean,
+        { countInline, deferStatus }: { countInline: boolean; deferStatus: boolean },
     ): Promise<{ error?: string; receipt?: Receipt; status: NotifyDeliveryStatus }> => {
         let receipt: Receipt | undefined;
         let error: string | undefined;
@@ -348,18 +350,22 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             error = error_ instanceof Error ? error_.message : String(error_);
         }
 
-        try {
-            if (status === "accepted") {
-                await subscriptionStore.markStatus(subscription.id, "ok");
-            } else if (status === "gone") {
-                await subscriptionStore.delete(subscription.id);
-            } else {
-                await subscriptionStore.markStatus(subscription.id, "failed", error);
+        // A broadcast page defers the lifecycle write and applies the whole page
+        // in one batch (see `deliverPage`); a single send writes immediately.
+        if (!deferStatus) {
+            try {
+                if (status === "accepted") {
+                    await subscriptionStore.markStatus(subscription.id, "ok");
+                } else if (status === "gone") {
+                    await subscriptionStore.delete(subscription.id);
+                } else {
+                    await subscriptionStore.markStatus(subscription.id, "failed", error);
+                }
+            } catch {
+                // The store lifecycle write is best-effort: a failing markStatus/delete
+                // (e.g. a transient D1 error) must not abort the fan-out. The send
+                // outcome above still stands; the status just went unrecorded.
             }
-        } catch {
-            // The store lifecycle write is best-effort: a failing markStatus/delete
-            // (e.g. a transient D1 error) must not abort the fan-out. The send
-            // outcome above still stands; the status just went unrecorded.
         }
 
         if (status === "failed") {
@@ -387,10 +393,37 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             // `deliver` is total (it never rejects — a throwing recipient
             // becomes a `failed` outcome inside it), so the bounded `Promise.all`
             // pool in `mapWithConcurrency` can never be rejected by one bad send.
-            const { error, status } = await deliver(subscription, payload, false);
+            const { error, status } = await deliver(subscription, payload, { countInline: false, deferStatus: true });
 
             return { error, kind: subscription.kind, status, subscription };
         });
+
+        // Best-effort, like the per-send write: a failing store never fails the page.
+        const outcomesToApply: SubscriptionOutcomes = { failed: [], gone: [], ok: [] };
+
+        for (const { error, status, subscription } of rows) {
+            if (status === "accepted") {
+                outcomesToApply.ok.push(subscription.id);
+            } else if (status === "gone") {
+                outcomesToApply.gone.push(subscription.id);
+            } else {
+                outcomesToApply.failed.push({ error, id: subscription.id });
+            }
+        }
+
+        try {
+            if (subscriptionStore.applyOutcomes === undefined) {
+                await Promise.all([
+                    ...outcomesToApply.ok.map((id) => subscriptionStore.markStatus(id, "ok")),
+                    ...outcomesToApply.failed.map(({ error, id }) => subscriptionStore.markStatus(id, "failed", error)),
+                    ...outcomesToApply.gone.map((id) => subscriptionStore.delete(id)),
+                ]);
+            } else {
+                await subscriptionStore.applyOutcomes(outcomesToApply);
+            }
+        } catch {
+            // The status just went unrecorded for the failed part.
+        }
 
         // Fold the per-recipient statuses into one metric count per (kind,
         // status) bucket — at most kinds×3 emits — instead of one durable
@@ -459,6 +492,9 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
      * audience cap, so its zero-floor is zero deliveries, not an unbounded page.
      */
     const broadcastPage = async (payload: PushContent, filter?: SubscriptionFilter): Promise<BroadcastPageResult> => {
+        checkPushTtl(payload.ttl);
+        checkPushUrgency(payload.urgency);
+
         // A non-positive `limit` means "deliver to nobody" at this (audience-cap)
         // layer — NOT "no cap", which is the store layer's convention for the same
         // sentinel (see SubscriptionFilter.limit's JSDoc). Short-circuit before
@@ -568,7 +604,10 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             return subscriptionStore.put(normalizeRegisterInput(input, undefined, { allowedPushOrigins: definition.allowedPushOrigins }));
         },
         send: async (target: StoredSubscription | string, payload: PushContent): Promise<Receipt> => {
-            const { error, receipt } = await deliver(await resolveSubscription(target), payload, true);
+            checkPushTtl(payload.ttl);
+            checkPushUrgency(payload.urgency);
+
+            const { error, receipt } = await deliver(await resolveSubscription(target), payload, { countInline: true, deferStatus: false });
 
             if (receipt === undefined) {
                 // A targeted single send is not a fan-out: when the provider throws

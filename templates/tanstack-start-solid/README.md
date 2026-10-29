@@ -18,8 +18,8 @@ Install dependencies and start the dev server with your package manager
 <pm> run dev
 ```
 
-The dev command runs the TanStack Start dev server alongside `wrangler dev` so
-your client and worker share the same origin.
+The dev command runs Vite with `@cloudflare/vite-plugin`, so the worker runs
+in-process in workerd and shares the dev server's origin with your client.
 
 ## Build
 

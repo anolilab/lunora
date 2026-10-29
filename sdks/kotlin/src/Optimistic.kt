@@ -46,7 +46,7 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * **Divergence from `@lunora/client`.** The TypeScript engine suppresses a
  * notification whose folded result is reference-identical to the value already
- * displayed. Reference identity has no portable meaning across the seven ports,
+ * displayed. Reference identity has no portable meaning across the eight ports,
  * so they notify on every fold instead — a consumer sees at most a few redundant
  * callbacks carrying the same value, never a missing one.
  */

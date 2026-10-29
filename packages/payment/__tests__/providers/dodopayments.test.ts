@@ -123,6 +123,72 @@ describe("dodopayments adapter", () => {
         expect(result.state).toBe("captured");
     });
 
+    it("sums the payment's succeeded refunds instead of reporting zero refunded (regression)", async () => {
+        expect.assertions(4);
+
+        const client = makeClient();
+
+        // Dodo's `Payment` carries its refunds inline. Reporting zero is what reconcile writes: after a
+        // missed `refund.succeeded` the ledger says a refunded payment is unrefunded, and the next
+        // `refundPayment({ sessionId })` — which Dodo can only take in full — moves the whole captured
+        // amount a second time. Only `succeeded` entries count; `pending` may still fail.
+        (client as { payments: { retrieve: unknown } }).payments = {
+            retrieve: async (id: string) => {
+                return {
+                    currency: "USD",
+                    payment_id: id,
+                    refunds: [
+                        { amount: 4000, currency: "USD", refund_id: "ref_ok", status: "succeeded" },
+                        { amount: 1000, currency: "USD", refund_id: "ref_no", status: "failed" },
+                        { amount: 500, currency: "USD", refund_id: "ref_wait", status: "pending" },
+                    ],
+                    status: "succeeded",
+                    total_amount: 10_000,
+                };
+            },
+        };
+        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+
+        const session = await adapter.getPaymentStatus("pay_1");
+
+        expect(session.refundedAmount.minorUnits).toBe(4000n);
+        expect(session.capturedAmount.minorUnits).toBe(10_000n);
+        // Dodo's `IntentStatus` stays `succeeded` after a refund, so the refunded total is the only
+        // thing that can move the state off `captured` here.
+        expect(session.state).toBe("partially_refunded");
+
+        (client as { payments: { retrieve: unknown } }).payments = {
+            retrieve: async (id: string) => {
+                return {
+                    currency: "USD",
+                    payment_id: id,
+                    refunds: [{ amount: 10_000, currency: "USD", refund_id: "ref_all", status: "succeeded" }],
+                    status: "succeeded",
+                    total_amount: 10_000,
+                };
+            },
+        };
+
+        await expect(
+            createDodoPaymentsAdapter({ client, webhookSecret: SECRET })
+                .getPaymentStatus("pay_1")
+                .then((full) => full.state),
+        ).resolves.toBe("refunded");
+    });
+
+    it("reports an unrefunded payment as captured with a zero refunded total", async () => {
+        expect.assertions(2);
+
+        // The base stub carries no `refunds` array at all — the shape a payment that was never
+        // refunded arrives in.
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+
+        const session = await adapter.getPaymentStatus("pay_1");
+
+        expect(session.state).toBe("captured");
+        expect(session.refundedAmount.minorUnits).toBe(0n);
+    });
+
     it("creates a checkout carrying the pinned reference metadata and product cart", async () => {
         expect.assertions(4);
 
@@ -365,6 +431,45 @@ describe("dodopayments adapter", () => {
         const action = await adapter.parseWebhook({ headers: headersFor("m8", timestamp, sign("m8", timestamp, payload)), payload });
 
         expect(action.type).toBe("subscription.paused");
+    });
+
+    it("maps subscription.unpaused and subscription.past_due instead of dropping them (regression)", async () => {
+        expect.assertions(2);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const unpausedBody = JSON.stringify({ data: { status: "active", subscription_id: "sub_1" }, type: "subscription.unpaused" });
+        const unpaused = await adapter.parseWebhook({ headers: headersFor("m10", timestamp, sign("m10", timestamp, unpausedBody)), payload: unpausedBody });
+        const pastDueBody = JSON.stringify({ data: { status: "past_due", subscription_id: "sub_1" }, type: "subscription.past_due" });
+        const pastDue = await adapter.parseWebhook({ headers: headersFor("m11", timestamp, sign("m11", timestamp, pastDueBody)), payload: pastDueBody });
+
+        expect(unpaused.type).toBe("subscription.active");
+        expect(pastDue.type).toBe("subscription.past_due");
+    });
+
+    it("leaves referenceId unset without metadata instead of using the customer id, and carries occurredAt (regression)", async () => {
+        expect.assertions(3);
+
+        const client = makeClient();
+
+        (client as { subscriptions: { retrieve: unknown } }).subscriptions = {
+            retrieve: async (id: string) => {
+                return { customer: { customer_id: "cus_1" }, product_id: "pro", status: "active", subscription_id: id };
+            },
+        };
+        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        // `sync.ts` adopts an orphan row only while its referenceId is "" — a customer id there blocks it.
+        const payload = JSON.stringify({
+            data: { customer: { customer_id: "cus_1" }, status: "active", subscription_id: "sub_1" },
+            timestamp: "2026-01-02T03:04:05Z",
+            type: "subscription.active",
+        });
+        const action = await adapter.parseWebhook({ headers: headersFor("m12", timestamp, sign("m12", timestamp, payload)), payload });
+
+        expect(action.referenceId).toBeUndefined();
+        expect(action.occurredAt).toBe(Date.parse("2026-01-02T03:04:05Z"));
+        await expect(adapter.getSubscriptionStatus("sub_1").then((s) => s.referenceId)).resolves.toBe("");
     });
 
     it("rounds a fractional webhook amount instead of throwing on the BigInt conversion (regression)", async () => {

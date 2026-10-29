@@ -225,7 +225,11 @@ const presenceExtension = defineSchemaExtension(PRESENCE_KEY, {
             // heartbeat's oldest-first opportunistic reap.
             .index("byRoomLastSeen", ["roomId", "lastSeen"]),
     },
-}) as unknown as SchemaExtension<{ [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable> }>;
+}) as unknown as SchemaExtension<{ [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable> }, typeof PRESENCE_KEY>;
+
+// The presence functions are built with the procedure builders (no generated
+// server here, so bind the base contexts via `initLunora.dataModel().create()`).
+const { mutation, query } = initLunora.dataModel().create();
 
 /**
  * Build a presence {@link Component} — schema extension + heartbeat / listPresent
@@ -240,10 +244,6 @@ const presenceExtension = defineSchemaExtension(PRESENCE_KEY, {
  * @param options presence configuration (TTL).
  * @returns a component bundling the extension and the presence functions.
  */
-// The presence functions are built with the procedure builders (no generated
-// server here, so bind the base contexts via `initLunora.dataModel().create()`).
-const { mutation, query } = initLunora.dataModel().create();
-
 const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent => {
     const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     // A grace window longer than the TTL would never hide the row before the
@@ -298,7 +298,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
 
             // Patch on re-heartbeat — a single-row delta for subscribers, not an
             // insert+delete churn that would re-send the whole present list.
-            await (existing ? context.db.patch(existing["_id"] as never, row) : context.db.insert(PRESENCE_TABLE, row));
+            await (existing ? context.db.patch(PRESENCE_TABLE, existing["_id"] as never, row) : context.db.insert(PRESENCE_TABLE, row));
 
             // Self-reaping: each heartbeat reclaims a few of its room's aged-out
             // rows so the table stays bounded without the app scheduling `sweep`.
@@ -314,7 +314,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
                 .take(REAP_BATCH);
             const expired = oldest.filter((oldRow) => (oldRow["lastSeen"] as number) <= reapCutoff);
 
-            await Promise.all(expired.map((oldRow) => context.db.delete(oldRow["_id"] as never)));
+            await Promise.all(expired.map((oldRow) => context.db.delete(PRESENCE_TABLE, oldRow["_id"] as never)));
 
             return { lastSeen };
         });
@@ -390,7 +390,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
 
         // These deletes share the mutation's snapshot and the stale set is
         // small (one room's expired members); fire them together.
-        await Promise.all(stale.map((row) => context.db.delete(row["_id"] as never)));
+        await Promise.all(stale.map((row) => context.db.delete(PRESENCE_TABLE, row["_id"] as never)));
 
         return { deleted: stale.length };
     });
@@ -435,7 +435,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
 
         if (disconnectGraceMs === 0) {
             // No grace: drop the row now so the member disappears immediately.
-            await context.db.delete(existing["_id"] as never);
+            await context.db.delete(PRESENCE_TABLE, existing["_id"] as never);
 
             return;
         }
@@ -448,7 +448,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
         // already due to expire sooner is left alone), never extend it.
         const agedLastSeen = Math.min(existing["lastSeen"] as number, Date.now() + disconnectGraceMs - ttlMs);
 
-        await context.db.patch(existing["_id"] as never, { lastSeen: agedLastSeen });
+        await context.db.patch(PRESENCE_TABLE, existing["_id"] as never, { lastSeen: agedLastSeen });
     });
 
     return defineComponent(PRESENCE_KEY, {

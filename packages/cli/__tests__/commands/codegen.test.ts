@@ -4,10 +4,15 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { inferLunoraBindings } from "@lunora/config";
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { CodegenCommandData } from "../../src/commands/codegen/handler";
 import { execute, runCodegenCommand } from "../../src/commands/codegen/handler";
+import type { CodegenOptions } from "../../src/commands/codegen/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
+import { runExecute } from "../helpers/execute";
 
 // eslint-disable-next-line vitest/prefer-import-in-mock -- the import form type-checks the mock against the module's full type, which this partial re-export doesn't satisfy
 vi.mock("@lunora/config", async (importOriginal) => {
@@ -16,24 +21,6 @@ vi.mock("@lunora/config", async (importOriginal) => {
     return { ...actual, inferLunoraBindings: vi.fn<typeof actual.inferLunoraBindings>(actual.inferLunoraBindings) };
 });
 
-/** Run `body` while capturing everything written to `process.stdout`. */
-const captureStdout = (body: () => void): string => {
-    let captured = "";
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
-        captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-
-        return true;
-    });
-
-    try {
-        body();
-    } finally {
-        spy.mockRestore();
-    }
-
-    return captured;
-};
-
 /** Build a `lunora/crons.ts` with `count` distinct daily schedules (distinct hours → distinct expressions). */
 const cronsFile = (count: number): string => {
     const lines = Array.from(
@@ -41,7 +28,7 @@ const cronsFile = (count: number): string => {
         (_unused, index) => `crons.daily("job ${String(index)}", { hourUTC: ${String(index)}, minuteUTC: 0 }, internal.jobs.run${String(index)}, {});`,
     );
 
-    return `import { cronJobs } from "@lunora/scheduler";\n\nimport { internal } from "./_generated/api.js";\n\nconst crons = cronJobs();\n\n${lines.join("\n")}\n\nexport default crons;\n`;
+    return `import { cronJobs } from "@lunora/scheduler";\n\nimport { internal } from "./_generated/internal.js";\n\nconst crons = cronJobs();\n\n${lines.join("\n")}\n\nexport default crons;\n`;
 };
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -66,6 +53,7 @@ describe("lunora codegen", () => {
     });
 
     afterEach(() => {
+        vi.unstubAllEnvs();
         rmSync(workdir, { force: true, recursive: true });
     });
 
@@ -87,7 +75,7 @@ describe("lunora codegen", () => {
         });
 
         it("refuses an unregistered --target instead of emitting an un-gated surface", () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             const result = runCodegenCommand({ cwd: workdir, logger: silentLogger(), target: "aws" });
 
@@ -96,16 +84,19 @@ describe("lunora codegen", () => {
             // target that does not exist, warn, and exit 0 — the silent
             // fallback the driver registry exists to prevent.
             expect(result.error).toMatch(/unknown deploy target "aws"/);
+            // Exit 2, like a bad `--format`: the flag names a driver that does
+            // not exist, so it is the invocation that is wrong, not codegen.
+            expect(result.code).toBe(EXIT_CODE.USAGE);
 
             // Nothing was written: the target is rejected before codegen runs,
             // so a rejected run cannot leave a half-emitted surface behind.
             expect(existsSync(join(workdir, "lunora", "_generated", "server.ts"))).toBe(false);
         });
 
-        it("refuses an unregistered target from lunora.json", () => {
+        it("refuses an unregistered target from lunora.config.ts", () => {
             expect.assertions(1);
 
-            writeFileSync(join(workdir, "lunora.json"), JSON.stringify({ target: "clouflare" }), "utf8");
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "clouflare" };\n`, "utf8");
 
             // A typo in the committed config must fail the same way as a typo on
             // the command line — the config path is where it would otherwise go
@@ -113,16 +104,54 @@ describe("lunora codegen", () => {
             expect(runCodegenCommand({ cwd: workdir, logger: silentLogger() }).error).toMatch(/unknown deploy target "clouflare"/);
         });
 
-        it("lets --target override lunora.json", () => {
+        it("lets --target override lunora.config.ts", () => {
             expect.assertions(1);
 
-            writeFileSync(join(workdir, "lunora.json"), JSON.stringify({ target: "aws" }), "utf8");
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "aws" };\n`, "utf8");
 
             expect(runCodegenCommand({ cwd: workdir, logger: silentLogger(), target: "cloudflare" }).error).toBeUndefined();
         });
     });
 
     describe("lunora codegen", () => {
+        it("keeps the eager registry by default and emits lazy modules only when requested", async () => {
+            expect.assertions(7);
+
+            const generated = join(workdir, "lunora", "_generated");
+            const functionModule = join(generated, "fn", "lunora_messages_0.ts");
+
+            const eager = await runExecute<CodegenOptions, CodegenCommandData>(execute, { commandName: "codegen", cwd: workdir, options: { format: "json" } });
+            const eagerFunctions = readFileSync(join(generated, "functions.ts"), "utf8");
+
+            expect(eager.code).toBe(0);
+            expect(eagerFunctions).toContain('import * as lunora_messages_0 from "../messages.js"');
+            expect(existsSync(functionModule)).toBe(false);
+
+            const lazy = await runExecute<CodegenOptions, CodegenCommandData>(execute, {
+                commandName: "codegen",
+                cwd: workdir,
+                options: { format: "json", lazyFunctions: true },
+            });
+            const lazyFunctions = readFileSync(join(generated, "functions.ts"), "utf8");
+
+            expect(lazy.code).toBe(0);
+            expect(lazyFunctions).not.toContain('import * as lunora_messages_0 from "../messages.js"');
+            expect(lazyFunctions).toContain("export const LUNORA_FUNCTION_MANIFEST");
+            expect(existsSync(functionModule)).toBe(true);
+        });
+
+        it("honors the lazy environment opt-in without a flag", async () => {
+            expect.assertions(3);
+
+            vi.stubEnv("LUNORA_LAZY_FUNCTIONS", "true");
+            const result = await runExecute<CodegenOptions, CodegenCommandData>(execute, { commandName: "codegen", cwd: workdir, options: { format: "json" } });
+            const generated = join(workdir, "lunora", "_generated");
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(join(generated, "functions.ts"), "utf8")).toContain("export const LUNORA_FUNCTION_MANIFEST");
+            expect(existsSync(join(generated, "fn", "lunora_messages_0.ts"))).toBe(true);
+        });
+
         it("writes the three generated files", () => {
             expect.assertions(3);
 
@@ -215,34 +244,44 @@ describe("lunora codegen", () => {
         });
 
         describe("--format json", () => {
-            it("emits a single parseable JSON document with the structured result", () => {
-                expect.assertions(4);
+            // Through `execute`, because the envelope is written by `defineHandler`:
+            // `runCodegenCommand` is the library entry point and writes nothing.
+            it("emits a single parseable JSON envelope with the structured result", async () => {
+                expect.assertions(5);
 
-                const stdout = captureStdout(() => {
-                    runCodegenCommand({ cwd: workdir, format: "json", logger: silentLogger() });
+                const { code, document } = await runExecute<CodegenOptions, CodegenCommandData>(execute, {
+                    commandName: "codegen",
+                    cwd: workdir,
+                    options: { format: "json" },
                 });
 
-                const parsed = JSON.parse(stdout) as { advisories: unknown[]; cronTriggers: unknown[]; outputDirectory: string };
-
-                expect(parsed).toHaveProperty("outputDirectory");
-                expect(parsed.outputDirectory).toContain("_generated");
-                expect(Array.isArray(parsed.advisories)).toBe(true);
-                expect(Array.isArray(parsed.cronTriggers)).toBe(true);
+                expect(code).toBe(0);
+                expect(document?.code).toBe(0);
+                expect(document?.data?.outputDirectory).toContain("_generated");
+                expect(Array.isArray(document?.data?.advisories)).toBe(true);
+                expect(Array.isArray(document?.data?.cronTriggers)).toBe(true);
             });
 
-            it("rejects an unknown --format the same way logs does", () => {
-                expect.assertions(3);
+            /**
+             * The refusal answers in the same shape a success does. An unresolved
+             * `--target` returns before codegen runs, and that early return is the
+             * one a serialization written inside the command body would have
+             * skipped — leaving stdout empty and the reason only as prose on
+             * stderr, which is what `--format json` exists to avoid.
+             */
+            it("emits the envelope for an unresolved --target, with the reason in it", async () => {
+                expect.assertions(4);
 
-                const errors: string[] = [];
-
-                const stdout = captureStdout(() => {
-                    const result = runCodegenCommand({ cwd: workdir, format: "yaml", logger: { ...silentLogger(), error: (message) => errors.push(message) } });
-
-                    expect(result.error).toBeDefined();
+                const { code, document } = await runExecute<CodegenOptions, CodegenCommandData>(execute, {
+                    commandName: "codegen",
+                    cwd: workdir,
+                    options: { format: "json", target: "nope" },
                 });
 
-                expect(stdout).toBe("");
-                expect(errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
+                expect(code).toBe(EXIT_CODE.USAGE);
+                expect(document?.code).toBe(EXIT_CODE.USAGE);
+                expect(document?.error).toContain("unknown deploy target");
+                expect(document?.data?.outputDirectory).toBe("");
             });
         });
     });
@@ -277,7 +316,7 @@ describe("lunora codegen", () => {
         };
 
         /** Drive the real command handler — the warning lives in the `execute` wrapper, not in `runCodegenCommand`. */
-        const runExecute = async (options: Record<string, string> = {}): Promise<string> => {
+        const captureExecuteStderr = async (options: Record<string, string> = {}): Promise<string> => {
             let captured = "";
             const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
                 captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
@@ -303,7 +342,7 @@ describe("lunora codegen", () => {
 
             seedWorkflow('import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\n');
 
-            await expect(runExecute()).resolves.toMatch(/workflow "orderPipeline" is declared but .* is not exported by the worker entry/u);
+            await expect(captureExecuteStderr()).resolves.toMatch(/workflow "orderPipeline" is declared but .* is not exported by the worker entry/u);
         });
 
         // `runCodegenCommand` returns before generation for an invalid `--format`
@@ -320,11 +359,33 @@ describe("lunora codegen", () => {
 
             seedWorkflow('import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\n');
 
-            const output = await runExecute(overrides);
+            const output = await captureExecuteStderr(overrides);
 
             expect(output).not.toMatch(/is not exported by the worker entry/u);
             // …and the actual validation error is still reported.
             expect(output).not.toBe("");
+        });
+
+        it("warns about a cloudflare.config.ts once per process tree, not on every run", async () => {
+            expect.assertions(3);
+
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+
+            seedWorkflow(
+                'import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\nexport * from "../lunora/_generated/workflows.js";\n',
+            );
+            writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            try {
+                const first = await captureExecuteStderr();
+                const second = await captureExecuteStderr();
+
+                expect(first).toContain("cloudflare.config.ts found next to wrangler.jsonc");
+                expect(first).toContain("https://github.com/anolilab/lunora/issues/964");
+                expect(second).not.toContain("cloudflare.config.ts");
+            } finally {
+                vi.unstubAllEnvs();
+            }
         });
 
         it("stays quiet when the worker entry re-exports the generated module", async () => {
@@ -334,7 +395,7 @@ describe("lunora codegen", () => {
                 'import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\nexport * from "../lunora/_generated/workflows.js";\n',
             );
 
-            await expect(runExecute()).resolves.not.toMatch(/is not exported by the worker entry/u);
+            await expect(captureExecuteStderr()).resolves.not.toMatch(/is not exported by the worker entry/u);
         });
 
         it("teaches the project's linter to skip the generated output", async () => {
@@ -354,7 +415,7 @@ describe("lunora codegen", () => {
             writeFileSync(join(workdir, ".prettierrc"), JSON.stringify({ semi: true }), "utf8");
             writeFileSync(join(workdir, ".prettierignore"), "dist\n", "utf8");
 
-            await runExecute();
+            await captureExecuteStderr();
 
             const ignored = readFileSync(join(workdir, ".prettierignore"), "utf8");
 
@@ -375,7 +436,7 @@ describe("lunora codegen", () => {
 
             vi.mocked(inferLunoraBindings).mockRejectedValueOnce(new Error("cannot resolve the worker entry"));
 
-            const output = await runExecute();
+            const output = await captureExecuteStderr();
 
             expect(output).toMatch(/could not check whether declared containers\/workflows\/agents are re-exported/u);
             expect(output).toContain("cannot resolve the worker entry");

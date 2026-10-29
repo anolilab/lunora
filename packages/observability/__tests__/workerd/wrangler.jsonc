@@ -1,0 +1,15 @@
+// Test-only wrangler config consumed by `@cloudflare/vitest-plugin`. Not deployed.
+//
+// The SQLite-backed Durable Object is the whole point of the project: workerd's
+// SQLite and `node:sqlite` disagree about a double-quoted name that resolves to
+// nothing — Node builds with `SQLITE_DQS=0` and raises, workerd reads a string
+// literal instead. The node suites run these tables on the wrong one of the two.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-observability-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": { "bindings": [{ "name": "SQLITE", "class_name": "SqliteDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SqliteDO"] }],
+}

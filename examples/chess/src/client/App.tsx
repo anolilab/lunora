@@ -3,26 +3,21 @@ import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "../../lunora/_generated/api.js";
-import type { Doc, Id } from "../../lunora/_generated/dataModel.js";
+import type { Id } from "../../lunora/_generated/dataModel.js";
 import { authClient } from "./auth-client.js";
 import { Game } from "./Game.js";
 import { SignIn } from "./SignIn.js";
 
-export const App = (): ReactElement => {
-    const session = authClient.useSession();
-    const user = session.data?.user as undefined | { email: string; id: string; name?: string };
-
-    if (!user) {
-        return <SignIn />;
-    }
-
-    return <Lobby displayName={user.name ?? user.email.split("@")[0]} userId={user.id} />;
+/**
+ * Sign out, reporting a failure rather than leaving an unhandled rejection. A
+ * wrapper because `authClient` is `any` (see `auth-client.ts`), so `void
+ * authClient.signOut()` discards a value the compiler cannot describe.
+ */
+const signOut = (): void => {
+    (authClient.signOut() as Promise<unknown>).catch((error: unknown) => {
+        console.error("sign out failed", error);
+    });
 };
-
-interface LobbyProperties {
-    displayName: string;
-    userId: string;
-}
 
 const Lobby = ({ displayName, userId }: LobbyProperties): ReactElement => {
     const me = useQuery(api.players.me, {});
@@ -43,14 +38,14 @@ const Lobby = ({ displayName, userId }: LobbyProperties): ReactElement => {
     const [watching, setWatching] = useState<Id<"games"> | null>(null);
     const [error, setError] = useState<string | null>(null);
 
-    const claimedRef = useRef(false);
+    const claimedReference = useRef(false);
 
     useEffect(() => {
-        if (claimedRef.current || me === undefined || me !== null) {
+        if (claimedReference.current || me === undefined || me !== null) {
             return;
         }
 
-        claimedRef.current = true;
+        claimedReference.current = true;
         void claim({ displayName });
     }, [me, claim, displayName]);
 
@@ -67,7 +62,9 @@ const Lobby = ({ displayName, userId }: LobbyProperties): ReactElement => {
 
     const run = (work: Promise<unknown>): void => {
         setError(null);
-        void work.catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "something went wrong"));
+        void work.catch((error_: unknown) => {
+            setError(error_ instanceof Error ? error_.message : "something went wrong");
+        });
     };
 
     if (open) {
@@ -94,10 +91,20 @@ const Lobby = ({ displayName, userId }: LobbyProperties): ReactElement => {
             <header className="page-header">
                 <div>
                     <h1>Lunora Chess</h1>
-                    <p className="muted">{me ? `${me.displayName} · ${me.rating} Elo · ${me.gamesWon}/${me.gamesPlayed} won` : "Setting up your profile…"}</p>
+                    <p className="muted">
+                        {me
+                            ? `${me.displayName} · ${String(me.rating)} Elo · ${String(me.gamesWon)}/${String(me.gamesPlayed)} won`
+                            : "Setting up your profile…"}
+                    </p>
                 </div>
 
-                <button className="link" onClick={() => void authClient.signOut()} type="button">
+                <button
+                    className="link"
+                    onClick={() => {
+                        signOut();
+                    }}
+                    type="button"
+                >
                     Sign out
                 </button>
             </header>
@@ -114,11 +121,22 @@ const Lobby = ({ displayName, userId }: LobbyProperties): ReactElement => {
 
                     <div className="row">
                         {myLobby.isHost && myLobby.guestId && (
-                            <button className="primary" onClick={() => run(startGame({ lobbyId: myLobby._id }))} type="button">
+                            <button
+                                className="primary"
+                                onClick={() => {
+                                    run(startGame({ lobbyId: myLobby._id }));
+                                }}
+                                type="button"
+                            >
                                 Start game
                             </button>
                         )}
-                        <button onClick={() => run(leaveLobby({ lobbyId: myLobby._id }))} type="button">
+                        <button
+                            onClick={() => {
+                                run(leaveLobby({ lobbyId: myLobby._id }));
+                            }}
+                            type="button"
+                        >
                             Leave
                         </button>
                     </div>
@@ -128,10 +146,21 @@ const Lobby = ({ displayName, userId }: LobbyProperties): ReactElement => {
                     <h2>Play</h2>
 
                     <div className="row">
-                        <button className="primary" onClick={() => run(quickMatch({}))} type="button">
+                        <button
+                            className="primary"
+                            onClick={() => {
+                                run(quickMatch({}));
+                            }}
+                            type="button"
+                        >
                             Quick match
                         </button>
-                        <button onClick={() => run(createLobby({ isPrivate: true }))} type="button">
+                        <button
+                            onClick={() => {
+                                run(createLobby({ isPrivate: true }));
+                            }}
+                            type="button"
+                        >
                             Private table
                         </button>
                     </div>
@@ -160,7 +189,12 @@ const Lobby = ({ displayName, userId }: LobbyProperties): ReactElement => {
                         <li key={lobby._id}>
                             <span>{nameOf(lobby.hostId)}</span>
                             {lobby.hostId !== userId && (
-                                <button onClick={() => run(joinLobby({ lobbyId: lobby._id }))} type="button">
+                                <button
+                                    onClick={() => {
+                                        run(joinLobby({ lobbyId: lobby._id }));
+                                    }}
+                                    type="button"
+                                >
                                     Sit down
                                 </button>
                             )}
@@ -179,7 +213,12 @@ const Lobby = ({ displayName, userId }: LobbyProperties): ReactElement => {
                             <span>
                                 {nameOf(game.whiteId)} vs {nameOf(game.blackId)} · {game.moveCount} moves
                             </span>
-                            <button onClick={() => setWatching(game._id)} type="button">
+                            <button
+                                onClick={() => {
+                                    setWatching(game._id);
+                                }}
+                                type="button"
+                            >
                                 Watch
                             </button>
                         </li>
@@ -205,3 +244,19 @@ const Lobby = ({ displayName, userId }: LobbyProperties): ReactElement => {
         </main>
     );
 };
+
+export const App = (): ReactElement => {
+    const session = authClient.useSession();
+    const user = session.data?.user as undefined | { email: string; id: string; name?: string };
+
+    if (!user) {
+        return <SignIn />;
+    }
+
+    return <Lobby displayName={user.name ?? user.email.split("@")[0]} userId={user.id} />;
+};
+
+interface LobbyProperties {
+    displayName: string;
+    userId: string;
+}

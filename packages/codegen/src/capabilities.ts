@@ -1,38 +1,102 @@
 /**
  * The single source of truth for the optional, package-backed **capabilities** —
  * the `ctx.*` helpers and `defineApp` builder methods each backed by an
- * `@lunora/*` add-on. Before this table the same capability was described four
- * times, each drifting independently: the code-usage probe
- * (`discover/feature-usage.ts`), the typed `ctx.*` field seam (`emit.ts`), the
- * fluent `defineApp` builder method (`emit-app.ts`), and the `has*` flag
- * plumbing (`run-codegen.ts`). Adding a capability now means one row here.
+ * `@lunora/*` add-on. Every consumer that enumerates capabilities iterates this
+ * table instead of keeping its own list: the code-usage probe
+ * (`discover/feature-usage.ts`), the required-package assertion, the typed
+ * `ctx.*` fields (`emit/server.ts`), the generated ShardDO's construction wiring
+ * (`emit/shard-bindings.ts`), and the fluent `defineApp` builder (`emit-app.ts`).
+ * The emitters take the set of capabilities the app uses (`ReadonlySet<CapabilityKey>`)
+ * rather than one `has*` boolean per capability, so adding a binding capability
+ * is one row here (plus its platform-matrix rating in `platform-target.ts`).
  *
- * Each descriptor carries optional **facets**, one per consumer; a consumer maps
- * over the rows that carry its facet. `moduleSpecifier` / `contextProperty` drive
- * the usage probe (every row has these); `serverCtxField` is the exact `ctx.*`
- * type fragment spliced into the emitted `QueryCtx`/`MutationCtx`/`ActionCtx` plus
- * its determinism `tier`; `appMethod` is the fluent `defineApp` builder method
- * (`method` / `configKey` / `doc`).
+ * Each descriptor carries optional **facets**, one per consumer:
+ * - `moduleSpecifier` / `contextProperty` drive the usage probe: every row names
+ * its package; every row but `mail` (no `ctx.mail` helper) names its ctx property.
+ * `bindingFreeExports` lists the package's pure helpers whose import alone does
+ * not mark the capability used.
+ * - `tier` is the determinism tier the `ctx.<contextProperty>` helper rides —
+ * stated once here and read by both the type surface and the runtime wiring.
+ * - `serverCtxField` is the exact `ctx.*` type fragment spliced into the emitted
+ * ctx interfaces (`QueryCtx`/`MutationCtx` when `tier` is `"every"`, always `ActionCtx`).
+ * - `shardBinding` is how the generated ShardDO constructs the helper: a
+ * {@link ShardBindingFacet} for the uniform `config.<prop>` thunk → env binding →
+ * factory → throwing-stub shape, or `"bespoke"` for one with its own emitter in
+ * `emit/shard-bindings.ts` (keyed by capability, checked exhaustive at compile time).
+ * - `appMethod` is the fluent `defineApp` builder method (`method` / `configKey` / `doc`).
  *
- * Deliberately **out of scope** (kept in their own bespoke emitters, so they do
- * NOT live here): the umbrella-aware `flags` and the synchronous `access` facade
- * (both special-cased in `emit.ts`), and the per-declaration emitters for
- * `ai` / `payments` / `vectors` / `containers` / `workflows` / `queues` /
- * `identity` / `env`. Those keep their own construction logic — this table owns
- * only the flat, uniform metadata the four lists were duplicating. A capability
- * may still appear here for its probe (`ai`, `payments`, …) or app method
- * (`vectors`, `payment`, …) without a `serverCtxField`.
+ * **Table order is emit order.** Every consumer walks the rows in array order, so
+ * the order here is the order of the fluent `defineApp` methods, of the `ctx.*`
+ * fields in each ctx interface, and of the ShardDO's imports / config fields /
+ * stubs / ctx builds. Reordering rows changes generated output.
+ *
+ * Out of scope: surfaces gated on a DECLARATION rather than on usage (`ctx.flags`,
+ * `ctx.notify`/`ctx.push`, `ctx.env`, `ctx.vectors` and the per-declaration
+ * `containers`/`workflows`/`queues`/`services`/`agents` emitters), and the
+ * ShardDO build of `ctx.payments` (see its row).
  */
 
 /** Determinism tier a capability's `ctx.*` field rides. `"every"` = query+mutation+action; `"action"` = ActionCtx only (external, non-deterministic I/O). */
 type CapabilityTier = "action" | "every";
 
-/** The typed `ctx.*` field seam (`emit.ts`): the exact interface fragment + which ctx tier(s) it rides. */
-interface ServerContextFieldFacet {
-    /** The exact fragment spliced into the emitted ctx interface (leading `\n`, `readonly …`). One source of truth for the bytes. */
-    field: string;
-    /** Determinism tier — `"every"` rides all three ctx interfaces; `"action"` only the ActionCtx. */
-    tier: CapabilityTier;
+/**
+ * How the generated ShardDO resolves the conventional `env.<NAME>` binding for
+ * a {@link ShardBindingFacet}: `config.<prop>?.(env) ?? env.<NAME>`, then the
+ * factory, else the throwing stub.
+ */
+interface ShardEnvBinding {
+    /** Structural type the `config.<prop>` override thunk returns and the factory takes (`KVNamespaceLike`). Omit when the binding IS the client (no `factory`). */
+    bindingType?: string;
+    /** The conventional binding name the build falls back to (`KV` → `env.KV`). */
+    envName: string;
+
+    /**
+     * The `moduleSpecifier` export that builds the client from the binding.
+     * `option` names the options-object key the binding is passed under
+     * (`createKv({ namespace })`); omitted, the binding is passed positionally
+     * (`createAnalytics(binding)`). Omit the factory entirely for a binding that
+     * is used as-is (cast to `clientType`).
+     */
+    factory?: { name: string; option?: string };
+
+    /**
+     * Read methods wrapped with `markUnvouchableReads`. Needed for an every-tier
+     * read surface that lives outside this shard's SQLite: nothing appends a
+     * `__cdc_log` entry when its data changes, so a subscription that read it must
+     * re-snapshot on reconnect. Writes stay unstamped.
+     */
+    unvouchableReads?: ReadonlyArray<string>;
+}
+
+/**
+ * The protected `ShardDO` (`@lunora/do`) methods that instrument a binding
+ * client — the only names a generated `this.<method>(…)` call may use. A
+ * literal union rather than `string` so a typo is a compile error here, not a
+ * `this.x is not a function` in every generated app.
+ */
+type ShardInstrumentMethod = "instrumentSql";
+
+/**
+ * The uniform ShardDO construction shape for a binding-backed `ctx.<prop>`
+ * helper (`emitBindingClientFragments` in `emit/shard-bindings.ts`): a
+ * `ShardDOConfig.<prop>` override thunk, the build in `buildCtx` (on every ctx
+ * or only the action ctx, per the row's `tier`), and a module-level stub typed
+ * as `clientType` whose every method throws `missingMessage`. Because the stub is
+ * annotated (never cast), TypeScript flags a method missing from `stubMethods`.
+ */
+interface ShardBindingFacet {
+    /** Resolve an `env.<NAME>` binding and build the client from it. Omit for a thunk-only helper (`ctx.sql`, `ctx.browser`) whose `config.<prop>` thunk returns the built client. */
+    binding?: ShardEnvBinding;
+    /** The exported client type the ctx local and the stub are typed as, imported type-only from the row's `moduleSpecifier`. */
+    clientType: string;
+    /** The ShardDO method that wraps a configured client in automatic telemetry, called as `this.<method>(client, functionPath, traceAnchor, observability)`. Never applied to the stub. */
+    instrument?: ShardInstrumentMethod;
+    /** The plain-text message of the stub's `throw new Error(…)` — name the wrangler key and the `createShardDO()` override. Rendered with `JSON.stringify`, so write it unescaped. */
+    missingMessage: string;
+    /** Every method of `clientType`, in emit order. Async (`async () => { throw }`) unless listed in `syncStubMethods`. */
+    stubMethods: ReadonlyArray<string>;
+    /** The `stubMethods` that are synchronous on the client, so their stub throws instead of rejecting. */
+    syncStubMethods?: ReadonlyArray<string>;
 }
 
 /** The fluent `defineApp` builder method (`emit-app.ts` long-tail): method name, `createShardDO` config key, and doc. */
@@ -45,10 +109,22 @@ interface AppMethodFacet {
     method: string;
 }
 
-/** One package-backed capability and the per-consumer facets describing how it is wired. */
-interface CapabilityDescriptor {
+/** The usage-probe / package / builder facets every row may carry. */
+interface CapabilityBase {
     /** The fluent `defineApp` builder method facet — present for long-tail (`shardExtras`-backed) capabilities. */
     appMethod?: AppMethodFacet;
+
+    /**
+     * The `moduleSpecifier` exports that touch no binding, env or ctx (WebCrypto
+     * URL signing, string builders, validators). An import naming ONLY these —
+     * `import { buildSignedUrl } from "@lunora/storage"` — does not mark the
+     * capability used, so it neither wires `ctx.<prop>` nor trips the platform
+     * gate on a host without the binding. Fail closed: an unlisted export, a
+     * default, namespace or side-effect import and an `export *` all still
+     * count, as does a dynamic `import()` wherever one is counted
+     * (`@lunora/config`). List a name only after reading it.
+     */
+    bindingFreeExports?: ReadonlyArray<string>;
     /** Generated `ctx.*` helper name (the usage probe + the destructure detector); omitted when the feature has no ctx surface (`mail`). */
     contextProperty?: string;
     /** The capability id — equal to its `FeatureUsage` key and its `ctx.<key>` helper (except where `contextProperty` differs, e.g. `hyperdrive` → `ctx.sql`). */
@@ -72,33 +148,100 @@ interface CapabilityDescriptor {
      * `v.storage()` column, a storage rule) are handled explicitly there.
      */
     requiredPackage?: string;
-    /** The typed `ctx.*` field seam facet — present only for the uniform binding capabilities emitted inline in `emit.ts` (NOT `flags`/`access`). */
-    serverCtxField?: ServerContextFieldFacet;
 }
 
 /**
- * The canonical capability list. **Order is load-bearing** for the `emit-app.ts`
- * long-tail: the fluent methods are emitted in the order the `appMethod`-bearing
- * rows appear here, so this array is ordered to reproduce the original
- * `LONG_TAIL` sequence (ai, analytics, browser, hyperdrive, images, kv, payment,
- * r2sql, vectors). The `serverCtxField` rows are referenced by name in the ctx
- * interface templates, so their order here is not output-affecting.
+ * One package-backed capability and the per-consumer facets describing how it is
+ * wired. A row that puts a helper on `ctx` states the `tier` it rides, its
+ * `contextProperty` and its `serverCtxField`, and optionally a `shardBinding`
+ * (omitted where the ShardDO build is hand-wired, `payments`); every other row
+ * carries none of them.
+ */
+type CapabilityDescriptor = (
+    | {
+          contextProperty: string;
+          /** The exact fragment spliced into the emitted ctx interface(s) (leading `\n`, `readonly …`). */
+          serverCtxField: string;
+          /** How the generated ShardDO builds the helper — a uniform {@link ShardBindingFacet}, or `"bespoke"` for its own emitter. */
+          shardBinding?: ShardBindingFacet | "bespoke";
+          /** Which ctx interfaces the helper rides — read by `emit/server.ts` (type surface) and `emit/shard.ts` (runtime attach). */
+          tier: CapabilityTier;
+      }
+    | { serverCtxField?: never; shardBinding?: never; tier?: never }
+) &
+    CapabilityBase;
+
+/**
+ * The canonical capability list. **Order is load-bearing** — every consumer
+ * emits in row order (see the module doc). The `appMethod` rows reproduce the
+ * original `LONG_TAIL` builder sequence (ai, aiSearch, analytics, analyticsSql, artifacts, browser,
+ * hyperdrive, images, kv, payment, x402, r2sql — `.vectors()` follows them, emitted off the
+ * declaration), and the same order places the `ctx.*` fields and the ShardDO wiring.
  */
 const CAPABILITY_ROWS = [
     // The `accessContext()` middleware imports the `/context` subpath, NOT the
     // bare `@lunora/cloudflare-access` specifier — so the per-procedure
     // middleware never trips the global `ctx.access` wiring.
-    // A handler reading `ctx.access` is the signal that wires it onto every ctx.
-    // `access` has a synchronous facade type, so its ctx field stays bespoke in
-    // `emit.ts` (no `serverCtxField` here).
-    { contextProperty: "access", key: "access", moduleSpecifier: "@lunora/cloudflare-access", requiredPackage: "@lunora/cloudflare-access" },
+    // A handler reading `ctx.access` is the signal that wires it onto every ctx:
+    // a synchronous facade over the already-resolved claims (a deterministic read
+    // of the per-request identity, like `ctx.auth`; verification happened once at
+    // the edge in `resolveIdentity`), built by its own emitter.
+    {
+        contextProperty: "access",
+        key: "access",
+        moduleSpecifier: "@lunora/cloudflare-access",
+        requiredPackage: "@lunora/cloudflare-access",
+        serverCtxField: `\n    /** Verified Cloudflare Access identity — a synchronous facade over the resolved claims (email / groups / hasGroup / claims). Anonymous when no Access token is present. */\n    readonly access: import("@lunora/cloudflare-access/context").AccessFacade;`,
+        shardBinding: "bespoke",
+        tier: "every",
+    },
+    // `ctx.ai` — Workers AI. ActionCtx ONLY: inference is external,
+    // non-deterministic I/O. Its `createAi` build (gateway metadata + telemetry)
+    // is bespoke; `emit/server.ts` also types the conventional `env.AI` binding
+    // off this row's usage.
     {
         appMethod: { configKey: "ai", doc: "Override the Workers AI binding backing `ctx.ai` (defaults to `env.AI`).", method: "ai" },
+        // The token-pricing table and its lookups.
+        bindingFreeExports: ["DEFAULT_MODEL_PRICES", "estimateModelCost", "lookupModelPrice"],
         contextProperty: "ai",
         key: "ai",
         moduleSpecifier: "@lunora/ai",
         requiredPackage: "@lunora/ai",
+        serverCtxField: `\n    readonly ai: import("@lunora/ai").LunoraAi;`,
+        shardBinding: "bespoke",
+        tier: "action",
     },
+    // `ctx.aiSearch` — Cloudflare AI Search, the raw `ai_search_namespaces`
+    // binding passed through unwrapped (no factory: the binding IS the client).
+    // Its own types-only `@lunora/bindings/ai-search` subpath, so the emitted
+    // field does not depend on the app's ambient `types`. ActionCtx ONLY: a
+    // ranked search over a re-indexing corpus is billed, non-deterministic
+    // network I/O, and a query running it would re-bill on every subscription
+    // re-run.
+    {
+        appMethod: {
+            configKey: "aiSearch",
+            doc: "Override the AI Search namespace binding backing `ctx.aiSearch` (defaults to `env.AI_SEARCH`).",
+            method: "aiSearch",
+        },
+        contextProperty: "aiSearch",
+        key: "aiSearch",
+        moduleSpecifier: "@lunora/bindings/ai-search",
+        requiredPackage: "@lunora/bindings",
+        serverCtxField: `\n    /** Cloudflare AI Search namespace (\`ai_search_namespaces\`): \`.get(name)\` an instance, then \`search\` / \`chatCompletions\`. Billed, non-deterministic network I/O — available only in actions. */\n    readonly aiSearch: import("@lunora/bindings/ai-search").AiSearch;`,
+        shardBinding: {
+            binding: { envName: "AI_SEARCH" },
+            clientType: "AiSearch",
+            missingMessage:
+                "ctx.aiSearch: no AI Search binding found. Add an `ai_search_namespaces` binding (env.AI_SEARCH) to wrangler.jsonc, or point `defineApp().aiSearch((env) => …)` at yours.",
+            stubMethods: ["chatCompletions", "create", "delete", "get", "list", "search"],
+            syncStubMethods: ["get"],
+        },
+        tier: "action",
+    },
+    // `ctx.analytics` — Analytics Engine write helper. EVERY ctx: a write-only,
+    // fire-and-forget side effect, not a determinism hazard for reads.
+    // `createAnalytics` takes the binding POSITIONALLY.
     {
         appMethod: {
             configKey: "analytics",
@@ -109,37 +252,107 @@ const CAPABILITY_ROWS = [
         key: "analytics",
         moduleSpecifier: "@lunora/bindings/analytics",
         requiredPackage: "@lunora/bindings",
-        // `ctx.analytics` — Analytics Engine write helper. EVERY ctx: a write-only,
-        // fire-and-forget side effect, not a determinism hazard for reads.
-        serverCtxField: {
-            field: `\n    /** Analytics Engine telemetry sink. Fire-and-forget and sampled; do not read it back in-handler. */\n    readonly analytics: import("@lunora/bindings/analytics").AnalyticsClient;`,
-            tier: "every",
+        serverCtxField: `\n    /** Analytics Engine telemetry sink. Fire-and-forget and sampled; do not read it back in-handler. */\n    readonly analytics: import("@lunora/bindings/analytics").AnalyticsClient;`,
+        shardBinding: {
+            binding: { bindingType: "AnalyticsEngineDatasetLike", envName: "ANALYTICS", factory: { name: "createAnalytics" } },
+            clientType: "AnalyticsClient",
+            missingMessage:
+                "ctx.analytics: no Analytics Engine binding found. Add an `analytics_engine_datasets` binding (env.ANALYTICS) to wrangler.jsonc, or pass `analytics` to createShardDO().",
+            stubMethods: ["track", "writeDataPoint"],
+            syncStubMethods: ["track", "writeDataPoint"],
         },
+        tier: "every",
     },
+    // `ctx.analyticsSql` — the Analytics SQL binding (wrangler `analytics` key):
+    // read-only SQL over Cloudflare's Analytics SQL API, Analytics Engine datasets
+    // included. A sibling of `ctx.analytics`, not a method on it: that one rides
+    // EVERY ctx as a write-only sink over a different binding, while a read is
+    // billed, non-deterministic network I/O — ActionCtx ONLY. A worker without
+    // the binding points `.analyticsSql()` at `createAnalyticsSqlRest(...)`, the
+    // API-token transport with the same binding shape.
+    {
+        appMethod: {
+            configKey: "analyticsSql",
+            doc: "Override the Analytics SQL binding backing `ctx.analyticsSql` (defaults to `env.ANALYTICS_SQL`), e.g. `(env) => createAnalyticsSqlRest({ accountId, apiToken })` where the Worker has no `analytics` binding.",
+            method: "analyticsSql",
+        },
+        contextProperty: "analyticsSql",
+        key: "analyticsSql",
+        moduleSpecifier: "@lunora/bindings/analytics-sql",
+        requiredPackage: "@lunora/bindings",
+        serverCtxField: `\n    /** Read-only SQL over Cloudflare's Analytics SQL API (Analytics Engine datasets and more) through the \`analytics\` binding. Non-deterministic — available only in actions. Reads here are NOT tracked by Lunora live queries. */\n    readonly analyticsSql: import("@lunora/bindings/analytics-sql").AnalyticsSql;`,
+        shardBinding: {
+            binding: { bindingType: "AnalyticsSqlBindingLike", envName: "ANALYTICS_SQL", factory: { name: "createAnalyticsSql", option: "binding" } },
+            clientType: "AnalyticsSql",
+            missingMessage:
+                'ctx.analyticsSql: no Analytics SQL binding found. Add an `analytics` binding ({ binding: "ANALYTICS_SQL" }, wrangler >= 4.145.0) to wrangler.jsonc, or point ctx.analyticsSql at a token transport with defineApp().analyticsSql((env) => createAnalyticsSqlRest({ accountId, apiToken })).',
+            stubMethods: ["query"],
+        },
+        tier: "action",
+    },
+    // `ctx.artifacts` — Cloudflare Artifacts (Git-backed repos). ActionCtx ONLY:
+    // every call is remote, billed network I/O. Without a binding the stub's
+    // `authenticatedRemote` throws like every other method rather than delegating
+    // to the pure helper — import `authenticatedRemote` from
+    // `@lunora/bindings/artifacts` directly to build a remote URL with no binding.
+    {
+        appMethod: {
+            configKey: "artifacts",
+            doc: "Override the Artifacts binding backing `ctx.artifacts` (defaults to `env.ARTIFACTS`).",
+            method: "artifacts",
+        },
+        contextProperty: "artifacts",
+        key: "artifacts",
+        moduleSpecifier: "@lunora/bindings/artifacts",
+        requiredPackage: "@lunora/bindings",
+        serverCtxField: `\n    /** Cloudflare Artifacts repos (create/import/fork, Git tokens, read commits and files). Non-deterministic — available only in actions. Writes go through \`git push\` with a token, not this client. */\n    readonly artifacts: import("@lunora/bindings/artifacts").ArtifactsClient;`,
+        shardBinding: {
+            binding: { bindingType: "ArtifactsBindingLike", envName: "ARTIFACTS", factory: { name: "createArtifacts", option: "binding" } },
+            clientType: "ArtifactsClient",
+            missingMessage:
+                'ctx.artifacts: no Artifacts binding found. Add an `artifacts` binding ({ binding: "ARTIFACTS", namespace }) to wrangler.jsonc, or point ctx.artifacts at another binding with defineApp().artifacts((env) => env.<BINDING>).',
+            stubMethods: ["authenticatedRemote", "create", "delete", "import", "info", "list", "withRepo"],
+            syncStubMethods: ["authenticatedRemote"],
+        },
+        tier: "action",
+    },
+    // `ctx.browser` — Browser Rendering. ActionCtx ONLY: non-deterministic network
+    // I/O. Thunk-only: `createBrowser` needs an injected Playwright `launch` (the
+    // optional `@cloudflare/playwright` peer), so the generated worker stays free
+    // of it and imports only the `Browser` type; the `config.browser` thunk owns
+    // construction.
     {
         appMethod: {
             configKey: "browser",
-            doc: "Override the Browser Rendering binding backing `ctx.browser` (defaults to `env.BROWSER`).",
+            doc: "Build the `ctx.browser` helper, e.g. `(env) => createBrowser({ binding: env.BROWSER, launch })`. REQUIRED: unlike the binding-backed capabilities, `ctx.browser` is not auto-constructed — without this thunk every method throws, because the generated worker deliberately stays free of the optional `@cloudflare/playwright` peer.",
             method: "browser",
         },
         contextProperty: "browser",
         key: "browser",
         moduleSpecifier: "@lunora/browser",
         requiredPackage: "@lunora/browser",
-        // `ctx.browser` — Browser Rendering. ActionCtx ONLY: non-deterministic network I/O.
-        serverCtxField: {
-            field: `\n    /** Browser Rendering (screenshots/PDF/scrape). Non-deterministic — available only in actions. */\n    readonly browser: import("@lunora/browser").Browser;`,
-            tier: "action",
+        serverCtxField: `\n    /** Browser Rendering (screenshots/PDF/scrape). Non-deterministic — available only in actions. */\n    readonly browser: import("@lunora/browser").Browser;`,
+        shardBinding: {
+            clientType: "Browser",
+            missingMessage:
+                "ctx.browser: provide a `browser` config thunk, e.g. `browser: (env) => createBrowser({ binding: env.BROWSER, launch })` with `import { launch } from '@cloudflare/playwright'`. Session reuse (connect/sessions) additionally needs those two exports passed the same way.",
+            stubMethods: ["cancelCrawl", "connect", "content", "crawl", "crawlResult", "launch", "pdf", "quickAction", "scrape", "screenshot", "sessions"],
         },
+        tier: "action",
     },
     // `lunora/containers.ts` imports `defineContainer` from `@lunora/container`,
     // and handlers reach live instances via `ctx.containers` — either signals the
     // app wires containers, so the studio should show the Containers page. The ctx
-    // field is a per-declaration emitter (kept bespoke), so no `serverCtxField`.
+    // field is a per-declaration emitter (kept bespoke), so no ctx facets.
     { contextProperty: "containers", key: "container", moduleSpecifier: "@lunora/container" },
-    // `ctx.flags` — OpenFeature. Umbrella-aware specifier + its own provider
-    // client, so both the ctx field and the shard fragment stay bespoke.
+    // `ctx.flags` — OpenFeature. Declaration-gated (`lunora/flags.ts`) with an
+    // umbrella-aware specifier, so both the ctx field and the shard fragment stay
+    // bespoke; this row is the usage probe only.
     { contextProperty: "flags", key: "flags", moduleSpecifier: "@lunora/flags" },
+    // `ctx.sql` — Hyperdrive (external Postgres/MySQL). ActionCtx ONLY: external,
+    // non-deterministic I/O whose writes are invisible to Lunora live queries.
+    // Thunk-only: `createHyperdrive` returns connection info, not a `SqlClient`
+    // (that needs a user-chosen driver), so the `config.sql` thunk is REQUIRED.
     {
         appMethod: {
             configKey: "sql",
@@ -150,34 +363,59 @@ const CAPABILITY_ROWS = [
         key: "hyperdrive",
         moduleSpecifier: "@lunora/hyperdrive",
         requiredPackage: "@lunora/hyperdrive",
-        // `ctx.sql` — Hyperdrive (external Postgres/MySQL). ActionCtx ONLY: external,
-        // non-deterministic I/O whose writes are invisible to Lunora live queries.
-        serverCtxField: {
-            field: `\n    /**\n     * External database access via Hyperdrive. Non-deterministic — available only in actions. Writes here are NOT tracked by Lunora live queries; subscriptions will not re-run on external DB changes.\n     */\n    readonly sql: import("@lunora/hyperdrive").SqlClient;`,
-            tier: "action",
+        serverCtxField: `\n    /**\n     * External database access via Hyperdrive. Non-deterministic — available only in actions. Writes here are NOT tracked by Lunora live queries; subscriptions will not re-run on external DB changes.\n     */\n    readonly sql: import("@lunora/hyperdrive").SqlClient;`,
+        shardBinding: {
+            clientType: "SqlClient",
+            // Same `instrumentDatabase` levels as `ctx.db`, under its own `sql.*` tally.
+            instrument: "instrumentSql",
+            missingMessage:
+                "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))`.",
+            stubMethods: ["query"],
         },
+        tier: "action",
     },
+    // `ctx.images` — Cloudflare Images binding transforms. ActionCtx ONLY:
+    // non-deterministic compute/network I/O.
     {
         appMethod: { configKey: "images", doc: "Override the Images binding backing `ctx.images` (defaults to `env.IMAGES`).", method: "images" },
+        // The delivery-URL string builder and the WebCrypto signed-URL trio.
+        bindingFreeExports: ["buildImageDeliveryUrl", "buildSignedImageUrl", "parseSignedTransform", "verifySignedImageUrl"],
         contextProperty: "images",
         key: "images",
         moduleSpecifier: "@lunora/bindings/images",
         requiredPackage: "@lunora/bindings",
-        // `ctx.images` — Cloudflare Images binding transforms. ActionCtx ONLY: non-deterministic compute/network I/O.
-        serverCtxField: {
-            field: `\n    /** Cloudflare Images transforms (resize/format/optimize). Non-deterministic — available only in actions. */\n    readonly images: import("@lunora/bindings/images").Images;`,
-            tier: "action",
+        serverCtxField: `\n    /** Cloudflare Images transforms (resize/format/optimize). Non-deterministic — available only in actions. */\n    readonly images: import("@lunora/bindings/images").Images;`,
+        shardBinding: {
+            binding: { bindingType: "ImagesBindingLike", envName: "IMAGES", factory: { name: "createImages", option: "binding" } },
+            clientType: "Images",
+            missingMessage: "ctx.images: no Images binding found. Add an `images` binding (env.IMAGES) to wrangler.jsonc, or pass `images` to createShardDO().",
+            stubMethods: ["info", "transform"],
         },
+        tier: "action",
     },
+    // `ctx.kv` — Workers KV. Typed on EVERY ctx: a KV read is allowed in a
+    // deterministic read path the way `ctx.db` is (the binding is user-named) —
+    // which is why its reads are stamped unvouchable.
     {
         appMethod: { configKey: "kv", doc: "Override the Workers KV binding backing `ctx.kv` (defaults to `env.KV`).", method: "kv" },
+        bindingFreeExports: ["scopeKey"],
         contextProperty: "kv",
         key: "kv",
         moduleSpecifier: "@lunora/bindings/kv",
         requiredPackage: "@lunora/bindings",
-        // `ctx.kv` — Workers KV. Typed on EVERY ctx (a KV read is allowed in a
-        // deterministic read path the way `ctx.db` is; the binding is user-named).
-        serverCtxField: { field: `\n    readonly kv: import("@lunora/bindings/kv").Kv;`, tier: "every" },
+        serverCtxField: `\n    readonly kv: import("@lunora/bindings/kv").Kv;`,
+        shardBinding: {
+            binding: {
+                bindingType: "KVNamespaceLike",
+                envName: "KV",
+                factory: { name: "createKv", option: "namespace" },
+                unvouchableReads: ["get", "getRaw", "getWithMetadata", "list"],
+            },
+            clientType: "Kv",
+            missingMessage: "ctx.kv: no KV binding found. Add a `kv_namespaces` binding (env.KV) to wrangler.jsonc, or pass `kv` to createShardDO().",
+            stubMethods: ["delete", "get", "getRaw", "getWithMetadata", "list", "put"],
+        },
+        tier: "every",
     },
     // `mail` is import-only — no `ctx.mail` helper (mail is reached through its own
     // client), so only a `@lunora/mail` import flips it.
@@ -188,20 +426,26 @@ const CAPABILITY_ROWS = [
     // app declares `lunora/notify.ts`, which imports `@lunora/notify` and is
     // itself scanned, so a `ctx.push`-only handler is still caught by the import
     // arm (and by the declared-dependency arm in `buildStudioFeatures`). Its ctx
-    // fields are hand-wired in `emit.ts` off the `lunora/notify.ts` signal, so no
-    // `serverCtxField` here — declaring one would emit the fields twice.
+    // fields are hand-wired in `emit/` off the `lunora/notify.ts` signal, so no
+    // ctx facets here — declaring them would emit the fields twice.
     { contextProperty: "notify", key: "notify", moduleSpecifier: "@lunora/notify" },
+    // `ctx.payments` — ActionCtx ONLY: payment ops are external provider calls.
+    // The type field rides the table, but there is no `shardBinding`: the facade's
+    // store rides the request's `ctx.db`, so its build must run AFTER `db` is
+    // constructed, which no `shardBinding` slot does (every one is built before the
+    // ctx literal). `emitPaymentFragments` hand-wires the build off this row's usage.
     {
         appMethod: { configKey: "payment", doc: "Wire the payment options backing `ctx.payments`.", method: "payment" },
         contextProperty: "payments",
         key: "payments",
         moduleSpecifier: "@lunora/payment",
         requiredPackage: "@lunora/payment",
+        serverCtxField: `\n    readonly payments: import("@lunora/payment").LunoraPayment;`,
+        tier: "action",
     },
     // `ctx.x402` — the x402 agent-wallet pay rail. ActionCtx ONLY: it signs and
-    // settles real USDC over the network per request. Like `payments`, its ctx
-    // field is bespoke (a lazily-built, per-run-metered rail), so no
-    // `serverCtxField` — `emit.ts` hand-wires it.
+    // settles real USDC over the network per request. Its ShardDO build is bespoke
+    // (a lazily-built rail reading its wallet key through `ctx.secrets`).
     {
         appMethod: {
             configKey: "x402",
@@ -212,22 +456,35 @@ const CAPABILITY_ROWS = [
         key: "x402",
         moduleSpecifier: "@lunora/x402/pay",
         requiredPackage: "@lunora/x402",
+        serverCtxField: `\n    readonly x402: import("@lunora/x402/pay").X402Pay;`,
+        shardBinding: "bespoke",
+        tier: "action",
     },
-    // Pipelines is its own `@lunora/bindings/pipelines` subpath (distinct from
-    // `/analytics`), so a real import is a clean signal that won't be flipped by a
-    // plain analytics import; `ctx.pipelines` reads flip it too.
+    // `ctx.pipelines` — Pipelines (R2-backed) ingestion sink. ActionCtx ONLY
+    // (write-only fire-and-forget, but external I/O — kept off query/mutation).
+    // Its own `@lunora/bindings/pipelines` subpath (distinct from `/analytics`), so
+    // a real import is a clean signal that won't be flipped by a plain analytics
+    // import; `ctx.pipelines` reads flip it too.
     {
         contextProperty: "pipelines",
         key: "pipelines",
         moduleSpecifier: "@lunora/bindings/pipelines",
         requiredPackage: "@lunora/bindings",
-        // `ctx.pipelines` — Pipelines (R2-backed) ingestion sink. ActionCtx ONLY
-        // (write-only fire-and-forget, but external I/O — kept off query/mutation).
-        serverCtxField: {
-            field: `\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import("@lunora/bindings/pipelines").PipelineClient;`,
-            tier: "action",
+        serverCtxField: `\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import("@lunora/bindings/pipelines").PipelineClient;`,
+        shardBinding: {
+            binding: { bindingType: "PipelineBindingLike", envName: "PIPELINES", factory: { name: "createPipelines", option: "binding" } },
+            clientType: "PipelineClient",
+            missingMessage:
+                "ctx.pipelines: no Pipelines binding found. Add a `pipelines` binding (env.PIPELINES) to wrangler.jsonc, or pass `pipelines` to createShardDO().",
+            stubMethods: ["send"],
         },
+        tier: "action",
     },
+    // `ctx.r2sql` — R2 SQL (serverless query engine over Apache Iceberg tables).
+    // ActionCtx ONLY: external REST I/O, non-deterministic, and non-reactive
+    // (reads are not tracked by Lunora live queries). No Workers binding — the
+    // client resolves account id + API token + bucket from env vars — so its
+    // ShardDO build is bespoke.
     {
         appMethod: {
             configKey: "r2sql",
@@ -238,18 +495,29 @@ const CAPABILITY_ROWS = [
         key: "r2sql",
         moduleSpecifier: "@lunora/bindings/r2sql",
         requiredPackage: "@lunora/bindings",
-        // `ctx.r2sql` — R2 SQL (serverless query engine over Apache Iceberg tables).
-        // ActionCtx ONLY: external REST I/O, non-deterministic, and non-reactive
-        // (reads are not tracked by Lunora live queries).
-        serverCtxField: {
-            field: `\n    /**\n     * R2 SQL over Apache Iceberg tables (window functions, DISTINCT, set operations). Non-deterministic — available only in actions. Reads here are NOT tracked by Lunora live queries.\n     */\n    readonly r2sql: import("@lunora/bindings/r2sql").R2SqlClient;`,
-            tier: "action",
-        },
+        serverCtxField: `\n    /**\n     * R2 SQL over Apache Iceberg tables (window functions, DISTINCT, set operations). Non-deterministic — available only in actions. Reads here are NOT tracked by Lunora live queries.\n     */\n    readonly r2sql: import("@lunora/bindings/r2sql").R2SqlClient;`,
+        shardBinding: "bespoke",
+        tier: "action",
     },
-    { contextProperty: "scheduler", key: "scheduler", moduleSpecifier: "@lunora/scheduler" },
-    { contextProperty: "storage", key: "storage", moduleSpecifier: "@lunora/storage" },
     {
-        appMethod: { configKey: "vectors", doc: "Wire the Vectorize index map backing `ctx.vectors`.", method: "vectors" },
+        // The cron-expression validators.
+        bindingFreeExports: ["assertValidCronExpression", "isValidCronExpression"],
+        contextProperty: "scheduler",
+        key: "scheduler",
+        moduleSpecifier: "@lunora/scheduler",
+    },
+    {
+        // Worker-signed URLs (WebCrypto), R2 S3 presigned URLs (SigV4 over the
+        // caller's credentials, not the binding) and the tenant key prefixer.
+        bindingFreeExports: ["buildPresignedUrl", "buildSignedUrl", "scopeKey", "verifySignedUrl"],
+        contextProperty: "storage",
+        key: "storage",
+        moduleSpecifier: "@lunora/storage",
+    },
+    // `ctx.vectors` is declaration-gated (schema indexes + the platform gate), so
+    // its `.vectors()` builder method is emitted off `hasVectors` in `emit-app.ts`,
+    // not from this row; the row is the usage probe only.
+    {
         contextProperty: "vectors",
         key: "vectors",
         moduleSpecifier: "@lunora/bindings/vectors",
@@ -268,16 +536,21 @@ type CapabilityKey = (typeof CAPABILITY_ROWS)[number]["key"];
 
 /**
  * The subset of {@link CapabilityKey} for capabilities that expose a fluent
- * `defineApp` builder method (an `appMethod` facet). `emit-app.ts` derives each
- * one's `has<Capitalized>` option key off this union, so the derivation is
- * checked against `EmitAppOptions` at compile time (a capability whose flag is
- * missing from `EmitAppOptions` is a type error, not a silent no-op).
+ * `defineApp` builder method (an `appMethod` facet).
  */
 type AppMethodKey = Extract<(typeof CAPABILITY_ROWS)[number], { appMethod: unknown }>["key"];
 
 /**
+ * The capabilities whose ShardDO construction is a bespoke emitter
+ * (`shardBinding: "bespoke"`). `emit/shard-bindings.ts` keys its bespoke-emitter
+ * map by this union, so a row marked bespoke without an emitter (or an emitter
+ * left behind for a row that no longer is) is a compile error.
+ */
+type BespokeShardKey = Extract<(typeof CAPABILITY_ROWS)[number], { shardBinding: "bespoke" }>["key"];
+
+/**
  * The canonical table, widened to `CapabilityDescriptor` for iteration — so a
- * consumer can read `capability.serverCtxField` / `.appMethod` / `.contextProperty`
+ * consumer can read `capability.serverCtxField` / `.shardBinding` / `.appMethod`
  * uniformly across every row (they read as `T | undefined`, whereas the narrow
  * {@link CAPABILITY_ROWS} literal type only exposes the facets a given row
  * actually declares). `key` stays narrowed to the {@link CapabilityKey} union
@@ -288,24 +561,48 @@ type AppMethodKey = Extract<(typeof CAPABILITY_ROWS)[number], { appMethod: unkno
 const CAPABILITIES: ReadonlyArray<CapabilityDescriptor & { readonly key: CapabilityKey }> = CAPABILITY_ROWS;
 
 /**
- * The typed `ctx.*` field seam keyed by capability id — for `emit.ts`, which
- * gates each on the matching `has*` flag and splices `field` into the ctx
- * interfaces. Only the uniform binding capabilities appear (NOT `flags`/`access`,
- * whose fields stay bespoke).
- */
-const SERVER_CTX_FIELDS: ReadonlyMap<CapabilityKey, ServerContextFieldFacet> = new Map(
-    CAPABILITIES.flatMap((capability) => (capability.serverCtxField ? [[capability.key, capability.serverCtxField] as const] : [])),
-);
-
-/**
  * The long-tail `defineApp` builder capabilities, in emit order — for
  * `emit-app.ts`, which turns each into a fluent method setting `configKey` on the
- * `createShardDO` config. Each pairs the capability's `has*` option key
- * (`has<Capitalized-key>`) with its {@link AppMethodFacet}.
+ * `createShardDO` config.
  */
 const APP_METHOD_CAPABILITIES: ReadonlyArray<{ appMethod: AppMethodFacet; key: AppMethodKey }> = CAPABILITY_ROWS.flatMap((capability) =>
     "appMethod" in capability ? [{ appMethod: capability.appMethod, key: capability.key }] : [],
 );
 
-export { APP_METHOD_CAPABILITIES, CAPABILITIES, SERVER_CTX_FIELDS };
-export type { AppMethodFacet, AppMethodKey, CapabilityDescriptor, CapabilityKey, CapabilityTier, ServerContextFieldFacet };
+/** The usage-probe facets of one row: the package whose value import, and the `ctx.<property>` whose read, marks it used. */
+interface CapabilityProbe {
+    /** `undefined` for a capability with no ctx helper (`mail`). */
+    readonly contextProperty: string | undefined;
+    readonly moduleSpecifier: string;
+}
+
+/**
+ * The usage-probe facets of every row, keyed by capability — the view a consumer
+ * outside codegen reads (`@lunora/config` names a package and words a hint off
+ * it), so a lookup needs no existence check. Which signals mark a capability used
+ * is decided by `capabilitiesUsedBy` alone, never re-derived from these.
+ */
+// The one widening `Object.fromEntries` forces: its keys provably come from `CAPABILITIES`.
+const CAPABILITY_PROBES: Readonly<Record<CapabilityKey, CapabilityProbe>> = Object.fromEntries(
+    CAPABILITIES.map(({ contextProperty, key, moduleSpecifier }) => [key, { contextProperty, moduleSpecifier }] as const),
+) as Readonly<Record<CapabilityKey, CapabilityProbe>>;
+
+/**
+ * The capabilities a usage record marks as used, as the set the emitters take
+ * (`emitServer` / `emitShard` / `emitApp`'s `capabilities` option).
+ */
+const usedCapabilities = (usage: Readonly<Record<CapabilityKey, boolean>>): ReadonlySet<CapabilityKey> =>
+    new Set(CAPABILITIES.filter((capability) => usage[capability.key]).map((capability) => capability.key));
+
+export { APP_METHOD_CAPABILITIES, CAPABILITIES, CAPABILITY_PROBES, usedCapabilities };
+export type {
+    AppMethodFacet,
+    AppMethodKey,
+    BespokeShardKey,
+    CapabilityDescriptor,
+    CapabilityKey,
+    CapabilityProbe,
+    CapabilityTier,
+    ShardBindingFacet,
+    ShardEnvBinding,
+};

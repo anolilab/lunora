@@ -12,6 +12,7 @@ const RESOLVED = (projectRoot: string) => {
     return {
         allowUnauthenticatedShardAccess: false as const,
         apiSpec: "openapi" as const,
+        lazyFunctions: false,
         cloudflare: {} as never,
         generatedDir: "lunora/_generated",
         overlay: false as const,

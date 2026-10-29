@@ -9,6 +9,8 @@ module Lunora
   OFFLINE_QUEUE_OVERFLOW = "OFFLINE_QUEUE_OVERFLOW"
   # The write's precondition no longer held when the flush reached it.
   OFFLINE_PRECONDITION_FAILED = "OFFLINE_PRECONDITION_FAILED"
+  # An online-only write was refused because the connection is not live. Nothing was queued.
+  OFFLINE_NOT_QUEUED = "OFFLINE_NOT_QUEUED"
   # The write was queued under a different identity than the one now in effect.
   OFFLINE_IDENTITY_CHANGED = "OFFLINE_IDENTITY_CHANGED"
   # The client was closed while the write was still queued.
@@ -25,7 +27,7 @@ module Lunora
   # idempotency key is expected to succeed later, and dropping the write would
   # lose it to a transient condition. Every other coded error IS a verdict:
   # replaying it would only re-trigger the same failure, a poison-message loop.
-  TRANSIENT_ERROR_CODES = %w[SHARD_ERROR SHARD_UNAVAILABLE].freeze
+  TRANSIENT_ERROR_CODES = %w[DELIVERY_FENCED SHARD_ERROR SHARD_UNAVAILABLE].freeze
 
   # Codes that say "not now" rather than "no". A rate-limited replay is the one
   # verdict a durable queue must never honour: the write is perfectly valid and
@@ -33,6 +35,12 @@ module Lunora
   # punctual. The delay comes from the envelope's +data.retryAfterMs+ (see
   # protocol/fixtures/rpc.json's +responseError.with-data+).
   RATE_LIMIT_ERROR_CODES = %w[RATE_LIMITED TOO_MANY_REQUESTS].freeze
+
+  # A refused CREDENTIAL holds a replay rather than settling it. A write queued
+  # offline replays with whatever bearer the client held when it went offline,
+  # which has very often expired by reconnect; settling it destroyed the user's
+  # own durable write over a problem one token refresh fixes.
+  AUTH_REPLAY_ERROR_CODES = %w[UNAUTHORIZED TOKEN_EXPIRED UNAUTHENTICATED].freeze
 
   # The stamp of a record that carries no identity at all.
   #
@@ -42,6 +50,15 @@ module Lunora
   # Collapsing the two would either strand old records or silently push one
   # user's queued writes as another.
   ABSENT_IDENTITY = :absent
+
+  # The stamp a write made with no identity set carries: a digest of the bearer
+  # token held when it was queued (see +Lunora.token_stamp+).
+  #
+  # A type of its own rather than the digest string: an identity is any string
+  # the app chooses, and one spelled like a digest must not match that token's
+  # writes. A TokenStamp only ever equals a TokenStamp, and it persists as
+  # +{"tokenDigest" => digest}+, which no identity string can be read back as.
+  TokenStamp = Struct.new(:digest)
 
   # A coded, queue-scoped failure.
   class OfflineError < StandardError
@@ -106,7 +123,9 @@ module Lunora
     def to_record(version = nil)
       record = { "args" => Lunora.encode_wire(args.nil? ? {} : args), "functionPath" => function_path, "id" => id }
       record["clientId"] = client_id unless client_id.nil?
-      record["identity"] = identity unless identity == Lunora::ABSENT_IDENTITY
+      unless identity == Lunora::ABSENT_IDENTITY
+        record["identity"] = identity.is_a?(TokenStamp) ? { "tokenDigest" => identity.digest } : identity
+      end
       record["shardKey"] = shard_key unless shard_key.nil?
       record["version"] = version unless version.nil?
       record
@@ -117,7 +136,8 @@ module Lunora
     # The restored entry carries no settle handles: the caller that submitted it
     # did not survive the restart. A missing "identity" key restores as
     # ABSENT_IDENTITY (a legacy record) while a stored null restores as nil
-    # (queued signed out) — the distinction the identity gate turns on.
+    # (queued signed out) — the distinction the identity gate turns on. A stored
+    # +{"tokenDigest" => ...}+ restores as the TokenStamp it was written from.
     #
     # Raises WireFormatError when the stored args are not wire values. Never
     # substitutes: a record hydrated as empty args replays SUCCESSFULLY with the
@@ -129,11 +149,19 @@ module Lunora
         client_id: record["clientId"],
         function_path: record["functionPath"],
         id: record["id"],
-        identity: record.key?("identity") ? record["identity"] : Lunora::ABSENT_IDENTITY,
+        identity: restore_identity(record),
         live_awaiter: false,
         shard_key: record["shardKey"]
       )
     end
+
+    def self.restore_identity(record)
+      return Lunora::ABSENT_IDENTITY unless record.key?("identity")
+
+      stored = record["identity"]
+      stored.is_a?(Hash) ? TokenStamp.new(stored["tokenDigest"]) : stored
+    end
+    private_class_method :restore_identity
   end
 
   module_function
@@ -168,13 +196,53 @@ module Lunora
   # writes shaped for an older schema.
   def stale_version?(current, stamped) = !current.nil? && stamped != current
 
-  # Whether a write stamped +stamped+ may replay under +current+ (nil = signed
-  # out). A record with no stamp at all predates stamping and replays ambiently;
-  # anything else must match exactly, nil included.
-  def identity_allows_replay?(stamped, current)
-    return true if stamped == ABSENT_IDENTITY
+  # The reference client's +hashToken+: who a bearer token stamps a write as.
+  #
+  # A digest, not the token, because the stamp is persisted and a queue store
+  # should not become somewhere a credential sits at rest. FNV-1a and djb2 side
+  # by side over UTF-16 code UNITS (JavaScript's +charCodeAt+ walk), each base36
+  # and prefixed by the length in code units, so the two cannot encode to one
+  # string through variable-width concatenation.
+  #
+  # A Ruby string cannot hold a lone surrogate as valid UTF-8 (the literal and
+  # JSON.parse both refuse one), so the reference's lone-surrogate digests have
+  # no Ruby input. Bytes that are not valid in the token's encoding digest as
+  # their replacement characters rather than raising: the digest runs inside
+  # +submit+ and every flush, and a token must never be able to make either throw.
+  def token_digest(token)
+    fnv = 0x811C9DC5
+    djb2 = 5381
+    units = token.encode(Encoding::UTF_16LE, invalid: :replace, undef: :replace).unpack("v*")
 
-    stamped == current
+    units.each do |code|
+      fnv = ((fnv ^ code) * 0x01000193) & 0xFFFFFFFF
+      djb2 = ((djb2 * 33) + code) & 0xFFFFFFFF
+    end
+
+    "#{units.length.to_s(36)}:#{fnv.to_s(36)}:#{djb2.to_s(36)}"
+  end
+
+  # The stamp a write made with +token+ and no identity carries.
+  def token_stamp(token) = TokenStamp.new(token_digest(token))
+
+  # +:match+, +:unknown+ or +:mismatch+ for a write stamped +stamped+, judged
+  # against +current+ (the identity in effect now: the app's identity, else the
+  # held token's stamp, else nil) and +token+ (the bearer held now). Mirrors the
+  # reference's +replayIdentityVerdict+:
+  #
+  # - +:match+ — the same identity, nil (signed out) included, or a TokenStamp
+  #   of the very token held now. A TokenStamp only ever equals a TokenStamp,
+  #   and an identity string only an identity string. A record with no stamp at
+  #   all predates stamping and replays ambiently.
+  # - +:unknown+ — nobody is signed in, so whose write it is cannot be told. The
+  #   write is HELD, neither sent nor dropped, until someone is.
+  # - +:mismatch+ — someone else is signed in. Terminal: replaying would
+  #   attribute one user's write to another.
+  def replay_identity_verdict(stamped, current, token)
+    return :match if stamped == ABSENT_IDENTITY || stamped == current
+    return :match if stamped.is_a?(TokenStamp) && !token.nil? && token_stamp(token) == stamped
+
+    current.nil? ? :unknown : :mismatch
   end
 
   # A bounded FIFO of writes waiting for the socket, optionally durable.

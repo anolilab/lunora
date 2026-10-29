@@ -18,16 +18,17 @@ export type {
     TerminalKind,
 } from "./builder/index";
 export { initLunora } from "./builder/index";
+export { isPerDispatchMiddleware, tagPerDispatchMiddleware } from "./builder/per-dispatch-tag";
 export { createSecrets } from "./create-secrets";
 export type { DeferredDeleteFlushResult } from "./deferred-deletes";
-export { flushDeferredDeletes, withDeferredDeletes } from "./deferred-deletes";
+export { beginDeferredDeletes, flushDeferredDeletes, withDeferredDeletes } from "./deferred-deletes";
 export { beginDeferredSchedules, withDeferredSchedules } from "./deferred-schedules";
 export type { DefineDocumentHistoryOptions, DocumentHistoryComponent, DocumentHistoryEntry, DocumentHistoryFunctions } from "./document-history";
 export { defineDocumentHistory, DOCUMENT_HISTORY_REDACTED_FIELDS, DOCUMENT_HISTORY_TABLE, documentHistoryExtension } from "./document-history";
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv } from "./env";
 export { defineEnv, LunoraEnvError, redactSecrets } from "./env";
 export type { FacadeEntry, FacadeWriterLike, OrmLike } from "./facade";
-export { bindOrm, bindTableFacade } from "./facade";
+export { bindOrm, bindTableFacade, defineLazyFacade } from "./facade";
 export type {
     HttpActionCtx,
     HttpActionHandler,
@@ -38,25 +39,50 @@ export type {
     HttpRouteHandlerOptions,
     HttpRunners,
     HttpStreamHandlerOptions,
+    LivePublisher,
+    LivePublishOptions,
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
+    ShardFetch,
+    ShardFetchInit,
+    SseEvent,
 } from "./http";
-export { httpAction, httpRoute, httpRouter, isSafeHeaderValue } from "./http";
+export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, lastEventId, sseEvent } from "./http";
 export type { StorageServeAuthorizer, StorageServeAuthzContext } from "./http-storage";
 export { serveStorageObject } from "./http-storage";
 export type { DefineIdentityOptions, IdentityContract, IdentityRejectMode, IdentityValidation, InferIdentity } from "./identity";
 export { defineIdentity } from "./identity";
+export { default as defineIdentityGuard } from "./identity-guard";
 export type { LifecycleHandler, ShardInitHandler } from "./lifecycle";
 export { onConnect, onDisconnect, onShardInit } from "./lifecycle";
 export type { DefineListArgsConfig, ListArgsSpec, ListArgsValidators, ListArgsValue, ListFilterOperators, ListOrderByEntry, ListWhere } from "./list-args";
 export { clampLimit, DEFAULT_LIMIT, DEFAULT_MAX_LIMIT, defineListArgs } from "./list-args";
+export type {
+    LiveRouterApp,
+    LiveRouterFallback,
+    LiveStream,
+    LiveStreamConfig,
+    LiveStreamMount,
+    LiveSubscribeHandler,
+    LiveSubscribeOptions,
+    LiveTopicDeclaration,
+    LiveTopicKey,
+    LiveTopicPayload,
+    LiveTopicRef,
+    LiveTopics,
+} from "./live-stream";
+export { defineLiveStream, liveStreamRouter } from "./live-stream";
 export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskRegistry, MaskStrategy } from "./mask/index";
 export { buildMaskRegistry, mask } from "./mask/index";
 export type { MigrationCtx, MigrationDefinition, MigrationDocument, MigrationReader, MigrationTransform, RegisteredMigration } from "./migration";
 export { defineMigration } from "./migration";
+export type { ModuleConfig, ModuleDefinition } from "./module";
+export { defineModule } from "./module";
 export type { MutatorDefinition, RegisteredMutator } from "./mutators";
 export { defineMutator } from "./mutators";
+export type { PlatformAdminCheck } from "./platform-admin";
+export { platformAdmin } from "./platform-admin";
 export type { Component, ComponentFunctions, DefineComponentOptions, DefinePluginOptions, Plugin, PrefixedTables, SchemaExtension } from "./plugin";
 export { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "./plugin";
 export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, PresenceMember } from "./presence";
@@ -96,6 +122,8 @@ export {
     rls,
     toWhereInput,
 } from "./rls/index";
+export type { DefineRoomOptions, RegisteredRoom, RoomJoinHandler, RoomLeaveHandler, RoomMessageHandler, RoomMessageOf, RoomSocket } from "./room";
+export { defineRoom } from "./room";
 export type {
     AggregateIndexOptions,
     ExtendableSchema,
@@ -111,15 +139,25 @@ export type {
     VectorizeOptions,
 } from "./schema";
 export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, indexFieldsFromSchema } from "./schema";
+export type { ServiceBindingSpec, ServiceFetcher, ServiceRpc } from "./services";
+export { createServices } from "./services";
 export type { RegisteredShape, ShapeDefinition } from "./shapes";
 export { defineShape } from "./shapes";
+export type {
+    DefineWebSocketOptions,
+    RegisteredWebSocket,
+    WebSocketCloseHandler,
+    WebSocketHandle,
+    WebSocketMessageHandler,
+    WebSocketOpenHandler,
+} from "./socket";
+export { defineWebSocket } from "./socket";
 export type { DefineStorageRuleInput, StorageOperation, StorageRule, StorageRuleContext, StorageRuleDecision, StorageRulesOptions } from "./storage/index";
 export { defineStorageRule, defineStorageRules, storageRules } from "./storage/index";
 export type {
     ActionCtx,
     AggregateIndexDefinition,
     AggregateOp,
-    AnyApi,
     ArgsValidator,
     AuthState,
     CachePurge,
@@ -150,6 +188,7 @@ export type {
     OnDeleteAction,
     PaginationOptions,
     PaginationResult,
+    PatchIfResult,
     QueryCtx,
     RankIndexDefinition,
     RankSortKey,
@@ -160,7 +199,14 @@ export type {
     RegisteredMutation,
     RegisteredQuery,
     RegisteredStream,
+    RelatedDirection,
+    RelatedNode,
+    RelatedOptions,
+    RelatedPage,
+    RelatedStart,
+    RelatedStartReference,
     RelationDefinition,
+    RelationThrough,
     RestCacheConfig,
     RetryPolicy,
     RunQueryOptions,
@@ -180,10 +226,18 @@ export type {
     SpanLink,
     SpanOptions,
     Storage,
+    StorageListOptions,
+    StorageListResult,
     StorageMetadata,
+    StorageMultipartUpload,
+    StorageMultipartUploadOptions,
     StorageObjectBody,
     StorageObjectHead,
     StorageRange,
+    StorageUploadBody,
+    StorageUploadedPart,
+    StorageUploadOptions,
+    StorageUploadResult,
     SystemDatabaseReader,
     SystemDoc,
     SystemQuery,
@@ -222,15 +276,18 @@ export type {
     VectorSearch,
     VectorSearchReader,
     VectorUpsertInput,
+    WhisperEvent,
     WorkflowCreateOptions,
     WorkflowEventDefinition,
     WorkflowHandle,
     WorkflowInstance,
+    WorkflowInstanceEvent,
     WorkflowInstanceStatus,
     Workflows,
     WorkflowStatusResult,
 } from "./types";
-export { anyApi } from "./types";
+export type { RegisteredWhisperAuthorizer, WhisperAuthorizeHandler } from "./whisper";
+export { onWhisper } from "./whisper";
 // `LunoraError` is the ONE canonical error class, owned by `@lunora/errors` and
 // re-exported here so handlers can throw it without a second dependency. The
 // third argument is `LunoraErrorOptions` (`{ cause, data, status, … }`) — there

@@ -305,5 +305,5 @@ const scaffoldCiWorkflow = (
     }
 };
 
-export type { CiProvider, PmCiProfile, WriteCiWorkflowOptions, WriteCiWorkflowResult };
+export type { CiProvider };
 export { buildContent, isCiProvider, PM_CI_PROFILES, scaffoldCiWorkflow, WORKFLOWS, writeCiWorkflow };

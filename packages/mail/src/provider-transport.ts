@@ -107,5 +107,5 @@ const interpretSendResult = (result: ProviderSendResult): { id: string } => {
     return { id: result.data.messageId };
 };
 
-export { interpretSendResult, reasonOf, requireRecipients, toProviderEmail };
-export type { ProviderAddress, ProviderEmail, ProviderSendResult };
+export { interpretSendResult, requireRecipients, toProviderEmail };
+export type { ProviderSendResult };

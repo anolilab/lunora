@@ -22,7 +22,7 @@ export interface HydratePreloadedOptions {
  * @experimental
  */
 export interface HydratePreloadedResult<T> {
-    /** The latest value pushed by the server. Seeded synchronously from the preloaded value. */
+    /** The latest value pushed by the server. Seeded synchronously from the preloaded value until an identity is retired. */
     data: Signal<T | undefined>;
 
     /** The latest subscription error, or `undefined`. */
@@ -42,6 +42,12 @@ export interface HydratePreloadedResult<T> {
  *
  * The subscription tears down when the owning `DestroyRef` fires.
  *
+ * The preloaded value was read for whoever was signed in when the page loaded.
+ * After a sign-out or user switch retires that identity
+ * (`client.identityEpoch() > 0`), every `hydratePreloaded` on the client (created
+ * then or later) stops using it and `data` holds `undefined` until the live value
+ * arrives — matching `@lunora/react`'s `usePreloadedQuery`.
+ *
  * Call from an injection context:
  * ```ts
  * readonly { data, error } = hydratePreloaded(preloadedMessages);
@@ -55,7 +61,7 @@ export const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: HydratePre
 
     const { args, functionPath, shardKey, value } = preloaded;
 
-    const data = signal<T | undefined>(value);
+    const data = signal<T | undefined>(client.identityEpoch() === 0 ? value : undefined);
     const error = signal<SubscriptionError | undefined>(undefined);
 
     const functionReference: FunctionReference = { __lunoraRef: functionPath };
@@ -79,7 +85,14 @@ export const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: HydratePre
             },
         );
 
-        destroyRef.onDestroy(unsubscribe);
+        const offIdentity = client.onIdentityChange(() => {
+            data.set(undefined);
+        });
+
+        destroyRef.onDestroy(() => {
+            offIdentity();
+            unsubscribe();
+        });
     }
 
     return { data: data.asReadonly(), error: error.asReadonly() };

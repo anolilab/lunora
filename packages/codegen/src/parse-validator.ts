@@ -1,8 +1,9 @@
 import { LunoraError } from "@lunora/errors";
-import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, SpreadAssignment } from "ts-morph";
+import type { CallExpression, Expression, Identifier, ObjectLiteralExpression } from "ts-morph";
 import { Node, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
+import { staticPropertyName } from "./discover/property-name";
 import type { ColumnMetaIR, ValidatorIR } from "./ir";
 
 /**
@@ -60,8 +61,10 @@ const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR =
             break;
         }
         case "$type": {
-            // Type-only override: the generated code can't import the caller's
-            // override type, so it stays a no-op and we emit the base kind.
+            // Type-only override, deliberately a no-op here: the runtime parser is
+            // unchanged, so the base kind is what a stored value is guaranteed to
+            // be, and emitting the caller's `T` would mean rendering an arbitrary
+            // (possibly module-local) user type into `_generated/`.
             break;
         }
         case "nullable": {
@@ -86,7 +89,7 @@ const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR =
 /**
  * Scalar `v.*` kinds that map to a bare `{ kind }` IR with no further parsing.
  * `geoPoint` is arg-less like the scalars (it renders to a fixed `{ lat, lng }`
- * object type in `emit.ts`), so it rides this fast path too.
+ * object type in `emit/shared.ts`), so it rides this fast path too.
  */
 const SCALAR_KINDS = new Set(["any", "bigint", "boolean", "bytes", "date", "geoPoint", "null", "number", "string", "timestamp"]);
 
@@ -346,7 +349,8 @@ const parseValidator = (expression: Expression): ValidatorIR => {
 };
 
 /**
- * The fields `{ ...sharedArgs }` contributes, or `{}` when it cannot be read.
+ * The fields `{ ...sharedArgs }` or `v.object(sharedFields)` names, or `{}` when
+ * they cannot be read.
  *
  * Unreadable is deliberately NOT fatal. `defineSchema({ ...authTables(options) })`
  * is the documented way to consume `@lunora/auth`, and the record it spreads is
@@ -359,8 +363,8 @@ const parseValidator = (expression: Expression): ValidatorIR => {
  * the alias guard is released before the shape is parsed, so without it the two
  * literals recurse into each other until the stack gives out.
  */
-const parseSpreadShape = (property: SpreadAssignment): Record<string, ValidatorIR> => {
-    const spread = resolveObjectLiteral(property.getExpression());
+const parseResolvedShape = (expression: Expression): Record<string, ValidatorIR> => {
+    const spread = resolveObjectLiteral(expression);
 
     if (spread === undefined || spreadingShapes.has(spread)) {
         return {};
@@ -376,6 +380,10 @@ const parseSpreadShape = (property: SpreadAssignment): Record<string, ValidatorI
     }
 };
 
+const unresolvableKey = (nameNode: Node): never => {
+    throw diagnosticAt(nameNode, `computed property name ${nameNode.getText()} must be a string literal — codegen resolves object keys statically.`);
+};
+
 const parseObjectShape = (object: ObjectLiteralExpression): Record<string, ValidatorIR> => {
     const out: Record<string, ValidatorIR> = {};
 
@@ -383,7 +391,7 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
         // Merged in source order, so spread semantics hold: a key written after
         // the spread wins, one written before it loses.
         if (Node.isSpreadAssignment(property)) {
-            Object.assign(out, parseSpreadShape(property));
+            Object.assign(out, parseResolvedShape(property.getExpression()));
 
             continue;
         }
@@ -402,21 +410,19 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
             continue;
         }
 
-        // Skip computed property names (`[expr]: ...`) — we can't derive a stable
-        // identifier from them and they can't be emitted safely.
-        const nameNode = property.getNameNode();
-
-        if (Node.isComputedPropertyName(nameNode)) {
-            continue;
-        }
-
         const initializer = shorthand ? property.getNameNode() : property.getInitializer();
 
         if (!initializer) {
             continue;
         }
 
-        const fieldName = property.getName();
+        // A literal computed name (`["id"]`) resolves to its key. Any other one
+        // aborts the run: the key still exists at runtime, so dropping it from the
+        // IR would let the compiled args validator commit records the interpreted
+        // parser rejects (the soundness contract in `@lunora/values`
+        // `validator-map.ts`), or silently drop a table column from `Doc_*`.
+        const nameNode = property.getNameNode();
+        const fieldName = staticPropertyName(nameNode) ?? unresolvableKey(nameNode);
 
         if (!FIELD_NAME_RE.test(fieldName)) {
             throw new LunoraError("INTERNAL", `@lunora/codegen: field name is not a valid JS identifier: ${JSON.stringify(fieldName)}`);
@@ -431,6 +437,21 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
 /** Parse an argument node as a nested validator, or fall back when it isn't an expression. */
 const parseArgument = (argument: Node | undefined, fallback: ValidatorIR): ValidatorIR =>
     argument && Node.isExpression(argument) ? parseValidator(argument) : fallback;
+
+/**
+ * True when the IR tree rooted at `validator` holds a `v.sensitive(...)` marker
+ * anywhere. Mirrors `containsSensitive` in `@lunora/values` on the build-time side:
+ * an argument with a secret inside it is treated as a secret as a whole.
+ */
+const validatorContainsSensitive = (validator: ValidatorIR): boolean => {
+    if (validator.sensitive === true) {
+        return true;
+    }
+
+    const children = [validator.inner, validator.keyType, validator.valueType, ...(validator.members ?? []), ...Object.values(validator.shape ?? {})];
+
+    return children.some((child) => child !== undefined && validatorContainsSensitive(child));
+};
 
 /**
  * Render a `v.literal(...)` argument as the IR's `literalValue` source text.
@@ -498,7 +519,7 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: Cal
 
         case "id": {
             // The table name feeds straight into the generated `Id<"...">` type
-            // (see `emit.ts`), so codegen must resolve it statically — a
+            // (see `emit/shared.ts`), so codegen must resolve it statically — a
             // non-literal (or missing) argument must fail loudly rather than
             // degrade to a placeholder that still compiles.
             if (!first || !Node.isStringLiteral(first)) {
@@ -522,7 +543,7 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: Cal
         }
 
         case "object": {
-            return first && Node.isObjectLiteralExpression(first) ? { kind: "object", shape: parseObjectShape(first) } : { kind: "object", shape: {} };
+            return { kind: "object", shape: first && Node.isExpression(first) ? parseResolvedShape(first) : {} };
         }
 
         case "optional": {
@@ -535,6 +556,12 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: Cal
                 kind: "record",
                 valueType: parseArgument(second, { kind: "any" }),
             };
+        }
+
+        case "sensitive": {
+            // The inner kind is kept, so the compiled parser, the arg types and the
+            // schema are the wrapped validator's; the marker only rides along.
+            return { ...parseArgument(first, { kind: "any" }), sensitive: true };
         }
 
         case "storage": {
@@ -550,7 +577,7 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: Cal
 
         default: {
             // Loud failure — silently emitting `unknown` masks codegen bugs.
-            // `emit.ts` keeps a fallback case for safety, but this parser
+            // `emit/shared.ts` keeps a fallback case for safety, but this parser
             // must call out validator kinds it does not recognise.
             throw new LunoraError("INTERNAL", `Unsupported validator kind: ${member}`);
         }
@@ -634,5 +661,6 @@ export {
     REFINEMENT_MODIFIERS,
     resolveObjectLiteral,
     setStandardTypeResolver,
+    validatorContainsSensitive,
 };
 export type { StandardTypeResolver };

@@ -18,8 +18,13 @@ const registryItemAliases = {
     "cloudflare:workers": join(fixtures, "cloudflare-workers.ts"),
 };
 
+// `doctor` and `deploy` read the account's Durable Object class count from the
+// Cloudflare API whenever a token is in the environment (plan 462). A developer's
+// or CI's real token must never reach the API from a test, so it is blanked here
+// and the suites that exercise the check inject their own `fetch`.
+//
 // ratchet: below the default floor; raise as coverage improves.
 export default getVitestConfig(
-    { resolve: { alias: registryItemAliases }, test: { environment: "node" } },
+    { resolve: { alias: registryItemAliases }, test: { env: { CLOUDFLARE_API_TOKEN: "" }, environment: "node" } },
     { branches: 60, functions: 65, lines: 75, statements: 75 },
 );

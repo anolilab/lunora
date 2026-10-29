@@ -12,12 +12,13 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
 
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { decodeWire, encodeWire } from "../../../../shared/wire-codec";
 import { runBackupCommand } from "../../src/commands/backup/handler";
 import { temporaryFileName } from "../../src/commands/backup/r2-destination";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const capturingLogger = (): { logger: Logger; logs: string[] } => {
@@ -94,6 +95,19 @@ const createWorkerDouble = (): { bucket: Map<string, Buffer>; fetchImpl: Streami
     const bucket = new Map<string, Buffer>();
     const imported: string[] = [];
 
+    /** A `dryRun` POST is the check before the import: it records nothing. A real POST records its rows and reports them inserted. */
+    const importAnswer = (url: URL, body: string): ReturnType<typeof jsonResponse> => {
+        if (url.searchParams.get("dryRun") === "true") {
+            return jsonResponse({ dryRun: true, inserted: {}, received: 0 });
+        }
+
+        imported.push(body);
+
+        const rows = body.split("\n").filter(Boolean).length;
+
+        return jsonResponse({ inserted: { users: rows }, received: rows });
+    };
+
     const fetchImpl: StreamingFetchLike = async (input, init) => {
         const url = new URL(input);
         const method = init?.method ?? "GET";
@@ -104,11 +118,7 @@ const createWorkerDouble = (): { bucket: Map<string, Buffer>; fetchImpl: Streami
         }
 
         if (url.pathname === "/_lunora/admin/import") {
-            const body = String(init?.body ?? "");
-
-            imported.push(body);
-
-            return jsonResponse({ inserted: { users: body.split("\n").filter(Boolean).length }, received: body.split("\n").filter(Boolean).length });
+            return importAnswer(url, String(init?.body ?? ""));
         }
 
         if (url.pathname === "/_lunora/admin/storage/object") {
@@ -460,7 +470,7 @@ describe("lunora backup --bucket", () => {
         });
 
         // Unverifiable must not read as verified.
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(logs.some((line) => line.includes("carries no recorded checksum"))).toBe(true);
     });
 
@@ -484,7 +494,7 @@ describe("lunora backup --bucket", () => {
                 url: "http://localhost:8787",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(logs.some((line) => line.includes("--prefix applies only to an R2 destination"))).toBe(true);
             expect(logs.some((line) => line.includes("no backups found"))).toBe(false);
         });
@@ -505,7 +515,7 @@ describe("lunora backup --bucket", () => {
                 url: "http://localhost:8787",
             });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(logs.some((line) => line.includes("--dir applies only to a local destination"))).toBe(true);
         });
     });

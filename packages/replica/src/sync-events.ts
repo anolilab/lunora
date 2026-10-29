@@ -112,8 +112,24 @@ export interface EventsSyncOptions {
      * event log, or read from an IndexedDB cache.
      *
      * Return an empty array when there are no new events.
+     *
+     * `signal` is aborted when the call outlives {@link EventsSyncOptions.fetchTimeoutMs}; pass it to
+     * the underlying request so it is cancelled rather than left running.
      */
-    fetchEventsSince: (sinceSeq: number) => Promise<ReadonlyArray<EventLogEntry>>;
+    fetchEventsSince: (sinceSeq: number, signal?: AbortSignal) => Promise<ReadonlyArray<EventLogEntry>>;
+
+    /**
+     * Longest a single `fetchEventsSince` call may take, in milliseconds. A
+     * transport that never answers would otherwise hold the poll cycle open
+     * forever, and every later `sync()` and timer tick awaits that cycle. On
+     * timeout the cycle ends through `onError`, the watermark stays where it
+     * was, and the next poll fetches again; an answer that arrives late is
+     * discarded. A timed-out call cannot be cancelled by {@link EventsSync}
+     * itself, so no new fetch starts (the poll is skipped) until it settles —
+     * honouring the `signal` is what lets polling resume promptly. `0` disables the bound.
+     * @default 30000
+     */
+    fetchTimeoutMs?: number;
 
     /**
      * Produce {@link TableDiff | TableDiffs} from the current derived state.
@@ -197,6 +213,9 @@ export class EventsSync {
      */
     #inFlight: Promise<number> | undefined;
 
+    /** The last fetch that timed out, until it settles: while set, no further fetch starts, so a transport that ignores its `signal` cannot pile up requests. */
+    #timedOutFetch: Promise<unknown> | undefined;
+
     // ── Constructor ─────────────────────────────────────────────────────
 
     public constructor(options: EventsSyncOptions) {
@@ -277,6 +296,43 @@ export class EventsSync {
         return promise;
     }
 
+    /** `fetchEventsSince`, failing with a timeout error when the transport does not answer in `fetchTimeoutMs`. */
+    async #fetchWithinTimeout(sinceSeq: number): Promise<ReadonlyArray<EventLogEntry>> {
+        const timeoutMs = this.#options.fetchTimeoutMs ?? 30_000;
+
+        if (timeoutMs <= 0) {
+            return this.#options.fetchEventsSince(sinceSeq);
+        }
+
+        const controller = new AbortController();
+        const pending = this.#options.fetchEventsSince(sinceSeq, controller.signal);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => {
+                this.#timedOutFetch = pending;
+                pending
+                    .finally(() => {
+                        if (this.#timedOutFetch === pending) {
+                            this.#timedOutFetch = undefined;
+                        }
+                    })
+                    .catch(() => undefined);
+                // Reject before aborting: an abort-aware transport rejects as soon as it is aborted,
+                // and the timeout must be the error that wins the race and ends the cycle.
+                reject(new Error(`EventsSync: fetchEventsSince timed out after ${timeoutMs.toString()}ms`));
+                controller.abort();
+            }, timeoutMs);
+        });
+
+        try {
+            return await Promise.race([pending, timeout]);
+        } finally {
+            clearTimeout(timer);
+            // The fetch may still settle later; its outcome is not ours to surface.
+            pending.catch(() => undefined);
+        }
+    }
+
     /**
      * One poll cycle: drive every batch available since the watermark through
      * the pipeline — `applyEvents` → `getTableDiffs` → mirror fan-out →
@@ -320,12 +376,17 @@ export class EventsSync {
      * advances past a diff the mirror never received.
      */
     async #pollOnce(): Promise<number> {
+        // A fetch that timed out is still running: starting another would stack requests behind it.
+        if (this.#timedOutFetch !== undefined) {
+            return 0;
+        }
+
         let total = 0;
 
         try {
             for (let batches = 0; batches < MAX_BATCHES_PER_CYCLE; batches += 1) {
                 // eslint-disable-next-line no-await-in-loop -- each batch is fetched from the watermark the previous one advanced, so the round-trips are inherently sequential
-                const events = await this.#options.fetchEventsSince(this.#watermark);
+                const events = await this.#fetchWithinTimeout(this.#watermark);
 
                 if (events.length === 0) {
                     return total;

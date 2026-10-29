@@ -32,8 +32,14 @@ lives on actions, not queries or mutations.
 import { action, v } from "@/lunora/_generated/server";
 import { generateText } from "@lunora/ai";
 
-export const summarize = action.input({ text: v.string() }).action(async ({ ctx, args: { text } }) => {
+export const summarize = action.input({ text: v.string().max(20_000) }).action(async ({ ctx, args: { text } }) => {
     const { text: summary } = await generateText({
+        // Both ends of the token bill are bounded: the input by `.max()` above,
+        // the completion here. An `action` is public RPC and inference is
+        // metered, so an unbounded completion is a denial-of-wallet vector — a
+        // short prompt can ask for an arbitrarily long answer, and output
+        // tokens are the expensive half.
+        maxOutputTokens: 300,
         model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
         prompt: `Summarize:\n\n${text}`,
     });
@@ -42,26 +48,80 @@ export const summarize = action.input({ text: v.string() }).action(async ({ ctx,
 });
 ```
 
-`ctx.ai.model(id)` resolves a Workers AI model from the binding. Pass the
-resolved model to the AI SDK functions re-exported from `@lunora/ai`
+Bound every generation reachable from a public procedure, and rate-limit the
+entry point — the `ai_unbounded_generation_public` advisor lint flags the ones
+that are not. See the `ai` registry item (`lunora add ai`) for the full
+auth + rate-limit + bounds shape.
+
+`ctx.ai.model(id)` resolves a model from the binding — a Workers AI id, or any
+provider's model through AI Gateway (next section). Pass the resolved model to the AI SDK functions re-exported from `@lunora/ai`
 (`generateText`, `streamText`, `generateObject`, `streamObject`, `embed`,
 `embedMany`, `tool`).
 
 ## Any provider, same call
 
-A string id resolves Workers AI; an AI SDK model object passes straight through.
+Switch provider by changing the model string — nothing else:
+
+```ts
+const model = ctx.ai.model("anthropic/claude-sonnet-5"); // or "openai/gpt-5", "google/gemini-2.5-pro", …
+```
+
+A `"<provider>/<model>"` id is routed through [Cloudflare AI
+Gateway](https://developers.cloudflare.com/ai-gateway/) over the same `AI`
+binding, so the app holds **no provider API key**. Which way the provider is
+paid depends on the provider, and is set up once in the Cloudflare dashboard:
+
+- **[Unified Billing](https://developers.cloudflare.com/ai-gateway/features/unified-billing/)**
+  — for the unified-catalog providers (OpenAI, Anthropic, Google, xAI, Groq,
+  DeepSeek). Their calls take the binding's run path, where Cloudflare holds
+  the provider credentials and bills against prepaid credits; a key stored on
+  the gateway is not used for them.
+- **[Keys stored on the gateway](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/)**
+  — for the other OpenAI-compatible providers (Mistral, Perplexity, Cerebras,
+  OpenRouter, Fireworks, …), which only exist on the gateway path. The key lives
+  in the gateway's Secrets Store, not in the app.
+
+Calls go to the gateway named by `LUNORA_AI_GATEWAY_ID`, or to the account's
+auto-created `default` gateway when it is unset. `lunora cloudflare ai-gateway`
+creates a gateway for the app and writes that var for you. Each call carries its function
+path and trace id as gateway metadata, so the gateway's logs attribute spend to
+the function that made it.
+
+A `dynamic/<route>` id calls an AI Gateway [dynamic
+route](https://developers.cloudflare.com/ai-gateway/features/dynamic-routing/) —
+the place to configure fallback models, per-model budgets and spend limits
+without a code change.
+
+`@cf/…` ids stay on Workers AI, exactly as before.
+
+### Your own proxy (celld, or no Cloudflare)
+
+Set `LUNORA_AI_PROXY_URL` to any OpenAI-compatible endpoint (LiteLLM,
+OpenRouter, a self-hosted proxy) and `<provider>/<model>` slugs go there instead
+of AI Gateway. The slug is sent unchanged as the request's `model`, and
+`LUNORA_AI_PROXY_TOKEN` (a secret) is sent as the bearer token. No `AI` binding is
+needed, so this is how `ctx.ai` works on celld. `@cf/…` ids and `ctx.ai.run`
+still need the binding.
+
+```jsonc
+{ "vars": { "LUNORA_AI_PROXY_URL": "https://ai-proxy.internal/v1" } }
+```
+
+### Bring your own provider
+
+An AI SDK model object passes straight through, for a provider or feature the
+gateway catalog does not cover:
 
 ```ts
 import { streamText } from "@lunora/ai";
-import { openai } from "@ai-sdk/openai"; // optional, bring-your-own
+import { createOpenAI } from "@ai-sdk/openai";
 
-const result = streamText({ model: openai("gpt-5"), messages });
+const openai = createOpenAI({ apiKey: env.OPENAI_API_KEY });
+const result = streamText({ model: ctx.ai.model(openai("gpt-5")), messages });
 ```
 
-Install the provider you want (`@ai-sdk/openai`, `@ai-sdk/anthropic`, …)
-alongside `@lunora/ai`; route through a [Cloudflare AI
-Gateway](https://developers.cloudflare.com/ai-gateway/) by passing `gateway` to
-`createAi`.
+Wrap it in `ctx.ai.model(...)` as above so its usage is recorded like any other
+call (see [Usage and spend per function](#usage-and-spend-per-function)).
 
 ## Structured output
 
@@ -75,6 +135,52 @@ const { object } = await generateObject({
     prompt: review,
 });
 ```
+
+## Failing fast when Workers AI is busy
+
+By default a synchronous Workers AI call waits in a capacity queue when no
+capacity is free. Pass `rejectIfBusy: true` to fail at once instead. It applies
+to Workers AI model ids (`@cf/…`) only:
+
+```ts
+import { generateText } from "@lunora/ai";
+
+const { text } = await generateText({
+    model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast", { rejectIfBusy: true }),
+    // The rejection is an AI SDK `APICallError` with `statusCode: 429`, which the
+    // AI SDK retries by default. Turn retries off to actually fail fast.
+    maxRetries: 0,
+    prompt,
+});
+
+// Raw binding: a rejection throws a `LunoraError` with code `RATE_LIMITED`.
+await ctx.ai.run("@cf/meta/m2m100-1.2b", inputs, { rejectIfBusy: true });
+```
+
+## Web search
+
+`ctx.ai.websearch(query, options?)` calls the Cloudflare Web Search API (beta)
+over the same `AI` binding, so a response can be grounded in live results. The
+providers are `"ceramic"` (the default), `"exa"` and `"linkup"`, all under Zero
+Data Retention. The search goes through the gateway inference already routes
+through (`LUNORA_AI_GATEWAY_ID`), else the account's `default` gateway; pass
+`gatewayId` to pick another. It bills a provider key stored on that gateway
+under the `default` alias (or the one `byokAlias` names) when there is one, and
+AI Gateway credits at list price otherwise.
+
+```ts
+const { items } = await ctx.ai.websearch("cloudflare durable objects pricing", { limit: 5, provider: "exa" });
+// items: [{ url, title, description?, lastModifiedDate?, imageUrl?, faviconUrl? }, …]
+```
+
+`limit` defaults to 10 and accepts at most 10. Results describe pages; reading a
+page is a separate `fetch` of its `url`.
+
+A rejected request throws a `LunoraError` with code `BAD_REQUEST`. Gateway or
+credential problems keep their own codes (`UNAUTHORIZED`, `FORBIDDEN`,
+`NOT_FOUND`), a throttled search is `RATE_LIMITED`, and a provider or gateway
+failure `SERVICE_UNAVAILABLE`. An unreadable response is `INTERNAL`.
+For agents, `webSearchTool()` from `@lunora/agent` wraps this as a tool.
 
 ## RAG — `defineRag` (`@lunora/ai/rag`)
 
@@ -302,13 +408,49 @@ When the executor is a shard's own SQLite, the shard **is** the tenant
 boundary — so the account-global-namespace hazard that Vectorize forces you to
 guard against does not exist here, rather than being filtered away.
 
-**Search is brute force.** Every vector in the namespace is read and scored in
-JS; there is no ANN index, because SQLite has no vector type and `sqlite-vec` is
+**Search is brute force by default.** Every vector in the namespace is read and scored in
+JS; there is no ANN index by default, because SQLite has no vector type and `sqlite-vec` is
 not loadable inside workerd. That is linear in namespace size, so this suits
 **many small per-tenant indexes** — the shape most sharded apps already have —
 and not one large shared corpus. A namespace past `maxScan` (default 50,000)
 throws a named error rather than letting a Worker get killed on CPU with nothing
 explaining why.
+
+**Where `sqlite-vec` is loaded, add an index.** A celld Durable Object whose
+worker sets the `sqlite_vec` compatibility flag, or a `node:sqlite` database
+with the extension loaded, can pass `ann`:
+
+```ts
+sqliteVectorStore({ ann: { dimensions: 768 }, exec });
+```
+
+The store then keeps a `vec0` index (cosine distance, one partition per
+namespace) in `<table>_ann`, backfilled from the table the first time, and an
+unfiltered query is a KNN lookup instead of a scan. A query with a `filter`
+still scans: `vec0` filters after choosing the `k` nearest, which would return
+a short page. Without the extension the first operation throws naming the
+missing `vec0` module. Workerd cannot load `sqlite-vec`, so this does not apply
+on Cloudflare.
+
+Limits of the index:
+
+- **It needs code that runs inside the Durable Object.** celld loads sqlite-vec
+  only into Durable Object SQLite, not into D1, and Lunora actions run in the
+  Worker rather than inside a shard, so a Lunora function has no `exec` over a
+  shard's SQLite to hand the store. Use it from a Durable Object class your app
+  writes (its `state.storage.sql`), or from `node:sqlite`.
+- **Cosine only**, over one fixed width: `ann.dimensions` is the `vec0` column
+  width, so an embedding of another width — or reopening the table with a
+  different `ann.dimensions` — fails with `RAG_DIMENSION_MISMATCH`. Changing the
+  model's width means a new `table`.
+- **An interrupted build is rebuilt, not trusted.** The index counts as built
+  only once its backfill finishes, so a build cut off part-way is dropped and
+  redone on the next call.
+- **Filtered queries still scan** the namespace, with the same `maxScan` bound
+  as without the index.
+- **Writes are two statements, not one transaction.** An interrupted upsert or
+  delete can leave an index entry the table no longer holds; a query drops it,
+  so it costs a `topK` slot rather than returning a stale record.
 
 ### Bring your own embeddings — no `env.AI` binding
 
@@ -456,6 +598,11 @@ export const docs = defineRag({
     // Return a string to rewrite, or an array for multi-query retrieval.
     transformQuery: async (query, { conversationId }) => {
         const { text } = await generateText({
+            // A rewritten query is a phrase. Retrieval is reachable from public
+            // RPC, so leave this uncapped and every search is an uncapped
+            // generation — the same denial-of-wallet shape as an unbounded
+            // answer, one hop further back.
+            maxOutputTokens: 100,
             model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
             prompt: `Rewrite this search query to be self-contained: ${query}`,
         });
@@ -513,8 +660,10 @@ mode there is a cross-tenant leak, not a missing result.
 
 `rag.index()` takes one document's text, which leaves the whole crawl — list the
 objects, fetch each, extract text, index it, notice the ones that were deleted —
-as something every app writes for itself. This is the one axis on which
-Cloudflare's managed AutoRAG pipeline is genuinely more convenient.
+as something every app writes for itself. `defineRagSource` is that loop. If you
+would rather not run it at all, [AI Search](#managed-rag-ai-search) ingests an
+R2 bucket or a website on its own schedule, at the cost of the controls on this
+page.
 
 ```ts
 import { defineRagSource } from "@lunora/ai/rag";
@@ -569,6 +718,175 @@ users who need it is the wrong trade. Plain-text types (`text/plain`,
 else without one is **skipped**, never indexed as raw bytes — a PDF's binary or
 an HTML file's markup embeds to something that matches nothing.
 
+## Managed RAG: AI Search
+
+[Cloudflare AI Search](https://developers.cloudflare.com/ai-search/) (formerly
+AutoRAG) runs the whole pipeline on Cloudflare's side: ingestion from an R2
+bucket, a website or uploaded files, chunking, embedding, a hybrid vector and
+BM25 index, reranking and a query cache. An action reaches it as
+`ctx.aiSearch`: the raw `ai_search_namespaces` binding, passed through
+unwrapped, so every method is Cloudflare's own `AiSearchNamespace`. It is typed
+as `@lunora/bindings/ai-search`'s `AiSearch`, a structural mirror of that class,
+so it type-checks without `@cloudflare/workers-types` in your tsconfig.
+
+```ts
+// lunora/search.ts
+import { action } from "./_generated/server";
+import { v } from "@lunora/values";
+
+export const askDocs = action.input({ question: v.string() }).action(async ({ args, ctx }) => {
+    const { chunks } = await ctx.aiSearch.get("docs").search({
+        ai_search_options: { retrieval: { max_num_results: 5 } },
+        query: args.question,
+    });
+
+    return chunks.map((chunk) => ({ key: chunk.item.key, score: chunk.score, text: chunk.text }));
+});
+```
+
+Reading `ctx.aiSearch` is the whole setup. `lunora dev` and `lunora deploy` add
+`{ "binding": "AI_SEARCH", "namespace": "default" }` to `wrangler.jsonc` the
+first time a `lunora/` source reads it, and leave any `ai_search_namespaces`
+entry you wrote alone. If `AI_SEARCH` is already the name of another binding (an
+`ai_search` instance, a KV namespace, a var), nothing is written and the
+reconcile warning says which; add your own entry under another name. `default`
+exists on every account and already holds the instances you created before AI
+Search went GA. To bind another namespace, keep your own entry and point the app
+at it with `defineApp().aiSearch((env) => env.MY_NAMESPACE)`. The instances themselves
+(source, embedding model, index method, OCR) are configured in the dashboard,
+with `wrangler`, or through `ctx.aiSearch.create(...)`.
+
+It is **action-only**. Every call is billed network I/O over a corpus that
+re-indexes underneath you, so a query or mutation running it would re-bill on
+every subscription re-run and return a different answer each time. There is no
+local simulator either: plain `lunora dev` proxies the binding to the deployed
+service (wrangler warns that it may incur charges), so you need to be logged in
+with `wrangler login`. On the `celld` and `node` targets the capability matrix
+rates it unsupported, and codegen omits `ctx.aiSearch` with a
+`platform_unsupported_feature` diagnostic.
+
+### AI Search or `defineRag`?
+
+| Choose AI Search when…                                                | Choose `defineRag` when…                                                               |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| the corpus is an R2 bucket or a website you want indexed with no code | the corpus is your app's own rows, indexed as they are written                         |
+| you need OCR for scanned PDFs or the multimodal embedding models      | you need your own chunker, embedder, lexical or graph leg, reranker or query transform |
+| one tenant per instance is fine, or the corpus is shared              | retrieval must be filtered by row-level security across many tenants in one index      |
+| Cloudflare is the only target                                         | the app also runs on `celld` or `node`                                                 |
+
+Two limits decide the tenancy row. An instance has at most **5 custom metadata
+fields**, and a filterable string is indexed only to its first **64 bytes**, so
+a metadata filter on a tenant id longer than that stops filtering correctly
+without an error. That is a cross-tenant leak, not a missing result. For
+per-tenant isolation, give each tenant its own instance:
+
+```ts
+import { internalAction } from "./_generated/server";
+import { v } from "@lunora/values";
+
+export const provisionTenant = internalAction.input({ tenantId: v.string() }).action(async ({ args, ctx }) => {
+    // Built-in storage: omit `type` and `source`, then upload into it.
+    const instance = await ctx.aiSearch.create({ id: `tenant-${args.tenantId}` });
+
+    await instance.items.upload("welcome.md", "# Welcome\n…");
+});
+```
+
+Two more things to know before you put it on a hot path:
+
+- **Billing.** AI Search is usage-billed from **2026-11-01**: past the monthly
+  free allowance, semantic queries cost $0.75 and full-text queries $0.10 per
+  1,000, and ingestion $0.75 per million tokens. Workers AI embedding and
+  reranking calls are folded into that bill. `ctx.ai` usage counters do not see
+  these calls.
+- **Text only over the binding.** A message's `content` is a string. Image and
+  file content parts, one of the GA headlines, are accepted only by the REST API
+  and the public endpoint, not by `ctx.aiSearch`.
+
+### Streaming an answer
+
+`chatCompletions` retrieves and generates in one call, and with `stream: true`
+it resolves to a `ReadableStream` of server-sent events. An HTTP route can hand
+that stream straight back. `ctx.aiSearch` is not on the HTTP action context, so
+read the binding off the route's `env`:
+
+```ts
+// lunora/http.ts
+import type { AiSearch } from "@lunora/bindings/ai-search";
+import { httpRouter } from "lunorash/server";
+
+export const app = httpRouter();
+
+app.post("/ask", async (c) => {
+    const { question } = await c.req.json<{ question: string }>();
+    const search = c.env.AI_SEARCH as AiSearch;
+    const stream = await search.get("docs").chatCompletions({ messages: [{ content: question, role: "user" }], stream: true });
+
+    return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+});
+```
+
+Across several instances, call `chatCompletions` (or `search`) on the namespace
+itself with `ai_search_options: { instance_ids: ["docs", "blog"] }` (1 to 10
+ids). Each returned chunk then carries its `instance_id`.
+
+### Feeding agent memory
+
+Agent memory consumes `defineRag`'s `RetrieveResult`. AI Search returns its own
+`chunks`, so map them across by hand. There is no adapter to keep in sync:
+
+```ts
+import type { RetrieveResult } from "@lunora/ai/rag";
+import type { AiSearchInstance } from "@lunora/bindings/ai-search";
+
+const toRetrieveResult = (chunks: Awaited<ReturnType<AiSearchInstance["search"]>>["chunks"]): RetrieveResult => ({
+    chunks: chunks.map((chunk, index) => ({
+        chunkIndex: index,
+        id: chunk.id,
+        importance: 1,
+        metadata: chunk.item.metadata,
+        score: chunk.score,
+        sourceId: chunk.item.key,
+        text: chunk.text,
+    })),
+    context: chunks.map((chunk) => `[source:${chunk.item.key}]\n${chunk.text}`).join("\n\n"),
+    sources: [...new Set(chunks.map((chunk) => chunk.item.key))].map((id) => ({ id })),
+});
+```
+
+`AiSearchInstance` is what `ctx.aiSearch.get(name)` returns, exported next to
+`AiSearch`. Both are types only; the subpath ships no runtime code.
+
+## Tagging gateway calls for cost attribution
+
+AI Gateway can only break cost down by keys that were sent **with** the call, so
+a dimension you did not tag is one you cannot recover afterwards. Two scopes,
+because they are fixed at different times:
+
+- **Deployment-scoped** — which app, which environment. Set
+  `LUNORA_AI_GATEWAY_TAGS` to a flat JSON object of string values and every
+  gateway call carries them:
+
+    ```jsonc
+    // wrangler.jsonc
+    "vars": { "LUNORA_AI_GATEWAY_TAGS": "{\"app\":\"checkout\",\"env\":\"prod\"}" }
+    ```
+
+- **Per-call** — which feature, which (hashed) user. Pass them at the call site
+  as the `tags` field of `AiGatewayMetadata`.
+
+Both land in the same place: the `cf-aig-metadata` header for bring-your-own
+providers, and the Workers AI binding's native `gateway.metadata` option. The
+built-in `functionPath` / `traceId` correlation fields always win over a tag of
+the same name.
+
+AI Gateway rejects the whole metadata object past `AI_GATEWAY_METADATA_MAX_KEYS`
+(5) keys, so the builder trims to that rather than sending something the gateway
+will throw away. A malformed `LUNORA_AI_GATEWAY_TAGS` is ignored with a
+warn-once rather than failing the call — telemetry configuration must not take
+inference down — and non-string values are dropped rather than coerced, since a
+number silently becoming `"1"` is worse than a visibly absent tag.
+
 ## Cost telemetry without an AI Gateway
 
 Per-request dollar cost used to reach a span only when a Cloudflare AI Gateway
@@ -593,12 +911,46 @@ always wins, and the span records which it got:
 | `gen_ai.usage.cost`        | the cost in USD               |
 | `lunora.usage.cost.source` | `"provider"` or `"estimated"` |
 
+On a `ctx.ai.model(...)` call and a `defineRag` embed, an estimate is priced only
+from a complete token report. `lunora.usage.status` is `"complete"` when the
+provider reported every total the call carries, `"partial"` when it reported some
+of them, and `"unavailable"` when it reported none. A partial or unavailable call
+gets no estimated cost, because pricing the input alone would understate it. A
+provider-reported cost is still recorded. Cached input is priced at the table's
+`cacheRead` / `cacheWrite` rate when a model lists one, and at its `input` rate
+otherwise.
+
 The shipped table is **indicative, not authoritative** — a hand-maintained
 snapshot, and providers change prices without warning. It is deliberately small,
 because a table trying to cover every model is a table that is wrong about most
 of them; anything it does not cover returns `undefined` rather than a guess, and
 an unpriced model yields no attribute rather than a `0` that would quietly sum
 into a total. Pass your own `prices` for anything you are invoicing against.
+
+## Usage and spend per function
+
+Every model resolved through `ctx.ai.model(...)` is instrumented: each call gets
+an `ai.generate` (or `ai.stream`) span, and its usage is counted into the
+function's durable metrics. The counters are grouped by the model id you asked
+for (`anthropic/claude-sonnet-5`, not the provider's internal id) and carry the
+same cost-source rule as above:
+
+| Counter                                    | Value                                          | Attributes                                         |
+| ------------------------------------------ | ---------------------------------------------- | -------------------------------------------------- |
+| `gen_ai.usage.input_tokens`                | input tokens of one call (cache included)      | `gen_ai.request.model`                             |
+| `gen_ai.usage.output_tokens`               | output tokens of one call (reasoning included) | `gen_ai.request.model`                             |
+| `gen_ai.usage.cache_read.input_tokens`     | input tokens read from the provider's cache    | `gen_ai.request.model`                             |
+| `gen_ai.usage.cache_creation.input_tokens` | input tokens written to the provider's cache   | `gen_ai.request.model`                             |
+| `gen_ai.usage.reasoning.output_tokens`     | the reasoning share of `output_tokens`         | `gen_ai.request.model`                             |
+| `gen_ai.usage.cost`                        | USD cost of one call                           | `gen_ai.request.model`, `lunora.usage.cost.source` |
+
+The cache and reasoning counters are emitted only when the provider reports
+them above zero. A breakdown the provider did not send is absent, not a counted
+zero. The span carries `lunora.usage.status` (see above) and the same figures.
+
+Studio's **AI usage** page reads them: total spend and tokens, a breakdown by
+function and by model, and each recent call linked to its trace. A stream's span
+stays open until the stream finishes, so its duration is the whole generation.
 
 ## Outside an action
 

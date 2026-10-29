@@ -32,18 +32,22 @@ type RestFunctionKind = "action" | "mutation" | "query";
  * {@link RestCachePolicy.credentialHeaders}, or not mark the endpoint
  * `scope: "public"`.
  *
- * `x-payment` is here for a reason worth stating: an x402-tagged procedure is
- * paywalled INSIDE the dispatch, so a paid response that a shared cache stored
- * would be replayed to callers who never paid — together with the payer's
- * settlement receipt. Treating the payment as the credential it is keeps the paid
- * exchange out of the shared cache entirely.
+ * The x402 payment headers are here for a reason worth stating: an x402-tagged
+ * procedure is paywalled INSIDE the dispatch, so a paid response that a shared
+ * cache stored would be replayed to callers who never paid — together with the
+ * payer's settlement receipt. Treating the payment as the credential it is keeps
+ * the paid exchange out of the shared cache entirely. `payment-signature` is the
+ * x402 v2 name — the one `@x402/core` reads and `@x402/fetch` sends; `x-payment`
+ * is v1's, kept so a client still sending it is fenced too. This is a second
+ * lock, not the first: the REST router refuses a public cache on an `.x402`
+ * route outright.
  *
  * One credential is deliberately absent because it is not a header at all: under
  * a Cloudflare Access policy attached to the Worker, the caller's identity
  * arrives on the `ExecutionContext`. `@lunora/runtime`'s `requestCarriesCredentials`
  * checks for that separately.
  */
-const CREDENTIAL_HEADERS = ["authorization", "cf-access-jwt-assertion", "cookie", "x-payment"] as const;
+const CREDENTIAL_HEADERS = ["authorization", "cf-access-jwt-assertion", "cookie", "payment-signature", "x-payment"] as const;
 
 /**
  * Headers that select WHICH data a request sees rather than who is asking, and so

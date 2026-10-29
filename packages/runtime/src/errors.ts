@@ -40,8 +40,13 @@ const toErrorResponse = (error: unknown): Response => {
  * is mapped to a generic 500 with code `INTERNAL`.
  */
 class LunoraError extends BaseLunoraError {
-    public constructor(message: string, options?: { cause?: unknown; code?: string; status?: number }) {
-        super(options?.code ?? "INTERNAL", message, { cause: options?.cause, status: options?.status });
+    public constructor(message: string, options?: { cause?: unknown; code?: string; internal?: Record<string, unknown>; status?: number; why?: string }) {
+        super(options?.code ?? "INTERNAL", message, {
+            cause: options?.cause,
+            internal: options?.internal,
+            status: options?.status,
+            why: options?.why,
+        });
     }
 
     public toResponse(): Response {

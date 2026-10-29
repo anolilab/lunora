@@ -55,6 +55,26 @@ describe(agentToolEvents, () => {
         destroy.destroy();
     });
 
+    it("lists a pending secret request (awaiting-secret) until the server retires its marker", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+
+        const tool: AgentToolEventsResult = agentToolEvents({ api: buildApi(), client: fake.asClient, destroyRef: destroy.asDestroyRef, threadKey: "t1" });
+
+        fake.push(MESSAGES_REF, { key: "t1" }, [
+            { content: 'Awaiting a secret for tool "requestKey".', role: "tool", seq: 4, status: "awaiting_secret", toolCallId: "c3", toolName: "requestKey" },
+        ]);
+
+        expect(tool.events()).toStrictEqual([{ seq: 4, toolCallId: "c3", toolName: "requestKey", type: "awaiting-secret" }]);
+
+        // Supply and decline both delete the marker, so the next history push drops it.
+        fake.push(MESSAGES_REF, { key: "t1" }, []);
+
+        expect(tool.events()).toStrictEqual([]);
+
+        destroy.destroy();
+    });
+
     it("forwards the history limit to agents:agentMessages", () => {
         const fake = createFakeClient();
         const destroy = createFakeDestroyRef();

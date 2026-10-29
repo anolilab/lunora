@@ -1,35 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { emitApp } from "../src/emit-app";
-
-/** Minimal `EmitAppOptions` with every capability off; tests flip one flag at a time. */
-const baseOptions = {
-    hasAccess: false,
-    hasAi: false,
-    hasAnalytics: false,
-    hasAuth: false,
-    hasBrowser: false,
-    hasFramework: false,
-    hasGlobal: false,
-    hasHyperdrive: false,
-    hasHyperdriveGlobal: false,
-    hasImages: false,
-    hasKv: false,
-    hasKvIntrospector: false,
-    hasNotify: false,
-    hasPayments: false,
-    hasQueue: false,
-    hasR2sql: false,
-    hasScheduler: false,
-    hasStorage: false,
-    hasVectors: false,
-    hasWorkflow: false,
-    hasX402: false,
-    tableNames: [],
-    useUmbrella: false,
-    wantsOpenApi: false,
-    wantsOpenRpc: false,
-};
+import baseOptions from "./emit-app-options";
 
 describe("emitApp — notify subscription store wiring", () => {
     it("widens `env` when handing it to the `defineNotify` store factory", () => {
@@ -42,7 +14,7 @@ describe("emitApp — notify subscription store wiring", () => {
         // tsc with TS2345 ("Index signature for type 'string' is missing").
         const output = emitApp({ ...baseOptions, hasNotify: true });
 
-        expect(output).toContain("options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env as Record<string, unknown>) : undefined;");
+        expect(output).toContain("options.notifySubscriptionStore = notifyConfig.store(env as Record<string, unknown>);");
         expect(output).toContain('import notifyConfig from "../notify.js";');
     });
 

@@ -10,7 +10,8 @@
  * React Native, Node.js).
  */
 
-import type { ConnectionStatus } from "./lunora-client";
+import type { ConnectionStatus } from "./connection-state";
+import { withDeferredNotifications } from "./optimistic-layers";
 import type { SubscriptionError } from "./subscription";
 
 // ---------------------------------------------------------------------------
@@ -75,7 +76,7 @@ interface TabCoordinatorOptions {
      * its own confirmed optimistic layers instead of just displaying the raw
      * value; both are absent on a mixed-version leader that hasn't shipped the
      * cursor yet (the follower falls back to its historical behavior — see
-     * `lunora-client.ts`'s `onSubscriptionData` wiring).
+     * the follower data handler in `tab-leadership.ts`).
      *
      * `identity` is the leader's `identityFingerprint()` (see
      * `onConnectionStatus`'s docblock for the full rationale and the
@@ -113,8 +114,24 @@ interface TabCoordinatorOptions {
 type WsFollowerMessage =
     { tabId: string; ts: number; type: "heartbeat" } | { tabId: string; ts: number; type: "claim-leadership" } | { tabId: string; type: "yield-leadership" };
 
+/**
+ * `more` marks every snapshot of one flush but the last, so a follower applies the whole
+ * flush as one update, as the leader did. A follower that predates it applies each frame
+ * as it lands, as before.
+ */
+type SubscriptionDataMessage = {
+    cursor?: number;
+    data: unknown;
+    epoch?: string;
+    identity?: string | null;
+    key: string;
+    more?: true;
+    tabId: string;
+    type: "subscription-data";
+};
+
 type WsLeaderMessage =
-    | { cursor?: number; data: unknown; epoch?: string; identity?: string | null; key: string; tabId: string; type: "subscription-data" }
+    | SubscriptionDataMessage
     | { error: SubscriptionError; identity?: string | null; key: string; tabId: string; type: "subscription-error" }
     | {
           clientId?: string;
@@ -164,6 +181,17 @@ class TabCoordinator {
 
     /** Timestamp of the most recent leader heartbeat. */
     private lastHeartbeat: number = 0;
+
+    /**
+     * Snapshots waiting for the end of the current tick, latest per key. A
+     * `subscription-data` frame is a full snapshot, so a burst for one key within
+     * a tick only needs its last frame posted — each post structured-clones the
+     * whole value for every tab on the channel.
+     */
+    private readonly pendingData = new Map<string, WsLeaderMessage>();
+
+    /** Snapshots received under `more`, per leader tab, applied with the frame that closes their flush. */
+    private readonly heldData = new Map<string, SubscriptionDataMessage[]>();
 
     private heartbeatTimer: ReturnType<typeof setInterval> | undefined = undefined;
     private leaderCheckTimer: ReturnType<typeof setInterval> | undefined = undefined;
@@ -354,7 +382,13 @@ class TabCoordinator {
             return;
         }
 
-        this.broadcast({
+        if (this.pendingData.size === 0) {
+            queueMicrotask(() => {
+                this.flushPendingData();
+            });
+        }
+
+        this.pendingData.set(key, {
             type: "subscription-data",
             tabId: this.tabId,
             key,
@@ -440,8 +474,72 @@ class TabCoordinator {
     // -----------------------------------------------------------------------
 
     private broadcast(message: TabCoordinatorMessage): void {
+        // Anything else posted for a key goes out BEHIND that key's pending snapshot:
+        // a `settled` frame that advanced the cursor ahead of the value it describes
+        // would leave a follower holding a resume position with nothing cached behind it.
+        this.flushPendingData();
+
         // bc.postMessage is synchronous in modern browsers.
         this.bc?.postMessage(message);
+    }
+
+    /** Post the snapshots queued this tick — unless leadership was lost meanwhile, when the new leader's own snapshots supersede them. */
+    private flushPendingData(): void {
+        if (this.pendingData.size === 0) {
+            return;
+        }
+
+        const frames = [...this.pendingData.values()];
+
+        this.pendingData.clear();
+
+        if (!this.leader) {
+            return;
+        }
+
+        let posted: WsLeaderMessage | undefined;
+        let closed = true;
+
+        for (const [index, frame] of frames.entries()) {
+            const more = index < frames.length - 1;
+
+            try {
+                this.bc?.postMessage(more ? { ...frame, more: true } : frame);
+                posted = frame;
+                closed = !more;
+            } catch {
+                // A value structured clone refuses (a `URL` in a result) skips that key; the rest still go out.
+            }
+        }
+
+        // The closing frame failed: re-post the last one that went out, unmarked, so followers release what they hold.
+        if (!closed && posted !== undefined) {
+            this.bc?.postMessage(posted);
+        }
+    }
+
+    /** Hold a snapshot marked `more`; on the one that closes its flush, apply them all and notify once. */
+    private applySubscriptionData(message: SubscriptionDataMessage): void {
+        // Kept per tab: during a split brain two leaders post at once, and one's closing frame must not release the other's.
+        const held = this.heldData.get(message.tabId) ?? [];
+
+        held.push(message);
+
+        if (message.more === true) {
+            this.heldData.set(message.tabId, held);
+
+            return;
+        }
+
+        this.heldData.delete(message.tabId);
+        withDeferredNotifications(
+            () => {
+                for (const frame of held) {
+                    this.onSubscriptionData?.(frame.key, frame.data, frame.cursor, frame.epoch, frame.identity);
+                }
+            },
+            () => this.running,
+        );
     }
 
     private handleMessage(message: TabCoordinatorMessage): void {
@@ -473,7 +571,7 @@ class TabCoordinator {
                     break; // ignore our own broadcasts
                 }
 
-                this.onSubscriptionData?.(message.key, message.data, message.cursor, message.epoch, message.identity);
+                this.applySubscriptionData(message);
 
                 break;
             }
@@ -504,6 +602,9 @@ class TabCoordinator {
                 // waiting for the next health-check tick (up to
                 // `leaderTimeout`) before even starting the claim window would
                 // double the freeze every remaining tab experiences.
+                // A flush the departing leader never closed is never released.
+                this.heldData.delete(message.tabId);
+
                 if (this.knownLeader === message.tabId) {
                     this.knownLeader = undefined;
 
@@ -532,7 +633,7 @@ class TabCoordinator {
         //
         // The status broadcast is not redundant: `emitConnectionStatus` fires
         // only on a CHANGE, and `onBecomeLeader` announces once. A tab opened
-        // later therefore heard nothing, left `leaderStatus` undefined, and
+        // later therefore heard nothing, left `leader.status` undefined, and
         // `computeStatus()` answered `"idle"` forever — reporting disconnected
         // while the app was fully live, and never producing the
         // transitioned-to-connected edge that flushes an offline queue, so a
@@ -653,7 +754,8 @@ class TabCoordinator {
         const elapsed = Date.now() - this.lastHeartbeat;
 
         if (elapsed > this.leaderTimeout) {
-            // Leader is gone — attempt to claim.
+            // Leader is gone — attempt to claim. A flush it never closed is never released.
+            this.heldData.delete(this.knownLeader);
             this.knownLeader = undefined;
             this.claimAndPromote();
         }
@@ -685,5 +787,5 @@ class TabCoordinator {
     }
 }
 
-export type { TabCoordinatorOptions };
 export { TabCoordinator };
+export type { TabCoordinatorOptions };

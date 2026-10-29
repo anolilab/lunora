@@ -1,39 +1,35 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { LunoraError } from "@lunora/errors";
+import type { NotifyDefinition } from "@lunora/notify";
 import type {
     ActionCtx,
     ArgsValidator,
     AuthState,
-    DatabaseWriter,
     InferArgs,
-    LogFields,
-    LunoraLogger,
-    LunoraMetrics,
-    LunoraTracer,
     MutationCtx,
     QueryCtx,
     RegisteredAction,
     RegisteredMutation,
     RegisteredQuery,
     Schema,
-    SpanHandle,
     TableDefinition,
 } from "@lunora/server";
-import { beginDeferredSchedules, withDeferredSchedules } from "@lunora/server";
-import type { SchemaLike, TransactionHeadroom } from "@lunora/shard-engine";
-import { createShardCtxDb, RLS_UNWRAP_SYMBOL, runShardMigrations, TransactionHeadroomTracker } from "@lunora/shard-engine";
+import { withDeferredSchedules } from "@lunora/server";
+import { createInProcessRuntime, registeredFunctionKind, resolveInProcessIdentity, runRegisteredFunction } from "@lunora/server/in-process";
 
-import { evaluationAttributes } from "./evaluation-telemetry";
+import type { RecordedWideEvent } from "./context-fakes";
+import { createRecordingSpan, noopLog, noopMetrics, passthroughTrace, servicesContext, stubProxy } from "./context-fakes";
+import type { FakeNotifyControls, NotifySurfaces } from "./fake-notify";
+import { createFakeNotify } from "./fake-notify";
+import type { FakeQueueControls, QueueSurface } from "./fake-queues";
+import { createFakeQueues } from "./fake-queues";
 import { createFakeScheduler } from "./fake-scheduler";
+import type { FakeTopicControls, TopicSurface } from "./fake-topics";
+import { createFakeTopics } from "./fake-topics";
 import { createSqlExec } from "./node-sqlite";
 
-/**
- * The schema value produced by `@lunora/server`'s `defineSchema`. Accepted
- * structurally; internally it is handed to `@lunora/do`'s `runShardMigrations` /
- * `createShardCtxDb`, whose `SchemaLike` is the same shape declared in the DO
- * package — the two are structurally compatible at runtime (only their
- * independently-declared trigger nesting drifts at the type level), so the
- * boundary cast below is sound.
- */
+/** The schema value produced by `@lunora/server`'s `defineSchema`. */
 type TestSchema = Schema<Record<string, TableDefinition>>;
 
 /**
@@ -43,67 +39,6 @@ type TestSchema = Schema<Record<string, TableDefinition>>;
  */
 interface TestIdentity extends Record<string, unknown> {
     userId?: null | string;
-}
-
-/** The `userId` + claims a dispatch runs under, after production's normalisation. */
-interface ResolvedIdentity {
-    readonly claims: Record<string, unknown> | null;
-    readonly userId: null | string;
-}
-
-/**
- * Reduce a caller-supplied {@link TestIdentity} to what production would actually
- * hand a shard.
- *
- * Mirrors `@lunora/runtime`'s `create-worker.ts` identity forwarding: an identity
- * whose `userId` is not a non-empty string is dropped to anonymous outright, and
- * the forwarded claims are the identity MINUS `userId` (`null` when nothing is
- * left), because the shard reads the subject from its own header and surfaces
- * only the remaining claims through `ctx.auth.getIdentity()`. Without this the
- * harness accepted identities production cannot build — `{ roles: ["admin"] }`
- * with no subject reached `rls()` with its roles intact.
- */
-const resolveTestIdentity = (identity: null | TestIdentity): ResolvedIdentity => {
-    if (identity === null || typeof identity.userId !== "string" || identity.userId.length === 0) {
-        // eslint-disable-next-line unicorn/no-null -- AuthState's anonymous sentinel is `null` for both fields
-        return { claims: null, userId: null };
-    }
-
-    const { userId, ...extra } = identity;
-
-    // eslint-disable-next-line unicorn/no-null -- `getIdentity()`'s empty-claims sentinel is `null`, matching a shard with no `x-lunora-identity` header
-    return { claims: Object.keys(extra).length > 0 ? extra : null, userId };
-};
-
-/**
- * A resource meter with a stable identity whose budget resets per dispatch.
- *
- * Production builds a fresh `createShardCtxDb` writer — and with it a fresh
- * {@link TransactionHeadroomTracker} — for every dispatch (`ShardDO.beginDispatch`
- * mints one; the generated `buildCtx` passes it). The harness builds one writer
- * per identity view, so it hands that writer this forwarder and swaps the tracker
- * behind it at each top-level entry: every dispatch gets its own budget, and the
- * ceilings are the engine defaults rather than "unmetered".
- */
-class DispatchHeadroom extends TransactionHeadroomTracker {
-    private current = new TransactionHeadroomTracker();
-
-    /** Begin a new dispatch with a full budget. */
-    public reset(): void {
-        this.current = new TransactionHeadroomTracker();
-    }
-
-    public override headroom(): TransactionHeadroom {
-        return this.current.headroom();
-    }
-
-    public override recordRead(count: number): void {
-        this.current.recordRead(count);
-    }
-
-    public override recordWrite(row: unknown): void {
-        this.current.recordWrite(row);
-    }
 }
 
 /**
@@ -197,7 +132,7 @@ interface LunoraTestOptions {
      * Pass `vi.fn()` or any `typeof globalThis.fetch` compatible implementation.
      * @example
      * ```ts
-     * const fakeFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+     * const fakeFetch = vi.fn(async () => Response.json({ ok: true }));
      * const t = lunoraTest(schema, { fetch: fakeFetch });
      * ```
      */
@@ -222,6 +157,29 @@ interface LunoraTestOptions {
     functions?: FunctionRegistry;
 
     /**
+     * The app's `lunora/notify.ts` default export. Enables `ctx.notify` and its
+     * `ctx.push` alias on every context, built by `@lunora/notify`'s own
+     * `createNotify` — so register / list / unregister / broadcast behave as in
+     * production, and channels are wired exactly when production wires them
+     * (each factory is called with `options.env`; a push target for a transport
+     * that resolved to nothing fails). Differences: deliveries are recorded and
+     * report accepted instead of reaching a service (no send-time DNS re-check,
+     * retry or circuit breaker), and subscriptions live in an in-memory store —
+     * the definition's `store` is never called. Assert on deliveries with
+     * `harness.notify.sent()`. Left unset, touching `ctx.notify` / `ctx.push` —
+     * or calling `harness.notify.sent()` — throws, naming this option.
+     * @example
+     * ```ts
+     * import notify from "../lunora/notify";
+     *
+     * const t = lunoraTest(schema, { notify });
+     * await t.action(alertOwner, { orderId });
+     * expect(t.notify.sent("push")).toHaveLength(1);
+     * ```
+     */
+    notify?: NotifyDefinition;
+
+    /**
      * Fixed value for `ctx.now` (epoch ms) in every context. Production captures
      * `Date.now()` once per execution; in tests a fixed `now` makes time-dependent
      * handlers deterministic. Defaults to the wall clock at harness creation.
@@ -231,6 +189,57 @@ interface LunoraTestOptions {
      * ```
      */
     now?: number;
+
+    /**
+     * The export names of the queues in `lunora/queues.ts` (the keys of
+     * `ctx.queues`). Each gets a recording producer on mutation and action
+     * contexts, behind `@lunora/queue`'s own validation (batch cap, delay
+     * ceiling), so a send the platform would refuse rejects here too. A name not
+     * listed rejects on use, as an undeclared queue does in production. Assert
+     * on sends with `harness.queues.sent(name)`. Left unset, touching
+     * `ctx.queues` — or calling `harness.queues.sent()` — throws, naming this
+     * option.
+     * @example
+     * ```ts
+     * const t = lunoraTest(schema, { queues: ["jobs"] });
+     * await t.mutation(enqueueJob, { id: "a" });
+     * expect(t.queues.sent("jobs")).toEqual([{ body: { id: "a" }, queue: "jobs" }]);
+     * ```
+     */
+    queues?: ReadonlyArray<string>;
+
+    /**
+     * Fakes for `ctx.services` (the `lunora.config` `services` an app calls),
+     * keyed like `ctx.services`. Set on action contexts only — queries and
+     * mutations have no `ctx.services` at runtime either. A key with no fake
+     * throws on use, naming the option to add it to.
+     * @example
+     * ```ts
+     * const t = lunoraTest(schema, {
+     *   services: { documentParser: { fetch: vi.fn(async () => Response.json({ text: "…" })) } },
+     * });
+     * ```
+     */
+    services?: Record<string, object>;
+
+    /**
+     * The export names of the topics in `lunora/queues.ts` (the keys of
+     * `ctx.topics`). Each gets a recording publisher on mutation and action
+     * contexts, built by `@lunora/queue`'s own `createTopicContext` — so the
+     * batch cap, delay ceiling and reserved-key check reject as in production,
+     * and a name not listed rejects on use. Bodies are recorded and size-checked
+     * as `queues` records them, once per message however many subscriptions the
+     * app declares; no subscription handler runs. Assert with
+     * `harness.topics.published(name)`. Left unset, touching `ctx.topics` — or
+     * calling `harness.topics.published()` — throws, naming this option.
+     * @example
+     * ```ts
+     * const t = lunoraTest(schema, { topics: ["signups"] });
+     * await t.mutation(signUp, { email: "a@example.test" });
+     * expect(t.topics.published("signups")).toHaveLength(1);
+     * ```
+     */
+    topics?: ReadonlyArray<string>;
 }
 
 /**
@@ -253,11 +262,27 @@ interface TestHarness {
         <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineMutationFunction<R>): Promise<R>;
     };
+
+    /**
+     * What handlers delivered through `ctx.notify` / `ctx.push` (enabled by
+     * `options.notify`): `sent(channel?)` in send order, `clear()` to reset.
+     * Both throw when the option was not passed. Shared with any `withIdentity` view.
+     */
+    notify: FakeNotifyControls;
     /** Run a registered `query` (or an inline `async (context) => …`) against the harness. */
     query: {
         <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineQueryFunction<R>): Promise<R>;
     };
+
+    /**
+     * What handlers enqueued through `ctx.queues` (declared by `options.queues`):
+     * `sent(name?)` in send order, `clear()` to reset. Sends are not
+     * transactional in production, so one made by a mutation that then threw is
+     * recorded too. Both throw when the option was not passed. Shared with any
+     * `withIdentity` view.
+     */
+    queues: FakeQueueControls;
 
     /**
      * Direct db access at mutation-level (read + write), mirroring `convexTest`'s
@@ -314,6 +339,14 @@ interface TestHarness {
     };
 
     /**
+     * What handlers published through `ctx.topics` (declared by `options.topics`):
+     * `published(name?)` in publish order, `clear()` to reset. Like queue sends,
+     * publishes are not transactional. Both throw when the option was not passed.
+     * Shared with any `withIdentity` view.
+     */
+    topics: FakeTopicControls;
+
+    /**
      * What handlers attached to `ctx.span` — the **wide event** — during this
      * harness's runs, so a test can assert the instrumentation itself:
      *
@@ -331,186 +364,10 @@ interface TestHarness {
     withIdentity: (identity: TestIdentity) => TestHarness;
 }
 
-const registeredFunctionKind = (value: unknown): "action" | "mutation" | "query" | undefined => {
-    if (typeof value !== "object" || value === null) {
-        return undefined;
-    }
+type RunRegisteredFunction = typeof runRegisteredFunction;
 
-    const { kind } = value as { kind?: unknown };
-
-    if (kind === "query" || kind === "mutation" || kind === "action") {
-        return kind;
-    }
-
-    return undefined;
-};
-
-const registeredFunctionVisibility = (value: unknown): "internal" | "public" =>
-    typeof value === "object" && value !== null && (value as { visibility?: unknown }).visibility === "internal" ? "internal" : "public";
-
-/**
- * Build a value that throws a clear "not available in v1" error the moment a
- * handler touches the stubbed surface — but not at context construction, so
- * functions that never reach for it still run.
- */
-const unavailable = (surface: string): never => {
-    throw new LunoraError("INTERNAL", `ctx.${surface} is not available in the in-memory @lunora/testing harness (v1)`);
-};
-
-/**
- * The proxy target MUST be a function so the `apply` trap fires when the
- * stub is called directly (e.g. `ctx.fetch(url)`). A plain `{}` target is
- * not callable and throws "not a function" before our trap can run.
- */
-const stubProxy = (surface: string): unknown =>
-    new Proxy((..._args: unknown[]): never => unavailable(surface), {
-        apply: () => unavailable(surface),
-        get: () => unavailable(surface),
-    });
-
-/** What a handler attached to the dispatch's span (`ctx.span`) during a harness run. */
-interface RecordedWideEvent {
-    /**
-     * Attributes accumulated across the run, merged in call order. Values are
-     * recorded AS PASSED (not coerced the way the real pipeline normalizes them),
-     * so a test asserts on what the handler meant rather than on the wire form.
-     */
-    attributes: LogFields;
-    /** Span events recorded via `ctx.span.addEvent` / `recordException`, in order. */
-    events: { attributes?: LogFields; name: string }[];
-    /** Links recorded via `ctx.span.addLink`, in order. */
-    links: { spanId: string; traceId: string }[];
-}
-
-/**
- * Fixed, well-formed trace ids for the harness.
- *
- * Constant rather than random so a snapshot or an assertion that happens to
- * include them stays stable across runs; well-formed (32/16 lowercase hex) so
- * code under test that parses or builds a `traceparent` from them behaves as it
- * would in production instead of hitting a validation path only tests can reach.
- */
-const HARNESS_SPAN_CONTEXT = { spanId: "0000000000000001", traceId: "00000000000000000000000000000001" };
-
-/**
- * A no-op {@link SpanHandle} for a `ctx.trace` body under test: a child span has
- * nowhere to go without a sink, so accept and drop what the body attaches (like
- * `noopMetrics`).
- *
- * The DISPATCH span (`ctx.span`) is deliberately NOT this — see
- * {@link createRecordingSpan}. What a handler records about the request as a
- * whole is exactly the kind of thing a test wants to assert on, and dropping it
- * would make the wide-event API the one part of `ctx` that is untestable.
- */
-const noopSpan: SpanHandle = {
-    addEvent: () => undefined,
-    addLink: () => undefined,
-    recordEvaluation: () => undefined,
-    recordException: () => undefined,
-    setAttribute: () => undefined,
-    setAttributes: () => undefined,
-    spanContext: () => HARNESS_SPAN_CONTEXT,
-};
-
-/**
- * A recording {@link SpanHandle} backing `ctx.span` in the harness, so a test can
- * assert on the wide event a handler builds:
- *
- * ```ts
- * await t.mutation(checkout, { … });
- * expect(t.wideEvent().attributes["payment.provider"]).toBe("stripe");
- * ```
- *
- * Without this, the recommended way to instrument a handler would have no
- * assertion story at all, and "did we record the right thing?" would only be
- * answerable by deploying.
- */
-const createRecordingSpan = (): { handle: SpanHandle; recorded: RecordedWideEvent } => {
-    const recorded: RecordedWideEvent = { attributes: {}, events: [], links: [] };
-
-    const handle: SpanHandle = {
-        addEvent: (name, attributes) => {
-            recorded.events.push({ ...(attributes === undefined ? {} : { attributes: { ...attributes } }), name });
-        },
-        addLink: (link) => {
-            recorded.links.push({ spanId: link.spanId, traceId: link.traceId });
-        },
-        recordEvaluation: (evaluation) => {
-            // Merged into the recorded attributes exactly as production does, so a
-            // test asserting on `gen_ai.evaluation.<name>.score` sees the same keys
-            // the collector would. Reuses this package's own `evaluationAttributes`
-            // rather than the bundler-inlined `shared/` copy — same contract, no
-            // extra import path for the harness to carry.
-            Object.assign(recorded.attributes, evaluationAttributes(evaluation));
-        },
-        recordException: (error) => {
-            // Mirrors the production recorder's attribute set, `exception.stacktrace`
-            // included: a test that asserts on the harness's exception events should
-            // see the same shape a collector would, or it silently passes against a
-            // narrower record than the one that ships.
-            const attributes: LogFields = {
-                "exception.message": error instanceof Error ? error.message : String(error),
-                // NOTE: production prefers a `LunoraError`'s stable `code` here (via
-                // `toErrorType`), which is not exported from `@lunora/do`. For a
-                // plain Error — the common case in a test — the two agree.
-                "exception.type": error instanceof Error ? error.constructor.name : "Error",
-            };
-
-            if (error instanceof Error && error.stack !== undefined) {
-                attributes["exception.stacktrace"] = error.stack;
-            }
-
-            handle.addEvent("exception", attributes);
-        },
-        setAttribute: (key, value) => {
-            recorded.attributes[key] = value;
-        },
-        setAttributes: (fields) => {
-            Object.assign(recorded.attributes, fields);
-        },
-        spanContext: () => HARNESS_SPAN_CONTEXT,
-    };
-
-    return { handle, recorded };
-};
-
-/**
- * `ctx.trace` under test: runs the body and returns its value, recording
- * nothing. There is no sink in the harness, so a span has nowhere to go — but
- * the body must still execute and its result and any throw must pass through
- * untouched, or instrumenting a handler would change what the test observes. The
- * body still receives a (no-op) span handle so post-hoc attributes are accepted.
- */
-const passthroughTrace: LunoraTracer = async <T>(_name: string, function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T): Promise<T> =>
-    await function_(passthroughTrace, noopSpan);
-
-/** `ctx.metrics` under test: accepts every measurement and records nothing. */
-const noopMetrics: LunoraMetrics = {
-    count: () => undefined,
-    gauge: () => undefined,
-    record: () => undefined,
-};
-
-const noopLog: LunoraLogger = {
-    debug: () => undefined,
-    error: () => undefined,
-    event: () => undefined,
-    fatal: () => undefined,
-    info: () => undefined,
-    log: () => undefined,
-    trace: () => undefined,
-    warn: () => undefined,
-    with: () => noopLog,
-};
-
-/** RunRegistered type extracted so buildSubscribe can reference it without duplication. */
-type RunRegisteredFunction = (
-    expected: "action" | "mutation" | "query",
-    reference: { handler: (context: unknown, args: never) => unknown },
-    context: unknown,
-    args: unknown,
-    allowInternal: boolean,
-) => Promise<unknown>;
+/** The app-specific surfaces codegen adds to a mutation context (and an action's) on top of `MutationCtx`. */
+type HarnessMutationContext = MutationCtx & NotifySurfaces & QueueSurface & TopicSurface;
 
 /**
  * Build the `subscribe` method for a harness view. Extracted to keep
@@ -524,7 +381,15 @@ type RunRegisteredFunction = (
  * - Intermediate snapshots between two `next()` calls are coalesced (the next `next()` sees
  * the most-recent state).
  */
-const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: QueryCtx, mutationListeners: Set<() => void>): TestHarness["subscribe"] => {
+/** The clock the current top-level harness call reads through `ctx.now`. */
+const runClock = new AsyncLocalStorage<number>();
+
+const buildSubscribe = (
+    runRegistered: RunRegisteredFunction,
+    queryContext: QueryCtx,
+    mutationListeners: Set<() => void>,
+    clock: () => number,
+): TestHarness["subscribe"] => {
     const factory = (referenceOrInline: unknown, args?: unknown): TestSubscription<unknown> => {
         let done = false;
         // Parked `next()` callers awaiting the next emit. An array (not a single
@@ -547,13 +412,15 @@ const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: Quer
         let latestSeq = 0;
         let appliedSeq = 0;
 
-        const runQuery = (): Promise<unknown> => {
-            if (registeredFunctionKind(referenceOrInline)) {
-                return runRegistered("query", referenceOrInline as never, queryContext, args, false);
-            }
+        // Every (re-)evaluation is its own run: it reads the clock as of that run.
+        const runQuery = (): Promise<unknown> =>
+            runClock.run(clock(), () => {
+                if (registeredFunctionKind(referenceOrInline)) {
+                    return runRegistered("query", referenceOrInline as never, queryContext, args, false);
+                }
 
-            return Promise.resolve((referenceOrInline as InlineQueryFunction<unknown>)(queryContext));
-        };
+                return Promise.resolve((referenceOrInline as InlineQueryFunction<unknown>)(queryContext));
+            });
 
         const emit = (seq: number, value: unknown): void => {
             // Drop a snapshot a newer notification has already superseded.
@@ -756,6 +623,12 @@ const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: Quer
  * control via `harness.scheduler.advance(ms)` / `runPending()` / `list()`. As in
  * production it is transactional inside a mutation: a job scheduled by a mutation
  * that then throws never becomes pending.
+ * - `ctx.queues` (mutations + actions): recording producers for `options.queues`;
+ * inspect via `harness.queues.sent(name)`.
+ * - `ctx.topics` (mutations + actions): recording publishers for `options.topics`;
+ * inspect via `harness.topics.published(name)`.
+ * - `ctx.notify` / `ctx.push` (all contexts): built from `options.notify` with
+ * recorded deliveries and in-memory subscriptions; inspect via `harness.notify.sent()`.
  * - `harness.subscribe(query, args)`: async iterable that re-emits after mutations.
  *
  * **v1 stubs (still throwing):** `ctx.storage`, `ctx.vectors`, `ctx.workflows`.
@@ -763,127 +636,6 @@ const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: Quer
  */
 const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarness => {
     const { close, sql } = createSqlExec();
-    const ddlSchema = schema as unknown as SchemaLike;
-
-    runShardMigrations(sql, ddlSchema);
-
-    // The per-dispatch resource meter, reset at every top-level entry below. One
-    // instance for the whole harness (all identity views share the one SQLite
-    // handle, and top-level entries are serialized), handed to every writer built
-    // here so a harness mutation hits the same ceilings production enforces.
-    const headroom = new DispatchHeadroom();
-
-    /**
-     * The guarded `ctx.db` writer for one identity view, plus the trusted writer
-     * behind it.
-     *
-     * Secure-by-default: mirrors production's generated `buildCtx`, which always
-     * passes `enforceRls: true` (a no-op unless the schema is `.rls("required")`).
-     * `options.enforceRls` is the harness's opt-out — default `true` so a green
-     * suite means a procedure that forgot `.use(rls(...))` against a protected
-     * table would fail here exactly as it fails on first production dispatch.
-     *
-     * `auth` is the same slice `buildCtx` passes, so `.serverDefault(({ auth }) => …)`
-     * columns stamp the dispatching identity rather than the anonymous fallback.
-     */
-    const createWriters = (identity: ResolvedIdentity): { database: DatabaseWriter; rawDatabase: DatabaseWriter } => {
-        const database = createShardCtxDb({
-            auth: { identity: identity.claims, userId: identity.userId },
-            enforceRls: options?.enforceRls ?? true,
-            headroom,
-            schema: ddlSchema,
-            sql,
-        }) as unknown as DatabaseWriter;
-
-        // The trusted, UNGUARDED writer — recovered through the same well-known
-        // `RLS_UNWRAP_SYMBOL` seam `@lunora/server`'s `rls()` middleware uses to
-        // reach the raw writer, rather than a second `createShardCtxDb` call. When
-        // the guard didn't wrap `database` (schema not `.rls("required")`, or
-        // `enforceRls: false`), the symbol is absent and `rawDatabase` is `database`
-        // itself. Backs the harness's explicit trusted escape hatch (`t.run`, and any
-        // `@lunora/seed` helper built on it) — mirrors production's admin/migration/
-        // studio writers, which are built from `createShardCtxDb` WITHOUT `enforceRls`
-        // and so are never guarded.
-        return { database, rawDatabase: ((database as unknown as Record<PropertyKey, unknown>)[RLS_UNWRAP_SYMBOL] as DatabaseWriter | undefined) ?? database };
-    };
-
-    // Mutation atomicity — mirrors the real ShardDO, whose codegen dispatch routes
-    // every mutation handler through `runMutationTransaction` (a BEGIN/COMMIT
-    // span). Every entry that can host one is wrapped — `t.mutation`, `t.run`, a
-    // scheduled mutation, and `ctx.runMutation` from an ACTION — so a mid-handler
-    // throw, including a partial `insertMany`/`patchMany`/`deleteMany` loop, rolls
-    // back every write it made, matching production. Queries are read-only, and an
-    // action's own I/O cannot be rolled back, so neither is wrapped. A
-    // `ctx.runMutation` from inside a MUTATION rides the already-open span (no
-    // second BEGIN), exactly as in production. Entries are serialized through a
-    // promise queue (see `runInMutationTransaction`) so concurrently-issued
-    // mutations never share or interleave a span. The `.exec` is routed through a
-    // `.call` indirection — the secret-scan hook flags a literal `.exec(` (see
-    // do-exec.ts / node-sqlite.ts).
-    const execStatement = (statement: string): void => {
-        const runner = sql.exec as (this: typeof sql, query: string) => unknown;
-
-        runner.call(sql, statement);
-    };
-    // Serialize top-level mutation/`run` entries so concurrently-issued mutations
-    // (e.g. `Promise.all([t.mutation(a), t.mutation(b)])`) never interleave their
-    // BEGIN/COMMIT spans. This mirrors the real DO's single-writer semantics
-    // (input gates): each top-level entry runs to completion — commit or rollback —
-    // before the next begins, so no entry ever rides (and is rolled back by)
-    // another's transaction, and two spans never nest into an illegal nested BEGIN.
-    //
-    // Only entries that open their OWN span reach here (`t.mutation` / `t.run` / a
-    // scheduled mutation / an action's `ctx.runMutation`); a mutation's own
-    // `ctx.run*` composition dispatches through `runInternal` → `runRegistered`
-    // directly, running synchronously inside the already-open span without a fresh
-    // BEGIN. So every call to this function must queue. An action is not itself
-    // queued, so a mutation it composes waits its turn here like any other.
-    let mutationQueue: Promise<unknown> = Promise.resolve();
-
-    const runInMutationTransaction = <R>(function_: () => Promise<R> | R): Promise<R> => {
-        const runTransaction = async (): Promise<R> => {
-            // Mirrors the generated shard's `runMutationTransaction`: the jobs this
-            // mutation schedules are held until the COMMIT lands, and dropped on the
-            // ROLLBACK. `runAfter(0, …)` is documented as the deterministic
-            // equivalent of an `afterCommit` hook, so the ordering is the contract.
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `scheduler` is constructed below; this closure only runs once a dispatch calls it
-            const settleSchedules = beginDeferredSchedules({ scheduler });
-
-            headroom.reset();
-            execStatement("BEGIN");
-
-            try {
-                const result = await function_();
-
-                execStatement("COMMIT");
-
-                await settleSchedules(true);
-
-                return result;
-            } catch (error) {
-                try {
-                    execStatement("ROLLBACK");
-                } catch {
-                    // A failed rollback (broken handle) must not mask the original throw.
-                }
-
-                await settleSchedules(false);
-
-                throw error;
-            }
-        };
-
-        const result = mutationQueue.then(runTransaction);
-
-        // Advance the queue tail whether or not this entry succeeds, so a rejected
-        // mutation never wedges every later one.
-        mutationQueue = result.then(
-            () => undefined,
-            () => undefined,
-        );
-
-        return result;
-    };
 
     // One native SQLite handle backs every harness view (including `withIdentity`
     // scopes); close it once and ignore repeat calls so any accessor can tear the
@@ -930,17 +682,29 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     let mutationContextRef: unknown;
     let actionContextRef: unknown;
 
-    // `ctx.now` for every context: captured once so a harness sees one stable
-    // instant (production captures it per execution). Overridable via `options.now`.
-    // Computed BEFORE the scheduler so the fake scheduler's virtual clock starts
-    // from the same instant — otherwise a handler that does
-    // `ctx.scheduler.runAt(ctx.now + delay, …)` schedules against a clock that
-    // disagrees with `ctx.now`.
-    const harnessNow = options?.now ?? Date.now();
+    // `ctx.now` for every context. Production captures it once per execution, so
+    // the harness reads the clock when a handler touches `ctx.now` — not once when
+    // the harness is built, which left a test that moved the clock with
+    // `vi.setSystemTime` after setup reading a stale instant. A fixed
+    // `options.now` still wins. The fake scheduler's virtual clock is seeded
+    // from the same starting instant, so `ctx.scheduler.runAt(ctx.now + delay, …)`
+    // schedules against the clock `ctx.now` reports.
+    const currentNow = (): number => options?.now ?? Date.now();
+    const schedulerSeedNow = currentNow();
+
+    // Each top-level call runs under its own clock (see `runClock`). Nested calls inherit
+    // it, overlapping calls keep their own, and a synchronous throw restores it.
+    const inRun = <F extends (...args: never[]) => unknown>(run: F): F =>
+        ((...args: never[]) => runClock.run(currentNow(), () => (run as (...callArgs: never[]) => unknown)(...args))) as F;
     // One recorder per harness (shared by the query/mutation/action contexts, so a
     // `ctx.runMutation` from a query accumulates onto the same wide event the real
     // runtime would — a composed call reuses the outer dispatch's span).
     const dispatchSpan = createRecordingSpan();
+    // Recorders shared by every view, like the scheduler: what one identity's
+    // handler sends is visible from any `withIdentity` scope.
+    const { controls: queueControls, surfaces: queueSurfaces } = createFakeQueues(options?.queues);
+    const { controls: topicControls, surfaces: topicSurfaces } = createFakeTopics(options?.topics);
+    const { controls: notifyControls, surfaces: notifySurfaces } = createFakeNotify(options?.notify, options?.env ?? {});
 
     /** Guard for the lazily-wired scheduler references: fail loudly if a sweep runs before harness construction completed. */
     const requireReference = <T>(value: T | undefined, name: string): T => {
@@ -956,32 +720,52 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         () => requireReference(mutationContextRef, "mutationContext"),
         () => requireReference(actionContextRef, "actionContext"),
         () => functionRegistryMap,
-        harnessNow,
+        schedulerSeedNow,
     );
 
     // `ctx.scheduler` as production installs it on a mutation/action ctx: the
     // deferral facade from `@lunora/server`, so a `runAfter`/`runAt` issued inside
     // a transaction is buffered and only reaches the scheduler once that
-    // transaction commits (`runInMutationTransaction` opens and settles the
+    // transaction commits (`runInTransaction` opens and settles the
     // window). Without it a rolled-back mutation still leaves its job pending, and
     // the harness would tell a test the opposite of what production does.
     const scheduler = withDeferredSchedules(fakeScheduler);
 
+    // Schema → migrations → `ctx.db` writers → mutation transactions: the
+    // in-process core from `@lunora/server/in-process`, here over `node:sqlite`. Every
+    // mutation entry (`t.mutation`, `t.run`, a scheduled mutation, an action's
+    // `ctx.runMutation`) goes through its `runInTransaction`, so a
+    // mid-handler throw rolls back every write it made and the jobs it scheduled,
+    // matching production; a mutation's own `ctx.run*` composition rides the
+    // already-open span through `runInternal` instead.
+    const { createWriters, resetHeadroom, runInTransaction } = createInProcessRuntime(schema, {
+        enforceRls: options?.enforceRls,
+        scheduler,
+        sql,
+    });
+
     const makeHarness = (identity: null | TestIdentity): TestHarness => {
-        const resolved = resolveTestIdentity(identity);
+        const resolved = resolveInProcessIdentity(identity);
         const auth: AuthState = {
             getIdentity: () => Promise.resolve(resolved.claims),
             userId: resolved.userId,
         };
         const { database, rawDatabase } = createWriters(resolved);
 
-        const queryContext: QueryCtx = {
+        const queryContext: NotifySurfaces & QueryCtx = {
+            ...notifySurfaces,
             auth,
             db: database,
             env: options?.env,
             log: noopLog,
             metrics: noopMetrics,
-            now: harnessNow,
+            get now(): number {
+                return runClock.getStore() ?? currentNow();
+            },
+            newId: () => crypto.randomUUID(),
+            // Math.random, as production's unkeyed draw does, so a test that stubs it controls the value.
+            // eslint-disable-next-line sonarjs/pseudo-random -- the unkeyed draw is Math.random by design; secrets use crypto.getRandomValues
+            random: () => Math.random(),
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -993,13 +777,22 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             vectors: stubProxy("vectors") as QueryCtx["vectors"],
         };
 
-        const mutationContext: MutationCtx = {
+        const mutationContext: HarnessMutationContext = {
+            ...notifySurfaces,
+            ...queueSurfaces,
+            ...topicSurfaces,
             auth,
             db: database,
             env: options?.env,
             log: noopLog,
             metrics: noopMetrics,
-            now: harnessNow,
+            get now(): number {
+                return runClock.getStore() ?? currentNow();
+            },
+            newId: () => crypto.randomUUID(),
+            // Math.random, as production's unkeyed draw does, so a test that stubs it controls the value.
+            // eslint-disable-next-line sonarjs/pseudo-random -- the unkeyed draw is Math.random by design; secrets use crypto.getRandomValues
+            random: () => Math.random(),
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -1030,9 +823,21 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // Backs `harness.run` only — `query`/`mutation`/`action` dispatch (both the
         // registered-procedure and inline-callback forms) stays on the guarded
         // `queryContext`/`mutationContext`/`actionContext` above.
-        const rawMutationContext: MutationCtx = { ...mutationContext, db: rawDatabase };
+        // Copy the descriptors, not the values: a spread would evaluate the `now` getter once.
+        const rawMutationContext = Object.defineProperties(
+            {},
+            {
+                ...Object.getOwnPropertyDescriptors(mutationContext),
+                db: { enumerable: true, value: rawDatabase },
+            },
+        ) as HarnessMutationContext;
 
-        const actionContext: ActionCtx = {
+        // `services` is not on the base ActionCtx: codegen adds it to the app's own
+        // action context when `lunora.config` declares services.
+        const actionContext: ActionCtx & NotifySurfaces & QueueSurface & TopicSurface & { services: Record<string, object> } = {
+            ...notifySurfaces,
+            ...queueSurfaces,
+            ...topicSurfaces,
             auth,
             db: database,
             env: options?.env,
@@ -1040,7 +845,13 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             fetch: options?.fetch ?? (stubProxy("fetch") as ActionCtx["fetch"]),
             log: noopLog,
             metrics: noopMetrics,
-            now: harnessNow,
+            get now(): number {
+                return runClock.getStore() ?? currentNow();
+            },
+            newId: () => crypto.randomUUID(),
+            // Math.random, as production's unkeyed draw does, so a test that stubs it controls the value.
+            // eslint-disable-next-line sonarjs/pseudo-random -- the unkeyed draw is Math.random by design; secrets use crypto.getRandomValues
+            random: () => Math.random(),
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -1057,7 +868,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             // transactional work in a mutation and call it from the action" recipe
             // promises.
             runMutation: ((reference: never, args: never) =>
-                runInMutationTransaction(() =>
+                runInTransaction(() =>
                     // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: invoked only when a handler calls ctx.runMutation, after construction completes
                     runInternal("mutation", reference, mutationContext, args),
                 ).then(notifyAfter) as Promise<never>) as unknown as MutationCtx["runMutation"],
@@ -1067,6 +878,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 runInternal("query", reference, queryContext, args) as Promise<never>) as unknown as QueryCtx["runQuery"],
             scheduler,
             secrets: stubProxy("secrets") as ActionCtx["secrets"],
+            services: servicesContext(options?.services),
             storage: stubProxy("storage") as ActionCtx["storage"],
             vectors: stubProxy("vectors") as ActionCtx["vectors"],
             workflows: stubProxy("workflows") as ActionCtx["workflows"],
@@ -1078,34 +890,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // the canonical one.
         actionContextRef ??= actionContext;
 
-        const runRegistered = (
-            expected: "action" | "mutation" | "query",
-            reference: { handler: (context: unknown, args: never) => unknown },
-            context: unknown,
-            args: unknown,
-            allowInternal: boolean,
-        ): Promise<unknown> => {
-            const kind = registeredFunctionKind(reference);
-
-            if (kind !== expected) {
-                throw new LunoraError("INTERNAL", `expected a registered ${expected}, received a ${kind ?? "non-function"} reference`);
-            }
-
-            if (!allowInternal && registeredFunctionVisibility(reference) === "internal") {
-                throw new LunoraError(
-                    "INTERNAL",
-                    `This ${expected} is an internal function — it is unreachable from the external RPC boundary in production. ` +
-                        `Call it through ctx.run${expected.charAt(0).toUpperCase()}${expected.slice(1)} from another function instead.`,
-                );
-            }
-
-            return Promise.resolve(reference.handler(context, (args ?? {}) as never));
-        };
-
         // Internal (server-to-server) dispatch surface used by ctx.run*. Mirrors
         // prod's `isSystemDispatch()` branch: internal functions are reachable here.
         const runInternal = (expected: "action" | "mutation" | "query", reference: unknown, context: unknown, args: unknown): Promise<unknown> =>
-            runRegistered(expected, reference as never, context, args, true);
+            runRegisteredFunction(expected, reference as never, context, args, true);
 
         // Top-level dispatch for the fake scheduler. A scheduled job is a fresh
         // top-level entry (production dispatches it back to the Worker as its own
@@ -1116,19 +904,19 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // scheduler is the trusted server-dispatch surface (allowInternal = true).
         scheduledDispatchRef ??= (kind, reference, context, args) => {
             if (kind === "mutation") {
-                return runInMutationTransaction(() => runRegistered("mutation", reference as never, context, args, true)).then(notifyAfter);
+                return runInTransaction(() => runRegisteredFunction("mutation", reference as never, context, args, true)).then(notifyAfter);
             }
 
-            headroom.reset();
+            resetHeadroom();
 
             return runInternal("action", reference, context, args);
         };
 
         const query = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
-            headroom.reset();
+            resetHeadroom();
 
             if (registeredFunctionKind(referenceOrInline)) {
-                return runRegistered("query", referenceOrInline as never, queryContext, args, false);
+                return runRegisteredFunction("query", referenceOrInline as never, queryContext, args, false);
             }
 
             return Promise.resolve((referenceOrInline as InlineQueryFunction<unknown>)(queryContext));
@@ -1136,17 +924,17 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
 
         const mutation = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
             const body = registeredFunctionKind(referenceOrInline)
-                ? (): Promise<unknown> => runRegistered("mutation", referenceOrInline as never, mutationContext, args, false)
+                ? (): Promise<unknown> => runRegisteredFunction("mutation", referenceOrInline as never, mutationContext, args, false)
                 : (): unknown => (referenceOrInline as InlineMutationFunction<unknown>)(mutationContext);
 
-            return runInMutationTransaction(body).then(notifyAfter);
+            return runInTransaction(body).then(notifyAfter);
         }) as TestHarness["mutation"];
 
         const action = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
-            headroom.reset();
+            resetHeadroom();
 
             if (registeredFunctionKind(referenceOrInline)) {
-                return runRegistered("action", referenceOrInline as never, actionContext, args, false);
+                return runRegisteredFunction("action", referenceOrInline as never, actionContext, args, false);
             }
 
             return Promise.resolve((referenceOrInline as InlineActionFunction<unknown>)(actionContext));
@@ -1156,22 +944,30 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // the query), so it gets a fresh budget rather than accumulating onto the last one.
         const subscribe = buildSubscribe(
             (...parameters) => {
-                headroom.reset();
+                resetHeadroom();
 
-                return runRegistered(...parameters);
+                return runRegisteredFunction(...parameters);
             },
             queryContext,
             mutationListeners,
+            () => options?.now ?? Date.now(),
         );
 
+        // The inline `t.run` body, hoisted so the harness object stays shallow.
+        const runTopLevelInline = (function_: InlineMutationFunction<unknown>): Promise<unknown> =>
+            runInTransaction(() => function_(rawMutationContext)).then(notifyAfter);
+
         const harness: TestHarness = {
-            action,
+            action: inRun(action),
             close: closeDatabase,
-            mutation,
-            query,
-            run: (function_) => runInMutationTransaction(() => function_(rawMutationContext)).then(notifyAfter),
+            mutation: inRun(mutation),
+            notify: notifyControls,
+            query: inRun(query),
+            queues: queueControls,
+            run: inRun(runTopLevelInline) as TestHarness["run"],
             scheduler: schedulerControls,
             subscribe,
+            topics: topicControls,
             wideEvent: () => dispatchSpan.recorded,
             // A scoped view shares the SAME sql/db handle (created once above), so
             // writes performed under an identity persist for every accessor.
@@ -1186,5 +982,9 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
 };
 
 export { lunoraTest };
+export type { RecordedWideEvent } from "./context-fakes";
+export type { FakeNotifyControls, NotifyChannel, SentNotification } from "./fake-notify";
+export type { FakeQueueControls, SentQueueMessage } from "./fake-queues";
 export type { FakeScheduledJob, FakeSchedulerControls, ScheduledJobFailure, SweepOptions } from "./fake-scheduler";
-export type { FunctionRegistry, LunoraTestOptions, RecordedWideEvent, TestHarness, TestIdentity, TestSubscription };
+export type { FakeTopicControls, PublishedTopicMessage } from "./fake-topics";
+export type { FunctionRegistry, LunoraTestOptions, TestHarness, TestIdentity, TestSubscription };

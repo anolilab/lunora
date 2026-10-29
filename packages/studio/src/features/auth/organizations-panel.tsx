@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -9,14 +8,19 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAuthConfig } from "../../hooks/use-auth-config";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { formatCell, formatTimestamp } from "../../lib/internal";
+import { AuthPager } from "./auth-pager";
 import { OrganizationDetail } from "./organization-detail";
 import { ConfirmDialog, OrgFormDialog } from "./organization-dialogs";
 import type { Row } from "./types";
 
 /** Which top-level dialog (if any) the panel has open, plus its row context. */
 type PanelDialog = null | { kind: "create" } | { kind: "delete"; org: Row } | { kind: "edit"; org: Row };
+
+/** Organizations per page. */
+const ORG_PAGE_SIZE = 100;
 
 /**
  * Organization management — gated on the `organization` better-auth plugin via
@@ -28,7 +32,7 @@ type PanelDialog = null | { kind: "create" } | { kind: "delete"; org: Row } | { 
  * dashboard adapts to whatever plugins the deployment turned on.
  */
 const OrganizationsPanel = (): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const { config, ready } = useAuthConfig();
     const orgEnabled = config.capabilities.organization;
@@ -38,15 +42,14 @@ const OrganizationsPanel = (): ReactElement => {
 
     // The org/auth store is HTTP-only (no admin-RPC path), so this is a
     // `useClientQuery` read over the bespoke `client.listAuthOrganizations`.
-    const orgsQuery = useClientQuery(["lunora-auth-orgs"], () => client.listAuthOrganizations({ limit: 100 }), {
+    const [offset, setOffset] = useState<number>(0);
+    const orgsQuery = useClientQuery(["lunora-auth-orgs", offset], () => client.listAuthOrganizations({ limit: ORG_PAGE_SIZE, offset }), {
         enabled: orgEnabled,
     });
     const orgs = orgsQuery.data?.rows ?? null;
 
     // Poll the org list while the plugin is enabled (paused while the tab is hidden).
-    useAutoRefresh(() => {
-        orgsQuery.refetch();
-    }, orgEnabled);
+    useAutoRefresh(() => orgsQuery.poll(), orgEnabled);
 
     const closeDialog = (): void => {
         setDialog(null);
@@ -162,6 +165,10 @@ const OrganizationsPanel = (): ReactElement => {
                         </Table>
                     </CardContent>
                 </Card>
+            )}
+
+            {orgs !== null && (
+                <AuthPager count={orgs.length} offset={offset} onOffsetChange={setOffset} pageSize={ORG_PAGE_SIZE} prefix="org" total={orgsQuery.data?.total} />
             )}
 
             {selected !== null && (

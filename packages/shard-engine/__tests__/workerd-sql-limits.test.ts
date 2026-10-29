@@ -1,3 +1,6 @@
+import { Buffer } from "node:buffer";
+import { DatabaseSync } from "node:sqlite";
+
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
@@ -7,6 +10,7 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
 import { runSql } from "../src/do-exec";
 import { renderSql, sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "../src/drizzle";
 import { buildSeekBeforeWhere, buildSeekWhere } from "../src/query-args";
+import { rawText, textFragments } from "../src/where-fragments";
 import { compileWhereSql } from "../src/where-sql";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -101,54 +105,14 @@ describe("compound SELECT term cap", () => {
             const other = await writer.insert("t1", { title: "untouched" });
 
             // Bare-id (no `expectedTable`) — the unscoped probe the issue reports.
-            await writer.patch(id, { title: "after" });
+            await writer.patch("t6", id, { title: "after" });
 
-            await expect(writer.get(id)).resolves.toMatchObject({ title: "after" });
+            await expect(writer.get("t6", id)).resolves.toMatchObject({ title: "after" });
 
-            await writer.delete(id);
+            await writer.delete("t6", id);
 
-            await expect(writer.get(id)).resolves.toBeNull();
-            await expect(writer.get(other)).resolves.toMatchObject({ title: "untouched" });
-        } finally {
-            harness.close();
-        }
-    });
-
-    it("resolves every id through the reshaped guarded batch probe, on a schema wider than the cap", async () => {
-        expect.assertions(1);
-
-        const harness = createSqliteExec();
-
-        try {
-            // The batched probe is the RLS guard's `deleteMany` pre-check, so it
-            // only runs under a `.rls("required")` schema with `enforceRls`.
-            const schema = schemaWith(8, true);
-
-            runShardMigrations(harness.sql, schema);
-
-            const admin = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
-            // More ids than the 100-bound-variable budget allows in one
-            // statement at eight branches apiece, so the id list has to stop
-            // being one placeholder per id.
-            const ids: string[] = [];
-
-            for (let index = 0; index < 40; index += 1) {
-                // eslint-disable-next-line no-await-in-loop -- sequential inserts against a single-threaded SQLite harness
-                ids.push(await admin.insert(`t${String(index % 8)}`, { title: `row ${String(index)}` }));
-            }
-
-            const guarded = createShardContextDatabase({ clock: () => 1_700_000_000_000, enforceRls: true, schema, sql: harness.sql });
-
-            await guarded.deleteMany!(ids);
-
-            const survivors = [];
-
-            for (const id of ids) {
-                // eslint-disable-next-line no-await-in-loop -- sequential reads against a single-threaded SQLite harness
-                survivors.push(await admin.get(id));
-            }
-
-            expect(survivors.filter(Boolean)).toEqual([]);
+            await expect(writer.get("t6", id)).resolves.toBeNull();
+            await expect(writer.get("t1", other)).resolves.toMatchObject({ title: "untouched" });
         } finally {
             harness.close();
         }
@@ -158,7 +122,7 @@ describe("compound SELECT term cap", () => {
 describe("bound-parameter cap", () => {
     // eslint-disable-next-line no-restricted-syntax -- a drizzle identifier chunk, not a string conversion; the rule misfires on the inner TemplateLiteral
     const fieldRef = (field: string): SQL => dsql`${dsql.identifier(field)}`;
-    const strategy = { fieldRef, inList: sqliteInList, serialize: (value: unknown) => value };
+    const strategy = { fieldRef, inList: sqliteInList, rangeTypeGuard: () => dsql`1 = 1`, serialize: (value: unknown) => value };
 
     it.each([
         ["in", false],
@@ -199,6 +163,40 @@ describe("bound-parameter cap", () => {
         expect(text).not.toContain("json_each");
     });
 
+    it.each([
+        ["in", false],
+        ["notIn", true],
+    ])("carries a wide `%s` of bytes as one hex parameter that matches the same BLOBs", (operator, negated) => {
+        expect.assertions(4);
+
+        const items = Array.from({ length: 60 }, (_, index) => new Uint8Array([index, 255]));
+        const { params, sql: text } = renderSql("sqlite", compileWhereSql({ blob: { [operator]: items } }, strategy)!);
+        const asText = compileWhereSql(
+            { blob: { [operator]: items } },
+            { rangeTypeGuard: () => rawText("1 = 1"), fieldRef: (field) => rawText(`"${field}"`), serialize: (value: unknown) => value },
+            textFragments,
+        );
+
+        expect(text).toBe(`"blob"${negated ? " NOT IN " : " IN "}(SELECT unhex("value") FROM json_each(?))`);
+        // The Durable Object's text builder emits the same statement.
+        expect({ params: asText?.params, sql: asText?.text }).toStrictEqual({ params, sql: text });
+
+        const database = new DatabaseSync(":memory:");
+
+        try {
+            database.exec("CREATE TABLE b (blob BLOB)");
+            database.prepare("INSERT INTO b VALUES (?), (?), (NULL)").run(new Uint8Array([7, 255]), new Uint8Array([200]));
+
+            const rows = database.prepare(`SELECT hex(blob) AS h FROM b WHERE ${text}`).all(...(params as never[]));
+
+            // `[7, 255]` is in the list, `[200]` is not, and NULL matches neither form.
+            expect(rows).toEqual(negated ? [{ h: "C8" }] : [{ h: "07FF" }]);
+            expect(params).toStrictEqual([JSON.stringify(items.map((item) => Buffer.from(item).toString("hex")))]);
+        } finally {
+            database.close();
+        }
+    });
+
     it("refuses an over-budget list it can neither bind as one parameter nor fit as placeholders", () => {
         expect.assertions(1);
 
@@ -208,51 +206,6 @@ describe("bound-parameter cap", () => {
         const items = [...Array.from({ length: 400 }, (_, index) => index), Number.NaN];
 
         expect(() => compileWhereSql({ score: { in: items } }, strategy)).toThrow(/cannot be bound as one parameter/u);
-    });
-
-    it("chunks the by-id probes so a schema wider than the parameter cap stays under it", async () => {
-        expect.assertions(4);
-
-        const harness = createSqliteExec();
-
-        try {
-            // 120 tables: `unionAll` nests them past the compound-SELECT cap
-            // fine, but one placeholder per branch — the id, or the `json_each`
-            // list — still binds 120 parameters against Workerd's cap of 100.
-            const schema = schemaWith(120, true);
-
-            runShardMigrations(harness.sql, schema);
-
-            const bound: number[] = [];
-            const counting: SqlExec = {
-                exec: (query, ...params) => {
-                    bound.push(params.length);
-
-                    return harness.sql.exec(query, ...params);
-                },
-            };
-
-            const admin = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: counting });
-            // The last table, so the owning branch lands in the second chunk.
-            const id = await admin.insert("t119", { title: "before" });
-            const guarded = createShardContextDatabase({ clock: () => 1_700_000_000_000, enforceRls: true, schema, sql: counting });
-
-            bound.length = 0;
-
-            // Bare-id (no `expectedTable`) — `locateRowById`'s unscoped probe.
-            await admin.patch(id, { title: "after" });
-
-            await expect(admin.get(id)).resolves.toMatchObject({ title: "after" });
-
-            // And the RLS guard's batched `locateTablesByIds` pre-check.
-            await guarded.deleteMany!([id]);
-
-            await expect(admin.get(id)).resolves.toBeNull();
-            expect(bound.length).toBeGreaterThan(0);
-            expect(Math.max(...bound)).toBeLessThanOrEqual(100);
-        } finally {
-            harness.close();
-        }
     });
 
     it("keeps a bounded page over the widest orderBy under the cap, seek included", () => {
@@ -461,7 +414,15 @@ describe("expression-depth cap", () => {
     const depthFieldRef = (field: string): SQL => dsql`${dsql.identifier(field)}`;
     const wideWhere = Object.fromEntries(Array.from({ length: 200 }, (_unused, index) => [`f${String(index)}`, index]));
     const compileWide = (): { params: unknown[]; sql: string } =>
-        renderSql("sqlite", compileWhereSql(wideWhere, { fieldRef: depthFieldRef, inList: sqliteInList, serialize: (value: unknown) => value })!);
+        renderSql(
+            "sqlite",
+            compileWhereSql(wideWhere, {
+                rangeTypeGuard: () => dsql`1 = 1`,
+                fieldRef: depthFieldRef,
+                inList: sqliteInList,
+                serialize: (value: unknown) => value,
+            })!,
+        );
 
     it("measures terms per level, not total nesting", () => {
         expect.assertions(2);

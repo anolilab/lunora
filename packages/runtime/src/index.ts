@@ -1,3 +1,4 @@
+export { declareAppJurisdiction } from "../../../shared/app-jurisdiction";
 export type { BackupManifestEntry } from "./backup-layout";
 export {
     BACKUP_KEY_PREFIX,
@@ -53,6 +54,10 @@ export type {
     LunoraWorker,
     NotifySubscriptionDevice,
     NotifySubscriptionStoreLike,
+    QueueForwardBatch,
+    QueueForwardHandler,
+    QueueForwardMessage,
+    QueueForwardResult,
     Route,
     RpcContext,
     RpcEnvelope,
@@ -82,7 +87,10 @@ export {
 export type { CrossShardCounter, CrossShardReader, CrossShardRelationCapabilities, CrossShardRelationOptions } from "./cross-shard-relations";
 export { createCrossShardRelationCapabilities } from "./cross-shard-relations";
 export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynamic-shard-registry";
+export type { ShardRegistryRpc } from "./dynamic-shard-registry";
 export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry";
+export type { ReportedError, StackFrame } from "./error-reporting";
+export { parseStackFrames, toError } from "./error-reporting";
 export type { LunoraErrorBody } from "./errors";
 export { LunoraError, toErrorResponse } from "./errors";
 export type { ExportBatch, ExportChange, ExportCursorStore, ExportSink, ExportTapFailure, ExportTapResult, RunExportTapOptions } from "./export-tap";
@@ -106,6 +114,8 @@ export type {
     TraceSamplingConfig,
 } from "./observability";
 export { emitLogEvent, emitRpcEvent } from "./observability";
+export type { SinkEnricher, SinkEvent, SinkRouteOptions, SinkSignalKind } from "./observability-routing";
+export { enrichSink, filterSink } from "./observability-routing";
 export type {
     AnalyticsEngineDataPointLike,
     AnalyticsEngineDatasetLike,
@@ -114,10 +124,9 @@ export type {
     OtlpSinkOptions,
     PipelineLike,
     PipelineLogSinkOptions,
-    SentrySinkOptions,
     WebhookSinkOptions,
 } from "./observability-sinks";
-export { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, sentrySink, webhookSink } from "./observability-sinks";
+export { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, webhookSink } from "./observability-sinks";
 export type {
     PipelineLogColumnMap,
     PipelineLogCursor,

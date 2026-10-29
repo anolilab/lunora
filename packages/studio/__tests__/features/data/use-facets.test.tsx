@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { FacetFetcher } from "../../../src/features/data/hooks/use-facets";
 import { useFacets } from "../../../src/features/data/hooks/use-facets";
 import type { FacetResult } from "../../../src/lib/admin";
+import { fireAndForget } from "../../../src/lib/internal";
 
 const facetResult = (label: string): FacetResult => {
     return { truncated: false, values: [{ count: 1, value: label }] };
@@ -52,7 +53,7 @@ describe("useFacets", () => {
 
         // A view change refetches the open facet (deferred[1]).
         act(() => {
-            result.current.refetchFacets(fetcher);
+            fireAndForget(result.current.refetchFacets(fetcher));
         });
 
         // Resolve the NEWER fetch first, then the older/stale one.

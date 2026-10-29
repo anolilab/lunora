@@ -1,0 +1,16 @@
+// Test-only wrangler config consumed by `@cloudflare/vitest-plugin`. Not deployed.
+//
+// The Durable Object is the point: its `ctx.storage.sql` is the real SQLite the agent
+// tables live in on a shard, so the component's own mutations and queries run
+// against workerd's engine rather than a dispatch double.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-agent-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "class_name": "AgentStoreDO", "name": "AGENT_STORE" }],
+    },
+    "migrations": [{ "new_sqlite_classes": ["AgentStoreDO"], "tag": "v1" }],
+}

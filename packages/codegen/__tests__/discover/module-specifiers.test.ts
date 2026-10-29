@@ -119,7 +119,7 @@ describe("discovery module specifiers", () => {
                 `
                 import { cronJobs } from "${specifier}";
 
-                import { internal } from "./_generated/api.js";
+                import { internal } from "./_generated/internal.js";
 
                 const crons = cronJobs();
 

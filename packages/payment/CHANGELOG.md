@@ -1,3 +1,1146 @@
+## @lunora/payment [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.249...@lunora/payment@1.0.0-alpha.250) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.249
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.168
+
+## @lunora/payment [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.248...@lunora/payment@1.0.0-alpha.249) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.248
+
+## @lunora/payment [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.247...@lunora/payment@1.0.0-alpha.248) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.247
+* **@lunora/values:** upgraded to 1.0.0-alpha.85
+
+## @lunora/payment [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.246...@lunora/payment@1.0.0-alpha.247) (2026-10-28)
+
+### Performance Improvements
+
+* cache hmac keys per secret on per-message paths ([#1383](https://github.com/anolilab/lunora/issues/1383)) ([4b259f8](https://github.com/anolilab/lunora/commit/4b259f8583960cf26066423f64ee10e5e0de7c85))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.246
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+
+## @lunora/payment [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.245...@lunora/payment@1.0.0-alpha.246) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.244
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.165
+
+## @lunora/payment [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.244...@lunora/payment@1.0.0-alpha.245) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/server:** upgraded to 1.0.0-alpha.243
+* **@lunora/values:** upgraded to 1.0.0-alpha.83
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.164
+
+## @lunora/payment [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.243...@lunora/payment@1.0.0-alpha.244) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.242
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+
+## @lunora/payment [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.242...@lunora/payment@1.0.0-alpha.243) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/server:** upgraded to 1.0.0-alpha.241
+* **@lunora/values:** upgraded to 1.0.0-alpha.82
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.162
+
+## @lunora/payment [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.241...@lunora/payment@1.0.0-alpha.242) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.240
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.161
+
+## @lunora/payment [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.240...@lunora/payment@1.0.0-alpha.241) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.239
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.160
+
+## @lunora/payment [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.239...@lunora/payment@1.0.0-alpha.240) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/server:** upgraded to 1.0.0-alpha.238
+* **@lunora/values:** upgraded to 1.0.0-alpha.81
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+
+## @lunora/payment [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.238...@lunora/payment@1.0.0-alpha.239) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.237
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+
+## @lunora/payment [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.237...@lunora/payment@1.0.0-alpha.238) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/server:** upgraded to 1.0.0-alpha.236
+* **@lunora/values:** upgraded to 1.0.0-alpha.80
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+
+## @lunora/payment [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.236...@lunora/payment@1.0.0-alpha.237) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/server:** upgraded to 1.0.0-alpha.235
+* **@lunora/values:** upgraded to 1.0.0-alpha.79
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+
+## @lunora/payment [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.235...@lunora/payment@1.0.0-alpha.236) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.234
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+
+## @lunora/payment [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.234...@lunora/payment@1.0.0-alpha.235) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.233
+
+## @lunora/payment [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.233...@lunora/payment@1.0.0-alpha.234) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.232
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.154
+
+## @lunora/payment [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.232...@lunora/payment@1.0.0-alpha.233) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.231
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+
+## @lunora/payment [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.231...@lunora/payment@1.0.0-alpha.232) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.230
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+
+## @lunora/payment [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.230...@lunora/payment@1.0.0-alpha.231) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.229
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+
+## @lunora/payment [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.229...@lunora/payment@1.0.0-alpha.230) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/server:** upgraded to 1.0.0-alpha.228
+* **@lunora/values:** upgraded to 1.0.0-alpha.78
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+
+## @lunora/payment [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.228...@lunora/payment@1.0.0-alpha.229) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.227
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.149
+
+## @lunora/payment [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.227...@lunora/payment@1.0.0-alpha.228) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.226
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.148
+
+## @lunora/payment [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.226...@lunora/payment@1.0.0-alpha.227) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/server:** upgraded to 1.0.0-alpha.225
+* **@lunora/values:** upgraded to 1.0.0-alpha.77
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+
+## @lunora/payment [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.225...@lunora/payment@1.0.0-alpha.226) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/server:** upgraded to 1.0.0-alpha.224
+* **@lunora/values:** upgraded to 1.0.0-alpha.76
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.146
+
+## @lunora/payment [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.224...@lunora/payment@1.0.0-alpha.225) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/server:** upgraded to 1.0.0-alpha.223
+* **@lunora/values:** upgraded to 1.0.0-alpha.75
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+
+## @lunora/payment [1.0.0-alpha.224](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.223...@lunora/payment@1.0.0-alpha.224) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/server:** upgraded to 1.0.0-alpha.222
+* **@lunora/values:** upgraded to 1.0.0-alpha.74
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.144
+
+## @lunora/payment [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.222...@lunora/payment@1.0.0-alpha.223) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/server:** upgraded to 1.0.0-alpha.221
+* **@lunora/values:** upgraded to 1.0.0-alpha.73
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.143
+
+## @lunora/payment [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.221...@lunora/payment@1.0.0-alpha.222) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.220
+
+## @lunora/payment [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.220...@lunora/payment@1.0.0-alpha.221) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.218
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.141
+
+## @lunora/payment [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.219...@lunora/payment@1.0.0-alpha.220) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/server:** upgraded to 1.0.0-alpha.217
+* **@lunora/values:** upgraded to 1.0.0-alpha.72
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.140
+
+## @lunora/payment [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.218...@lunora/payment@1.0.0-alpha.219) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/server:** upgraded to 1.0.0-alpha.216
+* **@lunora/values:** upgraded to 1.0.0-alpha.71
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.139
+
+## @lunora/payment [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.217...@lunora/payment@1.0.0-alpha.218) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/server:** upgraded to 1.0.0-alpha.215
+* **@lunora/values:** upgraded to 1.0.0-alpha.70
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.138
+
+## @lunora/payment [1.0.0-alpha.217](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.216...@lunora/payment@1.0.0-alpha.217) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.214
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.137
+
+## @lunora/payment [1.0.0-alpha.216](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.215...@lunora/payment@1.0.0-alpha.216) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.213
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.136
+
+## @lunora/payment [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.214...@lunora/payment@1.0.0-alpha.215) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+* **@lunora/server:** upgraded to 1.0.0-alpha.212
+* **@lunora/values:** upgraded to 1.0.0-alpha.69
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.135
+
+## @lunora/payment [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.213...@lunora/payment@1.0.0-alpha.214) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+* **@lunora/server:** upgraded to 1.0.0-alpha.211
+* **@lunora/values:** upgraded to 1.0.0-alpha.68
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.134
+
+## @lunora/payment [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.212...@lunora/payment@1.0.0-alpha.213) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.210
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.133
+
+## @lunora/payment [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.211...@lunora/payment@1.0.0-alpha.212) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.209
+
+## @lunora/payment [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.210...@lunora/payment@1.0.0-alpha.211) (2026-10-16)
+
+### Performance Improvements
+
+* **payment:** look up each reference's customer once per reconcile tick ([#1221](https://github.com/anolilab/lunora/issues/1221)) ([5b0f658](https://github.com/anolilab/lunora/commit/5b0f6580bb818afaefe1d3b4b1de3984addf8d92))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.207
+
+## @lunora/payment [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.209...@lunora/payment@1.0.0-alpha.210) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.206
+
+## @lunora/payment [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.208...@lunora/payment@1.0.0-alpha.209) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.205
+
+## @lunora/payment [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.207...@lunora/payment@1.0.0-alpha.208) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.204
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.131
+
+## @lunora/payment [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.206...@lunora/payment@1.0.0-alpha.207) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.56
+* **@lunora/server:** upgraded to 1.0.0-alpha.203
+* **@lunora/values:** upgraded to 1.0.0-alpha.66
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.130
+
+## @lunora/payment [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.205...@lunora/payment@1.0.0-alpha.206) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.202
+
+## @lunora/payment [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.204...@lunora/payment@1.0.0-alpha.205) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.201
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.129
+
+## @lunora/payment [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.203...@lunora/payment@1.0.0-alpha.204) (2026-10-15)
+
+### Performance Improvements
+
+* **payment:** read the current period's usage events through an index ([#1180](https://github.com/anolilab/lunora/issues/1180)) ([435a38f](https://github.com/anolilab/lunora/commit/435a38fa7b55596acb99ee86509a7a550e380e00))
+
+## @lunora/payment [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.202...@lunora/payment@1.0.0-alpha.203) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+* **@lunora/server:** upgraded to 1.0.0-alpha.200
+* **@lunora/values:** upgraded to 1.0.0-alpha.65
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.128
+
+## @lunora/payment [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.201...@lunora/payment@1.0.0-alpha.202) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.199
+
+## @lunora/payment [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.200...@lunora/payment@1.0.0-alpha.201) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.198
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.127
+
+## @lunora/payment [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.199...@lunora/payment@1.0.0-alpha.200) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.197
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.126
+
+## @lunora/payment [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.198...@lunora/payment@1.0.0-alpha.199) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.196
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.125
+
+## @lunora/payment [1.0.0-alpha.198](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.197...@lunora/payment@1.0.0-alpha.198) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+* **@lunora/server:** upgraded to 1.0.0-alpha.195
+* **@lunora/values:** upgraded to 1.0.0-alpha.64
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.124
+
+## @lunora/payment [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.196...@lunora/payment@1.0.0-alpha.197) (2026-10-13)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.194
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.123
+
+## @lunora/payment [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.195...@lunora/payment@1.0.0-alpha.196) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+* **@lunora/server:** upgraded to 1.0.0-alpha.193
+* **@lunora/values:** upgraded to 1.0.0-alpha.63
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.122
+
+## @lunora/payment [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.194...@lunora/payment@1.0.0-alpha.195) (2026-10-12)
+
+### Bug Fixes
+
+* **ratelimit:** make the D1-backed consume atomic with ctx.db.patchIf ([#1133](https://github.com/anolilab/lunora/issues/1133)) ([e137141](https://github.com/anolilab/lunora/commit/e137141443492eca6a7485341f4e6f8486864089))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.192
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.121
+
+## @lunora/payment [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.193...@lunora/payment@1.0.0-alpha.194) (2026-10-12)
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+* **payment:** store money minor units as number columns ([#1119](https://github.com/anolilab/lunora/issues/1119)) ([d496ff9](https://github.com/anolilab/lunora/commit/d496ff9398625320f2d68b1e8241346e9e3f0fcc))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.191
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.120
+
+## @lunora/payment [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.192...@lunora/payment@1.0.0-alpha.193) (2026-10-10)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.190
+* **@lunora/values:** upgraded to 1.0.0-alpha.62
+
+## @lunora/payment [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.191...@lunora/payment@1.0.0-alpha.192) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.189
+
+## @lunora/payment [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.190...@lunora/payment@1.0.0-alpha.191) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.188
+
+## @lunora/payment [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.189...@lunora/payment@1.0.0-alpha.190) (2026-10-09)
+
+### Bug Fixes
+
+* **payment:** apply polar seat changes instead of dropping them ([#1058](https://github.com/anolilab/lunora/issues/1058)) ([0d81f7c](https://github.com/anolilab/lunora/commit/0d81f7c3d18573c331fe391f0841f13d1770224d))
+
+## @lunora/payment [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.188...@lunora/payment@1.0.0-alpha.189) (2026-10-09)
+
+### Bug Fixes
+
+* **payment:** apply creem seat changes instead of dropping them ([#1057](https://github.com/anolilab/lunora/issues/1057)) ([536bb1a](https://github.com/anolilab/lunora/commit/536bb1aa1284c782e60cccf67166216bd19ec02d))
+
+## @lunora/payment [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.187...@lunora/payment@1.0.0-alpha.188) (2026-10-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.187
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.119
+
+## @lunora/payment [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.186...@lunora/payment@1.0.0-alpha.187) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/server:** upgraded to 1.0.0-alpha.186
+* **@lunora/values:** upgraded to 1.0.0-alpha.61
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.118
+
+## @lunora/payment [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.185...@lunora/payment@1.0.0-alpha.186) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.185
+
+## @lunora/payment [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.184...@lunora/payment@1.0.0-alpha.185) (2026-10-07)
+
+### Bug Fixes
+
+* **server:** keep schema extension keys literal through extend() ([#1025](https://github.com/anolilab/lunora/issues/1025)) ([d717390](https://github.com/anolilab/lunora/commit/d717390fdc722495832823fe57a09d88f35d4065))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.184
+
+## @lunora/payment [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.183...@lunora/payment@1.0.0-alpha.184) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.183
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.116
+
+## @lunora/payment [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.182...@lunora/payment@1.0.0-alpha.183) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.182
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.115
+
+## @lunora/payment [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.181...@lunora/payment@1.0.0-alpha.182) (2026-10-06)
+
+### Bug Fixes
+
+* **payment:** lazy ctx.payments, context-aware authorize, multi-reference creem ([#1001](https://github.com/anolilab/lunora/issues/1001)) ([b7d6285](https://github.com/anolilab/lunora/commit/b7d6285cad41b9a6c8f64ef048362360a6c478d0))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.181
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.114
+
+## @lunora/payment [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.180...@lunora/payment@1.0.0-alpha.181) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.180
+
+## @lunora/payment [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.179...@lunora/payment@1.0.0-alpha.180) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.179
+
+## @lunora/payment [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.178...@lunora/payment@1.0.0-alpha.179) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.178
+
+## @lunora/payment [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.177...@lunora/payment@1.0.0-alpha.178) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.177
+
+## @lunora/payment [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.176...@lunora/payment@1.0.0-alpha.177) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.176
+
+## @lunora/payment [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.175...@lunora/payment@1.0.0-alpha.176) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.175
+
+## @lunora/payment [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.174...@lunora/payment@1.0.0-alpha.175) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.174
+
+## @lunora/payment [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.173...@lunora/payment@1.0.0-alpha.174) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.173
+
+## @lunora/payment [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.172...@lunora/payment@1.0.0-alpha.173) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+* **@lunora/server:** upgraded to 1.0.0-alpha.172
+* **@lunora/values:** upgraded to 1.0.0-alpha.60
+
+## @lunora/payment [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.171...@lunora/payment@1.0.0-alpha.172) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.171
+
+## @lunora/payment [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.170...@lunora/payment@1.0.0-alpha.171) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/server:** upgraded to 1.0.0-alpha.170
+* **@lunora/values:** upgraded to 1.0.0-alpha.59
+
+## @lunora/payment [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.169...@lunora/payment@1.0.0-alpha.170) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.169
+
+## @lunora/payment [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.168...@lunora/payment@1.0.0-alpha.169) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.168
+
+## @lunora/payment [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.167...@lunora/payment@1.0.0-alpha.168) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.167
+
+## @lunora/payment [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.166...@lunora/payment@1.0.0-alpha.167) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.166
+
+## @lunora/payment [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.165...@lunora/payment@1.0.0-alpha.166) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.165
+
+## @lunora/payment [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.164...@lunora/payment@1.0.0-alpha.165) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.164
+
+## @lunora/payment [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.163...@lunora/payment@1.0.0-alpha.164) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/server:** upgraded to 1.0.0-alpha.163
+* **@lunora/values:** upgraded to 1.0.0-alpha.58
+
+## @lunora/payment [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.162...@lunora/payment@1.0.0-alpha.163) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.162
+
+## @lunora/payment [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.161...@lunora/payment@1.0.0-alpha.162) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.161
+
+## @lunora/payment [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.160...@lunora/payment@1.0.0-alpha.161) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.160
+
+## @lunora/payment [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.159...@lunora/payment@1.0.0-alpha.160) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.159
+
+## @lunora/payment [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.158...@lunora/payment@1.0.0-alpha.159) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.158
+
+## @lunora/payment [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.157...@lunora/payment@1.0.0-alpha.158) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.157
+
+## @lunora/payment [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.156...@lunora/payment@1.0.0-alpha.157) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/server:** upgraded to 1.0.0-alpha.156
+* **@lunora/values:** upgraded to 1.0.0-alpha.57
+
+## @lunora/payment [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.155...@lunora/payment@1.0.0-alpha.156) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.155
+
+## @lunora/payment [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.154...@lunora/payment@1.0.0-alpha.155) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+* **@lunora/server:** upgraded to 1.0.0-alpha.154
+* **@lunora/values:** upgraded to 1.0.0-alpha.56
+
+## @lunora/payment [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.153...@lunora/payment@1.0.0-alpha.154) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.153
+
+## @lunora/payment [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.152...@lunora/payment@1.0.0-alpha.153) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+* **@lunora/server:** upgraded to 1.0.0-alpha.152
+* **@lunora/values:** upgraded to 1.0.0-alpha.55
+
+## @lunora/payment [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.151...@lunora/payment@1.0.0-alpha.152) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+* **@lunora/server:** upgraded to 1.0.0-alpha.150
+* **@lunora/values:** upgraded to 1.0.0-alpha.54
+
+## @lunora/payment [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.150...@lunora/payment@1.0.0-alpha.151) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+* **@lunora/server:** upgraded to 1.0.0-alpha.149
+* **@lunora/values:** upgraded to 1.0.0-alpha.53
+
+## @lunora/payment [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.149...@lunora/payment@1.0.0-alpha.150) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.148
+* **@lunora/values:** upgraded to 1.0.0-alpha.52
+
+## @lunora/payment [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.148...@lunora/payment@1.0.0-alpha.149) (2026-09-25)
+
+### Bug Fixes
+
+* **payment:** key Polar webhook HMAC with the secret's utf-8 bytes ([#835](https://github.com/anolilab/lunora/issues/835)) ([f62e82b](https://github.com/anolilab/lunora/commit/f62e82b01ffd6c6cd2426eeee5b4285b4592bf9c))
+
+## @lunora/payment [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.147...@lunora/payment@1.0.0-alpha.148) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.147
+
+## @lunora/payment [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.146...@lunora/payment@1.0.0-alpha.147) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.146
+
+## @lunora/payment [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.145...@lunora/payment@1.0.0-alpha.146) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.145
+
+## @lunora/payment [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.144...@lunora/payment@1.0.0-alpha.145) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.144
+
+## @lunora/payment [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.143...@lunora/payment@1.0.0-alpha.144) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.143
+
+## @lunora/payment [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.142...@lunora/payment@1.0.0-alpha.143) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.142
+
+## @lunora/payment [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.141...@lunora/payment@1.0.0-alpha.142) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.141
+
+## @lunora/payment [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.140...@lunora/payment@1.0.0-alpha.141) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.140
+
+## @lunora/payment [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.139...@lunora/payment@1.0.0-alpha.140) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+* **@lunora/server:** upgraded to 1.0.0-alpha.139
+* **@lunora/values:** upgraded to 1.0.0-alpha.51
+
+## @lunora/payment [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.138...@lunora/payment@1.0.0-alpha.139) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.138
+
+## @lunora/payment [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.137...@lunora/payment@1.0.0-alpha.138) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/server:** upgraded to 1.0.0-alpha.137
+* **@lunora/values:** upgraded to 1.0.0-alpha.50
+
+## @lunora/payment [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.136...@lunora/payment@1.0.0-alpha.137) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.135
+
+## @lunora/payment [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.135...@lunora/payment@1.0.0-alpha.136) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.134
+
+## @lunora/payment [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.134...@lunora/payment@1.0.0-alpha.135) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.133
+
+## @lunora/payment [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.133...@lunora/payment@1.0.0-alpha.134) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.132
+
+## @lunora/payment [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.132...@lunora/payment@1.0.0-alpha.133) (2026-09-19)
+
+### Bug Fixes
+
+* **payment:** three defects on the money path ([#759](https://github.com/anolilab/lunora/issues/759)) ([cfd776d](https://github.com/anolilab/lunora/commit/cfd776dbf7953e62c3ed93cc1715a89addbdb6bb))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.131
+
+## @lunora/payment [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.131...@lunora/payment@1.0.0-alpha.132) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.130
+
+## @lunora/payment [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.130...@lunora/payment@1.0.0-alpha.131) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/server:** upgraded to 1.0.0-alpha.129
+* **@lunora/values:** upgraded to 1.0.0-alpha.49
+
+## @lunora/payment [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.129...@lunora/payment@1.0.0-alpha.130) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/server:** upgraded to 1.0.0-alpha.128
+* **@lunora/values:** upgraded to 1.0.0-alpha.48
+
+## @lunora/payment [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.128...@lunora/payment@1.0.0-alpha.129) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/server:** upgraded to 1.0.0-alpha.127
+* **@lunora/values:** upgraded to 1.0.0-alpha.47
+
+## @lunora/payment [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.127...@lunora/payment@1.0.0-alpha.128) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.126
+
+## @lunora/payment [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.126...@lunora/payment@1.0.0-alpha.127) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.125
+
+## @lunora/payment [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.125...@lunora/payment@1.0.0-alpha.126) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.124
+
+## @lunora/payment [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.124...@lunora/payment@1.0.0-alpha.125) (2026-09-12)
+
+### Bug Fixes
+
+* **payment:** correct refund totals and entitlements ([#725](https://github.com/anolilab/lunora/issues/725)) ([2ca1d28](https://github.com/anolilab/lunora/commit/2ca1d28a81fb0c85d91e302c45205b7c44099389))
+* **payment:** stop the ledger recording money that never moved ([#727](https://github.com/anolilab/lunora/issues/727)) ([f9f0630](https://github.com/anolilab/lunora/commit/f9f0630b7c67b1ece56c63873c73a76d38d04411))
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+## @lunora/payment [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.123...@lunora/payment@1.0.0-alpha.124) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/server:** upgraded to 1.0.0-alpha.121
+* **@lunora/values:** upgraded to 1.0.0-alpha.45
+
+## @lunora/payment [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.122...@lunora/payment@1.0.0-alpha.123) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.120
+
+## @lunora/payment [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.121...@lunora/payment@1.0.0-alpha.122) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.119
+
+## @lunora/payment [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.120...@lunora/payment@1.0.0-alpha.121) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.118
+* **@lunora/values:** upgraded to 1.0.0-alpha.44
+
+## @lunora/payment [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.119...@lunora/payment@1.0.0-alpha.120) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.117
+
+## @lunora/payment [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.118...@lunora/payment@1.0.0-alpha.119) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.116
+
+## @lunora/payment [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.117...@lunora/payment@1.0.0-alpha.118) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.115
+
+## @lunora/payment [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.116...@lunora/payment@1.0.0-alpha.117) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.114
+
+## @lunora/payment [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.115...@lunora/payment@1.0.0-alpha.116) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.113
+
+## @lunora/payment [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.114...@lunora/payment@1.0.0-alpha.115) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.112
+
+## @lunora/payment [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.113...@lunora/payment@1.0.0-alpha.114) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.111
+
+## @lunora/payment [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.112...@lunora/payment@1.0.0-alpha.113) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.110
+
+## @lunora/payment [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.111...@lunora/payment@1.0.0-alpha.112) (2026-09-07)
+
+### Bug Fixes
+
+* **deps:** pin the catalog entries that must not float, and repair the sweep ([#658](https://github.com/anolilab/lunora/issues/658)) ([9054697](https://github.com/anolilab/lunora/commit/9054697634d9497101ce8c697bc65fdd09ce8e65))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.109
+
 ## @lunora/payment [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.110...@lunora/payment@1.0.0-alpha.111) (2026-09-07)
 
 

@@ -162,4 +162,4 @@ const connect = async (url: string, dialect: SqlDialect, schemaOverride?: string
 };
 
 export type { Connection };
-export { connect, databaseFromUrl, dialectFromUrl, loadDriver };
+export { connect, dialectFromUrl, loadDriver };

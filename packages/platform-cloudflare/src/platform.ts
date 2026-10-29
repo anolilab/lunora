@@ -45,10 +45,10 @@
  * {@link WorkerPlatform.scheduler} is `undefined`, which callers already handle.
  */
 
-import type { PlatformCapabilities, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
+import type { PlatformCapabilities, SchedulerHost, SecretValueHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { CLOUDFLARE_CAPABILITIES } from "@lunora/platform";
 
-import { createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "./cloudflare-host";
+import { createSecretValueHost, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "./cloudflare-host";
 
 /**
  * The contracts available inside one Durable Object instance.
@@ -60,6 +60,8 @@ import { createShardDirectory, createShardHost, createShardKvStore, createSocket
 export interface ShardPlatform {
     /** Durable key-value storage for this shard. */
     kv: ShardKvStore;
+    /** Human-supplied secret values held for one durable step, kept out of `kv`'s reach. */
+    secretValues: SecretValueHost;
     /** Single-writer execution, local SQL, transactions, alarms, identity. */
     shard: ShardHost;
     /** Hibernated WebSocket subscriptions for this shard. */
@@ -114,13 +116,18 @@ export interface WorkerPlatformOptions {
  * `state` is typed `unknown` so this package does not force
  * `@cloudflare/workers-types` onto callers that are already holding the runtime
  * object; the adapters narrow it internally.
+ *
+ * `env` carries the Worker secrets the secret-value host seals under. Leave it out
+ * for a shard that holds no key: the host then refuses every put and take rather
+ * than store plaintext.
  */
-export const createShardPlatform = (state: unknown): ShardPlatform => {
+export const createShardPlatform = (state: unknown, env: unknown = {}): ShardPlatform => {
     const durableState = state as Parameters<typeof createShardHost>[0];
 
     return {
         kv: createShardKvStore(durableState.storage),
         shard: createShardHost(durableState),
+        secretValues: createSecretValueHost(durableState.storage, env),
         sockets: createSocketHost(durableState),
     };
 };

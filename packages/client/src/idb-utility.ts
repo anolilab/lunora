@@ -43,7 +43,7 @@ const createDatabaseOpener = (
             return databasePromise;
         }
 
-        databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
+        const opening = new Promise<IDBDatabase>((resolve, reject) => {
             const request = factory.open(databaseName, version);
 
             request.addEventListener("upgradeneeded", () => {
@@ -57,7 +57,17 @@ const createDatabaseOpener = (
             });
         });
 
-        return databasePromise;
+        databasePromise = opening;
+
+        // A failed open is not cached: one transient failure (a blocked upgrade, a
+        // private-mode quota error) must not disable the store for the page lifetime.
+        opening.catch(() => {
+            if (databasePromise === opening) {
+                databasePromise = undefined;
+            }
+        });
+
+        return opening;
     };
 };
 

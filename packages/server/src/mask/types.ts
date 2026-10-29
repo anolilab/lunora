@@ -122,5 +122,3 @@ export interface MaskOptions<Context = unknown> {
     readonly indexFields?: IndexFieldsByTable;
     readonly roles?: ReadonlyArray<Role>;
 }
-
-export type { Permission, Role } from "../rls/types";

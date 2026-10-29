@@ -14,11 +14,12 @@
  *
  * The upload hooks re-exported here (`useUpload`, `useMultipartUpload`,
  * `useTusUpload`, `useChunkedRestUpload`, `useFileInput`, `usePasteUpload`) hold
- * their own state and need no `QueryClientProvider`. `@visulima/storage-client`'s
- * _data_ hooks (`useGetFileList` etc.) do use TanStack Query — and `LunoraProvider`
- * already mounts a `QueryClient`, so they work inside a Lunora app without extra
- * wiring. That is the reconciliation: Lunora's own `useQuery` and the visulima
- * upload hooks coexist because the upload hooks never touch the query cache.
+ * their own state and need no `QueryClientProvider`, so Lunora's own `useQuery`
+ * and the visulima upload hooks coexist: the upload hooks never touch the query
+ * cache. `@visulima/storage-client`'s _data_ hooks (`useGetFileList` etc.) are
+ * not re-exported: they read files over `GET` on the upload route, which
+ * `@lunora/storage/upload` refuses (`405`). Read stored files through
+ * `ctx.storage` or a signed URL.
  */
 // The unified control handle + typed errors + restriction guards live on the
 // framework-agnostic core entry, not the React entry — surface them here so a

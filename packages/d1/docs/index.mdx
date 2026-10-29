@@ -70,9 +70,9 @@ without depending on the full Workers types package.
 ## `MigrationRunner`
 
 Applies a sequence of `Migration` records against a D1 database in version
-order. Each migration's SQL is hashed (SHA-256) and the hash is recorded in the
-`__drizzle_migrations` table, so applied migrations are skipped idempotently and
-re-running is a no-op.
+order. Each applied migration's `version` and the SHA-256 of its SQL are
+recorded in the `__drizzle_migrations` table, so an applied migration is skipped
+by its version and re-running is a no-op.
 
 ```ts
 import { MigrationRunner } from "@lunora/d1";
@@ -83,7 +83,7 @@ const { applied, skipped } = await runner.run();
 ```
 
 `MigrationRunnerResult.applied` is the migrations applied this run (each `{ name,
-version }`); `skipped` is the ones whose SQL hash was already recorded. The
+version }`); `skipped` is the ones whose version was already recorded. The
 constructor accepts a `D1Client` or a bare D1 binding (it wraps the binding for
 you). It rejects duplicate versions and two migrations with identical SQL at
 construction time.
@@ -96,6 +96,40 @@ it into one entry per statement to get the runner's hash tracking. Most schema
 changes need neither: the worker provisions every `.global()` table on first
 use, additively and idempotently — what it never does is drop or retype, which
 is what a hand-written `Migration` is for.
+
+### When a run refuses with `MIGRATION_DRIFT`
+
+An applied migration is never run a second time. If its SQL no longer hashes to
+what was recorded, the run stops before applying anything. Line endings, a
+byte-order mark and trailing newlines are ignored, so a CRLF checkout of an LF
+file is the same migration. Anything else is treated as a change: revert it and
+put the change in a new migration.
+
+When the change is deliberate and already reflected in the database — you
+squashed several migrations into one, renamed a file, or reworded a comment —
+tell the runner what it now is, then run again:
+
+```sql
+-- The migration's text changed but what it did is already applied: record the new hash.
+UPDATE __drizzle_migrations SET hash = '<hash printed in the error>' WHERE version = <n>;
+
+-- A row written before versions were tracked matches no current migration
+-- (it was squashed away or edited): give it the version it applied, or any
+-- version no current migration uses if the migration no longer exists.
+UPDATE __drizzle_migrations SET version = <n> WHERE id = <id printed in the error>;
+```
+
+Run these once per environment, with `wrangler d1 execute <database> --command`.
+
+### Running two at once
+
+Two runners racing on the same database — parallel deploys, say — are safe for
+the migrations themselves: each migration's body and its tracking row commit in
+one batch, the tracking row is unique by version and by hash, and the loser's
+batch rolls back and reports the migration as skipped. Upgrading a tracking table
+written before `version` existed is safe to race as well. What is not covered is
+a migration that is unsafe to run while another writer is live; that is the
+migration's own concern.
 
 ## `Migration`
 
@@ -246,6 +280,36 @@ transient, and anything else — a constraint violation, a syntax error, a missi
 table, `internal error: too many SQL variables` — is treated as **permanent** and
 surfaces immediately, because re-running one turns a single fast failure into
 three slow ones and hides the cause.
+
+## Per-query cost accounting
+
+D1 returns `rows_read` / `rows_written` / `duration` in the `meta` of every
+result, and the exec layer records them instead of discarding them.
+
+**Rows read counts rows SCANNED, not rows returned.** That is the number D1
+bills and the number a missing index inflates: a query filtering on an
+unindexed column scans the table to find its subset, so one that cost 200 rows
+against a small table costs 200k once the table grows — nothing deployed, and
+the spend went up a thousandfold. The dashboard's own `rowsRead` metric is
+per-DATABASE, so it can say the total moved but never which query moved it.
+
+Each statement is emitted to Workers Logs under a **low-cardinality** tag from
+`d1QueryTag` — `select:users`, `insert:orders`, `select:unknown` when no table
+token is recognisable. Verb + table, never the rendered SQL: grouping on the
+statement itself mints a tag per distinct parameter value and answers nothing.
+
+```jsonc
+{ "source": "lunora", "type": "d1_query", "tag": "select:users", "rowsRead": 204831, "rowsWritten": 0, "durationMs": 41 }
+```
+
+Group by `tag` in the Workers Logs Query Builder and "D1 reads spiked" resolves
+to one culprit. The emit is best-effort — instrumentation never fails the query
+it measures — and a result with no usable `meta` (a test double, a `batch()`
+leg that reports none) is skipped rather than logged as zeroes, which would read
+as "this query was free".
+
+`readD1QueryCost(meta)` projects the same numbers as a `D1QueryCost` if you want
+to route them somewhere other than Workers Logs.
 
 ## Atomicity
 

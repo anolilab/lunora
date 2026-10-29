@@ -1,10 +1,10 @@
-import { LunoraError } from "lunorash/server";
 import { rateLimit } from "lunorash/ratelimit";
+import { LunoraError } from "lunorash/server";
 
-import { embedText } from "./embed.js";
-import { makeRateLimiter } from "./ratelimit/schema.js";
 import type { ActionCtx, Id, MutationCtx } from "./_generated/server.js";
 import { action, mutation, query, v } from "./_generated/server.js";
+import { embedText } from "./embed.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
  * One limiter per context kind: a middleware's context type flows into the
@@ -15,7 +15,7 @@ const actionLimiter = (ctx: ActionCtx) => makeRateLimiter(ctx);
 const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
 const byUser = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
-interface PostDoc {
+interface PostDocument {
     _id: Id<"posts">;
     authorId: string;
     body: string;
@@ -27,13 +27,15 @@ interface PostDoc {
 /**
  * Public feed — list every post, newest first. Open to anonymous readers.
  */
-export const list = query.query(async ({ ctx }): Promise<PostDoc[]> =>
+export const list = query.query(async ({ ctx }): Promise<PostDocument[]> =>
     // `.order("desc")` on the `by_published` index — the database does the
     // ordering, so this stays right (and cheap) as the feed grows.
     ctx.db.query("posts").withIndex("by_published").order("desc").collect(),
 );
 
-export const get = query.input({ id: v.id("posts") }).query(async ({ args: { id }, ctx }): Promise<PostDoc | null> => (await ctx.db.get(id)) ?? null);
+export const get = query
+    .input({ id: v.id("posts") })
+    .query(async ({ args: { id }, ctx }): Promise<PostDocument | null> => (await ctx.db.get("posts", id)) ?? null);
 
 /**
  * Semantic search over post bodies. `.vectorize("body", …)` keeps the
@@ -43,18 +45,20 @@ export const get = query.input({ id: v.id("posts") }).query(async ({ args: { id 
  */
 export const search = query
     .input({ text: v.string().max(1000), topK: v.optional(v.number()) })
-    .query(async ({ args: { text, topK }, ctx }): Promise<Array<{ id: Id<"posts">; score: number; title: string }>> => {
+    .query(async ({ args: { text, topK }, ctx }): Promise<{ id: Id<"posts">; score: number; title: string }[]> => {
         // Bound user-supplied inputs: clamp `topK` to a sane ceiling and cap the
         // query text length so a caller can't ask for unbounded work.
         const boundedTopK = Math.min(Math.max(topK ?? 5, 1), 50);
         const input = text.slice(0, 1000);
         const result = await ctx.vectors.query("posts_search", { embed: embedText, input, topK: boundedTopK });
 
-        return result.matches.map((match) => ({
-            id: match.id as Id<"posts">,
-            score: match.score,
-            title: String(match.metadata?.title ?? ""),
-        }));
+        return result.matches.map((match) => {
+            return {
+                id: match.id as Id<"posts">,
+                score: match.score,
+                title: typeof match.metadata?.title === "string" ? match.metadata.title : "",
+            };
+        });
     });
 
 /**
@@ -90,9 +94,10 @@ export const requestImageUpload = action
 
             return { key, url };
         } catch (error) {
-            // Signing fails loudly when `STORAGE_SECRET` / `PUBLIC_STORAGE_BASE_URL`
-            // are missing (see `.dev.vars.example`). Naming the dependency here
-            // beats the caller receiving a bare 500.
+            // Signing fails loudly when `STORAGE_SECRET` is missing (see
+            // `.dev.vars.example`). The URL is signed against the origin this
+            // request reached the worker on, which serves the PUT. Naming the
+            // dependency here beats the caller receiving a bare 500.
             throw new LunoraError("INTERNAL", "could not mint an R2 upload URL", { cause: error });
         }
     });

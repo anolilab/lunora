@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import { LunoraError } from "@lunora/errors";
 import { findPackageManagerSync, identifyInitiatingPackageManager } from "@visulima/package/package-manager";
 
+import type { ToolchainCommand } from "./deploy-driver";
+
 type PackageManager = "pnpm" | "npm" | "yarn" | "bun";
 
 /**
@@ -153,6 +155,13 @@ const execArgsFor = (manager: PackageManager, command: string, args: ReadonlyArr
 };
 
 /**
+ * The argv that runs a driver's {@link ToolchainCommand}: through the package
+ * manager for a project dependency, directly for a binary on `PATH`.
+ */
+const toolchainExecArgs = (manager: PackageManager, command: ToolchainCommand): { args: string[]; command: string } =>
+    command.onPath === true ? { args: [...command.args], command: command.tool } : execArgsFor(manager, command.tool, command.args);
+
+/**
  * The argv that runs a project SCRIPT with `manager` — the counterpart to
  * {@link execArgsFor}, which runs a BINARY.
  *
@@ -181,4 +190,4 @@ const runScriptCommand = (manager: PackageManager, script: string): string => {
 };
 
 export type { PackageManager, PackageManagerProbe };
-export { addArgsFor, detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor, runScriptArgsFor, runScriptCommand };
+export { addArgsFor, detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor, runScriptArgsFor, runScriptCommand, toolchainExecArgs };

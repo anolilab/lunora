@@ -3,14 +3,15 @@ import { join } from "node:path";
 
 // The /naming subpath keeps codegen from loading the agent runtime (and the
 // AI SDK behind it) just to derive deploy names.
-import { agentBindingName, agentClassName, agentDefaultName, voiceBindingName, voiceClassName } from "@lunora/agent/naming";
+import { agentClassName, agentDefaultName, voiceBindingName, voiceClassName } from "@lunora/agent/naming";
 import { LunoraError } from "@lunora/errors";
 import type { CallExpression, Expression, Identifier, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { AgentIR } from "../ir";
-import { stringPropertyFor, unwrapToCallExpression } from "./ast";
+import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
+import { addressableExportNameOf } from "./attribution";
 
 /** The only file agents may be declared in — mirrors `lunora/workflows.ts`. */
 const AGENTS_FILENAME = "agents.ts";
@@ -71,13 +72,12 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
     }
 
     const ir: AgentIR = {
-        bindingName: agentBindingName(exportName),
         className: agentClassName(exportName),
         exportName,
         name: agentDefaultName(exportName),
     };
 
-    const nameProperty = argument.getProperty("name");
+    const nameProperty = findObjectProperty(argument, "name");
 
     if (nameProperty && Node.isPropertyAssignment(nameProperty)) {
         ir.name = stringProperty(nameProperty.getInitializerOrThrow(), exportName, "name");
@@ -86,7 +86,7 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
     // Opt-in to public run-starts (`agents:agentRun`). Only a `true` literal is
     // carried onto IR — `false`/absent stays undefined so the emitted spec (and
     // agent-free output) is byte-identical.
-    const publicRunProperty = argument.getProperty("publicRun");
+    const publicRunProperty = findObjectProperty(argument, "publicRun");
 
     if (
         publicRunProperty &&
@@ -100,7 +100,7 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
     // literal) turns on the hibernatable-WebSocket DO; the block's fields are
     // runtime config the DO reads, so codegen keys only on presence, not contents.
     // Only carried onto IR when present, so voice-free agents stay byte-identical.
-    const voiceProperty = argument.getProperty("voice");
+    const voiceProperty = findObjectProperty(argument, "voice");
 
     if (voiceProperty && Node.isPropertyAssignment(voiceProperty)) {
         const voiceInitializer = voiceProperty.getInitializerOrThrow();
@@ -122,7 +122,7 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
     // form: assignment, shorthand, or method) tells codegen to wire this agent
     // onto the worker's `email()` handler. Carried onto IR only when present, so
     // email-free agents stay byte-identical.
-    if (argument.getProperty("onEmail")) {
+    if (findObjectProperty(argument, "onEmail")) {
         ir.onEmail = true;
     }
 
@@ -141,10 +141,6 @@ const agentsFromSource = (source: SourceFile): AgentIR[] => {
     const agents: AgentIR[] = [];
 
     for (const declaration of source.getVariableDeclarations()) {
-        if (!declaration.isExported()) {
-            continue;
-        }
-
         const call = unwrapToCallExpression(declaration.getInitializer());
 
         if (!call) {
@@ -159,27 +155,37 @@ const agentsFromSource = (source: SourceFile): AgentIR[] => {
 
         const nameNode = declaration.getNameNode();
 
+        // Only the `export` keyword can export a destructuring; an unexported one is a local.
         if (!Node.isIdentifier(nameNode)) {
+            if (declaration.getVariableStatement()?.hasExportKeyword() !== true) {
+                continue;
+            }
+
             throw diagnosticAt(nameNode, "defineAgent exports must be plain named exports (no destructuring)");
         }
 
-        agents.push(agentFromCall(call, nameNode.getText()));
+        const exportName = addressableExportNameOf(declaration, "binding");
+
+        if (exportName === undefined) {
+            continue;
+        }
+
+        agents.push(agentFromCall(call, exportName));
     }
 
     return agents;
 };
 
 /**
- * Reject agents whose deployed `name`, `bindingName`, or `className` collide
- * across exports — all three flow into wrangler/generated output (`workflows[].name`,
- * the `AGENT_*` Workflow binding, and the `_generated/agents.ts` class), and agent
- * naming case-folds (`supportBot`/`SupportBot` both derive `AGENT_SUPPORT_BOT`), so a
- * collision on any one of them silently clobbers a binding or a generated class.
- * Mirrors `discover/workflows.ts`'s `assertUniqueNames`, extended with `className`.
+ * Reject agents whose deployed `name` or `className` collide across exports —
+ * both flow into wrangler/generated output (`exports.<Class>.name`, and the
+ * `_generated/agents.ts` class that is also the `exports` key), and agent naming
+ * case-folds (`supportBot`/`SupportBot` both derive `SupportBotAgentWorkflow`), so
+ * a collision on either silently clobbers an export or a generated class.
+ * Mirrors `discover/workflows.ts`'s `assertUniqueNames`.
  */
 const assertUniqueNames = (agents: ReadonlyArray<AgentIR>): void => {
     const seenNames = new Map<string, string>();
-    const seenBindings = new Map<string, string>();
     const seenClasses = new Map<string, string>();
 
     for (const agent of agents) {
@@ -194,18 +200,6 @@ const assertUniqueNames = (agents: ReadonlyArray<AgentIR>): void => {
         }
 
         seenNames.set(agent.name, agent.exportName);
-
-        const priorBinding = seenBindings.get(agent.bindingName);
-
-        if (priorBinding !== undefined) {
-            throw new LunoraError(
-                "DUPLICATE_AGENT_BINDING",
-                `Duplicate agent binding "${agent.bindingName}": produced by both "${priorBinding}" and "${agent.exportName}". Agent export names must yield unique binding names.`,
-                { status: 500 },
-            );
-        }
-
-        seenBindings.set(agent.bindingName, agent.exportName);
 
         const priorClass = seenClasses.get(agent.className);
 

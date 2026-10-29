@@ -1,4 +1,5 @@
 import { expect, test } from "../fixtures/lunora.js";
+import { BASE_URL } from "../origin";
 
 /**
  * The copy-in auth screens (`lunora add auth-ui`) in a real browser, against the
@@ -15,7 +16,6 @@ import { expect, test } from "../fixtures/lunora.js";
  *   - client-side validation stops an empty submit before any request
  *   - a bad password surfaces the mapped error on the card, not a blank screen
  */
-const WORKER_URL = process.env.LUNORA_E2E_WORKER_URL ?? "http://localhost:5173";
 
 test.beforeEach(async ({ resetServer }) => {
     await resetServer();
@@ -27,9 +27,9 @@ test.beforeEach(async ({ resetServer }) => {
  * and the card, correctly, reports invalid credentials later.
  */
 const signUpViaApi = async (page: import("@playwright/test").Page, email: string, password: string): Promise<void> => {
-    const response = await page.request.post(`${WORKER_URL}/api/auth/sign-up/email`, {
+    const response = await page.request.post(`${BASE_URL}/api/auth/sign-up/email`, {
         data: { email, name: email, password },
-        headers: { Origin: WORKER_URL },
+        headers: { Origin: BASE_URL },
     });
 
     expect(response.status()).toBe(200);
@@ -170,18 +170,56 @@ test("change-password card rotates the password and the old one stops working", 
     await expect(page.getByRole("heading", { name: "Channels" })).toBeHidden();
 });
 
-test("sessions card lists the session and revoking others leaves this one signed in", async ({ page }) => {
+test("sessions card revokes the other sessions and leaves this one signed in", async ({ page, request }) => {
     const email = `authui-sessions-${Date.now()}@lunora.test`;
+    const password = "test-password-1234"; // gitleaks:allow
 
-    await signInToAccount(page, email, "test-password-1234"); // gitleaks:allow
+    await signUpViaApi(page, email, password);
+
+    /*
+     * A SECOND session for the same account, in its own cookie jar (the `request`
+     * fixture's, which the page's context does not share). Without one there is
+     * nothing whose revocation could be observed: the card lists a single row,
+     * the click has nothing to do, and the only post-click assertion — that the
+     * Profile heading is still there — was already true before it. That version
+     * of this test stayed green with `revokeOthers` replaced by a stub.
+     */
+    const second = await request.post(`${BASE_URL}/api/auth/sign-in/email`, {
+        data: { email, password },
+        headers: { Origin: BASE_URL },
+    });
+
+    expect(second.status()).toBe(200);
+
+    await page.goto("/?authui=account");
+    await expect(page.getByRole("heading", { name: "Profile" })).toBeVisible();
 
     const card = page.locator(".lunora-auth-card").filter({ has: page.getByRole("heading", { name: "Active sessions" }) });
+    const rows = card.locator(".lunora-auth-list__item");
 
-    await expect(card).toBeVisible();
+    await expect(rows).toHaveCount(2);
     await card.getByRole("button", { name: "Sign out other sessions", exact: true }).click();
+
+    // The card refetches after the mutation, so the other row really is gone
+    // server-side rather than hidden optimistically.
+    await expect(rows).toHaveCount(1);
 
     // Revoking *other* sessions must not revoke this one.
     await expect(page.getByRole("heading", { name: "Profile" })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Profile" })).toBeVisible();
+
+    /*
+     * …and the revoked one is genuinely dead, not merely dropped from the list.
+     * `disableCookieCache` because `@lunora/auth` turns better-auth's signed
+     * session cookie cache on with a 60s maxAge (see `createAuth`'s hardened
+     * defaults), so a plain `get-session` would keep answering from that cookie
+     * for a minute after the row is gone and make this pass for the wrong
+     * reason.
+     */
+    const orphaned = await request.get(`${BASE_URL}/api/auth/get-session?disableCookieCache=true`, { headers: { Origin: BASE_URL } });
+
+    expect(await orphaned.text()).not.toContain(email);
 });
 
 test("sign-out button clears the session and returns to the sign-in card", async ({ page }) => {

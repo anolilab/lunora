@@ -2,10 +2,11 @@
 
 A Lunora app on **SvelteKit**, scaffolded by `lunora init`.
 
-Your route loaders are live: a `+page.ts` loader preloads Lunora data on the
-server (read-your-writes SSR), the HTML ships with it, and on the client the
-**same** data hydrates into a live subscription via `@lunora/svelte`'s
-`hydratePreloaded` — re-rendering on every server write with no loading flash.
+The scaffold ships a static welcome page plus the wiring behind it: a sharded
+schema, the typed API, and one Cloudflare Worker that serves SvelteKit SSR and
+the Lunora realtime plane together. `src/routes/+layout.svelte` already publishes
+the `LunoraClient`, so `query` / `mutation` / `hydratePreloaded` from
+`@lunora/svelte` resolve in any route you add.
 
 ## Develop
 
@@ -41,18 +42,29 @@ development"` / `"ShardDO…not exported"` warning. That's the adapter's own emp
 
 - `lunora/schema.ts` + `lunora/messages.ts` — a sharded `messages` table with a
   sample `list` query and `send` mutation.
+- `lunora/app.ts` — the app, defined once with the generated `defineApp()`
+  builder; configure auth and the shard gate here.
 - `src/worker.ts` — the **single-worker entry**: folds SvelteKit's
-  Cloudflare-adapter handler into the generated `defineApp()` builder via
+  Cloudflare-adapter handler into the `lunora/app.ts` builder via
   `.buildFrameworkWorker(...)` (see below) and re-exports the generated
   `ShardDO`.
 - `src/routes/+layout.svelte` — publishes the `LunoraClient` on Svelte context
   with `setLunoraClient` (the provider), pointed at the **same origin**.
-- `src/routes/+page.ts` — a universal `load` that calls `preloadQuery` through a
-  request-scoped `createServerClient`, forwarding SvelteKit's `fetch` for
-  same-origin session continuity. Because Lunora is mounted in the same worker,
-  it is a same-origin loopback.
-- `src/routes/+page.svelte` — uses `hydratePreloaded(data.preloaded)` for the
-  SSR-seed-to-live handoff and `mutation(api.messages.send)` for optimistic writes.
+- `src/routes/+page.svelte` — the static welcome page. It makes no Lunora call
+  yet; see below.
+
+## Making a loader live
+
+The scaffold does not load data yet. To go live:
+
+1. Add `src/routes/+page.ts` — a universal `load` that calls `preloadQuery`
+   through a request-scoped `createServerClient` (both from
+   `@lunora/svelte/server`), forwarding SvelteKit's `fetch` for same-origin
+   session continuity. Because Lunora is mounted in the same worker, it is a
+   same-origin loopback. It returns a serializable `Preloaded` token.
+2. In `src/routes/+page.svelte`, hand that token to
+   `hydratePreloaded(data.preloaded)` for the SSR-seed-to-live handoff, and use
+   `mutation(api.messages.send)` for optimistic writes.
 
 ## Stack
 
@@ -75,25 +87,27 @@ How it's wired here:
 
 - **`svelte.config.js`** uses `@sveltejs/adapter-cloudflare`, which builds
   SvelteKit's SSR into `.svelte-kit/cloudflare/_worker.js`.
-- **`src/worker.ts`** imports that emitted handler and folds it into the
-  generated `defineApp()` builder via `.buildFrameworkWorker(...)`:
+- **`src/worker.ts`** imports that emitted handler and folds it into the app
+  builder `lunora/app.ts` exports (the one `defineApp()` call, shared with the
+  dev entry `lunora/server.ts`) via `.buildFrameworkWorker(...)`:
 
     ```ts
     import svelteKitWorker from "../.svelte-kit/cloudflare/_worker.js";
 
-    import { defineApp } from "../lunora/_generated/app.js";
+    import { lunora } from "../lunora/app";
 
-    const app = defineApp<Env>()
-        .shard((env) => env.SHARD)
-        .buildFrameworkWorker(svelteKitWorker);
+    const app = lunora.buildFrameworkWorker(svelteKitWorker);
 
     export const ShardDO = app.ShardDO;
     export default app;
     ```
 
-- **`wrangler.jsonc`**'s `main` points at `src/worker.ts` (not at SvelteKit's
-  emitted `_worker.js`), and binds the `SHARD` Durable Object. One Worker bundles
-  both planes — no double-bundling the DO class.
+- **`wrangler.jsonc`**'s `main` is the adapter's own output
+  (`.svelte-kit/cloudflare/_worker.js`), because the adapter overwrites whatever
+  `main` names. `lunora deploy` passes `src/worker.ts` as the positional deploy
+  entry, which overrides `main`, so the composed worker is what ships.
+  `wrangler.jsonc` also binds the `SHARD` Durable Object. One Worker bundles both
+  planes — no double-bundling the DO class.
 
 The composed worker reserves `/_lunora/*` for Lunora realtime (`/_lunora/rpc`,
 `/_lunora/ws`, `/_lunora/admin/*`) and forwards **everything else** to

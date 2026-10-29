@@ -1,6 +1,5 @@
-import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import ErrorAlert from "../../components/error-alert";
@@ -15,19 +14,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Textarea } from "../../components/ui/textarea";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
+import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
-import type {
-    QueueMessageOutcome,
-    QueueMessageRow,
-    QueueMessagesResult,
-    QueueMetadata,
-    QueuesResult,
-    ReplayQueueMessageResult,
-    SendQueueMessageResult,
-} from "../../lib/admin";
+import type { QueueMessageOutcome, QueueMessageRow, QueueMessagesResult, QueueMetadata, QueuesResult, ReplayQueueMessageResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp, jsonRowReplacer } from "../../lib/internal";
 import { computeQueueReliability } from "./reliability";
+import { groupByTopic, sendTargets, topicTarget } from "./topic-groups";
 
 interface QueuesPanelProps {
     /** Newest-N consumed messages to load into the log (default {@link DEFAULT_MESSAGE_LIMIT}). */
@@ -38,6 +32,32 @@ interface QueuesPanelProps {
 const DEFAULT_MESSAGE_LIMIT = 200;
 
 const SEND_QUEUE_MESSAGE = adminRef(ADMIN_FUNCTIONS.sendQueueMessage);
+
+/**
+ * Send one test message per request and return the error to show, or `null`
+ * when every send landed. Settled, not `all`: a topic send's requests are
+ * independent, so a partial failure must name the subscriptions that did not
+ * get the message — a blind retry would duplicate it in the ones that did.
+ */
+const sendToTargets = async (
+    client: ReturnType<typeof useStudioClient>,
+    requests: ReadonlyArray<{ batch?: unknown[]; body?: unknown; delaySeconds?: number; exportName: string }>,
+    t: TFunction,
+): Promise<null | string> => {
+    const results = await Promise.allSettled(requests.map(async (args) => client.query(SEND_QUEUE_MESSAGE, args, callOptions(""))));
+    const failures = results.flatMap((result, index) =>
+        result.status === "rejected" ? [{ exportName: requests[index]?.exportName ?? "", message: errorMessage(result.reason) }] : [],
+    );
+    const [only] = failures;
+
+    if (only === undefined) {
+        return null;
+    }
+
+    return requests.length === 1
+        ? only.message
+        : t("Not sent to {failed}", { failed: failures.map((failure) => `${failure.exportName}: ${failure.message}`).join("; ") });
+};
 const REPLAY_QUEUE_MESSAGE = adminRef(ADMIN_FUNCTIONS.replayQueueMessage);
 const CLEAR_QUEUE_MESSAGES = adminRef(ADMIN_FUNCTIONS.clearQueueMessages);
 
@@ -55,7 +75,7 @@ const formatBody = (value: unknown): string => {
     }
 
     try {
-        return JSON.stringify(value);
+        return JSON.stringify(value, jsonRowReplacer);
     } catch {
         // Captured bodies come from JSON.parse, so this only fires for exotic values (BigInt/cyclic).
         return "[unserializable]";
@@ -91,9 +111,22 @@ const tabLabel = (value: QueuesTab, t: ReturnType<typeof useT>): string => {
     return t("Declared");
 };
 
-/** Declared-producers tab: the `defineQueue` producers `@lunora/codegen` statically discovered. */
+/** One declared queue (or topic subscription) row. */
+const QueueRow = ({ queue }: { readonly queue: QueueMetadata }): ReactElement => (
+    <TableRow data-testid={`queues-row-${queue.exportName}`}>
+        <TableCell className="font-mono text-xs">{queue.exportName}</TableCell>
+        <TableCell className="font-mono text-xs text-muted-foreground">{queue.name}</TableCell>
+        <TableCell className="font-mono text-xs text-muted-foreground">{queue.mode}</TableCell>
+        <TableCell className="font-mono text-xs text-muted-foreground">{queue.binding}</TableCell>
+        <TableCell className="font-mono text-xs text-muted-foreground">{queue.deadLetterQueue ?? "—"}</TableCell>
+    </TableRow>
+);
+
+/** Declared-producers tab: the `defineQueue` producers and topic subscriptions `@lunora/codegen` statically discovered. */
 const QueuesDeclaredTab = ({ loaded, queues }: { loaded: boolean; queues: QueueMetadata[] }): ReactElement => {
     const t = useT();
+    // Subscriptions sit under their topic, after the plain queues.
+    const { plain, topics } = groupByTopic(queues);
 
     return (
         <div className="flex flex-col gap-4" data-testid="queues-declared">
@@ -123,14 +156,20 @@ const QueuesDeclaredTab = ({ loaded, queues }: { loaded: boolean; queues: QueueM
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {queues.map((queue) => (
-                                    <TableRow data-testid={`queues-row-${queue.exportName}`} key={queue.exportName}>
-                                        <TableCell className="font-mono text-xs">{queue.exportName}</TableCell>
-                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.name}</TableCell>
-                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.mode}</TableCell>
-                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.binding}</TableCell>
-                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.deadLetterQueue ?? "—"}</TableCell>
-                                    </TableRow>
+                                {plain.map((queue) => (
+                                    <QueueRow key={queue.exportName} queue={queue} />
+                                ))}
+                                {[...topics].map(([topic, subscriptions]) => (
+                                    <Fragment key={topic}>
+                                        <TableRow className="bg-muted/40" data-testid={`queues-topic-${topic}`}>
+                                            <TableCell className="text-xs font-medium" colSpan={5}>
+                                                {t("Topic {topic} · {count} subscriptions", { count: subscriptions.length, topic })}
+                                            </TableCell>
+                                        </TableRow>
+                                        {subscriptions.map((queue) => (
+                                            <QueueRow key={queue.exportName} queue={queue} />
+                                        ))}
+                                    </Fragment>
                                 ))}
                             </TableBody>
                         </Table>
@@ -217,12 +256,14 @@ const QueuesMessagesTab = ({
                     {t("Cloudflare Queues have no peek API, so this is what push consumers actually processed — not pending depth.")}
                 </p>
                 <div className="ml-auto">
-                    <ConfirmButton
-                        confirmLabel={t("Clear {count} messages?", { count: messages.length })}
-                        disabled={messages.length === 0}
-                        onConfirm={onClear}
-                        testId="queues-clear"
-                    >
+                    {/*
+                     * No count in the confirm: `messages` is one loaded page
+                     * ({@link DEFAULT_MESSAGE_LIMIT}) while the clear empties the
+                     * whole table, which retains up to `QUEUE_RETENTION` rows. The
+                     * panel has no total to quote, so it names the scope instead of
+                     * a number it did not measure.
+                     */}
+                    <ConfirmButton confirmLabel={t("Clear the whole message log?")} disabled={messages.length === 0} onConfirm={onClear} testId="queues-clear">
                         {t("Clear log")}
                     </ConfirmButton>
                 </div>
@@ -329,6 +370,11 @@ const QueuesSendTab = ({
                                     {queue.exportName}
                                 </option>
                             ))}
+                            {[...groupByTopic(queues).topics].map(([topic, subscriptions]) => (
+                                <option key={topic} value={topicTarget(topic)}>
+                                    {t("{topic} (topic → {count} subscriptions)", { count: subscriptions.length, topic })}
+                                </option>
+                            ))}
                         </select>
                         <Input
                             aria-label={t("Delay (seconds)")}
@@ -369,6 +415,88 @@ const QueuesSendTab = ({
 };
 
 /**
+ * Validate the Send form: the body must be JSON (empty sends `null`), the delay a
+ * non-negative number of seconds (empty means none), and batch mode needs an array.
+ */
+const parseSendInput = (
+    bodyText: string,
+    delayText: string,
+    batchMode: boolean,
+    t: ReturnType<typeof useT>,
+): { body: unknown; delaySeconds: number | undefined } | { error: string } => {
+    let body: unknown = null;
+    const trimmedBody = bodyText.trim();
+
+    if (trimmedBody !== "") {
+        try {
+            body = JSON.parse(trimmedBody);
+        } catch {
+            return { error: t("Body must be valid JSON.") };
+        }
+    }
+
+    let delaySeconds: number | undefined;
+    const trimmedDelay = delayText.trim();
+
+    if (trimmedDelay !== "") {
+        const parsed = Number(trimmedDelay);
+
+        if (!Number.isFinite(parsed) || parsed < 0) {
+            return { error: t("Delay must be a non-negative number of seconds.") };
+        }
+
+        delaySeconds = parsed;
+    }
+
+    if (batchMode && !Array.isArray(body)) {
+        return { error: t("Batch mode needs a JSON array body — each element is enqueued as one message.") };
+    }
+
+    return { body, delaySeconds };
+};
+
+/** Names the queues with no dead-letter queue, and how many loaded messages were dead-lettered. */
+const QueueReliabilityWarning = ({
+    deadLetteredCount,
+    queuesWithoutDlq,
+}: {
+    readonly deadLetteredCount: number;
+    readonly queuesWithoutDlq: ReadonlyArray<QueueMetadata>;
+}): ReactElement => {
+    const t = useT();
+
+    return (
+        <Alert
+            icon={
+                <span aria-hidden="true" className="text-base leading-none">
+                    ⚠
+                </span>
+            }
+            testId="queues-dlq-warning"
+            variant="warning"
+        >
+            <div className="flex flex-col gap-1">
+                {queuesWithoutDlq.length > 0 && (
+                    <>
+                        <p className="font-medium">
+                            {t("No dead-letter queue on {queues}.", { queues: queuesWithoutDlq.map((queue) => queue.name).join(", ") })}
+                        </p>
+                        <p className="text-muted-foreground">{t("Exhausted messages are dropped after retries. Add a deadLetterQueue to capture them.")}</p>
+                    </>
+                )}
+                {deadLetteredCount > 0 && (
+                    <p className={queuesWithoutDlq.length > 0 ? "text-muted-foreground" : "font-medium"}>
+                        {deadLetteredCount === 1
+                            ? t("1 message was recently dead-lettered.")
+                            : t("{count} messages were recently dead-lettered.", { count: deadLetteredCount })}
+                    </p>
+                )}
+            </div>
+        </Alert>
+    );
+};
+
+/**
  * The Queues inspector — three tabs over the deployment's Cloudflare Queues.
  *
  * Declared: the `defineQueue` producers statically discovered by `@lunora/codegen` (export, deployed name, push/pull mode, binding, DLQ).
@@ -377,7 +505,7 @@ const QueuesSendTab = ({
  *
  * Send: enqueue a JSON body (optionally a batch, with an optional delay) to any declared producer, to exercise a consumer end to end.
  *
- * All three read/write reserved admin RPCs over the {@link useLunora} client, gated by the server's `LUNORA_ADMIN_TOKEN`.
+ * All three read/write reserved admin RPCs over the {@link useStudioClient} client, gated by the server's `LUNORA_ADMIN_TOKEN`.
  *
  * The tab bodies are extracted into sibling components so the panel stays small
  * and each tab is independently readable; state and actions live here and flow
@@ -390,7 +518,7 @@ const QueuesSendTab = ({
  */
 const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
     const messageLimit = limit ?? DEFAULT_MESSAGE_LIMIT;
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [tab, setTab] = useState<QueuesTab>("declared");
@@ -405,6 +533,7 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
         data: messagesData,
         error: messagesError,
         errorSource: messagesErrorSource,
+        poll: pollMessages,
         refetch: refetchMessages,
     } = useAdminQuery<QueueMessagesResult>(ADMIN_FUNCTIONS.getQueueMessages, { limit: messageLimit });
 
@@ -425,7 +554,10 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
     const [replayingId, setReplayingId] = useState<null | string>(null);
 
     // Default the Send target to the first declared queue until the user picks one.
-    const selectedExportName = queues.some((queue) => queue.exportName === selectedExport) ? selectedExport : (queues[0]?.exportName ?? "");
+    // Every queue, plus one publish target per topic.
+    const { topics } = groupByTopic(queues);
+    const targets = [...queues.map((queue) => queue.exportName), ...[...topics.keys()].map((topic) => topicTarget(topic))];
+    const selectedExportName = targets.includes(selectedExport) ? selectedExport : (targets[0] ?? "");
 
     const readError = tab === "messages" ? messagesError : queuesError;
     const readErrorSource = tab === "messages" ? messagesErrorSource : queuesErrorSource;
@@ -434,9 +566,7 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
 
     // Keep the consumed-message log live without a manual refresh — but only while
     // the Messages tab is visible, so the Declared / Send tabs don't poll the RPC.
-    useAutoRefresh(() => {
-        refetchMessages();
-    }, tab === "messages");
+    useAutoRefresh(pollMessages, tab === "messages");
 
     const send = async (): Promise<void> => {
         setActionError(null);
@@ -447,49 +577,28 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
             return;
         }
 
-        let body: unknown = null;
-        const trimmedBody = bodyText.trim();
+        const input = parseSendInput(bodyText, delayText, batchMode, t);
 
-        if (trimmedBody !== "") {
-            try {
-                body = JSON.parse(trimmedBody);
-            } catch {
-                setActionError(t("Body must be valid JSON."));
-
-                return;
-            }
-        }
-
-        let delaySeconds: number | undefined;
-        const trimmedDelay = delayText.trim();
-
-        if (trimmedDelay !== "") {
-            const parsed = Number(trimmedDelay);
-
-            if (!Number.isFinite(parsed) || parsed < 0) {
-                setActionError(t("Delay must be a non-negative number of seconds."));
-
-                return;
-            }
-
-            delaySeconds = parsed;
-        }
-
-        if (batchMode && !Array.isArray(body)) {
-            setActionError(t("Batch mode needs a JSON array body — each element is enqueued as one message."));
+        if ("error" in input) {
+            setActionError(input.error);
 
             return;
         }
+
+        const { body, delaySeconds } = input;
 
         setSending(true);
 
         // `args` is built before the `try`: React Compiler bails on a conditional (or
         // optional-chaining) expression *inside* a try/catch. And no `finally` (that also
         // bails) — the catch swallows the error, so the trailing `setSending(false)` always runs.
-        const args = batchMode ? { batch: body as unknown[], delaySeconds, exportName } : { body, delaySeconds, exportName };
+        // A topic target publishes like `ctx.topics.<name>.publish`: one send per subscription.
+        const requests = sendTargets(exportName, topics).map((target) =>
+            batchMode ? { batch: body as unknown[], delaySeconds, exportName: target } : { body, delaySeconds, exportName: target },
+        );
 
         try {
-            (await client.query(SEND_QUEUE_MESSAGE, args, callOptions(""))) as SendQueueMessageResult;
+            setActionError(await sendToTargets(client, requests, t));
             refetchMessages();
         } catch (error_) {
             setActionError(errorMessage(error_));
@@ -586,37 +695,7 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
 
             {error !== null && <ErrorAlert error={errorSource} testId="queues-error" />}
 
-            {showReliabilityWarning && (
-                <Alert
-                    icon={
-                        <span aria-hidden="true" className="text-base leading-none">
-                            ⚠
-                        </span>
-                    }
-                    testId="queues-dlq-warning"
-                    variant="warning"
-                >
-                    <div className="flex flex-col gap-1">
-                        {queuesWithoutDlq.length > 0 && (
-                            <>
-                                <p className="font-medium">
-                                    {t("No dead-letter queue on {queues}.", { queues: queuesWithoutDlq.map((queue) => queue.name).join(", ") })}
-                                </p>
-                                <p className="text-muted-foreground">
-                                    {t("Exhausted messages are dropped after retries. Add a deadLetterQueue to capture them.")}
-                                </p>
-                            </>
-                        )}
-                        {deadLetteredCount > 0 && (
-                            <p className={queuesWithoutDlq.length > 0 ? "text-muted-foreground" : "font-medium"}>
-                                {deadLetteredCount === 1
-                                    ? t("1 message was recently dead-lettered.")
-                                    : t("{count} messages were recently dead-lettered.", { count: deadLetteredCount })}
-                            </p>
-                        )}
-                    </div>
-                </Alert>
-            )}
+            {showReliabilityWarning && <QueueReliabilityWarning deadLetteredCount={deadLetteredCount} queuesWithoutDlq={queuesWithoutDlq} />}
 
             {tab === "declared" && <QueuesDeclaredTab loaded={queuesData !== undefined} queues={queues} />}
 

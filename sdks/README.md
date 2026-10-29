@@ -79,15 +79,15 @@ self-import would dangle in every generated SDK.
 
 Six of eight: nothing.
 
-| Language     | Install                                                            |
-| ------------ | ------------------------------------------------------------------ |
-| python       | nothing — stdlib only                                              |
-| go           | nothing — stdlib only                                              |
-| java, kotlin | nothing — JDK only                                                 |
-| swift        | nothing — Foundation only                                          |
-| dart         | nothing — `dart:convert` / `dart:typed_data` only                  |
-| rust         | `serde` (derive) + `serde_json`, declared in the emitted manifests |
-| ruby         | `dry-struct` + `dry-types`, and only when models are emitted       |
+| Language     | Install                                                                                |
+| ------------ | -------------------------------------------------------------------------------------- |
+| python       | nothing — stdlib only                                                                  |
+| go           | nothing — stdlib only                                                                  |
+| java, kotlin | nothing — JDK only                                                                     |
+| swift        | nothing — Foundation only                                                              |
+| dart         | nothing — `dart:convert` / `dart:typed_data` only                                      |
+| rust         | `serde` (derive) + `serde_json` (`float_roundtrip`), declared in the emitted manifests |
+| ruby         | `dry-struct` + `dry-types`, and only when models are emitted                           |
 
 The two that are not empty are quicktype's, not the transports': the Ruby backend
 renders `Dry::Struct` types with no renderer option to avoid them, and Rust models
@@ -121,31 +121,40 @@ This table exists for the same reason `PlatformCapabilities` does (see
 what lets the next consumer discover a gap at runtime. Update it in the same
 change that adds or removes a capability.
 
-| Capability                    | python | go  | ruby | rust | swift | java | kotlin | dart |
-| ----------------------------- | ------ | --- | ---- | ---- | ----- | ---- | ------ | ---- |
-| Wire codec (all tags)         | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Stable subscription key       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| RPC query / mutation / action | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Live subscriptions            | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Shapes + poke protocol        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Resume across reconnect       | ✅⁶    | ✅⁶ | ✅⁶  | ✅⁶  | ✅⁶   | ✅⁶  | ✅⁶    | ✅⁶  |
-| Typed argument models         | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Typed result models           | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Concurrency-safe client       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Subscription as a stream      | ✅¹    | ✅¹ | ✅¹  | ✅¹  | ✅¹   | ✅¹  | ✅¹    | ✅¹  |
-| Unset `v.optional()` omitted  | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Required `v.nullable()` sent  | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Optimistic updates            | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Offline mutation queue        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Durable offline queue         | ✅²    | ✅² | ✅²  | ✅²  | ✅²   | ✅²  | ✅²    | ✅²  |
-| Per-shard drain               | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Batched offline replay        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Rate-limit backoff            | ✅⁵    | ✅⁵ | ✅⁵  | ✅⁵  | ✅⁵   | ✅⁵  | ✅⁵    | ✅⁵  |
-| Row-delta merge into a list   | ❌⁷    | ❌⁷ | ❌⁷  | ❌⁷  | ❌⁷   | ❌⁷  | ❌⁷    | ❌⁷  |
-| `chunk` / `whisper` frames    | ❌⁸    | ❌⁸ | ❌⁸  | ❌⁸  | ❌⁸   | ❌⁸  | ❌⁸    | ❌⁸  |
-| Multi-tab leader election     | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
-| Built-in HTTP / socket        | ✅⁴    | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
-| Several sockets per client    | ❌³    | ❌³ | ❌³  | ❌³  | ❌³   | ❌³  | ❌³    | ❌³  |
+| Capability                    | python | go   | ruby | rust | swift | java | kotlin | dart |
+| ----------------------------- | ------ | ---- | ---- | ---- | ----- | ---- | ------ | ---- |
+| Wire codec (all tags)         | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Stable subscription key       | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| RPC query / mutation / action | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Live subscriptions            | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Shapes + poke protocol        | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Resume across reconnect       | ✅⁶    | ✅⁶  | ✅⁶  | ✅⁶  | ✅⁶   | ✅⁶  | ✅⁶    | ✅⁶  |
+| Typed argument models         | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Typed result models           | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Concurrency-safe client       | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Subscription as a stream      | ✅¹    | ✅¹  | ✅¹  | ✅¹  | ✅¹   | ✅¹  | ✅¹    | ✅¹  |
+| Unset `v.optional()` omitted  | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Required `v.nullable()` sent  | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Optimistic updates            | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Offline mutation queue        | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Durable offline queue         | ✅²    | ✅²  | ✅²  | ✅²  | ✅²   | ✅²  | ✅²    | ✅²  |
+| Per-shard drain               | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Batched offline replay        | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Online-only writes            | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Rate-limit backoff            | ✅⁵    | ✅⁵  | ✅⁵  | ✅⁵  | ✅⁵   | ✅⁵  | ✅⁵    | ✅⁵  |
+| Re-flush on a new token       | ✅⁹    | ➖⁹  | ➖⁹  | ➖⁹  | ➖⁹   | ➖⁹  | ➖⁹    | ✅⁹  |
+| Unset identity = token digest | ✅¹⁰   | ✅¹⁰ | ✅¹⁰ | ✅¹⁰ | ✅¹⁰  | ✅¹⁰ | ✅¹⁰   | ✅¹⁰ |
+| Row-delta merge into a list   | ❌⁷    | ❌⁷  | ❌⁷  | ❌⁷  | ❌⁷   | ❌⁷  | ❌⁷    | ❌⁷  |
+| `chunk` frames                | ❌⁸    | ❌⁸  | ❌⁸  | ❌⁸  | ❌⁸   | ❌⁸  | ❌⁸    | ❌⁸  |
+| Whisper topics and rooms      | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Session credential on connect | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Connection context on attach  | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Token expiry from close codes | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Identity frame adopted        | ➖¹²   | ➖¹² | ➖¹² | ➖¹² | ➖¹²  | ➖¹² | ➖¹²   | ➖¹² |
+| 503 at upgrade retried        | ✅¹¹   | ➖¹¹ | ➖¹¹ | ➖¹¹ | ➖¹¹  | ➖¹¹ | ➖¹¹   | ➖¹¹ |
+| Multi-tab leader election     | ❌     | ❌   | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
+| Built-in HTTP / socket        | ✅⁴    | ❌   | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
+| Several sockets per client    | ❌³    | ❌³  | ❌³  | ❌³  | ❌³   | ❌³  | ❌³    | ❌³  |
 
 ¹ Each in the language's own PULL type, not one shape forced onto eight — an
 async generator in Python, a receive channel in Go, an `Enumerator` in Ruby, an
@@ -180,6 +189,36 @@ re-read the eighth — a matrix is only worth its accuracy in the direction it d
 not expect to be wrong. Injecting `http_post` still overrides the default
 everywhere it is passed.
 
+Two things about that loop, because it is the only one in this directory and
+nothing in `conformance-cases.json` can reach it — the suites inject a sender, so
+a socket-scheduling defect is invisible to all eight. `sdks/python/tests/test_connect_and_run.py`
+is where those guarantees are asserted instead.
+
+- **Outbound frames are written when produced.** A writer task drains one FIFO
+  alongside the read loop. Draining the outbox only after each INBOUND frame —
+  which is what this did — starves a client whose server is idle, and a server
+  with no subscriptions is idle by definition: a `subscribe` issued once the
+  socket was up sat in memory until something unrelated arrived. Measured
+  against a real `websockets` server: 0 subscribe frames after three idle
+  seconds, 1 the instant an unrelated frame landed. Subscribing BEFORE
+  connecting, which the quickstart does, is the one order that hid it.
+- **Inbound frames up to 32 MiB.** `connect_and_run` passes `max_size=32 MiB`
+  (`MAX_WS_FRAME_BYTES`) to `websockets.connect`. The library default of 1 MiB
+  closed the socket with 1009 on any larger query result or shape seed — on every
+  reconnect, since the reseed is the same frame. The Durable Object caps only the
+  frames it RECEIVES; what it sends is bounded by the Workers per-message limit.
+- **`close()` ends it.** `close()` makes `connect_and_run` return and ends every
+  `stream()` generator; frames that arrive after close are ignored.
+- **No `lunora-ping`, deliberately.** The reference client sends one every 30 s
+  and watchdogs `lastFrameAt`; this loop sends none. `websockets` already pings
+  at the protocol level every 20 s and closes the connection when a ping goes
+  unanswered for another 20 s, which is both halves of that job — measured over
+  a 50 s idle connection: two pings and two pongs each way, no application
+  traffic, socket open throughout. An app-level ping with no watchdog beside it
+  would be symmetry and nothing else. Revisit if a deployment's edge needs an
+  application frame to hold a path open, or if this port grows the reference's
+  force-close-on-silence semantics. Inbound `lunora-pong` is ignored either way.
+
 ⁵ **From the envelope only.** `protocol/README.md` §4.3 says a rate-limited
 retry SHOULD wait out `error.data.retryAfterMs` **or** the `Retry-After` header;
 these eight honour the first and none of them can see the second. Every port
@@ -211,12 +250,77 @@ only require behaviour every port has. Closing it is one merge implementation pe
 language against the placement rule in `protocol/README.md` §5.1.1, which the
 `pageDeltaFrames` goldens already carry.
 
-⁸ **Neither frame is handled.** `chunk` (a streaming-query chunk, with the durable
-`seq`/`generation` resume watermark) and `whisper` (the ephemeral topic relay) are
-in `protocol/README.md` §5.2 and reach the default arm of every port's frame
-switch, where they are ignored. No port sends `stream`, `whisper_subscribe` or
-`whisper` either, so nothing arrives to drop; the gap is that a deployment using
-those features has no non-JS client for them.
+⁸ **`chunk` is not handled.** A streaming-query chunk carries a durable `seq`/`generation`
+resume watermark (`protocol/README.md` §5.2). It reaches the default arm of every port's frame
+switch and is ignored. No port sends `stream`, so no chunk arrives to drop; the gap is that a
+deployment using streaming queries has no non-JS client for them.
+
+⁹ **A write refused for its credential (`TOKEN_EXPIRED`, `UNAUTHENTICATED`,
+`UNAUTHORIZED`) is held in all eight, and every replay reads the token current
+when it is sent.** What differs is who starts that replay. The two ports that
+flush on their own when a socket connects — dart (`setConnected`) and python's
+`connect_and_run` — also flush when a new token is set while connected, as the
+reference's `setAuthToken` does; before, the held write waited for a reconnect
+that a healthy socket never makes. The other six (➖) never flush on their own at
+all, so there is no flush to be missing: the app that refreshes the token calls
+the flush, as it does on every reconnect. Dart gates that flush the way the
+reference does, because its identity is a subject kept apart from the token: a
+token set while a subject is established leaves the subject UNCONFIRMED — the new
+token may be the same user's refresh or another user's sign-in — and queued
+writes are held, neither sent nor dropped, until `authSubject` is set again for
+it (the same id replays them, another id rejects them). With no subject the
+identity is the token's digest, so a new token is a new identity and the writes
+are rejected `OFFLINE_IDENTITY_CHANGED`, exactly as the reference rejects them;
+supplying `authSubject` is how a refresh keeps them. Python gates the same way
+without the subject half: its `identity` is the app's own stamp and, left unset,
+falls back to the token's digest (¹⁰), so python flushes on every new token and
+a refresh with no identity rejects the held write as the reference does. It
+never flushes on a token cleared to `None`; on an account switch set the
+identity before the token. Both run one flush per shard
+at a time, and a flush asked for mid-flush makes the running one pass again, so
+a token that lands while the refused request is in flight is not lost.
+`offline_write_held_for_credential_replays_after_token_refresh` runs the refresh
+in all eight and in the reference.
+
+¹⁰ **Who a queued write belongs to when the app names no one.** The reference
+stamps a write with `subj:<subject>` when a subject is set, else a digest of the
+bearer token (FNV-1a and djb2 over UTF-16 code units, `<len>:<fnv>:<djb2>` in
+base36), else `null` — so a write queued under one token is never replayed with
+another: under a different token it is rejected `OFFLINE_IDENTITY_CHANGED`, with
+no token at all it is held until one is set, and a digest stamp of the token
+held NOW matches even after a subject is named. All eight mirror it. Dart
+follows the reference's spelling; the other seven store their `identity` as
+given rather than under `subj:`, so records persisted before the digest keep
+matching, and stamp a token write as `{"tokenDigest": …}` in the persisted
+record — a typed stamp rather than the bare digest, so no identity string, however
+it is spelled, can equal it, nor a token stamp an identity. Each flush pass
+snapshots the token beside the identity it gates on and sends every request of
+that pass with it, so a token swapped mid-flush applies from the next pass; with
+no identity set, a new or cleared token evicts the previous session as an
+identity change does; a record persisted with a `null` stamp by an earlier build
+is rejected once a token is held. Six of the eight never flush on a token change
+(⁹), so there the app's next flush is what the gate judges; the retry python
+and dart schedule after a transient refusal is an ordinary pass, gated and
+token-snapshotted like any other (a token cleared while it is armed holds the
+write rather than sending it with no bearer). Go, Rust and Java
+turned the token into an accessor pair for the eviction (`SetAuthToken`,
+`set_auth_token`, `authToken(String)`). The digest walks UTF-16 code units: Java
+and Kotlin assert two lone-surrogate digests inline, which the shared fixture
+cannot carry (`serde_json` and `JSONSerialization` refuse to parse a lone
+surrogate); Go, Rust, Swift and Ruby strings cannot hold one. The reference's
+digests are pinned in `fixtures/offline-optimistic.json` `tokenIdentity` and
+asserted by the reference (`protocol-conformance.test.ts`) and by all eight
+under `offline_unset_identity_stamps_token_digest`, which also replays
+`accountSwitch`: a write queued under one token and flushed under another sends
+nothing and is rejected.
+
+¹¹ **A 503 at upgrade is the caller's to retry, except in python.** The seven ports that take an injected
+socket never see the upgrade response, so their reconnect loop retries any failure with jittered backoff, as
+the README example does. Python owns its socket, and `reconnect_forever` retries any failure of the upgrade with backoff,
+a 503 included. `test_a_503_at_upgrade_is_retried_with_backoff_and_refuses_no_credential` pins it.
+
+¹² **The identity frame is not adopted.** `identity` (protocol/README.md §5.2) names the user a cookie session
+runs as. Each port states its own session credential, which §5.2 allows, so each ignores the frame.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the
@@ -275,9 +379,16 @@ optionality — disappeared with the rest.
 **Subscription as a Stream, dart.** The one row where a target does something the
 others do not, and it is the reason the port exists: `client.watch(path, args)`
 and the generated `watchX(args)` return a `Stream`, which a Flutter
-`StreamBuilder` consumes with no adapter. The stream subscribes on first listen
-and unsubscribes when the last listener cancels, so disposing a widget disposes
-the subscription and there is no `dispose()` override to forget. The
+`StreamBuilder` consumes with no adapter. **Each listener opens its OWN
+subscription**, which starts when it listens and is torn down when it cancels, so
+disposing a widget disposes exactly its own subscription and there is no
+`dispose()` override to forget. The cost is the other half of that: two
+`StreamBuilder`s on one `watch()` stream are two server subscriptions and two
+re-executions per write, so a widget tree that wants one should share the value
+it builds rather than the stream. `Stream.multi` and not a broadcast controller
+because a broadcast stream's late listener — a builder that rebuilds after
+cancelling — would sit empty until the next poke, where a fresh subscription is
+served a snapshot. The
 callback-shaped `subscribe`/`subscribeX` every sibling has is still there, for a
 value whose lifetime is not a widget's.
 
@@ -290,7 +401,7 @@ client is disconnected routinely rather than exceptionally, so a write it cannot
 send yet and a value it can show before the server confirms are the difference
 between a usable app and one that spins.
 
-Three things are Dart's alone, and each follows from this transport's own shape
+Two things are Dart's alone, and each follows from this transport's own shape
 rather than from taste:
 
 - **Connectivity is told, not observed.** The other seven flush on the socket
@@ -324,7 +435,7 @@ at the worker's own 500-entry cap AND under a byte budget of 1 MiB less 64 KiB o
 headroom, sent sequentially so FIFO survives a flush longer than one batch; a
 lone write still rides the single-call path, which is the proven one. The four
 rules that make it safe for a DURABLE write — a slot coded
-`SHARD_UNAVAILABLE`/`SHARD_ERROR`/`RATE_LIMITED`/`TOO_MANY_REQUESTS` is
+`SHARD_UNAVAILABLE`/`SHARD_ERROR`/`DELIVERY_FENCED`/`RATE_LIMITED`/`TOO_MANY_REQUESTS` is
 transient, an unanswered slot is retried under its original idempotency key, a
 body with no `results` is a whole-batch outcome classified the same way, and a
 `413` is a verdict on the REQUEST rather than on the writes inside it — are in
@@ -423,6 +534,20 @@ class because its single-file form is not compilable Java. `targets/java.ts` rec
 every renderer option that was measured and why the alternative — subclassing
 quicktype's `JavaRenderer`/`KotlinRenderer` — was not taken.
 
+**Callbacks are isolated from each other.** One subscription or shape callback
+that raises does not stop the next from running — python and ruby used to run
+the deferred list bare, so a consumer's bug in one view silenced every other view
+fed by the same frame. The reference catches per callback too.
+
+**Swift with no HTTP poster** re-queues a queued write, alone or batched: a
+missing poster is a configuration gap, not a verdict on the write. A lone write
+was rejected and a batch re-queued before.
+
+**Go's `Stream`** closes its channel under the same lock every send holds, so a
+frame racing an unsubscribe or `Close()` can no longer send on a closed channel
+(a data race, and a panic when it lost); `hardening_test.go` catches it under
+the `-race` that `run-all.sh` always passes.
+
 **Concurrency.** Go, Ruby, Java, Kotlin, Swift and Python hold a lock over the
 subscription registry, the shape views and the id counters, and dispatch frames
 and user callbacks after releasing it. Resume frames are BUILT under that lock,
@@ -466,7 +591,7 @@ data race, and with no interior mutability, `static` or `unsafe` in the client
 that holds totally. Sharing is the caller's `Arc<Mutex<Client>>` — which required
 `Client: Send`, so the injected poster, sender and handlers carry a `+ Send`
 bound; without it one non-`Send` closure made the whole struct unshareable and no
-amount of wrapping helped. Note the difference that follows: the other five
+amount of wrapping helped. Note the difference that follows: the other six
 release their lock before invoking your callback and a caller's `Mutex` cannot,
 so a Rust handler must not re-lock the client it was called from.
 
@@ -501,6 +626,10 @@ before it replays; an identity change refuses one; and a flush classifies each
 reply — success confirms the overlay, a coded verdict is terminal, a transient
 failure re-queues that write and every unreplayed one, in order.
 
+**An online-only write is never queued.** The option (`onlineOnly` in the spelling each port uses) makes a write refuse with `OFFLINE_NOT_QUEUED` at the point a normal write would be queued: before any optimistic layer is applied, and before its arguments reach the queue, the persistence adapter or disk. It is the write path for a credential or a one-time token. It does not wait for a flush or queue behind pending writes, so it may overtake a queued write to the same document, the same caveat `@lunora/client`'s `onlineOnly` carries. The queueing entry point gains the option: `submit` in every port except dart, whose `mutation` is the queueing call. The direct `mutation` of the other seven never queues, so it has nothing to refuse and takes no option.
+
+**A transport failure on an online-only write is refused the same way.** A write sent directly (the shard never connected and the client does not queue before the first connect) can fail without any response: a refused connection, a DNS failure, a timeout. While the shard has no open connection, that failure raises `OFFLINE_NOT_QUEUED` with the transport error as its cause, after any optimistic layer has been rolled back, as `@lunora/client` does. A server's coded rejection, and any failure while the shard is connected, surface as themselves.
+
 **A durable record holds the WIRE form of its args.** The native form carries the
 codec's own wrappers, and every real adapter serialises — a file, a SQLite text
 column, a preferences store — so a queued write with a `bigint`, `bytes`, `Date`
@@ -515,19 +644,36 @@ with substitute args would commit a different write than the caller made.
 
 ### Where the ports deliberately differ from `@lunora/client`
 
-Each of these is forced by what these SDKs are rather than chosen:
+Each of these is forced by what these SDKs are rather than chosen — except the
+rows whose "Why" says **behind the spec**, which are gaps, recorded here so they
+are not rediscovered by the next port:
 
-| Divergence                                                                                                                                                                                                                                                                                                                                                             | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`submit` is a NEW method; `mutation` is unchanged.** `mutation` stays one direct HTTP round-trip that fails when the deployment is unreachable, because the generated surface calls it and a typed wrapper must keep returning a typed result. `submit` is the write path that survives a dropped socket.                                                            | Changing `mutation`'s contract under the generated code would turn "this write failed" into "this write is queued" for every existing caller.                                                                                                                                                                                                                                                                                                                                                                  |
-| **`submit` returns immediately with a `status` of `committed` or `queued`.** The browser client's `mutation()` returns a promise that stays PENDING until a queued write finally replays; the eventual verdict here arrives through `onSettled` (per write) or `onMutationSettled` (per client).                                                                       | A pending promise is fine in a browser event loop and bad on a goroutine, a Ruby thread or a JVM thread pool. A caller that must not report success early checks `status`.                                                                                                                                                                                                                                                                                                                                     |
-| **The persistence adapter is SYNCHRONOUS** in the seven non-Dart ports. The browser client's is async because IndexedDB is, and Dart's stays async because its IO is.                                                                                                                                                                                                  | A consumer injects whatever it likes — a file, SQLite, a key-value store — and owns its own threading, exactly as it already does for the HTTP poster and the frame sender.                                                                                                                                                                                                                                                                                                                                    |
-| **The identity stamp is an opaque string the CONSUMER sets** (`client.identity`) in seven ports — Dart is the exception and mirrors the reference, deriving one from `authSubject` or, failing that, from a non-cryptographic digest of the token (`dart/lib/src/transport.dart`).                                                                                     | These SDKs do not manage auth sessions, so a derived stamp would mean persisting a digest of a bearer token in the consumer's storage. Put a stable, non-secret subject (a user id) there — in Dart, `authSubject`, which is what its fallback exists to avoid needing.                                                                                                                                                                                                                                        |
-| **A transient replay failure is classified by code AND by status**: a raw transport error, `SHARD_ERROR`/`SHARD_UNAVAILABLE`, `RATE_LIMITED`/`TOO_MANY_REQUESTS`, any 5xx, and any non-2xx carrying no `{ error }` envelope all re-queue; everything else coded is terminal. One predicate governs the single-call path, a batch slot and a whole-batch outcome alike. | `protocol/README.md` §4.3. A durable write's fate must not depend on how many siblings were queued alongside it, which is exactly what it did: the same envelope-less 502 was transient for a batch and terminal for a lone write. **Behind §4.3 on one half**: an envelope-less **4xx** is a refusal that resending only reproduces, and the spec now settles those terminally rather than parking the outbox head behind them forever. These eight still re-queue every envelope-less non-2xx alike.         |
-| **A rate limit defers the next flush rather than dropping the write.** `FlushReport.retryAfterMs` carries the envelope's `data.retryAfterMs`, clamped to 60 s, and a flush inside that window is a no-op reporting the time remaining.                                                                                                                                 | "Not now" is not "no", and a queue that honours a limiter by discarding loses data for being punctual. The `Retry-After` HEADER is not read: the injected poster surfaces `(status, body)` only — see the capability matrix's note ⁵. The window is also **passive and global**: nothing schedules a re-flush when it elapses (the caller's next flush is what tries again), a refusal carrying no hint sets no window at all, and the one field gates every shard rather than the shard that met the limiter. |
-| **Every fold notifies.** The TypeScript engine suppresses a notification whose folded result is reference-identical to the value already displayed.                                                                                                                                                                                                                    | Reference identity has no portable meaning across eight languages. A consumer sees at most a few redundant callbacks carrying the same value, never a missing one.                                                                                                                                                                                                                                                                                                                                             |
-| **A persistence failure is SILENT unless you wire `on_persistence_error`.** The browser client falls back to `console.warn` when no handler is set.                                                                                                                                                                                                                    | There is no console in a Ruby worker or a JVM service, and writing to stderr from a library is its own bad default. The cost is real, so wire the handler: without it a durable store that has started failing looks exactly like one that is working.                                                                                                                                                                                                                                                         |
-| **An unencodable queued write settles with the coded verdict `OFFLINE_WRITE_UNENCODABLE`.** The reference settles the caller with the raw codec exception.                                                                                                                                                                                                             | Every other terminal drop in these ports carries a code, and a consumer classifying by exception type would need to know seven languages' codec error hierarchies to spot this one.                                                                                                                                                                                                                                                                                                                            |
+| Divergence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`submit` is a NEW method; `mutation` is unchanged.** `mutation` stays one direct HTTP round-trip that fails when the deployment is unreachable, because the generated surface calls it and a typed wrapper must keep returning a typed result. `submit` is the write path that survives a dropped socket.                                                                                                                                                                                                                                                                                                                                           | Changing `mutation`'s contract under the generated code would turn "this write failed" into "this write is queued" for every existing caller.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **`submit` returns immediately with a `status` of `committed` or `queued`.** The browser client's `mutation()` returns a promise that stays PENDING until a queued write finally replays; the eventual verdict here arrives through `onSettled` (per write) or `onMutationSettled` (per client).                                                                                                                                                                                                                                                                                                                                                      | A pending promise is fine in a browser event loop and bad on a goroutine, a Ruby thread or a JVM thread pool. A caller that must not report success early checks `status`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **The persistence adapter is SYNCHRONOUS** in the seven non-Dart ports. The browser client's is async because IndexedDB is, and Dart's stays async because its IO is.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | A consumer injects whatever it likes — a file, SQLite, a key-value store — and owns its own threading, exactly as it already does for the HTTP poster and the frame sender.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **The identity stamp is an opaque string the CONSUMER sets** (`client.identity`; `set_identity` in rust, `identity(String)` in java, `SetIdentity` in go) in seven ports, stored as given, and falls back to a non-cryptographic digest of the token when unset (¹⁰) — Dart is the exception and mirrors the reference, deriving one from `authSubject` or, failing that, from the same digest (`dart/lib/src/transport.dart`).                                                                                                                                                                                                                       | These SDKs do not manage auth sessions, so the digest fallback only tells one token from another: a token refresh with no identity set rejects the writes queued under the old token. Put a stable, non-secret subject (a user id) there to keep them — in Dart, `authSubject`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| **A transient replay failure is classified by CODE when there is an envelope, and by STATUS only when there is not**: a raw transport error, `SHARD_ERROR`/`SHARD_UNAVAILABLE`/`DELIVERY_FENCED`, `RATE_LIMITED`/`TOO_MANY_REQUESTS`, and any non-2xx carrying no `{ error }` envelope re-queue; every other coded error is terminal whatever its status — a coded `500` included. Any `413`, coded or not, splits a batch and settles a lone write `PAYLOAD_TOO_LARGE`. One predicate governs the single-call path, a batch slot and a whole-batch outcome alike, and a slot whose `error` key holds no envelope at all is retried rather than read. | `protocol/README.md` §4.3. The reference's rule too — including the half the ports missed until the same change: a refused CREDENTIAL (`UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`) HOLDS the write for a token refresh instead of settling it, where all eight used to delete the user's queued writes over an expired bearer on reconnect; an error `data` that does not decode is dropped and the code still classifies (the reference threw the codec's error there too); and a server-sent `WIRE_DECODE_FAILED` is a refusal, told apart from a result the client failed to decode by where the failure arose, never by the string. A durable write's fate must not depend on how many siblings were queued alongside it, which is exactly what it did twice: an envelope-less 502 was transient for a batch and terminal for a lone write, and later a coded 5xx was transient for a lone write (the port stamped `transient` from the status) and terminal for a batch. `offline_flush_classifies_single_and_batch_alike` runs every case down both paths. **Behind §4.3 on one half**: an envelope-less **4xx** other than `413` is a refusal that resending only reproduces, and the spec settles those terminally rather than parking the outbox head behind them forever. These eight still re-queue them. |
+| **A committed write whose result does not decode settles `committed` with `WIRE_DECODE_FAILED`.** Its overlay confirms, its durable record goes, and the settled event carries the decode error and no value; the reference rejects the awaiter with the same coded error.                                                                                                                                                                                                                                                                                                                                                                            | Replaying it returns the same result, forever — which is what a codeless decode error classified as transport did, at the head of the queue. On the batch path the decode ran after the record was deleted and threw out of the demux, losing that write and stranding every slot after it; in Dart it crashed the process. Every flush now also re-queues, in order, any write it drained but never settled if something unexpected escapes its loop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **A rate limit defers the next flush rather than dropping the write.** `FlushReport.retryAfterMs` carries the envelope's `data.retryAfterMs`, clamped to 60 s, and a flush inside that window is a no-op reporting the time remaining.                                                                                                                                                                                                                                                                                                                                                                                                                | "Not now" is not "no", and a queue that honours a limiter by discarding loses data for being punctual. The `Retry-After` HEADER is not read: the injected poster surfaces `(status, body)` only — see the capability matrix's note ⁵. A 429 or 503 leaves the socket open, so nothing reconnects to flush again: the two ports that flush on their own — python's `connect_and_run` and dart's `setConnected` — re-flush a write that an ANSWERED transient refusal left queued, after the hint or, lacking one, the reference's bounded backoff (1 s doubling to a 60 s ceiling, jittered across the top half), one timer per socket in python and per shard in dart, cancelled when the socket drops or the client closes. A raw transport failure schedules nothing (the reconnect flushes) and neither does a held credential (a new token does). The other six never flush on their own (⁹), so their caller schedules the next flush from `retryAfterMs`, and a refusal carrying no hint reports none there — that caller picks its own backoff. The window is also **global**: the one field gates every shard rather than the shard that met the limiter.                                                                                                                                                            |
+| **Every fold notifies.** The TypeScript engine suppresses a notification whose folded result is reference-identical to the value already displayed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Reference identity has no portable meaning across eight languages. A consumer sees at most a few redundant callbacks carrying the same value, never a missing one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **A persistence failure is SILENT unless you wire `on_persistence_error`.** The browser client falls back to `console.warn` when no handler is set.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | There is no console in a Ruby worker or a JVM service, and writing to stderr from a library is its own bad default. The cost is real, so wire the handler: without it a durable store that has started failing looks exactly like one that is working.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **An unencodable queued write settles with the coded verdict `OFFLINE_WRITE_UNENCODABLE`.** The reference settles the caller with the raw codec exception.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Every other terminal drop in these ports carries a code, and a consumer classifying by exception type would need to know eight languages' codec error hierarchies to spot this one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+
+**An identity change evicts the previous session**, in all eight, as the
+reference's `evictPreviousIdentitySession` does: setting the identity from one
+value to a different one (or to unset) drops every query's and shape's resume
+cursor and epoch, so the next resubscribe is cold, and empties every shape view,
+telling its callbacks `[]`. Those cursors were the previous identity's position
+in the changelog and those rows were what it could see; resuming from them asks
+the server for a diff against a view the new identity never held. A first set,
+or re-asserting the same identity, evicts nothing. What the ports cannot do is
+the reference's other half — bounce the socket, whose credential is pinned in the
+upgrade URL — because the socket is the consumer's: reconnect after changing it.
+`identity_change_evicts_previous_session` pins it. Python, Ruby, Go, Java,
+Kotlin, Rust and Swift turned `identity` into a setter for it; Dart evicts from
+its `authSubject` / `authToken` setters.
 
 **Multi-tab leader election** is the one browser-only half no port has — a Web
 Lock deciding which tab hydrates the shared durable queue, and there are no tabs
@@ -551,7 +697,7 @@ ways:
 | Go `sync.Mutex`, non-reentrant          | **Self-deadlock.** The second offline write past capacity hung the calling goroutine outright.                                                                     |
 | Ruby `Mutex`, non-reentrant             | **Silently swallowed.** It raised `ThreadError`, which the queue's own `rescue StandardError` then ate — so the evicted write never rolled back and never settled. |
 | Java / Kotlin `synchronized`, reentrant | No hang, but a consumer's callback ran inside the critical section guarding the subscription registry.                                                             |
-| Rust `&mut self`, Swift `NSLock`        | Never expressible — which is why those two were written this way first, and why the other five now match.                                                          |
+| Rust `&mut self`, Swift `NSLock`        | Never expressible — which is why those two were written this way first, and why the other six now match.                                                           |
 
 The Ruby failure is the instructive one: the mechanism that was supposed to stop
 an eviction dropping a durable write in silence was itself dropping it in silence.
@@ -564,7 +710,7 @@ its lock.** The optimistic transform is run against a snapshot and its result
 recorded; a queued write's `precondition` is evaluated on a snapshot too; the
 lock is then taken only to install what came back. Settle handlers, `on_settled`,
 and every subscription and error callback are likewise deferred and invoked after
-the lock is released. Four of the seven use a non-reentrant lock, so without this
+the lock is released. Four of the eight use a non-reentrant lock, so without this
 a callback reading `pending_mutation_count` would deadlock its own thread — a
 hazard the reference client cannot have, because it has no lock at all.
 
@@ -758,15 +904,15 @@ difference it exists to measure. Every suite therefore repeats the assertion
 through `wireText`, defined beside `canonical` as the serializer that port's own
 transport puts on the socket:
 
-| Language     | `wireText`                                                     |
-| ------------ | -------------------------------------------------------------- |
-| python       | `json.dumps`                                                   |
-| go           | `json.Marshal` (`canonical` is defined in terms of it there)   |
-| ruby         | `JSON.generate`                                                |
-| rust         | `serde_json::to_string`                                        |
-| swift        | `JSONSerialization` (`.sortedKeys`, since a dict has no order) |
-| java, kotlin | `Json.write`                                                   |
-| dart         | `jsonEncode`                                                   |
+| Language     | `wireText`                                                   |
+| ------------ | ------------------------------------------------------------ |
+| python       | `json.dumps`                                                 |
+| go           | `json.Marshal` (`canonical` is defined in terms of it there) |
+| ruby         | `JSON.generate`                                              |
+| rust         | `serde_json::to_string`                                      |
+| swift        | `Wire.stableStringify` (the transport's own writer)          |
+| java, kotlin | `Json.write`                                                 |
+| dart         | `jsonEncode`                                                 |
 
 Dart's dates went out as `1700000000000.0` under a green suite before that line
 existed. What it compares is the port against ITS OWN parse of the fixture, so it
@@ -782,8 +928,11 @@ removing dart's turns 17 cases red, all 17 on the wire-text line and none on
 java's `Json.write` number spelling turns nothing red, because java's parser maps
 every JSON number to `Double`, so both sides of the comparison move together; the
 same holds for kotlin, and go is a third case again — `canonical` is defined in
-terms of `wireText` there, so the two lines are one assertion. The line stays in
-all eight anyway: it is the shape a ninth port copies, and a change to any of
+terms of `wireText` there, so the two lines are one assertion. Swift is now the
+same as go from the other direction: its transport posts `Wire.stableStringify`
+itself (Darwin's `JSONSerialization` refused a lone surrogate and swallowed the
+error), so `canonical` IS the wire text and the suite asserts once. The line stays
+in the other seven: it is the shape a ninth port copies, and a change to any of
 those parsers or writers makes it live.
 
 **What the `covers()` form actually proves is narrower than it looks.** In the
@@ -799,7 +948,7 @@ the row as "a case exists and runs under this name", and rely on the assertions
 themselves for the rest.
 
 **The manifest holds a suite to every name in
-`protocol/conformance-cases.json` — 40 of them today; it cannot hold one that ran
+`protocol/conformance-cases.json` — 53 of them today; it cannot hold one that ran
 nothing at all.** Six of these eight test tools exit 0 having collected NO tests
 — `unittest discover` finding no matching module, an empty `test/test_*.rb`
 glob, a Go package with no `_test.go`, `cargo test` and `swift test` with
@@ -859,8 +1008,8 @@ leaves the go leg green without having run.
 
 ### Coverage matrix — what the fixtures actually pin
 
-Derived from the reference source (`shared/wire-codec.ts`, `shared/stable-key.ts`,
-`shared/wire-key.ts`, `packages/client/src/lunora-client.ts`) rather than from
+Derived from the reference source (`packages/wire/src/wire-codec.ts`, `packages/wire/src/stable-key.ts`,
+`packages/wire/src/wire-key.ts`, `packages/client/src/lunora-client.ts`) rather than from
 the fixtures, so a behaviour the fixtures forgot shows up as a row with no case
 against it. The test is "would a port that got this WRONG go red", not "is it
 mentioned somewhere" — that distinction is the whole point: `rejected[]` once
@@ -911,42 +1060,66 @@ Every row below is either pinned by a named case or listed under
 
 **Stable key (`stableStringify ∘ encodeWire`)**
 
-| Reference behaviour                                    | Pinned by                                                                                                                    |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| keys sorted at every depth, UTF-16 code UNIT order     | `sorted-top-level`, `sorted-nested`, `codepoint-order`, `key-order-surrogate-vs-pua`, `key_order_matches_utf16`              |
-| an empty-string key sorts first                        | `empty-string-key`                                                                                                           |
-| arrays keep order; nested objects still sort           | `arrays-keep-order`, `nested-array-of-objects`                                                                               |
-| `null` field kept, `undefined` field dropped           | `null-field-kept`, `undefined-object-field-arg`                                                                              |
-| `undefined` in an array keys as its tag, not as `null` | `undefined-in-array-arg`                                                                                                     |
-| string escaping matches `JSON.stringify`               | `string-with-quote`, `escape-set-matches-json-stringify`, `string_escaping_matches_json_stringify`                           |
-| number spelling matches `String(v)`                    | `number-exponent-forms`, `format_number_matches_ecmascript`                                                                  |
-| a negative zero keys as `-0`, distinct from `0`        | `negative-zero`; meeting TimeClip in `date-arg-negative-fraction-epoch`, `date-arg-negative-zero-epoch`                      |
-| empty containers                                       | `empty`, `nested-empty-containers`                                                                                           |
-| wire-typed args tokenise rather than throwing          | `bigint-arg`, `date-arg`, `bytes-arg`, `map-arg-keeps-insertion-order`, `set-arg`, `url-arg`, `error-arg`, `non-finite-args` |
-| the `(functionPath, args, shardKey)` composition       | `empty_shard_key_is_omitted`                                                                                                 |
+| Reference behaviour                                       | Pinned by                                                                                                                    |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| keys sorted at every depth, UTF-16 code UNIT order        | `sorted-top-level`, `sorted-nested`, `codepoint-order`, `key-order-surrogate-vs-pua`, `key_order_matches_utf16`              |
+| an empty-string key sorts first                           | `empty-string-key`                                                                                                           |
+| arrays keep order; nested objects still sort              | `arrays-keep-order`, `nested-array-of-objects`                                                                               |
+| `null` field kept, `undefined` field dropped              | `null-field-kept`, `undefined-object-field-arg`                                                                              |
+| `undefined` in an array keys as its tag, not as `null`    | `undefined-in-array-arg`                                                                                                     |
+| string escaping matches `JSON.stringify`                  | `string-with-quote`, `escape-set-matches-json-stringify`, `string_escaping_matches_json_stringify`                           |
+| number spelling matches `String(v)`                       | `number-exponent-forms`, `number-adjacent-double-*`, `number-positional-shortest-digits`, `format_number_matches_ecmascript` |
+| a decimal literal decodes to the correctly rounded double | `number-decode-correctly-rounded`                                                                                            |
+| an integer literal off the wire is a float64, not refused | `number-integer-literal-past-exact-range`                                                                                    |
+| a negative zero keys as `-0`, distinct from `0`           | `negative-zero`; meeting TimeClip in `date-arg-negative-fraction-epoch`, `date-arg-negative-zero-epoch`                      |
+| empty containers                                          | `empty`, `nested-empty-containers`                                                                                           |
+| wire-typed args tokenise rather than throwing             | `bigint-arg`, `date-arg`, `bytes-arg`, `map-arg-keeps-insertion-order`, `set-arg`, `url-arg`, `error-arg`, `non-finite-args` |
+| the `(functionPath, args, shardKey)` composition          | `empty_shard_key_is_omitted`                                                                                                 |
 
 **RPC and frames**
 
-| Reference behaviour                                   | Pinned by                                                                                                                                                |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| request body, with and without `shardKey`             | `rpc.request.cases`, `rpc_request_bodies`                                                                                                                |
-| `{ result }`, `commitCursor`, `lastMutationId`        | `rpc.responseOk`, `rpc_responses`                                                                                                                        |
-| `{ error }` with `code` / `message` / `data`          | `rpc.responseError`                                                                                                                                      |
-| a non-2xx body with no envelope is `INTERNAL`         | `non_2xx_without_error_envelope_fails`                                                                                                                   |
-| `connect` / `subscribe` / `unsubscribe` frames        | `clientFrames`, `client_frame_builders`                                                                                                                  |
-| `shape_subscribe`, resume across reconnect            | `shape_subscribe_frame`, `shape_subscriptions_resend_after_reconnect`                                                                                    |
-| `ack` / `data` / `error` / `resume` / `settled`       | `serverFrames`, `server_frame_consumer`                                                                                                                  |
-| poke buffering, `reset`, bounded buffers              | `poke_sequence_materialises_rows`, `poke_parts_do_not_apply_before_poke_end`, `shape_reset_poke_replaces_membership`, `pending_poke_buffers_are_bounded` |
-| batched replay, its cap and its split                 | `offline_flush_batches_multiple_writes`, `offline_flush_batch_splits_on_payload_too_large`, `batch_entry_cap_matches_protocol`                           |
-| `shape_unsubscribe` spelling                          | **unpinned** — see below                                                                                                                                 |
-| `delta` merged into a cached list, `chunk`, `whisper` | **not implemented in any port** — see the capability matrix above                                                                                        |
+| Reference behaviour                                    | Pinned by                                                                                                                                                                                       |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| request body, with and without `shardKey`              | `rpc.request.cases`, `rpc_request_bodies`                                                                                                                                                       |
+| `{ result }`, `commitCursor`, `lastMutationId`         | `rpc.responseOk`, `rpc_responses`                                                                                                                                                               |
+| `{ error }` with `code` / `message` / `data`           | `rpc.responseError`                                                                                                                                                                             |
+| a non-2xx body with no envelope is `INTERNAL`          | `non_2xx_without_error_envelope_fails`                                                                                                                                                          |
+| `connect` / `subscribe` / `unsubscribe` frames         | `clientFrames`, `client_frame_builders`                                                                                                                                                         |
+| connect first, carrying the session token              | `connect_frame_first_and_carries_session_token`, `attach_socket_carries_connection_context`                                                                                                     |
+| the socket URL carries only the admin ticket           | `ws_url_carries_only_the_admin_ticket`                                                                                                                                                          |
+| close codes drive token expiry                         | `close_codes_drive_token_expiry` (over `closeSequences`)                                                                                                                                        |
+| whisper topics, rooms and rejoin                       | `whisper_frames_join_send_and_deliver`, `whisper_topics_rejoin_after_reconnect`                                                                                                                 |
+| `shape_subscribe`, resume across reconnect             | `shape_subscribe_frame`, `shape_subscriptions_resend_after_reconnect`                                                                                                                           |
+| `ack` / `data` / `error` / `resume` / `settled`        | `serverFrames`, `server_frame_consumer`                                                                                                                                                         |
+| `complete` cancels without dropping the registration   | `serverFrames`'s `complete`, `complete_frame_cancels_without_dropping_the_subscription`                                                                                                         |
+| poke buffering, `reset`, bounded buffers               | `poke_sequence_materialises_rows`, `poke_parts_do_not_apply_before_poke_end`, `shape_reset_poke_replaces_membership`, `pending_poke_buffers_are_bounded`                                        |
+| batched replay, its cap and its split                  | `offline_flush_batches_multiple_writes`, `offline_flush_batch_splits_on_payload_too_large`, `batch_entry_cap_matches_protocol`                                                                  |
+| a slot whose `error` holds no envelope is retried      | `batchReplay`'s `m5` slot, `offline_flush_unreadable_slot_is_retried`                                                                                                                           |
+| one replay predicate; a coded 5xx is terminal          | `offline_flush_classifies_single_and_batch_alike`                                                                                                                                               |
+| any `413` splits a batch; a lone refused write settles | `offline_flush_batch_splits_on_envelopeless_413`                                                                                                                                                |
+| a committed, undecodable result settles, never retries | `offline_flush_undecodable_result_settles_committed`                                                                                                                                            |
+| an empty shard key is the default shard on every path  | `offline_flush_empty_shard_key_routes_to_default`                                                                                                                                               |
+| an online-only write is refused offline, never queued  | `offline_online_only_refused_when_disconnected`, `offline_online_only_sends_when_connected`, `offline_online_only_leaves_normal_writes_queued`, `offline_online_only_transport_failure_refused` |
+| a poke with an undecodable row is refused whole        | `shape_poke_with_undecodable_row_is_refused_whole`                                                                                                                                              |
+| a malformed frame never raises out of the handler      | `malformed_frames_are_ignored_without_raising`                                                                                                                                                  |
+| a 2xx body that is not an object is the SDK's error    | `rpc_unreadable_success_body_raises_sdk_error`                                                                                                                                                  |
+| `close()` ends every live stream                       | `subscription_stream_ends_on_close`                                                                                                                                                             |
+| an identity change evicts the previous session         | `identity_change_evicts_previous_session`                                                                                                                                                       |
+| an unset identity stamps the token digest              | `tokenIdentity`, `offline_unset_identity_stamps_token_digest`                                                                                                                                   |
+| the bearer token never reaches a printed value         | `auth_token_redacted_when_printed`                                                                                                                                                              |
+| `shape_unsubscribe` spelling                           | **unpinned** — see below                                                                                                                                                                        |
+| `delta` merged into a cached list, `chunk`             | **not implemented in any port** — see the capability matrix above                                                                                                                               |
 
 #### Deliberately unpinned, and why
 
 Four rows above resolve to "no case, on purpose". Each is measured, not
 assumed:
 
-- **How a port's transport SPELLS a number in `(2^53, 1e21)`.** `wireText`
+- **How a port's transport SPELLS a number in `(2^53, 1e21)`.** (Its VALUE is
+  pinned: an integer literal there, which is how `JSON.stringify` writes every
+  such double, decodes to the double `JSON.parse` reads — never to a native
+  integer the encode-side range guard then refuses. That is
+  `number-integer-literal-past-exact-range`, below.) `wireText`
   compares a port against its own parse of the fixture, not against the
   reference's bytes, and a fixture cannot carry those bytes: an exact-text
   assertion would also pin whitespace and key order, which no port's default
@@ -970,7 +1143,24 @@ assumed:
   stable-key case down with it), and go's `encoding/json` silently substitutes
   U+FFFD before the port's key encoder ever sees it. Two of eight cannot express
   it, and the same two refuse the value on a real wire, so it is unreachable
-  there rather than mishandled.
+  there rather than mishandled. Rust's `String` cannot hold one either. The five
+  whose strings can — python, swift (a bridged `NSString`), java, kotlin and
+  dart — escape it as `JSON.stringify` does, lowercase, in the key AND on the
+  wire, each pinned port-locally in `string_escaping_matches_json_stringify`.
+  Java and Kotlin used to hand it to the JDK's UTF-8 encoder, which replaced it
+  with `?`, so `"a\ud800b"` keyed and travelled as `"a?b"`; Swift's
+  `JSONSerialization` refused the whole body, and a `try?` swallowed that, so the
+  queued write never replayed and blocked every write behind it.
+
+    KEYS that differ only by one are a second matter. The four whose maps key on a
+    UTF-16 string — python, java, kotlin, dart — keep `{"\ud800":1,"\ud801":2,"�":3}`
+    as three members, as JavaScript does. Swift's `String` equality reads a lone
+    surrogate as U+FFFD, so a `[String: Any]` holds one of the three: such an
+    object decodes to `[WireKey: Any]` instead, keyed by UTF-16 code unit, and
+    every other object stays `[String: Any]`. Map keys and Set members were
+    already compared by code unit there. The bytes and stable key match the
+    reference's, pinned port-locally in `string_escaping_matches_json_stringify`.
+
 - **`Error` own props carrying `__proto__`.** The decode side handles it (an own
   data property, never the setter), but the ENCODE side's Error branch writes
   `properties[key] = …` with no such guard, so the prop lands on the props
@@ -982,10 +1172,10 @@ assumed:
   and would catch nothing today. The `clientFrames` goldens that DO exist are the
   ones that once diverged.
 
-The `connect-with-caps` and `pageDeltaFrames` goldens stay opt-in, as
-`ws-frames.json`'s own comment declares: a client that has not announced the
-`pageDelta` token never receives such a frame, and running those cases would hold
-it to a merge it correctly does not do.
+The `connect-with-caps`, `pageDeltaFrames` and `refreshBatchFrames` goldens stay
+opt-in, as `ws-frames.json`'s own comment declares: a client that has not
+announced the `pageDelta` or `refreshBatch` token never receives such a frame, and
+running those cases would hold it to a merge or a hold it correctly does not do.
 
 ### The decoder leniencies, and where they went
 
@@ -1077,15 +1267,26 @@ program (go, rust) then ran a project with no tests in it. `cargo test` reported
 `cargo test --test generated_smoke` names the target instead, so its absence is
 "no test target named `generated_smoke`" and a non-zero exit.
 
-The smoke programs are `sdks/smoke/<lang>/`, and each asserts the same thing: that
-a generated call reaches the wire as
+The smoke programs are `sdks/smoke/<lang>/`, two per language. `generated_smoke`
+asserts that a generated call reaches the wire as
 `{"args":{"channelId":"chan_1"},"functionPath":"messages:list"}` — note the absent
-`limit`, which is what makes this assertion catch the unset-optional bug at all. They sit outside
+`limit`, which is what makes this assertion catch the unset-optional bug at all.
+`surface_smoke` runs against a second spec,
+`packages/codegen/__tests__/fixtures/sdk-surface/expected/_generated/openrpc.json`
+— the emitter's own golden, never a hand-written document — with one function per
+shape a model backend renders differently: a no-arg function; object, id, number,
+array, record and null results; a nullable object; an array of objects; two
+functions sharing one non-object shape; a union; an unset optional; `v.bigint()`
+arguments and results at the top level and nested; and functions named `match`,
+`type` and `self`. It calls each one and asserts both the frame and the decoded
+result, because the first spec's untyped results never reach the parts of a
+backend that differ by shape — six generator defects shipped there with every leg
+green. They sit outside
 every transport's tree because that is what they are — consumer code, importing
 `lunorasdk/lunoraapi` and `import LunoraApi`, which resolve only against generated
 output. `--from sdks` is passed for them, because the default fetch is the CLI's
-release tag and seven of the eight transports do not exist at any released tag
-yet.
+release tag, and CI has to exercise the transports in the checkout under test
+rather than whatever a published tag carries.
 
 The dart leg runs `dart analyze` in BOTH the generated package and the consumer,
 and the first is the one that matters: `dart analyze` only reports on the package

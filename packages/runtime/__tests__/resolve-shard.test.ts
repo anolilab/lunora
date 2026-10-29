@@ -83,6 +83,24 @@ describe("applyJurisdiction", () => {
 });
 
 describe("resolveShard", () => {
+    it("refuses a shard key carrying the reserved role prefix", () => {
+        expect.assertions(2);
+
+        const getByName = vi.fn<() => typeof fakeStub>(() => fakeStub);
+        const namespace: ShardNamespaceLike = {
+            get: () => fakeStub,
+            getByName,
+            idFromName: () => {
+                return {};
+            },
+        };
+
+        // A merged Durable Object class hosts the scheduler under this prefix; a
+        // client-chosen shard key must never reach it.
+        expect(() => resolveShard(namespace, "__lunora_do__:scheduler:default")).toThrow(/reserved/u);
+        expect(getByName).not.toHaveBeenCalled();
+    });
+
     it("prefers getByName when present", () => {
         expect.assertions(2);
 

@@ -1,62 +1,23 @@
 /* eslint-disable sonarjs/deprecation -- the SDK marks the low-level `Server` @deprecated in favour of the high-level `McpServer`, but explicitly sanctions `Server` for "advanced use cases". Ours qualifies: we dispatch tools defined with plain JSON Schema and bridge structured results ourselves, which avoids McpServer's per-tool zod dependency. */
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-import { LunoraClient } from "@lunora/client";
+import { LunoraAdminClient } from "@lunora/client/admin";
 import { LunoraError } from "@lunora/errors";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
+import pkg from "../package.json";
 import type { McpAgentExposure } from "./agent-tools";
 import { agentToolDefinitions, callAgentTool, isAgentToolName } from "./agent-tools";
 import { callTool, toolDefinitions } from "./tools";
 
 /**
- * Resolve the package's real version so the MCP `initialize` handshake reports
- * the build a client is actually talking to. Reading `package.json` at runtime
- * (rather than hardcoding) keeps the advertised version in lockstep with
- * semantic-release bumps; if resolution ever fails we fall back to `0.0.0`.
+ * Server name advertised in the MCP `initialize` handshake. The version defaults
+ * to the `package.json` bundled at build time, which is stamped before
+ * semantic-release bumps the manifest and so can lag one release behind on
+ * Workers (it was `0.0.0` there before). The Node entry passes the installed
+ * manifest's exact version via `version`.
  */
-const resolveVersion = (): string => {
-    // Walk up from this module's directory to the nearest `package.json`. A
-    // relative `../package.json` is unreliable because the bundler emits this
-    // code into a hashed shared-chunk subdirectory whose depth isn't fixed.
-    try {
-        let directory = dirname(fileURLToPath(import.meta.url));
-
-        for (let depth = 0; depth < 8; depth += 1) {
-            try {
-                const raw = readFileSync(join(directory, "package.json"), "utf8");
-                const pkg = JSON.parse(raw) as { name?: string; version?: string };
-
-                // Skip any nested package.json that isn't ours.
-                if (pkg.name === "@lunora/mcp" && typeof pkg.version === "string" && pkg.version.length > 0) {
-                    return pkg.version;
-                }
-            } catch {
-                // No package.json at this level (or unreadable); keep climbing.
-            }
-
-            const parent = dirname(directory);
-
-            if (parent === directory) {
-                break;
-            }
-
-            directory = parent;
-        }
-    } catch {
-        // Fall through to the static fallback below.
-    }
-
-    return "0.0.0";
-};
-
-/** Server name/version advertised in the MCP `initialize` handshake. */
-const SERVER_INFO = { name: "lunora", version: resolveVersion() } as const;
+const SERVER_NAME = "lunora";
 
 interface LunoraMcpServerOptions {
     /** Wall-clock budget a single agent tool call awaits before returning a pending result. */
@@ -77,6 +38,15 @@ interface LunoraMcpServerOptions {
     allowAgents?: boolean;
 
     /**
+     * Expose `lunora_find_related`, which returns raw table rows read through the
+     * admin writer, so RLS policies and column masks do not apply. Defaults to
+     * `false`, for the same reason as `allowObservability`. Only takes effect
+     * when a `token` resolved. On the OAuth-protected path the verified token must
+     * also carry the data-read scope (see `DATA_READ_SCOPE` in `./tools`).
+     */
+    allowDataReads?: boolean;
+
+    /**
      * Expose the observability tools (`lunora_get_logs`, `lunora_get_issues`,
      * `lunora_get_advisories`, `lunora_get_query_insights`,
      * `lunora_get_migration_status`). Defaults to `false`, mirroring
@@ -85,7 +55,9 @@ interface LunoraMcpServerOptions {
      * lands in the model's context and therefore at its provider. Holding the
      * admin bearer is not consent to ship that, so it is a separate opt-in;
      * without it the tools are omitted from the advertised list AND refused at
-     * dispatch. Only takes effect when a `token` resolved.
+     * dispatch. Only takes effect when a `token` resolved. On the OAuth-protected
+     * path the verified token must also carry the observability scope (see
+     * `OBSERVABILITY_SCOPE` in `./tools`); this option stays the outer gate.
      */
     allowObservability?: boolean;
 
@@ -99,10 +71,10 @@ interface LunoraMcpServerOptions {
     allowWrites?: boolean;
 
     /**
-     * Pre-built client (test injection). When omitted a `LunoraClient` is
+     * Pre-built client (test injection). When omitted a `LunoraAdminClient` is
      * created from `url`/`token`/`fetch`.
      */
-    client?: LunoraClient;
+    client?: LunoraAdminClient;
     /** `fetch` implementation; defaults to the ambient global. */
     fetch?: typeof fetch;
 
@@ -128,18 +100,28 @@ interface LunoraMcpServerOptions {
     token?: string;
     /** Base URL of the deployed Lunora Worker. Required unless `client` is given. */
     url?: string;
+    /** Version reported in the `initialize` handshake. Defaults to the version bundled at build time. */
+    version?: string;
 }
 
 /**
- * Build the `LunoraClient` the tools dispatch against.
+ * Build the `LunoraAdminClient` the tools dispatch against.
  *
  * Exported for the HTTP handlers, which build one client for the lifetime of
  * the handler instead of one per request: `listFunctionsCached` in `./tools`
  * keys its memo on client identity, so a fresh client per request turns every
  * tool call back into two admin round trips.
  */
-const resolveClient = (options: LunoraMcpServerOptions): LunoraClient => {
+const resolveClient = (options: LunoraMcpServerOptions): LunoraAdminClient => {
     if (options.client !== undefined) {
+        // The type already says so; this catches a JS caller or a cast, which would
+        // otherwise fail on the first tool call with `listFunctions is not a function`.
+        // It probes the one admin method every tool needs rather than
+        // `isLunoraAdminClient`, so an injected stub need only carry what MCP calls.
+        if (typeof (options.client as Partial<LunoraAdminClient>).listFunctions !== "function") {
+            throw new LunoraError("INTERNAL", "createLunoraMcpServer needs a LunoraAdminClient (`@lunora/client/admin`), not a plain LunoraClient.");
+        }
+
         return options.client;
     }
 
@@ -154,7 +136,7 @@ const resolveClient = (options: LunoraMcpServerOptions): LunoraClient => {
         );
     }
 
-    const client = new LunoraClient({ fetch: options.fetch, url: options.url });
+    const client = new LunoraAdminClient({ fetch: options.fetch, url: options.url });
 
     client.setAuthToken(options.token);
 
@@ -183,10 +165,13 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     // fail-closed reading of "unknown" is "no privileged tools".
     const hasAdminToken = typeof options.token === "string" && options.token.length > 0;
     const allowObservability = options.allowObservability === true && hasAdminToken;
-    const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
+    // Its own gate, not folded into observability: log lines and raw table rows
+    // are different data classes, and one opt-in must not silently grant both.
+    const allowDataReads = options.allowDataReads === true && hasAdminToken;
+    const server = new Server({ name: SERVER_NAME, version: options.version ?? pkg.version }, { capabilities: { tools: {} } });
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
-        return { tools: [...toolDefinitions(allowWrites, allowObservability), ...agentToolDefinitions(agents, allowAgents)] };
+        return { tools: [...toolDefinitions(allowWrites, allowObservability, allowDataReads), ...agentToolDefinitions(agents, allowAgents)] };
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
@@ -202,26 +187,13 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
                   ...(options.agentMaxWaitMs === undefined ? {} : { maxWaitMs: options.agentMaxWaitMs }),
                   ...(options.agentPollIntervalMs === undefined ? {} : { pollIntervalMs: options.agentPollIntervalMs }),
               })
-            : await callTool(client, name, input, allowWrites, allowObservability);
+            : await callTool(client, name, input, allowWrites, allowObservability, allowDataReads);
 
-        return result as CallToolResult;
+        return result;
     });
 
     return server;
 };
 
-/**
- * Build the server and connect it over stdio — the transport MCP clients use
- * when they spawn the `lunora-mcp` binary. Resolves once the transport is
- * connected; the process then stays alive serving requests.
- */
-const connectStdio = async (options: LunoraMcpServerOptions): Promise<Server> => {
-    const server = createLunoraMcpServer(options);
-
-    await server.connect(new StdioServerTransport());
-
-    return server;
-};
-
 export type { LunoraMcpServerOptions };
-export { connectStdio, createLunoraMcpServer, resolveClient };
+export { createLunoraMcpServer, resolveClient };

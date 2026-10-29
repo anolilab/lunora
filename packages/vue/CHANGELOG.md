@@ -1,3 +1,1648 @@
+## @lunora/vue [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.297...@lunora/vue@1.0.0-alpha.298) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.261
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.179
+
+## @lunora/vue [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.296...@lunora/vue@1.0.0-alpha.297) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.260
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.178
+
+## @lunora/vue [1.0.0-alpha.296](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.295...@lunora/vue@1.0.0-alpha.296) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.259
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.177
+
+## @lunora/vue [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.294...@lunora/vue@1.0.0-alpha.295) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.258
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.176
+
+## @lunora/vue [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.293...@lunora/vue@1.0.0-alpha.294) (2026-10-27)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.257
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.175
+
+## @lunora/vue [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.292...@lunora/vue@1.0.0-alpha.293) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.256
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.174
+
+## @lunora/vue [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.291...@lunora/vue@1.0.0-alpha.292) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.253
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.172
+
+## @lunora/vue [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.290...@lunora/vue@1.0.0-alpha.291) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.252
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.171
+
+## @lunora/vue [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.289...@lunora/vue@1.0.0-alpha.290) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.251
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.170
+
+## @lunora/vue [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.288...@lunora/vue@1.0.0-alpha.289) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.250
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.169
+
+## @lunora/vue [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.287...@lunora/vue@1.0.0-alpha.288) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.249
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.168
+
+## @lunora/vue [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.286...@lunora/vue@1.0.0-alpha.287) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.248
+
+## @lunora/vue [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.285...@lunora/vue@1.0.0-alpha.286) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.247
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.167
+
+## @lunora/vue [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.284...@lunora/vue@1.0.0-alpha.285) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.246
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.166
+
+## @lunora/vue [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.283...@lunora/vue@1.0.0-alpha.284) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.245
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.165
+
+## @lunora/vue [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.282...@lunora/vue@1.0.0-alpha.283) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.244
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.164
+
+## @lunora/vue [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.281...@lunora/vue@1.0.0-alpha.282) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.243
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.163
+
+## @lunora/vue [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.280...@lunora/vue@1.0.0-alpha.281) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.242
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.162
+
+## @lunora/vue [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.279...@lunora/vue@1.0.0-alpha.280) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.241
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.161
+
+## @lunora/vue [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.278...@lunora/vue@1.0.0-alpha.279) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.239
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.159
+
+## @lunora/vue [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.277...@lunora/vue@1.0.0-alpha.278) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.238
+
+## @lunora/vue [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.276...@lunora/vue@1.0.0-alpha.277) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.237
+
+## @lunora/vue [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.275...@lunora/vue@1.0.0-alpha.276) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.236
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.158
+
+## @lunora/vue [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.274...@lunora/vue@1.0.0-alpha.275) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.235
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.157
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+
+## @lunora/vue [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.273...@lunora/vue@1.0.0-alpha.274) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.234
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.156
+
+## @lunora/vue [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.272...@lunora/vue@1.0.0-alpha.273) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.233
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.155
+
+## @lunora/vue [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.271...@lunora/vue@1.0.0-alpha.272) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.232
+
+## @lunora/vue [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.270...@lunora/vue@1.0.0-alpha.271) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.231
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.154
+
+## @lunora/vue [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.269...@lunora/vue@1.0.0-alpha.270) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.230
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.153
+
+## @lunora/vue [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.268...@lunora/vue@1.0.0-alpha.269) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.229
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.152
+
+## @lunora/vue [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.267...@lunora/vue@1.0.0-alpha.268) (2026-10-18)
+
+### Features
+
+* **client:** share one live stream connection and add live topic bindings ([#1252](https://github.com/anolilab/lunora/issues/1252)) ([d108d5a](https://github.com/anolilab/lunora/commit/d108d5af5fa7f8dc099d7a30c42deeeb956fdebe))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.228
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.151
+
+## @lunora/vue [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.266...@lunora/vue@1.0.0-alpha.267) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.227
+
+## @lunora/vue [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.265...@lunora/vue@1.0.0-alpha.266) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.226
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.150
+
+## @lunora/vue [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.264...@lunora/vue@1.0.0-alpha.265) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.225
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.149
+
+## @lunora/vue [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.263...@lunora/vue@1.0.0-alpha.264) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.224
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.148
+
+## @lunora/vue [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.262...@lunora/vue@1.0.0-alpha.263) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.222
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.147
+
+## @lunora/vue [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.261...@lunora/vue@1.0.0-alpha.262) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.221
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.146
+
+## @lunora/vue [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.260...@lunora/vue@1.0.0-alpha.261) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.219
+
+## @lunora/vue [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.259...@lunora/vue@1.0.0-alpha.260) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.218
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.145
+
+## @lunora/vue [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.258...@lunora/vue@1.0.0-alpha.259) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.217
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.144
+
+## @lunora/vue [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.257...@lunora/vue@1.0.0-alpha.258) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.216
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.143
+
+## @lunora/vue [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.256...@lunora/vue@1.0.0-alpha.257) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.215
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.142
+
+## @lunora/vue [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.255...@lunora/vue@1.0.0-alpha.256) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.141
+
+## @lunora/vue [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.254...@lunora/vue@1.0.0-alpha.255) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.214
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.139
+
+## @lunora/vue [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.253...@lunora/vue@1.0.0-alpha.254) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.138
+
+## @lunora/vue [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.252...@lunora/vue@1.0.0-alpha.253) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.137
+
+## @lunora/vue [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.251...@lunora/vue@1.0.0-alpha.252) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.213
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.136
+
+## @lunora/vue [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.250...@lunora/vue@1.0.0-alpha.251) (2026-10-15)
+
+### Performance Improvements
+
+* **wire:** publish the wire codec once instead of inlining it into every package ([#1198](https://github.com/anolilab/lunora/issues/1198)) ([7020e2c](https://github.com/anolilab/lunora/commit/7020e2cec53c3e5c0f28ab8e569b33ee0ae3a55b))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.212
+* **@lunora/errors:** upgraded to 1.0.0-alpha.56
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.135
+* **@lunora/wire:** upgraded to 1.0.0-alpha.1
+
+## @lunora/vue [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.249...@lunora/vue@1.0.0-alpha.250) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.211
+
+## @lunora/vue [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.248...@lunora/vue@1.0.0-alpha.249) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.209
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.134
+
+## @lunora/vue [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.247...@lunora/vue@1.0.0-alpha.248) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.208
+
+## @lunora/vue [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.246...@lunora/vue@1.0.0-alpha.247) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.207
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.133
+
+## @lunora/vue [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.245...@lunora/vue@1.0.0-alpha.246) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.206
+
+## @lunora/vue [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.244...@lunora/vue@1.0.0-alpha.245) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.205
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.131
+
+## @lunora/vue [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.243...@lunora/vue@1.0.0-alpha.244) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.204
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.130
+
+## @lunora/vue [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.242...@lunora/vue@1.0.0-alpha.243) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.203
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.129
+
+## @lunora/vue [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.241...@lunora/vue@1.0.0-alpha.242) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.202
+
+## @lunora/vue [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.240...@lunora/vue@1.0.0-alpha.241) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.201
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.128
+
+## @lunora/vue [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.239...@lunora/vue@1.0.0-alpha.240) (2026-10-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.200
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.127
+
+## @lunora/vue [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.238...@lunora/vue@1.0.0-alpha.239) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.199
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.126
+
+## @lunora/vue [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.237...@lunora/vue@1.0.0-alpha.238) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.198
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.125
+
+## @lunora/vue [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.236...@lunora/vue@1.0.0-alpha.237) (2026-10-12)
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.197
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.124
+
+## @lunora/vue [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.235...@lunora/vue@1.0.0-alpha.236) (2026-10-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.196
+
+## @lunora/vue [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.234...@lunora/vue@1.0.0-alpha.235) (2026-10-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.195
+
+## @lunora/vue [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.233...@lunora/vue@1.0.0-alpha.234) (2026-10-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.194
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.123
+
+## @lunora/vue [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.232...@lunora/vue@1.0.0-alpha.233) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.193
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.122
+
+## @lunora/vue [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.231...@lunora/vue@1.0.0-alpha.232) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.192
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.121
+* **@visulima/storage-client:** 1.0.8 → 1.0.9
+
+## @lunora/vue [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.230...@lunora/vue@1.0.0-alpha.231) (2026-10-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.191
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.120
+
+## @lunora/vue [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.229...@lunora/vue@1.0.0-alpha.230) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.190
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.119
+
+## @lunora/vue [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.228...@lunora/vue@1.0.0-alpha.229) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.189
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.118
+
+## @lunora/vue [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.227...@lunora/vue@1.0.0-alpha.228) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.117
+
+## @lunora/vue [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.226...@lunora/vue@1.0.0-alpha.227) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.188
+
+## @lunora/vue [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.225...@lunora/vue@1.0.0-alpha.226) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.187
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.116
+
+## @lunora/vue [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.224...@lunora/vue@1.0.0-alpha.225) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.186
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.115
+
+## @lunora/vue [1.0.0-alpha.224](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.223...@lunora/vue@1.0.0-alpha.224) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.185
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.114
+
+## @lunora/vue [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.222...@lunora/vue@1.0.0-alpha.223) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.184
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.113
+
+## @lunora/vue [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.221...@lunora/vue@1.0.0-alpha.222) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.183
+
+## @lunora/vue [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.220...@lunora/vue@1.0.0-alpha.221) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.181
+* **@visulima/storage-client:** 1.0.5 → 1.0.8
+
+## @lunora/vue [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.219...@lunora/vue@1.0.0-alpha.220) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.180
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.111
+
+## @lunora/vue [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.218...@lunora/vue@1.0.0-alpha.219) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.179
+
+## @lunora/vue [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.217...@lunora/vue@1.0.0-alpha.218) (2026-10-04)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.178
+
+## @lunora/vue [1.0.0-alpha.217](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.216...@lunora/vue@1.0.0-alpha.217) (2026-10-04)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.177
+
+## @lunora/vue [1.0.0-alpha.216](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.215...@lunora/vue@1.0.0-alpha.216) (2026-10-04)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.176
+
+## @lunora/vue [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.214...@lunora/vue@1.0.0-alpha.215) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.175
+
+## @lunora/vue [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.213...@lunora/vue@1.0.0-alpha.214) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.110
+
+## @lunora/vue [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.212...@lunora/vue@1.0.0-alpha.213) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.109
+
+## @lunora/vue [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.211...@lunora/vue@1.0.0-alpha.212) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.174
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.108
+
+## @lunora/vue [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.210...@lunora/vue@1.0.0-alpha.211) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.173
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.107
+
+## @lunora/vue [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.209...@lunora/vue@1.0.0-alpha.210) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.172
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.106
+
+## @lunora/vue [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.208...@lunora/vue@1.0.0-alpha.209) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.171
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.105
+
+## @lunora/vue [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.207...@lunora/vue@1.0.0-alpha.208) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.170
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.104
+
+## @lunora/vue [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.206...@lunora/vue@1.0.0-alpha.207) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.169
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.103
+
+## @lunora/vue [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.205...@lunora/vue@1.0.0-alpha.206) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.102
+
+## @lunora/vue [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.204...@lunora/vue@1.0.0-alpha.205) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.168
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.101
+
+## @lunora/vue [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.203...@lunora/vue@1.0.0-alpha.204) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.100
+
+## @lunora/vue [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.202...@lunora/vue@1.0.0-alpha.203) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.167
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.99
+
+## @lunora/vue [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.201...@lunora/vue@1.0.0-alpha.202) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.166
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.98
+
+## @lunora/vue [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.200...@lunora/vue@1.0.0-alpha.201) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.165
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.97
+
+## @lunora/vue [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.199...@lunora/vue@1.0.0-alpha.200) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.164
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.96
+
+## @lunora/vue [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.198...@lunora/vue@1.0.0-alpha.199) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.163
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.95
+
+## @lunora/vue [1.0.0-alpha.198](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.197...@lunora/vue@1.0.0-alpha.198) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.162
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.94
+
+## @lunora/vue [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.196...@lunora/vue@1.0.0-alpha.197) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.161
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.93
+
+## @lunora/vue [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.195...@lunora/vue@1.0.0-alpha.196) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.160
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.92
+
+## @lunora/vue [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.194...@lunora/vue@1.0.0-alpha.195) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.159
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.91
+
+## @lunora/vue [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.193...@lunora/vue@1.0.0-alpha.194) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.158
+
+## @lunora/vue [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.192...@lunora/vue@1.0.0-alpha.193) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.157
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.90
+
+## @lunora/vue [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.191...@lunora/vue@1.0.0-alpha.192) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.156
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.89
+
+## @lunora/vue [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.190...@lunora/vue@1.0.0-alpha.191) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.155
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.88
+
+## @lunora/vue [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.189...@lunora/vue@1.0.0-alpha.190) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.154
+
+## @lunora/vue [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.188...@lunora/vue@1.0.0-alpha.189) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.153
+
+## @lunora/vue [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.187...@lunora/vue@1.0.0-alpha.188) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.152
+
+## @lunora/vue [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.186...@lunora/vue@1.0.0-alpha.187) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.151
+
+## @lunora/vue [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.185...@lunora/vue@1.0.0-alpha.186) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **react:** `usePreloadedQuery` and `hydratePreloaded` in @lunora/react,
+and `hydratePreloaded` in @lunora/vue, @lunora/svelte and @lunora/solid, now
+type the preloaded value as possibly `undefined`. Guard before reading a field
+(`if (!data) return <Loading />`, `data?.field`, `$store ?? []`).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(react): drop casts that widened a preloaded value by hand
+
+The identity-switch tests in @lunora/react, @lunora/solid and @lunora/svelte cast the preloaded
+value to `T | undefined` to get around the old `T` return type. The adapters return that type
+now, so the casts are redundant and trip `no-unnecessary-type-assertion`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **react:** type a preloaded value as possibly undefined ([#861](https://github.com/anolilab/lunora/issues/861)) ([a90ea49](https://github.com/anolilab/lunora/commit/a90ea496c5df42fa325a15cdf579c2bbbb36392d))
+
+## @lunora/vue [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.184...@lunora/vue@1.0.0-alpha.185) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.150
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.87
+
+## @lunora/vue [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.183...@lunora/vue@1.0.0-alpha.184) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.149
+
+## @lunora/vue [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.182...@lunora/vue@1.0.0-alpha.183) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.148
+
+## @lunora/vue [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.181...@lunora/vue@1.0.0-alpha.182) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.147
+
+## @lunora/vue [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.180...@lunora/vue@1.0.0-alpha.181) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.146
+
+## @lunora/vue [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.179...@lunora/vue@1.0.0-alpha.180) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.145
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.86
+
+## @lunora/vue [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.178...@lunora/vue@1.0.0-alpha.179) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.144
+
+## @lunora/vue [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.177...@lunora/vue@1.0.0-alpha.178) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.143
+
+## @lunora/vue [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.176...@lunora/vue@1.0.0-alpha.177) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.142
+
+## @lunora/vue [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.175...@lunora/vue@1.0.0-alpha.176) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.141
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.85
+
+## @lunora/vue [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.174...@lunora/vue@1.0.0-alpha.175) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** `LunoraClient.getCurrentUser()` answering "no session" under a
+cookie session now signs the client out (`onIdentityChange` fires if a user was
+known), and `ServerMessage` gains `ServerIdentityMessage`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(client): adopt a 401 sign-out and keep the auth gate recoverable
+
+- `getCurrentUser()` treated a `401`/`403` from `/get-session` as "no session"
+  but did not adopt it, so a cookie sign-out answered that way left the
+  identity on the previous user. It is now adopted like a `200 null`; a bearer
+  session still ignores a null user, and a 5xx or 404 is still no verdict.
+- The identity store's recovery from `unreachable` on reconnect now always
+  asks. After an earlier answer, a cookie session's refresh otherwise short-
+  circuited to `unauthenticated` off its absent token.
+- A probe that gets no answer no longer blocks the next probe for the same
+  subject. Only an answer that contradicts the socket does, which is what
+  keeps a disagreeing resolver from looping.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(runtime): add custom CORS headers to the client's own, not replace them
+
+`security.cors.allowedHeaders` replaced the default allowlist. A cross-origin
+app whose list predated a header `@lunora/client` sends on its own failed that
+request's preflight. The client can only read that as a network error, so a
+replayed offline write carrying `x-lunora-expect-subject` was retried as
+transient forever and never landed.
+
+An app's list is now added to the defaults, which are exactly the headers the
+client sends unprompted.
+* **client:** `security.cors.allowedHeaders` can no longer remove a default
+header from the preflight allowlist.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(client): name the queuing user on every cookie-session replay
+
+A replay carried `x-lunora-expect-subject` only when the app called
+`getCurrentUser()` or used the identity store. A socket's `identity` frame
+labels queued writes `subj:A` in every app, though. So an app that reads its
+session through better-auth alone replayed A's write without the header. If the
+cookie changed hands while offline (another tab) and the flush ran before the new
+socket's frame, the write committed as B. Every replay without a bearer token
+now carries the header. An app without auth stamps `null` and resolves to nobody,
+so the header always passes there.
+
+Also:
+- `setAuthToken` re-flushes the queue only when a replay verdict input changed.
+  A write the worker refused triggered a probe, and the probe's unchanged answer
+  re-flushed the write into the same refusal. That hot loop is gone.
+- A refusal followed by a probe that names the same user logs one warning:
+  `resolveIdentity` and `/get-session` resolve different ids, or RPC requests
+  carry no cookie.
+- A `403` from `/get-session` is no longer a sign-out. A WAF or bot challenge on
+  that route wiped the screen and the durable read cache of a signed-in user.
+  Only `401` or an empty session is.
+- In a browser, each client listens for a page-wide session-change signal
+  (`shared/session-change.ts`) and re-resolves the session when it fires.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* feat(auth): tell the Lunora client about every cookie sign-in and sign-out
+
+Under a cookie session a sign-in or sign-out in place changed nothing the
+Lunora client could see. Its socket kept serving the previous user's rows until
+it dropped, unless the app remembered to call `client.getCurrentUser()`
+afterwards. Neither auth-ui nor a direct better-auth setup did.
+
+- `lunoraSessionSync()` in `@lunora/auth/plugins/client` is a better-auth client
+  plugin. After every successful non-GET auth request it signals every
+  `LunoraClient` in the page to re-resolve the session.
+  `createLunoraAuthClient` always installs it, so the scaffolded auth-ui client
+  has it too. `notifyLunoraSessionChange()` reports a change made any other way.
+- `@lunora/auth-ui` signals on every session change (sign-in, sign-out, 2FA,
+  account switch) from the shared `resolveContext`, so all six ports and the
+  registry copies do it whatever client the app built. The app's own
+  `onSessionChange` runs after.
+- The playground now relies on this alone. It installs `lunoraSessionSync()`,
+  reads its session through better-auth, and makes no manual calls.
+  `?authstore=1` also mounts `useAuth` for the variant that probes. The
+  account cards stay in the page on sign-out, as under an SPA router.
+
+The authentication docs describe the automatic path and the id-equality
+requirement between `resolveIdentity` and better-auth's `user.id`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(errors): register IDENTITY_MISMATCH in the error catalog
+
+The worker's refusal of a replayed write whose cookie changed hands mints
+`IDENTITY_MISMATCH`. It was missing from `ERROR_CATALOG`, which the catalog
+registration test requires of every minted code. It is registered as a 409 with
+a hint that names the one misconfiguration causing it for a signed-in user: a
+`resolveIdentity` whose `userId` differs from better-auth's `user.id`. The
+message carries no backend detail, so the code is not `internal`. The errors
+reference is regenerated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(solid): give the Solid 2 auth fake an onIdentityChange
+
+The identity store now subscribes to `LunoraClient.onIdentityChange` so a
+retired cookie session updates the gate. The Solid 2 adapter's `createAuth`
+tests build their own client double without it. Every test in the file then
+died in the store's constructor, which halted Solid 2's reactive system. The
+double gets the method, as the other adapters' fakes already have.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(auth-ui): run onSessionChange once the Lunora clients know the new session
+
+auth-ui signalled the session change and then called the app's `onSessionChange`
+straight away, while each Lunora client's `/get-session` probe was still in
+flight. A handler that read `client.currentIdentity()` right after an account
+switch saw the previous user, contrary to the docs.
+
+The session-change signal now returns a promise that settles once every
+listener's work has settled. For a `LunoraClient`, that work is its re-resolve.
+`notifyLunoraSessionChange()` returns it too, so other callers can await it.
+auth-ui runs the app's handler after it, capped at 5s so a probe that never
+answers cannot hold the handler, often the app's own session refresh, back
+forever. The better-auth plugin still fires and forgets.
+* **client:** `AuthUIConfig.onSessionChange` now runs after the Lunora clients
+re-resolve the session, asynchronously, rather than synchronously inside the flow.
+`notifyLunoraSessionChange()` returns `Promise<void>`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(auth): await notifyLunoraSessionChange in its listener test
+
+`notifyLunoraSessionChange()` returns a promise since it waits for every Lunora
+client to re-resolve the session. The listener test left it floating, which
+`@typescript-eslint/no-floating-promises` rejects. Awaiting it also makes the
+assertion wait for the listeners rather than rely on them being synchronous.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### security
+
+* **client:** retire a cookie session when the server says it changed ([#842](https://github.com/anolilab/lunora/issues/842)) ([301f24c](https://github.com/anolilab/lunora/commit/301f24c44f55655bb8d84fe4ecc8e50508c81796))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.139
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.84
+
+## @lunora/vue [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.173...@lunora/vue@1.0.0-alpha.174) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.138
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.83
+
+## @lunora/vue [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.172...@lunora/vue@1.0.0-alpha.173) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.82
+
+## @lunora/vue [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.171...@lunora/vue@1.0.0-alpha.172) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.137
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.81
+
+## @lunora/vue [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.170...@lunora/vue@1.0.0-alpha.171) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.136
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.80
+
+## @lunora/vue [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.169...@lunora/vue@1.0.0-alpha.170) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.135
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.79
+
+## @lunora/vue [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.168...@lunora/vue@1.0.0-alpha.169) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.134
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.78
+
+## @lunora/vue [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.167...@lunora/vue@1.0.0-alpha.168) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.133
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.77
+
+## @lunora/vue [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.166...@lunora/vue@1.0.0-alpha.167) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.132
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.76
+
+## @lunora/vue [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.165...@lunora/vue@1.0.0-alpha.166) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.131
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.75
+
+## @lunora/vue [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.164...@lunora/vue@1.0.0-alpha.165) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.130
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.74
+
+## @lunora/vue [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.163...@lunora/vue@1.0.0-alpha.164) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.129
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.73
+
+## @lunora/vue [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.162...@lunora/vue@1.0.0-alpha.163) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.128
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.72
+
+## @lunora/vue [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.161...@lunora/vue@1.0.0-alpha.162) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.127
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.71
+
+## @lunora/vue [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.160...@lunora/vue@1.0.0-alpha.161) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.126
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.70
+
+## @lunora/vue [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.159...@lunora/vue@1.0.0-alpha.160) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.125
+
+## @lunora/vue [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.158...@lunora/vue@1.0.0-alpha.159) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.124
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.69
+
+## @lunora/vue [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.157...@lunora/vue@1.0.0-alpha.158) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.123
+
+## @lunora/vue [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.156...@lunora/vue@1.0.0-alpha.157) (2026-09-23)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** `LunoraClient` gains `expectIdentityResolution()`, and a client
+that resolves an identity caches no reads and replays no queued writes until a
+`/get-session` actually answers — previously only while one was in flight.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### security
+
+* **client:** close the identity gates outside the session probe ([#787](https://github.com/anolilab/lunora/issues/787)) ([e176653](https://github.com/anolilab/lunora/commit/e1766531497eeb9d097259ff3c315f924ebd0cca))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.122
+
+## @lunora/vue [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.155...@lunora/vue@1.0.0-alpha.156) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.121
+
+## @lunora/vue [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.154...@lunora/vue@1.0.0-alpha.155) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.120
+
+## @lunora/vue [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.153...@lunora/vue@1.0.0-alpha.154) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.119
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.68
+
+## @lunora/vue [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.152...@lunora/vue@1.0.0-alpha.153) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.117
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.67
+
+## @lunora/vue [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.151...@lunora/vue@1.0.0-alpha.152) (2026-09-22)
+
+### ⚠ BREAKING CHANGES
+
+* **agent:** `AgentThreadRecord["error"]` widens to `null | string` in @lunora/react,
+@lunora/vue, @lunora/solid, @lunora/svelte and @lunora/angular. A cleared error now reads back
+as `null` rather than absent; read the field for truthiness, not presence.
+
+Why the suite was green: all three `ctx.db` doubles in this package deleted a key whose value is
+`undefined` — strictly more permissive than the store. They now reject it with the engine's
+byte-identical message, from one shared helper. Eleven existing tests fail on the unfixed code
+with that hardening alone. The package has no workerd suite, so nothing else would catch it.
+
+Fixing this also makes an ordering hazard reachable that could not fire before.
+`agentCompleteRun`'s empty-queue branch leaves `instanceId` naming the finishing run, and
+`agentEnsureThread` dispatched with no `instanceId` — what `voice-turn.ts` does — marks the
+thread live again without taking ownership. A finished run then still reads as the owner, and
+its at-least-once completion would re-read the queue and wake a run parked behind whoever is
+actually holding the thread: two writers on one `seq` counter. Threads now record
+`completedInstanceId`, and a completion that matches it re-applies its terminal status
+(absolute, so a lost reply still converges) but dequeues nobody. The parked run waits for the
+thread's real holder, bounded by its own DEQUEUE_TIMEOUT.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* test(agent): pin that the thread error column admits null
+
+Found by sabotage: reverting the column to `v.optional(v.string())` — the state in which the
+declared row type says `string` while the store holds `null` — left all 75 tests green. The
+engine tolerates a stored `null` on any optional column when patching (`runRowValidators`'s
+`tolerateStoredNull`), so nothing on the write path objects; only the generated type is wrong,
+and no assertion read it.
+
+Asserting the column's own parser closes that: `null` in, `null` out.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* **agent:** clear a thread's error with null so continued runs stop throwing ([#774](https://github.com/anolilab/lunora/issues/774)) ([172f1c0](https://github.com/anolilab/lunora/commit/172f1c0ac4a1457f0ce94966328f23bc74cccef6))
+
+## @lunora/vue [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.150...@lunora/vue@1.0.0-alpha.151) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.116
+
+## @lunora/vue [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.149...@lunora/vue@1.0.0-alpha.150) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.115
+
+## @lunora/vue [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.148...@lunora/vue@1.0.0-alpha.149) (2026-09-21)
+
+### Bug Fixes
+
+* **react-native:** omit the ambient cookie, and four local-first tier fixes ([#765](https://github.com/anolilab/lunora/issues/765)) ([dbf584c](https://github.com/anolilab/lunora/commit/dbf584cac3692d8649b5bda3689f46b0f0c36cf5))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.114
+
+## @lunora/vue [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.147...@lunora/vue@1.0.0-alpha.148) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.113
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.66
+
+## @lunora/vue [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.146...@lunora/vue@1.0.0-alpha.147) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.112
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.65
+
+## @lunora/vue [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.145...@lunora/vue@1.0.0-alpha.146) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.111
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.64
+
+## @lunora/vue [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.144...@lunora/vue@1.0.0-alpha.145) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.110
+
+## @lunora/vue [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.143...@lunora/vue@1.0.0-alpha.144) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.109
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.63
+
+## @lunora/vue [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.142...@lunora/vue@1.0.0-alpha.143) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.108
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.62
+
+## @lunora/vue [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.141...@lunora/vue@1.0.0-alpha.142) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.107
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.61
+
+## @lunora/vue [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.140...@lunora/vue@1.0.0-alpha.141) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.106
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.60
+
+## @lunora/vue [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.139...@lunora/vue@1.0.0-alpha.140) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.105
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.59
+
+## @lunora/vue [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.138...@lunora/vue@1.0.0-alpha.139) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.104
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.58
+
+## @lunora/vue [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.137...@lunora/vue@1.0.0-alpha.138) (2026-09-12)
+
+### Bug Fixes
+
+* **client:** separate an unreachable session from no session ([#723](https://github.com/anolilab/lunora/issues/723)) ([c4a540b](https://github.com/anolilab/lunora/commit/c4a540b5aab79d58f3c4863651f729a0a1564856))
+* **vue,svelte,solid,angular:** key reactive args on content ([#721](https://github.com/anolilab/lunora/issues/721)) ([f1e1579](https://github.com/anolilab/lunora/commit/f1e1579cbd9f41789b16a8ad5a8231647f6bd297))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.102
+
+## @lunora/vue [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.136...@lunora/vue@1.0.0-alpha.137) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.101
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.57
+
+## @lunora/vue [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.135...@lunora/vue@1.0.0-alpha.136) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.100
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.56
+
+## @lunora/vue [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.134...@lunora/vue@1.0.0-alpha.135) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.99
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.55
+
+## @lunora/vue [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.133...@lunora/vue@1.0.0-alpha.134) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.98
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.54
+
+## @lunora/vue [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.132...@lunora/vue@1.0.0-alpha.133) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.97
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.53
+
+## @lunora/vue [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.131...@lunora/vue@1.0.0-alpha.132) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.96
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.52
+
+## @lunora/vue [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.130...@lunora/vue@1.0.0-alpha.131) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.95
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.51
+
+## @lunora/vue [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.129...@lunora/vue@1.0.0-alpha.130) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.94
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.50
+
+## @lunora/vue [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.128...@lunora/vue@1.0.0-alpha.129) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.93
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.49
+
+## @lunora/vue [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.127...@lunora/vue@1.0.0-alpha.128) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.92
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.48
+
+## @lunora/vue [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.126...@lunora/vue@1.0.0-alpha.127) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.91
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.47
+
+## @lunora/vue [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.125...@lunora/vue@1.0.0-alpha.126) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.90
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.46
+
+## @lunora/vue [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.124...@lunora/vue@1.0.0-alpha.125) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.89
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.45
+
 ## @lunora/vue [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.123...@lunora/vue@1.0.0-alpha.124) (2026-09-07)
 
 

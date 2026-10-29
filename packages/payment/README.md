@@ -10,8 +10,6 @@
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-> **Experimental** — this package is outside the Lunora 1.0 stability promise: its API may change in any release, without a major version bump.
-
 <br />
 
 <div align="center">
@@ -64,6 +62,9 @@ const payment = createPayment({
         client: new Stripe(env.STRIPE_SECRET_KEY),
         webhookSecret: env.STRIPE_WEBHOOK_SECRET,
     }),
+    // Required. Return `true` only when the current caller owns `referenceId`; anything else
+    // (including a throw) denies. Replace `callerOwns` with your ownership check.
+    authorize: async (referenceId) => callerOwns(referenceId),
     store: new MemoryPaymentStore(),
 });
 

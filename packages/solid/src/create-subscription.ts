@@ -5,7 +5,7 @@ import type { Accessor } from "solid-js";
 import { createSignal } from "solid-js";
 
 import { useLunora } from "./context";
-import { trackedEffect } from "./solid-compat";
+import { trackedArgsEffect } from "./reactive-args";
 
 interface CreateSubscriptionResult<T> {
     data: Accessor<T | undefined>;
@@ -33,7 +33,7 @@ const createSubscription = <F extends FunctionReference>(
 
     const resolveArgs = typeof args === "function" ? (args as Accessor<ArgsOf<F> | "skip">) : () => args;
 
-    trackedEffect(resolveArgs, (currentArgs) => {
+    trackedArgsEffect(resolveArgs, (currentArgs) => {
         // Each args generation starts clean: the previous args' value must not
         // render under the new args until the new subscription's first frame.
         setData(() => undefined);
@@ -58,9 +58,11 @@ const createSubscription = <F extends FunctionReference>(
                     // a plain `new Error(message)` would discard it. When a code is
                     // present, surface a `LunoraError` (its `.code` is typed);
                     // otherwise fall back to a bare `Error`.
-                    const normalized = subscriptionError.code
-                        ? new LunoraError(subscriptionError.code, subscriptionError.message)
-                        : new Error(subscriptionError.message);
+                    // The server's `why` explanation rides along the same way, as on the other adapters.
+                    const normalized = Object.assign(
+                        subscriptionError.code ? new LunoraError(subscriptionError.code, subscriptionError.message) : new Error(subscriptionError.message),
+                        subscriptionError.why === undefined ? {} : { why: subscriptionError.why },
+                    );
 
                     setError(() => normalized);
                     setData(() => undefined);

@@ -5,7 +5,7 @@
  *
  * Reference model: a record references a stored R2 object through a first-class
  * `v.storage(bucket?)` schema validator. Codegen emits the `{ table: [field, …] }`
- * map of those columns (`buildStorageColumns` in `@lunora/codegen`'s `emit.ts`),
+ * map of those columns (`buildStorageColumns` in `@lunora/codegen`'s `emit/shard-metadata.ts`),
  * the generated shard overrides `ShardDO.storageColumns()` with it, and both
  * correlation reads scan ONLY those declared columns — never the whole shard.
  *
@@ -27,6 +27,7 @@
  * discipline is auditable in one place — mirroring `introspect.ts`'s own.
  */
 import type { SqlExec } from "@lunora/shard-engine";
+import { isInternalTableName } from "@lunora/shard-engine";
 
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
@@ -69,13 +70,11 @@ interface DanglingReferenceResult {
     truncated: boolean;
 }
 
-/** Tables the correlation scan must never touch (SQLite/CF/Lunora bookkeeping), mirroring `introspect.ts`'s filter. */
-const isInternalTable = (name: string): boolean =>
-    name.startsWith("sqlite_") || name.startsWith("_cf_") || name.startsWith("__miniflare") || name.startsWith("__lunora") || name.includes("__fts_");
-
 /** True when `table` is a real, non-internal user table in this shard's SQLite database. */
 const tableExists = (sql: SqlExec, table: string): boolean => {
-    if (isInternalTable(table)) {
+    // The same predicate the admin data browser filters by, so the scan never
+    // touches a table the browser would hide.
+    if (isInternalTableName(table)) {
         return false;
     }
 
@@ -212,5 +211,5 @@ const findDanglingReferences = (sql: SqlExec, storageColumns: Record<string, str
     return accumulator;
 };
 
-export { DANGLING_RESULT_CAP, DANGLING_SCAN_CAP, findDanglingReferences };
+export { DANGLING_RESULT_CAP, findDanglingReferences };
 export type { DanglingReference, DanglingReferenceResult };

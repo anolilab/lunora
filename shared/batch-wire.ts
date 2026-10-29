@@ -15,6 +15,16 @@
  */
 interface BatchEntry {
     args?: Record<string, unknown>;
+
+    /**
+     * The CDC cursor this write was composed at, forwarded as `x-lunora-base-seq`
+     * on the entry's synthetic `/rpc` request. PER ENTRY, not on the outer batch
+     * request: a batch carries writes composed at different cursors, and one
+     * outbound header cannot state a baseline for all of them. Omitted when the
+     * write was composed with no baseline, which applies it unchanged.
+     */
+    baselineSeq?: number;
+
     clientId?: string;
     clientSeq?: number;
     functionPath: string;

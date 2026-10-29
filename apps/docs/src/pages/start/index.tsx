@@ -4,7 +4,6 @@ import SiExpo from "@icons-pack/react-simple-icons/icons/SiExpo.mjs";
 import SiNextdotjs from "@icons-pack/react-simple-icons/icons/SiNextdotjs.mjs";
 import SiNuxt from "@icons-pack/react-simple-icons/icons/SiNuxt.mjs";
 import SiReact from "@icons-pack/react-simple-icons/icons/SiReact.mjs";
-import SiReactrouter from "@icons-pack/react-simple-icons/icons/SiReactrouter.mjs";
 import SiSolid from "@icons-pack/react-simple-icons/icons/SiSolid.mjs";
 import SiSvelte from "@icons-pack/react-simple-icons/icons/SiSvelte.mjs";
 import SiTypescript from "@icons-pack/react-simple-icons/icons/SiTypescript.mjs";
@@ -52,6 +51,14 @@ interface Kit {
 const templates: Kit[] = [
     { Icon: TanstackLogo, id: "tanstack-start-react", name: "TanStack Start", note: "SSR with live-loader routes, typed end to end.", stack: "React" },
     { Icon: TanstackLogo, id: "tanstack-start-solid", name: "TanStack Start", note: "The same live loaders on fine-grained Solid reactivity.", stack: "Solid" },
+    {
+        Icon: TanstackLogo,
+        id: "tanstack-start-react-rspack",
+        name: "TanStack Start",
+        note: "Built by Rsbuild, SSR composed into the Lunora worker.",
+        stack: "React · Rsbuild",
+    },
+    { brand: true, Icon: SiReact, id: "rspack-react", name: "React", note: "A React SPA built by Rsbuild, the Worker under wrangler dev.", stack: "Rsbuild" },
     { brand: true, Icon: SiNextdotjs, id: "next", name: "Next.js", note: "App Router on OpenNext, plus a standalone Lunora worker.", stack: "React" },
     {
         brand: true,
@@ -60,14 +67,6 @@ const templates: Kit[] = [
         name: "Solid 2",
         note: "The new signals core and @solidjs/web renderer, live queries as plain accessors.",
         stack: "Solid",
-    },
-    {
-        brand: true,
-        Icon: SiReactrouter,
-        id: "react-router",
-        name: "React Router",
-        note: "v7 framework mode, SSR composed into the Lunora worker.",
-        stack: "React",
     },
     { brand: true, Icon: SiNuxt, id: "nuxt", name: "Nuxt", note: "One worker: Lunora mounts inside Nitro beside your pages.", stack: "Vue" },
     { brand: true, Icon: SiSvelte, id: "sveltekit", name: "SvelteKit", note: "Live stores and reactive loaders, plus a Lunora worker.", stack: "Svelte" },

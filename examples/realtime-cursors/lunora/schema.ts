@@ -1,5 +1,7 @@
 import { defineSchema, defineTable, v } from "lunorash/server";
 
+import { ratelimit } from "./ratelimit/schema.js";
+
 /**
  * realtime-cursors — multi-user cursor positions, sharded per room.
  *
@@ -20,4 +22,4 @@ export default defineSchema({
     })
         .shardBy("roomId")
         .index("by_room_session", ["roomId", "sessionId"], { unique: true }),
-});
+}).extend(ratelimit.extension);

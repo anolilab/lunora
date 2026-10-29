@@ -333,7 +333,7 @@ describe("discoverFunctions", () => {
 
             // Detecting the class is right — printed bare it is a TS2304. Expanding
             // it is not. `encodeWire` REFUSES a class instance outright
-            // (`shared/wire-codec.ts`: only plain objects and the supported built-ins
+            // (`packages/wire/src/wire-codec.ts`: only plain objects and the supported built-ins
             // round-trip), so no such value ever reaches a caller; and the structural
             // shape would be wrong in three directions at once — methods and getters
             // live on the prototype and never serialize, `#private` fields never
@@ -709,6 +709,54 @@ describe("discoverFunctions", () => {
             expect(byName.get("sync")).toMatchObject({ kind: "action", visibility: "internal" });
             // A plain `query` stays public.
             expect(byName.get("list")).toMatchObject({ kind: "query", visibility: "public" });
+        });
+
+        it("registers a binding exported by a separate specifier under its EXPORTED name", () => {
+            expect.hasAssertions();
+
+            // `export { run as start }` exports `start`; the module has no `run`.
+            // Registering nothing dropped the function from `api.ts` and the
+            // dispatch table, so it could not be called at all.
+            writeFunction(
+                "posts.ts",
+                `
+            import { internalQuery, mutation, query } from "@lunora/server";
+            const run = query({ args: {}, handler: () => null });
+            const createPost = mutation({ args: {}, handler: () => null });
+            const stats = internalQuery({ args: {}, handler: () => null });
+            const unexported = query({ args: {}, handler: () => null });
+            export const both = query({ args: {}, handler: () => null });
+            export { run as start, createPost as makePost, stats, both as alsoBoth };
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+
+            expect(result.map((entry) => [entry.exportName, entry.kind, entry.visibility])).toEqual([
+                ["alsoBoth", "query", "public"],
+                ["both", "query", "public"],
+                ["makePost", "mutation", "public"],
+                ["start", "query", "public"],
+                ["stats", "query", "internal"],
+            ]);
+        });
+
+        it("registers `export { run as default }` once, as `default`", () => {
+            expect.hasAssertions();
+
+            writeFunction(
+                "execute.ts",
+                `
+            import { query } from "@lunora/server";
+            const run = query({ args: {}, handler: () => null });
+            export { run as default };
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(discoverFunctions(project, workdir).map((entry) => entry.exportName)).toEqual(["default"]);
         });
 
         it("same file producing two registrations does not trip the guard", () => {

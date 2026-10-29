@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -168,6 +168,58 @@ describe("createNodeR2Bucket", () => {
         await expect(bucket.head!("gone")).resolves.toBeNull();
         // Deleting a missing object is a no-op, not an error.
         await expect(bucket.delete("gone")).resolves.toBeUndefined();
+    });
+
+    it("deletes several keys in one call", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        await bucket.put("a/1", "one");
+        await bucket.put("a/2", "two");
+        await bucket.put("b", "kept");
+        await bucket.delete(["a/1", "a/2", "missing"]);
+
+        const listed = await bucket.list();
+
+        expect(listed.objects.map((object) => object.key)).toStrictEqual(["b"]);
+    });
+
+    it("honors onlyIf etag preconditions on put, answering null when they fail", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        // `etagDoesNotMatch: "*"` is create-only.
+        const created = await bucket.put("state", "v1", { onlyIf: { etagDoesNotMatch: "*" } });
+
+        expect(created?.etag).toBe(sha256Hex("v1"));
+        await expect(bucket.put("state", "again", { onlyIf: { etagDoesNotMatch: "*" } })).resolves.toBeNull();
+
+        // `etagMatches` is a compare-and-swap.
+        await expect(bucket.put("state", "lost", { onlyIf: { etagMatches: "stale" } })).resolves.toBeNull();
+
+        const swapped = await bucket.put("state", "v2", { onlyIf: { etagMatches: sha256Hex("v1") } });
+
+        expect(swapped?.etag).toBe(sha256Hex("v2"));
+        await expect(bucket.put("absent", "x", { onlyIf: { etagMatches: "*" } })).resolves.toBeNull();
+
+        const object = await bucket.get("state");
+
+        await expect(object?.text()).resolves.toBe("v2");
+    });
+
+    it("lets only one of two racing compare-and-swaps on a key win", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+        const base = await bucket.put("state", "v1");
+        const results = await Promise.all([
+            bucket.put("state", "left", { onlyIf: { etagMatches: base.etag } }),
+            bucket.put("state", "right", { onlyIf: { etagMatches: base.etag } }),
+        ]);
+
+        expect(results.filter((result) => result !== null)).toHaveLength(1);
     });
 
     it("seeks past startAfter, and lets a cursor override it", async () => {
@@ -502,5 +554,96 @@ describe("createNodeR2Bucket", () => {
         await storage.delete("reports/q1.json");
 
         await expect(storage.download("reports/q1.json")).resolves.toBeNull();
+    });
+
+    it("verifies a declared sha256 and stores nothing when it does not match", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        // The matching digest is recorded, as R2 records one it was given.
+        const stored = await bucket.put("checked", "hello world", { sha256: sha256Hex("hello world") });
+
+        expect(Buffer.from(stored.checksums?.sha256 as ArrayBuffer).toString("hex")).toBe(sha256Hex("hello world"));
+
+        // A mismatch writes nothing at all — R2 answers "The SHA-256 checksum
+        // you specified did not match what we received" and leaves the key
+        // absent. Recording the digest of whatever arrived instead published a
+        // corrupt object under a write the caller had asked to be verified.
+        await expect(bucket.put("unchecked", "hello world", { sha256: "0".repeat(64) })).rejects.toThrow(/did not match what we received/u);
+        await expect(bucket.head!("unchecked")).resolves.toBeNull();
+
+        // The staged file is discarded with it; nothing accumulates in the tree.
+        expect(readdirSync(join(dir, ".lunora-tmp"))).toStrictEqual([]);
+
+        // A 32-byte buffer is the other form R2 takes.
+        await expect(
+            bucket.put("buffered", "hello world", { sha256: Uint8Array.from(Buffer.from(sha256Hex("hello world"), "hex")).buffer }),
+        ).resolves.toBeDefined();
+        await expect(bucket.put("malformed", "x", { sha256: "abc" })).rejects.toThrow(/64 hex characters or a 32-byte buffer/u);
+    });
+
+    it("refuses customMetadata over the ceiling R2 applies to the summed keys and values", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        // 2048 bytes of key + value is the largest R2 accepts; 2049 is not.
+        await expect(bucket.put("fits", "x", { customMetadata: { big: "z".repeat(2045) } })).resolves.toBeDefined();
+        await expect(bucket.put("over", "x", { customMetadata: { big: "z".repeat(2046) } })).rejects.toThrow(/exceed the maximum allowed metadata size/u);
+
+        // Summed across entries, not per entry: two that each fit still do not.
+        await expect(bucket.put("split", "x", { customMetadata: { one: "z".repeat(1300), two: "z".repeat(1300) } })).rejects.toThrow(
+            /exceed the maximum allowed metadata size/u,
+        );
+
+        await expect(bucket.head!("over")).resolves.toBeNull();
+    });
+
+    it("lets a prefix hold an object once the keys beneath it are deleted", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        await bucket.put("users/42/avatar", "png");
+        await bucket.delete("users/42/avatar");
+
+        // R2 has no directories, so the emptied prefix is not an object standing
+        // in the way of one — it reported a collision with something `list()`
+        // could not see, and the same sequence succeeds on R2.
+        expect(readdirSync(dir)).toStrictEqual([".lunora-tmp"]);
+
+        await expect(bucket.put("users/42", "row")).resolves.toBeDefined();
+        await expect(bucket.get("users/42").then((object) => object?.text())).resolves.toBe("row");
+
+        // A husk `delete` never saw: a put that fails after its `mkdir` leaves
+        // the directory behind, and nothing prunes it. `put` clears an EMPTY
+        // directory at its own target rather than reporting a collision with an
+        // object that is not there.
+        mkdirSync(join(dir, "orphaned"));
+
+        await expect(bucket.put("orphaned", "row")).resolves.toBeDefined();
+
+        // And the genuine collision — a prefix that still holds an object —
+        // is still named rather than left to an `fs` code.
+        await bucket.put("teams/7/logo", "png");
+
+        await expect(bucket.put("teams/7", "row")).rejects.toThrow(/collides with an existing object/u);
+    });
+
+    it("treats a delete of a key that is only a prefix as the no-op R2 makes of it", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        await bucket.put("a/b", "x");
+
+        // `unlink` says EPERM (macOS) or EISDIR (Linux) here. A directory is
+        // never an object, so this is a delete of a key the bucket does not
+        // hold — which R2 answers by doing nothing, and which the deferred-delete
+        // reconciler would otherwise log as a leaked object that never existed.
+        await expect(bucket.delete("a")).resolves.toBeUndefined();
+        // And the object under it is untouched.
+        await expect(bucket.get("a/b").then((object) => object?.text())).resolves.toBe("x");
     });
 });

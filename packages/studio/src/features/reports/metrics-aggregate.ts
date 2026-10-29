@@ -92,116 +92,50 @@ export const shardsToAggregate = (current: string, recents: ReadonlyArray<string
     return out;
 };
 
-/* -------------------------------------------------------------------------- */
-/* Percentile computation                                                      */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Compute the Pth percentile of `values` using the nearest-rank method.
- * `values` need not be sorted. Returns `0` for an empty array and the sole
- * element when `values.length === 1`.
- * @param values The sample population (mutated via in-place sort).
- * @param p Percentile in [0, 100] (e.g. `90` for P90).
- */
-export const percentile = (values: number[], p: number): number => {
-    if (values.length === 0) {
-        return 0;
-    }
-
-    values.sort((a, b) => a - b);
-
-    if (p <= 0) {
-        return values[0] ?? 0;
-    }
-
-    if (p >= 100) {
-        return values.at(-1) ?? 0;
-    }
-
-    // Nearest-rank: ceil(p/100 * n) — 1-based index.
-    const index = Math.ceil((p / 100) * values.length) - 1;
-
-    return values[index] ?? 0;
-};
-
 /**
  * Compute the P90 and P95 handler duration from the current per-function
  * stats in a snapshot. Returns `{ p90: 0, p95: 0 }` when no function data
  * is present (pre-feature worker or cold shard).
  *
  * Each function contributes its `totalDurationMs / calls` average as a
- * sample, weighted by call count so hot functions dominate the percentile.
- * This is an approximation — per-call duration histograms would be more
- * accurate but are not currently emitted by the DO.
+ * sample, weighted by its full call count so hot functions dominate the
+ * percentile. This is an approximation — per-call duration histograms would be
+ * more accurate but are not currently emitted by the DO.
  */
 export const computeLatencyPercentiles = (snapshot: ShardMetrics): { p90: number; p95: number } => {
     const snap = snapshot as { functions?: { calls: number; totalDurationMs: number }[] };
-    const functionList = snap.functions;
+    const samples: { avg: number; calls: number }[] = [];
+    let totalCalls = 0;
 
-    if (!functionList || functionList.length === 0) {
-        return { p90: 0, p95: 0 };
-    }
-
-    // Build a synthetic sample: one data point per call (avg duration repeated
-    // `calls` times). This keeps the percentile weighted correctly for busy
-    // functions.  We cap per-function repetitions at 1000 to avoid blowing the
-    // array on high-traffic shards.
-    const CAP = 1000;
-    const samples: number[] = [];
-
-    for (const functionStat of functionList) {
-        if (functionStat.calls <= 0) {
-            continue;
-        }
-
-        const avg = functionStat.totalDurationMs / functionStat.calls;
-        const reps = Math.min(functionStat.calls, CAP);
-
-        for (let index = 0; index < reps; index += 1) {
-            samples.push(avg);
+    for (const functionStat of snap.functions ?? []) {
+        if (functionStat.calls > 0) {
+            samples.push({ avg: functionStat.totalDurationMs / functionStat.calls, calls: functionStat.calls });
+            totalCalls += functionStat.calls;
         }
     }
 
-    if (samples.length === 0) {
-        return { p90: 0, p95: 0 };
-    }
+    samples.sort((a, b) => a.avg - b.avg);
 
-    return {
-        p90: percentile([...samples], 90),
-        p95: percentile([...samples], 95),
+    // Weighted nearest-rank: the smallest average whose cumulative call count
+    // reaches p% of all calls. Weighting by the real count (not a capped
+    // repetition) is what keeps a million 1ms calls from being outvoted by a
+    // thousand 900ms ones.
+    const weightedPercentile = (p: number): number => {
+        const rank = Math.ceil((p / 100) * totalCalls);
+        let cumulative = 0;
+
+        for (const sample of samples) {
+            cumulative += sample.calls;
+
+            if (cumulative >= rank) {
+                return sample.avg;
+            }
+        }
+
+        return samples.at(-1)?.avg ?? 0;
     };
-};
 
-/* -------------------------------------------------------------------------- */
-/* Trend deltas                                                                */
-/* -------------------------------------------------------------------------- */
-
-/**
- * The change in a scalar metric relative to a baseline. `delta` is the
- * absolute difference (`current - baseline`); `pct` is the percentage change
- * (`delta / baseline * 100`), or `null` when baseline is zero (division by
- * zero). `direction` encodes whether this metric increasing is `"good"`,
- * `"bad"`, or `"neutral"` — used by the panel to pick badge colours.
- */
-export interface MetricDelta {
-    delta: number;
-    direction: "bad" | "good" | "neutral";
-    pct: null | number;
-}
-
-/**
- * Compute the delta of a scalar metric between a `baseline` and `current`
- * snapshot value.
- * @param baseline The earlier snapshot's value.
- * @param current The current snapshot's value.
- * @param direction Whether an increase is `"good"`, `"bad"`, or `"neutral"`.
- */
-export const computeDelta = (baseline: number, current: number, direction: MetricDelta["direction"] = "neutral"): MetricDelta => {
-    const delta = current - baseline;
-    // eslint-disable-next-line unicorn/no-null -- pct is null when baseline is 0 (undefined percentage)
-    const pct = baseline === 0 ? null : (delta / baseline) * 100;
-
-    return { delta, direction, pct };
+    return { p90: weightedPercentile(90), p95: weightedPercentile(95) };
 };
 
 /**

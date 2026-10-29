@@ -12,7 +12,7 @@ const makeDb = (): LunoraDatabaseLike => {
         Object.entries(where ?? {}).every(([key, value]) => row[key] === value);
 
     return {
-        delete: async (id) => {
+        delete: async (_table, id) => {
             rows.delete(id);
         },
         findFirst: async (_table, args) => [...rows.values()].find((row) => matches(row, args?.where)) ?? null,
@@ -31,7 +31,19 @@ const makeDb = (): LunoraDatabaseLike => {
 
             return id;
         },
-        patch: async (id, patch) => {
+        patch: async (_table, id, patch) => {
+            // Mirror shard-engine's `assertNoExplicitUndefined`: `ctx.db.patch` rejects a key whose
+            // value is explicitly `undefined` rather than silently dropping (i.e. deleting) it. A
+            // permissive `{ ...row, ...patch }` double is how a store that throws on every second
+            // write of an optional column stayed green here.
+            for (const field of Object.keys(patch)) {
+                if (patch[field] === undefined) {
+                    throw new Error(
+                        `Cannot patch field '${field}' to undefined \u2014 use null to clear a nullable field, or omit the key to leave it unchanged.`,
+                    );
+                }
+            }
+
             rows.set(id, { ...rows.get(id), ...patch, _id: id });
         },
     };
@@ -119,6 +131,41 @@ describe("paymentsFromContext", () => {
         await expect(
             payment.createCheckout({ cancelUrl: "https://x/c", mode: "payment", priceId: "price_1", referenceId: "user_1", successUrl: "https://x/o" }),
         ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("hands a custom authorizer the caller and ctx.db so org-scoped billing can be authorized", async () => {
+        expect.assertions(3);
+
+        const db = makeDb();
+
+        await db.insert("members", { orgId: "org_1", role: "owner", userId: "user_1" });
+
+        const authorize = async (referenceId: string, caller: { db: LunoraDatabaseLike; userId: string | undefined }): Promise<boolean> =>
+            (await caller.db.findFirst("members", { where: { orgId: referenceId, role: "owner", userId: caller.userId } })) !== null;
+        const checkout = { cancelUrl: "https://x/c", mode: "subscription", priceId: "price_1", successUrl: "https://x/o" } as const;
+
+        const owner = paymentsFromContext({ auth: { userId: "user_1" }, db }, { adapter: fakeAdapter, authorize });
+        const stranger = paymentsFromContext({ auth: { userId: "user_2" }, db }, { adapter: fakeAdapter, authorize });
+
+        await expect(owner.createCheckout({ ...checkout, referenceId: "org_1" })).resolves.toMatchObject({ id: "cs_1" });
+        await expect(stranger.createCheckout({ ...checkout, referenceId: "org_1" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(owner.createCheckout({ ...checkout, referenceId: "org_2" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("hands a custom authorizer an empty-string identity as undefined", async () => {
+        expect.assertions(1);
+
+        let seen: string | undefined = "unset";
+        const authorize = (_referenceId: string, caller: { userId: string | undefined }): boolean => {
+            seen = caller.userId;
+
+            return false;
+        };
+        const payment = paymentsFromContext({ auth: { userId: "" }, db: makeDb() }, { adapter: fakeAdapter, authorize });
+
+        await payment.createCheckout({ mode: "payment", priceId: "price_1", referenceId: "", successUrl: "https://x/o" }).catch(() => undefined);
+
+        expect(seen).toBeUndefined();
     });
 
     it("treats an empty-string identity as unauthenticated (no empty-reference orphan match)", async () => {

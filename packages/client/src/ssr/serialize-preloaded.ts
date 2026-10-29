@@ -1,4 +1,5 @@
-import { decodeWire, encodeWire } from "../../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "@lunora/wire";
+
 import type { Preloaded } from "../types";
 
 /**

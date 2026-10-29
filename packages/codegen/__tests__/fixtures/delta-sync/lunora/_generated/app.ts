@@ -2,14 +2,13 @@
 // Run `lunora codegen` to regenerate.
 
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
-import { applyCdcChanges, createD1CtxDb, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
-import type { AdminTableResolver, ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
-import { createCrossShardRelationCapabilities, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
+import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
+import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, ShardRegistryRpc, WorkerOptions } from "@lunora/runtime";
+import { createCrossShardRelationCapabilities, createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
 
 import schema from "../schema.js";
 import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
-import { openApiSpec } from "./openapi.js";
 import { createShardDO } from "./shard.js";
 
 /** Read a value off the per-request `env`. Returns `undefined` to leave the capability unconfigured (its `ctx.*`/admin surface stays a clear-error stub). */
@@ -17,6 +16,21 @@ type Selector<Env, T> = (env: Env) => T | undefined;
 
 /** The generated `createShardDO` config — `.observability()`, `.maxRelationKeys()` and the long-tail `.ai()` / `.kv()` / … methods pass straight through to it. */
 type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
+
+/** What the worker reads only once a request arrives: loaded then, not at isolate startup (Cloudflare caps startup at 1 s of CPU). */
+interface DeferredModules {
+    openApiSpec: unknown;
+}
+
+let deferredModules: Promise<DeferredModules> | undefined;
+
+/** Loads {@link DeferredModules} once per isolate; every entry that builds the worker awaits it first. */
+const loadDeferredModules = (): Promise<DeferredModules> =>
+    (deferredModules ??= (async (): Promise<DeferredModules> => {
+        return {
+            openApiSpec: (await import("./openapi.js")).openApiSpec,
+        };
+    })());
 
 /** `.global(...)` declaration — the D1 binding backing `.global()` tables. Backs cross-tenant `ctx.db` reads/writes AND the studio's global data browser. */
 interface GlobalDeclaration<Env> {
@@ -43,6 +57,7 @@ interface ComposedApp extends LunoraWorker {
 class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private cdcEnabled = false;
+    private deliveryAuthorizationSelector?: ShardConfig["deliveryAuthorization"];
     private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
     private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];
     private observabilitySink?: ShardConfig["observability"];
@@ -51,7 +66,9 @@ class AppBuilder<Env extends object> {
     private globalDeclaration?: GlobalDeclaration<Env>;
     private httpRouterApp?: HttpRouterLike;
     private readonly routeMap: Record<string, Route> = {};
+    private shardRegistrySelector?: Selector<Env, ShardNamespaceLike | ShardRegistryRpc>;
     private shardSelector?: Selector<Env, ShardNamespaceLike>;
+    private sourceClientFactory?: NonNullable<ShardConfig["sourceClient"]>;
 
     private emailHandler?: (env: Env) => (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
 
@@ -111,6 +128,13 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
+    /** Authorize each RPC/subscription read and fence its eventual delivery against durable authority epochs. */
+    public deliveryAuthorization(selector: (env: Env) => ReturnType<NonNullable<ShardConfig["deliveryAuthorization"]>>): this {
+        this.deliveryAuthorizationSelector = selector as NonNullable<ShardConfig["deliveryAuthorization"]>;
+
+        return this;
+    }
+
     /** Escape hatch — merge raw `WorkerOptions` (anything not yet sugared) over the derived options at build time. The second `derived` argument is a snapshot of the options assembled so far (after `.auth(...)` etc.), so you can compose rather than clobber — e.g. wrap `derived.resolveIdentity` instead of replacing it. */
     public extend(fn: (env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>): this {
         this.extendFns.push(fn);
@@ -153,6 +177,20 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
+    /** The `ShardRegistryDO` namespace (typically `env.SHARD_REGISTRY`). Each shard registers itself for the `.shardBy()` tables it writes, and cross-shard export, CDC sync and migrations fan out to the shards it lists. Without it they refuse a `.shardBy()` table. */
+    public shardRegistry(selector: Selector<Env, ShardNamespaceLike | ShardRegistryRpc>): this {
+        this.shardRegistrySelector = selector;
+
+        return this;
+    }
+
+    /** Resolve the SQL client a `.source(...)` table's ingest poll reads from, given the wrangler Hyperdrive binding it named. Build it with `@lunora/hyperdrive`'s `createHyperdrive` plus your driver adapter. REQUIRED for a sourced table: without it every poll tick records "no sourceClient resolved for binding" and the table stays empty. */
+    public sourceClient(factory: (env: Env, binding: string) => ReturnType<NonNullable<ShardConfig["sourceClient"]>>): this {
+        this.sourceClientFactory = factory as NonNullable<ShardConfig["sourceClient"]>;
+
+        return this;
+    }
+
     /** Materialise the standalone Cloudflare worker + `ShardDO` class. */
     public build(): ComposedApp {
         return this.assemble();
@@ -165,6 +203,7 @@ class AppBuilder<Env extends object> {
             reactiveCache: this.reactiveCacheConfig,
             ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),
             ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),
+            ...(this.deliveryAuthorizationSelector === undefined ? {} : { deliveryAuthorization: this.deliveryAuthorizationSelector }),
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.globalDeclaration
                 ? {
@@ -178,7 +217,11 @@ class AppBuilder<Env extends object> {
 
                           const origin = this.globalDeclaration?.origin?.(env);
                           const crossShard = origin
-                              ? createCrossShardRelationCapabilities({ identity: request?.identity, origin, userId: request?.userId ?? undefined })
+                              ? createCrossShardRelationCapabilities({
+                                    ...(request?.identity === undefined ? {} : { identity: request.identity }),
+                                    origin,
+                                    ...(request?.userId == null ? {} : { userId: request.userId }),
+                                })
                               : undefined;
 
                           return createD1CtxDb({
@@ -200,6 +243,8 @@ class AppBuilder<Env extends object> {
                       },
                   }
                 : {}),
+            ...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),
+            ...(this.sourceClientFactory === undefined ? {} : { sourceClient: this.sourceClientFactory }),
         });
 
         // Per-isolate singletons: the worker (and auth instance) are expensive to
@@ -207,23 +252,26 @@ class AppBuilder<Env extends object> {
         // the same isolate reuses them.
         let worker: LunoraWorker | null = null;
 
-        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => null));
+        const buildWorker = (env: Env, deferred: DeferredModules): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => null, deferred));
 
         const composed: ComposedApp = {
             ShardDO,
             fetch: async (request: Request, rawEnv: unknown, context: ExecutionContextLike): Promise<Response> => {
                 const env = rawEnv as Env;
-                worker ??= buildWorker(env);
+                const deferred = await loadDeferredModules();
+                worker ??= buildWorker(env, deferred);
 
                 return worker.fetch(request, rawEnv, context);
             },
             scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
-                worker ??= buildWorker(rawEnv as Env);
+                const deferred = await loadDeferredModules();
+                worker ??= buildWorker(rawEnv as Env, deferred);
 
                 return worker.scheduled(controller, rawEnv, context);
             },
-            serverQuery: (request, rawEnv, reference, args, options) => {
-                worker ??= buildWorker(rawEnv as Env);
+            serverQuery: async (request, rawEnv, reference, args, options) => {
+                const deferred = await loadDeferredModules();
+                worker ??= buildWorker(rawEnv as Env, deferred);
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
             },
@@ -239,36 +287,50 @@ class AppBuilder<Env extends object> {
     }
 
     /** Fan the recorded declarations into the worker-side `createWorker` options. */
-    private buildWorkerOptions(env: Env, _getAuth: () => null): WorkerOptions {
+    private buildWorkerOptions(env: Env, _getAuth: () => null, deferred: DeferredModules): WorkerOptions {
         const options: WorkerOptions = {
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
-            openApiSpec,
+            openApiSpec: deferred.openApiSpec,
             ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),
             routes: this.routeMap,
             shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),
         };
 
-        if (this.adminToken) {
-            options.adminToken = this.adminToken(env);
+        const adminToken = this.adminToken?.(env);
+
+        if (adminToken !== undefined) {
+            options.adminToken = adminToken;
         }
 
-        options.listSchemaTables = () => ["notes", "boards"];
+        const tableSharding = new Map<string, ShardingInfo>([
+            ["notes", { mode: { field: "boardId", kind: "shardBy" } }],
+            ["boards", { mode: { kind: "global" } }],
+            ["contacts", { mode: { field: "boardId", kind: "shardBy" } }],
+        ]);
+
+        options.listSchemaTables = () => [...tableSharding.keys()];
+        options.resolveTableSharding = (table) => tableSharding.get(table);
+
+        const shardRegistry = this.shardRegistrySelector?.(env);
+
+        if (shardRegistry) {
+            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ env, namespace: shardRegistry }) });
+        }
 
         if (this.globalDeclaration) {
             const database = this.globalDeclaration.d1(env);
 
             if (database) {
                 options.globalIntrospector = buildGlobalIntrospector(database);
-                // `resolveTableSharding`/`importGlobals` wire the admin bulk-import
-                // endpoint: without the former, EVERY row (including a `.global()`
-                // table's) routes to the default shard, so a global table is never
-                // recognised as global and the latter is never reached — the
-                // endpoint answers 200 with `inserted: {}` for a write that never
-                // happened. Both are mechanical over the schema this file already
-                // imports, so there is nothing project-specific to configure.
-                options.resolveTableSharding = buildTableShardingResolver();
+                // `importGlobals` wires the admin bulk-import endpoint's global
+                // plane: the rows `resolveTableSharding` classifies as `.global()`
+                // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
+                // The importer above skips the write for a dry run, and
+                // overwrites an existing `_id` under `onConflict: "replace"`.
+                options.importGlobalsSupportsDryRun = true;
+                options.importGlobalsSupportsReplace = true;
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
                 // all, and every one of them fails SILENTLY when unset — export
@@ -283,7 +345,11 @@ class AppBuilder<Env extends object> {
             }
         }
 
-        options.logArchive = resolveLogArchiveFromEnv(env);
+        const logArchive = resolveLogArchiveFromEnv(env);
+
+        if (logArchive !== undefined) {
+            options.logArchive = logArchive;
+        }
 
         for (const fn of this.extendFns) {
             Object.assign(options, fn(env, { ...options }));
@@ -308,6 +374,13 @@ class AppBuilder<Env extends object> {
  * read-only retry; writes — including the `UPDATE … RETURNING` the store's
  * optimistic-concurrency check issues through `all` — pass straight through,
  * because a transient error never says whether the write applied.
+ *
+ * Every read and write also records D1's own `meta` accounting (`rows_read` /
+ * `rows_written` / `duration`) against a low-cardinality `verb:table` tag.
+ * Rows READ is rows SCANNED, not returned, so this is the number that explains
+ * a D1 bill and the one a missing index inflates without anything being
+ * deployed; the dashboard's own metric is per-database and can't name the query.
+ * The emit is best-effort — instrumentation must never fail a served query.
  */
 const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
     // Real D1 always exposes `withSession`; guarded the same way as `batch`
@@ -318,6 +391,13 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
     const session = typeof database.withSession === "function" ? database.withSession(bookmark ?? "first-unconstrained") : undefined;
     const target = session ?? database;
     const batchFn = target.batch;
+    const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
+        try {
+            emitD1QueryCost(sql, meta);
+        } catch {
+            // Best-effort: never let cost accounting fail the query it measures.
+        }
+    };
 
     return retryingExec({
         all: async (sql, parameters) => {
@@ -338,6 +418,7 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
             // bookmark only ever moves forward, and the sink takes the last
             // value.
             onBookmark?.(session?.getBookmark() ?? undefined);
+            meter(sql, result.meta);
 
             return result.results;
         },
@@ -353,20 +434,36 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
         // `target`, so the real workerd `D1Database`/session doesn't throw
         // `TypeError: Illegal invocation` the way a detached
         // `const fn = target.batch; fn(...)` capture would.
-        batch: batchFn
-            ? async (statements) => {
-                  await batchFn.call(
-                      target,
-                      statements.map(({ params, sql }) => target.prepare(sql).bind(...params)),
-                  );
-                  onBookmark?.(session?.getBookmark() ?? undefined);
-              }
-            : undefined,
+        ...(batchFn ? {
+            batch: async (statements) => {
+                const results = await batchFn.call(
+                    target,
+                    statements.map(({ params, sql }) => target.prepare(sql).bind(...params)),
+                );
+
+                // Meter each leg. D1 returns one result per statement, in
+                // order, each with its own `meta` — and a batch is where the
+                // expensive writes live (`@lunora/sql-store` runs its
+                // backfills through here), so discarding it left exactly the
+                // statements worth costing unaccounted. Guarded on the array
+                // because `batch` is optional in the structural type and a
+                // test double may resolve to anything.
+                if (Array.isArray(results)) {
+                    for (const [index, statement] of statements.entries()) {
+                        meter(statement.sql, (results[index] as { meta?: Record<string, unknown> } | undefined)?.meta);
+                    }
+                }
+
+                onBookmark?.(session?.getBookmark() ?? undefined);
+            },
+        } : {}),
         run: async (sql, parameters) => {
-            await target
+            const result = await target
                 .prepare(sql)
                 .bind(...parameters)
                 .run();
+
+            meter(sql, result.meta);
             onBookmark?.(session?.getBookmark() ?? undefined);
         },
     });
@@ -384,19 +481,6 @@ const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector =
 };
 
 /**
- * `resolveTableSharding` for the admin bulk-import endpoint: a lookup over each
- * table's declared `shardMode` (`defineTable(...).global()` / `.shardBy(field)`
- * already record exactly this shape on the table) — mechanical, nothing to
- * configure per project. `undefined` for a table the schema doesn't declare, so
- * the import endpoint's own unknown-table handling still applies.
- */
-const buildTableShardingResolver = (): AdminTableResolver => (table) => {
-    const declared = (schema as unknown as D1CtxDbOptions["schema"]).tables[table];
-
-    return declared?.shardMode ? { mode: declared.shardMode } : undefined;
-};
-
-/**
  * `importGlobals` for the admin bulk-import endpoint: routes `.global()` rows
  * through the same D1 writer `.global()` reads/writes already use, via
  * `@lunora/d1`'s `importGlobalRows`. Mirrors `runShardImport`'s shard-local
@@ -409,20 +493,23 @@ const buildTableShardingResolver = (): AdminTableResolver => (table) => {
  * shard-local ones it filtered out before calling here — a single
  * `startLine` plus positional counting would mis-attribute every row after
  * the first gap. `importGlobalRows` prefers `row.line` when present and
- * falls back to the position-derived count otherwise.
+ * falls back to the position-derived count otherwise. A dry run is passed through and writes nothing;
+ * `onConflict: "replace"` overwrites a row whose `_id` already exists instead of reporting a conflict.
  */
 const buildGlobalImporter =
     (database: D1DatabaseLike, cdc: boolean) =>
-    (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
+    (request: { dryRun?: boolean; onConflict?: "replace" | "skip"; rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
         const exec = buildExec(database);
         // Same reason the PITR applier carries it: a bulk import that skips the
         // changelog restores rows no downstream consumer is ever told about.
         const writer = createD1CtxDb({ cdc, exec, schema: schema as unknown as D1CtxDbOptions["schema"] });
 
         return importGlobalRows(writer, schema as unknown as D1CtxDbOptions["schema"], {
+            dryRun: request.dryRun === true,
             exec,
+            onConflict: request.onConflict ?? "skip",
             rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, table: row.table })),
-            startLine: request.startLine,
+            ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
         });
     };
 
@@ -463,7 +550,7 @@ const buildGlobalCdcSync =
             return { changes: [], cursor: request.sinceSeq };
         }
 
-        const page = await readD1CdcChanges(exec, { limit: request.limit, sinceSeq: request.sinceSeq });
+        const page = await readD1CdcChanges(exec, request);
 
         // `as unknown as`, because `CdcChange` is an interface and interfaces carry
         // no implicit index signature — the shapes are otherwise identical.
@@ -498,6 +585,31 @@ const buildGlobalCdcApplier =
     };
 
 /**
+ * Shape of the project's root `lunora.config.*`.
+ *
+ * Declared HERE, not in a package, so the `app` hook is typed against THIS
+ * project's builder with no annotation to keep in step — and so the config file
+ * needs only a type-only import, which is erased. That matters: the hook is
+ * bundled into the worker, and a runtime import in that file ships with it.
+ */
+interface LunoraConfig<Env extends object = object> {
+    /** Codegen's static advisor. `minSeverity` is the lowest level it reports and writes into `_generated/shard.ts`; an `"error"` is never dropped, so the gate that fails codegen stays on. `accept` demotes a reviewed ERROR to INFO when its rule, file and export all match. A literal, for the same reason as `target`. */
+    advisor?: { accept?: ReadonlyArray<{ exportName: string; file: string; reason: string; rule: string }>; minSeverity?: "error" | "info" | "warn" };
+    /** Receives this project's `defineApp()` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
+    app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
+    /** Codegen's source walk. `exclude` adds globs (relative to `lunora/`, e.g. `"seed/**"`) to skip on top of the built-in test-file patterns. A literal array of strings, for the same reason as `target`. */
+    codegen?: { exclude?: string[] };
+    /** Host the shard, scheduler and shard registry in ONE Durable Object class (`merge: true`, plan 462) — before the first deploy only. A literal, for the same reason as `target`. */
+    durableObjects?: { merge?: boolean };
+    /** Opt into remote-binding dev without `--remote` or `LUNORA_REMOTE` on every run. A literal, for the same reason as `target`. */
+    remote?: boolean;
+    /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported `WorkerEntrypoint` class (`rpc: false` binds that class but calls it with plain `fetch`, without importing the service's sources). Becomes `ctx.services.<key>` in actions, a wrangler `services[]` entry, one `lunora dev` session and a services-first `lunora deploy`. Literals, for the same reason as `target`. */
+    services?: Record<string, { dir: string; entrypoint?: string; rpc?: false }>;
+    /** Deploy target id — `lunora deploy`/`verify` read it when no `--target` is passed. Must be a literal: `runCodegen` resolves it synchronously by PARSING this file, so a computed value is not seen — `lunora verify` reports `platform_unreadable_target` rather than defaulting in silence. */
+    target?: string;
+}
+
+/**
  * Start composing the app. Chain the capability methods, then `.build()`.
  *
  * `Env` is constrained to `object`, not `Record<string, unknown>`: an `interface Env`
@@ -510,4 +622,4 @@ const buildGlobalCdcApplier =
 const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
 export { AppBuilder, defineApp };
-export type { ComposedApp, GlobalDeclaration, Selector };
+export type { ComposedApp, GlobalDeclaration, LunoraConfig, Selector };

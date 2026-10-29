@@ -67,11 +67,18 @@ const isByteStringSafe = (value: string): boolean => {
 };
 
 /**
+ * {@link encodeIdentityHeader} over claims the caller already serialized. A
+ * memo keyed on that text must encode the same text, not re-serialize the
+ * object — a claim with a getter or `toJSON` need not serialize the same twice.
+ */
+const encodeIdentityHeaderJson = (json: string): string => toBase64Url(textEncoder.encode(json));
+
+/**
  * Encode identity claims for the `x-lunora-identity` header: UTF-8 JSON ->
  * base64url. The result is always ASCII, so it is always a valid header value
  * regardless of what `claims` contains.
  */
-const encodeIdentityHeader = (claims: Record<string, unknown>): string => toBase64Url(textEncoder.encode(JSON.stringify(claims)));
+const encodeIdentityHeader = (claims: Record<string, unknown>): string => encodeIdentityHeaderJson(JSON.stringify(claims));
 
 /**
  * Decode an `x-lunora-identity` header value. `null`/empty -> `undefined`.
@@ -206,13 +213,40 @@ const dropExpiredCredentialSocket = (ws: ExpirableSocket): void => {
     }
 };
 
+/**
+ * Request header a replayed offline write carries to name the user it was
+ * queued by. The worker refuses the write with `IDENTITY_MISMATCH` when the
+ * request resolves to anyone else, so a write queued under one cookie session
+ * can never commit under the next one's cookie. `null` means "queued while
+ * signed out".
+ */
+const EXPECT_SUBJECT_HEADER = "x-lunora-expect-subject";
+
+/** Encode the subject for {@link EXPECT_SUBJECT_HEADER}: base64url JSON, so `null` and any id are unambiguous and ASCII. */
+const encodeExpectedSubjectHeader = (subject: null | string): string => encodeIdentityHeader({ subject });
+
+/**
+ * Decode an {@link EXPECT_SUBJECT_HEADER} value. `undefined` for anything that
+ * is not an object whose `subject` is a string or `null` — the caller refuses
+ * such a request rather than guessing.
+ */
+const decodeExpectedSubjectHeader = (raw: string): { subject: null | string } | undefined => {
+    const subject = decodeIdentityHeader(raw)?.subject;
+
+    return subject === null || typeof subject === "string" ? { subject } : undefined;
+};
+
 export {
+    decodeExpectedSubjectHeader,
     decodeIdentityExpiryHeader,
     decodeIdentityHeader,
     decodeUserIdHeader,
     dropExpiredCredentialSocket,
+    encodeExpectedSubjectHeader,
     encodeIdentityHeader,
+    encodeIdentityHeaderJson,
     encodeUserIdHeader,
+    EXPECT_SUBJECT_HEADER,
     isByteStringSafe,
     isIdentityExpired,
 };

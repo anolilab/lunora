@@ -1,12 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { platformMatrixIds } from "@lunora/codegen";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { BUILD_ROOT_ENV, BUILD_TARGET_ENV } from "../src/codegen-env";
 import { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "../src/driver-registry";
-import { interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference, readProjectTarget, resolveProjectTarget } from "../src/project-config";
+import { assertBuildTargetMatches, interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget } from "../src/project-config";
 
 describe("interpretRemote", () => {
     it("passes a boolean through unchanged", () => {
@@ -44,7 +45,12 @@ describe("readProjectRemotePreference", () => {
         rmSync(root, { force: true, recursive: true });
     });
 
-    it("returns undefined when lunora.json is absent", () => {
+    /** Write the project's `lunora.config.ts`. `source` is embedded as the default-exported object literal. */
+    const writeProjectConfig = (source: string): void => {
+        writeFileSync(join(root, "lunora.config.ts"), `export default ${source};\n`, "utf8");
+    };
+
+    it("returns undefined when lunora.config.ts is absent", () => {
         expect.assertions(1);
 
         expect(readProjectRemotePreference(root)).toBeUndefined();
@@ -53,7 +59,7 @@ describe("readProjectRemotePreference", () => {
     it("reads `remote: true`", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{ "remote": true }`, "utf8");
+        writeProjectConfig(`{ remote: true }`);
 
         expect(readProjectRemotePreference(root)).toBe(true);
     });
@@ -61,23 +67,33 @@ describe("readProjectRemotePreference", () => {
     it("reads `remote: false`", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{ "remote": false }`, "utf8");
+        writeProjectConfig(`{ remote: false }`);
 
         expect(readProjectRemotePreference(root)).toBe(false);
     });
 
-    it("tolerates JSONC comments + trailing commas", () => {
+    it("tolerates comments + trailing commas, being real TypeScript", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{\n  // project default\n  "remote": true,\n}`, "utf8");
+        writeProjectConfig(`{\n  // project default\n  remote: true,\n}`);
 
         expect(readProjectRemotePreference(root)).toBe(true);
     });
 
-    it("returns undefined for malformed JSONC rather than throwing", () => {
+    it("returns undefined for a config that does not parse rather than throwing", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{ not valid `, "utf8");
+        writeFileSync(join(root, "lunora.config.ts"), `export default { remote: `, "utf8");
+
+        expect(readProjectRemotePreference(root)).toBeUndefined();
+    });
+
+    it("returns undefined for a config that THROWS rather than breaking the command", () => {
+        expect.assertions(1);
+
+        // A `.ts` config runs, unlike the JSON it replaces — so a throw is a new
+        // failure mode, and `lunora dev` must survive it.
+        writeFileSync(join(root, "lunora.config.ts"), `throw new Error("boom");\n`, "utf8");
 
         expect(readProjectRemotePreference(root)).toBeUndefined();
     });
@@ -85,7 +101,7 @@ describe("readProjectRemotePreference", () => {
     it("returns undefined when the file has no remote key", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{ "name": "app" }`, "utf8");
+        writeProjectConfig(`{ name: "app" }`);
 
         expect(readProjectRemotePreference(root)).toBeUndefined();
     });
@@ -103,7 +119,7 @@ describe("deploy-target resolution", () => {
     });
 
     const writeConfig = (config: unknown): void => {
-        writeFileSync(join(root, LUNORA_CONFIG_FILE), JSON.stringify(config), "utf8");
+        writeFileSync(join(root, "lunora.config.ts"), `export default ${JSON.stringify(config)};\n`, "utf8");
     };
 
     it("falls back to the registry default with no flag and no config", () => {
@@ -113,7 +129,7 @@ describe("deploy-target resolution", () => {
         expect(resolveProjectTarget(root)).toBe(DEFAULT_DEPLOY_TARGET);
     });
 
-    it("reads the target from lunora.json", () => {
+    it("reads the target from lunora.config.ts", () => {
         expect.assertions(2);
 
         writeConfig({ remote: true, target: "aws" });
@@ -148,7 +164,7 @@ describe("deploy-target resolution", () => {
     it("degrades to the default on a malformed config rather than throwing", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, LUNORA_CONFIG_FILE), "{ not json", "utf8");
+        writeFileSync(join(root, "lunora.config.ts"), "export default { target: ", "utf8");
 
         expect(resolveProjectTarget(root)).toBe(DEFAULT_DEPLOY_TARGET);
     });
@@ -192,5 +208,74 @@ describe("target registries", () => {
         const matrixIds = new Set(platformMatrixIds());
 
         expect(deployTargetIds().every((id) => matrixIds.has(id))).toBe(true);
+    });
+});
+
+describe("assertBuildTargetMatches", () => {
+    const root = resolve("/app");
+    const saved = process.env[BUILD_TARGET_ENV];
+
+    beforeEach(() => {
+        process.env[BUILD_ROOT_ENV] = root;
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(process.env, BUILD_ROOT_ENV);
+
+        if (saved === undefined) {
+            Reflect.deleteProperty(process.env, BUILD_TARGET_ENV);
+        } else {
+            process.env[BUILD_TARGET_ENV] = saved;
+        }
+    });
+
+    it("does nothing outside a CLI build, where the env var is unset", () => {
+        expect.assertions(1);
+
+        Reflect.deleteProperty(process.env, BUILD_TARGET_ENV);
+
+        expect(() => {
+            assertBuildTargetMatches("node", root);
+        }).not.toThrow();
+    });
+
+    it("accepts the target the CLI resolved", () => {
+        expect.assertions(1);
+
+        process.env[BUILD_TARGET_ENV] = "cloudflare";
+
+        expect(() => {
+            assertBuildTargetMatches("cloudflare", root);
+        }).not.toThrow();
+    });
+
+    it("treats an empty env var as unset, so a direct plugin build is not refused", () => {
+        expect.assertions(1);
+
+        process.env[BUILD_TARGET_ENV] = "";
+
+        expect(() => {
+            assertBuildTargetMatches("node", root);
+        }).not.toThrow();
+    });
+
+    it("refuses a plugin target that differs from the one the CLI resolved", () => {
+        expect.assertions(1);
+
+        process.env[BUILD_TARGET_ENV] = "cloudflare";
+
+        expect(() => {
+            assertBuildTargetMatches("node", root);
+        }).toThrow(/resolves target "node" but the CLI resolved "cloudflare"/);
+    });
+
+    it("does not check a nested build for another project, which inherits the variables from the CLI's build", () => {
+        expect.assertions(1);
+
+        process.env[BUILD_TARGET_ENV] = "cloudflare";
+
+        expect(() => {
+            assertBuildTargetMatches("node", resolve("/app/services/parser"));
+        }).not.toThrow();
     });
 });

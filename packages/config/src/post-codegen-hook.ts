@@ -33,10 +33,9 @@
  * A missing script is not an error — it is the common case.
  */
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 
 import { detectPackageManager, runScriptArgsFor } from "./package-manager";
+import { readProjectManifest } from "./project-manifest";
 
 /** The script name a project declares to chain work onto codegen. */
 const POST_CODEGEN_SCRIPT = "postcodegen";
@@ -103,20 +102,10 @@ const defaultHookSpawner: HookSpawner = (descriptor) =>
  * deploy for a reason unrelated to it.
  */
 const hasPostCodegenScript = (projectRoot: string): boolean => {
-    const manifestPath = join(projectRoot, "package.json");
+    const scripts = readProjectManifest(projectRoot)?.["scripts"];
+    const script = typeof scripts === "object" && scripts !== null ? (scripts as Record<string, unknown>)[POST_CODEGEN_SCRIPT] : undefined;
 
-    if (!existsSync(manifestPath)) {
-        return false;
-    }
-
-    try {
-        const parsed: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
-        const scripts = (parsed as { scripts?: Record<string, unknown> } | null)?.scripts;
-
-        return typeof scripts?.[POST_CODEGEN_SCRIPT] === "string" && scripts[POST_CODEGEN_SCRIPT] !== "";
-    } catch {
-        return false;
-    }
+    return typeof script === "string" && script !== "";
 };
 
 interface PostCodegenHookResult {

@@ -223,6 +223,11 @@ interface MonthlySchedule extends DailySchedule {
 ```ts
 interface QueueConsumerOptions {
     dispatch: QueueDispatch;
+    maxRetries?: number;
+    requeue?: {
+        queue: QueueLike<QueueJob>;
+        secret: string;
+    };
 }
 ```
 
@@ -385,7 +390,7 @@ class SchedulerDO {
     constructor(state: SchedulerDOState, env: SchedulerEnv);
     fetch(request: Request): Promise<Response>;
     alarm(): Promise<void>;
-    protected dispatch(record: ScheduleRecord): Promise<boolean>;
+    protected dispatch(record: ScheduleRecord): Promise<boolean | "in-progress">;
 }
 ```
 
@@ -468,7 +473,7 @@ interface WeeklySchedule extends DailySchedule {
 ```ts
 interface WorkflowReference<Params = Record<string, unknown>> {
     readonly __params?: Params;
-    readonly binding?: string;
+    readonly className?: string;
     readonly isLunoraWorkflow: true;
     readonly name?: string;
 }
@@ -598,6 +603,12 @@ const resolveScheduleId: (requested: unknown) => string;
 ```ts
 const warnIfSecondsLeading: (schedule: string, context: string) => void;
 ```
+
+## `@lunora/scheduler/validate`
+
+### `default` (const)
+
+Re-exported from `@lunora/scheduler` — signature tracked in that section.
 
 ## Referenced internal declarations
 

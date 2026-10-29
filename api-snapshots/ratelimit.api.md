@@ -62,7 +62,6 @@ interface RateLimitConfig {
     kind: RateLimitKind;
     period: number;
     rate: number;
-    shards?: number;
     start?: number;
 }
 ```
@@ -77,30 +76,24 @@ type RateLimitConfigMap<Names extends string = string> = Record<Names, RateLimit
 
 ```ts
 interface RateLimitDatabase extends RateLimitDatabaseReader {
-    delete: <T extends string>(id: Id<T>) => Promise<void>;
-    insert: <T extends string>(table: T, document: Record<string, unknown>) => Promise<Id<T>>;
-    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
-}
-```
-
-### `RateLimitDbIndexRange` (interface)
-
-```ts
-interface RateLimitDatabaseIndexRange {
-    eq: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
-    gt: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
-    gte: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
-    lt: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
-    lte: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
-}
-```
-
-### `RateLimitDbQuery` (interface)
-
-```ts
-interface RateLimitDatabaseQuery {
-    first: () => Promise<Record<string, unknown> | null>;
-    withIndex: (indexName: string, range: (q: RateLimitDatabaseIndexRange) => RateLimitDatabaseIndexRange) => RateLimitDatabaseQuery;
+    delete: <T extends string>(table: T, id: Id<T>) => Promise<void>;
+    findMany?: (table: string, args: {
+        limit?: number;
+        orderBy?: Record<string, "asc" | "desc">[];
+        where?: Record<string, unknown>;
+    }) => Promise<{
+        page: Record<string, unknown>[];
+    }>;
+    insert: <T extends string>(table: T, document: Record<string, unknown>, options?: {
+        clientId?: string;
+    }) => Promise<Id<T>>;
+    patchIf: <T extends string>(table: T, id: Id<T>, args: {
+        patch: Record<string, unknown>;
+        where: Record<string, unknown>;
+    }) => Promise<{
+        applied: boolean;
+        doc: Record<string, unknown> | null;
+    }>;
 }
 ```
 
@@ -108,7 +101,9 @@ interface RateLimitDatabaseQuery {
 
 ```ts
 interface RateLimitDatabaseReader {
-    query: (table: string) => RateLimitDatabaseQuery;
+    findFirst: (table: string, args?: {
+        where?: Record<string, unknown>;
+    }) => Promise<Record<string, unknown> | null>;
 }
 ```
 
@@ -162,6 +157,8 @@ interface RateLimitStore {
     delete: (storageKey: string) => Promise<void> | void;
     get: (storageKey: string) => Promise<RateLimitValue | undefined> | RateLimitValue | undefined;
     set: (storageKey: string, value: RateLimitValue) => Promise<void> | void;
+    setIf?: (storageKey: string, value: RateLimitValue, prior: RateLimitValue | undefined) => Promise<boolean>;
+    sweep?: (olderThanTs: number, limit: number, owns?: (storageKey: string) => boolean) => Promise<void> | void;
 }
 ```
 
@@ -338,7 +335,6 @@ public API and is gated as one. Listed once per package, sorted by name.
 
 ```ts
 interface DatabaseStoreLocation {
-    index?: string;
     keyField?: string;
     table?: string;
 }

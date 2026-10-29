@@ -90,7 +90,11 @@ describe("class-A composed worker entry", () => {
         writeFileSync(join(SCRATCH, "app.ts"), APP_STUB, "utf8");
         writeFileSync(join(SCRATCH, "ssr-stub.ts"), SSR_STUB, "utf8");
 
-        const source = buildWorkerEntrySource("tanstack-start", SCRATCH, [], true, { cdc: true, maxRelationKeys: 32, reactiveCache: { maxEntries: 5 } });
+        const source = buildWorkerEntrySource("tanstack-start", SCRATCH, {
+            classModules: [],
+            allowUnauthenticatedShardAccess: true,
+            shard: { cdc: true, maxRelationKeys: 32, reactiveCache: { maxEntries: 5 } },
+        });
 
         // Only the framework SSR handler is faked — the composition under test is
         // the emitted text, byte for byte.

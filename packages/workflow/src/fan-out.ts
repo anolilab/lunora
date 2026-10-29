@@ -6,7 +6,7 @@
  * `ctx.runStep(...)` would.
  *
  * Node-safe (no `cloudflare:workers` import): the native durable `step`, the
- * `WORKFLOW_*` bindings, and the parent's identity are all injected, so the whole
+ * workflow bindings, and the parent's identity are all injected, so the whole
  * spawn/join orchestration is unit-testable with plain doubles. The workerd-only
  * `src/do` base class supplies the real values and runs the child-side signal.
  *
@@ -28,6 +28,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { BRANCH_MARKER_KEY, BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { fnv1a64Hex } from "../../../shared/fnv1a";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { RESERVED_EVENT_TYPE_PREFIX } from "./define-event";
 import { isDuplicateInstanceError, NonRetryableError } from "./errors";
 import type {
@@ -66,10 +67,10 @@ const DIGEST_WIDTH = 17;
  * check is `id.length > 100` FIRST and only then the character pattern. Both halves
  * of the id are caller-controlled right up to that ceiling — an explicit
  * `branch(…, { id })` / `ctx.spawn(…, { id })` is taken verbatim by the run
- * context's allocator, and its derived `<parentId>-c<n>` form appends to a parent id
- * the host issued at whatever length it likes. So a plain `<parentId>-c<n>` under a
- * 98-character parent is already 101, and `+ "-compensate"` puts a rollback over the
- * line at 90. Every one of those is a hard `create` rejection, and neither surfaces
+ * context's allocator, and its derived `<parentId>-<parentWorkflow>-c<n>` form appends
+ * to a parent id the host issued at whatever length it likes. So even the shortest
+ * derived suffix, `-x-c0`, puts a 96-character parent over, and `+ "-compensate"`
+ * pushes a rollback over sooner still. Every one of those is a hard `create` rejection, and neither surfaces
  * as one. For a CHILD, the spawn `Promise.all` sits outside {@link createParallel}'s
  * try, so the rejection is not a `BranchJoinFailure` and the group-saga rollback is
  * skipped entirely. For a ROLLBACK, {@link compensateCompleted} logs it and moves
@@ -113,19 +114,26 @@ const BRANCH_EVENT_PREFIX = `${RESERVED_EVENT_TYPE_PREFIX}branch:`;
 /** The completion event a branch child sends to its parent. Discriminated so an `undefined` value is distinguishable from a failure. */
 type BranchOutcome = { error: { message: string; name: string }; status: "error" } | { status: "ok"; value?: unknown };
 
+/**
+ * The shape `workflowClassName` gives every workflow export key — an identifier
+ * codegen accepts (`[A-Za-z_$][\w$]*`, first letter upper-cased) followed by
+ * `Workflow`: `OrderPipelineWorkflow`, `_ordersWorkflow`, `$ordersWorkflow`.
+ */
+const WORKFLOW_EXPORT_KEY = /^[A-Z_$][\w$]*Workflow$/u;
+
 /** The marker the parent injects into a child's params and the child reads back to address its parent. */
 interface BranchMarker {
     /** The event type the parent waits on for this branch. */
     eventType: string;
     /** Declaration-order index of the branch (for log correlation). */
     index: number;
-    /** The parent workflow's own `WORKFLOW_*` binding name — how the child reaches back. */
-    parentBinding: string;
+    /** The parent workflow's own export key (its generated class name) — how the child reaches back. */
+    parentClassName: string;
     /** The parent workflow instance id. */
     parentId: string;
 }
 
-/** Resolve a declared child workflow's `WORKFLOW_*` binding by export name; throws a helpful error when absent. */
+/** Resolve a declared child workflow's binding by export name; throws a helpful error when absent. */
 type WorkflowBindingResolver = (workflow: string) => {
     create: (options?: { id?: string; params?: Record<string, unknown> }) => Promise<WorkflowInstanceLike>;
     get: (id: string) => Promise<WorkflowInstanceLike>;
@@ -133,16 +141,18 @@ type WorkflowBindingResolver = (workflow: string) => {
 
 /** Dependencies the fan-out factories close over — all injected so the orchestration is Node-testable. */
 interface FanOutDeps {
-    /** The Worker environment bindings (used to reach the parent binding on the child side). */
+    /** The Worker environment bindings (a non-Cloudflare host's workflows live here). */
     env: Record<string, unknown>;
+    /** The invoking context's `ctx.exports` — where Cloudflare exposes the declared workflows. */
+    exports?: unknown;
     /** The running workflow's instance id — the parent id stamped into each child. */
     instanceId: string;
     /** Optional structured logger — used to surface best-effort failures (e.g. a stranded group-saga compensation) without aborting the flow. */
     log?: WorkflowLogger;
     /** Allocate the next deterministic child instance id (replay-stable; honors an explicit id). Free to return any length — every result is folded through {@link boundInstanceId} before it reaches `create`. */
     nextChildId: (explicit?: string) => string;
-    /** The running workflow's own `WORKFLOW_*` binding name — passed to children so they can signal back. */
-    parentBinding: string;
+    /** The running workflow's own export key — passed to children so they can signal back. */
+    parentClassName: string;
     /** Resolve a child workflow's binding by export name. */
     resolveBinding: WorkflowBindingResolver;
     /** The native Cloudflare durable-step API. */
@@ -291,24 +301,24 @@ const boundOutcome = (outcome: BranchOutcome): BranchOutcome => {
 const createOrAttach = async (
     binding: ReturnType<WorkflowBindingResolver>,
     options: { id: string; params?: Record<string, unknown> },
-): Promise<{ attached: boolean; instance: WorkflowInstanceLike }> => {
+): Promise<WorkflowInstanceLike> => {
     try {
-        return { attached: false, instance: await binding.create(options) };
+        return await binding.create(options);
     } catch (error: unknown) {
         if (!isDuplicateInstanceError(error)) {
             throw error;
         }
 
-        return { attached: true, instance: await binding.get(options.id) };
+        return binding.get(options.id);
     }
 };
 
 /**
- * The branch outcome an already-attached child has ALREADY produced, or
- * `undefined` while it is still running.
+ * The branch outcome a spawned child has ALREADY produced, or `undefined`
+ * while it is still running.
  *
- * Read only on the attach path, so it costs one `status()` call exactly when a
- * spawn found the child already there and never on a first spawn. It is what
+ * Read on every spawn (one `status()` call): a first spawn on a host that runs
+ * the child synchronously inside `create()` is already terminal. It is also what
  * makes `instance.restart()` on a fanned-out parent recoverable: a restart wipes
  * the parent's step cache *and* its event map, so the re-run spawn steps
  * re-attach to children that have already sent — and had consumed — their
@@ -492,24 +502,30 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
         }
 
         // 1. Spawn all branches concurrently. `step.do` memoizes by name, so the
-        //    create runs exactly once across replays/restarts. A step that had to
-        //    ATTACH reports the child's outcome when it has already finished, so
-        //    the join below can skip an event that will never be delivered twice.
+        //    create runs exactly once across replays/restarts. A step whose child
+        //    has already finished (attached, or run inline by `create()`) reports
+        //    its outcome, so the join below skips an event that will not arrive.
         const spawned = await Promise.all(
             planned.map((plan) =>
                 deps.step.do(`${SPAWN_STEP_PREFIX}${plan.childId}`, async (): Promise<BranchOutcome | undefined> => {
                     const binding = deps.resolveBinding(plan.item.workflow);
-                    const marker: BranchMarker = { eventType: plan.eventType, index: plan.index, parentBinding: deps.parentBinding, parentId: deps.instanceId };
+                    const marker: BranchMarker = {
+                        eventType: plan.eventType,
+                        index: plan.index,
+                        parentClassName: deps.parentClassName,
+                        parentId: deps.instanceId,
+                    };
 
-                    const { attached, instance } = await createOrAttach(binding, {
+                    const instance = await createOrAttach(binding, {
                         id: plan.childId,
                         params: { ...plan.item.params, [BRANCH_MARKER_KEY]: marker },
                     });
 
-                    if (!attached) {
-                        return undefined;
-                    }
-
+                    // Read on BOTH paths: a host that runs a fresh child to
+                    // completion inside `create()` (the Node host does) has it
+                    // terminal before the parent waits, and its completion event
+                    // could never be delivered to a run that was not yet waiting.
+                    //
                     // Bounded for the same reason the event path is: this value is
                     // the SPAWN STEP's return, which the host persists (miniflare's
                     // engine answers a step output over 1 MiB with `Step … output
@@ -556,7 +572,7 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
                     throw new BranchJoinFailure(plan, serializeError(joinError), "join failed");
                 }
             } else {
-                // The spawn step attached to a child that had already finished — its
+                // The spawn step found a child that had already finished — its
                 // terminal status IS the outcome, and no event is coming.
                 outcome = finished;
             }
@@ -644,7 +660,7 @@ const extractBranchMarker = (payload: unknown): BranchMarker | undefined => {
 
     if (
         typeof candidate.eventType !== "string" ||
-        typeof candidate.parentBinding !== "string" ||
+        typeof candidate.parentClassName !== "string" ||
         typeof candidate.parentId !== "string" ||
         typeof candidate.index !== "number"
     ) {
@@ -652,14 +668,14 @@ const extractBranchMarker = (payload: unknown): BranchMarker | undefined => {
     }
 
     // Defense-in-depth: even if a marker slips past the create-surface guard,
-    // constrain the parent dereference to a `WORKFLOW_*` binding and the send to
+    // constrain the parent dereference to a workflow export key and the send to
     // the branch event namespace. Legitimate markers always satisfy both
-    // (createParallel builds `WORKFLOW_*` bindings and `lunora:branch:*` types).
-    if (!candidate.parentBinding.startsWith("WORKFLOW_") || !candidate.eventType.startsWith(BRANCH_EVENT_PREFIX)) {
+    // (createParallel stamps `workflowClassName` keys and `lunora:branch:*` types).
+    if (!WORKFLOW_EXPORT_KEY.test(candidate.parentClassName) || !candidate.eventType.startsWith(BRANCH_EVENT_PREFIX)) {
         return undefined;
     }
 
-    return { eventType: candidate.eventType, index: candidate.index, parentBinding: candidate.parentBinding, parentId: candidate.parentId };
+    return { eventType: candidate.eventType, index: candidate.index, parentClassName: candidate.parentClassName, parentId: candidate.parentId };
 };
 
 /** Return the child's params with the internal branch marker removed — the shape the user handler's `ctx.params` should see. */
@@ -682,13 +698,13 @@ const stripBranchMarker = (payload: unknown): unknown => {
  * its timeout. Pass the result on success or the serialised error on failure.
  */
 const signalBranchParent = async (
-    deps: { env: Record<string, unknown>; step: WorkflowStepLike },
+    deps: { env: Record<string, unknown>; exports?: unknown; step: WorkflowStepLike },
     marker: BranchMarker,
     outcome: BranchOutcome,
 ): Promise<void> => {
-    const binding = deps.env[marker.parentBinding] as { get?: (id: string) => Promise<WorkflowInstanceLike> } | undefined;
+    const binding = resolveWorkflowHandle<{ get: (id: string) => Promise<WorkflowInstanceLike> }>(deps.env, deps.exports, marker.parentClassName, ["get"]);
 
-    if (!binding || typeof binding.get !== "function") {
+    if (binding === undefined) {
         return;
     }
 
@@ -713,7 +729,7 @@ const signalBranchParent = async (
  * logger is provided.
  */
 const signalBranchParentSafe = async (
-    deps: { env: Record<string, unknown>; log?: WorkflowLogger; step: WorkflowStepLike },
+    deps: { env: Record<string, unknown>; exports?: unknown; log?: WorkflowLogger; step: WorkflowStepLike },
     marker: BranchMarker,
     outcome: BranchOutcome,
 ): Promise<void> => {
@@ -724,7 +740,7 @@ const signalBranchParentSafe = async (
     }
 };
 
-export type { BranchMarker, BranchOutcome, FanOutDeps, WorkflowBindingResolver };
+export type { BranchOutcome, FanOutDeps, WorkflowBindingResolver };
 export {
     branch,
     createParallel,

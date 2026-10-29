@@ -3,15 +3,16 @@ import type { AsyncStorageLike, LunoraClientOptions } from "@lunora/client";
 /**
  * A `() => headers` factory the React Native client threads onto every HTTP RPC
  * request *and* the WebSocket upgrade — a generic escape hatch for attaching a
- * **custom** credential header (an API-gateway key, a proxy token, …) that
- * React Native's missing cookie jar can't carry implicitly. Return `undefined`
- * (or an empty object) when there's nothing to attach.
+ * **custom** credential header (an API-gateway key, a proxy token, …). Return
+ * `undefined` (or an empty object) when there's nothing to attach.
  *
  * For better-auth Expo sessions, prefer a **bearer** token instead: read it with
  * `@lunora/react-native/auth`'s `expoBearerToken` and feed it to
- * `client.setAuthToken` / `setWsToken` (see the package README). A bearer avoids
- * the `Cookie` header the runtime's CSRF guard rejects on `Origin`-less native
- * requests.
+ * `client.setAuthToken`, which also authenticates the WebSocket upgrade on
+ * native (see the package README). Either way the
+ * client sends `credentials: "omit"`, so the platform cookie jar never attaches a
+ * session cookie the runtime's CSRF guard would reject on an `Origin`-less native
+ * request.
  * @experimental
  */
 export type AuthHeadersFactory = () => Record<string, string> | undefined;
@@ -25,7 +26,7 @@ export type AuthHeadersFactory = () => Record<string, string> | undefined;
  * stays in memory and is lost on reload). `getAuthHeaders` is a generic escape
  * hatch for a custom credential header on both the HTTP RPC path and the
  * WebSocket upgrade; for better-auth sessions prefer a bearer token
- * (`expoBearerToken` + the client's `setAuthToken` / `setWsToken`).
+ * (`expoBearerToken` + the client's `setAuthToken`).
  *
  * The `persistence`, `fetch`, and `WebSocket` fields of `LunoraClientOptions`
  * are still accepted and take precedence when you need full control; the two
@@ -37,7 +38,7 @@ export interface CreateLunoraClientOptions extends LunoraClientOptions {
      * Attaches a credential to every HTTP RPC request and to the WebSocket
      * upgrade request. See `AuthHeadersFactory`. When omitted, requests go out
      * with only whatever `LunoraClient` already sets (its bearer token from
-     * `setAuthToken`, if any).
+     * `setAuthToken`, if any — on native that bearer also rides the upgrade).
      *
      * Merged UNDER the client's own headers on the HTTP path (an explicit
      * `setAuthToken` bearer wins over a same-named header here); applied to the

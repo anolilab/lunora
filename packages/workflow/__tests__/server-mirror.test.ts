@@ -15,12 +15,21 @@ import type {
     WorkflowEventDefinition as ServerEventDefinition,
     WorkflowHandle as ServerHandle,
     WorkflowInstance as ServerInstance,
+    WorkflowInstanceEvent as ServerInstanceEvent,
     Workflows as ServerWorkflows,
     WorkflowStatusResult as ServerStatusResult,
 } from "@lunora/server";
 import { describe, expect, it } from "vitest";
 
-import type { WorkflowCreateOptions, WorkflowEventDefinition, WorkflowHandle, WorkflowInstanceLike, Workflows, WorkflowStatusResult } from "../src/types";
+import type {
+    WorkflowCreateOptions,
+    WorkflowEventDefinition,
+    WorkflowHandle,
+    WorkflowInstanceEventLike,
+    WorkflowInstanceLike,
+    Workflows,
+    WorkflowStatusResult,
+} from "../src/types";
 
 /** `true` only when `A` and `B` are mutually assignable — i.e. the mirror has not drifted. */
 type Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
@@ -34,10 +43,11 @@ describe("@lunora/server ctx.workflows mirror", () => {
             Mutual<WorkflowEventDefinition, ServerEventDefinition>,
             Mutual<WorkflowHandle, ServerHandle>,
             Mutual<WorkflowInstanceLike, ServerInstance>,
+            Mutual<WorkflowInstanceEventLike, ServerInstanceEvent>,
             Mutual<WorkflowStatusResult, ServerStatusResult>,
             Mutual<Workflows, ServerWorkflows>,
-        ] = [true, true, true, true, true, true];
+        ] = [true, true, true, true, true, true, true];
 
-        expect(inLockstep).toHaveLength(6);
+        expect(inLockstep).toHaveLength(7);
     });
 });

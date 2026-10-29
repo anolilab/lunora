@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import { jsonPath, jsonPathSql, serializeSqlValue } from "../src/do-sql";
@@ -21,8 +22,12 @@ import type { WhereInput } from "../src/where-types";
  * cleanly and answers the wrong question.
  */
 
-const drizzleStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize: serializeSqlValue };
-const textStrategy: WhereSqlStrategy<TextFragment> = { fieldRef: (field) => rawText(jsonPath(field)), serialize: serializeSqlValue };
+const drizzleStrategy: WhereSqlStrategy = { rangeTypeGuard: () => sql`1 = 1`, fieldRef: jsonPathSql, serialize: serializeSqlValue };
+const textStrategy: WhereSqlStrategy<TextFragment> = {
+    rangeTypeGuard: () => rawText("1 = 1"),
+    fieldRef: (field) => rawText(jsonPath(field)),
+    serialize: serializeSqlValue,
+};
 
 /** Compile `where` both ways and return the two rendered forms. */
 const bothWays = (where: WhereInput): { drizzle: { params: unknown[]; sql: string }; text: { params: unknown[]; sql: string } } => {

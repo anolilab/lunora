@@ -30,6 +30,16 @@ const readEnv = (env: Record<string, unknown> | undefined, key: string): string 
  */
 let warnedWorkersAiBindingToken = false;
 
+/** Warn-once latch for a malformed {@link AI_GATEWAY_TAGS_ENV} value. */
+let warnedMalformedTags = false;
+
+/**
+ * AI Gateway's hard limit on `cf-aig-metadata` keys. Exceeding it makes the
+ * gateway reject the metadata object entirely, so the builder trims to this
+ * rather than sending something that will be thrown away.
+ */
+const AI_GATEWAY_METADATA_MAX_KEYS = 5;
+
 /**
  * Project {@link AiGatewayMetadata} to a plain string-map of only its defined,
  * non-empty fields, or `undefined` when nothing is set. This is the shared source
@@ -43,17 +53,46 @@ const buildAiGatewayMetadataFields = (metadata: AiGatewayMetadata | undefined): 
         return undefined;
     }
 
-    const fields: Record<string, string> = {};
+    const builtIns: Record<string, string> = {};
 
     if (typeof metadata.functionPath === "string" && metadata.functionPath.length > 0) {
-        fields["functionPath"] = metadata.functionPath;
+        builtIns["functionPath"] = metadata.functionPath;
     }
 
     if (typeof metadata.traceId === "string" && metadata.traceId.length > 0) {
-        fields["traceId"] = metadata.traceId;
+        builtIns["traceId"] = metadata.traceId;
     }
 
-    return Object.keys(fields).length > 0 ? fields : undefined;
+    const fields: Record<string, string> = {};
+
+    // An app tag never takes a built-in's name: `traceId` is what joins a gateway
+    // log entry to its trace, and an app must not be able to break that join by
+    // reusing the name. Skipped rather than overwritten, because overwriting keeps
+    // the TAG's insertion slot, so the trim below would cut the built-in first.
+    for (const [key, value] of Object.entries(metadata.tags ?? {})) {
+        if (typeof value === "string" && value.length > 0 && key.length > 0 && !Object.hasOwn(builtIns, key)) {
+            fields[key] = value;
+        }
+    }
+
+    Object.assign(fields, builtIns);
+
+    const keys = Object.keys(fields);
+
+    if (keys.length === 0) {
+        return undefined;
+    }
+
+    if (keys.length <= AI_GATEWAY_METADATA_MAX_KEYS) {
+        return fields;
+    }
+
+    // Over the cap the gateway rejects the whole object, so trim rather than
+    // lose every field. The built-ins are appended last and therefore kept:
+    // dropping an app tag costs one slice, dropping `traceId` costs the join.
+    const kept = keys.slice(-AI_GATEWAY_METADATA_MAX_KEYS);
+
+    return Object.fromEntries(kept.map((key) => [key, fields[key] as string]));
 };
 
 /**
@@ -87,6 +126,22 @@ export type AiGatewayConsumer = "byo-provider" | "workers-ai-binding";
 export interface AiGatewayMetadata {
     /** The Lunora function path that issued the model call (e.g. `messages:send`). */
     functionPath?: string;
+
+    /**
+     * App-supplied correlation tags — what the app slices its own AI spend by:
+     * feature, plan, tenant, a hashed user id. AI Gateway's cost filtering can
+     * only group by keys that were sent WITH the call, so a tag not set here is
+     * a question that cannot be asked later.
+     *
+     * Merged under the built-in fields, which win on a key collision, and
+     * trimmed to AI Gateway's {@link AI_GATEWAY_METADATA_MAX_KEYS}-key limit —
+     * over it, the gateway rejects the metadata outright and the correlation is
+     * lost rather than truncated.
+     *
+     * Values should stay low-cardinality for the same reason a route label
+     * does: a raw user id per call makes every call its own group. Hash it.
+     */
+    tags?: Record<string, string>;
     /** The 32-hex trace id the call belongs to, so the gateway log joins the trace. */
     traceId?: string;
 }
@@ -176,6 +231,89 @@ export const AI_GATEWAY_ID_ENV = "LUNORA_AI_GATEWAY_ID";
 export const AI_GATEWAY_TOKEN_ENV = "LUNORA_AI_GATEWAY_TOKEN";
 
 /**
+ * Env var carrying deployment-scoped AI Gateway tags as a flat JSON object of
+ * string values, e.g. `{"app":"checkout","env":"prod"}`.
+ *
+ * Deployment-scoped because that is the dimension you cannot recover in code:
+ * AI Gateway can only filter cost by keys that were sent WITH the call, and
+ * "which environment / which app spent this" is fixed at deploy time. Per-call
+ * tags (feature, hashed user) go through {@link AiGatewayMetadata.tags}
+ * instead. A malformed value is ignored with a warning rather than failing the
+ * call — telemetry configuration must not take inference down.
+ */
+export const AI_GATEWAY_TAGS_ENV = "LUNORA_AI_GATEWAY_TAGS";
+
+/**
+ * Env var carrying the base URL of a self-hosted OpenAI-compatible proxy
+ * (LiteLLM, OpenRouter, your own), e.g. `https://ai-proxy.internal/v1`.
+ *
+ * When set, `ctx.ai.model("<provider>/<model>")` sends the slug unchanged as the
+ * `model` of an OpenAI chat-completions request to this URL instead of routing
+ * it through Cloudflare AI Gateway — which needs no `AI` binding, so it is how
+ * `ctx.ai` works on hosts without Workers AI (celld). `@cf/…` ids still need
+ * the binding.
+ */
+export const AI_PROXY_URL_ENV = "LUNORA_AI_PROXY_URL";
+
+/** Env var carrying the bearer token sent to {@link AI_PROXY_URL_ENV}, when the proxy requires one. */
+export const AI_PROXY_TOKEN_ENV = "LUNORA_AI_PROXY_TOKEN";
+
+/**
+ * Parse {@link AI_GATEWAY_TAGS_ENV} into tag fields. Non-string values are
+ * dropped rather than coerced — a number silently becoming `"1"` is a worse
+ * outcome than the tag being absent and visibly so.
+ */
+export const readAiGatewayEnvTags = (env: Record<string, unknown>): Record<string, string> | undefined => {
+    const raw = readEnv(env, AI_GATEWAY_TAGS_ENV);
+
+    if (raw === undefined) {
+        return undefined;
+    }
+
+    try {
+        const parsed = JSON.parse(raw) as unknown;
+
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            throw new TypeError("expected a JSON object");
+        }
+
+        const tags: Record<string, string> = {};
+
+        for (const [key, value] of Object.entries(parsed)) {
+            if (typeof value === "string" && value.length > 0) {
+                tags[key] = value;
+            }
+        }
+
+        return Object.keys(tags).length > 0 ? tags : undefined;
+    } catch {
+        if (!warnedMalformedTags) {
+            warnedMalformedTags = true;
+            // eslint-disable-next-line no-console -- one-time misconfiguration diagnostic; the alternative is silently unlabelled cost data.
+            console.warn(`[lunora:ai] ${AI_GATEWAY_TAGS_ENV} is not a flat JSON object of strings — AI Gateway tags from it are ignored.`);
+        }
+
+        return undefined;
+    }
+};
+
+/**
+ * Warn once per isolate when {@link AI_GATEWAY_TOKEN_ENV} is set but the caller
+ * is the Workers AI binding, which has no field to carry it.
+ */
+export const warnIgnoredBindingToken = (env: Record<string, unknown>): void => {
+    if (warnedWorkersAiBindingToken || readEnv(env, AI_GATEWAY_TOKEN_ENV) === undefined) {
+        return;
+    }
+
+    warnedWorkersAiBindingToken = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+        `[lunora:ai] ${AI_GATEWAY_TOKEN_ENV} is set, but the Workers AI binding cannot send a gateway auth token — Cloudflare's native gateway option has no authorization field. The token is ignored on this path; use a bring-your-own AI SDK provider (which sends cf-aig-authorization), or make the AI Gateway unauthenticated for Workers AI.`,
+    );
+};
+
+/**
  * Resolve the Cloudflare AI Gateway coordinates from the Worker `env`, or
  * `undefined` when the gateway is not configured (both `LUNORA_AI_GATEWAY_ACCOUNT_ID`
  * and `LUNORA_AI_GATEWAY_ID` must be present). Opt-in and backward-compatible:
@@ -211,12 +349,8 @@ export const resolveAiGateway = (
     if (token !== undefined) {
         headers["cf-aig-authorization"] = `Bearer ${token}`;
 
-        if (consumer === "workers-ai-binding" && !warnedWorkersAiBindingToken) {
-            warnedWorkersAiBindingToken = true;
-            // eslint-disable-next-line no-console
-            console.warn(
-                `[lunora:ai] ${AI_GATEWAY_TOKEN_ENV} is set, but the Workers AI binding cannot send a gateway auth token — Cloudflare's native gateway option has no authorization field. The token is ignored on this path; use a bring-your-own AI SDK provider (which sends cf-aig-authorization), or make the AI Gateway unauthenticated for Workers AI.`,
-            );
+        if (consumer === "workers-ai-binding") {
+            warnIgnoredBindingToken(env);
         }
     }
 
@@ -234,4 +368,4 @@ export const resolveAiGateway = (
     };
 };
 
-export { buildAiGatewayMetadataFields, readEnv };
+export { AI_GATEWAY_METADATA_MAX_KEYS, buildAiGatewayMetadataFields, readEnv };

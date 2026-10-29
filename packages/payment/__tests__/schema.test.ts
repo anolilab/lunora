@@ -1,16 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { defineSchema, defineTable } from "@lunora/server";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
-import paymentTables from "../src/schema";
+import { PAYMENT_TABLES } from "../src/database-store";
+import paymentExtension from "../src/schema";
+
+const paymentTables = paymentExtension.tables;
 
 /**
  * Drift guard for the discriminator columns `@lunora/codegen` hardcodes.
  *
- * `packages/codegen/src/discover/feature-usage.ts` cannot resolve the
- * cross-package `...paymentTables` spread, so it hardcodes the signature columns
+ * `packages/codegen/src/discover/payment-store-tables.ts` hardcodes the signature columns
  * that identify a real payment store — `providerSubscriptionId` + `state` on
  * `subscriptions`, `providerEventId` + `processedAt` on `events` — to gate the
- * Studio payments page (and to keep an unrelated newsletter `subscriptions` or a
- * domain `events` table from spuriously enabling it). Nothing binds that hardcode
+ * Studio payments page. Nothing binds that hardcode
  * to this schema, so a rename here would silently un-gate the page.
  *
  * These assertions make such a rename fail LOUDLY: keep them and the codegen
@@ -22,7 +24,7 @@ describe("payment store signature columns (codegen drift guard)", () => {
 
         const { subscriptions } = paymentTables;
 
-        // Mirror of PAYMENT_SUBSCRIPTION_COLUMNS in discover/feature-usage.ts.
+        // Mirror of PAYMENT_SUBSCRIPTION_COLUMNS in discover/payment-store-tables.ts.
         expect(subscriptions?.shape).toHaveProperty("providerSubscriptionId");
         expect(subscriptions?.shape).toHaveProperty("state");
     });
@@ -32,8 +34,41 @@ describe("payment store signature columns (codegen drift guard)", () => {
 
         const { events } = paymentTables;
 
-        // Mirror of PAYMENT_EVENTS_COLUMNS in discover/feature-usage.ts.
+        // Mirror of PAYMENT_EVENTS_COLUMNS in discover/payment-store-tables.ts.
         expect(events?.shape).toHaveProperty("providerEventId");
         expect(events?.shape).toHaveProperty("processedAt");
+    });
+
+    it("names the merged tables exactly as the store reads them", () => {
+        expect.assertions(1);
+
+        // `.extend()` prefixes each bare name with the key; PAYMENT_TABLES is what the store uses.
+        expect(new Set(Object.keys(paymentTables).map((name) => `${paymentExtension.key}_${name}`))).toStrictEqual(new Set(Object.values(PAYMENT_TABLES)));
+    });
+});
+
+describe("paymentExtension", () => {
+    it("adds exactly the payment_* table names to an extended schema (#1021)", () => {
+        expect.assertions(1);
+
+        const schema = defineSchema({}).extend(paymentExtension);
+
+        expectTypeOf<keyof typeof schema.tables>().toEqualTypeOf<
+            "payment_customers" | "payment_events" | "payment_sessions" | "payment_subscriptions" | "payment_usageEvents"
+        >();
+
+        expect(Object.keys(schema.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(Object.values(PAYMENT_TABLES).toSorted((a, b) => a.localeCompare(b)));
+    });
+
+    it("declares no column a .global() table refuses, so an app can redeclare the tables global", () => {
+        expect.assertions(1);
+
+        // `defineSchema` rejects a `v.bigint()` column on a `.global()` table. An app that keeps its
+        // payment rows in D1 declares these tables itself with the package's columns.
+        const globalTables = Object.fromEntries(
+            Object.entries(paymentExtension.tables).map(([name, table]) => [`${paymentExtension.key}_${name}`, defineTable(table.shape).global()]),
+        );
+
+        expect(() => defineSchema(globalTables)).not.toThrow();
     });
 });

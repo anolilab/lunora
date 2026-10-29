@@ -1,4 +1,4 @@
-import type { FunctionReference, LunoraClient } from "@lunora/client";
+import type { FunctionReference, LunoraClient, SubscriptionErrorCallback } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import { get, writable } from "svelte/store";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -18,7 +18,7 @@ const createFakeClient = () => {
             function_: unknown,
             args: unknown,
             callback: (value: unknown) => void,
-            options?: { onError?: (error: { code?: string; message: string }) => void },
+            options?: { onError?: (error: { code?: string; message: string; why?: string }) => void },
         ) => () => void
     >((_fn, _args, callback, options) => {
         lastCallback = callback;
@@ -33,6 +33,7 @@ const createFakeClient = () => {
         client,
         emit: (value: unknown) => lastCallback?.(value),
         emitError: (message: string, code?: string) => lastOnError?.(code === undefined ? { message } : { code, message }),
+        emitErrorObject: (error: { code?: string; message: string; why?: string }) => lastOnError?.(error),
         subscribeSpy,
         unsubscribeSpy,
     };
@@ -105,19 +106,36 @@ describe("subscription store", () => {
         stop();
     });
 
+    it("keeps the SubscriptionError why explanation on the error store", () => {
+        const { client, emitErrorObject } = createFakeClient();
+        const { data, error } = subscription(client, fnRef, args, {});
+
+        // Subscribe both stores so the data store's start callback wires onError.
+        const stopData = data.subscribe(() => {});
+        const stopError = error.subscribe(() => {});
+
+        emitErrorObject({ code: "CONFLICT", message: "stale", why: "row moved" });
+
+        expect((get(error) as { why?: string } | undefined)?.why).toBe("row moved");
+
+        stopError();
+        stopData();
+    });
+
     it("routes a subscription error into the error store and the onError callback", () => {
         const { client, emitError } = createFakeClient();
-        const onError = vi.fn<(error: Error) => void>();
+        const onError = vi.fn<SubscriptionErrorCallback>();
         const { data, error } = subscription(client, fnRef, args, { onError });
 
         // Subscribe both stores so the data store's start callback wires onError.
         const stopData = data.subscribe(() => {});
         const stopError = error.subscribe(() => {});
 
-        emitError("boom");
+        emitError("boom", "FORBIDDEN");
 
         expect(onError).toHaveBeenCalledTimes(1);
-        expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+        // The raw wire error, not the normalised `Error` the store holds.
+        expect(onError.mock.calls[0]?.[0]).toMatchObject({ code: "FORBIDDEN", message: "boom" });
 
         const captured = get(error);
 

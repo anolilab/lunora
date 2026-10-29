@@ -82,6 +82,45 @@ describe(createContainerContext, () => {
         }
     });
 
+    // The tail-bias toggle rides beside the trace context, so the container is
+    // TOLD what the worker decided instead of falling back to its own env and
+    // agreeing only by coincidence. Same three handle shapes, and `.port()`,
+    // because a re-bound handle that dropped it would be a silent hole.
+    it("stamps the forwarded tail-bias toggle onto outbound container requests", async () => {
+        expect.assertions(4);
+
+        const { namespace, requests } = fakeNamespace();
+        const containers = createContainerContext(
+            { CONTAINER_TRANSCODER: namespace },
+            [{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 2 }],
+            undefined,
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            false,
+        );
+
+        await containers.transcoder!.get("a").fetch("/x");
+        await containers.transcoder!.any().fetch("/x");
+        await containers.transcoder!.pool().fetch("/x");
+        await containers.transcoder!.get("a").port(8080).fetch("/x");
+
+        for (const request of requests) {
+            expect(request.headers.get("x-lunora-sample-errors")).toBe("0");
+        }
+    });
+
+    // Absent toggle means absent header: a container with no verdict propagated
+    // to it falls back to its own configuration rather than being told "off".
+    it("omits the toggle header when the dispatch propagated none", async () => {
+        expect.assertions(1);
+
+        const { namespace, requests } = fakeNamespace();
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: namespace }, [{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder" }]);
+
+        await containers.transcoder!.get("a").fetch("/x");
+
+        expect(requests[0]!.headers.get("x-lunora-sample-errors")).toBeNull();
+    });
+
     it(".any() picks a pool instance within maxInstances", async () => {
         expect.assertions(2);
 
@@ -99,6 +138,31 @@ describe(createContainerContext, () => {
         await containers.transcoder!.any(10).fetch("/probe");
 
         expect(names[1]).toBe("pool-9");
+
+        vi.restoreAllMocks();
+    });
+
+    it("keeps pool instances out of the .get(name) namespace", async () => {
+        expect.assertions(2);
+
+        const { names, namespace } = fakeNamespace();
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 1 },
+        ]);
+
+        vi.spyOn(Math, "random").mockReturnValue(0);
+
+        // An entity called "pool-0" must not share a Durable Object (disk,
+        // lifecycle, `destroy()`) with the pool's first instance. The pool keeps
+        // its `pool-N` ids (renaming them would strand warm instances against
+        // `max_instances` on deploy), so `.get()` refuses the prefix instead.
+        expect(() => containers.transcoder!.get("pool-0")).toThrow(/"pool-" prefix is reserved/u);
+
+        await containers.transcoder!.get("pools-of-light").fetch("/probe");
+        await containers.transcoder!.any().fetch("/probe");
+        await containers.transcoder!.pool().fetch("/probe");
+
+        expect(names).toStrictEqual(["pools-of-light", "pool-0", "pool-0"]);
 
         vi.restoreAllMocks();
     });
@@ -286,6 +350,24 @@ describe("ctx.containers.<name>.get() lifecycle controls", () => {
         ]);
         // ReadonlyArray args are copied to a fresh mutable array before the RPC.
         expect(calls.find((call) => call.method === "setAllowedHosts")!.arg).toStrictEqual(["a.com", "b.com"]);
+    });
+
+    it("forwards snapshot() to the DO's lunoraSnapshot RPC and returns its handle", async () => {
+        expect.assertions(2);
+
+        const lunoraSnapshot = vi.fn<(options?: { name?: string }) => Promise<{ id: string; name?: string; size: number }>>(async (options) => {
+            return { id: "snap-1", name: options?.name, size: 9 };
+        });
+        const namespace: ContainerNamespaceLike = {
+            get: () => {
+                return { fetch: async () => new Response("ok"), lunoraSnapshot };
+            },
+            idFromName: (name) => name,
+        };
+        const handle = createContainerContext({ CONTAINER_SANDBOX: namespace }, [{ binding: "CONTAINER_SANDBOX", exportName: "sandbox" }]).sandbox!.get("s1");
+
+        await expect(handle.snapshot({ name: "v1" })).resolves.toStrictEqual({ id: "snap-1", name: "v1", size: 9 });
+        expect(lunoraSnapshot).toHaveBeenCalledWith({ name: "v1" });
     });
 
     it("routes .port(n) requests with the cf-container-target-port header across get/any/pool", async () => {
@@ -638,8 +720,57 @@ describe(createContainerTestContext, () => {
         await expect(response.text()).resolves.toBe("video-1:/transcode");
         expect(handler).toHaveBeenCalledTimes(1);
 
-        const pooled = await containers.transcoder!.any().fetch("/probe");
+        const pooled = await containers.transcoder!.get("worker-0").fetch("/probe");
 
-        await expect(pooled.text()).resolves.toBe("pool-0:/probe");
+        await expect(pooled.text()).resolves.toBe("worker-0:/probe");
+    });
+
+    it(".any() spreads across the pool exactly as the real accessor does", async () => {
+        expect.assertions(1);
+
+        // The double used to pin `.any()` to `pool-0`, which is MORE permissive
+        // than production: a stateful multi-step test (write a file, then read
+        // it back) passed here and failed live, where each `.any()` re-picks a
+        // random instance with its own disk.
+        const seen = new Set<string>();
+        const containers = createContainerTestContext({
+            transcoder: (_request, instance) => new Response(instance.name),
+        });
+
+        for (let call = 0; call < 40; call += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sampling the pick distribution is inherently sequential
+            const response = await containers.transcoder!.any(3).fetch("/probe");
+
+            // eslint-disable-next-line no-await-in-loop -- same
+            seen.add(await response.text());
+        }
+
+        expect(seen.size).toBeGreaterThan(1);
+    });
+
+    it("re-picks the instance inside each request on a pooled handle, as production does", async () => {
+        expect.assertions(1);
+
+        // `.any()` and `.pool()` do NOT pick the same way, and the difference is
+        // exactly what this covers: `.any()` fixes one instance for the life of
+        // the handle, while production's `.pool()` picks inside every request.
+        // Reusing ONE handle is what separates them — the `.any()` test above
+        // takes a fresh handle per call, so it passes against a double that
+        // pins per handle, which is what this one did.
+        const seen = new Set<string>();
+        const containers = createContainerTestContext({
+            transcoder: (_request, instance) => new Response(instance.name),
+        });
+        const handle = containers.transcoder!.pool({ size: 3 });
+
+        for (let call = 0; call < 40; call += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sampling the pick distribution is inherently sequential
+            const response = await handle.fetch("/probe");
+
+            // eslint-disable-next-line no-await-in-loop -- same
+            seen.add(await response.text());
+        }
+
+        expect(seen.size).toBeGreaterThan(1);
     });
 });

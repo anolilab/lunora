@@ -3,8 +3,8 @@ import { computed, DestroyRef, inject, signal } from "@angular/core";
 import type { FunctionReference, LunoraClient, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { stableWireKey } from "@lunora/wire";
 
-import { stableWireKey } from "../../../shared/wire-key";
 import { resolveLunoraClient } from "./client";
 import { attachReactiveArgs, shouldOpenSubscription } from "./platform";
 

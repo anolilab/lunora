@@ -1,5 +1,105 @@
-import type { Identifier, Node as TsNode } from "ts-morph";
+import type { BindingElement, Identifier, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
+
+import { bindingKeyName, descendantsOfKind } from "./discover/ast";
+import { declarationOf, isReassignedBinding } from "./discover/attribution";
+import { isHandlerArgsParameter, referencesContext } from "./discover/context-root";
+
+/**
+ * The parameter binding element that declares `name`, searched from the
+ * innermost enclosing function outward so a shadowing parameter wins over an
+ * outer one. Only PARAMETER patterns are searched: `({ args: { url } })` is the
+ * house style every handler is written in, and a parameter cannot be
+ * reassigned out from under the use the way a later `const` can, so this needs
+ * none of {@link singleHopInitializer}'s scope-order care.
+ */
+const parameterBindingFor = (identifier: Identifier): BindingElement | undefined => {
+    const name = identifier.getText();
+    const declares = (candidate: BindingElement): boolean => {
+        const nameNode = candidate.getNameNode();
+
+        return Node.isIdentifier(nameNode) && nameNode.getText() === name;
+    };
+
+    for (const ancestor of identifier.getAncestors()) {
+        if (!Node.isArrowFunction(ancestor) && !Node.isFunctionExpression(ancestor) && !Node.isFunctionDeclaration(ancestor)) {
+            continue;
+        }
+
+        for (const parameter of ancestor.getParameters()) {
+            const element = parameter.getDescendantsOfKind(SyntaxKind.BindingElement).find((candidate) => declares(candidate));
+
+            if (element !== undefined) {
+                return element;
+            }
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * The property name the outermost element of `element`'s destructuring chain
+ * reads off the parameter object — `({ args: { url: target } })`'s `target`
+ * resolves to `"args"`, and so does the `...rest` of `({ args: { url,
+ * ...rest } })`, because a rest element holds what is left of the same object.
+ * `undefined` when the chain is not rooted directly in a parameter's pattern
+ * (an array pattern, or a nested function's own binding).
+ */
+const destructuringRootName = (element: BindingElement): string | undefined => {
+    let outermost = element;
+
+    for (;;) {
+        const pattern = outermost.getParent();
+
+        if (!Node.isObjectBindingPattern(pattern)) {
+            return undefined;
+        }
+
+        const owner = pattern.getParent();
+
+        if (Node.isBindingElement(owner)) {
+            outermost = owner;
+
+            continue;
+        }
+
+        if (!Node.isParameterDeclaration(owner)) {
+            return undefined;
+        }
+
+        // The renamed spelling reads `propertyName`; a shorthand (and a rest
+        // element) reads its own name.
+        return bindingKeyName(outermost);
+    }
+};
+
+/** Whether `identifier` resolves, by symbol, to a positional handler's `args` parameter or to a binding destructured from it. */
+const isPositionalArgsReference = (identifier: Identifier): boolean => {
+    // Cheap pre-filter before any symbol lookup: some enclosing positional handler binds this spelling as its `args`.
+    const name = identifier.getText();
+    const isCandidate = identifier.getAncestors().some((ancestor) => {
+        const parameter = Node.isFunctionLikeDeclaration(ancestor) || Node.isArrowFunction(ancestor) ? ancestor.getParameters()[1] : undefined;
+        const nameNode = parameter?.getNameNode();
+
+        return (
+            parameter !== undefined &&
+            (Node.isIdentifier(nameNode)
+                ? nameNode.getText() === name
+                : parameter.getDescendantsOfKind(SyntaxKind.BindingElement).some((element) => element.getName() === name)) &&
+            isHandlerArgsParameter(parameter)
+        );
+    });
+
+    if (!isCandidate) {
+        return false;
+    }
+
+    const declaration = declarationOf(identifier);
+    const parameter = Node.isParameterDeclaration(declaration) ? declaration : declaration?.getFirstAncestorByKind(SyntaxKind.Parameter);
+
+    return parameter !== undefined && (Node.isParameterDeclaration(declaration) || Node.isBindingElement(declaration)) && isHandlerArgsParameter(parameter);
+};
 
 /**
  * True when `identifier` is a *value* reference to the binding named `name` —
@@ -9,19 +109,38 @@ import { Node, SyntaxKind } from "ts-morph";
  * member access and the key of an explicit `{ <name>: … }` property, which name
  * a different `<name>` and carry no taint; a `{ <name> }` shorthand IS a value
  * reference and is kept.
+ *
+ * A handler that destructures its parameter — `({ args: { url }, ctx }) => …
+ * url` — binds `url` to a field OF `args`, so `url` is a value reference to
+ * `args` just as `args.url` is. Renaming (`{ args: { url: target } }`),
+ * nesting, and rest elements all resolve through the same chain walk. Without
+ * this the destructured spelling (the one every registry item, example and doc
+ * snippet is written in) carried no taint at all, so three ERROR/WARN sink
+ * lints could not fire on the code this repo itself ships.
  */
 const isValueReference = (identifier: Identifier, name: string): boolean => {
-    if (identifier.getText() !== name) {
-        return false;
-    }
-
     const parent = identifier.getParent();
 
     if (Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier) {
         return false;
     }
 
-    return !(Node.isPropertyAssignment(parent) && parent.getNameNode() === identifier);
+    if (Node.isPropertyAssignment(parent) && parent.getNameNode() === identifier) {
+        return false;
+    }
+
+    if (identifier.getText() === name) {
+        return true;
+    }
+
+    const element = parameterBindingFor(identifier);
+
+    if (element !== undefined && destructuringRootName(element) === name) {
+        return true;
+    }
+
+    // A positional handler's `args` under any name: `handler: (c, a) => … a.userId`, `(c, { userId })`.
+    return name === "args" && isPositionalArgsReference(identifier);
 };
 
 /** True when `node` is, or textually contains, a value reference to the binding named `name`. */
@@ -32,9 +151,6 @@ const referencesBinding = (node: TsNode, name: string): boolean => {
 
     return node.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => isValueReference(identifier, name));
 };
-
-/** True when `node` is, or textually contains, a value reference to the `ctx` binding. */
-const textuallyReferencesContext = (node: TsNode): boolean => referencesBinding(node, "ctx");
 
 /**
  * The leftmost identifier of a member/element-access (and non-null) chain
@@ -51,6 +167,20 @@ const memberAccessRootIdentifier = (node: TsNode): Identifier | undefined => {
     }
 
     return Node.isIdentifier(current) ? current : undefined;
+};
+
+/**
+ * The initializer of the variable `node` names, resolved by symbol, when that
+ * binding cannot have been repointed since (a `const`, or a `let` never
+ * reassigned) — the hop a SUPPRESSOR may follow. `singleHopInitializer` is the
+ * looser, spelling-based hop the taint side uses.
+ */
+const trustedInitializerOf = (node: TsNode): TsNode | undefined => {
+    const declaration = Node.isIdentifier(node) ? declarationOf(node) : undefined;
+
+    return Node.isVariableDeclaration(declaration) && Node.isIdentifier(declaration.getNameNode()) && !isReassignedBinding(declaration)
+        ? declaration.getInitializer()
+        : undefined;
 };
 
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
@@ -79,13 +209,15 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
     // The nearest same-named `const` declared *before* this use. A declaration that
     // follows the use — or a shadowing one in a sibling branch — can't be its source,
     // so preferring the closest preceding binding avoids resolving through a shadow.
-    // (Exact symbol resolution would need the type-checker these pre-`pnpm install`
-    // feeders deliberately run without, so scope-order is the closest safe proxy.)
+    // Kept spelling-based on purpose: over-resolving here only makes the taint
+    // predicate report MORE, which fails open. The project does carry a type
+    // checker, and a predicate that SILENCES on a match must use it instead, as
+    // the owner-field feeder does for mutator impls (`implTaintOf`).
     const usePosition = node.getStart();
     let nearest: TsNode | undefined;
     let nearestPosition = -1;
 
-    for (const variable of enclosingFunction.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) {
+    for (const variable of descendantsOfKind(enclosingFunction, SyntaxKind.VariableDeclaration)) {
         if (variable.getName() !== name) {
             continue;
         }
@@ -165,25 +297,25 @@ export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
  * introduces one.
  */
 export const isScopedByContext = (node: TsNode): boolean => {
-    if (textuallyReferencesContext(node)) {
+    if (referencesContext(node)) {
         return true;
     }
 
-    const initializer = singleHopInitializer(node);
+    const initializer = trustedInitializerOf(node);
 
-    if (initializer !== undefined && textuallyReferencesContext(initializer)) {
+    if (initializer !== undefined && referencesContext(initializer)) {
         return true;
     }
 
     // Follow each value-identifier composed into the (expanded) key one hop to its
-    // own `const` initializer — `${userId}/…` reaches ctx via `const userId = ctx.*`.
+    // own initializer — `${userId}/…` reaches ctx via `const userId = ctx.*`.
     const composed = initializer ?? node;
     const identifiers = Node.isIdentifier(composed) ? [composed] : composed.getDescendantsOfKind(SyntaxKind.Identifier);
 
     return identifiers.some((identifier) => {
-        const boundInitializer = singleHopInitializer(identifier);
+        const boundInitializer = trustedInitializerOf(identifier);
 
-        return boundInitializer !== undefined && textuallyReferencesContext(boundInitializer);
+        return boundInitializer !== undefined && referencesContext(boundInitializer);
     });
 };
 
@@ -226,21 +358,4 @@ export const isRequestInputDerived = (node: TsNode, requestName: string): boolea
     }
 
     return false;
-};
-
-/**
- * The export name of the nearest *exported* `const x = …` ancestor, or `"<module>"`
- * when the node isn't inside one (e.g. an inline-mounted handler). Walks out past
- * any local `const result = …` bindings to the exported declaration — matching
- * {@link import("./discover/ast").enclosingExportName} — so a sink nested in a
- * local `const` is still attributed to its exported handler, not the local.
- */
-export const enclosingExportName = (node: TsNode): string => {
-    for (const ancestor of node.getAncestors()) {
-        if (Node.isVariableDeclaration(ancestor) && ancestor.getVariableStatement()?.hasExportKeyword() === true) {
-            return ancestor.getName();
-        }
-    }
-
-    return "<module>";
 };

@@ -3,8 +3,8 @@
 # `vis sort-package-json` over EVERY tracked manifest, not just the workspaces.
 #
 # The sorter takes its file set from `pnpm-workspace.yaml` and resolves it from
-# the repo root whatever the cwd, so it reads 76 of the 90 tracked
-# `package.json` files. The 14 it skips are `templates/*` and `.deepsec` — and
+# the repo root whatever the cwd, so it skips some of the tracked
+# `package.json` files — all of them under `templates/*` — and
 # `templates/*` is exactly where drift is invisible, because the CI path filter
 # matched `**/package.json`, so a template-only PR ran the job, had its manifest
 # never opened, and got a green check on the file it changed.

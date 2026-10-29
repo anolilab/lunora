@@ -1,11 +1,17 @@
 import { resolveBaseURL } from "better-auth";
+import { memoryAdapter } from "better-auth/adapters/memory";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import { createAuth, resolveAuthOptions } from "../src/create-auth";
+import type { LunoraAuthOptions } from "../src/create-auth";
+import { createAuth as createLunoraAuth, resolveAuthOptions } from "../src/create-auth";
 import { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "../src/handler";
 import { sessionPresets } from "../src/session";
 
 const SECRET_PATTERN = /secret/i;
+
+/** `createAuth` is adapter-only, so these wrapper-invariant tests run over an in-memory adapter. */
+const createAuth = (options: LunoraAuthOptions) =>
+    createLunoraAuth({ database: memoryAdapter({ account: [], rateLimit: [], session: [], user: [], verification: [] }), ...options });
 
 /**
  * Unit smoke tests for the better-auth wrapper. End-to-end coverage lives in
@@ -358,6 +364,13 @@ describe("createAuth — port-agnostic local baseURL", () => {
 
         // eslint-disable-next-line sonarjs/no-clear-text-protocols -- asserting the exact loopback dev origin better-auth derives; there is no https equivalent to assert here
         expect(context.trustedOrigins).toContain("http://localhost:*");
+    });
+});
+
+describe("createAuth database guard", () => {
+    it("rejects a raw database with a pointer to the migrate entry", () => {
+        expect.assertions(1);
+        expect(() => createLunoraAuth({ database: {} as never, secret: "s".repeat(32) })).toThrow(/createMigrationAuth/);
     });
 });
 

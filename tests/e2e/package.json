@@ -17,11 +17,8 @@
         "@lunora/mail": "workspace:*",
         "@playwright/test": "catalog:e2e",
         "@types/node": "catalog:types",
-        "cross-env": "catalog:dev",
-        "miniflare": "catalog:cloudflare",
         "playwright": "catalog:e2e",
-        "typescript": "catalog:tsc",
-        "wrangler": "catalog:cloudflare"
+        "typescript": "catalog:tsc"
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

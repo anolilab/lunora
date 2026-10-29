@@ -213,27 +213,44 @@
             ],
             "code": "OFFLINE_IDENTITY_CHANGED"
         },
+        "tokenIdentity": {
+            "$comment": "With no explicit subject set, a queued write is stamped with a DIGEST of the bearer token (never the token itself, which would put a credential at rest in the queue store), so a different token is a different identity. The digest is the reference client's `hashToken`: over UTF-16 code units, a 32-bit FNV-1a and a 32-bit djb2 side by side, each base36, prefixed by the token's length in code units and joined with `:`. No token and no subject stamps `null`. Two vectors carry a surrogate pair, because a code-point walk would produce a different digest there and nowhere else. Every port asserts these vectors (the reference in packages/client/__tests__/protocol-conformance.test.ts, and all eight SDKs under `offline_unset_identity_stamps_token_digest` in protocol/conformance-cases.json). `accountSwitch` is the account switch that case replays: with no identity set, one write is queued under `queuedUnder`, the token is replaced by `flushedUnder`, and a flush sends NOTHING and rejects the write with `identityGate.code`, where stamping `null` would have matched `null` and sent user A's write with user B's bearer. Flushed under `queuedUnder` instead, the same write replays with it.",
+            "digests": [
+                { "token": "", "digest": "0:ztntfp:45h" },
+                { "token": "a", "digest": "1:1r9wi7g:3t3a" },
+                { "token": "token-a", "digest": "7:lbbjyc:1ujs3qs" },
+                { "token": "token-b", "digest": "7:m5ad19:1ujs3qt" },
+                { "token": "token-abc", "digest": "9:6xtdsz:ku9cs9" },
+                { "token": "eyJhbGciOiJIUzI1NiJ9.payload.sig", "digest": "w:t846r5:1i09z6p" },
+                { "token": "caf\u00e9-\ud83d\ude00", "digest": "7:153fab2:1dk3l6q" },
+                { "token": "\ud83d\udd11\u00fcn\u00efcode", "digest": "9:zq7trr:4ipgmf" }
+            ],
+            "accountSwitch": { "queuedUnder": "token-a", "flushedUnder": "token-b" }
+        },
         "batchReplay": {
             "$comment": "Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip instead of N single calls — the flaky-reconnect win. The worker forwards each entry to its shard, which dispatches it through the ordinary single-call path, so per-entry `mutationId` idempotency is inherited rather than re-implemented: the key rides in the ENTRY, not in a request header, because a batch is one hop carrying independent calls. `clientId` rides with it for the same reason the header does — the shard namespaces an anonymous caller's de-duplication rows by it. Slot classification mirrors the single-call path exactly, with one rule that only a batch can express: a slot carrying a TRANSIENT shard code is not a verdict, so that write goes back on the queue rather than being reported as failed. A slot the server never returned (`m4`) is likewise retried, since it may or may not have committed and the idempotency key makes that safe.",
             "$maxEntriesComment": "The normative entry cap. It is the server's — `shared/batch-wire.ts`, enforced by both the worker and the shard DO with a coded 400, which protocol/README.md §4.3 makes a TERMINAL verdict — and every client chunks its flush to it. It was a bare `500` written out in ten independent places with nothing reconciling them, so lowering the server's value would have left eight clients chunking at the old one and discarding those durable writes as rejected. `batch_entry_cap_matches_protocol` in protocol/conformance-cases.json makes each port read it from here.",
             "maxEntries": 500,
             "path": "/_lunora/rpc-batch",
             "requests": 1,
-            "queued": ["m1", "m2", "m3", "m4"],
+            "$unreadableSlotComment": "`m5` is the fifth rule, and the one nothing reached before: a slot whose `error` key holds something that is NOT an object carries no envelope to read a verdict out of (protocol/README.md §4.2), and a slot has no HTTP status of its own to classify it by — which leaves it exactly where `m4`, the slot the server never returned, already is. §4.3 retries both. Every port matched the envelope with a type-checked pattern and fell THROUGH to the commit branch, settling this durable write committed with a null result and un-persisting it; a proxy answering the batch endpoint is all it takes. `rawError` is the literal JSON the slot's `error` key holds.",
+            "queued": ["m1", "m2", "m3", "m4", "m5"],
             "calls": [
                 { "id": 0, "mutationId": "m1", "functionPath": "messages:send", "clientId": "c-1" },
                 { "id": 1, "mutationId": "m2", "functionPath": "messages:send", "clientId": "c-1" },
                 { "id": 2, "mutationId": "m3", "functionPath": "messages:send", "clientId": "c-1" },
-                { "id": 3, "mutationId": "m4", "functionPath": "messages:send", "clientId": "c-1" }
+                { "id": 3, "mutationId": "m4", "functionPath": "messages:send", "clientId": "c-1" },
+                { "id": 4, "mutationId": "m5", "functionPath": "messages:send", "clientId": "c-1" }
             ],
             "slots": [
                 { "id": 0, "outcome": "ok", "commitCursor": 9 },
                 { "id": 1, "outcome": "transient-error", "code": "SHARD_UNAVAILABLE" },
-                { "id": 2, "outcome": "coded-error", "code": "NOT_FOUND" }
+                { "id": 2, "outcome": "coded-error", "code": "NOT_FOUND" },
+                { "id": 4, "outcome": "unreadable-error", "rawError": "bad gateway" }
             ],
             "committed": ["m1"],
             "rejected": ["m3"],
-            "queuedAfterFlush": ["m2", "m4"],
+            "queuedAfterFlush": ["m2", "m4", "m5"],
             "confirmedCommitCursor": 9,
             "persistRemoveCalls": ["m1", "m3"]
         },
@@ -251,6 +268,190 @@
             "mutationIdHeaders": ["m1", "m2", "m3"],
             "persistRemoveCalls": ["m1", "m2"],
             "confirmedCommitCursor": 4
+        },
+        "emptyShardKey": {
+            "$comment": "An EMPTY shard key is the default shard, exactly as an absent one is: the queue drains the two together (`shardDrain`), so the replay must route them together too. A port that omitted the key on its single-call body but sent `\"shardKey\": \"\"` on its batch entries replayed the same write to the default shard when it was queued alone and to a different Durable Object — the one the runtime names `\"\"` — when it shared a flush, with its optimistic overlay tracking neither. `queued` entries carry `shardKey` verbatim (null = absent); every request body the flush sends, single or batch entry, must carry NO `shardKey` key at all.",
+            "batch": {
+                "queued": [
+                    {
+                        "id": "e1",
+                        "shardKey": ""
+                    },
+                    {
+                        "id": "e2",
+                        "shardKey": null
+                    }
+                ],
+                "flushShardKey": null,
+                "committed": ["e1", "e2"]
+            },
+            "lone": {
+                "queued": [
+                    {
+                        "id": "e3",
+                        "shardKey": ""
+                    }
+                ],
+                "flushShardKey": null,
+                "committed": ["e3"]
+            }
+        },
+        "undecodableResult": {
+            "$comment": "A write the server COMMITTED whose result does not decode is still committed: replaying it can only return the same undecodable result, so retrying it forever parks the head of the queue, and letting the decode error escape a batch flush loses every later slot. It settles `committed` — its overlay confirmed, its durable record removed, reported in `committed` — and carries the coded decode error (`code`) on its settled event, with no value. Every other slot in the batch settles as usual and nothing is left queued. `rawResult` is the literal `result` the undecodable slot (or lone response) holds; every other slot answers `{\"result\": \"ok\", \"commitCursor\": <n>}`.",
+            "rawResult": ["$lunora.wire$", "bigint", "not-a-number"],
+            "code": "WIRE_DECODE_FAILED",
+            "batch": {
+                "queued": ["u1", "u2", "u3"],
+                "undecodableSlot": 1,
+                "committed": ["u1", "u2", "u3"],
+                "decodeFailed": ["u2"],
+                "rejected": [],
+                "queuedAfterFlush": [],
+                "persistRemoveCalls": ["u1", "u2", "u3"]
+            },
+            "lone": {
+                "queued": ["s1"],
+                "committed": ["s1"],
+                "decodeFailed": ["s1"],
+                "rejected": [],
+                "queuedAfterFlush": [],
+                "persistRemoveCalls": ["s1"],
+                "requestsAfterSecondFlush": 1
+            }
+        },
+        "replayClassification": {
+            "$comment": "ONE predicate classifies a replay failure, whether the write went out alone (single call) or in a batch (a whole-batch reply with no `results`), because a durable write's fate must not depend on how many siblings were queued with it (protocol/README.md 4.3). A CODED envelope is classified by its code alone — a coded 5xx is the server's verdict and terminal on both paths, and a transient code re-queues on both; its HTTP status does not change that. A reply with NO envelope is classified by status. Three classes are pinned beside that rule, all as the reference has them. A refused CREDENTIAL (`UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`) HOLDS the write rather than settling it: a write queued offline replays with whatever bearer the client held when it went offline, which has very often expired by reconnect, and settling it destroys the user's own durable write over a problem one token refresh fixes. An envelope whose `data` does not decode is still an envelope: the undecodable `data` is dropped and the error classified by its code, never as a transport failure (which re-queued it at the head of the queue forever) and never by letting the codec error escape. And a server that answers with the public code `WIRE_DECODE_FAILED` has REFUSED the write — only a result the CLIENT failed to decode is a committed write (see `undecodableResult`), so a port must tell the two apart by where the failure arose, not by the code string. Each case is run twice: once with `paths.single` queued (one write, the single-call path) and once with `paths.batch` (two writes, one batch request); the response below answers every request of that run. `body` is the JSON response body; `rawBody` is a literal body that is not JSON. `outcome` applies to every write of the run.",
+            "paths": {
+                "single": ["r1"],
+                "batch": ["r1", "r2"]
+            },
+            "cases": [
+                {
+                    "name": "coded-500-is-a-verdict",
+                    "status": 500,
+                    "body": {
+                        "error": {
+                            "code": "INTERNAL",
+                            "message": "handler threw"
+                        }
+                    },
+                    "outcome": "rejected",
+                    "code": "INTERNAL"
+                },
+                {
+                    "name": "coded-503-transient-code",
+                    "status": 503,
+                    "body": {
+                        "error": {
+                            "code": "SHARD_UNAVAILABLE",
+                            "message": "shard unreachable"
+                        }
+                    },
+                    "outcome": "requeued"
+                },
+                {
+                    "name": "coded-409-is-a-verdict",
+                    "status": 409,
+                    "body": {
+                        "error": {
+                            "code": "CONFLICT",
+                            "message": "stale"
+                        }
+                    },
+                    "outcome": "rejected",
+                    "code": "CONFLICT"
+                },
+                {
+                    "name": "coded-409-delivery-fenced-is-transient",
+                    "status": 409,
+                    "body": {
+                        "error": {
+                            "code": "DELIVERY_FENCED",
+                            "message": "Delivery fenced; operation may have committed"
+                        }
+                    },
+                    "outcome": "requeued"
+                },
+                {
+                    "name": "envelope-less-502",
+                    "status": 502,
+                    "rawBody": "<html><body>502 Bad Gateway</body></html>",
+                    "outcome": "requeued"
+                },
+                {
+                    "name": "coded-401-unauthorized-holds",
+                    "status": 401,
+                    "body": { "error": { "code": "UNAUTHORIZED", "message": "sign in" } },
+                    "outcome": "requeued"
+                },
+                {
+                    "name": "coded-401-token-expired-holds",
+                    "status": 401,
+                    "body": { "error": { "code": "TOKEN_EXPIRED", "message": "token expired" } },
+                    "outcome": "requeued"
+                },
+                {
+                    "name": "coded-401-unauthenticated-holds",
+                    "status": 401,
+                    "body": { "error": { "code": "UNAUTHENTICATED", "message": "who are you" } },
+                    "outcome": "requeued"
+                },
+                {
+                    "name": "coded-409-undecodable-data",
+                    "status": 409,
+                    "body": { "error": { "code": "CONFLICT", "message": "stale", "data": ["$lunora.wire$", "bigint", "not-a-number"] } },
+                    "outcome": "rejected",
+                    "code": "CONFLICT"
+                },
+                {
+                    "name": "coded-503-undecodable-data",
+                    "status": 503,
+                    "body": { "error": { "code": "SHARD_UNAVAILABLE", "message": "shard unreachable", "data": ["$lunora.wire$", "bigint", "not-a-number"] } },
+                    "outcome": "requeued"
+                },
+                {
+                    "name": "coded-wire-decode-failed-is-a-verdict",
+                    "status": 500,
+                    "body": { "error": { "code": "WIRE_DECODE_FAILED", "message": "the server could not decode the call" } },
+                    "outcome": "rejected",
+                    "code": "WIRE_DECODE_FAILED"
+                }
+            ]
+        },
+        "envelopelessPayloadTooLarge": {
+            "$comment": "A 413 is a verdict on the REQUEST whether or not it carries an envelope, and an edge or proxy in front of the worker refuses an oversized body with its own HTML page long before the worker's coded `PAYLOAD_TOO_LARGE` could be written. Such a reply has no envelope, and classifying it by the generic envelope-less rule re-queued the chunk whole: the next flush sent the identical body into the identical refusal, so the shard's queue parked forever. A batch of more than one write is split and retried on ANY 413 (`split`: the poster refuses every batch carrying more than `refuseCallsAbove` calls and accepts the rest); a lone write — or a chunk halved down to one — that is still refused settles terminally with `code`, the same verdict a coded 413 reaches (`alwaysRefused`, `lone`: every request is refused). `rawBody` is the literal body of every 413.",
+            "rawBody": "<html><body>413 Request Entity Too Large</body></html>",
+            "code": "PAYLOAD_TOO_LARGE",
+            "split": {
+                "queued": ["p1", "p2", "p3", "p4"],
+                "refuseCallsAbove": 1,
+                "committed": ["p1", "p2", "p3", "p4"],
+                "rejected": [],
+                "queuedAfterFlush": []
+            },
+            "alwaysRefused": {
+                "queued": ["q1", "q2"],
+                "committed": [],
+                "rejected": ["q1", "q2"],
+                "queuedAfterFlush": []
+            },
+            "lone": {
+                "queued": ["l1"],
+                "committed": [],
+                "rejected": ["l1"],
+                "queuedAfterFlush": []
+            }
+        },
+        "credentialRefresh": {
+            "$comment": "A write refused for its CREDENTIAL is held, and replays under the next token set for the same user. The client is signed in as `identity` with `staleToken` and connected; `queued` holds one write. The poster answers `refusal` to every request carrying `authorization: Bearer <staleToken>` and `{\"result\": null}` to the rest. The first flush sends the stale token and is refused: the write stays queued and persisted, unsettled (`afterRefusal`). Then `freshToken` is set with the identity unchanged — a refresh, not an account switch — and the write replays once more, under it (`afterRefresh`). `authorizationHeaders` is every request's header in order: the fresh token is read when the replay is SENT, never the one the write was queued under. A port that flushes on its own when its socket connects (the reference, dart) also flushes when a new token lands, so there nothing but the token is set; the ports whose flushes are always the app's call (python outside `connect_and_run`, go, ruby, rust, swift, java, kotlin) flush once more after setting it. Where the identity is a subject kept apart from the token (the reference, dart), setting the token alone leaves it unconfirmed — the new token could be another user's — so the subject is set again beside it, as a refresh does.",
+            "identity": "user-a",
+            "staleToken": "token-stale",
+            "freshToken": "token-fresh",
+            "queued": ["r1"],
+            "refusal": { "status": 401, "body": { "error": { "code": "TOKEN_EXPIRED", "message": "token expired" } } },
+            "afterRefusal": { "committed": [], "rejected": [], "queuedAfterFlush": ["r1"] },
+            "afterRefresh": { "committed": ["r1"], "rejected": [], "queuedAfterFlush": [] },
+            "authorizationHeaders": ["Bearer token-stale", "Bearer token-fresh"]
         }
     }
 }

@@ -1,5 +1,4 @@
 import type { AdvisorShardTraffic } from "@lunora/advisor";
-import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
@@ -8,6 +7,7 @@ import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useShardKey } from "../../hooks/use-shard-key";
+import useStudioClient from "../../hooks/use-studio-client";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type {
@@ -142,7 +142,7 @@ const AddIndexButton = ({ onJump, table }: AddIndexButtonProps): ReactElement =>
  * insights.
  */
 export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPanelProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const navigate = useNavigate();
     const t = useT();
 

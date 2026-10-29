@@ -272,5 +272,5 @@ const createDirectoryDestination = (directory: string): BackupDestination => {
     };
 };
 
-export type { BackupDestination, SnapshotFile };
+export type { BackupDestination };
 export { createDirectoryDestination, digestFile };

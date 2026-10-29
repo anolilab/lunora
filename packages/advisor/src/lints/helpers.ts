@@ -1,6 +1,44 @@
+import { sanitizeNamespace } from "../../../../shared/dispatch-namespace";
+import type { AdvisorCallEdge } from "../call-edges";
+import type { AdvisorCallSiteScope, CallSiteMetadata } from "../call-site-scope";
+import { callSiteCallers, callSiteMetadata, helperRole } from "../call-site-scope";
+import type { AdvisorTableWrite } from "../inserts";
 import type { AdvisorProcedureProtection } from "../procedure-protections";
 import type { AdvisorQueryRead } from "../queries";
+import type { AdvisorRowEffect } from "../row-effects";
 import type { AdvisorSchema, AdvisorTable } from "../schema";
+
+/** A feeder row that names a call site: its scope and where it sits. */
+interface CallSiteRow {
+    file: string;
+    line: number;
+    scope: AdvisorCallSiteScope;
+}
+
+/**
+ * Writes that can take a row out of, or move it within, the range a read selects.
+ * `patch` is included although only some patches move a row out of a range: the
+ * lint cannot read which field a patch sets, so a patch counts as progress. A sweep
+ * that patches a field the range does not depend on is therefore not reported.
+ */
+const ROW_CHANGING_WRITES: ReadonlySet<string> = new Set(["delete", "deleteMany", "hardDelete", "patch", "patchIf", "patchMany", "patchWhere", "replace"]);
+
+/**
+ * Whether one change can take a row out of the range a read selects. A delete or
+ * replace can always do that. A patch does only when it writes an index field. With
+ * no index, or fields the feeder could not read, any change counts.
+ */
+const changeTouches = (change: RowChange, indexFields: ReadonlyArray<string> | undefined): boolean => {
+    if (change.method !== "patch" && change.method !== "patchMany") {
+        return true;
+    }
+
+    if (indexFields === undefined || change.fields === undefined) {
+        return true;
+    }
+
+    return change.fields.some((field) => indexFields.includes(field));
+};
 
 /**
  * Personally-identifiable-information column names. Kept deliberately tight to
@@ -93,7 +131,7 @@ export const OWNERSHIP_FIELD_NAMES: ReadonlySet<string> = new Set([
 
 /**
  * `true` when `column` names PII, judged two ways: the whole column (normalized)
- * matches a {@link PII_FIELD_NAMES} entry exactly, or one of its words matches a
+ * matches a {@link PII_FIELD_NAME_LIST} entry exactly, or one of its words matches a
  * single-word entry.
  *
  * Token-based rather than a substring match, which would match a PII fragment
@@ -104,7 +142,7 @@ export const OWNERSHIP_FIELD_NAMES: ReadonlySet<string> = new Set([
  *
  * Still conservative in the other direction (not a full NLP classifier): a
  * genuinely unusual PII column name that shares no word with
- * {@link PII_FIELD_NAMES} slips through, and that false negative is the cheaper
+ * {@link PII_FIELD_NAME_LIST} slips through, and that false negative is the cheaper
  * mistake here.
  *
  * This is the package's ONE PII-naming policy. Every lint that asks "is this
@@ -112,9 +150,6 @@ export const OWNERSHIP_FIELD_NAMES: ReadonlySet<string> = new Set([
  * from is how eight listed names silently stopped being covered once before.
  */
 export const isPiiColumn = (column: string): boolean => NORMALIZED_PII_NAMES.has(normalize(column)) || tokenize(column).some((token) => PII_TOKENS.has(token));
-
-/** The PII column names {@link isPiiColumn} matches against. */
-export const PII_FIELD_NAMES: ReadonlySet<string> = new Set(PII_FIELD_NAME_LIST);
 
 /**
  * `true` when `identifier` names one of `phrases`, matched on WORD boundaries.
@@ -170,7 +205,7 @@ export const SYSTEM_FIELDS: ReadonlySet<string> = new Set(["_creationTime", "_id
 
 /**
  * A table's declared columns that are ownership/tenancy- or PII-named, per
- * {@link OWNERSHIP_FIELD_NAMES} / {@link PII_FIELD_NAMES}. The low-FP gate
+ * {@link OWNERSHIP_FIELD_NAMES} / {@link PII_FIELD_NAME_LIST}. The low-FP gate
  * `public_table_rls_optout_confusion` uses this to tell a genuinely public
  * lookup table (e.g. `emojis`, `countries`, no such columns) apart from a
  * `.public()` table that actually carries data an RLS opt-out would expose.
@@ -203,6 +238,33 @@ export const queryReadLocation = (read: Pick<AdvisorQueryRead, "file" | "line">)
     read.line > 0 ? `${read.file}:${read.line.toString()}` : read.file;
 
 /**
+ * Where a finding's detail places a call site: `` `send` (messages:12) `` for an
+ * export, `` `openInvoice` (accounts/signup:9; a helper called by `a`, `b`) ``
+ * for a helper — so every lint names the exported functions a helper's site runs
+ * for — and `module scope (boot:2)` at module scope.
+ */
+export const callSiteWhere = (row: CallSiteRow): string => {
+    const at = `${row.file}:${row.line.toString()}`;
+
+    switch (row.scope.kind) {
+        case "export": {
+            return `\`${row.scope.name}\` (${at})`;
+        }
+        case "helper": {
+            return `\`${row.scope.name}\` (${at}; ${helperRole(row.scope)})`;
+        }
+        default: {
+            return `module scope (${at})`;
+        }
+    }
+};
+
+/** A call-site finding's location metadata: its {@link callSiteMetadata} plus `file` and `line`. */
+export const callSiteFields = (row: CallSiteRow): CallSiteMetadata & { file: string; line: number } => {
+    return { ...callSiteMetadata(row.scope), file: row.file, line: row.line };
+};
+
+/**
  * Table name -> declared storage tier, for the query lints that word a finding
  * by where the rows actually live (`shardBy` reads one Durable Object, `global`
  * reads D1, `root` reads the single DO). A `Map` so a table named `toString`
@@ -211,3 +273,96 @@ export const queryReadLocation = (read: Pick<AdvisorQueryRead, "file" | "line">)
  */
 export const shardKindsByTable = (schema: AdvisorSchema): ReadonlyMap<string, string | undefined> =>
     new Map(schema.tables.map((table) => [table.name, table.shardKind]));
+
+/** The `namespace:export` key of one export, the form call edges and cron targets carry. */
+export const functionKey = (file: string, exportName: string): string => `${sanitizeNamespace(file)}:${exportName}`;
+
+/** `namespace:export` keys of the functions a read or write runs on behalf of, one per export that reaches its site. */
+export const functionKeysOf = (file: string, scope: AdvisorCallSiteScope): string[] =>
+    callSiteCallers(scope).map((exportName) => functionKey(file, exportName));
+
+/**
+ * Every function key that runs without a request: a call edge schedules it, or a cron
+ * job fires it. A lint uses this to tell a sweep that the server drives from one a caller reaches.
+ */
+export const scheduledFunctionKeys = (
+    callEdges: ReadonlyArray<AdvisorCallEdge> | undefined,
+    cronTargets: ReadonlyArray<string> | undefined,
+): ReadonlySet<string> =>
+    new Set([...(callEdges ?? []).flatMap((edge) => (edge.kind === "schedule" && edge.target !== undefined ? [edge.target] : [])), ...(cronTargets ?? [])]);
+
+/** One row-changing write an export performs: its method, and the fields a patch writes. */
+export interface RowChange {
+    fields?: string[];
+    method: string;
+}
+
+/** Row changes keyed `file:export:table`, so a lint asks "does this export change this table" with one lookup. */
+export type RowChanges = ReadonlyMap<string, ReadonlyArray<RowChange>>;
+
+/**
+ * Every row-changing write, keyed by the export that performs it. A direct write
+ * counts under each export that reaches its function. A write reached through a
+ * helper in another file is counted by the row-effect evidence, under the export
+ * that calls it. Built once per run.
+ */
+export const rowChangesOf = (writes: ReadonlyArray<AdvisorTableWrite> | undefined, effects: ReadonlyArray<AdvisorRowEffect> | undefined): RowChanges => {
+    const changes = new Map<string, RowChange[]>();
+    const add = (key: string, change: RowChange): void => {
+        const existing = changes.get(key);
+
+        if (existing === undefined) {
+            changes.set(key, [change]);
+        } else {
+            existing.push(change);
+        }
+    };
+
+    for (const write of writes ?? []) {
+        if (ROW_CHANGING_WRITES.has(write.method)) {
+            for (const caller of callSiteCallers(write.scope)) {
+                add(`${write.file}:${caller}:${write.table}`, { fields: write.fields, method: write.method });
+            }
+        }
+    }
+
+    for (const effect of effects ?? []) {
+        if (ROW_CHANGING_WRITES.has(effect.method)) {
+            add(`${effect.file}:${effect.exportName}:${effect.table}`, { fields: effect.fields, method: effect.method });
+        }
+    }
+
+    return changes;
+};
+
+/** The declared btree index fields of each read's index, looked up by table and index name, built once per run. */
+export const indexFieldsLookup = (schema: AdvisorSchema): ((read: Pick<AdvisorQueryRead, "index" | "table">) => ReadonlyArray<string> | undefined) => {
+    const indexes = new Map(
+        schema.tables.map((table) => [table.name, new Map(table.indexes.filter((index) => index.kind === "index").map((index) => [index.name, index.fields]))]),
+    );
+
+    return (read) => {
+        const name = read.index?.name;
+
+        return name === undefined ? undefined : indexes.get(read.table)?.get(name);
+    };
+};
+
+/**
+ * True when a function that reads `read` also removes or moves a row it selects. The
+ * function is every export that reaches the read's site. Index fields narrow a patch
+ * to the writes that can change the range.
+ */
+
+/**
+ * True when the given callers remove or move a row the read selects. The callers
+ * default to every export that reaches the read's site. Index fields narrow a patch to
+ * the writes that can change the range. A caller with no write of its own is not
+ * helped by another caller's write, so pass the one caller whose progress is at issue.
+ */
+export const readRowsChanged = (
+    changes: RowChanges,
+    read: Pick<AdvisorQueryRead, "file" | "scope" | "table">,
+    indexFields?: ReadonlyArray<string>,
+    callers: ReadonlyArray<string> = callSiteCallers(read.scope),
+): boolean => callers.some((caller) => (changes.get(`${read.file}:${caller}:${read.table}`) ?? []).some((change) => changeTouches(change, indexFields)));

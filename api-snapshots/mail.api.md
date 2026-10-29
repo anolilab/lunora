@@ -39,6 +39,7 @@ interface CloudflareTransportOptions {
 interface FromEnvOptions {
     cloudflareSend?: CloudflareSend;
     jurisdiction?: DurableObjectJurisdiction;
+    queue?: QueueLike;
     rootShard?: string;
 }
 ```
@@ -260,6 +261,7 @@ interface InboundAttachment {
     encoding?: "base64" | "utf8";
     filename: string | null;
     mimeType: string;
+    truncated?: boolean;
 }
 ```
 

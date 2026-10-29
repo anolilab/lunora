@@ -1,8 +1,9 @@
 import type { CallExpression, Project } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { ImageDeliveryUrlAccessIR } from "../ir";
 import { collectCallRows, propertyInitializer } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
 
 /**
@@ -29,7 +30,7 @@ const imageDeliveryUrlAccessInCall = (call: CallExpression, relativePath: string
         return undefined;
     }
 
-    return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber() };
+    return { scope: callSiteScopeOf(call), file: relativePath, line: call.getStartLineNumber() };
 };
 
 /**

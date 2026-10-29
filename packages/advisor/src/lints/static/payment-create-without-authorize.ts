@@ -6,23 +6,21 @@ import type { Lint } from "../../types";
  *
  * The `authorize(referenceId)` hook is `@lunora/payment`'s access-control gate: it
  * runs before every charge/refund/subscription operation and decides whether the
- * current caller may act on that payment reference. Omit it and the guard is
- * effectively open — any caller who can reach a reference id (often a
- * client-supplied string) can drive money movement against someone else's
- * payment, a broken-access-control (IDOR) escalation on the most sensitive
- * surface an app has.
+ * current caller may act on that payment reference. `createPayment` requires it,
+ * and throws `CONFIG_INVALID` at construction when it is missing, so a config
+ * without it fails at startup and no mutation runs. This lint reports that
+ * config statically, before it ships.
  *
  * The context accessor `ctx.payments` is authorization-scoped by default; this
- * lint targets the direct `createPayment(...)` factory, where the gate is
- * opt-in. Runs only when the codegen feeder supplies config-call evidence
- * (`context.configCalls`); a runtime caller flags nothing. Skips calls whose
- * config wasn't a static object literal (the key may be set on a config built
- * elsewhere). One finding per unguarded call.
+ * lint targets the direct `createPayment(...)` factory. Runs only when the
+ * codegen feeder supplies config-call evidence (`context.configCalls`); a runtime
+ * caller flags nothing. Skips calls whose config wasn't a static object literal
+ * (the key may be set on a config built elsewhere). One finding per unguarded call.
  */
 const paymentCreateWithoutAuthorize: Lint = {
     categories: ["SECURITY"],
     description:
-        "`createPayment({...})` was constructed without an `authorize` callback, so its access-control gate never runs — any caller that reaches a payment reference id can drive a charge, refund, or subscription change against it (a broken-access-control / IDOR risk on money movement).",
+        "`createPayment({...})` is constructed without an `authorize` callback. The factory rejects that configuration at construction (`CONFIG_INVALID`), so every payment mutation on it is denied and the app fails at startup.",
     facing: "EXTERNAL",
     level: "ERROR",
     name: "payment_create_without_authorize",
@@ -38,7 +36,7 @@ const paymentCreateWithoutAuthorize: Lint = {
             .map((call) =>
                 emit(paymentCreateWithoutAuthorize, {
                     cacheKey: `payment_create_without_authorize:${call.file}:${call.line.toString()}`,
-                    detail: `\`createPayment({...})\` in ${call.file}:${call.line.toString()} has no \`authorize\` callback — its access-control gate never runs, so any caller reaching the payment reference can move money against it. Add an \`authorize(referenceId)\` gate that checks \`ctx.auth\` ownership before the operation.`,
+                    detail: `\`createPayment({...})\` in ${call.file}:${call.line.toString()} has no \`authorize\` callback, so the factory throws \`CONFIG_INVALID\` at construction and every payment mutation on it is denied. Add an \`authorize(referenceId)\` gate that checks \`ctx.auth\` ownership.`,
                     metadata: { callee: call.callee, file: call.file, line: call.line },
                 }),
             );

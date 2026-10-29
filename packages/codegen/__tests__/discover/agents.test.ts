@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { agentComponent } from "@lunora/agent";
+import { sensitiveArgumentNames } from "@lunora/values";
 import { Project, SyntaxKind } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -23,18 +24,18 @@ const newProject = (): Project => new Project({ skipAddingFilesFromTsConfig: tru
  * recover each public function's declared return type for the drift guard
  * below.
  */
-const AGENT_COMPONENT_SOURCE_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "agent", "src", "component.ts");
+const ComponentSourcePathAgentWorkflow = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "agent", "src", "component.ts");
 
 /**
  * Read `const <constantName> = query|mutation.input({...}).query|mutation(async (...): Promise<T> => ...)`'s
  * declared return-type text out of `component.ts`, unwrapped of its outer
  * `Promise<…>` — mirroring codegen's own Promise-unwrap convention
  * (`unwrapHandlerReturn` in `discover/functions.ts`) so the comparison lines up
- * with what `syntheticAgentApiFunctions` hand-pins in `emit.ts`.
+ * with what `syntheticAgentApiFunctions` hand-pins in `emit/api.ts`.
  */
 const sourceReturnTypeOf = (constantName: string): string => {
     const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-    const source = project.addSourceFileAtPath(AGENT_COMPONENT_SOURCE_PATH);
+    const source = project.addSourceFileAtPath(ComponentSourcePathAgentWorkflow);
     // `getVariableDeclaration` only searches the source file's TOP-LEVEL
     // statements — `agentMessages` et al. are declared inside the
     // `agentComponent()` function body, so the declaration must be found by
@@ -45,7 +46,14 @@ const sourceReturnTypeOf = (constantName: string): string => {
         throw new Error(`test: expected to find a variable declaration named "${constantName}" in component.ts`);
     }
 
-    const typedArrows = declaration.getDescendantsOfKind(SyntaxKind.ArrowFunction).filter((arrow) => arrow.getReturnTypeNode() !== undefined);
+    // The handler is the arrow passed straight to `.query(...)` or `.mutation(...)`. A typed
+    // helper declared inside the handler (`const assertStillOwned = (request): void => …`) is
+    // not one, so it must not count.
+    const typedArrows = declaration.getDescendantsOfKind(SyntaxKind.ArrowFunction).filter((arrow) => {
+        const call = arrow.getParentIfKind(SyntaxKind.CallExpression);
+
+        return arrow.getReturnTypeNode() !== undefined && call !== undefined && /\.(?:query|mutation)$/.test(call.getExpression().getText());
+    });
 
     if (typedArrows.length !== 1) {
         throw new Error(`test: expected exactly one typed handler arrow for "${constantName}", found ${String(typedArrows.length)}`);
@@ -84,7 +92,7 @@ interface ArgShape {
  * Reduce a runtime `v.*` validator to its {@link ArgShape} by reading the same
  * `kind` + `_meta` surface codegen's IR mirrors (`inner` for `optional`,
  * `members`/`value` for `union`/`literal`). Lets the drift guard compare the
- * runtime component's validators against the shape emit.ts hand-pins.
+ * runtime component's validators against the shape emit/api.ts hand-pins.
  */
 const describeValidator = (validator: unknown): ArgShape => {
     const node = validator as { _meta?: Record<string, unknown>; kind: string };
@@ -134,13 +142,11 @@ describe("discover/agents", () => {
 
         expect(discoverAgents(newProject(), workdir)).toEqual([
             {
-                bindingName: "AGENT_BILLING",
                 className: "BillingAgentWorkflow",
                 exportName: "billing",
                 name: "billing-bot",
             },
             {
-                bindingName: "AGENT_SUPPORT",
                 className: "SupportAgentWorkflow",
                 exportName: "support",
                 name: "agent-support",
@@ -157,7 +163,6 @@ describe("discover/agents", () => {
         `);
 
         expect(discoverAgents(newProject(), workdir)[0]).toEqual({
-            bindingName: "AGENT_SUPPORT_BOT",
             className: "SupportBotAgentWorkflow",
             exportName: "supportBot",
             name: "agent-support-bot",
@@ -220,8 +225,8 @@ describe("discover/agents", () => {
         expect(discoverAgents(newProject(), workdir).map((agent) => agent.exportName)).toEqual(["viaAs", "viaParens", "viaSatisfies"]);
     });
 
-    it("rejects duplicate agent names/bindings/classes with a located diagnostic (CODEGEN-01)", () => {
-        expect.assertions(3);
+    it("rejects duplicate agent names/classes with a located diagnostic (CODEGEN-01)", () => {
+        expect.assertions(2);
 
         writeAgents(`
             import { defineAgent } from "@lunora/agent";
@@ -232,20 +237,6 @@ describe("discover/agents", () => {
 
         expect(() => discoverAgents(newProject(), workdir)).toThrow(/Duplicate agent name "helper"/u);
 
-        writeAgents(`
-            import { defineAgent } from "@lunora/agent";
-
-            export const supportBot = defineAgent({ model: "m" });
-            export const support_bot = defineAgent({ model: "m" });
-        `);
-
-        expect(() => discoverAgents(newProject(), workdir)).toThrow(/Duplicate agent binding "AGENT_SUPPORT_BOT"/u);
-
-        // `aB` vs `AB`: bindingName is NOT invariant to a first-character case
-        // change when the first two characters straddle a camelCase boundary
-        // (`aB`'s "a"→"B" transition inserts an underscore that "AB" never
-        // gets: AGENT_A_B vs AGENT_AB), so distinct `name:` overrides isolate a
-        // className-only collision (both capitalize to "ABAgentWorkflow").
         writeAgents(`
             import { defineAgent } from "@lunora/agent";
 
@@ -415,11 +406,11 @@ describe("emit (agents)", () => {
         expect(emitServer({ schema: EMPTY_SCHEMA })).not.toContain("LunoraAgents");
     });
 
-    it("emitServer narrows the AGENT_* env binding when agents exist", () => {
+    it("emitServer adds no env binding for agents (they live on ctx.exports)", () => {
         expect.assertions(2);
 
-        expect(emitServer({ agents: discoverSupportAgent(), schema: EMPTY_SCHEMA })).toContain("readonly AGENT_SUPPORT?: unknown;");
-        expect(emitServer({ schema: EMPTY_SCHEMA })).not.toContain("AGENT_SUPPORT");
+        expect(emitServer({ agents: discoverSupportAgent(), schema: EMPTY_SCHEMA })).not.toContain("SupportAgentWorkflow?: unknown;");
+        expect(emitServer({ schema: EMPTY_SCHEMA })).not.toContain("SupportAgentWorkflow");
     });
 
     it("emitShard wires createAgentContext into the built ctx", () => {
@@ -428,8 +419,8 @@ describe("emit (agents)", () => {
         const shard = emitShard({ agents: discoverSupportAgent(), schema: EMPTY_SCHEMA });
 
         expect(shard).toContain('import { createAgentContext } from "@lunora/agent";');
-        expect(shard).toContain('{ binding: "AGENT_SUPPORT", exportName: "support" },');
-        expect(shard).toContain("const agents = createAgentContext(env, LUNORA_AGENTS);");
+        expect(shard).toContain('{ className: "SupportAgentWorkflow", exportName: "support" },');
+        expect(shard).toContain("const agents = createAgentContext(env, LUNORA_AGENTS, { exports: this.state.exports });");
         expect(shard).toContain("agents,");
     });
 
@@ -455,7 +446,7 @@ describe("auto-registered agent runtime functions", () => {
     };
 
     it("registers the runtime functions in the dispatch table, imported from @lunora/agent", () => {
-        expect.assertions(16);
+        expect.assertions(27);
 
         const content = emitFunctions({ agents: discoverSupportAgent(), functions: [] });
 
@@ -463,18 +454,29 @@ describe("auto-registered agent runtime functions", () => {
         expect(content).toContain("const lunoraAgentRuntimeFunctions = agentComponent().functions;");
 
         for (const name of [
+            "agentApprovalGranted",
+            "agentApprovalGrants",
             "agentAppendMessage",
+            "agentDeclineSecret",
+            "agentDiscardSecret",
             "agentEnsureThread",
             "agentEpisodeRecall",
             "agentEpisodeUpsert",
             "agentGraphTraverse",
             "agentGraphUpsert",
             "agentMessages",
+            "agentOpenSecretRequest",
             "agentPatchThread",
+            "agentPendingApprovals",
             "agentResolveApproval",
+            "agentRevokeApprovalGrant",
             "agentRun",
+            "agentSecretRequests",
             "agentSetState",
+            "agentSettleSecretRequest",
             "agentState",
+            "agentSupplySecret",
+            "agentTakeSecret",
             "agentThread",
         ]) {
             expect(content).toContain(`"agents:${name}": lunoraAgentRuntimeFunctions.${name} as unknown as RegisteredLunoraFunction,`);
@@ -505,18 +507,31 @@ describe("auto-registered agent runtime functions", () => {
     });
 
     it("exposes the public thread queries and approval mutation as typed api references", () => {
-        expect.assertions(7);
+        expect.assertions(13);
 
         const content = emitApi({ agents: discoverSupportAgent(), functions: [] });
 
         expect(content).toContain('agentMessages: FunctionReference<"query", { key: string; limit?: number }, Record<string, unknown>[]>;');
+        expect(content).toContain('agentPendingApprovals: FunctionReference<"query", { limit?: number }, Record<string, unknown>[]>;');
         expect(content).toContain('agentState: FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;');
         expect(content).toContain('agentThread: FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;');
         expect(content).toContain(
-            'agentResolveApproval: FunctionReference<"mutation", { decision: "approve" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string }, { resolved: boolean }>;',
+            'agentResolveApproval: FunctionReference<"mutation", { decision: "approve" | "approve_for_thread" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string }, { resolved: boolean }>;',
         );
+        expect(content).toContain('agentApprovalGrants: FunctionReference<"query", { key: string }, { createdAt: number; toolName: string }[]>;');
+        expect(content).toContain('agentRevokeApprovalGrant: FunctionReference<"mutation", { threadKey: string; toolName: string }, { revoked: boolean }>;');
         expect(content).toContain(
             'agentRun: FunctionReference<"mutation", { agent: string; input: string; threadKey: string; title?: string }, { id: string; threadKey: string }>;',
+        );
+        // The secret is the one sensitive argument: its reference is typed `sensitive`,
+        // so the client refuses to queue it offline. Pinned here, and compared against
+        // the runtime marker in the drift test below.
+        expect(content).toContain(
+            'agentSupplySecret: FunctionReference<"mutation", { secret: string; threadKey: string; toolCallId: string }, { resolved: boolean }> & { readonly sensitive: true };',
+        );
+        expect(content).toContain('agentDeclineSecret: FunctionReference<"mutation", { threadKey: string; toolCallId: string }, { resolved: boolean }>;');
+        expect(content).toContain(
+            'agentSecretRequests: FunctionReference<"query", { threadKey: string }, { createdAt: number; expiresAt: number; label?: string; status: "consumed" | "declined" | "expired" | "pending" | "supplied"; toolCallId: string; toolName: string }[]>;',
         );
         // The internal thread-write mutations never surface on the api objects.
         expect(content).not.toContain("agentAppendMessage");
@@ -554,26 +569,44 @@ describe("auto-registered agent runtime functions", () => {
                 .toSorted((a, b) => a.localeCompare(b)),
         ).toStrictEqual([
             "agentAppendMessage",
+            "agentApprovalGranted",
             "agentCompleteRun",
             "agentDeleteMessage",
+            "agentDiscardSecret",
             "agentEnsureThread",
             "agentEpisodeRecall",
             "agentEpisodeUpsert",
             "agentGraphTraverse",
             "agentGraphUpsert",
+            "agentHistory",
+            "agentOpenSecretRequest",
             "agentPatchThread",
             "agentSetState",
+            "agentSettleSecretRequest",
+            "agentTakeSecret",
         ]);
         expect(
             Object.entries(runtime)
                 .filter(([, definition]) => definition.visibility === undefined)
                 .map(([name]) => name)
                 .toSorted((a, b) => a.localeCompare(b)),
-        ).toStrictEqual(["agentMessages", "agentResolveApproval", "agentRun", "agentState", "agentThread"]);
+        ).toStrictEqual([
+            "agentApprovalGrants",
+            "agentDeclineSecret",
+            "agentMessages",
+            "agentPendingApprovals",
+            "agentResolveApproval",
+            "agentRevokeApprovalGrant",
+            "agentRun",
+            "agentSecretRequests",
+            "agentState",
+            "agentSupplySecret",
+            "agentThread",
+        ]);
     });
 
     it("pins the synthetic api arg shapes to the runtime component (drift guard)", () => {
-        expect.assertions(5);
+        expect.assertions(12);
 
         // The api types for the public queries are hand-pinned in
         // syntheticAgentApiFunctions (codegen cannot read a published package's
@@ -593,14 +626,20 @@ describe("auto-registered agent runtime functions", () => {
             key: { kind: "string", optional: false },
             limit: { kind: "number", optional: true },
         });
+        expect(describeArgs(runtime.agentPendingApprovals.args)).toStrictEqual({ limit: { kind: "number", optional: true } });
         expect(describeArgs(runtime.agentState.args)).toStrictEqual({ key: { kind: "string", optional: false } });
         expect(describeArgs(runtime.agentThread.args)).toStrictEqual({ key: { kind: "string", optional: false } });
         expect(describeArgs(runtime.agentResolveApproval.args)).toStrictEqual({
-            decision: { kind: "union", literals: ["approve", "reject"], optional: false },
+            decision: { kind: "union", literals: ["approve", "approve_for_thread", "reject"], optional: false },
             instanceId: { kind: "string", optional: false },
             note: { kind: "string", optional: true },
             threadKey: { kind: "string", optional: false },
             toolCallId: { kind: "string", optional: false },
+        });
+        expect(describeArgs(runtime.agentApprovalGrants.args)).toStrictEqual({ key: { kind: "string", optional: false } });
+        expect(describeArgs(runtime.agentRevokeApprovalGrant.args)).toStrictEqual({
+            threadKey: { kind: "string", optional: false },
+            toolName: { kind: "string", optional: false },
         });
         expect(describeArgs(runtime.agentRun.args)).toStrictEqual({
             agent: { kind: "string", optional: false },
@@ -608,10 +647,23 @@ describe("auto-registered agent runtime functions", () => {
             threadKey: { kind: "string", optional: false },
             title: { kind: "string", optional: true },
         });
+        expect(describeArgs(runtime.agentSecretRequests.args)).toStrictEqual({ threadKey: { kind: "string", optional: false } });
+        expect(describeArgs(runtime.agentSupplySecret.args)).toStrictEqual({
+            secret: { kind: "string", optional: false },
+            threadKey: { kind: "string", optional: false },
+            toolCallId: { kind: "string", optional: false },
+        });
+        // The runtime marker must agree with the sensitive argument pinned in
+        // `syntheticAgentApiFunctions`: `secret` alone, nothing else.
+        expect([...sensitiveArgumentNames(runtime.agentSupplySecret.args as Record<string, unknown>)]).toStrictEqual(["secret"]);
+        expect(describeArgs(runtime.agentDeclineSecret.args)).toStrictEqual({
+            threadKey: { kind: "string", optional: false },
+            toolCallId: { kind: "string", optional: false },
+        });
     });
 
     it("pins the synthetic api RETURN shapes to the runtime component (drift guard)", () => {
-        expect.assertions(5);
+        expect.assertions(10);
 
         // CODEGEN-04: unlike the args (validated at runtime, so `describeArgs`
         // above can introspect the LIVE `agentComponent().functions` object),
@@ -621,13 +673,18 @@ describe("auto-registered agent runtime functions", () => {
         // declared `: Promise<T>` annotation straight out of the `@lunora/agent`
         // SOURCE instead (syntactic, no type-checker pass) and assert it against
         // the same literal strings `syntheticAgentApiFunctions` hand-pins in
-        // emit.ts (see the "exposes the public thread queries…" test), so a
+        // emit/api.ts (see the "exposes the public thread queries…" test), so a
         // return-shape change in component.ts fails here instead of silently
         // going stale in the generated `api.ts`.
         expect(sourceReturnTypeOf("agentMessages")).toBe("Record<string, unknown>[]");
+        expect(sourceReturnTypeOf("agentPendingApprovals")).toBe("Record<string, unknown>[]");
         expect(sourceReturnTypeOf("agentState")).toBe("Record<string, unknown> | undefined");
         expect(sourceReturnTypeOf("agentThread")).toBe("Record<string, unknown> | undefined");
         expect(sourceReturnTypeOf("agentResolveApproval")).toBe("{ resolved: boolean }");
         expect(sourceReturnTypeOf("agentRun")).toBe("{ id: string; threadKey: string }");
+        expect(sourceReturnTypeOf("agentApprovalGrants")).toBe("{ createdAt: number; toolName: string }[]");
+        expect(sourceReturnTypeOf("agentRevokeApprovalGrant")).toBe("{ revoked: boolean }");
+        expect(sourceReturnTypeOf("agentSupplySecret")).toBe("{ resolved: boolean }");
+        expect(sourceReturnTypeOf("agentDeclineSecret")).toBe("{ resolved: boolean }");
     });
 });

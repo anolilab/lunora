@@ -1,4 +1,5 @@
 import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
+import type { SqlExec } from "@lunora/sql-store";
 import {
     backfillSqlSearchIndexes,
     readSqlCdcChangedTables,
@@ -13,8 +14,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createHyperdriveGlobalCtxDb } from "../src/global";
 import { postgresDialect } from "../src/global-dialect";
+import { adminPlaneCases } from "./_helpers/admin-plane-cases";
+import backendParityCases from "./_helpers/backend-parity-cases";
 import type { PgliteHarness } from "./_helpers/pglite-exec";
 import createPgliteHarness from "./_helpers/pglite-exec";
+import rlsSearchCases from "./_helpers/rls-search-cases";
+import searchRaceCases from "./_helpers/search-races";
 
 /**
  * The store core (`createSqlCtxDb`) driven by the Postgres dialect against a
@@ -95,6 +100,41 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
         await harness.close();
     });
 
+    describe("patchIf — one conditional UPDATE", () => {
+        it("applies only while the stored row matches, and reports the row either way", async () => {
+            expect.assertions(3);
+
+            const writer = await setupTodos();
+
+            await seed(writer);
+
+            await expect(writer.patchIf?.("todos", "t1", { patch: { seq: 10 }, where: { seq: 99 } })).resolves.toStrictEqual({
+                applied: false,
+                doc: expect.objectContaining({ _id: "t1", seq: 1 }),
+            });
+            await expect(writer.patchIf?.("todos", "t1", { patch: { seq: 10 }, where: { archived: false, seq: 1 } })).resolves.toStrictEqual({
+                applied: true,
+                doc: expect.objectContaining({ _id: "t1", seq: 10 }),
+            });
+            await expect(writer.get("todos", "t1")).resolves.toMatchObject({ seq: 10 });
+        });
+
+        it("lets exactly one of ten concurrent compare-and-set patches win", async () => {
+            expect.assertions(2);
+
+            const writer = await setupTodos();
+
+            await seed(writer);
+
+            const results = await Promise.all(
+                Array.from({ length: 10 }, async () => writer.patchIf?.("todos", "t2", { patch: { seq: 3 }, where: { seq: 2 } })),
+            );
+
+            expect(results.filter((result) => result?.applied)).toHaveLength(1);
+            await expect(writer.get("todos", "t2")).resolves.toMatchObject({ seq: 3 });
+        });
+    });
+
     describe("findMany — where filtering", () => {
         it("filters by an equality field, defaulting to creation+id order", async () => {
             expect.assertions(3);
@@ -163,18 +203,18 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
 
             const id = await writer.insert("todos", { archived: false, priority: "low", projectId: "p9", seq: 7 });
 
-            await writer.patch(id, { priority: "high" });
+            await writer.patch("todos", id, { priority: "high" });
             const patched = await writer.findFirst("todos", { where: { _id: id } });
 
             expect(patched?.["priority"]).toBe("high");
 
-            await writer.replace(id, { archived: true, priority: "mid", projectId: "p9", seq: 8 });
+            await writer.replace("todos", id, { archived: true, priority: "mid", projectId: "p9", seq: 8 });
             const replaced = await writer.findFirst("todos", { where: { _id: id } });
 
             expect(replaced?.["archived"]).toBe(true);
             expect(replaced?.["seq"]).toBe(8);
 
-            await writer.delete(id);
+            await writer.delete("todos", id);
 
             await expect(writer.findFirst("todos", { where: { _id: id } })).resolves.toBeNull();
         });
@@ -252,6 +292,66 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             const remaining = await readSqlCdcChanges(harness.exec, { sinceSeq: 1 }, postgresDialect);
 
             expect(remaining.changes.map((change) => change.id)).toEqual(["t2"]);
+        });
+    });
+
+    describe("`.global()` changelog poll — late commits", () => {
+        // An append that took its `seq` and has not committed is invisible, so to
+        // the poll it is exactly a missing `seq`. Writing explicit `seq`s models
+        // it deterministically on a single session; the gated real-MySQL suite
+        // covers the two-session interleaving.
+        const append = async (seq: number, table: string): Promise<void> => {
+            await harness.query(`INSERT INTO "__cdc_log" ("seq", "ts", "table", "id", "op") VALUES ($1, $2, $3, $4, 'insert')`, [
+                seq,
+                FIXED_CLOCK,
+                table,
+                String(seq),
+            ]);
+        };
+
+        beforeEach(async () => {
+            await runSqlCdcMigration(harness.exec, postgresDialect);
+        });
+
+        it("holds the cursor below an in-flight append and delivers it once it commits", async () => {
+            expect.assertions(5);
+
+            await append(1, "a");
+            // seq 2 is allocated to an append still in flight; seq 3 committed first.
+            await append(3, "b");
+
+            const first = await readSqlCdcChangedTables(harness.exec, 0, postgresDialect, { now: FIXED_CLOCK });
+
+            // Tables past the hole are still reported; only the cursor waits.
+            expect(new Set(first.tables)).toStrictEqual(new Set(["a", "b"]));
+            expect(first.cursor).toBe(1);
+
+            await append(2, "late");
+
+            const second = await readSqlCdcChangedTables(harness.exec, first.cursor, postgresDialect, { now: FIXED_CLOCK });
+
+            expect(second.cursor).toBe(3);
+            expect(second.tables).toContain("late");
+
+            // The cold/resync read adopts the head directly, so it needs the same cap.
+            await append(5, "c");
+
+            await expect(readSqlCdcChangedTables(harness.exec, 0, postgresDialect, { cursorOnly: true, now: FIXED_CLOCK })).resolves.toStrictEqual({
+                cursor: 3,
+                tables: [],
+            });
+        });
+
+        it("stops waiting for a hole once the row after it is older than the window", async () => {
+            expect.assertions(2);
+
+            await append(1, "a");
+            await append(3, "b");
+
+            // A failed append burns its `seq` for good; a cursor pinned under it
+            // would re-report everything above it on every tick.
+            await expect(readSqlCdcChangedTables(harness.exec, 0, postgresDialect, { now: FIXED_CLOCK + 9000 })).resolves.toMatchObject({ cursor: 1 });
+            await expect(readSqlCdcChangedTables(harness.exec, 0, postgresDialect, { now: FIXED_CLOCK + 11_000 })).resolves.toMatchObject({ cursor: 3 });
         });
     });
 
@@ -417,8 +517,8 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             const writer = await setupNotes();
 
             await seedNotes(writer);
-            await writer.patch("n1", { body: "totally rewritten" });
-            await writer.delete("n4");
+            await writer.patch("notes", "n1", { body: "totally rewritten" });
+            await writer.delete("notes", "n4");
 
             const stale = await writer
                 .query("notes")
@@ -587,6 +687,131 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
         });
     });
 
+    describe("full-text search (portable inverted index) across isolates", () => {
+        it.each(
+            searchRaceCases({
+                dialect: postgresDialect,
+                engine: "postgres",
+                exec: () => harness.exec,
+                indexes: async (companion) => {
+                    const rows = await harness.query(`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = $1`, [companion]);
+
+                    return new Map(rows.map((row) => [String(row["indexname"]), String(row["indexdef"]).startsWith("CREATE UNIQUE")]));
+                },
+                query: (text, parameters) => harness.query(text, parameters),
+                // Every case gets a fresh pglite from the suite's `beforeEach`.
+                reset: async () => {},
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            60_000,
+        );
+    });
+
+    describe("values every engine must treat alike", () => {
+        it.each(
+            backendParityCases({
+                query: async (statement) => await harness.query(statement),
+                engine: "postgres",
+                setup: async (schema) => {
+                    await runSqlGlobalTableMigrations(harness.exec, schema, postgresDialect);
+
+                    return createHyperdriveGlobalCtxDb({ clock: () => FIXED_CLOCK, engine: "postgres", exec: harness.exec, schema });
+                },
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            120_000,
+        );
+    });
+
+    describe("admin plane — export, import, browser, CDC", () => {
+        it.each(
+            adminPlaneCases({
+                engine: "postgres",
+                get exec() {
+                    return harness.exec;
+                },
+                query: async (statement) => await harness.query(statement),
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            60_000,
+        );
+    });
+
+    describe("full-text search behind a read policy", () => {
+        it.each(
+            rlsSearchCases({
+                setup: async (schema, onRows) => {
+                    await runSqlGlobalTableMigrations(harness.exec, schema, postgresDialect);
+
+                    const exec: SqlExec = {
+                        ...harness.exec,
+                        all: async (text, parameters) => {
+                            const rows = await harness.exec.all(text, parameters);
+
+                            onRows(rows.length);
+
+                            return rows;
+                        },
+                    };
+
+                    return createHyperdriveGlobalCtxDb({ clock: tickingClock(), engine: "postgres", exec, schema });
+                },
+                textPushed: true,
+            }),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            120_000,
+        );
+    });
+
+    describe("full-text search (native Postgres strategy) across isolates", () => {
+        it.each(
+            searchRaceCases(
+                {
+                    dialect: postgresDialect,
+                    engine: "postgres",
+                    exec: () => harness.exec,
+                    indexes: async () => new Map(),
+                    query: (text, parameters) => harness.query(text, parameters),
+                    // Every case gets a fresh pglite from the suite's `beforeEach`.
+                    reset: async () => {},
+                },
+                { native: true },
+            ),
+        )(
+            "%s",
+            async (_name, run) => {
+                expect.hasAssertions();
+
+                await run();
+            },
+            60_000,
+        );
+    });
+
     describe("full-text search (native Postgres strategy)", () => {
         const nativeSchema: SchemaLike = {
             tables: {
@@ -645,8 +870,8 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
                 .withSearchIndex("by_body", (q) => q.search("body", "hello").eq("channel", "other"))
                 .collect();
 
-            await writer.patch("n1", { body: "totally rewritten" });
-            await writer.delete("n2");
+            await writer.patch("notes", "n1", { body: "totally rewritten" });
+            await writer.delete("notes", "n2");
 
             const stale = await writer
                 .query("notes")
@@ -756,7 +981,7 @@ describe("hyperdrive global — Postgres (pglite) integration", () => {
             ).resolves.toStrictEqual([expect.objectContaining({ _id: "n1" })]);
 
             // Plain reads and writes keep working through the switch.
-            await expect(native.get("n1")).resolves.toMatchObject({ title: "one" });
+            await expect(native.get("notes", "n1")).resolves.toMatchObject({ title: "one" });
             await expect(native.insert("notes", { body: "after the flip", channel: "general", title: "two" })).resolves.toBeDefined();
         });
 

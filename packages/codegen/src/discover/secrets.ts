@@ -1,9 +1,11 @@
-import type { Node as TsNode, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { readFileSync } from "node:fs";
+
+import type { Node as TsNode, SourceFile } from "ts-morph";
+import { Node, Project, SyntaxKind } from "ts-morph";
 
 import type { SecretLiteralIR } from "../ir";
 import { isHeuristicSecretKind, isSecretishName, redact, secretKindOf } from "../secret-rules";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { descendantsOfKind, isTestPath, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 
 /**
  * The constant string value of a node, folding `+` concatenations of string
@@ -50,20 +52,6 @@ const isFoldedConcatenationOperand = (node: TsNode): boolean => {
 };
 
 /**
- * Test files, where a secret-*shaped* literal is nearly always a fixture.
- *
- * Only the heuristic kinds are suppressed here — a real `sk_live_…` in a test is
- * still a leak and still reported.
- */
-const TEST_DIRECTORY_RE = /(?:^|\/)__tests__\//u;
-
-/** A `.test` / `.spec` module. Paths arrive without the `.ts`, so the suffix anchors at the end. */
-const TEST_SUFFIX_RE = /\.(?:spec|test)$/u;
-
-/** Whether a lunora-relative path is a test module. */
-const isTestFile = (relativePath: string): boolean => TEST_DIRECTORY_RE.test(relativePath) || TEST_SUFFIX_RE.test(relativePath);
-
-/**
  * The nearest name a literal is bound to: `const traceId = "…"`,
  * `{ apiKey: "…" }`, or a `name = "…"` assignment. Used as corroborating
  * evidence for the heuristic kinds, which have no vendor prefix to anchor on.
@@ -76,7 +64,7 @@ const boundNameOf = (node: TsNode): string | undefined => {
     }
 
     if (Node.isVariableDeclaration(parent) || Node.isPropertyAssignment(parent) || Node.isPropertySignature(parent)) {
-        return parent.getName();
+        return propertyKeyName(parent);
     }
 
     if (Node.isBinaryExpression(parent) && parent.getOperatorToken().getKind() === SyntaxKind.EqualsToken) {
@@ -100,7 +88,7 @@ const isReportable = (kind: string, node: TsNode, relativePath: string): boolean
         return true;
     }
 
-    return !isTestFile(relativePath) && isSecretishName(boundNameOf(node));
+    return !isTestPath(relativePath) && isSecretishName(boundNameOf(node));
 };
 
 /** Secret-shaped string literals (and `+`-folded concatenations) in one source file. */
@@ -110,9 +98,9 @@ const secretsInSourceFile = (sourceFile: SourceFile, relativePath: string): Secr
     const nodes: TsNode[] = [
         // Top-level `+` concatenations are folded; their string-literal operands are
         // skipped below so a secret split across literals is reported once, at the root.
-        ...sourceFile.getDescendantsOfKind(SyntaxKind.BinaryExpression),
-        ...sourceFile.getDescendantsOfKind(SyntaxKind.StringLiteral),
-        ...sourceFile.getDescendantsOfKind(SyntaxKind.NoSubstitutionTemplateLiteral),
+        ...descendantsOfKind(sourceFile, SyntaxKind.BinaryExpression),
+        ...descendantsOfKind(sourceFile, SyntaxKind.StringLiteral),
+        ...descendantsOfKind(sourceFile, SyntaxKind.NoSubstitutionTemplateLiteral),
     ];
 
     // Dedupe by (line, kind): a secret split across literals AND carrying a
@@ -165,8 +153,19 @@ const secretsInSourceFile = (sourceFile: SourceFile, relativePath: string): Secr
 const discoverSecrets = (project: Project, lunoraDirectory: string): SecretLiteralIR[] => {
     const secrets: SecretLiteralIR[] = [];
 
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
+    // A throwaway, syntax-only Project for the skipped files: adding one to the shared
+    // Project after it is built throws the program and its type checker away. The scan
+    // reads syntax only, so the files need no program.
+    const syntaxOnly = new Project({
+        compilerOptions: { allowJs: true },
+        skipFileDependencyResolution: true,
+        skipLoadingLibFiles: true,
+        useInMemoryFileSystem: true,
+    });
+
+    // Skipped files included: a vendor key committed in a test is still a leak.
+    for (const filePath of listLunoraSourceFiles(lunoraDirectory, { includeSkipped: true })) {
+        const sourceFile = project.getSourceFile(filePath) ?? syntaxOnly.createSourceFile(filePath, readFileSync(filePath, "utf8"), { overwrite: true });
 
         secrets.push(...secretsInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
     }

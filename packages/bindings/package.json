@@ -1,9 +1,12 @@
 {
     "name": "@lunora/bindings",
-    "version": "1.0.0-alpha.54",
-    "description": "Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql — one install, per-binding subpaths",
+    "version": "1.0.0-alpha.140",
+    "description": "Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql, ctx.artifacts, ctx.aiSearch, ctx.analyticsSql — one install, per-binding subpaths",
     "keywords": [
+        "ai-search",
         "analytics",
+        "analytics-sql",
+        "artifacts",
         "cloudflare",
         "images",
         "kv",
@@ -46,6 +49,10 @@
             "types": "./dist/analytics/index.d.ts",
             "import": "./dist/analytics/index.mjs"
         },
+        "./analytics-sql": {
+            "types": "./dist/analytics-sql/index.d.ts",
+            "import": "./dist/analytics-sql/index.mjs"
+        },
         "./pipelines": {
             "types": "./dist/pipelines/index.d.ts",
             "import": "./dist/pipelines/index.mjs"
@@ -57,6 +64,14 @@
         "./r2sql": {
             "types": "./dist/r2sql/index.d.ts",
             "import": "./dist/r2sql/index.mjs"
+        },
+        "./artifacts": {
+            "types": "./dist/artifacts/index.d.ts",
+            "import": "./dist/artifacts/index.mjs"
+        },
+        "./ai-search": {
+            "types": "./dist/ai-search/index.d.ts",
+            "import": "./dist/ai-search/index.mjs"
         },
         "./package.json": "./package.json"
     },
@@ -78,8 +93,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.35",
-        "@lunora/platform": "1.0.0-alpha.27"
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/platform": "1.0.0-alpha.75"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",

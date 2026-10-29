@@ -33,23 +33,42 @@ Run against the declared schema alone: deterministic, no running shard needed.
 
 ### Correctness
 
-| Lint                                | Level | Detects                                                                                                                                                                          |
-| ----------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `index_references_unknown_field`    | error | An index references a column that doesn't exist on the table.                                                                                                                    |
-| `relation_references_unknown_table` | error | A relation targets a table that doesn't exist.                                                                                                                                   |
-| `relation_references_unknown_field` | error | A relation's key column doesn't exist: the join can never resolve.                                                                                                               |
-| `workflow_unknown_target`           | error | `ctx.workflows.get("name")` names a workflow that isn't declared.                                                                                                                |
-| `empty_index`                       | warn  | An index declared with no columns: it narrows nothing.                                                                                                                           |
-| `circular_fk`                       | warn  | A cycle of `one` relations (A → B → C → A): cascade/restrict hazards.                                                                                                            |
-| `nondeterministic_query_mutation`   | warn  | A `query`/`mutation` calls `Date.now`/`Math.random`/`fetch`: non-deterministic reads break caching and replay. Use `ctx.now` for time; move randomness/network into an `action`. |
+The last four come from codegen rather than `@lunora/advisor`, so they are not in the
+programmatic `ALL_LINTS` catalog below — they travel the same channel to the terminal and the
+studio.
+
+| Lint                                    | Level | Detects                                                                                                                                                                                                                                                                                  |
+| --------------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index_references_unknown_field`        | error | An index references a column that doesn't exist on the table.                                                                                                                                                                                                                            |
+| `relation_references_unknown_table`     | error | A relation targets a table that doesn't exist.                                                                                                                                                                                                                                           |
+| `relation_references_unknown_field`     | error | A relation's key column doesn't exist: the join can never resolve.                                                                                                                                                                                                                       |
+| `through_relation_missing_unique_index` | error | A many-to-many join table has no unique index over its two keys: a repeated connect stores the link twice.                                                                                                                                                                               |
+| `workflow_unknown_target`               | error | `ctx.workflows.get("name")` names a workflow that isn't declared.                                                                                                                                                                                                                        |
+| `empty_index`                           | warn  | An index declared with no columns: it narrows nothing.                                                                                                                                                                                                                                   |
+| `circular_fk`                           | warn  | A cycle of `one` relations (A → B → C → A): cascade/restrict hazards.                                                                                                                                                                                                                    |
+| `cross_module_table_write`              | warn  | A function writes to a table another module owns (`defineModule({ tables })`), coupling the two modules.                                                                                                                                                                                 |
+| `nondeterministic_query_mutation`       | warn  | A `query`/`mutation` calls `Date.now`/`Math.random`/`fetch`: non-deterministic reads break caching and replay. Use `ctx.now` for time; move randomness/network into an `action`.                                                                                                         |
+| `procedure_not_registered`              | warn  | An export whose resolved TYPE is a registration — procedure, hook, reactor, mutator, shape, migration, workflow, queue, agent or container — never reached the generated output: produced by a factory or an alias, or (for the single-module kinds) sitting outside `lunora/<kind>.ts`. |
+| `procedure_type_check_unavailable`      | warn  | Types don't resolve for `lunora/` where codegen runs, so `procedure_not_registered` cannot report anything.                                                                                                                                                                              |
+| `procedure_arguments_unreadable`        | warn  | A registered procedure's `.input()` record could not be read, so `api.ts` types fewer arguments than the runtime enforces.                                                                                                                                                               |
+| `procedure_return_type_erased`          | warn  | A registered procedure's return type could neither be named nor reproduced in `_generated/`, so `api.ts` types it `unknown` while the runtime still returns the shape.                                                                                                                   |
+| `queue_alias_conflict`                  | warn  | A wrangler.jsonc `queues.producers[]` entry maps a queue's binding to another queue's declared name, or two scopes alias one name to different queues; the batch goes to a handler other than the one wrangler.jsonc implies.                                                            |
 
 ### Performance
 
-| Lint                    | Level | Detects                                                                                                                                     |
-| ----------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `unindexed_foreign_key` | info  | A foreign-key column with no index leading with it: reads on it full-scan. (Honours SQLite's leftmost-prefix rule; exempts FKs onto `_id`.) |
-| `filter_without_index`  | warn  | A `query(...).filter(...)` with no `.withIndex()` first: loads every row and filters in memory.                                             |
-| `duplicate_index`       | info  | An index whose columns are a leading prefix of another: pure write/storage overhead. (Unique indexes exempt.)                               |
+| Lint                               | Level | Detects                                                                                                                                                                                                                                            |
+| ---------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unindexed_foreign_key`            | info  | A foreign-key column with no index leading with it: reads on it full-scan. (Honours SQLite's leftmost-prefix rule; exempts FKs onto `_id`.)                                                                                                        |
+| `filter_without_index`             | warn  | A `query(...).filter(...)` with no `.withIndex()` first: loads every row and filters in memory.                                                                                                                                                    |
+| `count_without_index`              | warn  | A `count()` on a table with no aggregate index whose `where` no ordinary index covers (a bare count included): every call scans every row of the table to count them.                                                                              |
+| `duplicate_index`                  | info  | An index whose columns are a leading prefix of another: pure write/storage overhead. (Unique indexes exempt.)                                                                                                                                      |
+| `unbounded_loop`                   | error | A `while (true)` / `for (;;)` with no `break`, `return` or `throw`: it never ends, billing every turn.                                                                                                                                             |
+| `dispatch_cycle`                   | error | Functions schedule or call each other (or themselves) with no guard on any hop: an endless chain.                                                                                                                                                  |
+| `queue_dispatch_cycle`             | error | A queue consumer, or a function it runs, re-enqueues to its own queue (or through a topic) on every message, with no guard on any hop: the queue never drains.                                                                                     |
+| `self_reschedule_without_progress` | warn  | A guarded `runAfter` re-arms the same function under one second, with no cursor and no row removed: the same work every run. From one second to a minute it is an info-level poll, and a rewrite of a row on each tick does not count as progress. |
+| `unbounded_collect_on_open_range`  | warn  | A server-driven `.collect()` on a `withIndex` range with no upper bound, and nothing in the function removes the rows it reads.                                                                                                                    |
+| `filter_after_index_scan`          | info  | A `.filter()` after `.withIndex()` on a field the index does not cover: extend the index so the read seeks instead of scanning.                                                                                                                    |
+| `cron_every_minute`                | info  | A cron job that fires every minute: a Worker invocation and target dispatch billed on every fire, whether or not there is work.                                                                                                                    |
 
 ### Security
 
@@ -69,12 +88,14 @@ Run against the declared schema alone: deterministic, no running shard needed.
 
 ### Operational
 
-| Lint                           | Level | Detects                                                                                                |
-| ------------------------------ | ----- | ------------------------------------------------------------------------------------------------------ |
-| `table_without_insert`         | info  | No function inserts into the table: dead schema, or seeded out-of-band.                                |
-| `workflow_unused`              | info  | A declared workflow is never started: dead code (still billed), or external.                           |
-| `queue_without_dlq`            | warn  | A `defineQueue` with no `deadLetterQueue`: exhausted messages are dropped, not captured or replayable. |
-| `container_oversized_instance` | info  | A container on a large instance type: provisioned memory/disk billed while running.                    |
+| Lint                           | Level | Detects                                                                                                                           |
+| ------------------------------ | ----- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `table_without_insert`         | info  | No function inserts into the table: dead schema, or seeded out-of-band.                                                           |
+| `workflow_unused`              | info  | A declared workflow is never started: dead code (still billed), or external.                                                      |
+| `queue_without_dlq`            | warn  | A `defineQueue` with no `deadLetterQueue`: exhausted messages are dropped, not captured or replayable.                            |
+| `container_oversized_instance` | info  | A container on a large instance type: provisioned memory/disk billed while running.                                               |
+| `container_long_sleep_after`   | warn  | A container's idle window (`sleepAfter`, capped by `hardTimeout`) is over an hour: each idle instance runs, and bills, that long. |
+| `topic_too_many_subscriptions` | info  | A topic with more than 10 subscriptions: each publish sends to every queue, six at a time.                                        |
 
 ## Runtime lints
 

@@ -48,7 +48,6 @@
     "dependencies": {
         "@lunora/auth": "workspace:*",
         "@lunora/errors": "workspace:*",
-        "@lunora/react": "workspace:*",
         "better-auth": "catalog:auth"
     },
     "devDependencies": {
@@ -60,7 +59,6 @@
         "@solidjs/testing-library": "catalog:frontend",
         "@solidjs/web": "catalog:solid2",
         "@sveltejs/vite-plugin-svelte": "catalog:frontend",
-        "@tanstack/react-query": "catalog:frontend",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/jest-dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",

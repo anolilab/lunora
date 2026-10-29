@@ -25,7 +25,10 @@
  * would corrupt a live query silently. See that module's header.
  */
 
+import { decodeWire } from "@lunora/wire";
+
 import { ID_FIELD, insertionIndexFor, PAGE_FIELD, rowListOf } from "../../../shared/page-result";
+import type { ServerDataMessage } from "./types";
 
 /**
  * One row change as emitted by `@lunora/do`'s `broadcastDelta`. Mirrors
@@ -86,24 +89,39 @@ const isMutationDelta = (value: unknown): value is MutationDelta => {
  * @returns the merged rows, or `undefined` when the list isn't id-keyable or an insert/update carries no row
  */
 const mergeRows = (list: ReadonlyArray<unknown>, delta: MutationDelta): undefined | unknown[] => {
-    // Only merge when every element is an id-bearing object; a list of scalars
-    // (or rows without `_id`) has no stable key to splice against.
-    const rows: Record<string, unknown>[] = [];
+    const { key, op, row } = delta;
+
+    // One pass builds the new array and finds the first row with this id. Every
+    // delta runs this over the whole cached result, so it copies the list once.
+    const next: Record<string, unknown>[] = [];
+    let existingIndex = -1;
 
     for (const element of list) {
-        if (rowId(element) === undefined) {
+        const id = rowId(element);
+
+        // Only merge when every element is an id-bearing object; a list of scalars
+        // (or rows without `_id`) has no stable key to splice against.
+        if (id === undefined) {
             return undefined;
         }
 
-        rows.push(element as Record<string, unknown>);
+        if (id === key) {
+            // A delete drops every row with the id; a delete for a row this list never
+            // held is a legitimate no-op.
+            if (op === "delete") {
+                continue;
+            }
+
+            if (existingIndex === -1) {
+                existingIndex = next.length;
+            }
+        }
+
+        next.push(element as Record<string, unknown>);
     }
 
-    const { key, op, row } = delta;
-
     if (op === "delete") {
-        const next = rows.filter((existing) => existing[ID_FIELD] !== key);
-
-        return next.length === rows.length ? [...rows] : next;
+        return next;
     }
 
     // insert / update both need the new row body to splice in.
@@ -111,11 +129,8 @@ const mergeRows = (list: ReadonlyArray<unknown>, delta: MutationDelta): undefine
         return undefined;
     }
 
-    const next = [...rows];
-    const existingIndex = rows.findIndex((existing) => existing[ID_FIELD] === key);
-
     if (existingIndex === -1) {
-        next.splice(insertionIndexFor(rows, row), 0, row);
+        next.splice(insertionIndexFor(next, row), 0, row);
     } else {
         next[existingIndex] = row;
     }
@@ -157,3 +172,48 @@ const applyDelta = (current: unknown, delta: MutationDelta): Record<string, unkn
 
 export { applyDelta, isMutationDelta };
 export type { MutationDelta };
+
+/**
+ * Sentinel returned by `resolveDataPayload` for a frame the client RECOGNISED as
+ * a row delta but could not merge. Distinct from any real payload (a symbol can
+ * never come off the wire), so the caller can re-snapshot instead of publishing
+ * the raw `{ key, op, table, row }` envelope as the query's value.
+ */
+export const UNMERGEABLE_DELTA: unique symbol = Symbol("lunora.unmergeableDelta");
+
+/**
+ * Resolve a `data` or `delta` frame into the value the subscription should adopt.
+ *
+ * `serverBase` is the authoritative base, not the displayed value, which may carry
+ * an optimistic overlay: a delta describes a change to server truth, and the overlay
+ * is re-folded over the result afterwards.
+ *
+ * Returns the payload to commit, or {@link UNMERGEABLE_DELTA} when the frame is a row
+ * delta that cannot be spliced into the base. The caller must then re-snapshot.
+ */
+export const resolveDataPayload = (message: ServerDataMessage, serverBase: unknown): unknown => {
+    if ("data" in message && message.data !== undefined) {
+        // Wire-decode the snapshot so a `bytes`/`bigint` column arrives as a real value.
+        return decodeWire(message.data);
+    }
+
+    const delta = decodeWire(message.delta);
+
+    if (isMutationDelta(delta)) {
+        // No cached base is not a merge failure: there is nothing to corrupt. This is
+        // the legacy `broadcastDelta` fan-out, which stamps no cursor, so handing the
+        // change to an unseeded subscriber strands nothing. Asking for a snapshot here
+        // would turn every such broadcast into a re-subscribe.
+        if (serverBase === undefined) {
+            return delta;
+        }
+
+        // A base we hold and cannot splice into is the dangerous case: publishing the
+        // raw row envelope over a real result would never be reconciled, because a
+        // frame carrying a cursor advances past it. Ask for a snapshot instead.
+        return applyDelta(serverBase, delta) ?? UNMERGEABLE_DELTA;
+    }
+
+    // An opaque payload, such as a full result sent verbatim, replaces the base.
+    return delta;
+};

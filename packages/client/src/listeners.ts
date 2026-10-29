@@ -10,6 +10,10 @@ import type { Unsubscribe } from "./types";
 export default class Listeners<T = void> {
     private readonly listeners = new Set<(value: T) => void>();
 
+    public get size(): number {
+        return this.listeners.size;
+    }
+
     public add(listener: (value: T) => void): Unsubscribe {
         this.listeners.add(listener);
 

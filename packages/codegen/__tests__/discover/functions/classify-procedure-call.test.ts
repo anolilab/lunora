@@ -54,6 +54,24 @@ describe("classifyProcedureCall", () => {
         });
     });
 
+    it("tags `defineRoom` as an internal mutation on the room channel, not a lifecycle moment", () => {
+        expect.assertions(1);
+
+        // A room handler writes room state to the shard's SQLite, so it must be a
+        // MUTATION (transaction-wrapped) and internal (never a client RPC path). It
+        // is reached by its channel, so it carries no lifecycle moment.
+        expect(
+            classify(
+                `export const chat = defineRoom({ name: "chat", message: v.object({}), onMessage: () => null });`,
+                `import { defineRoom } from "@lunora/server";`,
+            ),
+        ).toStrictEqual({
+            channel: "room",
+            kind: "mutation",
+            visibility: "internal",
+        });
+    });
+
     it("resolves an aliased import to the exported factory name, not the local alias", () => {
         expect.assertions(1);
 
@@ -175,5 +193,99 @@ describe("classifyProcedureCall", () => {
         const classified = classify(`export const list = (query.use(rls(p)) as Builder).query(async () => []);`);
 
         expect(classified?.receiver?.getText()).toBe("query.use(rls(p))");
+    });
+
+    it("marks a chain that carries a platformAdmin step as admin-only", () => {
+        expect.assertions(1);
+
+        expect(
+            classify(
+                `export const setCredits = mutation.use(platformAdmin(() => true)).mutation(async () => null);`,
+                `import { mutation, platformAdmin } from "@lunora/server";`,
+            ),
+        ).toStrictEqual({ adminOnly: true, kind: "mutation", receiver: expect.anything(), visibility: "public" });
+    });
+
+    // A local function called `platformAdmin` is not the server's: the marker is the import.
+    it("does not mark admin-only from a locally defined platformAdmin", () => {
+        expect.assertions(1);
+
+        expect(
+            classify(
+                `const platformAdmin = (check: () => boolean) => check;\nexport const setCredits = mutation.use(platformAdmin(() => true)).mutation(async () => null);`,
+                `import { mutation } from "@lunora/server";`,
+            ),
+        ).not.toHaveProperty("adminOnly");
+    });
+
+    // The common shape: the admin builder is a local const, and procedures are built on it.
+    it("marks admin-only a procedure built on a local const carrying the platformAdmin step", () => {
+        expect.assertions(1);
+
+        expect(
+            classify(
+                `const adminMutation = mutation.use(platformAdmin(() => true));\nexport const setCredits = adminMutation.mutation(async () => null);`,
+                `import { mutation, platformAdmin } from "@lunora/server";`,
+            ),
+        ).toMatchObject({ adminOnly: true });
+    });
+
+    // Typed `@lunora/server`, so classification takes the `__lunoraProcedure` brand path neore uses.
+    const LUNORA_SERVER_TYPES = `export interface Builder { __lunoraProcedure: true; use(middleware: unknown): Builder; mutation(handler: unknown): { __lunoraProcedure: true }; }
+export declare const mutation: Builder;
+export declare const platformAdmin: (check: unknown) => unknown;
+export declare const logger: () => unknown;`;
+
+    // neore's shape: the admin builder lives in lib/crpc.ts and procedures import it.
+    it("marks admin-only a procedure built on an admin builder imported from another module", () => {
+        expect.assertions(1);
+
+        project.createSourceFile("node_modules/@lunora/server/index.d.ts", LUNORA_SERVER_TYPES, { overwrite: true });
+        project.createSourceFile(
+            "lib/crpc.ts",
+            `import { mutation, platformAdmin } from "@lunora/server";\nexport const adminMutation = mutation.use(platformAdmin(() => true));`,
+            { overwrite: true },
+        );
+
+        expect(classify(`import { adminMutation } from "./lib/crpc";\nexport const setCredits = adminMutation.mutation(async () => null);`, "")).toMatchObject({
+            adminOnly: true,
+        });
+    });
+
+    it("does not mark admin-only a procedure built on a builder imported from another module without platformAdmin", () => {
+        expect.assertions(2);
+
+        project.createSourceFile("node_modules/@lunora/server/index.d.ts", LUNORA_SERVER_TYPES, { overwrite: true });
+        project.createSourceFile("lib/crpc.ts", `import { mutation, logger } from "@lunora/server";\nexport const plainMutation = mutation.use(logger());`, {
+            overwrite: true,
+        });
+
+        const classified = classify(`import { plainMutation } from "./lib/crpc";\nexport const setCredits = plainMutation.mutation(async () => null);`, "");
+
+        expect(classified).toMatchObject({ kind: "mutation" });
+        expect(classified).not.toHaveProperty("adminOnly");
+    });
+
+    it("does not mark admin-only a procedure built on a local const without the platformAdmin step", () => {
+        expect.assertions(1);
+
+        expect(
+            classify(
+                `const plainMutation = mutation.use(logger());\nexport const setCredits = plainMutation.mutation(async () => null);`,
+                `import { mutation } from "@lunora/server";`,
+            ),
+        ).not.toHaveProperty("adminOnly");
+    });
+
+    it("does not mark admin-only from a variable named adminMutation without the platformAdmin step", () => {
+        expect.assertions(1);
+
+        expect(
+            classify(
+                `export const list = adminMutation.mutation(async () => null);`,
+                `import { mutation } from "@lunora/server";
+const adminMutation = mutation;`,
+            ),
+        ).not.toHaveProperty("adminOnly");
     });
 });

@@ -42,7 +42,7 @@ pnpm install
 pnpm --filter @lunora-example/tanstack-start dev
 ```
 
-Open <http://localhost:5173>, then **View Source** — the messages are in the
+Open the URL the dev server prints (<http://localhost:5173> in the main checkout), then **View Source** — the messages are in the
 served HTML, not fetched afterwards. Open a second tab and post: both update
 over the socket.
 

@@ -10,11 +10,11 @@ const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: 
 
 const rows: AdvisorPaymentWebhook[] = [
     // one-day tolerance → flagged.
-    { callee: "createStripeAdapter", exportName: "stripe", file: "payment", line: 3, toleranceSeconds: 86_400 },
+    { callee: "createStripeAdapter", scope: { kind: "export", name: "stripe" }, file: "payment", line: 3, toleranceSeconds: 86_400 },
     // default-ish 300s tolerance → not flagged.
-    { callee: "createPolarAdapter", exportName: "polar", file: "payment", line: 5, toleranceSeconds: 300 },
+    { callee: "createPolarAdapter", scope: { kind: "export", name: "polar" }, file: "payment", line: 5, toleranceSeconds: 300 },
     // no static tolerance value → not flagged.
-    { callee: "createStripeAdapter", exportName: "computed", file: "payment", line: 7 },
+    { callee: "createStripeAdapter", scope: { kind: "export", name: "computed" }, file: "payment", line: 7 },
 ];
 
 describe("payment_webhook_wide_tolerance", () => {
@@ -41,7 +41,9 @@ describe("payment_webhook_wide_tolerance", () => {
     it("does not flag a tolerance at the one-hour ceiling boundary minus a second", () => {
         expect.assertions(1);
 
-        const nearCeiling: AdvisorPaymentWebhook[] = [{ callee: "createStripeAdapter", exportName: "s", file: "p", line: 1, toleranceSeconds: 3599 }];
+        const nearCeiling: AdvisorPaymentWebhook[] = [
+            { callee: "createStripeAdapter", scope: { kind: "export", name: "s" }, file: "p", line: 1, toleranceSeconds: 3599 },
+        ];
 
         expect(paymentWebhookWideTolerance.run({ paymentWebhooks: nearCeiling, schema: schema() })).toHaveLength(0);
     });

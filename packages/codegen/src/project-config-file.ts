@@ -1,0 +1,650 @@
+/**
+ * `lunora.config.*` — the project's single authored config file, read on the HOST.
+ *
+ * It replaces `lunora.json`, and it carries what that file carried (`target`,
+ * `remote`) plus the `app` hook a Vite-first project composes its worker with.
+ *
+ * Read two ways, on purpose.
+ *
+ * {@link loadProjectConfig} EVALUATES it with `jiti`, so a computed value works
+ * — but `jiti`'s non-deprecated entry point is `await jiti.import()`, so it is
+ * async and only callers that can await it use it (`@lunora/vite`, whose hooks
+ * can).
+ *
+ * {@link readProjectConfigLiterals} PARSES the default export for `target` and
+ * `remote`. `runCodegen` is synchronous and resolves `target` inside itself, so
+ * those two have to be answerable without awaiting.
+ *
+ * What the parser can see, exactly: a string / boolean / object literal assigned
+ * to a property of the object the default export resolves to — directly, through
+ * a `satisfies` / `as` / parenthesised wrapper, or through a `const` in the same
+ * file. What it CANNOT: a computed value, a getter, a spread, `module.exports`.
+ * Those do not silently become the default — the reader reports `unreadable` and
+ * `resolveCodegenTarget` raises a diagnostic, because a `target` that quietly
+ * becomes `cloudflare` ships the app to the wrong provider.
+ *
+ * BOTH readers resolve the DEFAULT export and nothing else. That is not a
+ * limitation to be relaxed: `@lunora/vite` emits `import lunoraConfig from
+ * "…/lunora.config"` into the composed worker entry, so a hook reached any other
+ * way would fail the bundle with "does not provide an export named default" —
+ * the least debuggable error that plugin can produce.
+ *
+ * This lives in `@lunora/codegen` rather than `@lunora/config` for the reason
+ * `readProjectTarget` always did: `@lunora/config` depends on `@lunora/codegen`,
+ * not the reverse, so putting the loader there and importing it here would invert
+ * the edge. There is still exactly one loader for the file.
+ *
+ * The `app` hook is ALSO bundled into the worker by `@lunora/vite`, which is why
+ * the documented shape uses a type-only `satisfies` rather than a runtime
+ * `defineConfig` import: a runtime import in this file is evaluated HERE, on the
+ * host, and must resolve from the host — a `cloudflare:*` module or a tsconfig
+ * path alias (which `jiti` does not read) throws, and {@link loadProjectConfig}
+ * reports that rather than swallowing it.
+ */
+import { readFileSync, statSync } from "node:fs";
+import { basename } from "node:path";
+
+import { createJiti } from "jiti";
+import type { ObjectLiteralElementLike, ObjectLiteralExpression, PropertyAssignment, ShorthandPropertyAssignment, SourceFile } from "ts-morph";
+import { Node as TsNode, Project } from "ts-morph";
+
+import type { AcceptedFinding } from "./advisor-accept";
+import { propertyKeyName } from "./discover/property-name";
+import { findProjectConfigFile } from "./project-config-path";
+
+/**
+ * The literals {@link readProjectConfigLiterals} proves by parsing — narrowed,
+ * unlike the evaluated shape below, because the parser has just established that
+ * each one IS a string or a boolean. Callers that re-checked `typeof` were
+ * re-validating a fact this file already knew.
+ */
+interface ProjectConfigLiterals {
+    /**
+     * `advisor.minSeverity`, read the same way. `unreadable` when `advisor` is
+     * declared but its `minSeverity` is not a string literal the parser can see,
+     * kept apart from the top-level `unreadable`, which means "the target may
+     * be wrong".
+     */
+    advisor?: { accept?: AcceptedFinding[]; acceptUnreadable?: true; minSeverity?: string; unreadable?: boolean };
+
+    /**
+     * `codegen.exclude`: extra globs (relative to `lunora/`) the source walk
+     * skips on top of the built-in test-file patterns. `unreadable` when
+     * `codegen` is declared but `exclude` is not an array of string literals.
+     */
+    codegen?: { exclude?: string[]; unreadable?: boolean };
+
+    /**
+     * `durableObjects.merge`: host the shard, scheduler and shard registry in one
+     * Durable Object class (plan 462). `unreadable` when `durableObjects` is
+     * declared but `merge` is not a boolean literal.
+     */
+    durableObjects?: { merge?: boolean; unreadable?: boolean };
+    remote?: boolean;
+
+    /**
+     * `services`: binding key → `{ dir, entrypoint? }` (plan 457). `unreadable`
+     * when declared but not an object of string literals, kept apart from the
+     * top-level `unreadable` like `advisor`: a service codegen cannot read must
+     * fail loudly, not vanish from `ctx.services`.
+     */
+    services?: { declared?: Record<string, ServiceLiteral>; unreadable?: boolean };
+    target?: string;
+
+    /**
+     * A config file exists, but its default export could not be read as an
+     * object literal — a computed value, a getter, a spread, `module.exports`.
+     * The caller must not treat this as "no keys declared": that is how a
+     * declared `target` becomes the default in silence.
+     */
+    unreadable?: boolean;
+}
+
+/** One `services.<key>` entry as written: the Worker's folder and, for RPC, its `WorkerEntrypoint` export. */
+interface ServiceLiteral {
+    dir: string;
+    entrypoint?: string;
+    /** `false` binds a named `entrypoint` as a plain fetcher, without RPC types (so without importing the service's sources). */
+    rpc?: false;
+}
+
+/** The structural slice of `lunora.config.*` Lunora reads. Unvalidated on purpose — see {@link loadProjectConfig}. */
+interface LunoraProjectConfig {
+    /** Advisor settings for codegen (`minSeverity`). Read by `runCodegen` through {@link readProjectConfigLiterals}. */
+    advisor?: unknown;
+    /** The `app` hook: receives the generated `defineApp()` builder and returns it. Read by `@lunora/vite`, not by the CLI. */
+    app?: unknown;
+    /** Codegen source-walk settings (`exclude`). Read through {@link readProjectConfigLiterals}. */
+    codegen?: unknown;
+    /** Durable Object packaging (`merge`). Read through {@link readProjectConfigLiterals}. */
+    durableObjects?: unknown;
+    /** Remote-binding dev preference. */
+    remote?: unknown;
+    /** Deploy target id. */
+    target?: unknown;
+}
+
+/** What {@link loadProjectConfig} found: the config, or why it could not be evaluated. */
+interface LoadedProjectConfig {
+    config?: LunoraProjectConfig;
+
+    /**
+     * Set when the file exists but evaluating it threw. Surfaced by the caller —
+     * a config whose imports do not resolve on the host used to read as "no
+     * config", which silently dropped the user's whole `app` hook.
+     */
+    error?: string;
+}
+
+/**
+ * Memoized per path, keyed on mtime + size so an edit is picked up and a
+ * short-lived process transpiles once. One entry per path, replaced rather than
+ * accumulated: a long dev session edits the file many times.
+ */
+const cache = new Map<string, { key: string; value: Promise<LoadedProjectConfig> }>();
+
+/**
+ * Load `lunora.config.*`, or `{}` when the project ships none.
+ *
+ * `moduleCache: false` is load-bearing, not a tuning knob: `jiti`'s module cache
+ * lives on `globalThis`, so a NEW instance still hands back the module it
+ * compiled the first time. Without it a config edit was never picked up in a
+ * long-lived dev server — the watcher fired, the server restarted, and the hook
+ * stayed as it was when the process started.
+ *
+ * `interopDefault` is off so the namespace is not collapsed onto its default
+ * export: the hook has to come from `default` specifically, because that is what
+ * the emitted worker entry imports (see the module header).
+ */
+const loadProjectConfig = async (projectRoot: string): Promise<LoadedProjectConfig> => {
+    const configPath = findProjectConfigFile(projectRoot);
+
+    if (configPath === undefined) {
+        return {};
+    }
+
+    let key: string;
+
+    try {
+        const stats = statSync(configPath);
+
+        key = `${String(stats.mtimeMs)}:${String(stats.size)}`;
+    } catch {
+        return {};
+    }
+
+    const cached = cache.get(configPath);
+
+    if (cached?.key === key) {
+        return cached.value;
+    }
+
+    const pending = (async (): Promise<LoadedProjectConfig> => {
+        try {
+            const namespace: unknown = await createJiti(configPath, { interopDefault: false, moduleCache: false }).import(configPath);
+            const value = (namespace as { default?: unknown } | undefined)?.default;
+
+            return { config: value !== null && typeof value === "object" ? value : undefined };
+        } catch (error: unknown) {
+            return { error: error instanceof Error ? error.message : String(error) };
+        }
+    })();
+
+    cache.set(configPath, { key, value: pending });
+
+    return pending;
+};
+
+/**
+ * The object literal the default export resolves to, or `undefined` when it does
+ * not resolve to one.
+ *
+ * A `satisfies` / `as` / parenthesised wrapper is unwrapped, because that is the
+ * documented shape. An identifier is followed to a `const` in the same file,
+ * because `const config = { … }; export default config;` is the commonest config
+ * idiom there is and reading it as "no keys" was indistinguishable from an empty
+ * config.
+ */
+const defaultExportObject = (sourceFile: SourceFile): ObjectLiteralExpression | undefined => {
+    const assignment = sourceFile.getExportAssignments().find((candidate) => !candidate.isExportEquals());
+    let expression = assignment?.getExpression();
+
+    while (
+        expression !== undefined &&
+        (TsNode.isSatisfiesExpression(expression) || TsNode.isAsExpression(expression) || TsNode.isParenthesizedExpression(expression))
+    ) {
+        expression = expression.getExpression();
+    }
+
+    if (expression !== undefined && TsNode.isIdentifier(expression)) {
+        const declaration = sourceFile.getVariableDeclaration(expression.getText());
+
+        expression = declaration?.getInitializer();
+
+        while (expression !== undefined && (TsNode.isSatisfiesExpression(expression) || TsNode.isAsExpression(expression))) {
+            expression = expression.getExpression();
+        }
+    }
+
+    return expression !== undefined && TsNode.isObjectLiteralExpression(expression) ? expression : undefined;
+};
+
+/** The literal a property is assigned, following a shorthand to its `const` in the same file. */
+const propertyLiteral = (property: PropertyAssignment | ShorthandPropertyAssignment, sourceFile: SourceFile) => {
+    if (TsNode.isPropertyAssignment(property)) {
+        return property.getInitializer();
+    }
+
+    return sourceFile.getVariableDeclaration(propertyKeyName(property))?.getInitializer();
+};
+
+/** `value` with any `satisfies` / `as` / parentheses around it peeled off. */
+const unwrapLiteral = (value: TsNode | undefined): TsNode | undefined => {
+    let inner = value;
+
+    while (inner !== undefined && (TsNode.isSatisfiesExpression(inner) || TsNode.isAsExpression(inner) || TsNode.isParenthesizedExpression(inner))) {
+        inner = inner.getExpression();
+    }
+
+    return inner;
+};
+
+/**
+ * The literal under `key` in the plain object literal `declared`, `absent`
+ * when the object does not declare it, or `unreadable` when
+ * `declared` is not an object literal, the key's value cannot be resolved, or a
+ * member is not a plain property. A spread (before or after the literal), a
+ * getter, a method or a computed key may be what sets `key`, or override the
+ * literal this would read, so any of them makes the whole object unreadable.
+ */
+const readPlainMember = (declared: TsNode | undefined, sourceFile: SourceFile, key: string): { absent: true } | { literal: TsNode } | { unreadable: true } => {
+    const value = unwrapLiteral(declared);
+
+    if (value === undefined || !TsNode.isObjectLiteralExpression(value)) {
+        return { unreadable: true };
+    }
+
+    const properties = value.getProperties();
+    const plain = properties.filter(
+        (candidate): candidate is PropertyAssignment | ShorthandPropertyAssignment =>
+            (TsNode.isPropertyAssignment(candidate) && !TsNode.isComputedPropertyName(candidate.getNameNode())) ||
+            TsNode.isShorthandPropertyAssignment(candidate),
+    );
+
+    if (plain.length !== properties.length) {
+        return { unreadable: true };
+    }
+
+    // The last one wins, as it does at runtime: `{ a: 1, a: 2 }` evaluates to 2.
+    const property = plain.findLast((candidate) => propertyKeyName(candidate) === key);
+
+    if (property === undefined) {
+        return { absent: true };
+    }
+
+    const literal = propertyLiteral(property, sourceFile);
+
+    return literal === undefined ? { unreadable: true } : { literal };
+};
+
+const ACCEPT_KEYS = ["exportName", "file", "reason", "rule"] as const;
+
+/**
+ * One `advisor.accept` entry as four non-empty string literals, or `undefined`
+ * for anything else — an extra key, a computed value, a blank reason. A typo in
+ * a key would otherwise match nothing and fail silently, so only the four are read.
+ */
+const readAcceptedEntry = (entry: TsNode): AcceptedFinding | undefined => {
+    const value = unwrapLiteral(entry);
+
+    if (value === undefined || !TsNode.isObjectLiteralExpression(value)) {
+        return undefined;
+    }
+
+    const fields: Partial<Record<(typeof ACCEPT_KEYS)[number], string>> = {};
+
+    for (const property of value.getProperties()) {
+        if (!TsNode.isPropertyAssignment(property) || TsNode.isComputedPropertyName(property.getNameNode())) {
+            return undefined;
+        }
+
+        const key = propertyKeyName(property);
+        const initializer = unwrapLiteral(property.getInitializer());
+
+        if (!(ACCEPT_KEYS as ReadonlyArray<string>).includes(key) || initializer === undefined) {
+            return undefined;
+        }
+
+        if (!TsNode.isStringLiteral(initializer) && !TsNode.isNoSubstitutionTemplateLiteral(initializer)) {
+            return undefined;
+        }
+
+        fields[key as (typeof ACCEPT_KEYS)[number]] = initializer.getLiteralValue();
+    }
+
+    const { exportName, file, reason, rule } = fields;
+
+    return exportName?.trim() && file?.trim() && reason?.trim() && rule?.trim() ? { exportName, file, reason, rule } : undefined;
+};
+
+/** `advisor.accept` from the `advisor` literal: the entries, or `acceptUnreadable` when any part is not a literal the parser can read. */
+const readAccept = (declared: TsNode | undefined, sourceFile: SourceFile): { accept?: AcceptedFinding[]; acceptUnreadable?: true } => {
+    const member = readPlainMember(declared, sourceFile, "accept");
+
+    if ("absent" in member) {
+        return {};
+    }
+
+    const list = "literal" in member ? unwrapLiteral(member.literal) : undefined;
+
+    if (list === undefined || !TsNode.isArrayLiteralExpression(list)) {
+        return { acceptUnreadable: true };
+    }
+
+    const accept: AcceptedFinding[] = [];
+
+    for (const element of list.getElements()) {
+        const entry = readAcceptedEntry(element);
+
+        if (entry === undefined) {
+            return { acceptUnreadable: true };
+        }
+
+        accept.push(entry);
+    }
+
+    return { accept };
+};
+
+/**
+ * `advisor.minSeverity` and `advisor.accept` from the `advisor` object literal.
+ * `minSeverity` is `unreadable` when it is not a string literal the parser can
+ * see, since a wrong floor hides findings. `accept` is read apart from it, so a
+ * bad list drops only the acceptances, never the floor.
+ */
+const readAdvisor = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+    const member = readPlainMember(declared, sourceFile, "minSeverity");
+    const accepts = readAccept(declared, sourceFile);
+
+    if ("absent" in member) {
+        return { advisor: accepts };
+    }
+
+    // `accept` is read from the same plain object, so it stays valid when only `minSeverity` is not a literal.
+    return "literal" in member && TsNode.isStringLiteral(member.literal)
+        ? { advisor: { ...accepts, minSeverity: member.literal.getLiteralValue() } }
+        : { advisor: { ...accepts, unreadable: true } };
+};
+
+/** `codegen.exclude` from the `codegen` object literal: an array of non-negated string literals, or `unreadable`. */
+const readCodegen = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+    const member = readPlainMember(declared, sourceFile, "exclude");
+
+    if ("absent" in member) {
+        return { codegen: {} };
+    }
+
+    if (!("literal" in member) || !TsNode.isArrayLiteralExpression(member.literal)) {
+        return { codegen: { unreadable: true } };
+    }
+
+    const exclude: string[] = [];
+
+    for (const element of member.literal.getElements()) {
+        // A `!` negation would read as "anything but this" to the any-match
+        // matcher and exclude every source file, so it is refused, not honoured.
+        if ((!TsNode.isStringLiteral(element) && !TsNode.isNoSubstitutionTemplateLiteral(element)) || element.getLiteralValue().startsWith("!")) {
+            return { codegen: { unreadable: true } };
+        }
+
+        exclude.push(element.getLiteralValue());
+    }
+
+    return { codegen: { exclude } };
+};
+
+/** `durableObjects.merge` from the `durableObjects` object literal: a boolean literal, or `unreadable`. */
+const readDurableObjects = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+    const member = readPlainMember(declared, sourceFile, "merge");
+
+    if ("absent" in member) {
+        return { durableObjects: {} };
+    }
+
+    return "literal" in member && (TsNode.isTrueLiteral(member.literal) || TsNode.isFalseLiteral(member.literal))
+        ? { durableObjects: { merge: member.literal.getLiteralValue() } }
+        : { durableObjects: { unreadable: true } };
+};
+
+/** What a getter or method under each key this reader cares about contributes: it declares a value the parser cannot see. */
+const UNREADABLE_ACCESSOR: ReadonlyMap<string, ProjectConfigLiterals> = new Map([
+    ["advisor", { advisor: { unreadable: true } }],
+    ["codegen", { codegen: { unreadable: true } }],
+    ["durableObjects", { durableObjects: { unreadable: true } }],
+    ["remote", { unreadable: true }],
+    ["target", { unreadable: true }],
+]);
+
+/** A member's initializer: `undefined` when absent, `"unreadable"` when present but not a plain `key: value` assignment. */
+const memberInitializer = (object: ObjectLiteralExpression, name: string): TsNode | "unreadable" | undefined => {
+    const member = object.getProperty(name);
+
+    if (member === undefined) {
+        return undefined;
+    }
+
+    return (TsNode.isPropertyAssignment(member) ? member.getInitializer() : undefined) ?? "unreadable";
+};
+
+/**
+ * A string-literal member's value, `undefined` when absent, or `false` when present
+ * but not a literal (not `"unreadable"`, which is itself a valid string value).
+ */
+const stringMember = (object: ObjectLiteralExpression, name: string): string | false | undefined => {
+    const value = memberInitializer(object, name);
+
+    if (value === undefined) {
+        return undefined;
+    }
+
+    return value !== "unreadable" && (TsNode.isStringLiteral(value) || TsNode.isNoSubstitutionTemplateLiteral(value)) ? value.getLiteralValue() : false;
+};
+
+/**
+ * `rpc` on a service: only `false` means anything (a named entrypoint called with
+ * plain `fetch`), so `undefined` when absent and `"unreadable"` for any other value.
+ */
+const rpcMember = (object: ObjectLiteralExpression): false | "unreadable" | undefined => {
+    const value = memberInitializer(object, "rpc");
+
+    if (value === undefined) {
+        return undefined;
+    }
+
+    return value !== "unreadable" && TsNode.isFalseLiteral(value) ? false : "unreadable";
+};
+
+/** `services: { key: { dir: "…", entrypoint?: "…", rpc?: false } }`, all literals, or `unreadable`. */
+const readServices = (wrapped: TsNode | undefined): ProjectConfigLiterals => {
+    const value = unwrapLiteral(wrapped);
+
+    if (value === undefined || !TsNode.isObjectLiteralExpression(value)) {
+        return { services: { unreadable: true } };
+    }
+
+    const declared: Record<string, ServiceLiteral> = {};
+
+    for (const entry of value.getProperties()) {
+        if (!TsNode.isPropertyAssignment(entry) || TsNode.isComputedPropertyName(entry.getNameNode())) {
+            return { services: { unreadable: true } };
+        }
+
+        const initializer = unwrapLiteral(entry.getInitializer());
+
+        // A spread inside an entry could shadow `entrypoint` with a value the reader never sees.
+        if (
+            initializer === undefined ||
+            !TsNode.isObjectLiteralExpression(initializer) ||
+            initializer.getProperties().some((member) => !TsNode.isPropertyAssignment(member))
+        ) {
+            return { services: { unreadable: true } };
+        }
+
+        const directory = stringMember(initializer, "dir");
+        const entrypoint = stringMember(initializer, "entrypoint");
+        const rpc = rpcMember(initializer);
+
+        if (typeof directory !== "string" || entrypoint === false || rpc === "unreadable") {
+            return { services: { unreadable: true } };
+        }
+
+        declared[propertyKeyName(entry)] = {
+            dir: directory,
+            ...(entrypoint === undefined ? {} : { entrypoint }),
+            ...(rpc === undefined ? {} : { rpc }),
+        };
+    }
+
+    return { services: { declared } };
+};
+
+/**
+ * What one property of the config object contributes.
+ *
+ * A key this reader cares about but cannot resolve to a literal contributes
+ * `unreadable`, never absence: "no `target` declared" and "a `target` I could not
+ * read" must not be the same answer, because the second silently ships the app to
+ * the default provider.
+ */
+const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile): ProjectConfigLiterals => {
+    // A getter or method declares a value this reader cannot see.
+    if (TsNode.isGetAccessorDeclaration(property) || TsNode.isMethodDeclaration(property)) {
+        return UNREADABLE_ACCESSOR.get(propertyKeyName(property)) ?? {};
+    }
+
+    if (!TsNode.isPropertyAssignment(property) && !TsNode.isShorthandPropertyAssignment(property)) {
+        return {};
+    }
+
+    const key = propertyKeyName(property);
+
+    if (key === "advisor") {
+        return readAdvisor(propertyLiteral(property, sourceFile), sourceFile);
+    }
+
+    if (key === "services") {
+        return readServices(propertyLiteral(property, sourceFile));
+    }
+
+    if (key === "codegen") {
+        return readCodegen(propertyLiteral(property, sourceFile), sourceFile);
+    }
+
+    if (key === "durableObjects") {
+        return readDurableObjects(propertyLiteral(property, sourceFile), sourceFile);
+    }
+
+    if (key !== "target" && key !== "remote") {
+        return {};
+    }
+
+    const value = propertyLiteral(property, sourceFile);
+
+    if (value === undefined) {
+        return { unreadable: true };
+    }
+
+    if (key === "target") {
+        return TsNode.isStringLiteral(value) ? { target: value.getLiteralValue() } : { unreadable: true };
+    }
+
+    if (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value)) {
+        return { remote: value.getLiteralValue() };
+    }
+
+    // The object form (`{ kinds: [...] }`) is a reserved opt-in meaning "on", so
+    // it has to be visible here too — reading only the booleans turned a
+    // documented config into "no preference" without a word.
+    return TsNode.isObjectLiteralExpression(value) ? { remote: true } : { unreadable: true };
+};
+
+/**
+ * The `target`, `remote`, `advisor.minSeverity`, `codegen.exclude` and
+ * `services` LITERALS declared in the config, without evaluating it — see the
+ * module header for what this can and cannot see, and why.
+ */
+const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals => {
+    const configPath = findProjectConfigFile(projectRoot);
+
+    if (configPath === undefined) {
+        return {};
+    }
+
+    let source: string;
+
+    try {
+        source = readFileSync(configPath, "utf8");
+    } catch {
+        return { unreadable: true };
+    }
+
+    const project = new Project({
+        compilerOptions: { allowJs: true },
+        skipFileDependencyResolution: true,
+        skipLoadingLibFiles: true,
+        useInMemoryFileSystem: true,
+    });
+    const sourceFile = project.createSourceFile(basename(configPath), source, { overwrite: true });
+    const object = defaultExportObject(sourceFile);
+
+    if (object === undefined) {
+        return { unreadable: true };
+    }
+
+    // A spread can SHADOW a literal later in the object, so the literal this
+    // reader sees is not necessarily the value that wins. Reporting it anyway is
+    // the one case where this reader would be actively wrong rather than merely
+    // blind, so the whole read gives up instead. It still says so for a
+    // declared `advisor`, whose own warning is what tells the user the floor
+    // was not applied: dropping it here left that warning silent.
+    if (object.getProperties().some((property) => TsNode.isSpreadAssignment(property))) {
+        const declares = (key: string): boolean =>
+            object.getProperties().some((property) => !TsNode.isSpreadAssignment(property) && propertyKeyName(property) === key);
+
+        return {
+            ...(declares("advisor") ? { advisor: { unreadable: true } } : {}),
+            ...(declares("codegen") ? { codegen: { unreadable: true } } : {}),
+            ...(declares("durableObjects") ? { durableObjects: { unreadable: true } } : {}),
+            ...(declares("services") ? { services: { unreadable: true } } : {}),
+            unreadable: true,
+        };
+    }
+
+    let literals: ProjectConfigLiterals = {};
+
+    for (const property of object.getProperties()) {
+        literals = { ...literals, ...readProperty(property, sourceFile) };
+    }
+
+    return literals;
+};
+
+/**
+ * `lunora.config`'s `durableObjects.merge` (plan 462). An unreadable value is
+ * said out loud and treated as off: merging changes which classes wrangler binds,
+ * so it is never switched on by a value the parser could not prove.
+ */
+const readMergeDurableObjects = (projectRoot: string): boolean => {
+    const { durableObjects } = readProjectConfigLiterals(projectRoot);
+
+    if (durableObjects?.unreadable) {
+        // eslint-disable-next-line no-console -- codegen has no diagnostic sink for config literals; matches `codegen.exclude`'s warning.
+        console.warn("@lunora/codegen: `durableObjects.merge` in lunora.config is not a boolean literal — the Durable Object classes stay separate.");
+    }
+
+    return durableObjects?.merge === true;
+};
+
+export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral };
+export { findProjectConfigFile, PROJECT_CONFIG_FILENAMES } from "./project-config-path";
+export { loadProjectConfig, readMergeDurableObjects, readProjectConfigLiterals };

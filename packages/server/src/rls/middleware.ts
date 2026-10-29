@@ -51,21 +51,48 @@
  * The middleware is signature-compatible with the builder's `Middleware<>`,
  * so `.use(rls(policies))` slots in like any other middleware.
  */
-import { LunoraError } from "@lunora/errors";
+import { isLunoraError, LunoraError } from "@lunora/errors";
+// The traversal itself, not a structural mirror of it. Every other read here is
+// table-named, so the wrapper can `route()` it; a traversal DISCOVERS its tables
+// as it walks, so the only way to route one per hop is to run the walk here over
+// a reader this wrapper controls. `@lunora/shard-engine` does not depend on
+// `@lunora/server`, so the edge is acyclic.
+//
+// A VALUE import only. The types stay structurally mirrored below like every
+// other `@lunora/*` shape this file reads: a `import type { … } from
+// "@lunora/shard-engine"` here lands in `@lunora/server`'s published `.d.ts`,
+// and every package that builds against `@lunora/server` without declaring
+// `@lunora/shard-engine` then resolves it through pnpm's hoist — which packem
+// fails the build over, by design.
+import { findRelated, whereFilter } from "@lunora/shard-engine";
+import { isPlainObject } from "@lunora/wire";
 
 // `isPlainObject` comes from the wire codec rather than being re-declared here;
 // its prototype check is what keeps a `Date` or a `Map` from passing as an
 // options bag. See `./where-match` for the full story.
-import { isPlainObject } from "../../../../shared/wire-codec";
+import { assertWithinBatchCap, DEFAULT_BATCH_LIMIT, resolveBatchCap } from "../../../../shared/batch-cap";
+import { previewPatch } from "../../../../shared/field-operators";
 import type { Middleware } from "../builder/types";
+import type { QueryPlan } from "../data-model";
 import type { FacadeEntry } from "../facade";
-import { bindOrm, bindTableFacade } from "../facade";
+import { bindOrm, defineLazyFacade } from "../facade";
 import { optionalWriterOverride } from "../optional-writer-override";
 import type { ShardRankPageResultLike } from "../rank-page-rows-shape";
 import { tagRlsMiddleware } from "./policy-tag";
 import { deny } from "./predicates";
 import type { Permission, Policy, PolicyContext, RlsOptions, Role, WhereInput } from "./types";
 import { containsRelationPredicate, matchesWhere } from "./where-match";
+
+/**
+ * A post-image verdict handed to the store, which takes it on the row it reads. Structural mirror of
+ * `@lunora/shard-engine`'s `PatchVerifier`/`PatchWriteOptions`, declared here because a `.d.ts` that names a
+ * shard-engine type would have to hoist it (see the note at the top of this file on the other mirrors).
+ */
+type PatchVerifier = (previous: Record<string, unknown>, next: Record<string, unknown>) => boolean;
+
+interface PatchWriteOptions {
+    verify?: PatchVerifier;
+}
 
 /**
  * Structural mirror of `@lunora/do`'s `QueryArgs` and `CountArgs`. The
@@ -77,6 +104,14 @@ import { containsRelationPredicate, matchesWhere } from "./where-match";
 interface QueryArgs {
     baseWhere?: WhereInput;
     cursor?: null | string;
+
+    /**
+     * Opt a list read back into a `.softDelete()` table's tombstoned rows. Set by
+     * the chunked erase's re-location for a `{ hard: true }` delete, which must find
+     * a row an earlier delete of the page soft-deleted and physically remove it; the
+     * read `baseWhere` still applies (see `@lunora/do`'s `QueryArgs`).
+     */
+    includeDeleted?: boolean;
     limit?: number;
     orderBy?: ReadonlyArray<unknown>;
 
@@ -143,6 +178,56 @@ interface RankPageArgs {
     where?: WhereInput;
 }
 
+/**
+ * Structural mirror of `@lunora/shard-engine`'s `RelatedStart`.
+ *
+ * The document arm requires `_id` for the same reason the mirrored type does:
+ * against a bare `Record<string, unknown>` the union collapses, because
+ * `{ table, id }` is assignable to it.
+ */
+type RelatedStartLike = (Record<string, unknown> & { _id: string }) | { id: string; table: string };
+
+/** Structural mirror of `@lunora/shard-engine`'s `RelationEdge` — one directed foreign-key edge. */
+interface RelationEdgeLike {
+    readonly array: boolean;
+    readonly column: string;
+    readonly name: string;
+    readonly sourceTable: string;
+    readonly targetTable: string;
+}
+
+/** Structural mirror of `@lunora/shard-engine`'s `RelatedOptions` — only the fields the wrapper forwards or fills. */
+interface RelatedArgs {
+    cursor?: null | string;
+    depth?: number;
+    direction?: "both" | "in" | "out";
+    edges?: ReadonlyArray<string>;
+    limit?: number;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+
+    /**
+     * Per-hop column mask. Declared because an OUTER `mask()` step hands it to
+     * this wrapper's `related` (see `../mask/middleware`), and this wrapper now
+     * runs the walk itself — so it has to forward the hook rather than let a
+     * spread carry it to a delegate.
+     */
+    relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
+}
+
+/** Structural mirror of `@lunora/shard-engine`'s `RelatedPage`. */
+interface RelatedPageLike {
+    continueCursor: null | string;
+    isDone: boolean;
+    nodes: {
+        depth: number;
+        document: Record<string, unknown>;
+        path: ReadonlyArray<string>;
+        pathIds: ReadonlyArray<string>;
+        score: number;
+        table: string;
+    }[];
+}
+
 interface QueryPage {
     continueCursor: null | string;
     isDone: boolean;
@@ -174,17 +259,30 @@ interface DatabaseWriterLike {
      * wrapped is `@lunora/do`'s `createShardCtxDb`, which always implements it.
      */
     aggregate: (tableName: string, options: AggregateArgs) => Promise<null | number>;
+    /** Update-policy check on row `id` with no write; see `@lunora/shard-engine`'s `DatabaseWriterLike.assertPatchAllowed`. */
+    assertPatchAllowed?: (table: string, id: string) => Promise<void>;
     count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
-    delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
 
+    delete: (table: string, id: string, options?: { hard?: boolean }) => Promise<void>;
     /** Uncapped, chunked erase of a whole table. The RLS wrapper gates each row like a single delete. */
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
-    deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
+    deleteMany: (table: string, ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
+
+    /**
+     * Tables a chunked delete cannot trust a page-wide row image for: `.global()` tables and tables whose delete can
+     * reach a delete trigger or the table itself through relation delete actions. Published by the writer (see
+     * `@lunora/shard-engine`'s `DatabaseWriterLike`).
+     */
+    deleteRereadTables?: ReadonlySet<string>;
+
     deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
+
+    explain: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
-    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
 
     /**
      * Group + reduce. Same `baseWhere` injection as `aggregate`: the per-group
@@ -192,17 +290,27 @@ interface DatabaseWriterLike {
      * rows the caller may read. Required for the same reason as `aggregate`.
      */
     groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
-    insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
+
+    insert: (tableName: string, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<string>;
     insertMany: (
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: { limit?: number; skipDuplicates?: boolean },
     ) => Promise<(string | null)[]>;
+
     insertManyUnsafe: (
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: { allowExplicitId?: boolean; limit?: number },
     ) => Promise<string[]>;
+
+    /**
+     * Does the store currently hold an atomic write boundary open? Published by the writer (see
+     * `@lunora/shard-engine`'s `DatabaseWriterLike`). A chunked erase trusts the page image only while a
+     * mutation's serialized transaction is open; an action runs outside one, so every row is re-located.
+     * Absent ⇒ treated as "not in a transaction" (the conservative default).
+     */
+    inTransaction?: () => boolean;
 
     /**
      * Optional table-aware lookup. The underlying writer (e.g. `@lunora/do`)
@@ -213,11 +321,19 @@ interface DatabaseWriterLike {
      * don't implement it fall back to the probe path.
      */
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+
+    patch: (table: string, id: string, patch: Record<string, unknown>, options?: PatchWriteOptions) => Promise<void>;
+
+    /** Conditional patch. Optional: a writer without an atomic conditional write omits it, and the wrapper refuses. */
+    patchIf?: (
+        tableName: string,
+        id: string,
+        args: { patch: Record<string, unknown>; verify?: PatchVerifier; where: WhereInput },
+    ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
     patchMany: (
+        table: string,
         patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
         options?: { limit?: number },
-        expectedTable?: string,
     ) => Promise<{ patched: number }>;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
     query: (tableName: string) => TableReaderLike;
@@ -249,8 +365,37 @@ interface DatabaseWriterLike {
      * policy for the identical reason (see `rankPage` above).
      */
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<ShardRankPageResultLike>;
-    replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
-    restore?: (id: string, expectedTable?: string) => Promise<void>;
+
+    /**
+     * Relation-graph traversal. Declared so the `...base` spread's shape is
+     * typed, but never CALLED by the wrapper: the walk it performs is bound to
+     * whatever writer this closure came from, and the wrapper has to route each
+     * hop itself. It re-binds the traversal over {@link DatabaseWriterLike.relationEdges}
+     * instead — see the `related` entry on the wrapper.
+     */
+    related?: (start: RelatedStartLike, options?: RelatedArgs) => Promise<RelatedPageLike>;
+
+    /**
+     * The schema's foreign-key edge set — what `related` walks. Published by the
+     * writer (see `@lunora/shard-engine`'s `DatabaseWriterLike`) precisely so a
+     * wrapper that must route the traversal per hop can run the walk itself
+     * instead of delegating into a closure already bound to one writer.
+     *
+     * Present exactly when `related` is, so it is what this wrapper keys the
+     * traversal off.
+     */
+    relationEdges?: ReadonlyArray<RelationEdgeLike>;
+
+    replace: (table: string, id: string, document: Record<string, unknown>) => Promise<void>;
+    restore?: (table: string, id: string) => Promise<void>;
+
+    /**
+     * Soft-delete marker column per table, for tables declared `.softDelete()`. Published by the writer
+     * (see `@lunora/shard-engine`'s `DatabaseWriterLike`). A re-located row whose marker is already set is
+     * gone — the writer's delete is a no-op for it — so the chunked erase skips it instead of deleting and
+     * counting it.
+     */
+    softDeleteFields?: ReadonlyMap<string, string>;
 
     /**
      * Whole-shard erase. The RLS wrapper deliberately **fails this closed** rather
@@ -273,33 +418,20 @@ interface DatabaseWriterLike {
 type RlsDatabase = DatabaseWriterLike;
 
 /**
- * Mirror of `@lunora/do`'s batch-write cap. The middleware's `deleteMany` /
- * `patchMany` loop per-id (locating + policy-checking each row routes some ids
+ * `BATCH_LIMIT_EXCEEDED`, the code the writer's own cap throws: a client that
+ * catches it to chunk and retry must see the same code under `.rls()`.
+ */
+const batchLimitError = (message: string): LunoraError => new LunoraError("BATCH_LIMIT_EXCEEDED", message, { status: 400 });
+
+/**
+ * The writer's batch-write cap, re-checked here. The middleware's `deleteMany` /
+ * `patchMany` loop per id (locating + policy-checking each row routes some ids
  * through `raw` and others through `base`), so they never delegate to the
  * underlying writer's batch method — meaning that writer's own cap check never
- * runs. We re-enforce it here so the limit holds on the RLS path too. Keep this
- * value in sync with `DEFAULT_BATCH_LIMIT` in `@lunora/do`'s `ctx-db.ts`
- * (the two packages share no code, so the constant is duplicated by necessity).
+ * runs.
  */
-const DEFAULT_BATCH_LIMIT = 500;
-
 const assertBatchLimit = (count: number, limit: number | undefined, op: string): void => {
-    const cap = limit ?? DEFAULT_BATCH_LIMIT;
-
-    if (count > cap) {
-        // `BATCH_LIMIT_EXCEEDED`, matching the writer's own cap in
-        // `@lunora/shard-engine`'s `ctx-db.ts`. This threw `BAD_REQUEST` while the
-        // message and the cap were byte-identical, so a client catching
-        // `err.code === "BATCH_LIMIT_EXCEEDED"` to chunk-and-retry worked against
-        // a plain table and silently failed to match under a `.rls("required")`
-        // schema — same status, same text, different code. `@lunora/server`'s own
-        // types document that code as the one a caller reasons about.
-        throw new LunoraError(
-            "BATCH_LIMIT_EXCEEDED",
-            `${op}: batch of ${String(count)} exceeds the limit of ${String(cap)} (raise options.limit or chunk the call)`,
-            { status: 400 },
-        );
-    }
+    assertWithinBatchCap(count, resolveBatchCap(limit, op, batchLimitError), op, batchLimitError);
 };
 
 /**
@@ -878,89 +1010,61 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     const relationReadFilter = (table: string): undefined | WhereInput => readBase(table).baseWhere;
 
     /**
-     * Resolve the raw row for `id` and which policy-gated table (if any) owns
-     * it. The single source of truth shared by `get()` and the write gate.
-     * Two paths:
-     *
-     * - **Fast path** — when the writer implements the optional `lookupById`
-     * seam it already knows the owning table from its internal index, so we
-     * get `{ row, tableName }` in a single round-trip and only need to check
-     * whether that table participates in RLS.
-     * - **Fallback** — older writers expose only `get(id)`, so we fetch the
-     * row, then probe every policy table with a `findFirst` to discover
-     * ownership. The probes run concurrently (latency bounded by the slowest
-     * single probe, not their sum). The unwrapped `base.*` is intentionally
-     * used so policy enforcement on writes doesn't recurse through itself.
-     *
-     * A `lookupById` MISS falls through to the probe path rather than reporting
-     * "no such row": the seam is shard-local, so every `.global()` row misses it
-     * (those rows live in D1 and only `get`/`findFirst` reach them through the
-     * writer's global fallback). Reporting the miss as absent is what let
-     * `gateById` classify a global row as "in no policy-gated table" and perform
-     * update/delete with the policy never evaluated. Resolving global rows inside
-     * `lookupById` itself was the alternative; it would have to probe every
-     * global table across the D1 hop for a bare id, whereas falling through here
-     * keeps the common case — a shard-local row that hits — at the ONE round-trip
-     * the seam exists for, and charges the extra probes only to a miss.
-     *
-     * `probeTable` narrows the FALLBACK probe set without pinning the lookup.
-     * `expectedTable` does both, which `deleteAll`/`deleteWhere` cannot use: a
-     * pinned table blocks the writer's global fallback and turns every delete on
-     * a `.global()` table into a silent no-op. Those callers know the table
-     * anyway (their ids came from that table's own filtered read), so they pass
-     * it here instead — one probe per row rather than one per policy-gated
-     * table, which is what put a chunked erase into workerd's 1000-subrequest
-     * ceiling partway through.
-     *
-     * `row` is `null` when the id doesn't exist. `tableName` is `undefined` when
-     * the row exists but isn't in any policy-gated table (no policy applies →
-     * callers fall through unrestricted).
+     * Resolve the raw row for `table`'s `id` and whether that table is policy-gated. The owner is the named table,
+     * so a foreign id resolves to absent. A `.global()` table is included: the writer's D1 fallback reaches it.
+     * `row` is `null` when the id doesn't exist. `tableName` is `undefined` when the table has no policy (no policy
+     * applies → callers fall through unrestricted). The unguarded `raw` writer is read so policy enforcement on
+     * writes doesn't recurse through itself.
      */
-    const locateRow = async (
-        id: string,
-        expectedTable?: string,
-        probeTable?: string,
-    ): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
-        if (raw.lookupById) {
-            // Pin the lookup to the bound table when the by-id facade forwards
-            // one, so a foreign id resolves to "absent" rather than another
-            // table's row (IDOR). Read through the UNGUARDED `raw` writer: this
-            // is a policy-evaluation probe, not caller-visible data, so it must
-            // not be denied by the secure-by-default guard.
-            const located = await raw.lookupById(id, expectedTable);
-
-            if (located) {
-                // Owned by a table that isn't policy-gated → tableName undefined.
-                return { row: located.row, tableName: policyTables.has(located.tableName) ? located.tableName : undefined };
-            }
-
-            // A miss is NOT "absent" — see the docblock: a `.global()` row can
-            // only be reached through the probe path below.
-        }
-
-        const row = await raw.get(id, expectedTable);
+    const locateRow = async (table: string, id: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
+        const row = await raw.get(table, id);
 
         if (!row) {
             // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
             return { row: null, tableName: undefined };
         }
 
-        // Ids are globally unique, so at most one probe hits; settle all of
-        // them in parallel and pick the hit instead of serializing the
-        // round-trips. When the caller named a table — pinned via `expectedTable`
-        // or scoped via `probeTable` — only that table's policy can apply, so the
-        // probe set is that one table (or none, when it carries no policy).
-        const scopedTable = expectedTable ?? probeTable;
-        const probeTables = scopedTable === undefined ? [...policyTables.keys()] : [scopedTable].filter((table) => policyTables.has(table));
+        return { row, tableName: policyTables.has(table) ? table : undefined };
+    };
+
+    /**
+     * Resolve the row for an id with no table named, for the `lookupById` seam only: the shard-local index answers
+     * in one round-trip, and a miss (every `.global()` row) probes the policy tables with `findFirst`, which also
+     * returns the row.
+     */
+    const locateRowAnyTable = async (id: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
+        if (raw.lookupById) {
+            // Read through the UNGUARDED `raw` writer: this is a policy-evaluation
+            // probe, not caller-visible data, so it must not be denied by the
+            // secure-by-default guard.
+            const located = await raw.lookupById(id);
+
+            if (located) {
+                // Owned by a table that isn't policy-gated → tableName undefined.
+                return { row: located.row, tableName: policyTables.has(located.tableName) ? located.tableName : undefined };
+            }
+        }
+
+        // Unpinned, and the seam did not answer: probe the policy tables. Ids are
+        // globally unique, so at most one hits; settle them in parallel. The probe
+        // returns the row too, which is why a `.global()` row in a policy table still
+        // gets its policy checked here.
+        const probeTables = [...policyTables.keys()];
         const probes = await Promise.all(
             probeTables.map(async (tableName) => {
                 const probe = await raw.findFirst(tableName, { limit: 1, where: { _id: id } });
 
-                return probe?.["_id"] === id ? tableName : undefined;
+                return probe?.["_id"] === id ? { row: probe, tableName } : undefined;
             }),
         );
+        const hit = probes.find((entry): entry is { row: Record<string, unknown>; tableName: string } => entry !== undefined);
 
-        return { row, tableName: probes.find((entry): entry is string => entry !== undefined) };
+        if (!hit) {
+            // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
+            return { row: null, tableName: undefined };
+        }
+
+        return { row: hit.row, tableName: hit.tableName };
     };
 
     /**
@@ -968,12 +1072,8 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * wrapper over {@link locateRow} that drops the unguarded-row case — a write
      * to a row in no policy-gated table needs no policy check.
      */
-    const findRowTable = async (
-        id: string,
-        expectedTable?: string,
-        probeTable?: string,
-    ): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
-        const located = await locateRow(id, expectedTable, probeTable);
+    const findRowTable = async (table: string, id: string): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
+        const located = await locateRow(table, id);
 
         return located.row && located.tableName !== undefined ? { row: located.row, tableName: located.tableName } : undefined;
     };
@@ -998,14 +1098,13 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * transaction primitive the generic writer interface does not expose.
      */
     const gateById = async <R>(
+        table: string,
         id: string,
         op: Exclude<Policy["on"], "insert" | "read">,
-        perform: (writer: RlsDatabase) => Promise<R>,
+        perform: (writer: RlsDatabase, tableName?: string) => Promise<R>,
         computeNextRow?: (preRow: Record<string, unknown>) => Record<string, unknown>,
-        expectedTable?: string,
-        probeTable?: string,
     ): Promise<R> => {
-        const located = await findRowTable(id, expectedTable, probeTable);
+        const located = await findRowTable(table, id);
 
         if (!located) {
             // The id is in no policy-gated table (a non-policy table or absent).
@@ -1030,8 +1129,149 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
         // Policy table, write authorized: perform on the UNGUARDED `raw` writer
         // (the guard would otherwise deny this protected table).
-        return perform(raw);
+        return perform(raw, located.tableName);
     };
+
+    /**
+     * Is the row already soft-deleted, per the writer's published `softDeleteFields`?
+     *
+     * This is a second line of defence, NOT the read scope that normally excludes a tombstone: the re-location
+     * reads below go through the object-form `findFirst`, which already ANDs the table's soft-delete scope. A
+     * conforming writer therefore never returns a tombstone here, making this a no-op for it — it only bites a
+     * writer whose list read does not apply that scope. A forced physical delete (`{ hard: true }`) targets the
+     * row regardless of the marker, so it is never treated as gone. A table with no `.softDelete()`, or a
+     * writer that publishes no map, has no marker.
+     */
+    const isSoftDeleted = (tableName: string, row: Record<string, unknown>, deleteOptions: undefined | { hard: boolean }): boolean => {
+        if (deleteOptions?.hard === true) {
+            return false;
+        }
+
+        const field = base.softDeleteFields?.get(tableName);
+
+        return field !== undefined && row[field] !== null && row[field] !== undefined;
+    };
+
+    /**
+     * Re-locate one row of `tableName` and delete it on its fresh image; `false` when the read does not find it.
+     *
+     * `gated` says whether the table carries a policy. A gated row is re-located through the unguarded `raw`
+     * (the evaluator must see the protected row); a policy-less row is re-located and deleted through the
+     * guarded `base`, exactly as the fast path deletes it.
+     *
+     * The fresh read is the page read's scope re-applied: by id under the table's read scope (and, on that
+     * read's own relation hops, the child read filter) plus, for `deleteWhere`, the caller's `where`. It runs
+     * through the SQL path so it folds exactly as the page did — a JS re-evaluation would diverge (`contains`,
+     * for one, is case-sensitive in the in-memory matcher and folded in SQL). A row the read no longer finds
+     * has left the erase's scope (deleted, reassigned, or filtered out by a concurrent write) and is skipped,
+     * so the delete policy is taken only on a row still in scope, where it denies loudly. A `{ hard: true }`
+     * erase relaxes the soft-delete scope (`includeDeleted`) so it can reach — and physically remove — a row an
+     * earlier delete of the page soft-deleted; the scopes still apply.
+     */
+    const deleteLocated = async (
+        id: string,
+        tableName: string,
+        gated: boolean,
+        deleteOptions: undefined | { hard: boolean },
+        where?: WhereInput,
+    ): Promise<boolean> => {
+        const reader = gated ? raw : base;
+        const row = await reader.findFirst(tableName, {
+            ...(gated ? { baseWhere: readBase(tableName).baseWhere } : {}),
+            ...(deleteOptions?.hard === true ? { includeDeleted: true } : {}),
+            limit: 1,
+            relationBaseWhere: relationReadFilter,
+            where: where === undefined ? { _id: id } : mergeBaseWhere(where, { _id: id }),
+        });
+
+        if (!row || isSoftDeleted(tableName, row, deleteOptions)) {
+            return false;
+        }
+
+        if (gated && !allowsWrite(tableName, "delete", row)) {
+            // Same table-agnostic message as `gateById`.
+            throw new LunoraError("FORBIDDEN", "delete denied by policy");
+        }
+
+        await reader.delete(tableName, id, deleteOptions);
+
+        return true;
+    };
+
+    /**
+     * Delete the rows of `tableName` a policy-scoped read just returned. `gateById` would `locateRow` each id
+     * again (one `lookupById`, or a `get` plus a `findFirst` probe on a miss) to learn the row and its table; a
+     * chunked erase already holds both, so the delete verdict can be taken on that row image. The verdict is
+     * still evaluated per row through `allowsWrite`, so a delete policy stricter than the read policy denies
+     * exactly as before. A table with no policy runs the guarded `base`, as `gateById` does for an unlocated row.
+     *
+     * The page image is only trustworthy while the store serialises writes. Inside a mutation the DO holds one
+     * open; an ACTION deliberately runs outside that boundary (its external I/O cannot be rolled back), and the
+     * `.global()` / cascade / trigger tables `DatabaseWriterLike.deleteRereadTables` lists can change under an
+     * `await` even inside a mutation. In either case a concurrent write could reassign a later row before its
+     * delete, so each row is re-located through {@link deleteLocated} instead of trusting the image. `where`, when
+     * given (`deleteWhere`), is the caller's filter — re-applied on the fresh row so a row that left it is skipped.
+     */
+    const deleteReadRows = async (tableName: string, rows: ReadonlyArray<Record<string, unknown>>, hard?: boolean, where?: WhereInput): Promise<number> => {
+        const gated = policyTables.has(tableName);
+        const writer = gated ? raw : base;
+        const deleteOptions = hard === undefined ? undefined : { hard };
+        // Re-locate when the store is not mid-transaction (an action, or a writer that cannot report it), or when
+        // the writer lists this table as one whose page image can go stale (global / cascade / trigger).
+        const reread = base.inTransaction?.() !== true || base.deleteRereadTables?.has(tableName) === true;
+        let deleted = 0;
+
+        for (const row of rows) {
+            const id = String(row["_id"]);
+
+            // The image read before the page began may be stale (see `reread`): locate the row again. A row an
+            // earlier delete of this page already removed (a cascade, a trigger, another shard, a soft delete) or
+            // one that no longer matches the caller's filter is skipped without touching any writer.
+            if (reread) {
+                // eslint-disable-next-line no-await-in-loop -- sequential, mirrors looped single deletes
+                if (await deleteLocated(id, tableName, gated, deleteOptions, where)) {
+                    deleted += 1;
+                }
+
+                continue;
+            }
+
+            if (gated && !allowsWrite(tableName, "delete", row)) {
+                // Same table-agnostic message as `gateById`.
+                throw new LunoraError("FORBIDDEN", "delete denied by policy");
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- sequential, mirrors looped single deletes
+            await writer.delete(tableName, id, deleteOptions);
+            deleted += 1;
+        }
+
+        // Rows this call deleted: a row an earlier delete of the page (cascade/trigger), a concurrent write, or an
+        // existing tombstone removed is not counted.
+        return deleted;
+    };
+
+    /**
+     * The update gate shared by `patch`, `patchIf` and `patchMany`. It checks the post-image the patch would
+     * produce against the row the gate read, then hands the store a verdict to take again on the row IT reads:
+     * the two can differ, and an atomic operator (`{ increment: 1 }`) or a retry makes the post-image depend on
+     * which. Without the second check a policy could approve one post-image while a different one lands.
+     */
+    const gatePatchById = <R>(
+        table: string,
+        id: string,
+        patch: Record<string, unknown>,
+        write: (writer: RlsDatabase, options: PatchWriteOptions) => Promise<R>,
+    ): Promise<R> =>
+        gateById(
+            table,
+            id,
+            "update",
+            (writer, owner) => write(writer, { verify: owner === undefined ? undefined : (previous, next) => allowsWrite(owner, "update", previous, next) }),
+            (preRow) => {
+                return { ...preRow, ...previewPatch(patch, preRow) };
+            },
+        );
 
     /**
      * Fail a count-of-partition read (`rank`/`rankBefore`/`rankPage`) closed
@@ -1067,6 +1307,10 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     const baseRankBefore = base.rankBefore;
     const baseRankPageRows = base.rankPageRows;
 
+    // The schema's edge set, hoisted so `related` below can narrow on it once
+    // rather than per call. `undefined` ⇒ this writer declares no relation graph.
+    const { relationEdges } = base;
+
     const wrapped: RlsDatabase = {
         ...base,
         async count(tableName, whereOrArgs) {
@@ -1085,7 +1329,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             });
         },
 
-        delete: (id, expectedTable, options) => gateById(id, "delete", (writer) => writer.delete(id, expectedTable, options), undefined, expectedTable),
+        delete: (table, id, options) => gateById(table, id, "delete", (writer) => writer.delete(table, id, options)),
 
         async deleteAll(tableName, options) {
             // Chunked erase, RLS-honest: rows are resolved through the read-filtered
@@ -1104,39 +1348,19 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                     limit: chunkSize,
                     relationBaseWhere: relationReadFilter,
                 });
-                const ids = resolved.page.map((row) => String(row["_id"]));
+                const { page } = resolved;
 
-                if (ids.length === 0) {
+                if (page.length === 0) {
                     break;
                 }
 
-                for (const id of ids) {
-                    // `expectedTable` is deliberately NOT pinned. Pinning it would block
-                    // the writer's global fallback, so every delete on a `.global()`
-                    // table would be a silent no-op — inflating the count while the rows
-                    // survive. It costs nothing here: these ids came from this table's
-                    // own policy-filtered read, so they are provably its rows, and
-                    // `gateById` still resolves each row's real table and applies that
-                    // table's delete policy. Same reasoning as `deleteWhere`.
-                    //
-                    // `tableName` rides along as the PROBE scope, which pins nothing:
-                    // unpinned, a row that misses the shard-local `lookupById` seam is
-                    // probed against every policy-gated table, so a chunked erase of N
-                    // global rows costs N × (policy tables) subrequests and trips
-                    // workerd's 1000-subrequest ceiling mid-erase.
-                    // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single deletes
-                    await gateById(
-                        id,
-                        "delete",
-                        (writer) => writer.delete(id, undefined, options?.hard === undefined ? undefined : { hard: options.hard }),
-                        undefined,
-                        undefined,
-                        tableName,
-                    );
-                    deleted += 1;
-                }
+                // `deleteReadRows` pins the delete to `tableName`: the rows are provably this table's, so a
+                // re-location (when one is needed) probes only that table — a `.global()` pin still falls
+                // through to D1 — and can never land on another table's row with the same id.
+                // eslint-disable-next-line no-await-in-loop -- chunked by design: one policy-visible page at a time
+                deleted += await deleteReadRows(tableName, page, options?.hard);
 
-                if (ids.length < chunkSize) {
+                if (page.length < chunkSize) {
                     break;
                 }
             }
@@ -1144,7 +1368,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return { deleted };
         },
 
-        async deleteMany(ids, options, expectedTable) {
+        async deleteMany(table, ids, options) {
             assertBatchLimit(ids.length, options?.limit, "deleteMany");
 
             // Per-id gate: each id is located + policy-checked and routed to the
@@ -1152,11 +1376,10 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // guarded/public one). A denial throws; in a mutation the DO's
             // BEGIN/COMMIT span rolls the whole batch back, in an action
             // (no span) prior deletes persist. Sequential to match the per-row
-            // semantics of N `delete()` calls; `expectedTable` (the facade's bound
-            // table) scopes each id.
+            // semantics of N `delete()` calls; `table` scopes each id.
             for (const id of ids) {
                 // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single deletes
-                await gateById(id, "delete", (writer) => writer.delete(id, expectedTable), undefined, expectedTable);
+                await gateById(table, id, "delete", (writer) => writer.delete(table, id));
             }
 
             return { deleted: ids.length };
@@ -1167,25 +1390,19 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // reader so hidden rows are excluded, then gate each id like a single
             // delete. The read + writes share the mutation-span (if any).
             const { baseWhere } = readBase(tableName);
+            // Validated before the read, so a bad limit never reaches it.
+            const cap = resolveBatchCap(options?.limit, "deleteWhere", batchLimitError);
+            // `cap + 1` rows is enough to see an over-cap match without reading it all; an `Infinity` cap reads every match.
             const resolved = await route(tableName).findMany(tableName, {
                 baseWhere: mergeBaseWhere(where, baseWhere),
+                ...(Number.isFinite(cap) ? { limit: cap + 1 } : {}),
                 relationBaseWhere: relationReadFilter,
             });
             const ids = resolved.page.map((row) => String(row["_id"]));
 
-            assertBatchLimit(ids.length, options?.limit, "deleteWhere");
+            assertWithinBatchCap(ids.length, cap, "deleteWhere", batchLimitError);
 
-            // Gated per id here rather than through `deleteMany` so `tableName` can
-            // ride along as the probe scope: `expectedTable` must stay unpinned (it
-            // would block the writer's global fallback and make every global delete a
-            // silent no-op), and unpinned means every policy-gated table gets probed
-            // for every row. See `locateRow`.
-            for (const id of ids) {
-                // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single deletes
-                await gateById(id, "delete", (writer) => writer.delete(id), undefined, undefined, tableName);
-            }
-
-            return { deleted: ids.length };
+            return { deleted: await deleteReadRows(tableName, resolved.page, undefined, where) };
         },
 
         async findFirst(tableName, args) {
@@ -1208,6 +1425,18 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             });
         },
 
+        // Describes the read the caller would get, so the policy scope is merged exactly as `findMany` does.
+        async explain(tableName, args) {
+            const { baseWhere } = readBase(tableName);
+            const target = route(tableName);
+
+            return target.explain(tableName, {
+                ...args,
+                baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
+                relationBaseWhere: relationReadFilter,
+            });
+        },
+
         async findMany(tableName, args) {
             const { baseWhere } = readBase(tableName);
 
@@ -1218,14 +1447,13 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             });
         },
 
-        async get(id, expectedTable) {
+        async get(table, id) {
             // Step 1 — **membership + raw fetch in one pass**. `locateRow`
             // returns the raw row (so an absent row is `null` and a row in no
             // policy-gated table falls through unrestricted) plus the owning
-            // policy-gated `tableName` when one exists. `expectedTable` (when
-            // the by-id facade forwards it) pins the lookup to the bound table
-            // so a foreign id can't read another table's row.
-            const located = await locateRow(id, expectedTable);
+            // policy-gated `tableName` when one exists. The bound table pins the
+            // lookup so a foreign id can't read another table's row.
+            const located = await locateRow(table, id);
 
             if (!located.row) {
                 // eslint-disable-next-line unicorn/no-null -- RlsDatabase.get structurally mirrors @lunora/do's writer, which returns `null` for an absent row
@@ -1239,7 +1467,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // return a protected row to the caller. For a non-guarded schema
             // `base === raw`, so this is the plain unrestricted read.
             if (located.tableName === undefined) {
-                return base.get(id, expectedTable);
+                return base.get(table, id);
             }
 
             const { baseWhere, restricts } = readBase(located.tableName);
@@ -1250,9 +1478,9 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // bypass the secure-by-default guard and leak every row of a protected
             // table. Defer to the GUARDED `base.get` instead: a protected table
             // fails closed under `.rls("required")` and a `.public()` one returns
-            // the row. Mirrors the `route`/`readRoute` fail-closed parity.
+            // the row. Mirrors the `route`/`guardWriter` fail-closed parity.
             if (!restricts) {
-                return base.get(id, expectedTable);
+                return base.get(table, id);
             }
 
             // The owning table participates in RLS and the read policy grants
@@ -1279,7 +1507,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         // back, not just pass the raw seam through (the `...base` spread would
         // otherwise expose `base.lookupById` unfiltered by any read policy).
         async lookupById(id, expectedTable) {
-            const located = await locateRow(id, expectedTable);
+            const located = expectedTable === undefined ? await locateRowAnyTable(id) : await locateRow(expectedTable, id);
 
             if (!located.row) {
                 // eslint-disable-next-line unicorn/no-null -- mirrors get()'s absent-row null
@@ -1313,7 +1541,10 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return allowed?.["_id"] === id ? { row: allowed, tableName: located.tableName } : null;
         },
 
-        async insert(tableName, document) {
+        // `options` (a caller-pinned `clientId`) is forwarded on both branches: a
+        // caller that keys a row deterministically relies on the primary key
+        // refusing a duplicate, and a dropped option silently mints a fresh id.
+        async insert(tableName, document, options) {
             if (policyTables.has(tableName)) {
                 if (!allowsWrite(tableName, "insert", document)) {
                     throw new LunoraError("FORBIDDEN", `insert on "${tableName}" denied by policy`);
@@ -1321,12 +1552,12 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
                 // Policy table, insert authorized: write through the UNGUARDED
                 // `raw` writer (the guard would deny this protected table).
-                return raw.insert(tableName, document);
+                return raw.insert(tableName, document, options);
             }
 
             // Non-policy table → GUARDED `base` enforces secure-by-default: a
             // protected, policy-less table is denied; a `.public()` one passes.
-            return base.insert(tableName, document);
+            return base.insert(tableName, document, options);
         },
 
         async insertMany(tableName, documents, options) {
@@ -1376,35 +1607,63 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return base.insertManyUnsafe(tableName, documents, options);
         },
 
-        patch: (id, patch, expectedTable) =>
-            gateById(
-                id,
-                "update",
-                (writer) => writer.patch(id, patch, expectedTable),
-                (preRow) => {
-                    return { ...preRow, ...patch };
-                },
-                expectedTable,
-            ),
+        patch: (table, id, patch, options) => gatePatchById(table, id, patch, (writer, verify) => writer.patch(table, id, patch, { ...options, ...verify })),
 
-        async patchMany(patches, options, expectedTable) {
+        // The update gate with no write behind it: an empty patch leaves the post-image equal to the row as it
+        // stands, so only the policy is evaluated. A relation-only patch runs this on its parent row, which it never
+        // writes. Overridden for the same reason as `patch`: the `...base` spread would expose the guard's table-only check.
+        assertPatchAllowed: (table, id) => gatePatchById(table, id, {}, () => Promise.resolve()),
+
+        // The update gate of a single patch, against the row as it stands, with the
+        // patch's post-image as WITH CHECK. Overriding is mandatory: the `...base`
+        // spread would otherwise expose the guard's version, which checks only the
+        // table, and a policy-denied row could be written through it. The returned
+        // row is a read, so it is handed back only when this caller's `get` would
+        // return it: update rights do not imply read rights.
+        async patchIf(tableName, id, args) {
+            const result = await gatePatchById(tableName, id, args.patch, async (writer, options) => {
+                if (writer.patchIf === undefined) {
+                    throw new LunoraError("INTERNAL", `ctx.db.patchIf on "${tableName}" is unsupported: this writer has no conditional write`);
+                }
+
+                return writer.patchIf(tableName, id, { ...args, verify: options.verify });
+            });
+
+            if (result.doc === null) {
+                return result;
+            }
+
+            // Under `.rls("required")` a table with no read policy makes the guarded read throw,
+            // after the write has committed. The caller cannot read that row, so it is not visible.
+            const visible = await wrapped.get(tableName, id).then(
+                (row) => row !== null,
+                (error: unknown) => {
+                    if (isLunoraError(error) && error.code === "RLS_REQUIRED") {
+                        return false;
+                    }
+
+                    throw error;
+                },
+            );
+
+            if (visible) {
+                return result;
+            }
+
+            // eslint-disable-next-line unicorn/no-null -- `doc` is `Record | null`; the read policy hides this row from the caller
+            return { applied: result.applied, doc: null };
+        },
+
+        async patchMany(table, patches, options) {
             assertBatchLimit(patches.length, options?.limit, "patchMany");
 
             // Per-id update gate, same WITH-CHECK post-image semantics as the
             // single patch. Sequential; in a mutation the DO's BEGIN/COMMIT span
             // rolls the whole batch back on a denial, in an action (no
-            // span) prior patches persist. `expectedTable` scopes each id.
+            // span) prior patches persist. `table` scopes each id.
             for (const entry of patches) {
                 // eslint-disable-next-line no-await-in-loop -- sequential per-row policy gate, mirrors looped single patches
-                await gateById(
-                    entry.id,
-                    "update",
-                    (writer) => writer.patch(entry.id, entry.patch, expectedTable),
-                    (preRow) => {
-                        return { ...preRow, ...entry.patch };
-                    },
-                    expectedTable,
-                );
+                await gatePatchById(table, entry.id, entry.patch, (writer, writeOptions) => writer.patch(table, entry.id, entry.patch, writeOptions));
             }
 
             return { patched: patches.length };
@@ -1415,62 +1674,124 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             // reader so hidden rows are excluded, then gate each id like a single
             // patch. The read + writes share the mutation-span (if any).
             const { baseWhere } = readBase(tableName);
+            // Validated before the read, so a bad limit never reaches it.
+            const cap = resolveBatchCap(options?.limit, "patchWhere", batchLimitError);
+            // `cap + 1` rows is enough to see an over-cap match without reading it all; an `Infinity` cap reads every match.
             const resolved = await route(tableName).findMany(tableName, {
                 baseWhere: mergeBaseWhere(args.where, baseWhere),
+                ...(Number.isFinite(cap) ? { limit: cap + 1 } : {}),
                 relationBaseWhere: relationReadFilter,
             });
             const patches = resolved.page.map((row) => {
                 return { id: String(row["_id"]), patch: args.patch };
             });
 
-            assertBatchLimit(patches.length, options?.limit, "patchWhere");
+            assertWithinBatchCap(patches.length, cap, "patchWhere", batchLimitError);
 
-            return wrapped.patchMany(patches, options);
+            return wrapped.patchMany(tableName, patches, options);
         },
 
         query(tableName) {
             const { baseWhere } = readBase(tableName);
-
             const reader = route(tableName).query(tableName);
 
             if (!baseWhere) {
                 return reader;
             }
 
-            // The legacy reader doesn't take a `baseWhere` — push the
-            // predicate down as an in-memory `.filter()`. This trades the
-            // SQL-side prune for a row-by-row JS check, but the legacy
-            // `query()` path is already an iterator-style reader.
-            //
-            // We compile the predicate once into a JS-side checker.
-            return reader.filter((document) => matchesWhere(document, baseWhere));
+            // The policy is enforced by this predicate, on every reader and every
+            // terminal. Tagging it with its `where` lets the shard reader and the
+            // `.global()` search reader also AND that `where` into their SQL when
+            // `isPushableWhere` proves SQL keeps exactly the same rows, so
+            // `take` / `first` / `paginate` keep their LIMIT — the predicate still
+            // runs over every row returned. Otherwise (a policy that cannot be
+            // pushed, a masked reader) the plain predicate runs alone: the shard
+            // reader then reads in LIMIT-ed batches, the search reader its whole
+            // relevance window.
+            return reader.filter(whereFilter(baseWhere, (document) => matchesWhere(document, baseWhere)));
         },
+
+        /**
+         * The traversal, RE-BOUND rather than delegated — the same construction
+         * `guardWriter` applies one layer down, for the same reason.
+         *
+         * Every other read here is handed a table name, so it can `route()` up
+         * front. A traversal is not: it DISCOVERS its tables as it walks.
+         * Delegating to `base.related` therefore sends every hop to whatever
+         * writer that closure was built over — under `.rls("required")` the
+         * GUARDED one, whose `guardTable` denies any non-`.public()` table
+         * WHETHER OR NOT a policy covers it. So the walk runs HERE, over a reader
+         * routed per hop:
+         *
+         * - `findMany` goes back through this wrapper's own `findMany`, so each
+         * hop gets exactly the verdict a direct read of that table would: a
+         * policy table is reachable through `raw` and AND-merged with its read
+         * `baseWhere`, a `.public()` table passes through the guard, and a
+         * protected table with no read policy is denied by it.
+         * - `lookupById` resolves the START document's owning table through the
+         * UNGUARDED `raw` — a table-name probe, not caller-visible data, exactly
+         * as `locateRow` does for `get()`. The row itself is then read back
+         * through the routed `findMany`, so a start row the policy hides reads as
+         * absent rather than as a node whose neighbourhood is handed back.
+         *
+         * `relationBaseWhere` is deliberately NOT forwarded: the routed
+         * `findMany` already AND-merges each table's read `baseWhere` per hop, so
+         * passing the same predicate again would only duplicate it — and a
+         * caller-supplied one has never been allowed to reach the walk.
+         * `relationMask` IS forwarded, because an outer `mask()` step hands its
+         * per-hop hook in through these options and nothing else applies it.
+         *
+         * Keyed on `relationEdges` rather than on `related`: the edge set is what
+         * the walk needs, and the writer publishes the two together — so a writer
+         * with neither (the `.global()` twin) republishes `related` as absent
+         * exactly as before.
+         */
+        related:
+            relationEdges === undefined
+                ? undefined
+                : async (start: RelatedStartLike, options?: RelatedArgs): Promise<RelatedPageLike> =>
+                      findRelated(
+                          // One cast, for one reason: `findRelated` is typed
+                          // against `@lunora/shard-engine`'s `QueryArgs` /
+                          // `WhereInput`, while this module reads its own
+                          // structural mirrors of them (see `QueryArgs` above).
+                          // The runtime objects are the same ones either way.
+                          {
+                              findMany: async (tableName: string, args?: QueryArgs) => wrapped.findMany(tableName, args),
+                              lookupById: async (id: string) => raw.lookupById?.(id),
+                          } as unknown as Parameters<typeof findRelated>[0],
+                          relationEdges,
+                          start,
+                          {
+                              cursor: options?.cursor,
+                              depth: options?.depth,
+                              direction: options?.direction,
+                              edges: options?.edges,
+                              limit: options?.limit,
+                              relationMask: options?.relationMask,
+                          },
+                      ),
 
         // Restore clears the soft-delete marker — a by-id un-delete, gated as an
         // "update" (the policy that governs patch). No post-image check: the
         // writer owns the marker field, so we only enforce the pre-image USING.
-        restore: (id, expectedTable) =>
+        restore: (table, id) =>
+            gateById(table, id, "update", async (writer) => {
+                const perform = writer.restore ?? raw.restore;
+
+                if (!perform) {
+                    throw new LunoraError("BAD_REQUEST", "restore is not supported by this writer");
+                }
+
+                await perform(table, id);
+            }),
+
+        replace: (table, id, document) =>
             gateById(
+                table,
                 id,
                 "update",
-                async (writer) => {
-                    const perform = writer.restore ?? raw.restore;
-
-                    if (!perform) {
-                        throw new LunoraError("BAD_REQUEST", "restore is not supported by this writer");
-                    }
-
-                    await perform(id, expectedTable);
-                },
-                undefined,
-                expectedTable,
-            ),
-
-        replace: (id, document, expectedTable) =>
-            gateById(
-                id,
-                "update",
-                (writer) => writer.replace(id, document, expectedTable),
+                (writer) => writer.replace(table, id, document),
                 // Mirror the writer's post-image: `_id` always comes from the
                 // existing row; `_creationTime` honors a caller-supplied value
                 // (the writer keeps `document._creationTime` when present) and
@@ -1482,7 +1803,6 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                         _id: preRow["_id"],
                     };
                 },
-                expectedTable,
             ),
 
         // Analytical reads — plain methods (the writer always implements them;
@@ -1583,7 +1903,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     //
     // The old exemption was justified on the grounds that a `.global()` table's
     // entry is bound to the D1 `globalDb` writer and re-binding it would query
-    // the wrong backend. That premise is false: `packages/codegen/src/emit.ts`
+    // the wrong backend. That premise is false: `packages/codegen/src/emit/shard.ts`
     // binds every table's facade through the one shard ctx-db, `.global()`
     // included, precisely because `createShardCtxDb` routes global ops to D1
     // internally and stamps the subscription hooks — binding a global facade
@@ -1591,12 +1911,10 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     //
     // Gated on there being any policy at all, so an `rls([])` chain still leaves
     // the runtime's own bindings untouched.
-    const writableFacade = wrapped as unknown as Record<string, unknown>;
-
     if (policyTables.size > 0) {
         for (const [tableName, entry] of Object.entries(base as unknown as Record<string, unknown>)) {
             if (isFacadeEntry(entry)) {
-                writableFacade[tableName] = bindTableFacade(wrapped, tableName);
+                defineLazyFacade(wrapped, tableName);
             }
         }
     }
@@ -1839,7 +2157,7 @@ export type { RlsDatabase };
  * package root does not re-export them.
  * @internal
  */
-export { computeReadBaseWhere, evaluateWrite, indexRolePermissions, isFacadeEntry, permissionName, readIdentityRoles, resolveCan, resolvePolicyAuth };
+export { computeReadBaseWhere, evaluateWrite, indexRolePermissions, isFacadeEntry, readIdentityRoles, resolveCan, resolvePolicyAuth };
 export type { AuthLike };
 
 // `matchesWhere` moved to `./where-match` (the declared JS twin of the SQL

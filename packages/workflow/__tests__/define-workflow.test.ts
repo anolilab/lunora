@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { defineWorkflow, isWorkflowDefinition, workflowBindingName, workflowClassName, workflowDefaultName } from "../src/define-workflow";
+import { defineWorkflow, isWorkflowDefinition, workflowClassName, workflowDefaultName } from "../src/define-workflow";
 
 describe("defineWorkflow", () => {
     it("brands a valid definition", () => {
@@ -35,6 +35,37 @@ describe("defineWorkflow", () => {
     });
 });
 
+describe("defineWorkflow deploy settings", () => {
+    it("carries schedules, limits and defaultRetention through", () => {
+        expect.assertions(1);
+
+        const definition = defineWorkflow({
+            defaultRetention: { errorRetention: "30 days", successRetention: "3 days" },
+            handler: async () => undefined,
+            limits: { steps: 25_000 },
+            schedules: ["0 * * * *", "*/15 * * * *"],
+        });
+
+        expect([definition.schedules, definition.limits, definition.defaultRetention]).toStrictEqual([
+            ["0 * * * *", "*/15 * * * *"],
+            { steps: 25_000 },
+            { errorRetention: "30 days", successRetention: "3 days" },
+        ]);
+    });
+
+    it.each([
+        [{ schedules: [] }, /`schedules` must be a non-empty array/],
+        [{ schedules: ["0 * * * *", ""] }, /`schedules` must be a non-empty array/],
+        [{ limits: { steps: 0 } }, /`limits` must be an object whose `steps` is a positive integer/],
+        [{ limits: { steps: 1.5 } }, /`limits` must be an object whose `steps` is a positive integer/],
+        [{ defaultRetention: { successRetention: "" } }, /`defaultRetention` must be an object of duration strings/],
+    ])("rejects a malformed setting %j", (settings, message) => {
+        expect.assertions(1);
+
+        expect(() => defineWorkflow({ handler: async () => undefined, ...settings })).toThrow(message);
+    });
+});
+
 describe("isWorkflowDefinition", () => {
     it("rejects non-definitions", () => {
         expect.assertions(4);
@@ -52,14 +83,6 @@ describe("naming helpers", () => {
 
         expect(workflowClassName("orderPipeline")).toBe("OrderPipelineWorkflow");
         expect(workflowClassName("etl")).toBe("EtlWorkflow");
-    });
-
-    it("derives the SCREAMING_SNAKE binding name", () => {
-        expect.assertions(3);
-
-        expect(workflowBindingName("orderPipeline")).toBe("WORKFLOW_ORDER_PIPELINE");
-        expect(workflowBindingName("etl")).toBe("WORKFLOW_ETL");
-        expect(workflowBindingName("syncWithStripe")).toBe("WORKFLOW_SYNC_WITH_STRIPE");
     });
 
     it("derives the kebab default name", () => {

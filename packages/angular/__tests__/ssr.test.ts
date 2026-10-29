@@ -22,8 +22,10 @@ const listPresentRef = { __lunoraRef: "presence:listPresent" } as FunctionRefere
 const tokenStreamRef = { __lunoraRef: "chat:events" } as FunctionReference<"stream", { key: string }, AgentLiveEvent>;
 const agentApi = {
     agents: {
+        agentApprovalGrants: { __lunoraRef: "agents:agentApprovalGrants" },
         agentMessages: { __lunoraRef: "agents:agentMessages" },
         agentResolveApproval: { __lunoraRef: "agents:agentResolveApproval" },
+        agentRevokeApprovalGrant: { __lunoraRef: "agents:agentRevokeApprovalGrant" },
         agentThread: { __lunoraRef: "agents:agentThread" },
     },
 } as never;
@@ -110,6 +112,17 @@ describe("ssr platform gating", () => {
         expect(fake.connectionContexts).toHaveLength(0);
         expect(present()).toBeUndefined();
         expect(sessionId).toBe("sess-1");
+    });
+
+    it("presence setData sends no heartbeat on the server platform", () => {
+        const fake = createFakeClient();
+
+        const options = { heartbeat: heartbeatRef, listPresent: listPresentRef, sessionId: "sess-1" };
+        const { setData } = runInInjectionContext(makeInjector(fake, "server"), () => presence("room:1", options));
+
+        setData({ status: "typing" });
+
+        expect(fake.mutationCalls).toHaveLength(0);
     });
 
     it("flag/flags open no subscription on the server platform and hold their defaults", () => {

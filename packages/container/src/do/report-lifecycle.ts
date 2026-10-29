@@ -105,7 +105,7 @@ const reportContainerLifecycle = async (env: unknown, envelope: ContainerLifecyc
     }
 };
 
-export type { ShardNamespaceLike, ShardStubLike };
+export type { ShardNamespaceLike };
 export { RECORD_CONTAINER_EVENT_OP, reportContainerLifecycle, ROOT_SHARD_NAME };
 
 export { type DurableObjectJurisdiction } from "../jurisdiction";

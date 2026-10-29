@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { FetchLike, FunctionStatRow } from "../../src/commands/insights/handler";
 import { buildInsightsReport, formatInsightsReport, runInsightsCommand } from "../../src/commands/insights/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -145,7 +146,7 @@ describe("runInsightsCommand", () => {
 
         const result = await runInsightsCommand({ cwd: workdir, logger: silentLogger(), url: "http://localhost:8787" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.AUTH);
     });
 
     it("falls back to the .dev.vars token against a local worker", async () => {
@@ -172,7 +173,7 @@ describe("runInsightsCommand", () => {
 
         const result = await runInsightsCommand({ logger: silentLogger(), prod: true, token: "secret" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
     });
 
     it("pOSTs the admin RPC with the bearer token and returns the report", async () => {
@@ -235,6 +236,6 @@ describe("runInsightsCommand", () => {
 
         const result = await runInsightsCommand({ fetchImpl, logger: silentLogger(), token: "secret" });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.PERMISSION);
     });
 });

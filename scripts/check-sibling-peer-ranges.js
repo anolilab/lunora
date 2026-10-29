@@ -19,8 +19,6 @@
  *    "out-of-range"`, which leaves a specifier alone while the new version still
  *    satisfies it (exact-pinned regular dependencies keep their lockstep bumps —
  *    an exact pin never satisfies the next version, so it is always rewritten).
- *    This was `.multi-releaserc.json`'s `deps.bump: "satisfy"` before the repo
- *    moved off multi-semantic-release; same rule, different spelling.
  *
  * 2. npm-semver prerelease matching is tuple-scoped: `>=1.0.0-alpha.24 <2.0.0-0`
  *    does NOT match a post-stable prerelease like `1.0.1-alpha.1`. If the alpha
@@ -30,15 +28,31 @@
  *
  * A second, report-only mode covers exact sibling `dependencies` pins (as
  * opposed to `peerDependencies`). Exact-pinned regular dependencies are this
- * repo's *deliberate* lockstep convention (see point 1 above) — "satisfy"
+ * repo's *deliberate* lockstep convention (see point 1 above) — "out-of-range"
  * bumps them in lockstep whenever the CONSUMER package itself releases. But a
  * consumer with no triggering commits since its dependency's last release
  * keeps its stale pin indefinitely — the terminal case is a `private: true`
- * package that never releases at all. That drift is invisible today (nothing
- * walks `dependencies`) and, for a published sibling, means two installers of
- * two different `@lunora/*` packages can resolve two physical copies of a
- * shared dependency. This mode never fails the install — it only reports —
- * because mid-release-train drift between trains is normal and expected.
+ * package that never releases at all. For a published sibling that drift means
+ * two installers of two different `@lunora/*` packages can resolve two physical
+ * copies of a shared dependency. For published packages this mode never fails
+ * the install — it only reports — because mid-release-train drift between
+ * trains is normal and expected.
+ *
+ * Private packages are the exception and DO fail the install: nothing ever
+ * rewrites their pins. The root `pnpm-workspace.yaml` overrides force every
+ * sibling to `workspace:*` at install time, so a stale pin still links the
+ * workspace copy today — but the manifest then disagrees with the lockfile, and
+ * if those overrides are ever removed the stale pin resolves from the registry
+ * (a bundled private package such as `@lunora/dispatch` would inline that copy
+ * into the published packages that bundle it). The manifest should say what is
+ * installed, so any sibling specifier in a private package's dependency fields
+ * that is not `workspace:` or `catalog:` fails — on the shape, not on current
+ * drift. (`workspace:*` peers pass the exact-pin peer check above.)
+ *
+ * The same report covers sibling `>=<floor>` RANGES (used for `@lunora/errors`
+ * so every sibling dedupes onto one `LunoraError` class). "out-of-range" never raises
+ * a floor the new version still satisfies, so a floor below the dependency's
+ * current version is reported for a maintainer to raise by hand.
  *
  * Run on every `pnpm install` via the root `postinstall` script.
  */
@@ -47,7 +61,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { satisfies } from "semver";
+import semver from "semver";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, "..");
@@ -55,6 +69,9 @@ const packagesDir = join(rootDir, "packages");
 
 /** Matches an exact, range-free semver literal (`1.0.0`, `1.0.0-alpha.24`). */
 const EXACT_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** Captures the floor of a `>=<floor> …` range (`>=1.0.0-alpha.51 <2.0.0-0`). */
+const RANGE_FLOOR_RE = /^>=\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s|$)/;
 
 const isSibling = (name) => name === "lunorash" || name.startsWith("@lunora/");
 
@@ -95,25 +112,47 @@ for (const { dir, manifest } of manifests) {
     }
 }
 
-// Report-only: sibling `dependencies` specifiers that no longer admit the
-// dependency's current version. Never fails the install — see the doc comment
-// above for why this is a report, not a gate.
-//
-// Satisfaction, not string equality: `vis release` rewrites an out-of-range
-// sibling specifier to `^<new version>`, which keeps admitting the next alpha in
-// the same tuple. Comparing strings would report every one of those as drifted
-// on every install, for as long as they stay correct.
+// Private packages: any non-workspace/catalog sibling specifier fails — nothing
+// rewrites it on release, and only the root overrides keep it on the workspace copy.
+for (const { dir, manifest } of manifests) {
+    if (manifest.private !== true) {
+        continue;
+    }
+
+    for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+        for (const [name, specifier] of Object.entries(manifest[field] ?? {})) {
+            if (!isSibling(name) || typeof specifier !== "string" || specifier.startsWith("workspace:") || specifier.startsWith("catalog:")) {
+                continue;
+            }
+
+            hasFailure = true;
+
+            console.error(`❌ packages/${dir} is private but its ${field} pin "${name}": "${specifier}".`);
+            console.error("   A private package never releases, so nothing rewrites the pin; the manifest should match the workspace:* install.");
+            console.error(`   Use "${name}": "workspace:*" instead.`);
+        }
+    }
+}
+
+// Report-only: exact sibling `dependencies` pins in published packages that have
+// drifted behind the dependency's current published version. Never fails the
+// install — see the doc comment above for why this is a report, not a gate.
 let dependencyWarnings = 0;
 
 for (const { dir, manifest } of manifests) {
+    if (manifest.private === true) {
+        continue;
+    }
+
     for (const [name, specifier] of Object.entries(manifest.dependencies ?? {})) {
         if (!isSibling(name) || typeof specifier !== "string" || specifier.startsWith("workspace:")) {
             continue;
         }
 
         const current = versions[name];
+        const floor = EXACT_VERSION_RE.test(specifier) ? specifier : RANGE_FLOOR_RE.exec(specifier)?.[1];
 
-        if (!current || satisfies(current, specifier, { includePrerelease: false })) {
+        if (!current || !floor || !semver.lt(floor, current)) {
             continue;
         }
 
@@ -124,7 +163,9 @@ for (const { dir, manifest } of manifests) {
 }
 
 if (dependencyWarnings > 0) {
-    console.warn(`⚠️  ${dependencyWarnings} sibling dependency pin(s) are behind the current published version (report-only, does not fail install).`);
+    console.warn(
+        `⚠️  ${dependencyWarnings} sibling dependency pin(s)/range floor(s) are behind the current published version (report-only, does not fail install).`,
+    );
 }
 
 // The range fix only holds while the release tool leaves a satisfied specifier
@@ -155,4 +196,6 @@ if (hasFailure) {
     process.exit(1);
 }
 
-console.log('✅ No exact @lunora/* or lunorash peerDependency pins; vis release keeps ranges (updateInternalDependencies: "out-of-range").');
+console.log(
+    '✅ No exact @lunora/* or lunorash peerDependency pins; private packages use workspace:/catalog: siblings; vis release keeps ranges (updateInternalDependencies: "out-of-range").',
+);

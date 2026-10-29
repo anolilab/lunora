@@ -52,7 +52,7 @@ interface AgentToolEventsOptions {
      * Optional live event stream — the same app stream function `agentChat` uses.
      * When supplied, ephemeral `ctx.reportProgress(...)` events for the thread are
      * surfaced as `{ type: "progress" }` entries; when omitted only the durable
-     * lifecycle (call / result / awaiting-approval) is returned.
+     * lifecycle (call / result / awaiting-approval / awaiting-secret) is returned.
      */
     stream?: AgentLiveStreamReference;
     /** The thread whose tool activity to observe. */
@@ -61,7 +61,7 @@ interface AgentToolEventsOptions {
 
 /**
  * A single tool-lifecycle event for a thread. The durable arms
- * (`call`/`result`/`awaiting-approval`) are derived from `agents:agentMessages`
+ * (`call`/`result`/`awaiting-approval`/`awaiting-secret`) are derived from `agents:agentMessages`
  * and carry the persisted `seq`; the ephemeral `progress` arm comes live off the
  * stream and has no `seq`. Discriminate on `type`.
  * @experimental
@@ -70,7 +70,8 @@ type AgentToolEvent =
     | { data: unknown; toolCallId: string; type: "progress" }
     | { input: unknown; seq: number; toolCallId: string; toolName: string; type: "call" }
     | { output: string; seq: number; status?: "approved" | "rejected"; toolCallId?: string; toolName?: string; type: "result" }
-    | { seq: number; toolCallId?: string; toolName?: string; type: "awaiting-approval" };
+    | { seq: number; toolCallId?: string; toolName?: string; type: "awaiting-approval" }
+    | { seq: number; toolCallId?: string; toolName?: string; type: "awaiting-secret" };
 
 /**
  * `AgentToolEventsResult` is part of the experimental `@lunora/angular` API and may change without a major version bump.
@@ -95,6 +96,29 @@ const NO_STREAM_REF: AgentLiveStreamReference = { __lunoraRef: "" };
 /** Stable empty history so the un-loaded subscription doesn't churn the derived list identity. */
 const EMPTY_MESSAGES: ReadonlyArray<Record<string, unknown>> = [];
 
+/** Pause markers a tool row carries while a person decides: an approval, or a secret request. */
+const PAUSE_EVENT_TYPES: Partial<Record<string, "awaiting-approval" | "awaiting-secret">> = {
+    awaiting_approval: "awaiting-approval",
+    // The server retires this marker on supply, decline or timeout, so it drops out of the list then.
+    awaiting_secret: "awaiting-secret",
+};
+
+/** The pause event for a human-in-the-loop marker row, or `undefined` for any other row. */
+const toPauseEvent = (message: AgentChatMessage): AgentToolEvent | undefined => {
+    const type = message.status === undefined ? undefined : PAUSE_EVENT_TYPES[message.status];
+
+    if (type === undefined) {
+        return undefined;
+    }
+
+    return {
+        seq: message.seq,
+        type,
+        ...(message.toolCallId === undefined ? {} : { toolCallId: message.toolCallId }),
+        ...(message.toolName === undefined ? {} : { toolName: message.toolName }),
+    };
+};
+
 /** Map one durable thread message to its tool event(s), or `undefined` if it carries none. */
 const toDurableEvent = (message: AgentChatMessage): AgentToolEvent[] | undefined => {
     // An assistant turn carries the model's tool-call requests.
@@ -109,15 +133,10 @@ const toDurableEvent = (message: AgentChatMessage): AgentToolEvent[] | undefined
         return undefined;
     }
 
-    if (message.status === "awaiting_approval") {
-        return [
-            {
-                seq: message.seq,
-                type: "awaiting-approval",
-                ...(message.toolCallId === undefined ? {} : { toolCallId: message.toolCallId }),
-                ...(message.toolName === undefined ? {} : { toolName: message.toolName }),
-            },
-        ];
+    const pause = toPauseEvent(message);
+
+    if (pause !== undefined) {
+        return [pause];
     }
 
     return [

@@ -27,6 +27,18 @@ export interface AdvisorQueueTuning {
 export interface AdvisorQueue {
     /** The `lunora/queues.ts` export name, e.g. `notifications`. */
     exportName: string;
+
+    /**
+     * The declaring file, lunora-relative without `.ts` (`queues`, or `billing/queues`).
+     * Its handler's own call sites are attributed to `exportName` in this file.
+     */
+    filePath?: string;
+
+    /**
+     * Where a `handler:` passed by reference is declared, when it is exported from a
+     * lunora file. The handler's call sites then belong to this queue, under that export.
+     */
+    handlerSite?: { exportName: string; file: string };
     /** How the queue is consumed: `"push"` (a worker `queue()` handler) or `"pull"` (external HTTP). */
     mode: "pull" | "push";
 
@@ -37,6 +49,8 @@ export interface AdvisorQueue {
      * flagged for lacking its own DLQ.
      */
     name: string;
+    /** Set for a `defineSubscription(topic, …)` export: the `defineTopic` export it consumes. */
+    topic?: string;
     /** Push-consumer batch/retry tuning; the `deadLetterQueue`/`maxRetries` the queue lints read. */
     tuning: AdvisorQueueTuning;
 }

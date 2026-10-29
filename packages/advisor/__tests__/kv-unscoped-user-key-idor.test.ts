@@ -13,8 +13,8 @@ describe("kv_unscoped_user_key_idor", () => {
         expect.assertions(4);
 
         const kvKeyAccesses: AdvisorKvKeyAccess[] = [
-            { exportName: "readEntry", file: "entries", line: 4, method: "get" },
-            { exportName: "writeEntry", file: "entries", line: 9, method: "put" },
+            { scope: { kind: "export", name: "readEntry" }, file: "entries", line: 4, method: "get" },
+            { scope: { kind: "export", name: "writeEntry" }, file: "entries", line: 9, method: "put" },
         ];
         const findings = kvUnscopedUserKeyIdor.run({ kvKeyAccesses, schema: schema() });
 
@@ -29,6 +29,18 @@ describe("kv_unscoped_user_key_idor", () => {
         expect(findings[1]?.cacheKey).toBe("kv_unscoped_user_key_idor:entries:9");
     });
 
+    it("names a helper's exported callers, and keeps ERROR when untracked code reaches it", () => {
+        expect.assertions(2);
+
+        const kvKeyAccesses: AdvisorKvKeyAccess[] = [
+            { file: "files", line: 2, method: "get", scope: { callers: ["internalRead"], kind: "helper", name: "read", untracked: true } },
+        ];
+        const [finding] = kvUnscopedUserKeyIdor.run({ kvKeyAccesses, schema: schema() });
+
+        expect(finding?.level).toBe("ERROR");
+        expect(finding?.detail).toContain("`read` (files:2; a helper called by `internalRead` and by code outside any export)");
+    });
+
     // ERROR is the build-failing tier (`strictAdvisories` defaults on in CI), and
     // "any caller can read/overwrite/delete another user's entry" is false by
     // construction for a procedure no caller can reach. Mirrors the identical
@@ -36,7 +48,9 @@ describe("kv_unscoped_user_key_idor", () => {
     it("drops an internal procedure's access to INFO/INTERNAL instead of the build-failing ERROR", () => {
         expect.assertions(3);
 
-        const kvKeyAccesses: AdvisorKvKeyAccess[] = [{ exportName: "warmCache", file: "cache", line: 12, method: "put", visibility: "internal" }];
+        const kvKeyAccesses: AdvisorKvKeyAccess[] = [
+            { scope: { kind: "export", name: "warmCache" }, file: "cache", line: 12, method: "put", visibility: "internal" },
+        ];
         const findings = kvUnscopedUserKeyIdor.run({ kvKeyAccesses, schema: schema() });
 
         expect(findings).toHaveLength(1);
@@ -53,8 +67,8 @@ describe("kv_unscoped_user_key_idor", () => {
         expect.assertions(3);
 
         const kvKeyAccesses: AdvisorKvKeyAccess[] = [
-            { exportName: "readEntry", file: "entries", line: 4, method: "get", visibility: "public" },
-            { exportName: "orphan", file: "entries", line: 7, method: "get" },
+            { scope: { kind: "export", name: "readEntry" }, file: "entries", line: 4, method: "get", visibility: "public" },
+            { scope: { kind: "export", name: "orphan" }, file: "entries", line: 7, method: "get" },
         ];
         const findings = kvUnscopedUserKeyIdor.run({ kvKeyAccesses, schema: schema() });
 

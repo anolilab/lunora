@@ -1,7 +1,7 @@
+import { stableStringify } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
 import { contentDigest } from "../../../shared/content-digest";
-import { stableStringify } from "../../../shared/stable-key";
 
 /**
  * The shared change-detection digest (`shared/content-digest.ts`).

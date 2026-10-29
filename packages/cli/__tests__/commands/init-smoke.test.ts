@@ -78,7 +78,7 @@ describe("lunora init smoke", () => {
 
             // 1. Codegen against the scaffolded schema must succeed and emit the
             //    three generated files.
-            const codegenResult = runCodegen({ projectRoot });
+            const codegenResult = runCodegen({ projectRoot, wranglerQueueProducers: [] });
 
             expect(existsSync(join(codegenResult.outputDirectory, "dataModel.ts"))).toBe(true);
             expect(existsSync(join(codegenResult.outputDirectory, "api.ts"))).toBe(true);
@@ -123,7 +123,7 @@ describe("lunora init smoke", () => {
             expect(result.code).toBe(0);
 
             const projectRoot = join(workdir, "worker-smoke");
-            const codegenResult = runCodegen({ projectRoot });
+            const codegenResult = runCodegen({ projectRoot, wranglerQueueProducers: [] });
 
             expect(existsSync(join(codegenResult.outputDirectory, "api.ts"))).toBe(true);
 
@@ -154,7 +154,7 @@ describe("lunora init smoke", () => {
             expect(result.code).toBe(0);
 
             const projectRoot = join(workdir, "expo-smoke");
-            const codegenResult = runCodegen({ projectRoot });
+            const codegenResult = runCodegen({ projectRoot, wranglerQueueProducers: [] });
 
             expect(existsSync(join(codegenResult.outputDirectory, "api.ts"))).toBe(true);
 

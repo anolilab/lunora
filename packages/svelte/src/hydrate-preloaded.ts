@@ -11,11 +11,11 @@ import { getLunoraClient } from "./context";
  *
  * The store is seeded **synchronously** with `preloaded.value`, so the very
  * first read (`$store` during hydration) returns the server value with no
- * loading flash and no hydration mismatch — there is no `undefined` window and
- * no refetch. When the store gains its first subscriber on the client, a live
- * WS subscription attaches and every subsequent delta re-emits, exactly like a
- * plain `query` store. This is the Svelte equivalent of React's
- * `usePreloadedQuery`.
+ * loading flash and no hydration mismatch — no `undefined` window (until an
+ * identity is retired, see below) and no refetch. When the store gains its
+ * first subscriber on the client, a live WS subscription attaches and every
+ * subsequent delta re-emits, exactly like a plain `query` store. This is the
+ * Svelte equivalent of React's `usePreloadedQuery`.
  *
  * Pass `client` explicitly, or omit it to resolve the ambient client published
  * by `setLunoraClient`. Pass `onError` to surface a subscription-scoped error the
@@ -27,21 +27,43 @@ import { getLunoraClient } from "./context";
  * opened behind an explicit `isBrowser()` guard rather than left to the store's
  * laziness. On the server the store simply holds the seeded value. The token's
  * `value` is the single source of truth for the first paint either way.
+ *
+ * The preloaded value was read for whoever was signed in when the page loaded.
+ * After a sign-out or user switch retires that identity
+ * (`client.identityEpoch() > 0`), every `hydratePreloaded` store on the client
+ * (subscribed then or later) stops using it and holds `undefined` until the live
+ * value arrives — matching `@lunora/react`'s `usePreloadedQuery`, hence the
+ * `Readable<T | undefined>` type.
  */
 // eslint-disable-next-line import/prefer-default-export -- the package barrel re-exports every store by name; a default here would break the `import { hydratePreloaded } from "@lunora/svelte"` surface.
-export const hydratePreloaded = <T>(preloaded: Preloaded<T>, client?: LunoraClient, options: { onError?: SubscriptionErrorCallback } = {}): Readable<T> => {
+export const hydratePreloaded = <T>(
+    preloaded: Preloaded<T>,
+    client?: LunoraClient,
+    options: { onError?: SubscriptionErrorCallback } = {},
+): Readable<T | undefined> => {
     const resolvedClient = client ?? getLunoraClient();
     const { args, functionPath, shardKey, value } = preloaded;
     const functionRef: FunctionReference = { __lunoraRef: functionPath };
 
     // Seed `readable` with the preloaded value so the synchronous first read
     // already has data; the WS opens only in the browser, after hydration.
-    return readable<T>(value, (set) => {
+    return readable<T | undefined>(resolvedClient.identityEpoch() === 0 ? value : undefined, (set) => {
         if (!isBrowser()) {
             return () => {};
         }
 
-        return resolvedClient.subscribe(
+        const blank = (): void => {
+            set(undefined);
+        };
+
+        // The store may have been created before an identity was retired and
+        // only subscribed to after it.
+        if (resolvedClient.identityEpoch() !== 0) {
+            blank();
+        }
+
+        const offIdentity = resolvedClient.onIdentityChange(blank);
+        const unsubscribe = resolvedClient.subscribe(
             functionRef,
             args,
             (next: unknown) => {
@@ -49,5 +71,10 @@ export const hydratePreloaded = <T>(preloaded: Preloaded<T>, client?: LunoraClie
             },
             { onError: options.onError, shardKey },
         );
+
+        return () => {
+            offIdentity();
+            unsubscribe();
+        };
     });
 };

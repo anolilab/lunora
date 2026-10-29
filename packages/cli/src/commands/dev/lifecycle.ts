@@ -30,18 +30,27 @@ import {
     isCodegenDisabled,
     isDevServerReady,
     isRecordedProcessCurrent,
+    LAZY_FUNCTIONS_ENV,
     readDevServerState,
     readLiveDevServerState,
     readProjectDependencyNames,
+    readProjectManifest,
+    resolveLazyFunctions,
+    resolveProjectTarget,
+    targetRunsOwnDevServer,
     updateDevServerState,
 } from "@lunora/config";
+import { warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
 
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { ReadinessProbe } from "../../util/dev-probe";
 import { defaultProbe, POLL_INTERVAL_MS, resolveReadyTimeoutMs } from "../../util/dev-probe";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { printJson } from "../../util/output-format";
 import { spawnShellCompat } from "../../util/spawn";
+import daemonArguments from "./daemon-arguments";
+import pollDevServerState from "./dev-state-poll";
 import type { DevOptions } from "./index";
 
 /** Grace period `dev stop` allows for a clean SIGTERM shutdown before SIGKILL. */
@@ -56,9 +65,10 @@ const LOG_TAIL_MAX_BYTES = 256 * 1024;
 /**
  * How the dev child runs. `wrangler` is the classic `lunora dev` stack (wrangler
  * worker + embedded studio + codegen watch) for a standalone class-C project.
- * `vite` is a project on `@lunora/vite`: the plugin already runs the worker,
- * studio, and codegen inside the Vite dev server, so `lunora dev` runs the
- * project's own dev script and gets out of the way — this also covers class-B
+ * `vite` is a project whose BUNDLER PLUGIN already runs the worker — `@lunora/vite`
+ * inside the Vite dev server, or `@lunora/rspack/rsbuild` alongside an Rsbuild
+ * one — together with studio and codegen, so `lunora dev` runs the project's own
+ * dev script and gets out of the way — this also covers class-B
  * frameworks whose own dev server runs the worker in `workerd` (Astro 6 +
  * `@astrojs/cloudflare`, which embeds `@cloudflare/vite-plugin` in `astro dev`:
  * SSR + `/_lunora/*` + `ShardDO` in one process, HMR intact). `framework-worker`
@@ -82,21 +92,36 @@ type DevFlavor = "framework-worker" | "vite" | "wrangler";
 const SIDECAR_FRAMEWORKS = new Set(["nuxt", "sveltekit"]);
 
 /**
+ * Bundler plugins that run the worker themselves, so `lunora dev` delegates the
+ * whole stack to the project's own dev script.
+ *
+ * `@lunora/rspack` is here for its Rsbuild entry point, which spawns `wrangler
+ * dev` from `onBeforeStartDevServer` and proxies `/_lunora/*` to it. Without this
+ * an Rspack project fell through to the `wrangler` flavor and `lunora dev` ran
+ * ONLY the worker — the client dev server never started, which is a worse outcome
+ * than either half alone. A bare-Rspack project (no Rsbuild) runs its own worker
+ * anyway, per that package's README, so delegating is right there too.
+ */
+const WORKER_RUNNING_PLUGINS = ["@lunora/rspack", "@lunora/vite"];
+
+/**
  * Detect the dev flavor.
  *
  * A SvelteKit / Nuxt project needs the two-process `framework-worker` stack even
  * though it also declares `@lunora/vite` (which its framework dev server uses for
- * codegen/studio) — so the framework check comes FIRST. Everything else on
- * `@lunora/vite` (class-A frameworks + Astro + standalone Vite) delegates to the
- * project's own dev server (`vite`); a project without `@lunora/vite` is the
- * classic standalone `wrangler` stack.
+ * codegen/studio) — so the framework check comes FIRST. Everything else on a
+ * worker-running bundler plugin (class-A frameworks + Astro + standalone Vite +
+ * Rsbuild) delegates to the project's own dev server (`vite`); a project with no
+ * such plugin is the classic standalone `wrangler` stack.
  */
 const detectDevFlavor = (cwd: string): DevFlavor => {
     if (SIDECAR_FRAMEWORKS.has(detectFramework(cwd).framework)) {
         return "framework-worker";
     }
 
-    return readProjectDependencyNames(cwd).has("@lunora/vite") ? "vite" : "wrangler";
+    const dependencies = readProjectDependencyNames(cwd);
+
+    return WORKER_RUNNING_PLUGINS.some((name) => dependencies.has(name)) ? "vite" : "wrangler";
 };
 
 /**
@@ -110,17 +135,11 @@ const detectDevFlavor = (cwd: string): DevFlavor => {
  */
 const viteDevCommand = (cwd: string): { args: ReadonlyArray<string>; command: string } => {
     const manager = detectPackageManager(cwd);
-    let script: string | undefined;
+    // A missing / malformed package.json falls through to the vite default.
+    const scripts = readProjectManifest(cwd)?.["scripts"];
+    const script = typeof scripts === "object" && scripts !== null ? (scripts as Record<string, unknown>)["dev"] : undefined;
 
-    try {
-        const raw = readFileSync(join(cwd, "package.json"), "utf8");
-
-        script = (JSON.parse(raw) as { scripts?: Record<string, string> }).scripts?.dev;
-    } catch {
-        // Missing / malformed package.json — fall through to the vite default.
-    }
-
-    if (script === undefined || script.trim() === "" || script.includes("lunora")) {
+    if (typeof script !== "string" || script.trim() === "" || script.includes("lunora")) {
         const exec = execArgsFor(manager, "vite", ["dev"]);
 
         return { args: exec.args, command: exec.command };
@@ -252,6 +271,24 @@ const printLifecycleHints = (logger: Logger): void => {
     logger.info("  Logs:   lunora dev logs");
 };
 
+/**
+ * Warn, once per process tree, when the project also has a Cloudflare CLI config
+ * that Lunora never updates (#964). Call it BEFORE spawning any child: the claim
+ * is an env var, so the Vite / wrangler / daemon children inherit it and the
+ * plugins inside them stay quiet instead of repeating the warning — which, for a
+ * background start, would only ever land in the log file, never the terminal.
+ *
+ * A startup notice, deliberately: nothing is claimed when there is no file, so a
+ * config added after the dev server started is reported by the next Vite
+ * restart (or Rspack pass) inside it, the next `lunora dev`, `lunora doctor`, or
+ * `lunora deploy`.
+ */
+const printCloudflareCliConfigWarning = (logger: Logger, cwd: string): void => {
+    warnCloudflareCliConfigOnce(cwd, (message) => {
+        logger.warn(message);
+    });
+};
+
 /** Report an already-running dev server + the lifecycle hints (the idempotent-start path). */
 const reportExistingServer = (logger: Logger, existing: { pid: number; url: string }): void => {
     logger.warn(`Dev server already running at ${existing.url} (pid ${String(existing.pid)})`);
@@ -266,7 +303,29 @@ const printBackgroundBanner = (logger: Logger, state: DevServerState): void => {
         logger.info(`  Studio: ${state.studioUrl}`);
     }
 
+    if (state.tunnelUrl !== undefined) {
+        logger.info(`  Tunnel: ${state.tunnelUrl}`);
+    }
+
     printLifecycleHints(logger);
+};
+
+/** How long a `--background --tunnel` start waits, after ready, for cloudflared to report the URL. */
+const TUNNEL_URL_WAIT_MS = 30_000;
+
+/**
+ * After a `--background --tunnel` start is ready, wait (bounded) for the tunnel
+ * URL the daemon records once cloudflared reports it — the one URL a background
+ * start would otherwise only write to the log nobody is reading.
+ */
+const reportBackgroundTunnel = async (cwd: string, logger: Logger, pollIntervalMs: number, timeoutMs: number): Promise<void> => {
+    const tunnelUrl = await pollDevServerState(cwd, (state) => state?.tunnelUrl, { intervalMs: pollIntervalMs, timeoutMs });
+
+    if (tunnelUrl === undefined) {
+        logger.warn("  Tunnel: no URL yet — `lunora dev status` shows it once cloudflared reports one; `lunora dev logs` says why if it does not.");
+    } else {
+        logger.success(`  Tunnel: ${tunnelUrl}`);
+    }
 };
 
 interface BackgroundCommandOptions {
@@ -286,6 +345,10 @@ interface BackgroundCommandOptions {
     readyTimeoutMs?: number;
     /** Injection seam for tests — defaults to the real detached spawner. */
     spawnDetached?: DetachedSpawner;
+    /** `--tunnel` was requested: after ready, wait for and print the tunnel URL. */
+    tunnel?: boolean;
+    /** Injection seam for tests — how long to wait for the tunnel URL (defaults to {@link TUNNEL_URL_WAIT_MS}). */
+    tunnelUrlTimeoutMs?: number;
 }
 
 /** Outcome of the readiness wait: server ready (with its record), child death, or deadline. */
@@ -385,6 +448,10 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
     if (outcome.status === "ready") {
         printBackgroundBanner(logger, outcome.state);
 
+        if (options.tunnel === true && outcome.state.tunnelUrl === undefined) {
+            await reportBackgroundTunnel(cwd, logger, options.pollIntervalMs ?? POLL_INTERVAL_MS, options.tunnelUrlTimeoutMs ?? TUNNEL_URL_WAIT_MS);
+        }
+
         return { code: 0 };
     }
 
@@ -427,7 +494,7 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
             "Check `lunora dev status` and `lunora dev logs`; `lunora dev stop` shuts it down.",
     );
 
-    return { code: 1 };
+    return { code: EXIT_CODE.UNAVAILABLE };
 };
 
 /**
@@ -451,72 +518,14 @@ const codegenRequested = (options: { codegen?: boolean }): boolean => options.co
  * (#496) is precisely what happens when only one of them remembers a flag — so
  * the answer lives in one function and the next flag is added once.
  */
-const withViteChildEnv = (options: { codegen?: boolean; remote?: boolean }): { env?: Record<string, string> } => {
+const withViteChildEnv = (options: { codegen?: boolean; lazyFunctions?: boolean; remote?: boolean }): { env?: Record<string, string> } => {
     const environment: Record<string, string> = {
+        ...(resolveLazyFunctions(options.lazyFunctions) ? { [LAZY_FUNCTIONS_ENV]: "1" } : {}),
         ...(options.remote === true ? { LUNORA_REMOTE: "1" } : {}),
         ...(options.codegen === false ? { [CODEGEN_ENV]: "0" } : {}),
     };
 
     return Object.keys(environment).length > 0 ? { env: environment } : {};
-};
-
-/**
- * Rebuild the argv a detached daemon `lunora dev` re-invocation needs, from the
- * already-parsed options. `--background`/`--json` are deliberately NOT
- * forwarded: the daemon must run the foreground path (its detachment marker is
- * {@link DEV_DAEMON_ENV}), and JSON logging travels as `LUNORA_LOG_JSON=1` env.
- *
- * KEEP IN SYNC with the `dev` option table in `./index.ts`: any new flag that
- * must reach the detached daemon has to be forwarded here explicitly, or a
- * background start will silently drop it.
- */
-const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
-    const args = ["dev"];
-
-    if (options.apiSpec !== undefined) {
-        args.push("--api-spec", options.apiSpec);
-    }
-
-    if (options.port !== undefined) {
-        args.push("--port", String(options.port));
-    }
-
-    if (options.workerPort !== undefined) {
-        args.push("--worker-port", String(options.workerPort));
-    }
-
-    // Forwarded, or a `--background` run would emit nothing: the daemon child is
-    // the process that knows the resolved origin, and the supervisor asking for
-    // the manifest is the same one that wanted the server detached.
-    if (options.emitBindings !== undefined) {
-        args.push("--emit-bindings", options.emitBindings);
-    }
-
-    if (options.codegen === false) {
-        args.push("--no-codegen");
-    }
-
-    if (options.studio === false) {
-        args.push("--no-studio");
-    }
-
-    if (options.worker === false) {
-        args.push("--no-worker");
-    }
-
-    // Forwarded explicitly, like every other flag here: the daemon is a fresh
-    // process that re-parses argv, so an unforwarded flag is silently dropped.
-    // `lunora.json`'s target still reaches it (the daemon re-reads the config),
-    // which is what makes a missing `--target` look accepted and do nothing.
-    if (options.target !== undefined) {
-        args.push("--target", options.target);
-    }
-
-    if (remote) {
-        args.push("--remote");
-    }
-
-    return args;
 };
 
 /**
@@ -544,7 +553,12 @@ const startBackground = async (context: {
 }): Promise<{ code: number }> => {
     const { cwd, jsonLogs, logger, options, remote } = context;
     const run = context.run ?? runDevBackground;
-    const flavor = detectDevFlavor(cwd);
+    const detected = detectDevFlavor(cwd);
+    // A target with its own dev server (celld) has no Vite integration — the
+    // foreground path turns that into the standalone flavor (`resolveTargetFlavor`),
+    // so the background start must too, or it spawns `vite dev` and serves the
+    // worker on workerd after all.
+    const flavor = detected === "vite" && targetRunsOwnDevServer(options.target ?? resolveProjectTarget(cwd)) ? "wrangler" : detected;
     // Pre-listen default URL — cosmetic (shown only if a concurrent starter
     // loses to this claim); the child's superseding record carries the real one.
     // For `vite`/`framework-worker` the front door is the framework's own dev
@@ -569,8 +583,16 @@ const startBackground = async (context: {
 
     const handoff = { [DEV_HANDOFF_ENV]: String(process.pid) };
 
+    // In THIS terminal, before the detached child exists: its output goes to the
+    // log file, and the inherited claim keeps it from repeating the warning there.
+    printCloudflareCliConfigWarning(logger, cwd);
+
     try {
-        if (flavor === "vite") {
+        // `--tunnel` needs a process that owns the cloudflared child, and the
+        // bare Vite dev script is not one — so a tunneled Vite project runs
+        // through the daemon, which spawns Vite itself and tunnels the URL Vite
+        // records (the same arrangement as a foreground `lunora dev --tunnel`).
+        if (flavor === "vite" && options.tunnel !== true) {
             // This branch spawns the framework dev script directly — it does not
             // go through `planDevCommand`, so anything {@link withViteChildEnv}
             // does not carry is dropped for good.
@@ -590,6 +612,7 @@ const startBackground = async (context: {
             env: handoff,
             json: jsonLogs,
             logger,
+            tunnel: options.tunnel === true,
         });
     } finally {
         // Drop the provisional record unless a child already superseded it.
@@ -825,6 +848,7 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
             running: true,
             startedAt: state.startedAt,
             studioUrl: state.studioUrl,
+            tunnelUrl: state.tunnelUrl,
             uptimeSeconds,
             url: state.url,
         });
@@ -846,6 +870,10 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
 
     if (state.studioUrl !== undefined) {
         logger.info(`  Studio: ${state.studioUrl}`);
+    }
+
+    if (state.tunnelUrl !== undefined) {
+        logger.info(`  Tunnel: ${state.tunnelUrl}`);
     }
 
     if (state.logFile !== undefined) {
@@ -916,7 +944,7 @@ const runLifecycleSubcommand = (parameters: {
     if (subcommand !== undefined) {
         logger.error(`dev: unknown subcommand "${subcommand}" — expected stop | status | logs (or no subcommand to start the dev server)`);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     return undefined;
@@ -926,6 +954,7 @@ export type { DevFlavor };
 export {
     codegenRequested,
     detectDevFlavor,
+    printCloudflareCliConfigWarning,
     reportExistingServer,
     runDevBackground,
     runDevLogs,

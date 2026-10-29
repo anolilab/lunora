@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { classifyStatement } from "../../../shared/sql-readonly";
-import type { SqlExec } from "../src/ctx-db";
+import type { SqlCursor, SqlExec } from "../src/ctx-db";
 import { assertReadonly, lintReadonlySql, MAX_SQL_ROWS, runReadonlySql } from "../src/sql-console";
 
 /** A `SqlExec` stub that records the query and returns a fixed row set. */
@@ -18,6 +18,28 @@ const stubExec = (rows: Record<string, unknown>[]): { exec: SqlExec["exec"]; las
             return state.lastQuery;
         },
     };
+};
+
+/**
+ * A `SqlExec` stub whose cursor also exposes the statement's own column names
+ * and positional rows — the capability Cloudflare's `SqlStorageCursor` and
+ * better-sqlite3 both have. Hand-built rather than driven off `node:sqlite`
+ * because that module only grew `columns()` / `setReturnArrays` in 22.14 and CI
+ * runs 22.15 alongside 24: a fixture that silently degrades on one leg would
+ * leave the path this exercises untested exactly where it matters.
+ */
+const rawExec = (columnNames: string[], rows: unknown[][]): SqlExec => {
+    const toObject = (values: unknown[]): Record<string, unknown> => Object.fromEntries(columnNames.map((name, index) => [name, values[index]]));
+
+    const cursor: SqlCursor<Record<string, unknown>> = {
+        columnNames,
+        one: () => toObject(rows[0] ?? []),
+        raw: () => rows[Symbol.iterator](),
+        toArray: () => rows.map((values) => toObject(values)),
+        [Symbol.iterator]: () => rows.map((values) => toObject(values))[Symbol.iterator](),
+    };
+
+    return { exec: () => cursor as never };
 };
 
 /** A `SqlExec` stub whose `exec` throws — models SQLite rejecting a malformed statement. */
@@ -95,7 +117,7 @@ describe("assertReadonly", () => {
 });
 
 describe("runReadonlySql", () => {
-    it("returns columns from the first row, the true count, and rows", () => {
+    it("returns columns from the first row, the row count, and rows", () => {
         expect.assertions(3);
 
         const sql = stubExec([
@@ -118,7 +140,7 @@ describe("runReadonlySql", () => {
         const result = runReadonlySql(stubExec(rows), "SELECT i FROM t");
 
         expect(result.rows).toHaveLength(MAX_SQL_ROWS);
-        expect(result.rowCount).toBe(MAX_SQL_ROWS + 5);
+        expect(result.rowCount).toBe(MAX_SQL_ROWS);
         expect(result.truncated).toBe(true);
     });
 
@@ -130,6 +152,100 @@ describe("runReadonlySql", () => {
         expect(() => runReadonlySql(sql, "DELETE FROM t")).toThrow(/read-only/u);
         // The guard runs before exec, so the query was never sent.
         expect(sql.lastQuery).toBe("");
+    });
+
+    it("keeps both values when two result columns share a name", () => {
+        expect.assertions(2);
+
+        // `SELECT u.id, o.id FROM users u JOIN orders o …` — SQLite names both
+        // result columns `id`, and a row object can only hold one of them. Read
+        // off the row keys, the join's left-hand id disappeared with nothing on
+        // screen to suggest a column had been dropped.
+        const result = runReadonlySql(rawExec(["id", "id"], [["u1", "o1"]]), "SELECT u.id, o.id FROM users u JOIN orders o ON o.user_id = u.id");
+
+        expect(result.columns).toStrictEqual(["id", "id:2"]);
+        expect(result.rows).toStrictEqual([{ id: "u1", "id:2": "o1" }]);
+    });
+
+    it("reports the columns of a result that matched no rows", () => {
+        expect.assertions(3);
+
+        const result = runReadonlySql(rawExec(["id", "status"], []), "SELECT id, status FROM t WHERE 1 = 0");
+
+        // The shape of an empty result is exactly what someone debugging one
+        // needs; derived from the first row there is nothing to derive it from.
+        expect(result.columns).toStrictEqual(["id", "status"]);
+        expect(result.rows).toStrictEqual([]);
+        expect(result.rowCount).toBe(0);
+    });
+
+    it("caps and flags truncation on the positional path too", () => {
+        expect.assertions(3);
+
+        const rows = Array.from({ length: MAX_SQL_ROWS + 5 }, (_, index) => [index]);
+        const result = runReadonlySql(rawExec(["i"], rows), "SELECT i FROM t");
+
+        expect(result.rows).toHaveLength(MAX_SQL_ROWS);
+        expect(result.rowCount).toBe(MAX_SQL_ROWS);
+        expect(result.truncated).toBe(true);
+    });
+});
+
+describe("runReadonlySql bounds", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    /** A cursor over `count` rows that records how far it was iterated and never expects `toArray`. */
+    const countingExec = (count: number, onRow?: () => void): { exec: SqlExec; read: () => number; toArray: ReturnType<typeof vi.fn> } => {
+        let read = 0;
+        const toArray = vi.fn<() => never>(() => {
+            throw new Error("toArray must not be called");
+        });
+        const rows = function* (): Generator<Record<string, unknown>> {
+            for (let index = 0; index < count; index += 1) {
+                read += 1;
+                onRow?.();
+                yield { i: index };
+            }
+        };
+
+        return {
+            exec: {
+                exec: () =>
+                    ({
+                        one: () => {
+                            return {};
+                        },
+                        toArray,
+                        [Symbol.iterator]: rows,
+                    }) as never,
+            },
+            read: () => read,
+            toArray,
+        };
+    };
+
+    it("stops reading a 5,000-row result one row past the cap", () => {
+        expect.assertions(5);
+
+        const { exec, read, toArray } = countingExec(5000);
+        const result = runReadonlySql(exec, "SELECT i FROM t");
+
+        expect(result.rows).toHaveLength(MAX_SQL_ROWS);
+        expect(result.rowCount).toBe(MAX_SQL_ROWS);
+        expect(result.truncated).toBe(true);
+        expect(read()).toBe(MAX_SQL_ROWS + 1);
+        expect(toArray).not.toHaveBeenCalled();
+    });
+
+    it("does not flag a result of exactly the cap as truncated", () => {
+        expect.assertions(2);
+
+        const result = runReadonlySql(countingExec(MAX_SQL_ROWS).exec, "SELECT i FROM t");
+
+        expect(result.rowCount).toBe(MAX_SQL_ROWS);
+        expect(result.truncated).toBe(false);
     });
 });
 
