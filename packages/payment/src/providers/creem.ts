@@ -292,6 +292,7 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
     const loadClient = lazyValue(async () => (await options.client()) as unknown as Creem);
 
     return {
+        // Creem is a Merchant-of-Record: it moves the money, so there is no manual payment-intent flow.
         cancelPayment: () => notSupported("manual payment cancellation"),
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {

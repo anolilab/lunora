@@ -8,10 +8,10 @@
  * (`fake-internet.ts`, wired as miniflare's `outboundService`).
  *
  * Verified here: `import("@cloudflare/playwright")` loads in workerd and its real
- * `launch` / `connect` / `sessions` exports put what `createBrowser` asked for on the wire to the binding
- * (`keep_alive` in milliseconds, `allowedHosts` as normalized session guardrails
- * at acquire, the session id on a re-attach); `quickAction` crosses the binding's
- * RPC boundary with the guarded URL; the DoH re-check and the `/crawl` REST
+ * `launch` / `connect` / `sessions` exports put what `createBrowser` asked for
+ * on the wire to the binding (`keep_alive` in milliseconds, `allowedHosts` as
+ * normalized session guardrails at acquire, the session id on a re-attach);
+ * `quickAction` crosses the binding's RPC boundary with the guarded URL; the DoH re-check and the `/crawl` REST
  * client run on workerd's own `fetch`, and the operation deadline and the DoH
  * ceiling on its timers and `AbortSignal.timeout`.
  *

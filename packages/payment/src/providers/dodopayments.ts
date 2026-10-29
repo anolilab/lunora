@@ -316,6 +316,8 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
     const loadClient = lazyValue(async () => (await options.client()) as unknown as DodoPayments);
 
     return {
+        // Dodo is a Merchant-of-Record: it moves the money, so there is no manual payment-intent
+        // authorize/capture/cancel. Refunds, however, are supported below.
         cancelPayment: () => notSupported("manual payment cancellation"),
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {

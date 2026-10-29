@@ -5,14 +5,14 @@
  *
  * `createBrowser` takes the module through a `playwright` loader and types
  * `launch` / `connect` / `sessions` structurally, so the heavy optional peer
- * stays out of the startup graph and tests can pass plain doubles. The cost of that
- * decoupling is that nothing consumed the real signatures — which is exactly the
+ * stays out of the startup graph and tests can pass plain doubles. The cost of
+ * that decoupling is that nothing consumed the real signatures — which is exactly the
  * failure mode `AGENTS.md` names: "the canonical binding `*Like` types drifted
  * from the real ones because nothing consumed them".
  *
  * They had drifted, in four places, and the documented usage
- * (`createBrowser({ binding, launch })` — what users were then told to write) did not type-check against ANY published
- * version. The whole chain is asserted here, not just the three injected
+ * (`createBrowser({ binding, launch })` — what users were then told to write)
+ * did not type-check against ANY published version. The whole chain is asserted here, not just the three injected
  * functions, because the function mismatches were downstream of the return
  * types: `launch` returns `Browser`, whose `newContext()` returns
  * `BrowserContext`, whose `newPage()` returns `Page`. One wrong leaf failed all
