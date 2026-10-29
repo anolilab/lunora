@@ -399,6 +399,11 @@ interface CancelRequestBody {
 }
 
 /** A `done:<id>` row: the job's last record plus how it ended. */
+/** A `dead:` row: the parked record and, since parks are indexed in `dt:`, when it was parked. */
+interface DeadRecord extends ScheduleRecord {
+    completedAt?: number;
+}
+
 interface TerminalRecord extends ScheduleRecord {
     completedAt: number;
     state: Extract<ScheduledJobState, "canceled" | "failed" | "succeeded">;
@@ -1605,7 +1610,14 @@ class SchedulerDO {
      * schedulable time (see {@link isIndexableTime}).
      */
     private async parkDead(record: ScheduleRecord, attempts: number, reason: string): Promise<void> {
-        await this.state.storage.put(`${DEAD_PREFIX}${record.id}`, { ...record, attempts, error: `dead-lettered ${reason}` });
+        const completedAt = Date.now();
+
+        // Indexed in `dt:` like any other outcome, so `/history` lists the failure
+        // from the moment it is parked rather than only after a purge.
+        await this.state.storage.put<DeadRecord | string>({
+            [`${DEAD_PREFIX}${record.id}`]: { ...record, attempts, completedAt, error: `dead-lettered ${reason}` } satisfies DeadRecord,
+            [SchedulerDO.terminalIndexKey(completedAt, record.id)]: record.id,
+        });
         // Park is terminal; clear the pending retry row AND the live header row
         // in one batched delete. Leaving `id:<id>` behind would keep the dead job
         // visible in `/list` (and the studio) as a scheduled job
@@ -2020,7 +2032,7 @@ class SchedulerDO {
             return SchedulerDO.error(400, "INVALID_INPUT", "id is required");
         }
 
-        const dead = await this.state.storage.get<ScheduleRecord>(`${DEAD_PREFIX}${body.id}`);
+        const dead = await this.state.storage.get<DeadRecord>(`${DEAD_PREFIX}${body.id}`);
 
         if (dead === undefined) {
             return SchedulerDO.json({ retried: false });
@@ -2031,10 +2043,11 @@ class SchedulerDO {
         // via the standard time index and drop the dead row in one move. Going
         // through the normal header+index path means a pooled job re-enters the
         // concurrency gate on the next drain exactly like a fresh enqueue.
-        const revived: ScheduleRecord = { ...dead, attempts: 0, scheduledFor };
+        const revived: DeadRecord = { ...dead, attempts: 0, scheduledFor };
 
-        // The park reason described the attempts this budget reset discards.
+        // The park reason and time described the attempts this budget reset discards.
         delete revived.error;
+        delete revived.completedAt;
 
         // A purge that wrote its `failed` outcome but failed to drop the dead row
         // leaves that outcome behind, and `/get` reads it before the header. Dropped
@@ -2063,7 +2076,7 @@ class SchedulerDO {
             return SchedulerDO.error(400, "INVALID_INPUT", "id is required");
         }
 
-        const dead = await this.state.storage.get<ScheduleRecord>(`${DEAD_PREFIX}${body.id}`);
+        const dead = await this.state.storage.get<DeadRecord>(`${DEAD_PREFIX}${body.id}`);
 
         if (dead === undefined) {
             return SchedulerDO.json({ removed: false });
@@ -2071,7 +2084,8 @@ class SchedulerDO {
 
         // Purging the dead-letter row must not make the job read as "never
         // existed": it failed, and `/get` keeps saying so for the retention window.
-        await this.writeTerminal(dead, "failed");
+        // At the time it was parked, so the outcome keeps its place in `/history`.
+        await this.writeTerminal(dead, "failed", dead.completedAt);
         await this.state.storage.delete(`${DEAD_PREFIX}${body.id}`);
         await this.sweepTerminal().catch(() => undefined);
 
@@ -2144,7 +2158,7 @@ class SchedulerDO {
      * id has its own entry.
      */
     private async readTerminal(id: string, indexKey?: string): Promise<TerminalRecord | undefined> {
-        const row = await this.state.storage.get<TerminalRecord>(`${DONE_PREFIX}${id}`);
+        const row = (await this.state.storage.get<TerminalRecord>(`${DONE_PREFIX}${id}`)) ?? (await this.readParked(id));
 
         if (row === undefined || row.completedAt <= Date.now() - TERMINAL_RETENTION_MS) {
             return undefined;
@@ -2155,6 +2169,13 @@ class SchedulerDO {
         }
 
         return row;
+    }
+
+    /** A parked job as an outcome row, when it was parked with its failure time. */
+    private async readParked(id: string): Promise<TerminalRecord | undefined> {
+        const dead = await this.state.storage.get<DeadRecord>(`${DEAD_PREFIX}${id}`);
+
+        return dead?.completedAt === undefined ? undefined : { ...dead, completedAt: dead.completedAt, state: "failed" };
     }
 
     /**
@@ -2180,8 +2201,7 @@ class SchedulerDO {
     }
 
     /** Record how `record` ended: its `done:` row and `dt:` index entry, in one put. */
-    private async writeTerminal(record: ScheduleRecord, state: TerminalRecord["state"]): Promise<void> {
-        const completedAt = Date.now();
+    private async writeTerminal(record: ScheduleRecord, state: TerminalRecord["state"], completedAt = Date.now()): Promise<void> {
         const row: TerminalRecord = { ...record, completedAt, state };
 
         await this.state.storage.put<TerminalRecord | string>({

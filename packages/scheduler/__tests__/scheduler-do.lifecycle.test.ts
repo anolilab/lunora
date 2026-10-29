@@ -108,6 +108,39 @@ describe("schedulerDO job lifecycle", () => {
         await expect(getJob(scheduler, "doomed")).resolves.toMatchObject({ state: "failed" });
     });
 
+    it("lists a dead-lettered job in history from the moment it is parked, keeps its failure time through a purge, and drops it on requeue", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const scheduler = new AlwaysFailing(createFakeState(), env);
+
+        await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "jobs.run", id: "doomed", retry: { baseMs: 0, maxAttempts: 1 }, scheduledFor: Date.now() }),
+        );
+        await scheduler.alarm();
+        setNow(1_700_000_000_001);
+        await scheduler.alarm();
+
+        await expect(getJob(scheduler, "doomed")).resolves.toMatchObject({ completedAt: 1_700_000_000_001, state: "failed" });
+        await expect(history(scheduler)).resolves.toMatchObject({ records: [{ completedAt: 1_700_000_000_001, id: "doomed", state: "failed" }] });
+
+        setNow(1_700_000_000_500);
+        await scheduler.fetch(post("/dead/retry", { id: "doomed" }));
+
+        await expect(history(scheduler)).resolves.toMatchObject({ records: [] });
+
+        await scheduler.alarm();
+        setNow(1_700_000_000_600);
+        await scheduler.alarm();
+        setNow(1_700_000_000_900);
+        await scheduler.fetch(post("/dead/cancel", { id: "doomed" }));
+
+        const page = await history(scheduler);
+
+        expect(page.records).toHaveLength(1);
+        expect(page.records[0]).toMatchObject({ completedAt: 1_700_000_000_600, state: "failed" });
+    });
+
     it("reads a requeued dead job as pending even when a half-finished purge left its failed outcome", async () => {
         expect.hasAssertions();
 
