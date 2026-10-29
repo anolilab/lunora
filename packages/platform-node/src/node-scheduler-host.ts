@@ -240,6 +240,9 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         }
     }
 
+    // Finished rows stay for the retention window, so the per-completion sweep and the pending scans need this.
+    database.exec("CREATE INDEX IF NOT EXISTS _lunora_scheduler_jobs_state_completed ON _lunora_scheduler_jobs (state, completed_at)");
+
     database.exec(
         `CREATE TABLE IF NOT EXISTS _lunora_scheduler_crons (
             key TEXT PRIMARY KEY,

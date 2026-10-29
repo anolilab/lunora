@@ -116,6 +116,23 @@ describe("createNodeSchedulerHost", () => {
             database.close();
         });
 
+        it("sweeps retained rows through an index rather than a table scan", () => {
+            expect.assertions(1);
+
+            const database = new Database(":memory:");
+            const host = createNodeSchedulerHost(database);
+            const plan = database
+                .prepare<[], { detail: string }>(
+                    "EXPLAIN QUERY PLAN DELETE FROM _lunora_scheduler_jobs WHERE state IN ('succeeded', 'canceled') AND completed_at <= 0",
+                )
+                .all();
+
+            expect(plan.map((step) => step.detail).join(" ")).toContain("USING INDEX");
+
+            host.dispose();
+            database.close();
+        });
+
         it("adds the completion column to a database written before it existed", () => {
             expect.assertions(1);
 
