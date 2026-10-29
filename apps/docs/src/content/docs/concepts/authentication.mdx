@@ -30,9 +30,14 @@ Every function context (`QueryCtx`, `MutationCtx`, and `ActionCtx`) carries an
 
 - `ctx.auth.userId`: the verified user id, or `null` when the request is
   anonymous. This is the value to branch on for "is someone signed in?".
-- `ctx.auth.getIdentity()`: resolves the raw identity claims (the better-auth
-  session payload) as a record, or `null` when unauthenticated. Reach for it when
-  you need more than the id (email, name, roles, custom claims).
+- `ctx.auth.getIdentity()`: resolves the identity claims as a record, or `null`
+  when unauthenticated. Reach for it when you need more than the id. The built-in
+  better-auth wiring (D1 or Durable Object) puts `email`, `name`, `role` (the
+  `admin()` plugin's column) and `expiresAtMs` on it, plus, with the
+  `organization()` plugin, `orgId` (the session's active organization) and
+  `teamId` (its active team, when teams are enabled). `orgId` is the same claim
+  the [external JWT presets](/docs/concepts/external-auth) emit, so tenant-scoped
+  code reads one name whichever provider signed the user in.
 
 ```ts
 import { query } from "@/lunora/_generated/server";
@@ -48,7 +53,16 @@ The identity is **server-resolved and trusted**; it is not a value the client
 hands you in `args`. On an HTTP call it comes from the session the request
 carries. On a live subscription it is the identity stamped at the WebSocket
 upgrade and replayed on every re-run, so a long-lived socket can never drift to a
-different user (see [real-time](/docs/concepts/realtime)).
+different user (see [real-time](/docs/concepts/realtime)). The same holds for
+`orgId` / `teamId`: switching the active organization reaches HTTP calls on the
+next request, and an open subscription once its socket reconnects.
+
+`orgId` / `teamId` are checked against current membership before they are
+emitted, but resolved identities are cached per credential (60 s at most by
+default, `LUNORA_IDENTITY_CACHE_MS`; per request with the cookie cache off), so
+the claim can lag a removal by up to that window, and an open subscription keeps
+it until it reconnects. Code that authorizes tenant access where that lag matters
+should check membership itself.
 
 ## `@lunora/auth` on the server
 
