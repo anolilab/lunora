@@ -175,6 +175,21 @@ describe("run-codegen", () => {
             expect(runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated.app).toContain('jurisdiction: "eu"');
         });
 
+        it("hands the worker the agent classes, so a scheduled agent job's forged shardKey is stripped", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(workdir, "lunora", "agents.ts"),
+                `import { defineAgent } from "@lunora/agent";\nexport const support = defineAgent({ model: "m" });\n`,
+            );
+
+            const { app, shard } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
+
+            // Without this list the worker passes a scheduled agent job's args straight through.
+            expect(app).toContain('options.agentWorkflows = ["SupportAgentWorkflow"];');
+            expect(shard).toContain("withAgentScheduleShard(");
+        });
+
         it("narrows ctx.db.asId to a real TableName", () => {
             expect.assertions(5);
 
