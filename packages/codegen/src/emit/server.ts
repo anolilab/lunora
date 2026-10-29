@@ -360,7 +360,7 @@ ${services
     // an Omit. The handle is not parameterized by the definition (`run` takes the
     // flat `AgentRunInput`), so no `typeof lunoraAgentDefinitions` import is needed.
     const hasAgents = agents.length > 0;
-    const agentsTypeImport = hasAgents ? `import type { AgentHandle } from "@lunora/agent";\n` : "";
+    const agentsTypeImport = hasAgents ? `import type { AgentHandle } from "@lunora/agent/core";\n` : "";
     const agentsTypeBlock = hasAgents
         ? `
 

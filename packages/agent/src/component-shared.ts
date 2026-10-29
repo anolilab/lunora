@@ -81,5 +81,69 @@ const AGENT_SECRET_TTL_MS: number = 15 * 60 * 1000;
  */
 const SECRET_WAIT_GRACE_MS: number = 60 * 1000;
 
+/**
+ * How long a HITL approval wait hibernates before it gives up (overridable per
+ * agent via `approvalTimeout`). A slow approver is the NORMAL case — overnight
+ * or over a weekend — so the default is generous; but with no bound at all a
+ * never-answered approval hibernates the instance forever, and once the
+ * thread's staleness horizon passes, its pending approval can never be
+ * resolved again. The reclaim horizon is derived from
+ * `APPROVAL_TIMEOUT_MAX_MS`, so the wait always fires first by construction.
+ */
+const DEFAULT_APPROVAL_TIMEOUT_MS = 3 * 24 * 60 * 60 * 1000;
+
+/** Milliseconds per unit of the host's duration grammar (`"3 days"`); month/year are nominal. */
+const DURATION_UNIT_MS: Record<string, number> = {
+    day: 86_400_000,
+    hour: 3_600_000,
+    minute: 60_000,
+    month: 30 * 86_400_000,
+    second: 1000,
+    week: 7 * 86_400_000,
+    year: 365 * 86_400_000,
+};
+
+/** The host's `"<n> <unit>[s]"` duration grammar (hoisted, avoids recompilation). */
+const DURATION_PATTERN = /^(\d+(?:\.\d+)?) (day|hour|minute|month|second|week|year)s?$/u;
+
+/**
+ * Resolve the agent's configured approval timeout to a bounded number of
+ * milliseconds.
+ *
+ * Returns ms (which `waitForEvent` accepts natively) rather than passing the
+ * configured value through, because the bound is the point: a value above
+ * {@link APPROVAL_TIMEOUT_MAX_MS} would let the thread be reclaimed out from
+ * under a still-pending approval. An unparseable string cannot reach here from
+ * TypeScript (the property's type is the host's closed grammar) but can from
+ * plain JS — it falls back to the default rather than handing the host a
+ * duration it will reject mid-run.
+ */
+const approvalTimeoutMs = (configured: number | string | undefined): number => {
+    if (configured === undefined) {
+        return DEFAULT_APPROVAL_TIMEOUT_MS;
+    }
+
+    if (typeof configured === "number") {
+        return Math.min(configured, APPROVAL_TIMEOUT_MAX_MS);
+    }
+
+    const match = DURATION_PATTERN.exec(configured);
+
+    if (match === null) {
+        return DEFAULT_APPROVAL_TIMEOUT_MS;
+    }
+
+    return Math.min(Number(match[1]) * (DURATION_UNIT_MS[match[2] as string] as number), APPROVAL_TIMEOUT_MAX_MS);
+};
+
 export type { AgentRegisteredFunction };
-export { ABANDONED_APPROVAL_MS, AGENT_EXTENSION_KEY, AGENT_SECRET_TTL_MS, APPROVAL_TIMEOUT_MAX_MS, asInternal, definedColumns, SECRET_WAIT_GRACE_MS };
+export {
+    ABANDONED_APPROVAL_MS,
+    AGENT_EXTENSION_KEY,
+    AGENT_SECRET_TTL_MS,
+    APPROVAL_TIMEOUT_MAX_MS,
+    approvalTimeoutMs,
+    asInternal,
+    definedColumns,
+    SECRET_WAIT_GRACE_MS,
+};

@@ -529,6 +529,12 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `jsonSchema` (const)
+
+```ts
+const jsonSchema: <OBJECT = unknown>(schema: Awaited<Schema["jsonSchema"]>) => Schema<OBJECT>;
+```
+
 ### `mcpTools` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -644,6 +650,260 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `sandboxComponent` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+## `@lunora/agent/core`
+
+### `AgentApprovalContext` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentAsToolOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentBindingSpec` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentConfig` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentDefinition` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentEmailMapper` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentEmailRun` (interface)
+
+Re-exported from `@lunora/agent` — signature tracked in that section.
+
+### `AgentFunctionPaths` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentFunctionReference` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentGenerate` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentGenerateOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentGenerateResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentHandle` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentInstructionsContext` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentLiveEvent` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentMemoryOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentMemorySource` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentMessageRow` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentMessageStatus` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentModelInput` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentOnReply` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentOnStepFinish` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentPrepareStep` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentPrepareStepInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentPrepareStepResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentProgressEvent` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentReplyInfo` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentReplyRef` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentRunFunction` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentRunHandle` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentRunInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentRunOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentRunResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentStepFinishInfo` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentStepInfo` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentStepLike` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentStreamGenerate` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentSubToolInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentThreadStatus` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentTokenDelta` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentTokenSink` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentToolCall` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentToolConfig` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentToolContext` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentToolDefinition` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentUsage` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentVoiceConfig` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentWorkflowBindingLike` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentWorkflowInstanceLike` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AnyAgentTool` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `EnsureThreadOutcome` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `FunctionToolOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `SkillConfig` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `SkillDefinition` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `compileAgentWorkflow` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `createAgentContext` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `defineAgent` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `defineAgentTool` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `defineSkill` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `functionTool` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `isAgentDefinition` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `isSkillDefinition` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `jsonSchema` (const)
+
+Re-exported from `@lunora/agent` — signature tracked in that section.
 
 ## `@lunora/agent/inbound`
 

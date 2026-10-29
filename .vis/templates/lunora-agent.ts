@@ -47,7 +47,7 @@ export const ${exportName} = defineAgent({
 });
 `;
 
-const freshAgents = (exportName: string): string => `import { defineAgent } from "@lunora/agent";
+const freshAgents = (exportName: string): string => `import { defineAgent } from "@lunora/agent/core";
 
 ${definitionFor(exportName)}`;
 
@@ -85,7 +85,7 @@ export default createTemplate({
 
         const suggestions = [
             entrySuggestion,
-            "Merge the agent thread tables into your schema: `defineSchema({...}).extend(agentExtension)` (from `@lunora/agent`).",
+            "Merge the agent thread tables into your schema: `defineSchema({...}).extend(agentExtension)` (from `@lunora/agent/component`).",
             "Run `lunora codegen` (or just `lunora dev`) to emit the agent WorkflowEntrypoint class + `ctx.agents` producer and reconcile wrangler.jsonc.",
         ];
 

@@ -54,6 +54,10 @@
             "types": "./dist/component.d.ts",
             "import": "./dist/component.mjs"
         },
+        "./core": {
+            "types": "./dist/core.d.ts",
+            "import": "./dist/core.mjs"
+        },
         "./inbound": {
             "types": "./dist/inbound.d.ts",
             "import": "./dist/inbound.mjs"

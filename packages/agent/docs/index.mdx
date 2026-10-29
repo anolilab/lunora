@@ -18,8 +18,7 @@ pnpm add @lunora/agent
 
 ```ts
 // lunora/agents.ts
-import { defineAgent, defineAgentTool } from "@lunora/agent";
-import { jsonSchema } from "@lunora/ai";
+import { defineAgent, defineAgentTool, jsonSchema } from "@lunora/agent/core";
 
 export const support = defineAgent({
     instructions: "You are a helpful support agent.",
@@ -46,12 +45,21 @@ queries (`agents:agentMessages`, `agents:agentThread`, `agents:agentApprovalGran
 and the approval-grant revoke (`agents:agentRevokeApprovalGrant`), and wires the typed
 `ctx.agents.<name>` producer.
 
+`lunora/agents.ts` is evaluated when the Worker starts, and Cloudflare rejects a Worker
+whose startup takes more than 1 s of CPU. Import from `@lunora/agent/core` there: it
+carries `defineAgent`, `defineAgentTool`, `defineSkill`, `functionTool` and a `jsonSchema`
+the AI SDK accepts, without the agent loop or the AI SDK (and its ~830 KiB of zod), which
+load on an agent's first run. The `@lunora/agent` barrel and `jsonSchema` from `ai` or
+`@lunora/ai` put all of that back into startup. `@lunora/agent/sandbox` is light as well;
+a tool only the barrel exports (`webSearchTool`, `requestSecretTool`, `mcpTools`,
+`codeTool`, …) still needs the barrel.
+
 Merge the thread tables into your schema. They auto-prefix to
 `agent_threads` / `agent_messages` and can never collide with app tables:
 
 ```ts
 // lunora/schema.ts
-import { agentExtension } from "@lunora/agent";
+import { agentExtension } from "@lunora/agent/component";
 
 export default defineSchema({/* your tables */}).extend(agentExtension);
 ```

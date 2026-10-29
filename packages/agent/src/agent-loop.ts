@@ -5,7 +5,7 @@ import { SECRET_VALUE_MAX_TTL_MS } from "@lunora/platform";
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
-import { APPROVAL_TIMEOUT_MAX_MS, definedColumns, SECRET_WAIT_GRACE_MS } from "./component-shared";
+import { approvalTimeoutMs, definedColumns, SECRET_WAIT_GRACE_MS } from "./component-shared";
 import { resolveAgentModel, usageOfFailedTurn } from "./generate";
 import { readHistoryWindow } from "./history-window";
 import { firstEpisodicSource, firstGraphSource, memoryStepName, resolveInjectedSources } from "./memory";
@@ -310,61 +310,6 @@ const WORKFLOW_TIMEOUT_ERROR_NAME = "WorkflowTimeoutError";
 const isWaitTimeoutError = (error: unknown): boolean => error instanceof Error && error.name === WORKFLOW_TIMEOUT_ERROR_NAME;
 
 /**
- * How long a HITL approval wait hibernates before it gives up (overridable per
- * agent via `approvalTimeout`). A slow approver is the NORMAL case — overnight
- * or over a weekend — so the default is generous; but with no bound at all a
- * never-answered approval hibernates the instance forever, and once the
- * thread's staleness horizon passes, its pending approval can never be
- * resolved again. The reclaim horizon is derived from
- * `APPROVAL_TIMEOUT_MAX_MS`, so the wait always fires first by construction.
- */
-const DEFAULT_APPROVAL_TIMEOUT_MS = 3 * 24 * 60 * 60 * 1000;
-
-/** Milliseconds per unit of the host's duration grammar (`"3 days"`); month/year are nominal. */
-const DURATION_UNIT_MS: Record<string, number> = {
-    day: 86_400_000,
-    hour: 3_600_000,
-    minute: 60_000,
-    month: 30 * 86_400_000,
-    second: 1000,
-    week: 7 * 86_400_000,
-    year: 365 * 86_400_000,
-};
-
-/** The host's `"<n> <unit>[s]"` duration grammar (hoisted, avoids recompilation). */
-const DURATION_PATTERN = /^(\d+(?:\.\d+)?) (day|hour|minute|month|second|week|year)s?$/u;
-
-/**
- * Resolve the agent's configured approval timeout to a bounded number of
- * milliseconds.
- *
- * Returns ms (which `waitForEvent` accepts natively) rather than passing the
- * configured value through, because the bound is the point: a value above
- * {@link APPROVAL_TIMEOUT_MAX_MS} would let the thread be reclaimed out from
- * under a still-pending approval. An unparseable string cannot reach here from
- * TypeScript (the property's type is the host's closed grammar) but can from
- * plain JS — it falls back to the default rather than handing the host a
- * duration it will reject mid-run.
- */
-const approvalTimeoutMs = (configured: number | string | undefined): number => {
-    if (configured === undefined) {
-        return DEFAULT_APPROVAL_TIMEOUT_MS;
-    }
-
-    if (typeof configured === "number") {
-        return Math.min(configured, APPROVAL_TIMEOUT_MAX_MS);
-    }
-
-    const match = DURATION_PATTERN.exec(configured);
-
-    if (match === null) {
-        return DEFAULT_APPROVAL_TIMEOUT_MS;
-    }
-
-    return Math.min(Number(match[1]) * (DURATION_UNIT_MS[match[2] as string] as number), APPROVAL_TIMEOUT_MAX_MS);
-};
-
-/**
  * Pause the run on a human-in-the-loop tool approval: persist an
  * `"awaiting_approval"` marker (filtered out of the model prompt, but observable
  * by a client), move the thread to `"awaiting_input"`, then hibernate on the
@@ -372,7 +317,7 @@ const approvalTimeoutMs = (configured: number | string | undefined): number => {
  * replay memoizes the resolved wait, so the run resumes with the recorded
  * decision without pausing (or re-persisting) again. Named ONLY from the
  * replay-stable `call.id`. The wait carries a timeout (default
- * {@link DEFAULT_APPROVAL_TIMEOUT_MS}, configurable via the agent's
+ * 3 days, configurable via the agent's
  * `approvalTimeout` and bounded by {@link approvalTimeoutMs}) so a
  * never-answered approval ends as a rejection instead of hibernating the run
  * forever.
@@ -1903,4 +1848,4 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 };
 
 export type { AgentLoopOptions };
-export { addUsage, approvalTimeoutMs, compactHistory, runAgentLoop, splitForCompaction };
+export { addUsage, compactHistory, runAgentLoop, splitForCompaction };

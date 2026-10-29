@@ -13,6 +13,9 @@ import type { AgentIR } from "../ir";
 import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
 import { addressableExportNameOf } from "./attribution";
 
+/** The entries that export `defineAgent`: the barrel and the startup-light `/core`. */
+const DEFINE_AGENT_MODULES = new Set(["@lunora/agent", "@lunora/agent/core"]);
+
 /** The only file agents may be declared in — mirrors `lunora/workflows.ts`. */
 const AGENTS_FILENAME = "agents.ts";
 
@@ -34,7 +37,7 @@ const isDefineAgent = (identifier: Identifier): boolean => {
             continue;
         }
 
-        if (declaration.getImportDeclaration().getModuleSpecifierValue() !== "@lunora/agent") {
+        if (!DEFINE_AGENT_MODULES.has(declaration.getImportDeclaration().getModuleSpecifierValue())) {
             return false;
         }
 
