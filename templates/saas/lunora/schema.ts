@@ -8,7 +8,7 @@ import { saas } from "./saas/schema";
 import { ratelimit } from "./ratelimit/schema";
 // lunora:add:ratelimit:end
 import { paymentExtension } from "@lunora/payment";
-import { defineSchema } from "lunorash/server";
+import { defineSchema, defineTable, v } from "lunorash/server";
 
 /**
  * Your tables go in the `defineSchema({ … })` call; the kit's arrive through the
@@ -17,7 +17,20 @@ import { defineSchema } from "lunorash/server";
  * The default export is load-bearing — codegen's generated `app.ts` and
  * `shard.ts` import this module's default.
  */
-export default defineSchema({})
+export default defineSchema({
+    /*
+     * One row per organisation with a checkout in flight — see `checkout` in
+     * `lunora/payment/index.ts`. Root-scoped like the payment tables it guards,
+     * and taken inside a mutation, because only a mutation serialises two
+     * concurrent purchases; the provider call itself cannot.
+     */
+    checkout_holds: defineTable({
+        expiresAt: v.number(),
+        priceId: v.string(),
+        referenceId: v.string(),
+        url: v.optional(v.string()),
+    }).index("byReference", ["referenceId"], { unique: true }),
+})
     /*
      * The payment store's tables, as the package's own schema extension: the store
      * reads and writes them as `payment_customers`, `payment_sessions`,

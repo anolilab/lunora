@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { env } from "../fixtures/registry-runtime/cloudflare-workers";
+import { FUNCTION_PATH } from "../fixtures/registry-runtime/generated-internal";
 
 // The items import their table names from a sibling `schema.ts`, which pulls in `@lunora/server`.
 // That package is not a dependency here and aliasing it would reach every suite, so the two
@@ -83,17 +84,7 @@ const createDatabase = (unique: Record<string, string[][]>) => {
         }
     };
 
-    const find = (id: unknown): { row: Row; table: string } | undefined => {
-        for (const [table, list] of tables) {
-            const row = list.find((entry) => entry["_id"] === id);
-
-            if (row) {
-                return { row, table };
-            }
-        }
-
-        return undefined;
-    };
+    const find = (table: string, id: unknown): Row | undefined => rows(table).find((row) => row["_id"] === id);
 
     const facade = (table: string) => {
         return {
@@ -106,17 +97,17 @@ const createDatabase = (unique: Record<string, string[][]>) => {
 
     return {
         db: {
-            delete: async (id: unknown) => {
-                const found = find(id);
+            delete: async (table: string, id: unknown) => {
+                const found = find(table, id);
 
                 if (found) {
                     tables.set(
-                        found.table,
-                        rows(found.table).filter((row) => row !== found.row),
+                        table,
+                        rows(table).filter((row) => row !== found),
                     );
                 }
             },
-            get: async (id: unknown) => find(id)?.row ?? null,
+            get: async (table: string, id: unknown) => find(table, id) ?? null,
             insert: async (table: string, document: Row) => {
                 counter += 1;
 
@@ -127,17 +118,17 @@ const createDatabase = (unique: Record<string, string[][]>) => {
 
                 return row["_id"];
             },
-            patch: async (id: unknown, patch: Row) => {
-                const found = find(id);
+            patch: async (table: string, id: unknown, patch: Row) => {
+                const found = find(table, id);
 
                 if (!found) {
-                    throw new Error(`no row ${String(id)}`);
+                    throw new Error(`no row ${String(id)} in ${table}`);
                 }
 
-                const next = { ...found.row, ...patch };
+                const next = { ...found, ...patch };
 
-                assertUnique(found.table, next);
-                Object.assign(found.row, patch);
+                assertUnique(table, next);
+                Object.assign(found, patch);
             },
             query: (table: string) => {
                 let predicate = (_row: Row) => true;
@@ -188,6 +179,8 @@ const signedIn = (claims: Row) => {
 };
 
 describe("saas kit functions", () => {
+    const NOW = 1_700_000_000_000;
+
     interface Saas {
         archiveProject: Handler<Record<"projectId", string>, void>;
         createProject: Handler<{ name: string }, string>;
@@ -207,6 +200,7 @@ describe("saas kit functions", () => {
             auth: { ...signedIn({ activeOrganizationId: "org-1", orgRole: "owner" }), userId: "user-1" },
             db,
             log: { info: vi.fn<(message: string) => void>() },
+            now: NOW,
         };
 
         return { db, rows, saas, writer };
@@ -275,6 +269,18 @@ describe("saas kit functions", () => {
             expect(slugs).toHaveLength(2);
             expect(slugs).toContain("website");
             expect(rows("saas_projects").find((row) => row["_id"] === first)!["archivedAt"]).toBeDefined();
+        });
+
+        it("stamps the activity row and the archive with the injected clock", async () => {
+            expect.assertions(2);
+
+            const { rows, saas, writer } = await setup();
+            const projectId = await saas.createProject({ args: { name: "Website" }, ctx: writer });
+
+            await saas.archiveProject({ args: { projectId }, ctx: writer });
+
+            expect(rows("saas_activity").map((row) => row["createdAt"])).toStrictEqual([NOW, NOW]);
+            expect(rows("saas_projects")[0]!["archivedAt"]).toBe(NOW);
         });
 
         it("still refuses the name of a live project", async () => {
@@ -353,37 +359,123 @@ describe("saas kit functions", () => {
 describe("saas template checkout", () => {
     type Checkout = Handler<{ priceId: string }, { url: string }>;
 
+    interface Payment {
+        checkout: Checkout;
+        holdCheckout: Handler<{ priceId: string; referenceId: string }, { url?: string }>;
+        releaseCheckout: (invocation: { ctx: unknown }) => Promise<void>;
+        settleCheckoutHold: Handler<{ referenceId: string; url?: string }, void>;
+    }
+
+    const NOW = 1_700_000_000_000;
+    const HOLD_MS = 30 * 60_000;
+
     const setup = async (subscriptions: Row[]) => {
         env["APP_BASE_URL"] = "https://app.example.test";
 
-        const { checkout } = await load<{ checkout: Checkout }>("templates", "saas", "lunora", "payment", "index.ts");
+        const payment = await load<Payment>("templates", "saas", "lunora", "payment", "index.ts");
+        const database = createDatabase({ checkout_holds: [["referenceId"]] });
+        let sessions = 0;
         const createCheckout = vi.fn<() => Promise<{ url: string }>>(async () => {
-            return { url: "https://pay.example.test/session" };
+            sessions += 1;
+
+            return { url: `https://pay.example.test/session-${String(sessions)}` };
         });
+        const clock = { now: NOW };
+        const auth = signedIn({ activeOrganizationId: "org-1", orgRole: "owner" });
+        // The internal mutations run in the same shard, over the same database.
+        const runMutation = async (reference: Record<typeof FUNCTION_PATH, string>, args: Row) => {
+            const name = reference[FUNCTION_PATH].replace("payment.", "") as "holdCheckout" | "settleCheckoutHold";
+
+            return (payment[name] as Handler<Row, unknown>)({ args, ctx: { db: database.db, now: clock.now } });
+        };
         const ctx = {
-            auth: signedIn({ activeOrganizationId: "org-1", orgRole: "owner" }),
+            auth,
             payments: { createCheckout, listSubscriptions: vi.fn<() => Promise<Row[]>>(async () => subscriptions) },
+            runMutation,
+        };
+        const mutationCtx = () => {
+            return { auth, db: database.db, now: clock.now };
         };
 
-        return { checkout, createCheckout, ctx };
+        return { clock, createCheckout, ctx, database, mutationCtx, payment };
     };
 
     it.each(["active", "trialing", "past_due", "paused"])("refuses a second subscription while one is %s", async (state) => {
         expect.assertions(2);
 
-        const { checkout, createCheckout, ctx } = await setup([{ state }]);
+        const { createCheckout, ctx, payment } = await setup([{ state }]);
 
-        await expect(checkout({ args: { priceId: "price_scale" }, ctx })).rejects.toMatchObject({ code: "CONFLICT" });
+        await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).rejects.toMatchObject({ code: "CONFLICT" });
         expect(createCheckout).not.toHaveBeenCalled();
     });
 
     it("starts a checkout for an organisation with no live subscription", async () => {
         expect.assertions(2);
 
-        const { checkout, createCheckout, ctx } = await setup([{ state: "canceled" }]);
+        const { createCheckout, ctx, payment } = await setup([{ state: "canceled" }]);
 
-        await expect(checkout({ args: { priceId: "price_scale" }, ctx })).resolves.toStrictEqual({ url: "https://pay.example.test/session" });
+        await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).resolves.toStrictEqual({ url: "https://pay.example.test/session-1" });
         expect(createCheckout).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a checkout for another plan while one is in flight, before either webhook lands", async () => {
+        expect.assertions(2);
+
+        const { createCheckout, ctx, payment } = await setup([]);
+
+        await payment.checkout({ args: { priceId: "price_pro" }, ctx });
+
+        await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(createCheckout).toHaveBeenCalledTimes(1);
+    });
+
+    it("hands a repeat for the same plan the session already started", async () => {
+        expect.assertions(2);
+
+        const { createCheckout, ctx, payment } = await setup([]);
+
+        const first = await payment.checkout({ args: { priceId: "price_pro" }, ctx });
+
+        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx })).resolves.toStrictEqual(first);
+        expect(createCheckout).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets another checkout start once the customer cancels, or the hold expires", async () => {
+        expect.assertions(2);
+
+        const { clock, ctx, mutationCtx, payment } = await setup([]);
+
+        await payment.checkout({ args: { priceId: "price_pro" }, ctx });
+        await payment.releaseCheckout({ ctx: mutationCtx() });
+
+        await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).resolves.toMatchObject({ url: "https://pay.example.test/session-2" });
+
+        clock.now += HOLD_MS + 1;
+
+        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx })).resolves.toMatchObject({ url: "https://pay.example.test/session-3" });
+    });
+
+    it("starts a new session for the same plan once the hold has expired", async () => {
+        expect.assertions(1);
+
+        const { clock, ctx, payment } = await setup([]);
+
+        await payment.checkout({ args: { priceId: "price_pro" }, ctx });
+
+        clock.now += HOLD_MS + 1;
+
+        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx })).resolves.toStrictEqual({ url: "https://pay.example.test/session-2" });
+    });
+
+    it("drops the hold when the provider refuses to start the session", async () => {
+        expect.assertions(2);
+
+        const { createCheckout, ctx, database, payment } = await setup([]);
+
+        createCheckout.mockRejectedValueOnce(new Error("provider down"));
+
+        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx })).rejects.toThrow("provider down");
+        expect(database.rows("checkout_holds")).toHaveLength(0);
     });
 });
 

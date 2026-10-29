@@ -54,7 +54,8 @@ import { env as workerEnv } from "cloudflare:workers";
 
 import { LunoraError } from "@lunora/errors";
 import type { SubscriptionState } from "@lunora/payment";
-import { action, internalAction, query, v } from "#lunora/_generated/server.js";
+import { internal } from "#lunora/_generated/internal.js";
+import { action, internalAction, internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
 import type { CloudflareBindings } from "#lunora/_generated/server.js";
 
 import { API_CALLS, PLANS } from "../plans.js";
@@ -161,10 +162,90 @@ const billingPage = (outcome?: "cancel" | "success"): string => `${appOrigin()}/
 const PURCHASABLE_PRICE_IDS: ReadonlySet<string> = new Set(PLANS.flatMap((plan) => (plan.priceId === undefined ? [] : [plan.priceId])));
 
 /**
+ * How long a started checkout blocks another one for the same organisation. A
+ * customer who abandons the provider's page without coming back through the
+ * cancel URL can start a new checkout after this; one who does come back is
+ * released at once by {@link releaseCheckout}.
+ */
+const CHECKOUT_HOLD_MS = 30 * 60_000;
+
+/**
+ * Reserve the organisation's one in-flight checkout. The subscription check in
+ * `checkout` cannot see a purchase whose webhook has not landed yet, so two
+ * admins picking two plans at once would both pass it and be billed twice; this
+ * mutation is the serialisation point. A repeat for the same price gets the
+ * session already started back; a different price is refused until the hold is
+ * released or expires.
+ */
+export const holdCheckout = internalMutation
+    .input({ priceId: v.string(), referenceId: v.string() })
+    .mutation(async ({ args: { priceId, referenceId }, ctx }): Promise<{ url?: string }> => {
+        const hold = await ctx.db
+            .query("checkout_holds")
+            .withIndex("byReference", (q) => q.eq("referenceId", referenceId))
+            .first();
+        const expiresAt = ctx.now + CHECKOUT_HOLD_MS;
+
+        if (hold && (hold["expiresAt"] as number) > ctx.now) {
+            const url = hold["url"] as string | undefined;
+
+            if (hold["priceId"] === priceId && url !== undefined) {
+                return { url };
+            }
+
+            throw new LunoraError("CONFLICT", "a checkout for this organization is already in progress — finish or cancel it first");
+        }
+
+        // A fresh row rather than a patch: the expired hold's `url` is a session the
+        // provider may still accept, and it must not be handed to the next caller.
+        if (hold) {
+            await ctx.db.delete("checkout_holds", hold["_id"] as never);
+        }
+
+        await ctx.db.insert("checkout_holds", { expiresAt, priceId, referenceId });
+
+        return {};
+    });
+
+/** Record the started session on the hold (`url`), or drop the hold when starting it failed (no `url`). */
+export const settleCheckoutHold = internalMutation
+    .input({ referenceId: v.string(), url: v.optional(v.string()) })
+    .mutation(async ({ args: { referenceId, url }, ctx }): Promise<void> => {
+        const hold = await ctx.db
+            .query("checkout_holds")
+            .withIndex("byReference", (q) => q.eq("referenceId", referenceId))
+            .first();
+
+        if (!hold) {
+            return;
+        }
+
+        await (url === undefined ? ctx.db.delete("checkout_holds", hold["_id"] as never) : ctx.db.patch("checkout_holds", hold["_id"] as never, { url }));
+    });
+
+/**
+ * Lift the organisation's checkout hold. The billing page calls it when the
+ * provider sends the customer back through the cancel URL, so picking another
+ * plan straight away is not refused for the rest of {@link CHECKOUT_HOLD_MS}.
+ */
+export const releaseCheckout = mutation.mutation(async ({ ctx }): Promise<void> => {
+    const referenceId = await billingReference(ctx, { adminOnly: true });
+    const hold = await ctx.db
+        .query("checkout_holds")
+        .withIndex("byReference", (q) => q.eq("referenceId", referenceId))
+        .first();
+
+    if (hold) {
+        await ctx.db.delete("checkout_holds", hold["_id"] as never);
+    }
+});
+
+/**
  * Start a checkout session and hand the client the redirect URL. The reference
  * is the caller's active organisation — see {@link billingReference}. Admins and
  * owners only: a subscription bills the whole organisation. Refused while the
- * organisation already has a subscription that is not canceled.
+ * organisation already has a subscription that is not canceled, or another
+ * checkout in flight — see {@link holdCheckout}.
  */
 export const checkout = action.input({ priceId: v.string().max(512) }).action(async ({ args: { priceId }, ctx }): Promise<{ url: string }> => {
     const referenceId = await billingReference(ctx, { adminOnly: true });
@@ -176,22 +257,38 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
     // A checkout opens a NEW subscription. Started on top of one the provider is
     // still billing — `past_due` and `paused` included, not just `active` — it
     // bills the organisation for both. A plan change goes through the portal.
-    // Two checkouts started before either webhook lands are not caught here.
     const existing = await ctx.payments.listSubscriptions(referenceId);
 
     if (existing.some((subscription) => subscription.state !== "canceled")) {
         throw new LunoraError("CONFLICT", "this organization already has a subscription — change the plan from the billing portal");
     }
 
-    const result = await ctx.payments.createCheckout({
-        cancelUrl: billingPage("cancel"),
-        mode: "subscription",
-        priceId,
-        referenceId,
-        successUrl: billingPage("success"),
-    });
+    const pending = await ctx.runMutation(internal.payment.holdCheckout, { priceId, referenceId });
 
-    return { url: result.url };
+    if (pending.url !== undefined) {
+        return { url: pending.url };
+    }
+
+    let url: string;
+
+    try {
+        ({ url } = await ctx.payments.createCheckout({
+            cancelUrl: billingPage("cancel"),
+            mode: "subscription",
+            priceId,
+            referenceId,
+            successUrl: billingPage("success"),
+        }));
+    } catch (error) {
+        // Nothing was started, so nothing should block the next attempt.
+        await ctx.runMutation(internal.payment.settleCheckoutHold, { referenceId });
+
+        throw error;
+    }
+
+    await ctx.runMutation(internal.payment.settleCheckoutHold, { referenceId, url });
+
+    return { url };
 });
 
 /**
