@@ -24,7 +24,14 @@ import type { RestExposure } from "../../../shared/rest-surface";
 import { withRunShard } from "../../../shared/run-shard";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
-import { checkBearerToken, isReservedRelationFunctionPath, SCHEDULER_DISPATCH_PATH, verifySchedulerDispatch } from "../../../shared/scheduler-dispatch";
+import {
+    AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE,
+    checkBearerToken,
+    isAgentRunOffDefaultShard,
+    isReservedRelationFunctionPath,
+    SCHEDULER_DISPATCH_PATH,
+    verifySchedulerDispatch,
+} from "../../../shared/scheduler-dispatch";
 import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import { buildSystemDispatchHeaders, readForwardedDispatchIdentity } from "../../../shared/system-dispatch-headers";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
@@ -1953,9 +1960,6 @@ const STATUS_PATH = "/_lunora/status";
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
 
-/** `@lunora/agent`'s public run-start mutation (`DEFAULT_AGENT_FUNCTION_PATHS.run`); the runtime takes no dependency on that package. */
-const AGENT_RUN_FUNCTION_PATH = "agents:agentRun";
-
 /**
  * Refuse a `__lunora_relation__:*` dispatch that is NOT a fan-out.
  *
@@ -2955,22 +2959,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const noticeDroppedTrace = createDroppedTraceNotice(options.trustInboundTraceContext);
     const defaultShard = options.defaultShardKey ?? "__root__";
 
-    /**
-     * `agents:agentRun` checks for an in-flight run in the agent's thread table and then
-     * starts one, whose loop writes that table on the default shard. On any other shard
-     * the check reads an empty copy, so a retry starts a second run and a foreign-owned
-     * thread is only refused after a workflow instance was spawned. A shard DO cannot
-     * tell whether it is the default (`defaultShardKey` lives only here), and a mutation
-     * holds the shard's single-writer gate, so it cannot read the default shard either.
-     * The worker can tell, so it refuses the call before it reaches a shard.
-     */
+    // The worker knows `defaultShardKey`; the shard DO does not (see shared/scheduler-dispatch).
     const assertAgentRunOnDefaultShard = (functionPath: string, shardKey: string | undefined): void => {
-        // `undefined` is a fan-out: it reaches every shard, never just the default one.
-        if (functionPath === AGENT_RUN_FUNCTION_PATH && shardKey !== defaultShard) {
-            throw new LunoraError(
-                `\`${AGENT_RUN_FUNCTION_PATH}\` runs on the default shard only, where agent threads live; to run an agent's tools on another shard, start it from a mutation on that shard with \`ctx.agents.<name>.run\``,
-                { code: "BAD_REQUEST", status: 400 },
-            );
+        if (isAgentRunOffDefaultShard(functionPath, shardKey, defaultShard)) {
+            throw new LunoraError(AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, { code: "BAD_REQUEST", status: 400 });
         }
     };
 

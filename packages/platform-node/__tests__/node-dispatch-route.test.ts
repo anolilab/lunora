@@ -125,6 +125,24 @@ describe("the dispatch route's refusals and shard headers", () => {
         expect(invoke).not.toHaveBeenCalled();
     });
 
+    it("refuses agents:agentRun bound to a non-default shard, and forwards it on the default one", async () => {
+        expect.assertions(2);
+
+        const { invoke, route } = build();
+        const agentRun = (shardKey?: string): Request =>
+            post(JSON.stringify({ args: { agent: "support", input: "hi", threadKey: "t" }, functionPath: "agents:agentRun", shardKey }), {
+                authorization: `Bearer ${TOKEN}`,
+            });
+
+        // Its in-flight check reads the agent thread table, which only the default shard holds.
+        const refused = await route(agentRun("tenant-a"));
+
+        await route(agentRun());
+
+        expect(refused.status).toBe(400);
+        expect(invoke.mock.calls.map(([call]) => call.shardKey)).toStrictEqual(["__root__"]);
+    });
+
     it("answers a workflow target with a retryable 503, not a deterministic 400", async () => {
         expect.assertions(2);
 
