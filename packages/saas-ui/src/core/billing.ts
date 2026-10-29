@@ -89,8 +89,20 @@ const currentPlan = (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike 
  * can edit in devtools is a suggestion. Rendering the upsell instead of the
  * feature is exactly the right use of it.
  */
-const isEntitled = (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike | undefined, feature: string): boolean =>
-    currentPlan(plans, subscription)?.features.includes(feature) ?? false;
+const isEntitled = (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike | undefined, feature: string): boolean => {
+    if (isEntitling(subscription)) {
+        // Every plan the subscription bills a price of, not just the one
+        // \`currentPlan\` shows: an add-on is a plan of its own, and grants its
+        // features beside the base plan's, as the server's entitlements do.
+        const billed = new Set(subscription.priceIds ?? [subscription.priceId]);
+
+        if (plans.some((plan) => plan.priceId !== undefined && billed.has(plan.priceId) && plan.features.includes(feature))) {
+            return true;
+        }
+    }
+
+    return currentPlan(plans, subscription)?.features.includes(feature) ?? false;
+};
 
 interface SeatUsage {
     /** `undefined` on an unmetered plan. */

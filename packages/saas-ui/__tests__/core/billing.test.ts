@@ -59,6 +59,16 @@ describe("entitlement", () => {
         expect(isEntitled(PLANS, subscription({ priceId: "price_base", priceIds: ["price_base", "price_scale"] }), "sso")).toBe(true);
     });
 
+    it("grants an add-on's features beside the base plan's", () => {
+        const addOn: Plan = { blurb: "Audit trail", currency: "USD", features: ["audit"], id: "audit", name: "Audit", priceId: "price_audit", priceMinor: 900 };
+        const withAddOn = subscription({ priceId: "price_pro", priceIds: ["price_pro", "price_audit"] });
+
+        expect(currentPlan([...PLANS, addOn], withAddOn)?.id).toBe("pro");
+        expect(isEntitled([...PLANS, addOn], withAddOn, "audit")).toBe(true);
+        expect(isEntitled([...PLANS, addOn], withAddOn, "export")).toBe(true);
+        expect(isEntitled([...PLANS, addOn], withAddOn, "sso")).toBe(false);
+    });
+
     it("entitles a trial, because a trial that does not entitle is a demo", () => {
         expect(isEntitling(subscription({ state: "trialing" }))).toBe(true);
     });
