@@ -299,9 +299,35 @@ const rangeContains = (range: KeyRange, entry: IndexKeyEntry): boolean => range.
  * not it declares indexes, so a by-id read can be narrowed to the one row it
  * named. A user index that took the same name would only add touches, never
  * hide one: every written row carries its id key, and a row lacking its key on
- * any declared index reports its whole position as unknown.
+ * a declared index carries {@link UNKNOWN_KEY} for it instead.
  */
 const ID_INDEX = "!id";
+
+/**
+ * Marks a row whose position on an index is unknown (an unencodable or missing
+ * field). Unlike leaving the index out, it survives the batch gate folding rows
+ * together, so another row's key on that index cannot stand in for it. No real
+ * key equals it: the codec never emits `KEY_HIGH`.
+ */
+const UNKNOWN_KEY = KEY_HIGH;
+
+/** `keys` plus an {@link UNKNOWN_KEY} entry for each of `indexes` it has no key on. */
+const withUnknownIndexKeys = (indexes: ReadonlyArray<{ name: string }>, keys: IndexKeyEntry[]): IndexKeyEntry[] => {
+    if (keys.length === indexes.length) {
+        return keys;
+    }
+
+    const keyed = new Set(keys.map((entry) => entry.index));
+
+    return [
+        ...keys,
+        ...indexes
+            .filter((index) => !keyed.has(index.name))
+            .map((index) => {
+                return { index: index.name, key: UNKNOWN_KEY };
+            }),
+    ];
+};
 
 /** The position a row with `id` occupies on {@link ID_INDEX}. */
 const idIndexKey = (id: string): IndexKeyEntry => {
@@ -393,7 +419,7 @@ const keysTouchRange = (range: KeyRange, keys: ReadonlyArray<IndexKeyEntry>): bo
 
     for (const entry of keys) {
         if (entry.index === range.index) {
-            if (entry.key >= range.lo && entry.key < range.hi) {
+            if (entry.key === UNKNOWN_KEY || (entry.key >= range.lo && entry.key < range.hi)) {
                 return true;
             }
 
@@ -438,7 +464,7 @@ const keysTouchRanges = (ranges: ReadonlyArray<KeyRange> | undefined, keys: Read
     for (const [index, indexRanges] of rangesByIndex) {
         const merged = indexRanges.length === 1 ? indexRanges : mergeSorted(indexRanges);
 
-        if ((keysByIndex.get(index) as string[]).some((key) => mergedContains(merged, key))) {
+        if ((keysByIndex.get(index) as string[]).some((key) => key === UNKNOWN_KEY || mergedContains(merged, key))) {
             return true;
         }
     }
@@ -446,5 +472,5 @@ const keysTouchRanges = (ranges: ReadonlyArray<KeyRange> | undefined, keys: Read
     return false;
 };
 
-export { buildIndexRange, idIndexKey, idRange, indexKeysForRow, isPointRange, keysTouchRanges, rangeContains };
+export { buildIndexRange, idIndexKey, idRange, indexKeysForRow, isPointRange, keysTouchRanges, rangeContains, withUnknownIndexKeys };
 export type { IndexKeyEntry, KeyRange, StagedCondition };

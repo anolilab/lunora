@@ -198,7 +198,10 @@ describe("subscription point reads", () => {
     });
 
     it("a row with no key on a declared index re-runs that index's readers, even batched with a keyed row", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
+
+        const other = await seed.insert("pairs", { a: "9", b: "z" });
+        const byId = await subscribe(async (database) => database.get("pairs", other));
 
         const memo = await subscribe(async (database) =>
             database
@@ -213,6 +216,8 @@ describe("subscription point reads", () => {
                 await database.insert("pairs", { a: "2", b: "x" });
             }),
         ).resolves.toBe(true);
+        // Only that index is unknown: a by-id read of another row stays narrowed.
+        await expect(reruns(byId, async (database) => database.insert("pairs", { a: "1" }))).resolves.toBe(false);
     });
 
     it("a get mixed with a predicated read of the same table stays whole-table", async () => {
