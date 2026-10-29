@@ -93,7 +93,9 @@ To sweep a single room instead, pass both its tenant (`""` for the app-wide tena
 
 ### Upgrading from untenanted rooms
 
-Rows written before rooms were tenant-scoped have no `tenantId`. Every heartbeat, `listPresent` and join-time cleanup looks rows up by tenant, so those rows are invisible to them: members re-appear with their next heartbeat as new rows, and the old ones sit in storage. The next argument-less `sweep` reclaims them once they are past the TTL, so schedule one (or run it once) after upgrading.
+Rows written before rooms were tenant-scoped have no `tenantId` — which is why the column is optional. Every heartbeat, `listPresent` and join-time cleanup looks rows up by tenant, so those rows are invisible to them: members re-appear with their next heartbeat as new rows, and the old ones sit in storage. The next argument-less `sweep` reclaims them once they are past the TTL, so schedule one (or run it once) after upgrading.
+
+The upgrade replaces the `byRoomSession` index with `byTenantRoomSession`, and the deploy's schema-drift gate reports a removed index as breaking: it cannot know that the only query using it was this item's own code, which the upgrade also replaced. No data migration covers that, so accept the new shape once — `lunora prepare --update-schema-baseline`, or `--allow-schema-drift` on that one `lunora deploy`.
 
 ## What you own
 

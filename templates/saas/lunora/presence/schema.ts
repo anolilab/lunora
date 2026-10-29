@@ -67,7 +67,10 @@ export const presence = definePlugin("presence", {
                 sessionId: v.string(),
                 // A separate column, not a `tenant:room` key: concatenation lets org `a:b`
                 // + room `c` collide with org `a` + room `b:c`. `""` is the app-wide tenant.
-                tenantId: v.string(),
+                // Every write sets it; optional only because rows written before rooms were
+                // tenant-scoped have none, and a required column would fail the deploy's
+                // schema-drift gate on every existing install.
+                tenantId: v.optional(v.string()),
                 userId: v.optional(v.string()),
             })
                 // The `(tenantId, roomId)` prefix also covers the per-room

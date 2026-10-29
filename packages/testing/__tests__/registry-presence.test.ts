@@ -228,25 +228,9 @@ export { v };`,
         it("reclaims expired rows of every tenant, and rows written before rooms were tenant-scoped, when given no arguments", async () => {
             expect.assertions(2);
 
-            // Storage written before the upgrade holds rows with no `tenantId`; the
-            // current schema refuses to insert one, so this harness's table allows it.
-            const legacy = lunoraTest(
-                defineSchema({
-                    presence_present: defineTable({
-                        data: v.optional(v.record(v.string(), v.any())),
-                        lastSeen: v.number(),
-                        roomId: v.string(),
-                        sessionId: v.string(),
-                        tenantId: v.optional(v.string()),
-                        userId: v.optional(v.string()),
-                    })
-                        .index("byTenantRoomSession", ["tenantId", "roomId", "sessionId"])
-                        .index("byLastSeen", ["lastSeen"]),
-                }),
-                { now: NOW },
-            );
-
-            open.push(legacy);
+            // A row written before rooms were tenant-scoped has no `tenantId`; the
+            // schema must still accept it, or the deploy's drift gate blocks the upgrade.
+            const legacy = start();
 
             await legacy.run(async (ctx) => {
                 await ctx.db.insert("presence_present", { lastSeen: 0, roomId: "board", sessionId: "gone-a", tenantId: "org-a" });
@@ -260,6 +244,21 @@ export { v };`,
 
             await expect(sweep(legacy, {})).resolves.toStrictEqual({ deleted: 4 });
             await expect(remaining(legacy)).resolves.toStrictEqual(["-/live-legacy", "org-a/live-a", "org-b/live-b"]);
+        });
+
+        it("keeps a row without a tenant out of the app-wide tenant's room", async () => {
+            expect.assertions(1);
+
+            const t = start();
+
+            await t.run(async (ctx) => {
+                await ctx.db.insert("presence_present", { lastSeen: NOW, roomId: "lobby", sessionId: "legacy" });
+                await ctx.db.insert("presence_present", { lastSeen: NOW, roomId: "lobby", sessionId: "app", tenantId: "" });
+            });
+
+            await expect(t.withIdentity({ userId: "eve" }).query(item.listPresent, { roomId: "lobby" })).resolves.toStrictEqual([
+                expect.objectContaining({ sessionId: "app" }),
+            ]);
         });
 
         it("sweeps only the named tenant's room when given a (tenantId, roomId) pair", async () => {
