@@ -1,3 +1,13 @@
+## @lunora/codegen [1.0.0-alpha.372](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.371...@lunora/codegen@1.0.0-alpha.372) (2026-10-29)
+
+### Bug Fixes
+
+* **auth:** keep the session and identity in step with org membership ([#1417](https://github.com/anolilab/lunora/issues/1417)) ([d8dc0a5](https://github.com/anolilab/lunora/commit/d8dc0a57ebfb2c5dfa74271614e0109063984e60))
+
+### Performance Improvements
+
+* **codegen:** share parsed lib files across test projects ([#1403](https://github.com/anolilab/lunora/issues/1403)) ([d37bfbd](https://github.com/anolilab/lunora/commit/d37bfbddabb92242f9e75f354200ff949ccc2ead))
+
 ## @lunora/codegen [1.0.0-alpha.371](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.370...@lunora/codegen@1.0.0-alpha.371) (2026-10-29)
 
 ### Features
