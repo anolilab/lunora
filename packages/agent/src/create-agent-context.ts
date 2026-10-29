@@ -19,14 +19,18 @@ import type { AgentBindingSpec, AgentHandle, AgentRunFunction, AgentRunInput, Ag
  * and the env-backed `createDispatchRunner` (the same runner the workflow body
  * uses — it POSTs to `/_lunora/scheduler/dispatch`) is built on demand; tests
  * inject a `dispatch` double.
+ *
+ * `shardKey` is the shard of the ctx this producer rides (the generated shard passes
+ * its own). Every run started here carries it, so the run's tools reach the same
+ * tenant's `.shardBy(...)` data the starting mutation could; absent for the default shard.
  * @experimental
  */
 const createAgentContext = (
     env: Record<string, unknown>,
     specs: ReadonlyArray<AgentBindingSpec>,
-    context: { dispatch?: AgentRunFunction; exports?: unknown } = {},
+    context: { dispatch?: AgentRunFunction; exports?: unknown; shardKey?: string } = {},
 ): Record<string, AgentHandle> => {
-    const { dispatch, exports } = context;
+    const { dispatch, exports, shardKey } = context;
     const agents: Record<string, AgentHandle> = {};
     const patchThread = toFunctionReference(DEFAULT_AGENT_FUNCTION_PATHS.patchThread);
     const resolveDispatch = (): AgentRunFunction => dispatch ?? createDispatchRunner({ env, label: "@lunora/agent" });
@@ -79,7 +83,17 @@ const createAgentContext = (
                     throw new LunoraError("BAD_REQUEST", `@lunora/agent: run input ${BRANCH_MARKER_REJECTION}`);
                 }
 
-                const instance = await resolve().create({ ...(options?.id === undefined ? {} : { id: options.id }), params: input });
+                // The starting shard replaces a caller-supplied one: a public client reaching
+                // `agents:agentRun` was authorized for this shard, not the one it names.
+                const params: AgentRunInput = { ...input };
+
+                delete params.shardKey;
+
+                if (shardKey !== undefined) {
+                    params.shardKey = shardKey;
+                }
+
+                const instance = await resolve().create({ ...(options?.id === undefined ? {} : { id: options.id }), params });
 
                 return { id: instance.id };
             },

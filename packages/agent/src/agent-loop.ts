@@ -5,6 +5,7 @@ import { SECRET_VALUE_MAX_TTL_MS } from "@lunora/platform";
 import type { LanguageModel, ModelMessage, StopCondition, ToolSet } from "ai";
 
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
+import appCallOptions from "./app-call-options";
 import { approvalTimeoutMs, definedColumns, SECRET_WAIT_GRACE_MS } from "./component-shared";
 import { resolveAgentModel, usageOfFailedTurn } from "./generate";
 import { readHistoryWindow } from "./history-window";
@@ -151,6 +152,8 @@ interface TurnContext {
     setState: (state: Record<string, unknown>) => Promise<void>;
     /** Dispatch ref of `agents:agentSettleSecretRequest` — reads a paused secret request's status once its wait ends. */
     settleSecretRef: ReturnType<typeof toFunctionReference>;
+    /** The shard the run was started on (`params.shardKey`), handed to every tool context. */
+    shardKey: string | undefined;
     step: AgentStepLike;
     /** The streaming LLM-turn seam, when available (else `undefined`). */
     streamGenerate: AgentStreamGenerate | undefined;
@@ -574,8 +577,24 @@ const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCal
 };
 
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: number): Promise<void> => {
-    const { agent, approvalGrantedRef, depth, env, exports, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } =
-        turnContext;
+    const {
+        agent,
+        approvalGrantedRef,
+        depth,
+        env,
+        exports,
+        getState,
+        instanceId,
+        onTokenDelta,
+        owner,
+        persist,
+        run,
+        setState,
+        shardKey,
+        step,
+        threadKey,
+        tools,
+    } = turnContext;
     const stepName = `tool:${call.name}:${call.id}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
     const messageKey = `${instanceId}:tool:${call.id}`;
@@ -637,6 +656,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: 
         reportProgress,
         run,
         setState,
+        shardKey,
         step,
         threadKey,
         toolCallId: call.id,
@@ -644,7 +664,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall, turn: 
     // The gate's view: everything `toolContext` has EXCEPT `setState` — a gate
     // that mutates state is a side effect inside a decision predicate, which is
     // exactly the misuse durability here is fixing, not relocating.
-    const gateContext: AgentApprovalContext = { depth, env, getState, idempotencyKey: stepName, instanceId, run, threadKey, toolCallId: call.id };
+    const gateContext: AgentApprovalContext = { depth, env, getState, idempotencyKey: stepName, instanceId, run, shardKey, threadKey, toolCallId: call.id };
     // Distinct from `stepName` (`tool:${call.name}:${call.id}`) so
     // `@lunora/workflow`'s BY-NAME step memoization can never confuse the gate's
     // durable result with the tool's own (see the advisor's duplicate-step-name
@@ -1082,7 +1102,13 @@ const graphTraverseBounds = (graph: AgentMemoryOptions["graph"]): Record<string,
     definedColumns({ depth: graph?.depth, fanOut: graph?.fanOut, maxNodes: graph?.maxNodes, maxSeeds: graph?.maxSeeds }) as Record<string, number>;
 
 /** Dispatch a `"semantic"` source's RAG action as a `memory:retrieve[:<key>]` step and read its context. */
-const dispatchSemanticMemory = async (source: AgentMemorySource, input: string, step: AgentStepLike, run: AgentRunFunction): Promise<string | undefined> => {
+const dispatchSemanticMemory = async (
+    source: AgentMemorySource,
+    input: string,
+    shardKey: string | undefined,
+    step: AgentStepLike,
+    run: AgentRunFunction,
+): Promise<string | undefined> => {
     // A semantic source without a `source` is rejected at `defineAgent`; guard
     // defensively for a hand-built definition that bypassed it.
     if (source.source === undefined) {
@@ -1092,7 +1118,8 @@ const dispatchSemanticMemory = async (source: AgentMemorySource, input: string, 
     const memorySource = toFunctionReference(source.source);
     const { topK } = source;
     const stepName = memoryStepName("memory:retrieve", source.key);
-    const retrieved = await step.do(stepName, async () => run(memorySource, { query: input, ...(topK === undefined ? {} : { topK }) }));
+    const retrieved = await step.do(stepName, async () =>
+        run(memorySource, { query: input, ...(topK === undefined ? {} : { topK }) }, appCallOptions(shardKey)), );
 
     return readRetrievedContext(retrieved);
 };
@@ -1162,6 +1189,7 @@ const dispatchInjectedSource = async (
         input: string;
         owner: string | undefined;
         run: AgentRunFunction;
+        shardKey: string | undefined;
         step: AgentStepLike;
     },
 ): Promise<string | undefined> => {
@@ -1173,7 +1201,7 @@ const dispatchInjectedSource = async (
         return dispatchGraphMemory(source, deps.input, deps.owner, deps.graphTraverse, deps.step, deps.run);
     }
 
-    return dispatchSemanticMemory(source, deps.input, deps.step, deps.run);
+    return dispatchSemanticMemory(source, deps.input, deps.shardKey, deps.step, deps.run);
 };
 
 /**
@@ -1192,6 +1220,7 @@ const retrieveMemoryContext = async (
     agent: AgentDefinition,
     input: string,
     owner: string | undefined,
+    shardKey: string | undefined,
     paths: AgentFunctionPaths,
     step: AgentStepLike,
     run: AgentRunFunction,
@@ -1212,7 +1241,7 @@ const retrieveMemoryContext = async (
 
     for (const source of sources) {
         // eslint-disable-next-line no-await-in-loop -- sequential durable steps in a stable order ARE the replay-safe execution model
-        const context = await dispatchInjectedSource(source, { episodeRecall, graphTraverse, input, owner, run, step });
+        const context = await dispatchInjectedSource(source, { episodeRecall, graphTraverse, input, owner, run, shardKey, step });
 
         if (context !== undefined) {
             contexts.push(context);
@@ -1704,7 +1733,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     // Memory step: dispatch the configured retrieval action once per run and
     // inject the assembled context into every turn's prompt.
-    const memoryContext = await retrieveMemoryContext(agent, params.input, params.owner, paths, step, run);
+    const memoryContext = await retrieveMemoryContext(agent, params.input, params.owner, params.shardKey, paths, step, run);
 
     // Resolve the system prompt once per run. A dynamic `instructions` thunk is
     // pure (env + run params in, string out), so calling it at the top level is
@@ -1735,6 +1764,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         persist,
         run,
         setState,
+        shardKey: params.shardKey,
         step,
         streamGenerate,
         threadKey: params.threadKey,

@@ -19,6 +19,14 @@ export interface AgentFunctionReference {
  */
 export interface AgentRunOptions {
     /**
+     * Route the call to this shard instead of the default one. Pass
+     * {@link AgentToolContext.shardKey} when the target reads `.shardBy(...)` tables —
+     * `functionTool` does — and leave it unset for the agent's own `agents:*`
+     * functions, whose threads, state and secrets live on the default shard.
+     */
+    shardKey?: string;
+
+    /**
      * Abort the dispatch after this many ms, overriding the runner's 30s
      * default (`DEFAULT_DISPATCH_TIMEOUT_MS`).
      *
@@ -135,7 +143,10 @@ export interface AgentToolContext {
      */
     reportProgress: (data: unknown) => void;
 
-    /** Dispatch a Lunora function (the workflow `ctx.run`). */
+    /**
+     * Dispatch a Lunora function (the workflow `ctx.run`). Calls go to the default
+     * shard unless they pass {@link AgentRunOptions.shardKey}.
+     */
     run: AgentRunFunction;
 
     /**
@@ -160,6 +171,13 @@ export interface AgentToolContext {
      * skip the write when it is already present.
      */
     setState: (state: Record<string, unknown>) => Promise<void>;
+
+    /**
+     * The shard the run was started on ({@link AgentRunInput.shardKey}); `undefined`
+     * for the default shard. Pass it as {@link AgentRunOptions.shardKey} to reach the
+     * tenant's `.shardBy(...)` data from a hand-written tool.
+     */
+    shardKey?: string;
 
     /**
      * The durable-step handle (`step.do`/`waitForEvent`). ALWAYS present:
@@ -1076,6 +1094,14 @@ export interface AgentRunInput {
     owner?: string;
     /** Where a triggered run sends its answer — see {@link AgentReplyRef}. */
     replyRef?: AgentReplyRef;
+
+    /**
+     * The shard whose app data the run's tools read and write. `ctx.agents.<name>.run`
+     * sets it to the shard of the mutation or action that starts the run and overwrites
+     * any value in the input: `agents:agentRun` passes a public client's input through,
+     * and that client was authorized for its own shard only.
+     */
+    shardKey?: string;
     /** The thread key — reuse to continue a conversation. */
     threadKey: string;
     /** Optional thread title, set on first creation. */
