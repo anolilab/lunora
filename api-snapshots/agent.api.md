@@ -79,6 +79,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `AgentInboundShardResolver` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `AgentInstructionsContext` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
