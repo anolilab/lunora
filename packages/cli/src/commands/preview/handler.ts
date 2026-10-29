@@ -32,7 +32,7 @@ import { provisionBindings, runDeployCommand } from "../deploy/handler";
 import { resolveRequiredSecretKeys } from "../deploy/secrets";
 import { runSeedCommand } from "../seed/handler";
 import type { PreviewOptions } from "./index";
-import type { PreviewConfig, PreviewPlan, ResourceIds } from "./plan";
+import type { PlannedResource, PreviewConfig, PreviewPlan, ResourceIds } from "./plan";
 import { planPreview, PREVIEW_MARKER_VAR, previewEnvironmentBlock, previewMarker, previewNames, productionCollisions, resourceKey } from "./plan";
 import type { PreviewRecord, Request } from "./registry";
 import {
@@ -303,6 +303,51 @@ const ensureResources = async (request: Request, namespace: string, plan: Previe
     return ids;
 };
 
+/** The planned resources that exist in the account under the preview's names but are not on `record`. */
+const unrecordedResources = async (request: Request, planned: ReadonlyArray<PlannedResource>, record: PreviewRecord | undefined): Promise<string[]> => {
+    const recorded = new Set((record?.resources ?? []).map((resource) => `${resource.kind}:${resource.name}`));
+    const candidates = planned.filter((resource) => !recorded.has(`${resource.kind}:${resource.name}`));
+    const found = await Promise.all(
+        candidates.map(async (resource) => ((await findResource(request, resource.kind, resource.name)) === undefined ? [] : [resource])),
+    );
+
+    return found.flat().map((resource) => `${resource.kind} "${resource.name}"`);
+};
+
+/** Why a deploy must not take the record it read (and the Worker and resources under the preview's names). */
+const recordRefusal = async (
+    request: Request,
+    plan: PreviewPlan,
+    existing: PreviewRecord | undefined,
+    workerExists: boolean,
+): Promise<{ code: number; error: string } | undefined> => {
+    // The marker is only a var: without a record, nothing shows this preview owns the Worker that carries it.
+    if (existing === undefined && workerExists) {
+        return {
+            code: EXIT_CODE.USAGE,
+            error: `a Worker named "${plan.worker}" exists but no preview record says this preview deployed it; refusing to deploy over it`,
+        };
+    }
+
+    if (existing !== undefined && existing.worker !== plan.worker) {
+        return {
+            code: EXIT_CODE.USAGE,
+            error: `the record for preview "${plan.slug}" names Worker "${existing.worker}", not "${plan.worker}"; refusing to deploy over it`,
+        };
+    }
+
+    // KV is eventually consistent, so the record read can predate resources an earlier run made. Writing it back
+    // would erase them from the newer record; stop before any write instead.
+    const unrecorded = await unrecordedResources(request, plan.resources, existing);
+
+    return unrecorded.length === 0
+        ? undefined
+        : {
+              code: EXIT_CODE.FAILURE,
+              error: `${unrecorded.join(", ")} already exist(s) but no preview record read says this preview created it, so nothing was written or deployed. If a deploy of this preview just ran, its record may not have reached this location yet: run the deploy again. Otherwise rename or remove it, then deploy again.`,
+          };
+};
+
 /** Write the secrets to a private temporary file for `wrangler deploy --secrets-file`; the caller removes the directory. */
 const writeSecretsFile = (values: Record<string, string>): { directory: string; path: string } => {
     const directory = mkdtempSync(join(tmpdir(), "lunora-preview-"));
@@ -365,13 +410,10 @@ const shipPreview = async (
         const now = new Date().toISOString();
         const existing = await readRecord(request, namespace, recordKey(plan.production, plan.slug));
 
-        // The marker is only a var: without a record, nothing shows this preview owns the Worker that carries it.
-        if (existing === undefined && existingWorker.exists) {
-            return fail(logger, `a Worker named "${plan.worker}" exists but no preview record says this preview deployed it; refusing to deploy over it`);
-        }
+        const refusal = await recordRefusal(request, plan, existing, existingWorker.exists);
 
-        if (existing !== undefined && existing.worker !== plan.worker) {
-            return fail(logger, `the record for preview "${plan.slug}" names Worker "${existing.worker}", not "${plan.worker}"; refusing to deploy over it`);
+        if (refusal !== undefined) {
+            return fail(logger, refusal.error, refusal.code);
         }
 
         record = existing ?? {
@@ -582,13 +624,7 @@ const removePreview = async (
         // KV is eventually consistent: the record read here can predate a resource a deploy just made. Writing
         // this stale copy back would erase the newer one that lists it, so the record is then left untouched;
         // a re-run finds what was already deleted gone, which counts as deleted.
-        const recorded = new Set(record.resources.map((resource) => `${resource.kind}:${resource.name}`));
-        const candidates = (planned?.resources ?? []).filter((resource) => !recorded.has(`${resource.kind}:${resource.name}`));
-        const found = await Promise.all(
-            candidates.map(async (resource) => ((await findResource(request, resource.kind, resource.name)) === undefined ? [] : [resource])),
-        );
-
-        unrecorded = found.flat().map((resource) => `${resource.kind} "${resource.name}"`);
+        unrecorded = await unrecordedResources(request, planned?.resources ?? [], record);
 
         if (unrecorded.length === 0) {
             await (remaining.length === 0 ? deleteRecord(request, namespace, record) : writeRecord(request, namespace, left));

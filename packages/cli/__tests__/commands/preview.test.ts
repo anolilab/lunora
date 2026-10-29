@@ -532,6 +532,20 @@ describe("lunora preview", () => {
             expect(previewEnvironmentBlock(withCrons, plan, ids).triggers).toStrictEqual({ crons: [] });
         });
 
+        it("refuses bindings whose names differ only by case, which would share one preview resource", () => {
+            expect.assertions(1);
+
+            const twoDatabases = {
+                ...production,
+                d1_databases: [
+                    { binding: "DB", database_id: "prod-d1-uuid", database_name: "prod-db" },
+                    { binding: "db", database_id: "other-uuid", database_name: "other-db" },
+                ],
+            } as PreviewConfig;
+
+            expect(planPreview(twoDatabases, "42").error).toMatch(/two bindings would share the preview resource name "lunora-app-preview-42-db"/u);
+        });
+
         it("copies the build-time constants, which wrangler does not inherit into an environment", () => {
             expect.assertions(1);
 
@@ -594,6 +608,19 @@ describe("lunora preview", () => {
             expect(planPreview({ ...production, ...extra }, "42").error).toMatch(/cannot be previewed in isolation/u);
         });
     });
+
+    const deployWith = async (account: ReturnType<typeof fakeAccount>, spawner: Spawner): Promise<Awaited<ReturnType<typeof runPreviewCommand>>> =>
+        runPreviewCommand({
+            adminFetch: adminRecorder().fetch,
+            cwd: workdir,
+            environment: CREDENTIALS,
+            fetch: account.fetch,
+            healthFetch: healthy,
+            logger: silentLogger().logger,
+            name: "42",
+            spawner,
+            subcommand: "deploy",
+        });
 
     describe("deploy", () => {
         it("deploys its own Worker on its own D1, KV and R2, records them, and leaves the committed config and production's link alone", async () => {
@@ -746,7 +773,7 @@ describe("lunora preview", () => {
                 subcommand: "deploy",
             });
 
-            expect(result).toMatchObject({ code: EXIT_CODE.FAILURE, error: expect.stringMatching(/already exists but no preview record/u) });
+            expect(result).toMatchObject({ code: EXIT_CODE.FAILURE, error: expect.stringMatching(/already exist\(s\) but no preview record/u) });
             expect(deploys).toHaveLength(0);
             expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(PRODUCTION_WRANGLER);
         });
@@ -959,23 +986,35 @@ describe("lunora preview", () => {
             expect(fresh[1]).not.toBe(fresh[0]);
         });
 
+        it("stops before writing when a stale read of the record misses a resource an earlier deploy made", async () => {
+            expect.assertions(3);
+
+            const account = fakeAccount();
+            const { deploys, spawner } = wranglerAt(workdir, account.workers);
+            const deploy = async (): Promise<Awaited<ReturnType<typeof runPreviewCommand>>> => deployWith(account, spawner);
+
+            await deploy();
+
+            const registry = [...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "";
+            const current = account.kvValues.get(registry)?.get("lunora-app/42") ?? "";
+            const parsed = JSON.parse(current) as { resources: { kind: string }[] };
+
+            // One read is served a copy written before the R2 bucket was recorded.
+            account.staleReads.set("lunora-app/42", JSON.stringify({ ...parsed, resources: parsed.resources.filter((resource) => resource.kind !== "r2") }));
+
+            const result = await deploy();
+
+            expect(result.error).toMatch(/r2 "lunora-app-preview-42-files" already exist\(s\) but no preview record read/u);
+            expect(account.kvValues.get(registry)?.get("lunora-app/42")).toBe(current);
+            expect(deploys).toHaveLength(1);
+        });
+
         it("refuses to rebind a recorded resource whose id now names a different resource", async () => {
             expect.assertions(2);
 
             const account = fakeAccount();
             const { deploys, spawner } = wranglerAt(workdir, account.workers);
-            const deploy = async (): Promise<Awaited<ReturnType<typeof runPreviewCommand>>> =>
-                runPreviewCommand({
-                    adminFetch: adminRecorder().fetch,
-                    cwd: workdir,
-                    environment: CREDENTIALS,
-                    fetch: account.fetch,
-                    healthFetch: healthy,
-                    logger: silentLogger().logger,
-                    name: "42",
-                    spawner,
-                    subcommand: "deploy",
-                });
+            const deploy = async (): Promise<Awaited<ReturnType<typeof runPreviewCommand>>> => deployWith(account, spawner);
 
             await deploy();
 
@@ -1318,33 +1357,30 @@ describe("lunora preview", () => {
         it("lists every recorded preview across pages of the registry's keys", async () => {
             expect.assertions(1);
 
-            const account = fakeAccount({ keysPageSize: 2 });
-            const { spawner } = wranglerAt(workdir, account.workers);
+            const account = await deployed();
+            const registry = [...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "";
+            const values = account.kvValues.get(registry);
+            const template = JSON.parse(values?.get("lunora-app/42") ?? "{}") as Record<string, unknown>;
 
-            for (const name of ["1", "2", "3", "4", "5"]) {
-                // eslint-disable-next-line no-await-in-loop -- one preview at a time, as CI would
-                await runPreviewCommand({
-                    adminFetch: adminRecorder().fetch,
-                    cwd: workdir,
-                    environment: CREDENTIALS,
-                    fetch: account.fetch,
-                    healthFetch: healthy,
-                    logger: silentLogger().logger,
-                    name,
-                    spawner,
-                    subcommand: "deploy",
-                });
+            // Records written straight into the registry: deploying each one would only make the test slow.
+            for (const name of ["1", "2", "3", "4"]) {
+                values?.set(`lunora-app/${name}`, JSON.stringify({ ...template, name, resources: [], worker: `lunora-app-preview-${name}` }));
             }
+
+            const paged = fakeAccount({ keysPageSize: 2 });
+
+            paged.kv.set(registry, "lunora-preview-registry");
+            paged.kvValues.set(registry, values ?? new Map());
 
             const listed = await runPreviewCommand({
                 cwd: workdir,
                 environment: CREDENTIALS,
-                fetch: account.fetch,
+                fetch: paged.fetch,
                 logger: silentLogger().logger,
                 subcommand: "list",
             });
 
-            expect(listed.data?.previews?.map((preview) => preview.name).toSorted()).toStrictEqual(["1", "2", "3", "4", "5"]);
+            expect(listed.data?.previews?.map((preview) => preview.name).toSorted()).toStrictEqual(["1", "2", "3", "4", "42"]);
         });
 
         it("--dry-run lists what would be deleted and deletes nothing", async () => {

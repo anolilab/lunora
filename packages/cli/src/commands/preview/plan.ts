@@ -226,6 +226,15 @@ const planPreview = (config: PreviewConfig, name: string): { error: string; plan
         }),
     );
 
+    // Binding names are case-sensitive but resource names are lowercase, so `DB` and `db` would share one.
+    const shared = resources.find((resource, index) => resources.findIndex((other) => other.name === resource.name) !== index);
+
+    if (shared !== undefined) {
+        return {
+            error: `two bindings would share the preview resource name "${shared.name}"; rename one of them (binding names differ only by case or punctuation)`,
+        };
+    }
+
     return { plan: { ...named.names, resources } };
 };
 
@@ -321,5 +330,5 @@ const productionCollisions = (config: PreviewConfig, candidates: ReadonlyArray<s
     return candidates.filter((candidate) => identities.has(candidate));
 };
 
-export type { PreviewConfig, PreviewPlan, PreviewResourceKind, ResourceIds };
+export type { PlannedResource, PreviewConfig, PreviewPlan, PreviewResourceKind, ResourceIds };
 export { planPreview, PREVIEW_MARKER_VAR, previewEnvironmentBlock, previewMarker, previewNames, previewResourceName, productionCollisions, resourceKey };
