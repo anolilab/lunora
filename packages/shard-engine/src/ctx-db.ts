@@ -2003,16 +2003,33 @@ const deriveSoftDeleteFields = (schema: SchemaLike): ReadonlyMap<string, string>
     return fields;
 };
 
-/** Encoded size of the stored documents in `rows`, read off the JSON column the row store already returned. */
-const documentBytes = (rows: ReadonlyArray<unknown>): number => {
+/**
+ * Encoded size of the stored documents in `rows`, read off the JSON column the
+ * row store already returned. A document whose id is already in `charged` is
+ * skipped, and every one counted is added to it.
+ */
+const documentBytes = (rows: ReadonlyArray<unknown>, charged: Set<string>): number => {
     let bytes = 0;
 
     for (const row of rows) {
-        const raw = (row as Record<string, unknown> | undefined)?.[DOC_COLUMN];
+        const record = row as Record<string, unknown> | undefined;
+        const raw = record?.[DOC_COLUMN];
 
-        if (typeof raw === "string") {
-            bytes += raw.length;
+        if (typeof raw !== "string") {
+            continue;
         }
+
+        const id = record?.["id"];
+
+        if (typeof id === "string") {
+            if (charged.has(id)) {
+                continue;
+            }
+
+            charged.add(id);
+        }
+
+        bytes += raw.length;
     }
 
     return bytes;
@@ -2026,7 +2043,11 @@ const documentBytes = (rows: ReadonlyArray<unknown>): number => {
  * reaches the isolate through a dozen paths — by-id probes, keyset pages,
  * search and geo candidates, rank pages, relation loads — and a byte cap that
  * one of them skips is no cap. The stored JSON is already a string in hand, so
- * its length costs nothing; nothing is re-serialized. `toArray()`, `one()` and
+ * its length costs nothing; nothing is re-serialized. Each document is charged
+ * once per transaction: a write re-reads the row it updates, and charging that
+ * pre-image again would halve the cap for a read-then-update loop, while a
+ * document never read before is charged wherever it is first loaded — a write
+ * path that hands its pre-image back cannot read past the cap. `toArray()`, `one()` and
  * iteration are each charged. A host whose `toArray`/`one` is built on its own
  * iterator would charge each row twice, so iteration inside those two is not
  * charged.
@@ -2036,6 +2057,7 @@ const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | und
         return sql;
     }
 
+    const charged = new Set<string>();
     const exec = <Row = Record<string, unknown>>(query: string, ...params: unknown[]): SqlCursor<Row> => {
         const cursor = sql.exec<Row>(query, ...params);
         const toArray = cursor.toArray.bind(cursor);
@@ -2053,7 +2075,7 @@ const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | und
         };
         const charge = (rows: ReadonlyArray<unknown>): void => {
             if (!exempt()) {
-                const bytes = documentBytes(rows);
+                const bytes = documentBytes(rows, charged);
 
                 if (bytes > 0) {
                     headroom.recordReadBytes(bytes);
@@ -3009,18 +3031,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     /**
      * Locate a row by id and return both the owning table and the decoded
      * document in a single pass, so a `patch`/`delete` costs one lookup rather than a table probe plus a read.
-     *
-     * A write's pre-image probe passes `charge: false`: the caller paid for the
-     * document when it read it, and the write meters its own bytes, so charging
-     * the probe too would halve the read cap for read-then-update loops.
      * @returns the row, its owning table, and its serialised document, or `undefined` when the id is absent
      */
-    const locateRowById = (
-        id: string,
-        expectedTable?: string,
-        charge = true,
-    ): { docJson: string; row: Record<string, unknown>; tableName: string } | undefined => {
-        const probeSql = charge ? sql : unwrapSql(sql);
+    const locateRowById = (id: string, expectedTable?: string): { docJson: string; row: Record<string, unknown>; tableName: string } | undefined => {
         // Row ids are random UUIDs, so the owning table can't be derived from
         // the id. Rather than probing each table with its own SELECT (T
         // statements worst-case on a T-table schema, on the per-mutation hot
@@ -3039,7 +3052,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // Text depends only on the chunk's table list, so it is rendered once
             // per distinct list rather than per read — this probe runs on every
             // get/patch/replace/delete. See `row-statements.ts`.
-            const [firstRow] = runSql(probeSql, rowProbeSql(chunk), ...rowProbeParams(id, chunk)).toArray();
+            const [firstRow] = runSql(sql, rowProbeSql(chunk), ...rowProbeParams(id, chunk)).toArray();
 
             if (!firstRow) {
                 continue;
@@ -3114,7 +3127,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         canRetry: boolean,
         patchRow: (patch: Record<string, unknown>) => Promise<void>,
     ): Promise<{ applied: boolean; doc: Record<string, unknown> | null } | undefined> => {
-        const located = locateRowById(id, tableName, false);
+        const located = locateRowById(id, tableName);
 
         if (!located) {
             // eslint-disable-next-line unicorn/no-null -- no such row: nothing to match, nothing written
@@ -3368,7 +3381,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             assertSchemaTable(table, "ctx.db.delete(table, id)");
 
             // One lookup returns the table and the row together.
-            const located = locateRowById(id, table, false);
+            const located = locateRowById(id, table);
 
             if (!located) {
                 // A global row's id never lives in this DO; fall back to the
@@ -4307,7 +4320,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             assertSchemaTable(table, "ctx.db.patch(table, id, values)");
 
             // One lookup returns the table and the row together.
-            const located = locateRowById(id, table, false);
+            const located = locateRowById(id, table);
 
             if (!located) {
                 // A global row's id never lives in this DO; fall back to the
@@ -4787,7 +4800,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // By-id, so it reaches a row that list reads hide. Clearing the marker
             // is a plain `patch` to `null` — it re-syncs companions and broadcasts
             // an update, so live list queries pick the row back up.
-            const located = locateRowById(id, table, false);
+            const located = locateRowById(id, table);
 
             if (!located) {
                 const global = globalFallbackFor(table);
@@ -4837,7 +4850,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // — the same OCC contract `patch`/`delete` honor. Reusing the
             // decoded row as `previous` also keeps the aggregate/rank -prev
             // steps consistent with what was actually on disk at read time.
-            const located = locateRowById(id, table, false);
+            const located = locateRowById(id, table);
 
             if (!located) {
                 // A global row's id never lives in this DO; fall back to the

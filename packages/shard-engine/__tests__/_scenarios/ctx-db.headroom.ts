@@ -235,6 +235,31 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
             ).resolves.toBeUndefined();
         });
 
+        it("charges a conditional patch that hands back a row the transaction never read", async () => {
+            expect.assertions(1);
+
+            const id = await build({}).insert("notes", { body: "x".repeat(500), bucket: "a" });
+            const writer = build({ maxReadBytes: 100 });
+
+            await expect(codeOf(async () => writer.patchIf?.("notes", id, { patch: { bucket: "b" }, where: { bucket: "not-a" } }))).resolves.toBe(
+                "TRANSACTION_LIMIT_EXCEEDED",
+            );
+        });
+
+        it("charges a document read twice in one transaction once", async () => {
+            expect.assertions(1);
+
+            const id = await build({}).insert("notes", { body: "x".repeat(300), bucket: "a" });
+            const [stored] = sql.exec<{ __doc__: string }>("SELECT __doc__ FROM notes").toArray();
+            const tracker = new TransactionHeadroomTracker();
+            const reader = createShardContextDatabase({ clock: () => 1_700_000_000_000, headroom: tracker, schema, sql });
+
+            await reader.get("notes", id);
+            await reader.get("notes", id);
+
+            expect(tracker.headroom().readBytes).toBe(stored?.__doc__.length);
+        });
+
         it("does not charge read bytes inside an unmetered deleteAll", async () => {
             expect.assertions(1);
 
