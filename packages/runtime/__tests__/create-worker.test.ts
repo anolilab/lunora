@@ -224,6 +224,32 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.shardKey).toBe("tenant-1");
     });
 
+    it("refuses agents:agentRun on a non-default shard before forwarding it", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, defaultShardKey: "tenant-1", shardDO: shard.namespace });
+        const agentRun = async (shardKey?: string): Promise<Response> =>
+            worker.fetch(
+                new Request("https://app.example/_lunora/rpc", {
+                    body: JSON.stringify({ args: { agent: "support", input: "hi", threadKey: "t" }, functionPath: "agents:agentRun", shardKey }),
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+        // The agent's thread rows live on the default shard; a run-start check anywhere
+        // else reads an empty table.
+        const refused = await agentRun("org-a");
+
+        await agentRun();
+        await agentRun("tenant-1");
+
+        expect(refused.status).toBe(400);
+        await expect(refused.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+        expect(shard.calls.map((call) => call.shardKey)).toStrictEqual(["tenant-1", "tenant-1"]);
+    });
+
     it("rejects non-POST RPC requests with 405", async () => {
         expect.assertions(2);
 
