@@ -200,8 +200,11 @@ const deleteRecord = async (request: Request, namespace: string, record: Preview
     expectOk(await request(valuePath(namespace, recordKey(record.production, record.name)), { method: "DELETE" }), "removing the preview record");
 };
 
-/** Every recorded preview of `production`. The keys listing is cursor-paged; a partial list is refused, not shown. */
-const listRecords = async (request: Request, namespace: string, production: string): Promise<PreviewRecord[]> => {
+/**
+ * Every recorded preview of `production`, and the keys whose value is not a record this CLI wrote (listed, not
+ * fatal: one bad key must not hide the rest). The keys listing is cursor-paged; a partial list is refused.
+ */
+const listRecords = async (request: Request, namespace: string, production: string): Promise<{ records: PreviewRecord[]; unreadable: string[] }> => {
     const prefix = `${production}/`;
     const names: string[] = [];
     let cursor = "";
@@ -230,9 +233,24 @@ const listRecords = async (request: Request, namespace: string, production: stri
         cursor = info.cursor;
     }
 
-    const records = await Promise.all(names.map(async (key) => readRecord(request, namespace, key)));
+    const read = await Promise.all(
+        names.map(async (key) => {
+            try {
+                return { key, record: await readRecord(request, namespace, key) };
+            } catch (error) {
+                if (error instanceof TypeError) {
+                    return { key, unreadable: true };
+                }
 
-    return records.filter((record): record is PreviewRecord => record !== undefined);
+                throw error;
+            }
+        }),
+    );
+
+    return {
+        records: read.flatMap((entry) => (entry.record === undefined ? [] : [entry.record])),
+        unreadable: read.flatMap((entry) => (entry.unreadable === true ? [entry.key] : [])),
+    };
 };
 
 /** The id of an existing resource of this kind and name, or `undefined` when there is none. */

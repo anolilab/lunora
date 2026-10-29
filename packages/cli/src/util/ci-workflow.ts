@@ -100,9 +100,9 @@ const execLine = (manager: PackageManager, args: ReadonlyArray<string>): string 
  * The GitHub Actions steps shared by every job: checkout,
  * provision the manager, provision Node, install with a frozen lockfile.
  */
-const githubSetupSteps = (pm: PmCiProfile): string =>
+const githubSetupSteps = (pm: PmCiProfile, checkoutReference?: string): string =>
     `      - uses: actions/checkout@v4
-${pm.githubSetupStep}      - uses: actions/setup-node@v4
+${checkoutReference === undefined ? "" : `        with:\n          ref: ${checkoutReference}\n`}${pm.githubSetupStep}      - uses: actions/setup-node@v4
         with:
           node-version: 22
 ${pm.githubCacheKey === undefined ? "" : `          cache: ${pm.githubCacheKey}\n`}      - run: ${pm.installCmd}`;
@@ -185,7 +185,9 @@ ${githubSetupSteps(pm)}
     permissions:
       contents: read
     steps:
-${githubSetupSteps(pm)}
+      # A closed, unmerged pull request may have no merge ref left to check out;
+      # the base branch names the same production Worker the record is keyed by.
+${githubSetupSteps(pm, `\${{ github.event.pull_request.base.ref }}`)}
       - run: ${execLine(manager, ["preview", "delete", `\${{ github.event.pull_request.number }}`])}
 
   # A fork's pull request gets no secrets, so it runs the deploy pipeline,
@@ -246,13 +248,14 @@ deploy:
     # Unset (a first deploy), the gate blocks as before.
     - ${execLine(manager, ["deploy", "--migrate-url", '"$LUNORA_DEPLOY_URL"'])}
 
-# Every merge request gets an isolated preview: its own Worker, Durable Objects,
-# D1, KV and R2, never production's. GitLab runs the stop job below when the
-# merge request is merged or closed, or the environment auto-stops.
+# Every merge request from this project gets an isolated preview: its own
+# Worker, Durable Objects, D1, KV and R2, never production's. GitLab runs the
+# stop job below when the merge request is merged or closed, or the environment
+# auto-stops.
 preview:
   extends: .lunora_base
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
   resource_group: ${GITLAB_PREVIEW_GROUP}
   environment:
     name: preview/$CI_MERGE_REQUEST_IID
@@ -265,7 +268,7 @@ preview:
 preview_delete:
   extends: .lunora_base
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
       when: manual
   allow_failure: true
   resource_group: ${GITLAB_PREVIEW_GROUP}
@@ -274,6 +277,15 @@ preview_delete:
     action: stop
   script:
     - ${execLine(manager, ["preview", "delete", '"$CI_MERGE_REQUEST_IID"'])}
+
+# A fork's merge request runs without this project's CI/CD variables, so it
+# runs the deploy pipeline, bundle included, and publishes nothing.
+check:
+  extends: .lunora_base
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
+  script:
+    - ${execLine(manager, ["deploy", "--dry-run"])}
 `;
 };
 

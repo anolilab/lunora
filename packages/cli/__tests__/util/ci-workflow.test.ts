@@ -104,7 +104,11 @@ jobs:
     permissions:
       contents: read
     steps:
+      # A closed, unmerged pull request may have no merge ref left to check out;
+      # the base branch names the same production Worker the record is keyed by.
       - uses: actions/checkout@v4
+        with:
+          ref: \${{ github.event.pull_request.base.ref }}
       - uses: pnpm/action-setup@v4
         with:
           version: latest
@@ -169,13 +173,14 @@ deploy:
     # Unset (a first deploy), the gate blocks as before.
     - pnpm exec lunora deploy --migrate-url "$LUNORA_DEPLOY_URL"
 
-# Every merge request gets an isolated preview: its own Worker, Durable Objects,
-# D1, KV and R2, never production's. GitLab runs the stop job below when the
-# merge request is merged or closed, or the environment auto-stops.
+# Every merge request from this project gets an isolated preview: its own
+# Worker, Durable Objects, D1, KV and R2, never production's. GitLab runs the
+# stop job below when the merge request is merged or closed, or the environment
+# auto-stops.
 preview:
   extends: .lunora_base
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
   resource_group: lunora-preview-$CI_MERGE_REQUEST_IID
   environment:
     name: preview/$CI_MERGE_REQUEST_IID
@@ -188,7 +193,7 @@ preview:
 preview_delete:
   extends: .lunora_base
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
       when: manual
   allow_failure: true
   resource_group: lunora-preview-$CI_MERGE_REQUEST_IID
@@ -197,6 +202,15 @@ preview_delete:
     action: stop
   script:
     - pnpm exec lunora preview delete "$CI_MERGE_REQUEST_IID"
+
+# A fork's merge request runs without this project's CI/CD variables, so it
+# runs the deploy pipeline, bundle included, and publishes nothing.
+check:
+  extends: .lunora_base
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
+  script:
+    - pnpm exec lunora deploy --dry-run
 `;
 
 const MANAGERS: ReadonlyArray<PackageManager> = ["npm", "pnpm", "yarn", "bun"];
@@ -281,7 +295,7 @@ describe("ci-workflow", () => {
     });
 
     it("both providers deploy an isolated preview per pull/merge request and delete it when it closes, never a version upload", () => {
-        expect.assertions(9);
+        expect.assertions(12);
 
         writeCiWorkflow(workdir, "github", "pnpm");
         writeCiWorkflow(workdir, "gitlab", "pnpm");
@@ -302,6 +316,13 @@ describe("ci-workflow", () => {
         expect(gitlab).toContain("on_stop: preview_delete");
         expect(gitlab).toMatch(/action: stop\n {2}script:\n {4}- pnpm exec lunora preview delete "\$CI_MERGE_REQUEST_IID"/u);
         expect(gitlab).not.toContain("--preview");
+        // A closed, unmerged pull request's merge ref can be gone; the teardown checks out the base branch.
+        expect(teardown).toContain("ref: ${{ github.event.pull_request.base.ref }}");
+        // A fork's merge request has no CI/CD variables: it gets the dry-run check, not a preview.
+        expect(gitlab).toContain('"merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID\n  resource_group');
+        expect(gitlab.slice(gitlab.indexOf("\ncheck:"))).toContain(
+            "$CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID\n  script:\n    - pnpm exec lunora deploy --dry-run",
+        );
     });
 
     it("skips an existing pipeline unless overwrite is set", () => {

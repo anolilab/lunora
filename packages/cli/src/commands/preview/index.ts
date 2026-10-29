@@ -26,7 +26,11 @@ const previewCommand: Command = {
         }),
     name: "preview",
     options: [
-        { description: "deploy / delete: show the plan without calling Cloudflare or deploying", name: "dry-run", type: Boolean },
+        {
+            description: "deploy: show the plan without calling Cloudflare; delete: read the record and show what would be deleted, changing nothing",
+            name: "dry-run",
+            type: Boolean,
+        },
         OUTPUT_FORMAT_OPTION,
         {
             description: "deploy: give the preview this secret, with the value of the same-named environment variable. Repeatable; nothing else is copied",

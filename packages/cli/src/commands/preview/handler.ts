@@ -365,6 +365,11 @@ const shipPreview = async (
         const now = new Date().toISOString();
         const existing = await readRecord(request, namespace, recordKey(plan.production, plan.slug));
 
+        // The marker is only a var: without a record, nothing shows this preview owns the Worker that carries it.
+        if (existing === undefined && existingWorker.exists) {
+            return fail(logger, `a Worker named "${plan.worker}" exists but no preview record says this preview deployed it; refusing to deploy over it`);
+        }
+
         if (existing !== undefined && existing.worker !== plan.worker) {
             return fail(logger, `the record for preview "${plan.slug}" names Worker "${existing.worker}", not "${plan.worker}"; refusing to deploy over it`);
         }
@@ -687,8 +692,13 @@ const listPreviews = async (context: PreviewContext, options: PreviewCommandOpti
 
     try {
         const namespace = await registryNamespace(access.request, false);
+        const listed = namespace === undefined ? { records: [], unreadable: [] } : await listRecords(access.request, namespace, production);
 
-        records = namespace === undefined ? [] : await listRecords(access.request, namespace, production);
+        records = listed.records;
+
+        for (const key of listed.unreadable) {
+            logger.warn(`the registry key "${key}" is not a preview record this CLI wrote; it is not listed, and \`delete\` will refuse it`);
+        }
     } catch (error) {
         return fail(logger, reason(error), EXIT_CODE.FAILURE);
     }

@@ -121,7 +121,7 @@ lunora init my-app --ci github    # or --ci gitlab
 That scaffolds a production deploy on the default branch and a
 `lunora preview deploy <number>` on every pull or merge request. On GitHub, a
 `preview-delete` job runs `lunora preview delete <number>` when the pull request
-closes. A fork's pull request gets no secrets, so it runs
+closes. A fork's pull or merge request gets no secrets, so it runs
 `lunora deploy --dry-run` instead. On GitLab, the preview is a review
 environment whose stop job deletes it when the merge request is merged or
 closed, or after two weeks. Set `CLOUDFLARE_API_TOKEN` (with D1, KV and R2 edit

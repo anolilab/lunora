@@ -577,6 +577,7 @@ describe("lunora preview", () => {
             ["an unknown binding", { some_future_binding: [{ binding: "X" }] }],
             ["a Durable Object on another Worker", { durable_objects: { bindings: [{ class_name: "Billing", name: "BILL", script_name: "billing" }] } }],
             ["a singular route", { route: "app.example.com/*" }],
+            ["the Analytics SQL binding, which reads the account's datasets", { analytics: { binding: "ANALYTICS" } }],
         ])("refuses an app that binds %s rather than share production's resource", (_label, extra) => {
             expect.assertions(1);
 
@@ -762,6 +763,30 @@ describe("lunora preview", () => {
 
             expect(result.error).toMatch(/Worker named "lunora-app-preview-42" already exists and was not deployed as preview "42"/u);
             expect(account.calls.filter((call) => call.method !== "GET")).toHaveLength(0);
+            expect(deploys).toHaveLength(0);
+        });
+
+        it("refuses to deploy over a marked Worker that has no preview record, before creating any resource", async () => {
+            expect.assertions(3);
+
+            const account = fakeAccount();
+
+            // The marker is a var anyone can set; the record is what shows ownership.
+            account.workers.set("lunora-app-preview-42", "lunora-app/42");
+
+            const { deploys, spawner } = wranglerAt(workdir, account.workers);
+            const result = await runPreviewCommand({
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect(result.error).toMatch(/exists but no preview record says this preview deployed it/u);
+            expect(account.calls.filter((call) => call.method === "POST" || call.method === "PUT")).toHaveLength(1);
             expect(deploys).toHaveLength(0);
         });
 
@@ -1213,6 +1238,22 @@ describe("lunora preview", () => {
             expect(result.code).toBe(0);
             expect(account.r2.size).toBe(0);
             expect(account.r2Objects.get("lunora-app-preview-42-files")?.size).toBe(0);
+        });
+
+        it("lists the readable previews and names a registry key that is not a record, rather than failing", async () => {
+            expect.assertions(3);
+
+            const account = await deployed();
+            const registry = [...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "";
+
+            account.kvValues.get(registry)?.set("lunora-app/hand-edited", JSON.stringify({ version: 1 }));
+
+            const { logger, warns } = silentLogger();
+            const listed = await runPreviewCommand({ cwd: workdir, environment: CREDENTIALS, fetch: account.fetch, logger, subcommand: "list" });
+
+            expect(listed.code).toBe(0);
+            expect(listed.data?.previews?.map((preview) => preview.name)).toStrictEqual(["42"]);
+            expect(warns.join("\n")).toContain('"lunora-app/hand-edited" is not a preview record');
         });
 
         it("lists every recorded preview across pages of the registry's keys", async () => {

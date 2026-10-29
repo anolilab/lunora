@@ -80,7 +80,7 @@ const SETTINGS_KEYS = new Set([
  * Non-inheritable keys copied into the preview unchanged: each binds a capability, not production data
  * (`vars` and `secrets` are the config's own values and secret names, `define` its build-time constants).
  */
-const COPIED_KEYS = ["ai", "analytics", "browser", "define", "images", "media", "secrets", "send_email", "vars", "version_metadata", "worker_loaders"] as const;
+const COPIED_KEYS = ["ai", "browser", "define", "images", "media", "secrets", "send_email", "vars", "version_metadata", "worker_loaders"] as const;
 
 /** Non-inheritable keys left out: a preview's logs do not go to production's tail Workers. */
 const DROPPED_KEYS = new Set(["tail_consumers"]);

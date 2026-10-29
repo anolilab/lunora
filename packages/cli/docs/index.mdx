@@ -221,7 +221,7 @@ Additional flags:
 
 - `--add <list>`: add features non-interactively after scaffolding — a comma-separated list of the values in the [`lunora add` table](#lunora-add), each applied with its shipped defaults. Bypasses the interactive picker and its sub-prompts.
 - `--dry-run`: walk every step (prompts and output included) without writing files, installing, or running git.
-- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch, a [`lunora preview deploy <number>`](#lunora-preview) on every pull / merge request, and a `lunora preview delete <number>` once it is closed or merged (on GitHub, a fork's pull request gets a `lunora deploy --dry-run` check instead, since it receives no secrets). Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables, and after the first deploy `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN`, which let the production deploy's drift gate read the stored rows.
+- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch, a [`lunora preview deploy <number>`](#lunora-preview) on every pull / merge request, and a `lunora preview delete <number>` once it is closed or merged (a fork's pull or merge request gets a `lunora deploy --dry-run` check instead, since it receives no secrets). Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables, and after the first deploy `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN`, which let the production deploy's drift gate read the stored rows.
 
 ### `lunora add`
 
@@ -766,7 +766,8 @@ lunora preview deploy 123                         # deploy, migrate, print the U
 lunora preview deploy 123 --seed                  # …then fill it with `lunora seed` data
 lunora preview deploy 123 --secret RESEND_API_KEY # give it a secret from the environment
 lunora preview deploy 123 --var AUTH_URL=https://my-app-preview-123.acme.workers.dev
-lunora preview deploy 123 --dry-run               # show the Worker, resources and env block
+lunora preview deploy 123 --dry-run               # show the Worker, resources and env block, no API call
+lunora preview delete 123 --dry-run               # read the record, show what would go, change nothing
 lunora preview list
 lunora preview delete 123
 ```
@@ -813,7 +814,7 @@ deleted. A resource that cannot be deleted stays on record for the next
 
 An app that binds anything a preview cannot isolate yet is refused with the
 list: Hyperdrive, service bindings, queues, workflows, Vectorize, Analytics
-Engine, containers, Artifacts, `lunora.config` services, a Durable Object on
+Engine, the `analytics` (Analytics SQL) binding, which reads the account's datasets, containers, Artifacts, `lunora.config` services, a Durable Object on
 another Worker's `script_name`, a singular `route`, an R2 bucket with a
 jurisdiction, or any binding kind the CLI does not know. A `secrets.required`
 entry has to be passed with `--secret`; the preview refuses before creating
