@@ -254,12 +254,12 @@ const isolatedEntry = (kind: PreviewResourceKind, entry: Entry, plan: PreviewPla
 };
 
 /**
- * The `env.<preview>` block. `routes: []` overrides production's inheritable routes and custom domains, and
- * `workers_dev` gives the preview its URL; `name` is set so wrangler's `<name>-<env>` default never applies.
+ * The `env.<preview>` block. `routes: []` overrides production's inheritable routes and custom domains, empty
+ * `triggers` keep production's crons from firing once per open preview, and `workers_dev` gives the preview its URL; `name` is set so wrangler's `<name>-<env>` default never applies.
  */
 const previewEnvironmentBlock = (config: PreviewConfig, plan: PreviewPlan, ids: ResourceIds, overrides: Readonly<Record<string, string>> = {}): Entry => {
     const source = config as Record<string, unknown>;
-    const block: Entry = { name: plan.worker, routes: [], workers_dev: true };
+    const block: Entry = { name: plan.worker, routes: [], triggers: { crons: [] }, workers_dev: true };
     const marker = { [PREVIEW_MARKER_VAR]: previewMarker(plan) };
 
     for (const key of COPIED_KEYS) {

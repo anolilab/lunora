@@ -522,6 +522,16 @@ describe("lunora preview", () => {
             expect(planPreview(owned, "42").error).toMatch(/already declares "env.preview-42"/u);
         });
 
+        it("clears production's cron triggers, which wrangler would otherwise inherit into every preview", () => {
+            expect.assertions(1);
+
+            const withCrons = { ...production, triggers: { crons: ["0 3 * * *"] } } as PreviewConfig;
+            const plan = planOf(withCrons, "42");
+            const ids = new Map(plan.resources.map((resource) => [resourceKey(resource.kind, resource.binding), `preview-id-${resource.binding}`]));
+
+            expect(previewEnvironmentBlock(withCrons, plan, ids).triggers).toStrictEqual({ crons: [] });
+        });
+
         it("copies the build-time constants, which wrangler does not inherit into an environment", () => {
             expect.assertions(1);
 
@@ -822,6 +832,55 @@ describe("lunora preview", () => {
 
             expect(result.error).toMatch(/requires STRIPE_KEY.*--secret STRIPE_KEY/u);
             expect(account.calls).toHaveLength(0);
+        });
+
+        it("mints a mintable secret the project declares locally, but never a provider key", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, ".dev.vars"), `${["BETTER_AUTH_SECRET=local", "STRIPE_SECRET_KEY=sk_test"].join("\n")}\n`, "utf8");
+
+            const account = fakeAccount();
+            const { deploys, spawner } = wranglerAt(workdir, account.workers);
+
+            await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect(deploys[0]?.secrets.BETTER_AUTH_SECRET).toMatch(/^[0-9a-f]{64}$/u);
+            expect(Object.keys(deploys[0]?.secrets ?? {})).not.toContain("STRIPE_SECRET_KEY");
+        });
+
+        it("leaves no schema baseline behind in a checkout that had none", async () => {
+            expect.assertions(2);
+
+            const baselinePath = join(workdir, "lunora", ".lunora-schema.json");
+
+            rmSync(baselinePath, { force: true });
+
+            const account = fakeAccount();
+            const { spawner } = wranglerAt(workdir, account.workers);
+            const result = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect(result.code).toBe(0);
+            expect(existsSync(baselinePath)).toBe(false);
         });
 
         it("deploys the --var overrides with the preview", async () => {

@@ -221,7 +221,7 @@ Additional flags:
 
 - `--add <list>`: add features non-interactively after scaffolding — a comma-separated list of the values in the [`lunora add` table](#lunora-add), each applied with its shipped defaults. Bypasses the interactive picker and its sub-prompts.
 - `--dry-run`: walk every step (prompts and output included) without writing files, installing, or running git.
-- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch, a [`lunora preview deploy <number>`](#lunora-preview) on every pull / merge request, and a `lunora preview delete <number>` once it is closed or merged (a fork's pull or merge request gets a `lunora deploy --dry-run` check instead, since it receives no secrets). Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables, and after the first deploy `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN`, which let the production deploy's drift gate read the stored rows.
+- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch, a [`lunora preview deploy <number>`](#lunora-preview) on every pull / merge request, and a `lunora preview delete <number>` once it is closed or merged (a fork's or Dependabot's pull request, and a fork's merge request, gets a `lunora deploy --dry-run` check instead, since it receives no secrets). Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables, and after the first deploy `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN`, which let the production deploy's drift gate read the stored rows.
 
 ### `lunora add`
 
@@ -778,7 +778,7 @@ characters), so it gets its own Durable Object namespace. Every D1 database,
 KV namespace and R2 bucket the app binds gets a preview-owned one, named
 `<preview-worker>-<binding>`. The deploy is the normal `lunora deploy`
 pipeline under a transient `env.preview-<name>` block that clears production's
-`routes` and custom domains and turns on `workers_dev`. The block is removed
+`routes`, custom domains and cron triggers and turns on `workers_dev`. The block is removed
 from `wrangler.jsonc` when the command ends. The pipeline's data migrations run
 against the preview, and `--seed` runs `lunora seed` against it afterwards. The
 preview never touches the project link, the schema baseline, or the

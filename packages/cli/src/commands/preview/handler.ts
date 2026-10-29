@@ -7,11 +7,11 @@
  * record (see `./registry`), which is all `delete` acts on.
  */
 import { createHmac } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { readServiceBindings } from "@lunora/codegen";
+import { readServiceBindings, SCHEMA_SNAPSHOT_FILENAME } from "@lunora/codegen";
 import { generateSecretValue } from "@lunora/config";
 import { applyModify, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
@@ -233,7 +233,7 @@ const previewSecrets = async (
 
     const { fromLocal, fromPackages, mintableKeys } = await resolveRequiredSecretKeys(cwd, undefined);
 
-    for (const key of [...fromPackages, ADMIN_TOKEN_KEY]) {
+    for (const key of [...fromPackages, ...fromLocal, ADMIN_TOKEN_KEY]) {
         if (values[key] === undefined && (mintableKeys.has(key) || key === ADMIN_TOKEN_KEY)) {
             values[key] = mint(key);
         }
@@ -473,6 +473,9 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
     const { variables } = parsed;
     // The preview's env block, and whatever reconcile adds to the top level, exist only for this run.
     const restore = snapshotPreviewConfig(cwd);
+    // Codegen writes a first schema baseline when there is none; the branch's schema must not become production's.
+    const baselinePath = join(cwd, "lunora", SCHEMA_SNAPSHOT_FILENAME);
+    const hadBaseline = existsSync(baselinePath);
 
     try {
         // Bindings do not inherit into an environment: reconcile the top level first, so the env block copies
@@ -524,6 +527,10 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
         return await shipPreview({ ...context, config }, plan, variables, options, access.request);
     } finally {
         restore();
+
+        if (!hadBaseline) {
+            rmSync(baselinePath, { force: true });
+        }
     }
 };
 
