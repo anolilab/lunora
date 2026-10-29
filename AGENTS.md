@@ -105,6 +105,8 @@ Everything compiles with `"moduleResolution": "bundler"`. Write relative imports
 
 When a third-party API insists on a default (e.g. `@visulima/cerebro`'s `loader: () => import("./handler")`), adapt at the call site — `.then((m) => ({ default: m.execute }))` — rather than adding a `default` alongside named exports.
 
+The one exception is a **Worker entry module** — the file `wrangler.jsonc`'s `main` points at (e.g. `lunora/server.ts`). Cloudflare requires the request handler as its default export and each Durable Object class as a named export, which wrangler binds by `class_name` and the migrations name. Nothing at a call site can adapt that, so `export const ShardDO = app.ShardDO; export default app;` is correct there and nowhere else.
+
 ### Platform parity — state the mapping when you add a feature
 
 Every new `ctx.*` surface or binding states its per-target mapping, or its explicit non-support, **in the same change that adds it**:
