@@ -96,7 +96,6 @@ Codegen emits a `.hyperdriveGlobal({ engine, exec, origin? })` builder method.
 ```ts
 import { fromPostgresJs } from "@lunora/hyperdrive";
 import { buildPgExec } from "@lunora/hyperdrive/global";
-import postgres from "postgres";
 
 import { defineApp } from "../lunora/_generated/app.js";
 
@@ -104,7 +103,14 @@ const app = defineApp<Env>()
     .shard((env) => env.SHARD)
     .hyperdriveGlobal({
         engine: "postgres",
-        exec: (env) => buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))),
+        exec: (env) =>
+            buildPgExec(
+                fromPostgresJs(async () => {
+                    const { default: postgres } = await import("postgres");
+
+                    return postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 });
+                }),
+            ),
     })
     .build();
 

@@ -55,10 +55,13 @@ describe("hyperdrive global — postgres.js (fetch_types: false) over the wire",
 
         sql = postgres({ database: "postgres", fetch_types: false, host, max: 1, password, port, user });
 
-        const exec = buildPgExec(fromPostgresJs(sql as never));
+        const exec = buildPgExec(fromPostgresJs(() => sql as never));
 
         await runSqlGlobalTableMigrations(exec, schema, postgresDialect);
-        writer = createPostgresGlobalCtxDb(fromPostgresJs(sql as never), { clock: () => 1_700_000_000_000, schema });
+        writer = createPostgresGlobalCtxDb(
+            fromPostgresJs(() => sql as never),
+            { clock: () => 1_700_000_000_000, schema },
+        );
 
         await writer.insert("wide", { big: 7n, blob: new Uint8Array([1, 2]).buffer, label: "hit", n: 7, profile: { age: 30 } });
         await writer.insert("wide", { big: 8n, blob: new Uint8Array([3]).buffer, label: "miss", n: 8, profile: { age: "30" } });
@@ -105,7 +108,7 @@ describe("hyperdrive global — postgres.js (fetch_types: false) over the wire",
         // postgres.js sends a statement with no params over the simple protocol even with
         // `prepare: true`, and only that protocol accepts several commands in one string.
         await expect(
-            fromPostgresJs(sql as never).query("CREATE TEMP TABLE multi (n int); INSERT INTO multi VALUES (1); DROP TABLE multi"),
+            fromPostgresJs(() => sql as never).query("CREATE TEMP TABLE multi (n int); INSERT INTO multi VALUES (1); DROP TABLE multi"),
         ).resolves.toBeDefined();
     });
 
@@ -123,11 +126,14 @@ describe("hyperdrive global — postgres.js (fetch_types: false) over the wire",
             },
         } as unknown as SchemaLike;
 
-        await runSqlGlobalTableMigrations(buildPgExec(fromPostgresJs(sql as never)), searchSchema, postgresDialect);
+        await runSqlGlobalTableMigrations(buildPgExec(fromPostgresJs(() => sql as never)), searchSchema, postgresDialect);
 
         // The token rows go over as one JSON text param; a bare `::json` cast lets postgres.js
         // encode that string a second time, and `json_to_recordset` then rejects a scalar.
-        const notes = createPostgresGlobalCtxDb(fromPostgresJs(sql as never), { clock: () => 1_700_000_000_000, schema: searchSchema });
+        const notes = createPostgresGlobalCtxDb(
+            fromPostgresJs(() => sql as never),
+            { clock: () => 1_700_000_000_000, schema: searchSchema },
+        );
 
         await notes.insert("notes", { body: "hello wire world" });
 
@@ -144,7 +150,7 @@ describe("hyperdrive global — postgres.js (fetch_types: false) over the wire",
 
         // Without fetched array types postgres.js sends `[["a,b", "c"]]` bound to
         // `ANY($1::text[])` as the literal `a,b,c`, which Postgres rejects.
-        const store = createPgVectorIndex({ client: fromPostgresJs(sql as never), dimensions: 2, name: "wire" });
+        const store = createPgVectorIndex({ client: fromPostgresJs(() => sql as never), dimensions: 2, name: "wire" });
 
         await store.upsert([
             { id: "a,b", metadata: { kind: "x" }, values: [1, 0] },

@@ -213,7 +213,7 @@ describe("exec adapters", () => {
         await exec.all("SELECT ?", [1]);
         await exec.run("DELETE FROM `t` WHERE `id` = ?", ["x"]);
         await exec.batch?.([{ params: ["y"], sql: "DELETE FROM `t` WHERE `id` = ?" }]);
-        await fromMysql2(connection).query("SELECT ?", [2]);
+        await fromMysql2(() => connection).query("SELECT ?", [2]);
 
         expect(execute).not.toHaveBeenCalled();
         expect(query).toHaveBeenCalledTimes(4);
