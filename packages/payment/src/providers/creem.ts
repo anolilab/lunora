@@ -9,13 +9,15 @@
  * handled from the Creem dashboard (no SDK endpoint), so `refundPayment` throws; manual authorize /
  * capture also throw (Creem owns the money movement).
  *
- * Takes an injected, structural `CreemClientLike` (so this package never imports the `creem` SDK);
- * pass `new Creem()` (with the api key threaded per call) from the app. Webhooks are verified with the
- * `creem-signature` HMAC-SHA256 scheme via {@link verifyCreemSignature}. Field casing varies across
+ * Takes a loader for a structural `CreemClientLike` (so this package never imports the `creem` SDK);
+ * pass `async () => new (await import("creem")).Creem({ apiKey })` from the app. It runs on the
+ * first provider call, keeping the SDK out of the Worker's startup graph. Webhooks are verified with
+ * the `creem-signature` HMAC-SHA256 scheme via {@link verifyCreemSignature}. Field casing varies across
  * the SDK's camelCase surface vs. raw webhook snake_case, so responses are read defensively.
  */
 import type { Creem } from "creem";
 
+import { lazyValue } from "../../../../shared/lazy-value";
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
 import { asRecord, readAny, readAnyNumber, readBoolean, readEpochMs, readNumber, readString, referenceFromMetadata } from "../json";
@@ -53,7 +55,7 @@ interface CreemClientLike {
 }
 
 interface CreemAdapterOptions {
-    readonly client: CreemClientLike;
+    readonly client: () => Promise<CreemClientLike> | CreemClientLike;
     readonly webhookSecret: string;
 }
 
@@ -286,23 +288,30 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
 export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
-    // Use the injected client as the real `Creem` internally so every call is checked against the SDK.
-    const client = options.client as unknown as Creem;
+    // Use the loaded client as the real `Creem` internally so every call is checked against the SDK.
+    const loadClient = lazyValue(async () => (await options.client()) as unknown as Creem);
 
     return {
-        // Creem is a Merchant-of-Record: it moves the money, so there is no manual payment-intent flow.
         cancelPayment: () => notSupported("manual payment cancellation"),
 
-        cancelSubscription: async (subscriptionId, cancelOptions) =>
+        cancelSubscription: async (subscriptionId, cancelOptions) => {
+            const client = await loadClient();
+
             // Creem supports both immediate and period-end cancellation via `mode`; omitting it defers
             // to the store's configured default, so pass it explicitly. Default (no `atPeriodEnd`) is
             // immediate, matching the other adapters. Creem reports the resulting state, which we return.
-            subscriptionFromCreem(await client.subscriptions.cancel(subscriptionId, { mode: cancelOptions?.atPeriodEnd === true ? "scheduled" : "immediate" })),
+            return subscriptionFromCreem(
+                await client.subscriptions.cancel(subscriptionId, { mode: cancelOptions?.atPeriodEnd === true ? "scheduled" : "immediate" }),
+            );
+        },
+
         capabilities: { checkoutExpiry: false, merchantOfRecord: true, portal: true, usageMetering: false },
 
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),
 
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
+            const client = await loadClient();
+
             const checkout = await client.checkouts.create({
                 // Creem has no cancel URL, so `input.cancelUrl` has nowhere to go.
                 // No customer id means this reference's email already belongs to another reference's
@@ -322,6 +331,8 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         },
 
         createPortalSession: async (input: PortalInput) => {
+            const client = await loadClient();
+
             // Creem's hosted portal is customer-wide, and Creem keeps one customer per email, so a
             // customer can hold another reference's subscription (the same person paying for a second
             // org). Opening it would let this reference see and cancel that one: refuse instead, and
@@ -354,6 +365,8 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         },
 
         getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer | undefined> => {
+            const client = await loadClient();
+
             const toCustomer = (record: Record<string, unknown>): Customer => {
                 return {
                     createdAt: Date.now(),
@@ -409,9 +422,17 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
             }
         },
 
-        getPaymentStatus: async (sessionId) => checkoutToSession(await client.checkouts.retrieve(sessionId)),
+        getPaymentStatus: async (sessionId) => {
+            const client = await loadClient();
 
-        getSubscriptionStatus: async (subscriptionId) => subscriptionFromCreem(await client.subscriptions.get(subscriptionId)),
+            return checkoutToSession(await client.checkouts.retrieve(sessionId));
+        },
+
+        getSubscriptionStatus: async (subscriptionId) => {
+            const client = await loadClient();
+
+            return subscriptionFromCreem(await client.subscriptions.get(subscriptionId));
+        },
 
         identifier: "creem",
 
@@ -435,9 +456,15 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         // Creem refunds are issued from the dashboard; there is no SDK endpoint to initiate one.
         refundPayment: () => notSupported("programmatic refunds"),
 
-        resumeSubscription: async (subscriptionId) => subscriptionFromCreem(await client.subscriptions.resume(subscriptionId)),
+        resumeSubscription: async (subscriptionId) => {
+            const client = await loadClient();
+
+            return subscriptionFromCreem(await client.subscriptions.resume(subscriptionId));
+        },
 
         updateSubscription: async (subscriptionId, patch: SubscriptionPatch) => {
+            const client = await loadClient();
+
             // `upgrade` changes the product and `update` changes item units; neither takes the other's
             // field. Two calls are not atomic, so refuse the combined patch rather than apply half of it.
             if (patch.priceId && patch.quantity !== undefined) {

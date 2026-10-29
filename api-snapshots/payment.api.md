@@ -984,7 +984,7 @@ const zeroMoney: (currency: CurrencyCode) => Money;
 
 ```ts
 interface AutumnAdapterOptions {
-    readonly client: AutumnClientLike;
+    readonly client: () => Promise<AutumnClientLike> | AutumnClientLike;
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }
@@ -1140,7 +1140,7 @@ const createAutumnFeatures: (options: AutumnFeaturesOptions) => AutumnFeatures;
 
 ```ts
 interface CreemAdapterOptions {
-    readonly client: CreemClientLike;
+    readonly client: () => Promise<CreemClientLike> | CreemClientLike;
     readonly webhookSecret: string;
 }
 ```
@@ -1167,7 +1167,7 @@ const createCreemAdapter: (options: CreemAdapterOptions) => PaymentAdapter;
 
 ```ts
 interface DodoPaymentsAdapterOptions {
-    readonly client: DodoPaymentsClientLike;
+    readonly client: () => Promise<DodoPaymentsClientLike> | DodoPaymentsClientLike;
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }
@@ -1198,7 +1198,7 @@ const createDodoPaymentsAdapter: (options: DodoPaymentsAdapterOptions) => Paymen
 
 ```ts
 interface PolarAdapterOptions {
-    readonly client: PolarClientLike;
+    readonly client: () => Promise<PolarClientLike> | PolarClientLike;
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }
@@ -1230,7 +1230,7 @@ const createPolarAdapter: (options: PolarAdapterOptions) => PaymentAdapter;
 
 ```ts
 interface StripeAdapterOptions {
-    readonly client: StripeClientLike;
+    readonly client: () => Promise<StripeClientLike> | StripeClientLike;
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }

@@ -85,7 +85,7 @@ describe("autumn adapter", () => {
     it("is not a merchant-of-record and rejects manual capture/refund", () => {
         expect.assertions(4);
 
-        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         expect(adapter.capabilities.merchantOfRecord).toBe(false);
         expect(adapter.capabilities.usageMetering).toBe(true);
@@ -97,7 +97,7 @@ describe("autumn adapter", () => {
         expect.assertions(4);
 
         const calls: RecordedCall[] = [];
-        const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         const result = await adapter.createCheckout({
             cancelUrl: "https://x/cancel",
@@ -121,7 +121,7 @@ describe("autumn adapter", () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         await adapter.reportUsage?.({ featureId: "api_calls", idempotencyKey: "usage_1", quantity: 3, referenceId: "user_1" });
 
@@ -137,7 +137,7 @@ describe("autumn adapter", () => {
         expect.assertions(4);
 
         const calls: RecordedCall[] = [];
-        const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         const immediate = await adapter.cancelSubscription("user_1::pro");
         const immediateCancel = calls.findLast((call) => call.name === "update")?.args[0] as Record<string, unknown>;
@@ -159,7 +159,7 @@ describe("autumn adapter", () => {
         // The subscription is past_due (Autumn dunning). Cancelling at period end must preserve that
         // non-entitling state — never fabricate `active` and silently re-grant access.
         const client = makeClient([], { customerGet: { id: "user_1", products: [{ id: "pro", status: "past_due" }] } });
-        const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => client, webhookSecret: SECRET });
 
         const subscription = await adapter.cancelSubscription("user_1::pro", { atPeriodEnd: true });
 
@@ -170,7 +170,7 @@ describe("autumn adapter", () => {
     it("reads subscription status from the customer's product list", async () => {
         expect.assertions(4);
 
-        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         const subscription = await adapter.getSubscriptionStatus("user_1::pro");
 
@@ -186,7 +186,7 @@ describe("autumn adapter", () => {
         const client = makeClient([], {
             customerGet: { id: "user_1", subscriptions: [{ plan_id: "pro", status: "active" }] },
         });
-        const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => client, webhookSecret: SECRET });
 
         const subscription = await adapter.getSubscriptionStatus("user_1::pro");
 
@@ -203,7 +203,7 @@ describe("autumn adapter", () => {
         const client = makeClient([], {
             customerGet: { id: "user_1", subscriptions: [{ id: "sub_internal_1", pastDue: false, planId: "pro", status: "active" }] },
         });
-        const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => client, webhookSecret: SECRET });
 
         await expect(adapter.getSubscriptionStatus("user_1::pro")).resolves.toMatchObject({ id: "user_1::pro", priceId: "pro", state: "active" });
         await expect(adapter.checkEntitlement?.({ priceId: "pro", referenceId: "user_1" })).resolves.toMatchObject({ allowed: true });
@@ -215,7 +215,7 @@ describe("autumn adapter", () => {
         const client = makeClient([], {
             customerGet: { id: "user_1", subscriptions: [{ past_due: true, plan_id: "pro", status: "active" }] },
         });
-        const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => client, webhookSecret: SECRET });
 
         const subscription = await adapter.getSubscriptionStatus("user_1::pro");
 
@@ -227,7 +227,7 @@ describe("autumn adapter", () => {
         expect.assertions(1);
 
         const client = makeClient([], { customerGet: { id: "user_1", products: [{ id: "pro", status: "scheduled" }] } });
-        const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => client, webhookSecret: SECRET });
 
         const subscription = await adapter.getSubscriptionStatus("user_1::pro");
 
@@ -239,7 +239,7 @@ describe("autumn adapter", () => {
         expect.assertions(1);
 
         const client = makeClient([], { customerGet: { id: "user_1", products: [] } });
-        const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => client, webhookSecret: SECRET });
 
         const subscription = await adapter.getSubscriptionStatus("user_1::pro");
 
@@ -250,7 +250,7 @@ describe("autumn adapter", () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         const subscription = await adapter.updateSubscription("user_1::pro", { priceId: "enterprise" });
 
@@ -263,7 +263,7 @@ describe("autumn adapter", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         const subscription = await adapter.resumeSubscription("user_1::pro");
 
@@ -274,7 +274,7 @@ describe("autumn adapter", () => {
     it("throws on a malformed composite subscription id", async () => {
         expect.assertions(1);
 
-        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         await expect(adapter.getSubscriptionStatus("no-separator")).rejects.toMatchObject({ code: "PROVIDER_ERROR" });
     });
@@ -282,7 +282,7 @@ describe("autumn adapter", () => {
     it("opens a billing portal, reading the url from the nested data envelope", async () => {
         expect.assertions(1);
 
-        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         await expect(adapter.createPortalSession({ customerId: "user_1", referenceId: "user_1", returnUrl: "https://x/back" })).resolves.toEqual({
             url: "https://autumn.test/portal",
@@ -292,7 +292,7 @@ describe("autumn adapter", () => {
     it("maps customer.products.updated from the customer's own row for the updated product (regression)", async () => {
         expect.assertions(4);
 
-        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
             data: {
                 customer: { id: "user_1", subscriptions: [{ canceledAt: 1_900_000_000_000, id: "sub_x", planId: "pro", status: "active" }] },
@@ -314,7 +314,7 @@ describe("autumn adapter", () => {
     it("falls back to the scenario when the updated product has left the customer's rows", async () => {
         expect.assertions(1);
 
-        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
             data: { customer: { id: "user_1", subscriptions: [] }, scenario: "expired", updated_product: { id: "pro" } },
             type: "customer.products.updated",
@@ -328,7 +328,7 @@ describe("autumn adapter", () => {
     it("leaves event names outside Autumn's webhook catalog unhandled", async () => {
         expect.assertions(1);
 
-        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({ data: { currency: "usd", customer_id: "user_1", id: "inv_1", total: 2500 }, type: "invoice.paid" });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const action = await adapter.parseWebhook({ headers: headersFor("msg_3", timestamp, sign("msg_3", timestamp, payload)), payload });
@@ -339,7 +339,7 @@ describe("autumn adapter", () => {
     it("maps a verified billing.updated webhook (plan_changes shape) to a subscription transition (regression)", async () => {
         expect.assertions(3);
 
-        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
             data: { customer_id: "user_1", plan_changes: [{ action: "activated", subscription: { plan_id: "pro", status: "active" } }] },
             type: "billing.updated",
@@ -356,7 +356,7 @@ describe("autumn adapter", () => {
     it("billing.updated honors the nested past_due flag as non-entitling (regression)", async () => {
         expect.assertions(1);
 
-        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
             data: { customer_id: "user_1", plan_changes: [{ subscription: { past_due: true, plan_id: "pro", status: "active" } }] },
             type: "billing.updated",
@@ -370,7 +370,7 @@ describe("autumn adapter", () => {
     it("accepts Svix's svix-* headers, not just the webhook-* aliases (regression)", async () => {
         expect.assertions(1);
 
-        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
             data: { customer_id: "user_1", plan_changes: [{ subscription: { plan_id: "pro", status: "active" } }] },
             type: "billing.updated",
@@ -388,7 +388,7 @@ describe("autumn adapter", () => {
     it("rejects a bad signature", async () => {
         expect.assertions(1);
 
-        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
 
         await expect(adapter.parseWebhook({ headers: headersFor("msg_4", timestamp, "v1,not-a-valid-signature"), payload: "{}" })).rejects.toMatchObject({
@@ -401,7 +401,7 @@ describe("autumn adapter", () => {
             expect.assertions(4);
 
             const calls: RecordedCall[] = [];
-            const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+            const adapter = createAutumnAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
             const result = await adapter.checkEntitlement?.({ featureId: "api_calls", quantity: 10, referenceId: "user_1" });
 
@@ -419,7 +419,7 @@ describe("autumn adapter", () => {
 
             // Autumn's `check` is feature-only, so a product check reads the customer's plans; the default
             // customer holds an active "pro" product → allowed, with no numeric balance.
-            const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+            const adapter = createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
             const result = await adapter.checkEntitlement?.({ priceId: "pro", referenceId: "user_1" });
 
@@ -433,7 +433,7 @@ describe("autumn adapter", () => {
             // Classic autumn-js returns `balance` as a top-level NUMBER (+ `included_usage`/`usage`),
             // not a nested object. `asRecord(number)` is `{}`, so a naive descent would drop the balance.
             const client = makeClient([], { check: { allowed: true, balance: 100, included_usage: 500, unlimited: false, usage: 400 } });
-            const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+            const adapter = createAutumnAdapter({ client: () => client, webhookSecret: SECRET });
 
             const result = await adapter.checkEntitlement?.({ featureId: "credits", referenceId: "user_1" });
 
@@ -445,7 +445,7 @@ describe("autumn adapter", () => {
             expect.assertions(1);
 
             const calls: RecordedCall[] = [];
-            const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+            const adapter = createAutumnAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
             await adapter.checkEntitlement?.({ featureId: "api_calls", referenceId: "user_1" });
 
@@ -455,7 +455,7 @@ describe("autumn adapter", () => {
         it("getBalances maps every Autumn feature balance, including unlimited", async () => {
             expect.assertions(3);
 
-            const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+            const adapter = createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
             const balances = await adapter.getBalances?.("user_1");
 
@@ -473,7 +473,7 @@ describe("autumn adapter", () => {
             // No `entitlements` config — proving the facade uses Autumn's truth, not the local evaluator
             // (which would throw "requires entitlements to be configured").
             const payment = createPayment({
-                adapter: createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET }),
+                adapter: createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET }),
                 authorize: () => true,
                 store: new MemoryPaymentStore(),
             });
@@ -492,7 +492,7 @@ describe("autumn adapter", () => {
             expect.assertions(1);
 
             const payment = createPayment({
-                adapter: createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET }),
+                adapter: createAutumnAdapter({ client: () => makeClient(), webhookSecret: SECRET }),
                 authorize: () => true,
                 store: new MemoryPaymentStore(),
             });

@@ -36,12 +36,16 @@ In your Worker entry's `createShardDO({ … })` call. Note that `createStripeAda
 
 ```ts
 import { createStripeAdapter } from "@lunora/payment/stripe";
-import Stripe from "stripe";
 
 createShardDO({
     payment: (env) => ({
         adapter: createStripeAdapter({
-            client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }),
+            // Loaded on the first provider call, which keeps `stripe` out of the Worker's startup graph.
+            client: async () => {
+                const { default: Stripe } = await import("stripe");
+
+                return new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
+            },
             webhookSecret: env.STRIPE_WEBHOOK_SECRET,
         }),
         entitlements: { plans: { pro: { features: ["export"], limits: { api_calls: 1000 }, priceIds: ["price_xxx"] } } },

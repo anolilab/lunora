@@ -4,7 +4,6 @@ import type { EntitlementsConfig, PaymentAdapter } from "@lunora/payment";
 import { createStripeAdapter } from "@lunora/payment/stripe";
 import type { ShardNamespaceLike } from "lunorash/runtime";
 import ssr from "@tanstack/react-start/server-entry";
-import Stripe from "stripe";
 
 import { authOptions, getAuth } from "./auth/index.js";
 import { defineApp } from "./_generated/app.js";
@@ -41,57 +40,30 @@ const ENTITLEMENTS: EntitlementsConfig = entitlementsFromPlans(PLANS);
  * The Stripe adapter, built once per isolate.
  *
  * The runtime calls the `.payment()` factory for every function context, not
- * just the ones that touch `ctx.payments`, so constructing `new Stripe(key)`
- * there made EVERY call — `saas.overview` included — throw when the key was
- * unset. The adapter only reaches its client inside a method, so the client is
- * resolved on first use instead, and a missing key fails that payment call with
- * a message that says what to set.
+ * just the ones that touch `ctx.payments`, so the adapter must not need the key
+ * to be built: an unset key would make EVERY call — `saas.overview` included —
+ * throw. The `client` loader runs on the first payment call instead, so a
+ * missing key fails that call with a message that says what to set (and the
+ * next call retries), and `stripe` is imported there rather than evaluated at
+ * Worker startup.
  */
 let stripeAdapter: PaymentAdapter | undefined;
-let stripe: Stripe | undefined;
-
-const stripeClient = (env: Env): Stripe => {
-    if (!env.STRIPE_SECRET_KEY) {
-        throw new LunoraError("NOT_IMPLEMENTED", "payments are not configured — set STRIPE_SECRET_KEY (and STRIPE_WEBHOOK_SECRET) in .dev.vars or as a secret");
-    }
-
-    // `stripe` is an optional peer dependency; the fetch HTTP client is required
-    // on workerd.
-    stripe ??= new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
-
-    return stripe;
-};
 
 const paymentAdapter = (env: Env): PaymentAdapter => {
     stripeAdapter ??= createStripeAdapter({
-        client: {
-            get billing() {
-                return stripeClient(env).billing;
-            },
-            get billingPortal() {
-                return stripeClient(env).billingPortal;
-            },
-            get checkout() {
-                return stripeClient(env).checkout;
-            },
-            get customers() {
-                return stripeClient(env).customers;
-            },
-            get paymentIntents() {
-                return stripeClient(env).paymentIntents;
-            },
-            get refunds() {
-                return stripeClient(env).refunds;
-            },
-            get subscriptionItems() {
-                return stripeClient(env).subscriptionItems;
-            },
-            get subscriptions() {
-                return stripeClient(env).subscriptions;
-            },
-            get webhooks() {
-                return stripeClient(env).webhooks;
-            },
+        client: async () => {
+            if (!env.STRIPE_SECRET_KEY) {
+                throw new LunoraError(
+                    "NOT_IMPLEMENTED",
+                    "payments are not configured — set STRIPE_SECRET_KEY (and STRIPE_WEBHOOK_SECRET) in .dev.vars or as a secret",
+                );
+            }
+
+            const { default: Stripe } = await import("stripe");
+
+            // `stripe` is an optional peer dependency; the fetch HTTP client is required
+            // on workerd.
+            return new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
         },
         webhookSecret: env.STRIPE_WEBHOOK_SECRET ?? "",
     });
