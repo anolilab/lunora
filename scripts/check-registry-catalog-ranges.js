@@ -22,6 +22,14 @@
  * installed tree is what a user's `@lunora/*` packages will actually carry —
  * catalog entry, override, and resolution quirks already folded in.
  *
+ * Templates get the same rule, narrowed to the better-auth family. `lunora init`
+ * copies a template's package.json into a project outside this workspace, where
+ * `catalog:` means nothing, so a template has to name a literal version. The
+ * family is exact-pinned in lockstep (`catalogs.auth`), and `@lunora/auth` brings
+ * its own copy, so a template asking for another version installs two. Other
+ * template dependencies are left to the template's own build gate: a looser range
+ * there costs nothing but a different patch.
+ *
  * Run on every `pnpm install` via the root `postinstall` script.
  */
 import { readdirSync, readFileSync } from "node:fs";
@@ -32,6 +40,9 @@ import semver from "semver";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const registryDir = join(rootDir, "registry");
+const templatesDir = join(rootDir, "templates");
+
+const isBetterAuthFamily = (name) => name === "better-auth" || name.startsWith("@better-auth/");
 
 /**
  * The installed version of `name`, or undefined when the workspace doesn't
@@ -117,8 +128,42 @@ for (const entry of readdirSync(registryDir, { withFileTypes: true })) {
     }
 }
 
+for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+        continue;
+    }
+
+    let manifest;
+
+    try {
+        manifest = JSON.parse(readFileSync(join(templatesDir, entry.name, "package.json"), "utf8"));
+    } catch {
+        continue;
+    }
+
+    for (const [name, specifier] of Object.entries({ ...manifest.dependencies, ...manifest.devDependencies })) {
+        if (!isBetterAuthFamily(name) || typeof specifier !== "string") {
+            continue;
+        }
+
+        const installed = resolveInstalledVersion(name);
+
+        if (installed === undefined || !semver.valid(installed) || semver.satisfies(installed, specifier)) {
+            continue;
+        }
+
+        hasFailure = true;
+
+        console.error(
+            `❌ templates/${entry.name}/package.json depends on "${name}": "${specifier}", which the workspace's installed ${installed} does not satisfy.`,
+        );
+        console.error(`   \`lunora init\` copies that range into the user's project, beside @lunora/auth's own ${name},`);
+        console.error(`   so they would install two copies of it. Set it to "${installed}" (or a range that admits it).`);
+    }
+}
+
 if (hasFailure) {
     process.exit(1);
 }
 
-console.log("✅ Registry item deps all admit the version the workspace resolves.");
+console.log("✅ Registry item deps and templates' better-auth pins all admit the version the workspace resolves.");
