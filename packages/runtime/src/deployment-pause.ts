@@ -129,10 +129,10 @@ const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause
             return undefined;
         }
 
-        const message = state.reason === undefined ? "the deployment is paused" : `the deployment is paused: ${state.reason}`;
-
+        // A fixed message: the operator's `reason` is an internal note, readable on
+        // the admin route only, never shown to end users.
         return Response.json(
-            { error: { code: "DEPLOYMENT_PAUSED", message } },
+            { error: { code: "DEPLOYMENT_PAUSED", message: "the deployment is paused" } },
             { headers: { "cache-control": "no-store", "retry-after": String(PAUSED_RETRY_AFTER_SECONDS) }, status: 503 },
         );
     };

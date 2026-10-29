@@ -1484,7 +1484,8 @@ lunora resume --prod --url https://app.example.com
 
 While paused, app function calls (`/_lunora/rpc`, batches, REST routes) and new
 WebSocket, socket-route and voice connections answer `503 DEPLOYMENT_PAUSED`
-with a `Retry-After`. A realtime socket opened before the pause keeps serving its
+with a `Retry-After` and a fixed message; the `--reason` note is shown only to
+operators (`lunora pause status`, Studio). A realtime socket opened before the pause keeps serving its
 subscriptions until it reconnects; writes go over HTTP, so they are refused. Scheduled jobs stay where they are, with their attempt budgets
 untouched, and run when you resume. Cron ticks are skipped and recorded as such,
 and a raw `crons` handler is skipped too; the built-in scheduled backup still runs.

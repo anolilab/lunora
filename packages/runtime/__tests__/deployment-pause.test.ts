@@ -97,7 +97,8 @@ describe("createWorker — deployment pause", () => {
 
         expect(refused.status).toBe(503);
         expect(refused.headers.get("retry-after")).toBe("30");
-        await expect(refused.json()).resolves.toStrictEqual({ error: { code: "DEPLOYMENT_PAUSED", message: "the deployment is paused: incident 42" } });
+        // The operator's note stays on the admin route; callers get a fixed message.
+        await expect(refused.json()).resolves.toStrictEqual({ error: { code: "DEPLOYMENT_PAUSED", message: "the deployment is paused" } });
         expect(shard.calls()).toBe(0);
 
         // The operator's own calls still run, and the status read stays reachable.
