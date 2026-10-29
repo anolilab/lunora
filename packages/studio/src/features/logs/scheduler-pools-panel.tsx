@@ -83,7 +83,7 @@ export const SchedulerPoolsPanel = ({ initialShardKey, loadStatus }: SchedulerPo
     useAutoRefresh(() => metricsQuery.poll(), true);
 
     const lag = (Array.isArray(metrics?.series) ? metrics.series : [])
-        .filter((series) => series.name === LAG_METRIC && series.count > 0)
+        .filter((series) => series.name === LAG_METRIC && series.kind === "histogram" && series.count > 0)
         .toSorted((a, b) => b.max - a.max);
 
     return (

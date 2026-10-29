@@ -3053,6 +3053,7 @@ interface SavedQuery {
 
 ```ts
 interface SchedulePanelProps {
+    readonly initialShardKey?: string;
     readonly loadCronJobs?: CronTriggersPanelProps["loadCronJobs"];
     readonly scheduledCancel?: ScheduledJobsProps["cancelJob"];
     readonly scheduledLoad?: ScheduledJobsProps["loadJobs"];

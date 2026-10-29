@@ -13,6 +13,8 @@ import { ScheduledJobs } from "./scheduled-jobs";
 import { SchedulerPoolsPanel } from "./scheduler-pools-panel";
 
 interface SchedulePanelProps {
+    /** The shard the Pools view reads scheduler lag from first. */
+    readonly initialShardKey?: string;
     /** Override how the Cron triggers sub-view loads triggers; see {@link CronTriggersPanel}. */
     readonly loadCronJobs?: CronTriggersPanelProps["loadCronJobs"];
 
@@ -40,7 +42,7 @@ const VIEW_KEYS: ReadonlyArray<ScheduleView> = ["jobs", "history", "dead", "pool
  * introspection). Jobs is the default — it is the surface an operator acts on.
  */
 
-export const SchedulePanel = ({ loadCronJobs, scheduledCancel, scheduledLoad }: SchedulePanelProps = {}): ReactElement => {
+export const SchedulePanel = ({ initialShardKey, loadCronJobs, scheduledCancel, scheduledLoad }: SchedulePanelProps = {}): ReactElement => {
     const t = useT();
     const [view, setView] = useState<ScheduleView>("jobs");
 
@@ -75,7 +77,7 @@ export const SchedulePanel = ({ loadCronJobs, scheduledCancel, scheduledLoad }: 
             {view === "jobs" && <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />}
             {view === "history" && <JobHistory />}
             {view === "dead" && <DeadLetterJobs />}
-            {view === "pools" && <SchedulerPoolsPanel />}
+            {view === "pools" && <SchedulerPoolsPanel initialShardKey={initialShardKey} />}
             {view === "cron" && <CronTriggersPanel loadCronJobs={loadCronJobs} />}
         </div>
     );
