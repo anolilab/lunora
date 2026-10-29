@@ -821,8 +821,8 @@ export interface DatabaseWriterLike {
 
     /**
      * `skipOnDelete` removes the row without running the schema's `onDelete` actions (cascade, set null,
-     * restrict), so no other row changes. Only a data restore uses it: its file already says what every
-     * table holds, and a cascade would reach tables the file does not name.
+     * restrict). Delete triggers still fire, as insert triggers do on an import. Only a data restore uses
+     * it: its file already says what every table holds, and a cascade would reach tables the file does not name.
      */
     delete: (table: string, id: string, options?: { hard?: boolean; skipOnDelete?: boolean }) => Promise<void>;
 
