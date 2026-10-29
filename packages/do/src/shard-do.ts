@@ -1735,16 +1735,13 @@ const countLiveConnections = (
 const VOLATILE_CLAIMS = new Set(["exp", "expiresAtMs", "iat", "jti", "nbf"]);
 
 /**
- * The revalidation deadline a newly accepted socket is held to. A route socket is the app's own protocol and an
- * admin socket (the studio, `subscribeScheduledJobs`) answers to its admin token, which `adminBinding` already
- * revokes; neither has a re-auth channel, so only a user subscription socket gets one. An anonymous socket has no
- * identity to go stale.
+ * The revalidation deadline a newly accepted socket is held to: any non-route socket carrying a user identity,
+ * admin or not. Admin authority (revoked by an admin-token rotation) says nothing about the user identity riding
+ * beside it, so exempting admin sockets would let a removed user keep its user subscriptions on one. A route socket
+ * is the app's own protocol with no re-auth channel; an anonymous socket has no identity to go stale.
  */
-const revalidationStamp = (
-    socket: { admin: boolean; route: unknown; userId: string | undefined },
-    acceptedAt: number,
-): Pick<SocketAttachment, "revalidateAt"> =>
-    !socket.admin && socket.route === undefined && socket.userId !== undefined ? { revalidateAt: acceptedAt + SOCKET_REVALIDATE_MS } : {};
+const revalidationStamp = (route: unknown, userId: string | undefined, acceptedAt: number): Pick<SocketAttachment, "revalidateAt"> =>
+    route === undefined && userId !== undefined ? { revalidateAt: acceptedAt + SOCKET_REVALIDATE_MS } : {};
 
 /** The claims a re-auth must leave unchanged, as one comparable key (`""` for none). */
 const credentialClaimsKey = (identity: Record<string, unknown> | undefined): string => {
@@ -17157,7 +17154,7 @@ abstract class ShardDO {
             ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),
             ...(ip === undefined ? {} : { ip }),
-            ...revalidationStamp({ admin, route, userId }, acceptedAt),
+            ...revalidationStamp(route, userId, acceptedAt),
             ...(route === undefined ? {} : { socketFunction: route.functionPath, socketPath: url.pathname }),
             ...(routeTopic === undefined ? {} : { whispers: [routeTopic] }),
             ...(userId === undefined ? {} : { userId }),

@@ -366,11 +366,21 @@ describe("socket identity revalidation", () => {
     });
 
     it.each([
-        ["an anonymous upgrade", {}, {}],
-        // The studio and `subscribeScheduledJobs` answer to the admin token, which a rotation already revokes.
-        ["an admin upgrade", { authorization: `Bearer ${ADMIN_FIXTURE}`, "x-lunora-userid": "user-1" }, { LUNORA_ADMIN_TOKEN: ADMIN_FIXTURE }],
-    ])("holds %s to no window", async (_name, headers, env) => {
-        expect.assertions(1);
+        ["an anonymous upgrade", {}, {}, undefined],
+        // A pure admin-token socket (the studio) has no user identity to go stale; the token rotation revokes it.
+        ["an admin upgrade with no user", { authorization: `Bearer ${ADMIN_FIXTURE}` }, { LUNORA_ADMIN_TOKEN: ADMIN_FIXTURE }, undefined],
+        // Admin authority does not vouch for the user identity riding beside it: a removed user would keep its
+        // user subscriptions for as long as the admin token stayed valid.
+        [
+            "an admin upgrade that also carries a user",
+            { authorization: `Bearer ${ADMIN_FIXTURE}`, "x-lunora-userid": "user-1" },
+            { LUNORA_ADMIN_TOKEN: ADMIN_FIXTURE },
+            NOW + WINDOW,
+        ],
+    ])("holds %s to the window only when it carries a user identity", async (_name, headers, env, revalidateAt) => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
 
         const server = createFakeWebSocket();
         const globalWithPair = globalThis as { WebSocketPair?: unknown };
@@ -392,7 +402,8 @@ describe("socket identity revalidation", () => {
             globalWithPair.WebSocketPair = original;
         }
 
-        expect(server.attachment).not.toHaveProperty("revalidateAt");
+        expect(server.attachment).toBeDefined();
+        expect(server.attachment?.revalidateAt).toBe(revalidateAt);
     });
 });
 
