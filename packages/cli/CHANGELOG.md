@@ -1,3 +1,9 @@
+## @lunora/cli [1.0.0-alpha.452](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.451...@lunora/cli@1.0.0-alpha.452) (2026-10-29)
+
+### Features
+
+* **saas-ui,templates:** add the admin users and subscriptions views to the kit ([#1418](https://github.com/anolilab/lunora/issues/1418)) ([3159b3d](https://github.com/anolilab/lunora/commit/3159b3d6854c4997cdfe2c5f25f20cfaf428ae74))
+
 ## @lunora/cli [1.0.0-alpha.451](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.450...@lunora/cli@1.0.0-alpha.451) (2026-10-29)
 
 
