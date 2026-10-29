@@ -33,7 +33,7 @@ const resolveOptions = (options: LunoraRspackOptions | undefined): ResolvedLunor
     return {
         apiSpec: input.apiSpec ?? "openapi",
         explicitTarget: input.target,
-        lazyFunctions: resolveLazyFunctions(input.lazyFunctions),
+        lazyFunctions: resolveLazyFunctions(),
         projectRoot,
         schemaDir: input.schemaDir ?? "lunora",
         // Same resolution AND validation as the CLI — explicit option, then

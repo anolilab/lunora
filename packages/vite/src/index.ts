@@ -112,7 +112,7 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
     return {
         allowUnauthenticatedShardAccess: input.allowUnauthenticatedShardAccess ?? false,
         apiSpec: input.apiSpec ?? "openapi",
-        lazyFunctions: resolveLazyFunctions(input.lazyFunctions),
+        lazyFunctions: resolveLazyFunctions(),
         cloudflare: cloudflareOption,
         studio: input.studio ?? true,
         // Derived, never taken from `input`: codegen always writes

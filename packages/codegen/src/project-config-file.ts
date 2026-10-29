@@ -71,8 +71,11 @@ interface ProjectConfigLiterals {
      * `codegen.exclude`: extra globs (relative to `lunora/`) the source walk
      * skips on top of the built-in test-file patterns. `unreadable` when
      * `codegen` is declared but `exclude` is not an array of string literals.
+     * `codegen.lazyFunctions` is read apart from it, with its own
+     * `lazyFunctionsUnreadable`, so a bad `exclude` never turns the lazy
+     * registry off and a bad `lazyFunctions` never drops the excludes.
      */
-    codegen?: { exclude?: string[]; unreadable?: boolean };
+    codegen?: { exclude?: string[]; lazyFunctions?: boolean; lazyFunctionsUnreadable?: true; unreadable?: boolean };
 
     /**
      * `durableObjects.merge`: host the shard, scheduler and shard registry in one
@@ -114,7 +117,7 @@ interface LunoraProjectConfig {
     advisor?: unknown;
     /** The `app` hook: receives the generated `defineApp()` builder and returns it. Read by `@lunora/vite`, not by the CLI. */
     app?: unknown;
-    /** Codegen source-walk settings (`exclude`). Read through {@link readProjectConfigLiterals}. */
+    /** Codegen settings (`exclude`, `lazyFunctions`). Read through {@link readProjectConfigLiterals}. */
     codegen?: unknown;
     /** Durable Object packaging (`merge`). Read through {@link readProjectConfigLiterals}. */
     durableObjects?: unknown;
@@ -376,16 +379,16 @@ const readAdvisor = (declared: TsNode | undefined, sourceFile: SourceFile): Proj
         : { advisor: { ...accepts, unreadable: true } };
 };
 
-/** `codegen.exclude` from the `codegen` object literal: an array of non-negated string literals, or `unreadable`. */
-const readCodegen = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+/** `codegen.exclude`: an array of non-negated string literals, or `unreadable`. */
+const readExclude = (declared: TsNode | undefined, sourceFile: SourceFile): { exclude?: string[]; unreadable?: boolean } => {
     const member = readPlainMember(declared, sourceFile, "exclude");
 
     if ("absent" in member) {
-        return { codegen: {} };
+        return {};
     }
 
     if (!("literal" in member) || !TsNode.isArrayLiteralExpression(member.literal)) {
-        return { codegen: { unreadable: true } };
+        return { unreadable: true };
     }
 
     const exclude: string[] = [];
@@ -394,13 +397,33 @@ const readCodegen = (declared: TsNode | undefined, sourceFile: SourceFile): Proj
         // A `!` negation would read as "anything but this" to the any-match
         // matcher and exclude every source file, so it is refused, not honoured.
         if ((!TsNode.isStringLiteral(element) && !TsNode.isNoSubstitutionTemplateLiteral(element)) || element.getLiteralValue().startsWith("!")) {
-            return { codegen: { unreadable: true } };
+            return { unreadable: true };
         }
 
         exclude.push(element.getLiteralValue());
     }
 
-    return { codegen: { exclude } };
+    return { exclude };
+};
+
+/** `codegen.lazyFunctions`: a boolean literal, or `lazyFunctionsUnreadable`. */
+const readLazyFunctions = (declared: TsNode | undefined, sourceFile: SourceFile): { lazyFunctions?: boolean; lazyFunctionsUnreadable?: true } => {
+    const member = readPlainMember(declared, sourceFile, "lazyFunctions");
+
+    if ("absent" in member) {
+        return {};
+    }
+
+    const value = "literal" in member ? unwrapLiteral(member.literal) : undefined;
+
+    return value !== undefined && (TsNode.isTrueLiteral(value) || TsNode.isFalseLiteral(value))
+        ? { lazyFunctions: value.getLiteralValue() }
+        : { lazyFunctionsUnreadable: true };
+};
+
+/** `codegen.exclude` and `codegen.lazyFunctions` from the `codegen` object literal, each read on its own. */
+const readCodegen = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+    return { codegen: { ...readExclude(declared, sourceFile), ...readLazyFunctions(declared, sourceFile) } };
 };
 
 /** `durableObjects.merge` from the `durableObjects` object literal: a boolean literal, or `unreadable`. */
@@ -419,7 +442,7 @@ const readDurableObjects = (declared: TsNode | undefined, sourceFile: SourceFile
 /** What a getter or method under each key this reader cares about contributes: it declares a value the parser cannot see. */
 const UNREADABLE_ACCESSOR: ReadonlyMap<string, ProjectConfigLiterals> = new Map([
     ["advisor", { advisor: { unreadable: true } }],
-    ["codegen", { codegen: { unreadable: true } }],
+    ["codegen", { codegen: { lazyFunctionsUnreadable: true, unreadable: true } }],
     ["durableObjects", { durableObjects: { unreadable: true } }],
     ["remote", { unreadable: true }],
     ["target", { unreadable: true }],
@@ -569,8 +592,8 @@ const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile
 };
 
 /**
- * The `target`, `remote`, `advisor.minSeverity`, `codegen.exclude` and
- * `services` LITERALS declared in the config, without evaluating it — see the
+ * The `target`, `remote`, `advisor.minSeverity`, `codegen.exclude`,
+ * `codegen.lazyFunctions` and `services` LITERALS declared in the config, without evaluating it — see the
  * module header for what this can and cannot see, and why.
  */
 const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals => {
@@ -613,7 +636,7 @@ const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals =
 
         return {
             ...(declares("advisor") ? { advisor: { unreadable: true } } : {}),
-            ...(declares("codegen") ? { codegen: { unreadable: true } } : {}),
+            ...(declares("codegen") ? { codegen: { lazyFunctionsUnreadable: true, unreadable: true } } : {}),
             ...(declares("durableObjects") ? { durableObjects: { unreadable: true } } : {}),
             ...(declares("services") ? { services: { unreadable: true } } : {}),
             unreadable: true,
@@ -645,6 +668,24 @@ const readMergeDurableObjects = (projectRoot: string): boolean => {
     return durableObjects?.merge === true;
 };
 
+/**
+ * `lunora.config`'s `codegen.lazyFunctions`: the project-wide opt-in to the lazy
+ * function registry. Read inside `runCodegen` so every entry point that writes or
+ * checks `_generated/` — the CLI commands, the Vite and Rspack plugins, the Studio
+ * host — agrees without each having to pass the flag. An unreadable value is said
+ * out loud and treated as off, like `durableObjects.merge`.
+ */
+const readProjectLazyFunctions = (projectRoot: string): boolean => {
+    const { codegen } = readProjectConfigLiterals(projectRoot);
+
+    if (codegen?.lazyFunctionsUnreadable) {
+        // eslint-disable-next-line no-console -- codegen has no diagnostic sink for config literals; matches `durableObjects.merge`'s warning.
+        console.warn("@lunora/codegen: `codegen.lazyFunctions` in lunora.config is not a boolean literal — the function registry stays eager.");
+    }
+
+    return codegen?.lazyFunctions === true;
+};
+
 export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral };
 export { findProjectConfigFile, PROJECT_CONFIG_FILENAMES } from "./project-config-path";
-export { loadProjectConfig, readMergeDurableObjects, readProjectConfigLiterals };
+export { loadProjectConfig, readMergeDurableObjects, readProjectConfigLiterals, readProjectLazyFunctions };
