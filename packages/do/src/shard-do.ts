@@ -7565,13 +7565,20 @@ abstract class ShardDO {
     }
 
     /**
-     * A stream's budget, held for its whole life: rows stay capped as before, but
-     * bytes are not, since a long-lived stream's total is not one transaction's.
+     * A stream's budget, held for its whole life. Rows stay capped over the life,
+     * as before; bytes are capped per frame by {@link ShardDO.windowStreamReads}.
      */
     protected streamHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker {
-        return this.mintHeadroom(functionPath, { trace: undefined, userId: identity?.userId }, this.rerunNearLimitWarned, {
-            maxReadBytes: Number.POSITIVE_INFINITY,
-        });
+        return this.mintHeadroom(functionPath, { trace: undefined, userId: identity?.userId }, this.rerunNearLimitWarned);
+    }
+
+    /** Pass `frames` through, opening a fresh read-byte window after each one. */
+    // eslint-disable-next-line class-methods-use-this, generator-star-spacing -- a hook the generated executeStream calls through `this`; prettier owns the `async *` spacing
+    protected async *windowStreamReads(headroom: TransactionHeadroomTracker, frames: AsyncIterable<unknown>): AsyncIterable<unknown> {
+        for await (const frame of frames) {
+            yield frame;
+            headroom.beginReadWindow();
+        }
     }
 
     /**
@@ -15978,9 +15985,8 @@ abstract class ShardDO {
         functionPath: string,
         pin: { trace: TraceAnchor | undefined; userId: string | undefined },
         warnedBefore?: Set<string>,
-        overrides?: Partial<TransactionLimits>,
     ): TransactionHeadroomTracker {
-        return new TransactionHeadroomTracker({ ...this.transactionLimits(), ...overrides }, (warning: TransactionLimitWarning) => {
+        return new TransactionHeadroomTracker(this.transactionLimits(), (warning: TransactionLimitWarning) => {
             const key = `${functionPath}\u0000${warning.kind}`;
 
             if (warnedBefore?.has(key)) {

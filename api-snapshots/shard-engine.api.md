@@ -3442,6 +3442,7 @@ class TransactionHeadroomTracker {
     recordRead(count: number): void;
     recordReadBytes(bytes: number): void;
     recordDocumentRead(key: string, bytes: number): void;
+    beginReadWindow(): void;
     recordWrite(row: unknown): void;
     headroom(): TransactionHeadroom;
 }

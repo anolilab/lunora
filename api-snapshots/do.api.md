@@ -620,6 +620,7 @@ abstract class ShardDO {
     protected transactionHeadroom(functionPath?: string): TransactionHeadroomTracker;
     protected subscriptionHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker;
     protected streamHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker;
+    protected windowStreamReads(headroom: TransactionHeadroomTracker, frames: AsyncIterable<unknown>): AsyncIterable<unknown>;
     protected alarmHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
     protected flushMigrationProgress(): Promise<void>;

@@ -50,6 +50,10 @@ class NearLimitShard extends ShardDO {
         return this.streamHeadroom(functionPath);
     }
 
+    public windowFrames(headroom: TransactionHeadroomTracker, frames: AsyncIterable<unknown>): AsyncIterable<unknown> {
+        return this.windowStreamReads(headroom, frames);
+    }
+
     public fallbackTracker(functionPath: string): TransactionHeadroomTracker {
         return this.transactionHeadroom(functionPath);
     }
@@ -68,8 +72,8 @@ class NearLimitShard extends ShardDO {
     }
 
     // eslint-disable-next-line class-methods-use-this -- tiny so the threshold is reached in a handful of writes
-    protected override transactionLimits(): { maxReadRows: number; maxWrittenRows: number } {
-        return { maxReadRows: 10, maxWrittenRows: 10 };
+    protected override transactionLimits(): { maxReadBytes: number; maxReadRows: number; maxWrittenRows: number } {
+        return { maxReadBytes: 100, maxReadRows: 10, maxWrittenRows: 10 };
     }
 }
 
@@ -149,18 +153,29 @@ describe("transaction near-limit warning", () => {
         expect(events).toHaveLength(1);
     });
 
-    it("caps a stream's rows but not its lifetime bytes", () => {
+    it("caps a stream's read bytes per frame, not over its life", async () => {
         expect.assertions(2);
 
         const shard = createShard();
-        const stream = shard.streamTracker("items:tail");
+        const headroom = shard.streamTracker("items:tail");
+        const frames = async function* frames(perFrame: number): AsyncIterable<number> {
+            for (let frame = 0; frame < 3; frame += 1) {
+                headroom.recordReadBytes(perFrame);
+                yield frame;
+            }
+        };
+        const drain = async (perFrame: number): Promise<unknown[]> => {
+            const seen: unknown[] = [];
 
-        expect(() => {
-            stream.recordReadBytes(64 * 1024 * 1024);
-        }).not.toThrow();
-        expect(() => {
-            stream.recordRead(11);
-        }).toThrow("over the 10-document limit");
+            for await (const frame of shard.windowFrames(headroom, frames(perFrame))) {
+                seen.push(frame);
+            }
+
+            return seen;
+        };
+
+        await expect(drain(80)).resolves.toStrictEqual([0, 1, 2]);
+        await expect(drain(200)).rejects.toThrow("over the 100-byte limit");
     });
 
     it("names the function a fallback tracker was minted for", async () => {

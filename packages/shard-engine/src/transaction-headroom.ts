@@ -156,6 +156,17 @@ class TransactionHeadroomTracker {
         }
     }
 
+    /**
+     * Start a fresh read-byte budget. A stream holds one tracker for its whole
+     * life, so it opens a window per yielded frame: each frame's reads are capped
+     * like one transaction's, without the stream's lifetime total ending it.
+     */
+    public beginReadWindow(): void {
+        this.readBytes = 0;
+        this.chargedDocuments.clear();
+        this.warned.delete("readBytes");
+    }
+
     /** Charge one written document, sized by {@link estimateBytes}. */
     public recordWrite(row: unknown): void {
         const bytes = estimateBytes(row);
