@@ -24,10 +24,29 @@ function DashboardPage() {
     // `authorizeShard` turns an anonymous caller away from every shard, the root
     // included, so a signed-out visitor sees this subscription fail rather than
     // resolve to `null`.
+    //
+    // A refused subscription keeps returning its last good value, so the refusal
+    // has to win over it: otherwise a user who signs out, or is removed from the
+    // organisation, keeps looking at its data. A new value is a new identity
+    // (signed back in), which lifts the refusal.
     const [signedOut, setSignedOut] = useState(false);
     const me = useQuery(api.saas.me, {}, { onError: () => setSignedOut(true) });
+    const [seen, setSeen] = useState(me);
 
-    if (me === undefined && !signedOut) {
+    if (me !== seen) {
+        setSeen(me);
+        setSignedOut(false);
+    }
+
+    if (signedOut) {
+        return (
+            <main className="lu-saas-card" style={{ margin: "3rem auto", maxWidth: "44rem" }}>
+                <p>Sign in to see your dashboard.</p>
+            </main>
+        );
+    }
+
+    if (me === undefined) {
         return <main aria-busy="true" style={{ margin: "2rem auto", maxWidth: "56rem", padding: "0 1rem" }} />;
     }
 

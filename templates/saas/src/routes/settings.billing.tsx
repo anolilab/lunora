@@ -36,10 +36,29 @@ function BillingPage() {
     // `authorizeShard` turns an anonymous caller away from every shard, the root
     // included, so a signed-out visitor sees this subscription fail rather than
     // resolve to `null`.
+    //
+    // A refused subscription keeps returning its last good value, so the refusal
+    // has to win over it: otherwise a user who signs out, or is removed from the
+    // organisation, keeps looking at its data. A new value is a new identity
+    // (signed back in), which lifts the refusal.
     const [signedOut, setSignedOut] = useState(false);
     const me = useQuery(api.saas.me, {}, { onError: () => setSignedOut(true) });
+    const [seen, setSeen] = useState(me);
 
-    if (me === undefined && !signedOut) {
+    if (me !== seen) {
+        setSeen(me);
+        setSignedOut(false);
+    }
+
+    if (signedOut) {
+        return (
+            <main className="lu-saas-card" style={{ margin: "3rem auto", maxWidth: "44rem" }}>
+                <p>Sign in to manage billing.</p>
+            </main>
+        );
+    }
+
+    if (me === undefined) {
         return <main aria-busy="true" style={{ margin: "2rem auto", maxWidth: "56rem", padding: "0 1rem" }} />;
     }
 
@@ -62,7 +81,8 @@ interface OrganizationBillingProps {
 }
 
 function OrganizationBilling({ memberCount, orgRole }: OrganizationBillingProps) {
-    const subscriptions = useQuery(api.payment.mySubscriptions, {});
+    const [loadError, setLoadError] = useState<string>();
+    const subscriptions = useQuery(api.payment.mySubscriptions, {}, { onError: (error_) => setLoadError(message(error_)) });
     // `useAction` returns `{ call, pending, … }` rather than a callable, the same
     // shape as `useMutation` — destructure at the call site.
     const { call: checkout } = useAction(api.payment.checkout);
@@ -74,6 +94,20 @@ function OrganizationBilling({ memberCount, orgRole }: OrganizationBillingProps)
     // Only hides the controls — `checkout` and `portal` enforce the role
     // server-side either way.
     const canManageBilling = orgRole?.split(",").some((role) => BILLING_ADMIN_ROLES.has(role.trim())) ?? false;
+
+    // Until the subscriptions arrive the organisation's plan is unknown, and an
+    // empty list would read as "no plan" and offer a purchase to a paying one.
+    if (loadError !== undefined || subscriptions === undefined) {
+        return (
+            <main aria-busy={loadError === undefined} style={{ margin: "2rem auto", maxWidth: "56rem", padding: "0 1rem" }}>
+                {loadError === undefined ? undefined : (
+                    <p className="lu-saas-error" role="alert">
+                        {loadError}
+                    </p>
+                )}
+            </main>
+        );
+    }
 
     const redirectTo = async (start: () => Promise<{ url: string }>) => {
         setError(undefined);
