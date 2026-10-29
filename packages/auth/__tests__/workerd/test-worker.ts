@@ -138,8 +138,8 @@ const testWorker = {
 };
 
 export default testWorker;
-// Exports last, per the repo's `import/exports-last` rule. `AuthStorageDO`
-// and `OrgAuthDO` are named by wrangler.jsonc's DO bindings; the constants are shared
+// Exports last, per the repo's `import/exports-last` rule. `AuthStorageDO` and
+// `OrgAuthDO` are named by wrangler.jsonc's DO bindings; the constants are shared
 // with the suites so each credential is declared once.
 export type { TestEnv };
 export { AuthStorageDO, INTERNAL_SECRET, ORG_AUTH_ORIGIN, OrgAuthDO, SCIM_TOKEN, SECRET };
