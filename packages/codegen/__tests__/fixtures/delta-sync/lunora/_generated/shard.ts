@@ -126,7 +126,7 @@ export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
     /** `origin` is the origin the current `/rpc` request reached the worker on — the fallback base for signed object URLs when no `publicBaseUrl` is configured. `undefined` off the synchronous dispatch path. */
     storage?: (env: Record<string, unknown>, origin?: string) => unknown;
-    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;
+    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;
     sourceClient?: (env: Record<string, unknown>, binding: string) => { query: <Row = Record<string, unknown>>(text: string, params?: readonly unknown[]) => Promise<Row[]> } | undefined;
     /** The `ShardRegistryDO` namespace (typically `env.SHARD_REGISTRY`). This shard registers its key for each `.shardBy()` table it writes, so cross-shard export, sync and migrations reach it. */
     shardRegistry?: (env: Record<string, unknown>) => unknown;
@@ -1506,14 +1506,16 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const span = this.makeDispatchSpan(traceAnchor, observability, options.sensitive);
 
             const bookmark = this.getInboundBookmark();
-            const identity = readIdentity();
-            const userId = readUserId();
             const globalRequest = {
                 ...this.globalCdcOptions(config.cdc ?? false),
                 ...(bookmark === undefined ? {} : { bookmark }),
-                ...(identity === undefined ? {} : { identity }),
+                get identity(): Record<string, unknown> | undefined {
+                    return readIdentity();
+                },
                 onBookmark: (bookmarkValue: string | undefined) => { if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } },
-                ...(userId === undefined ? {} : { userId }),
+                get userId(): string | undefined {
+                    return readUserId();
+                },
             };
             const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;
             // `ctx.db`, wrapped in automatic instrumentation: by default this

@@ -202,7 +202,7 @@ class AppBuilder<Env extends object> {
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.hyperdriveGlobalDeclaration
                 ? {
-                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; userId?: string | null }) => {
+                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; userId?: string | null | undefined }) => {
                           const env = rawEnv as Env;
                           const declaration = this.hyperdriveGlobalDeclaration;
                           const exec = declaration?.exec(env) as SqlExec | undefined;
@@ -214,16 +214,30 @@ class AppBuilder<Env extends object> {
                           const origin = declaration.origin?.(env);
                           const crossShard = origin
                               ? createCrossShardRelationCapabilities({
-                                    ...(request?.identity === undefined ? {} : { identity: request.identity }),
+                                    get identity() {
+                                        return request?.identity;
+                                    },
                                     origin,
-                                    ...(request?.userId == null ? {} : { userId: request.userId }),
+                                    get userId() {
+                                        return request?.userId ?? undefined;
+                                    },
                                 })
                               : undefined;
 
                           return createHyperdriveGlobalCtxDb({
                               ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
                               ...(request?.cdcRetentionMs === undefined ? {} : { cdcRetentionMs: request.cdcRetentionMs }),
-                              auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
+                              // Getters, like the cross-shard identity above: reading the
+                              // request's caller marks the live query as caller-dependent, so
+                              // it may happen only when a `.serverDefault` column is stamped.
+                              auth: {
+                                  get identity() {
+                                      return request?.identity ?? null;
+                                  },
+                                  get userId() {
+                                      return request?.userId ?? null;
+                                  },
+                              },
                               // See the D1 twin: one `cdc` switch, both changelogs.
                               cdc: request?.cdc ?? false,
                               engine: declaration.engine as HyperdriveEngine,

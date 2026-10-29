@@ -346,23 +346,20 @@ const emitAiFragments = (): CapabilityShardFragments => {
 
 /**
  * `ctx.access` (verified Cloudflare Access identity). Bespoke because the facade
- * is built **synchronously** from the resolved `identity`/`userId` locals already
- * in scope at the ctx-build site (the same source `ctx.auth` uses), via the
- * package's pure `accessFacade(identity, userId)` factory — so a global
- * `ctx.access` adds only one object construction per request: no I/O, and no
- * JWT re-verification (that happened once at the edge in `resolveIdentity`).
- * `accessFacade` returns the anonymous facade when no identity is present, so
- * there is no config thunk and no stub fallback. Being built eagerly, it marks
- * every ctx as reading its caller, so an app using `ctx.access` never shares a
- * live-query run across subscribers.
+ * reads the caller through `buildCtx`'s `readIdentity()` / `readUserId()`
+ * (the same source `ctx.auth` uses) via the package's `lazyAccessFacade`: no
+ * I/O and no JWT re-verification (that happened once at the edge in
+ * `resolveIdentity`). The readers mark the path through `noteIdentityRead`, so
+ * the facade must stay lazy: built eagerly it would mark every ctx, and no live
+ * query of an app using `ctx.access` could share a run across subscribers.
  */
 const emitAccessFragments = (): CapabilityShardFragments => {
     return {
         build: `
-            const access = accessFacade(readIdentity(), readUserId());
+            const access = lazyAccessFacade(readIdentity, readUserId);
 `,
         configField: "",
-        importLines: [`import { accessFacade } from "@lunora/cloudflare-access/context";`],
+        importLines: [`import { lazyAccessFacade } from "@lunora/cloudflare-access/context";`],
         stub: "",
     };
 };

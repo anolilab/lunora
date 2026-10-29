@@ -9,14 +9,17 @@
  * procedure middleware, a composed `ctx.runQuery` — marks the path. A missed
  * route would hand one user's result to another.
  *
- * Uses the `random-replay` golden: it has no `.global()` table, whose request
- * context copies the caller eagerly and so keeps every query of such an app keyed.
+ * Uses the `random-replay` golden, plus `delta-sync` for an app with a
+ * `.global()` table: its global writer is handed the caller through getters, so
+ * only a handler whose global access reads the caller is keyed by it.
  */
 import { DatabaseSync } from "node:sqlite";
 
 import { definePolicies, definePolicy, initLunora, mask, rls, v } from "@lunora/server";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { LUNORA_FUNCTIONS as GLOBAL_APP_FUNCTIONS } from "./fixtures/delta-sync/lunora/_generated/functions";
+import { createShardDO as createGlobalAppShardDO } from "./fixtures/delta-sync/lunora/_generated/shard";
 import { LUNORA_FUNCTIONS } from "./fixtures/random-replay/lunora/_generated/functions";
 import { createShardDO } from "./fixtures/random-replay/lunora/_generated/shard";
 
@@ -92,8 +95,8 @@ const values = async (ctx: Ctx): Promise<number[]> => {
     return rows.map((row) => row.value).toSorted((left, right) => left - right);
 };
 
-const register = (path: string, registered: unknown): void => {
-    (LUNORA_FUNCTIONS as unknown as Record<string, unknown>)[path] = registered;
+const register = (path: string, registered: unknown, functions: object = LUNORA_FUNCTIONS): void => {
+    Object.assign(functions, { [path]: registered });
 };
 
 /** Every identity read below goes through a real accessor; each handler counts its own runs. */
@@ -239,16 +242,32 @@ const registerAll = (): void => {
 
 const USERS = ["user-A", "user-B", "user-C", "user-D"];
 
-const createHarness = (): {
+interface HarnessOptions {
+    config?: unknown;
+    /** The emitted `createShardDO` and its config; the `random-replay` shard by default. */
+    create?: (config: never) => new (state: never, env: never) => unknown;
+    writeArgs?: (value: number) => Record<string, unknown>;
+    /** The mutation `write` calls and the args it sends for a value. */
+    writePath?: string;
+}
+
+const createHarness = ({
+    config = {},
+    create = createShardDO,
+    writeArgs = (value) => {
+        return { value };
+    },
+    writePath = "live:add",
+}: HarnessOptions = {}): {
     shard: Shard;
     /** An `ip:`-prefixed caller subscribes anonymously from that address. */
     subscribe: (caller: string, functionPath: string, args?: Record<string, unknown>) => Promise<FakeSocket>;
     write: (value: number) => Promise<void>;
 } => {
     const sockets: FakeSocket[] = [];
-    const ShardClass = createShardDO({});
+    const ShardClass = create(config as never);
     const state = createState(sockets) as { acceptWebSocket: (ws: FakeSocket) => void };
-    const shard = new ShardClass(state as never, {}) as unknown as Shard;
+    const shard = new ShardClass(state as never, {} as never) as Shard;
 
     return {
         shard,
@@ -277,7 +296,7 @@ const createHarness = (): {
         write: async (value) => {
             const response = await shard.fetch(
                 new Request("https://shard.internal/rpc", {
-                    body: JSON.stringify({ args: { value }, functionPath: "live:add" }),
+                    body: JSON.stringify({ args: writeArgs(value), functionPath: writePath }),
                     headers: { "content-type": "application/json" },
                     method: "POST",
                 }),
@@ -426,5 +445,89 @@ describe("emitted shard — live runs shared across identities", () => {
         await expect(write(99)).resolves.toBe(USERS.length);
         expect(sockets.map((ws) => (lastData(ws) as { who: string }).who)).toStrictEqual(USERS);
         await expect(write(3)).resolves.toBe(USERS.length);
+    });
+});
+
+describe("emitted shard with a .global() table — live runs shared across identities", () => {
+    /** The global writer reads its request's caller only when a handler reaches the global table. */
+    const globalApp = (): ReturnType<typeof createHarness> =>
+        createHarness({
+            config: {
+                d1: (_env: unknown, request: { userId?: string }) => {
+                    return {
+                        findMany: async () => [{ name: "board", ownerId: request.userId ?? null }],
+                    };
+                },
+            },
+            create: createGlobalAppShardDO as unknown as NonNullable<HarnessOptions["create"]>,
+            writeArgs: (value) => {
+                return { body: String(value), boardId: "shard-a" };
+            },
+            writePath: "global:add",
+        });
+
+    beforeAll(() => {
+        const procedures = lunora as unknown as {
+            mutation: { input: (shape: unknown) => { mutation: (handler: (input: { args: Record<string, unknown>; ctx: never }) => unknown) => unknown } };
+            query: { input: (shape: unknown) => { query: (handler: (input: { ctx: never }) => unknown) => unknown } };
+        };
+        type GlobalCtx = {
+            db: {
+                findMany: (table: string, args?: unknown) => Promise<{ ownerId: null | string }[]>;
+                insert: (table: string, row: unknown) => Promise<unknown>;
+                query: (table: string) => { collect: () => Promise<{ body: string }[]> };
+            };
+        };
+        const bodies = async (ctx: GlobalCtx): Promise<string[]> => {
+            const rows = await ctx.db.query("notes").collect();
+
+            return rows.map((row) => row.body).toSorted((left, right) => left.localeCompare(right));
+        };
+
+        register(
+            "global:add",
+            procedures.mutation
+                .input({ body: v.string(), boardId: v.string() })
+                .mutation(async ({ args, ctx }) => (ctx as GlobalCtx).db.insert("notes", { body: args["body"], boardId: args["boardId"], ownerId: "x" })),
+            GLOBAL_APP_FUNCTIONS,
+        );
+        register(
+            "global:public",
+            procedures.query.input({}).query(async ({ ctx }) => {
+                count("global:public");
+
+                return bodies(ctx);
+            }),
+            GLOBAL_APP_FUNCTIONS,
+        );
+        register(
+            "global:boards",
+            procedures.query.input({}).query(async ({ ctx }) => {
+                count("global:boards");
+
+                const boards = await (ctx as GlobalCtx).db.findMany("boards", {});
+
+                return { bodies: await bodies(ctx), owner: boards[0]?.ownerId ?? null };
+            }),
+            GLOBAL_APP_FUNCTIONS,
+        );
+    });
+
+    it("runs a public query that never reaches the global writer once per write", async () => {
+        expect.assertions(2);
+
+        const { delta, sockets } = await subscribeAllThenWrite("global:public", 1, globalApp());
+
+        expect(delta).toBe(1);
+        expect(sockets.map((ws) => lastData(ws))).toStrictEqual(USERS.map(() => ["1"]));
+    });
+
+    it("never shares a run whose global read reaches the caller", async () => {
+        expect.assertions(2);
+
+        const { delta, sockets } = await subscribeAllThenWrite("global:boards", 1, globalApp());
+
+        expect(delta).toBe(USERS.length);
+        expect(sockets.map((ws) => (lastData(ws) as { owner: string }).owner)).toStrictEqual(USERS);
     });
 });

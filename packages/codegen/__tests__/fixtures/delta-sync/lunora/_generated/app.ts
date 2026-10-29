@@ -207,7 +207,7 @@ class AppBuilder<Env extends object> {
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.globalDeclaration
                 ? {
-                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null }) => {
+                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null | undefined }) => {
                           const env = rawEnv as Env;
                           const database = this.globalDeclaration?.d1(env);
 
@@ -218,16 +218,30 @@ class AppBuilder<Env extends object> {
                           const origin = this.globalDeclaration?.origin?.(env);
                           const crossShard = origin
                               ? createCrossShardRelationCapabilities({
-                                    ...(request?.identity === undefined ? {} : { identity: request.identity }),
+                                    get identity() {
+                                        return request?.identity;
+                                    },
                                     origin,
-                                    ...(request?.userId == null ? {} : { userId: request.userId }),
+                                    get userId() {
+                                        return request?.userId ?? undefined;
+                                    },
                                 })
                               : undefined;
 
                           return createD1CtxDb({
                               ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
                               ...(request?.cdcRetentionMs === undefined ? {} : { cdcRetentionMs: request.cdcRetentionMs }),
-                              auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
+                              // Getters, like the cross-shard identity above: reading the
+                              // request's caller marks the live query as caller-dependent, so
+                              // it may happen only when a `.serverDefault` column is stamped.
+                              auth: {
+                                  get identity() {
+                                      return request?.identity ?? null;
+                                  },
+                                  get userId() {
+                                      return request?.userId ?? null;
+                                  },
+                              },
                               // Forwarded from the shard's own `cdc` config, so ONE
                               // switch governs both changelogs. Built without it, the
                               // global `__cdc_log` is never written and the shape
