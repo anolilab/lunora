@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type { AdminUsersClient, ImpersonationSessionLike } from "../core/admin-users";
 import {
+    adminUsersPage,
     createAdminUsersController,
     createStopImpersonatingController,
     impersonatedUser,
@@ -77,6 +78,7 @@ const AdminUsers = ({ client, now, onSessionChange, viewerId }: AdminUsersProps)
     }, [controller]);
 
     const busy = state.status === "busy";
+    const page = adminUsersPage(state);
 
     return (
         <Card subtitle={state.users ? `${(state.total ?? state.users.length).toString()} users` : undefined} title="Users">
@@ -183,6 +185,32 @@ const AdminUsers = ({ client, now, onSessionChange, viewerId }: AdminUsersProps)
                         })}
                     </tbody>
                 </table>
+            ) : undefined}
+
+            {page.hasPrevious || page.hasNext ? (
+                <nav aria-label="Users pages" className="lu-saas-toolbar">
+                    <button
+                        className="lu-saas-button lu-saas-button--quiet"
+                        disabled={busy || !page.hasPrevious}
+                        onClick={() => {
+                            void controller.actions.previousPage();
+                        }}
+                        type="button"
+                    >
+                        Previous
+                    </button>
+                    <span>{page.label}</span>
+                    <button
+                        className="lu-saas-button lu-saas-button--quiet"
+                        disabled={busy || !page.hasNext}
+                        onClick={() => {
+                            void controller.actions.nextPage();
+                        }}
+                        type="button"
+                    >
+                        Next
+                    </button>
+                </nav>
             ) : undefined}
         </Card>
     );

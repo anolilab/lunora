@@ -103,6 +103,8 @@ interface AdminUsersController {
     actions: {
         impersonate: (userId: string) => Promise<boolean>;
         load: () => Promise<void>;
+        nextPage: () => Promise<void>;
+        previousPage: () => Promise<void>;
         search: (term: string) => Promise<void>;
         suspend: (userId: string, reason?: string) => Promise<boolean>;
         unsuspend: (userId: string) => Promise<boolean>;
@@ -122,11 +124,23 @@ interface AdminUsersOptions {
 }
 ```
 
+### `AdminUsersPage` (interface)
+
+```ts
+interface AdminUsersPage {
+    hasNext: boolean;
+    hasPrevious: boolean;
+    label: string;
+}
+```
+
 ### `AdminUsersState` (interface)
 
 ```ts
 interface AdminUsersState {
     error?: string;
+    limit: number;
+    offset: number;
     pendingUserId?: string;
     search: string;
     status: FlowStatus;
@@ -476,6 +490,12 @@ interface UserActions {
 
 ```ts
 const adminTotals: (rows: ReadonlyArray<OrganizationRow>) => { organizations: number; seats: number; };
+```
+
+### `adminUsersPage` (const)
+
+```ts
+const adminUsersPage: (state: Pick<AdminUsersState, "limit" | "offset" | "total" | "users">) => AdminUsersPage;
 ```
 
 ### `createAdminUsersController` (const)
@@ -1032,6 +1052,7 @@ public API and is gated as one. Listed once per package, sorted by name.
 ```ts
 interface AdminUsersQuery {
     limit: number;
+    offset?: number;
     searchField?: "email";
     searchOperator?: "contains";
     searchValue?: string;

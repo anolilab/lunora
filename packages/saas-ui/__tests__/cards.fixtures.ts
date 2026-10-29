@@ -68,8 +68,11 @@ const adminClient = (users: ReadonlyArray<AdminUserRow>): AdminClientMock => {
         impersonateUser: vi.fn<AdminUsersClient["impersonateUser"]>(async () => {
             return { data: {} };
         }),
-        listUsers: vi.fn<AdminUsersClient["listUsers"]>(async () => {
-            return { data: { total: users.length, users } };
+        // Pages like better-auth: `offset`/`limit` slice the list, `total` counts all of it.
+        listUsers: vi.fn<AdminUsersClient["listUsers"]>(async ({ query }) => {
+            const from = query.offset ?? 0;
+
+            return { data: { total: users.length, users: users.slice(from, from + query.limit) } };
         }),
         stopImpersonating: vi.fn<AdminUsersClient["stopImpersonating"]>(async () => {
             return { data: {} };

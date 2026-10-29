@@ -2,7 +2,7 @@
     import { onMount, untrack } from "svelte";
 
     import type { AdminUsersClient } from "../core";
-    import { createAdminUsersController, userActions, userJoined, userLabel, userStatusLabel } from "../core";
+    import { adminUsersPage, createAdminUsersController, userActions, userJoined, userLabel, userStatusLabel } from "../core";
     import Card from "./Card.svelte";
     import Empty from "./Empty.svelte";
     import { bindController } from "./use-controller.svelte";
@@ -35,6 +35,7 @@
 
     const busy = $derived(bound.state.status === "busy");
     const users = $derived(bound.state.users);
+    const page = $derived(adminUsersPage(bound.state));
 
     onMount(() => {
         void controller.actions.load();
@@ -120,5 +121,27 @@
                 {/each}
             </tbody>
         </table>
+    {/if}
+
+    {#if page.hasPrevious || page.hasNext}
+        <nav aria-label="Users pages" class="lu-saas-toolbar">
+            <button
+                class="lu-saas-button lu-saas-button--quiet"
+                disabled={busy || !page.hasPrevious}
+                onclick={() => {
+                    void controller.actions.previousPage();
+                }}
+                type="button">Previous</button
+            >
+            <span>{page.label}</span>
+            <button
+                class="lu-saas-button lu-saas-button--quiet"
+                disabled={busy || !page.hasNext}
+                onclick={() => {
+                    void controller.actions.nextPage();
+                }}
+                type="button">Next</button
+            >
+        </nav>
     {/if}
 </Card>

@@ -63,6 +63,24 @@ describe("adminUsers", () => {
         });
     });
 
+    it("pages past the first 50 users", async () => {
+        const client = adminClient(Array.from({ length: 51 }, (_, index) => adminUser(`user${String(index)}`)));
+
+        render(AdminUsers, { client, now: NOW, onSessionChange: vi.fn(), viewerId: "me" });
+
+        await expect(screen.findByText("1–50 of 51")).resolves.toBeInTheDocument();
+
+        expect(screen.getByText("Previous")).toBeDisabled();
+
+        await fireEvent.click(screen.getByText("Next"));
+
+        await expect(screen.findByText("user50@example.com")).resolves.toBeInTheDocument();
+
+        expect(client.listUsers.mock.lastCall?.[0].query.offset).toBe(50);
+        expect(screen.getByText("51–51 of 51")).toBeInTheDocument();
+        expect(screen.getByText("Next")).toBeDisabled();
+    });
+
     it("searches by email on submit", async () => {
         const client = adminClient([]);
 

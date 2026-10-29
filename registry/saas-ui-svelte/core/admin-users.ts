@@ -47,6 +47,7 @@ interface AuthClientResult<T> {
 
 interface AdminUsersQuery {
     limit: number;
+    offset?: number;
     searchField?: "email";
     searchOperator?: "contains";
     searchValue?: string;
@@ -163,6 +164,10 @@ const authErrorMessage = (error: AuthClientResult<unknown>["error"]): string => 
 
 interface AdminUsersState {
     error?: string;
+    /** Rows per page. */
+    limit: number;
+    /** How many rows precede this page. Back to 0 on every search. */
+    offset: number;
     /** The row a write is running against, so the view can mark that one row busy. */
     pendingUserId?: string;
     /** The term the current list was loaded with. */
@@ -178,7 +183,11 @@ interface AdminUsersController {
     actions: {
         impersonate: (userId: string) => Promise<boolean>;
         load: () => Promise<void>;
-        /** Re-query with a new term. An empty string lists everyone. */
+        /** The page after this one. Does nothing on the last page. */
+        nextPage: () => Promise<void>;
+        /** The page before this one. Does nothing on the first. */
+        previousPage: () => Promise<void>;
+        /** Re-query with a new term, from the first page. An empty string lists everyone. */
         search: (term: string) => Promise<void>;
         suspend: (userId: string, reason?: string) => Promise<boolean>;
         unsuspend: (userId: string) => Promise<boolean>;
@@ -195,15 +204,39 @@ interface AdminUsersController {
 }
 
 interface AdminUsersOptions {
-    /** Rows per load. Defaults to 50. */
+    /** Rows per page. Defaults to 50. */
     limit?: number;
     /** Called once an impersonation has started. Navigate here — the session belongs to someone else now. */
     onSessionChange: () => void;
 }
 
+interface AdminUsersPage {
+    hasNext: boolean;
+    hasPrevious: boolean;
+    /** "51–100 of 230", or empty before the first load and on an empty page. */
+    label: string;
+}
+
+/**
+ * Where the table is in the list. better-auth returns `total` with each page;
+ * when a client leaves it out, a full page is the only sign another may follow.
+ */
+const adminUsersPage = (state: Pick<AdminUsersState, "limit" | "offset" | "total" | "users">): AdminUsersPage => {
+    const count = state.users?.length ?? 0;
+    const hasNext = state.total === undefined ? count === state.limit : state.offset + count < state.total;
+    const range = `${(state.offset + 1).toString()}–${(state.offset + count).toString()}`;
+    let label = "";
+
+    if (count > 0) {
+        label = state.total === undefined ? range : `${range} of ${state.total.toString()}`;
+    }
+
+    return { hasNext: state.users !== undefined && hasNext, hasPrevious: state.offset > 0, label };
+};
+
 const createAdminUsersController = (client: AdminUsersClient, options: AdminUsersOptions): AdminUsersController => {
-    const store = createStore<AdminUsersState>({ search: "", status: "idle" });
     const limit = options.limit ?? 50;
+    const store = createStore<AdminUsersState>({ limit, offset: 0, search: "", status: "idle" });
     // Each load takes a ticket; an answer whose ticket is stale is dropped, so a
     // slow search for "a" cannot land on top of the faster one for "ab".
     let ticket = 0;
@@ -213,6 +246,7 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
         ticket += 1;
 
         const mine = ticket;
+        const { offset } = store.get();
         const search = store.get().search.trim();
 
         store.update({ error: undefined, status: "busy" });
@@ -223,6 +257,7 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
             result = await client.listUsers({
                 query: {
                     limit,
+                    offset,
                     sortBy: "createdAt",
                     sortDirection: "desc",
                     ...(search === "" ? {} : { searchField: "email", searchOperator: "contains", searchValue: search }),
@@ -291,8 +326,23 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
                 return ok;
             },
             load,
+            nextPage: async () => {
+                if (adminUsersPage(store.get()).hasNext) {
+                    store.update({ offset: store.get().offset + limit });
+                    await load();
+                }
+            },
+            previousPage: async () => {
+                const { offset } = store.get();
+
+                if (offset > 0) {
+                    store.update({ offset: Math.max(0, offset - limit) });
+                    await load();
+                }
+            },
             search: async (term: string) => {
-                store.update({ search: term });
+                // A page number means nothing against a different result set.
+                store.update({ offset: 0, search: term });
 
                 return load();
             },
@@ -396,6 +446,7 @@ export type {
     AdminUsersClient,
     AdminUsersController,
     AdminUsersOptions,
+    AdminUsersPage,
     AdminUsersState,
     AuthClientResult,
     ImpersonationSessionLike,
@@ -404,6 +455,7 @@ export type {
     UserActions,
 };
 export {
+    adminUsersPage,
     createAdminUsersController,
     createStopImpersonatingController,
     impersonatedUser,

@@ -17,6 +17,7 @@ export type {
     AdminUsersClient,
     AdminUsersController,
     AdminUsersOptions,
+    AdminUsersPage,
     AdminUsersState,
     AuthClientResult,
     ImpersonationSessionLike,
@@ -25,6 +26,7 @@ export type {
     UserActions,
 } from "./admin-users";
 export {
+    adminUsersPage,
     createAdminUsersController,
     createStopImpersonatingController,
     impersonatedUser,

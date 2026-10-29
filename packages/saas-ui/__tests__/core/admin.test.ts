@@ -4,6 +4,7 @@ import type { AdminSubscriptionRow } from "../../src/core/admin-subscriptions";
 import { selectSubscriptions, subscriptionsSubtitle, subscriptionStateOptions, subscriptionTotals } from "../../src/core/admin-subscriptions";
 import type { AdminUserRow, AdminUsersClient, AuthClientResult } from "../../src/core/admin-users";
 import {
+    adminUsersPage,
     createAdminUsersController,
     createStopImpersonatingController,
     impersonatedUser,
@@ -44,7 +45,11 @@ const createClient = (users: ReadonlyArray<AdminUserRow> = []) => {
     return {
         banUser: vi.fn<AdminUsersClient["banUser"]>(async () => ok({})),
         impersonateUser: vi.fn<AdminUsersClient["impersonateUser"]>(async () => ok({})),
-        listUsers: vi.fn<AdminUsersClient["listUsers"]>(async () => ok({ total: users.length, users })),
+        listUsers: vi.fn<AdminUsersClient["listUsers"]>(async ({ query }) => {
+            const from = query.offset ?? 0;
+
+            return ok({ total: users.length, users: users.slice(from, from + query.limit) });
+        }),
         stopImpersonating: vi.fn<AdminUsersClient["stopImpersonating"]>(async () => ok({})),
         unbanUser: vi.fn<AdminUsersClient["unbanUser"]>(async () => ok({})),
     };
@@ -99,13 +104,61 @@ describe("createAdminUsersController", () => {
         await controller.actions.load();
 
         expect(controller.getState().users).toHaveLength(1);
-        expect(client.listUsers).toHaveBeenLastCalledWith({ query: { limit: 50, sortBy: "createdAt", sortDirection: "desc" } });
+        expect(client.listUsers).toHaveBeenLastCalledWith({ query: { limit: 50, offset: 0, sortBy: "createdAt", sortDirection: "desc" } });
 
         await controller.actions.search("  ada ");
 
         expect(client.listUsers).toHaveBeenLastCalledWith({
-            query: { limit: 50, searchField: "email", searchOperator: "contains", searchValue: "ada", sortBy: "createdAt", sortDirection: "desc" },
+            query: { limit: 50, offset: 0, searchField: "email", searchOperator: "contains", searchValue: "ada", sortBy: "createdAt", sortDirection: "desc" },
         });
+    });
+
+    it("pages by offset, stops at the last page, and starts over on a search", async () => {
+        const client = createClient(Array.from({ length: 5 }, (_, index) => user({ id: `u${String(index)}` })));
+        const controller = createAdminUsersController(client, { limit: 2, onSessionChange: vi.fn() });
+
+        await controller.actions.load();
+
+        expect(adminUsersPage(controller.getState())).toStrictEqual({ hasNext: true, hasPrevious: false, label: "1–2 of 5" });
+
+        await controller.actions.nextPage();
+        await controller.actions.nextPage();
+
+        expect(client.listUsers.mock.lastCall?.[0].query.offset).toBe(4);
+        expect(controller.getState().users?.map((row) => row.id)).toStrictEqual(["u4"]);
+        expect(adminUsersPage(controller.getState())).toStrictEqual({ hasNext: false, hasPrevious: true, label: "5–5 of 5" });
+
+        await controller.actions.nextPage();
+
+        expect(client.listUsers).toHaveBeenCalledTimes(3);
+
+        await controller.actions.previousPage();
+
+        expect(controller.getState().users?.map((row) => row.id)).toStrictEqual(["u2", "u3"]);
+
+        await controller.actions.search("u");
+
+        expect(client.listUsers.mock.lastCall?.[0].query.offset).toBe(0);
+        expect(controller.getState().offset).toBe(0);
+    });
+
+    it("keeps the page it is on when a write re-reads the list", async () => {
+        const client = createClient(Array.from({ length: 3 }, (_, index) => user({ id: `u${String(index)}` })));
+        const controller = createAdminUsersController(client, { limit: 2, onSessionChange: vi.fn() });
+
+        await controller.actions.load();
+        await controller.actions.nextPage();
+        await controller.actions.suspend("u2");
+
+        expect(client.listUsers.mock.lastCall?.[0].query.offset).toBe(2);
+    });
+
+    it("reads a full page as possibly not the last when the client gives no total", () => {
+        const rows = [user({ id: "a" }), user({ id: "b" })];
+
+        expect(adminUsersPage({ limit: 2, offset: 0, users: rows })).toStrictEqual({ hasNext: true, hasPrevious: false, label: "1–2" });
+        expect(adminUsersPage({ limit: 3, offset: 0, users: rows }).hasNext).toBe(false);
+        expect(adminUsersPage({ limit: 2, offset: 0, users: undefined }).hasNext).toBe(false);
     });
 
     it("drops a slower answer to an older search", async () => {
