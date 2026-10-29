@@ -1,7 +1,7 @@
 import type { SubscriptionError } from "@lunora/react";
 import { usePaginatedQuery, useQuery } from "@lunora/react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../../lunora/_generated/api";
 import { PLANS } from "../../lunora/plans";
@@ -9,6 +9,9 @@ import { AdminOrganizations, AdminSubscriptions, AdminUsers } from "../../lunora
 import { authClient } from "../auth-client";
 
 import "../../lunora/saas-ui/styles.css";
+
+/** How often the admin tables' clock advances. */
+const CLOCK_TICK_MS = 60_000;
 
 /** Subscriptions per page of the admin table. */
 const SUBSCRIPTIONS_PAGE = 50;
@@ -43,7 +46,20 @@ function AdminPage() {
     // older tenant in dunning out of sight until someone paged back to it.
     const pastDue = useQuery(api.payment.adminPastDueSubscriptions, {}, { onError: setFailure });
     const { data: session } = authClient.useSession();
-    const [now] = useState(() => Date.now());
+    // The clock the tables read, advanced each minute: a timed suspension that has
+    // lapsed has to turn back into Active (with Suspend offered), and "4m ago" has
+    // to keep counting, without a reload.
+    const [now, setNow] = useState(() => Date.now());
+
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setNow(Date.now());
+        }, CLOCK_TICK_MS);
+
+        return () => {
+            clearInterval(timer);
+        };
+    }, []);
     // Calendar days are the viewer's, not the Worker's (always UTC). The table
     // only renders once its live query resolves in the browser, so this is the
     // browser's zone by then.
