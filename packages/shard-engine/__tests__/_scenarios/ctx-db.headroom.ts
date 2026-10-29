@@ -219,6 +219,22 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
             expect(tracker.headroom().readBytes).toBeGreaterThan(500);
         });
 
+        it("does not charge a write's pre-image probe on top of the read that loaded the row", async () => {
+            expect.assertions(1);
+
+            const id = await build({}).insert("notes", { body: "x".repeat(500), bucket: "a" });
+            const [stored] = sql.exec<{ __doc__: string }>("SELECT __doc__ FROM notes").toArray();
+            const writer = build({ maxReadBytes: Math.floor((stored?.__doc__.length ?? 0) * 1.5) });
+
+            await expect(
+                codeOf(async () => {
+                    await writer.get("notes", id);
+                    await writer.patch("notes", id, { bucket: "b" });
+                    await writer.delete("notes", id);
+                }),
+            ).resolves.toBeUndefined();
+        });
+
         it("does not charge read bytes inside an unmetered deleteAll", async () => {
             expect.assertions(1);
 

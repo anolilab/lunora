@@ -3009,9 +3009,18 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     /**
      * Locate a row by id and return both the owning table and the decoded
      * document in a single pass, so a `patch`/`delete` costs one lookup rather than a table probe plus a read.
+     *
+     * A write's pre-image probe passes `charge: false`: the caller paid for the
+     * document when it read it, and the write meters its own bytes, so charging
+     * the probe too would halve the read cap for read-then-update loops.
      * @returns the row, its owning table, and its serialised document, or `undefined` when the id is absent
      */
-    const locateRowById = (id: string, expectedTable?: string): { docJson: string; row: Record<string, unknown>; tableName: string } | undefined => {
+    const locateRowById = (
+        id: string,
+        expectedTable?: string,
+        charge = true,
+    ): { docJson: string; row: Record<string, unknown>; tableName: string } | undefined => {
+        const probeSql = charge ? sql : unwrapSql(sql);
         // Row ids are random UUIDs, so the owning table can't be derived from
         // the id. Rather than probing each table with its own SELECT (T
         // statements worst-case on a T-table schema, on the per-mutation hot
@@ -3030,7 +3039,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // Text depends only on the chunk's table list, so it is rendered once
             // per distinct list rather than per read — this probe runs on every
             // get/patch/replace/delete. See `row-statements.ts`.
-            const [firstRow] = runSql(sql, rowProbeSql(chunk), ...rowProbeParams(id, chunk)).toArray();
+            const [firstRow] = runSql(probeSql, rowProbeSql(chunk), ...rowProbeParams(id, chunk)).toArray();
 
             if (!firstRow) {
                 continue;
@@ -3105,7 +3114,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         canRetry: boolean,
         patchRow: (patch: Record<string, unknown>) => Promise<void>,
     ): Promise<{ applied: boolean; doc: Record<string, unknown> | null } | undefined> => {
-        const located = locateRowById(id, tableName);
+        const located = locateRowById(id, tableName, false);
 
         if (!located) {
             // eslint-disable-next-line unicorn/no-null -- no such row: nothing to match, nothing written
@@ -3359,7 +3368,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             assertSchemaTable(table, "ctx.db.delete(table, id)");
 
             // One lookup returns the table and the row together.
-            const located = locateRowById(id, table);
+            const located = locateRowById(id, table, false);
 
             if (!located) {
                 // A global row's id never lives in this DO; fall back to the
@@ -4298,7 +4307,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             assertSchemaTable(table, "ctx.db.patch(table, id, values)");
 
             // One lookup returns the table and the row together.
-            const located = locateRowById(id, table);
+            const located = locateRowById(id, table, false);
 
             if (!located) {
                 // A global row's id never lives in this DO; fall back to the
@@ -4778,7 +4787,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // By-id, so it reaches a row that list reads hide. Clearing the marker
             // is a plain `patch` to `null` — it re-syncs companions and broadcasts
             // an update, so live list queries pick the row back up.
-            const located = locateRowById(id, table);
+            const located = locateRowById(id, table, false);
 
             if (!located) {
                 const global = globalFallbackFor(table);
@@ -4828,7 +4837,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // — the same OCC contract `patch`/`delete` honor. Reusing the
             // decoded row as `previous` also keeps the aggregate/rank -prev
             // steps consistent with what was actually on disk at read time.
-            const located = locateRowById(id, table);
+            const located = locateRowById(id, table, false);
 
             if (!located) {
                 // A global row's id never lives in this DO; fall back to the
