@@ -229,10 +229,10 @@ export const buildPgExec = (client: RowClient): SqlExec => {
 
 /**
  * Wrap a `mysql2/promise` connection/pool, built by `load` on the first statement,
- * as a {@link SqlExec}. The core already
- * renders backtick identifiers and `?` placeholders for MySQL, so `all`/`run`
- * forward verbatim. MySQL has no `RETURNING`, so `run` surfaces `affectedRows`
- * for the store's affected-rows OCC guard.
+ * as a {@link SqlExec}. The core already renders backtick identifiers and `?`
+ * placeholders for MySQL, so `all`/`run` forward verbatim. MySQL has no
+ * `RETURNING`, so `run` surfaces `affectedRows` for the store's affected-rows
+ * OCC guard.
  *
  * Statements go over as text with client-side escaping, so the server must not
  * run with `NO_BACKSLASH_ESCAPES` (see {@link Mysql2Like}).
