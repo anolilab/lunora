@@ -284,7 +284,11 @@ Pass `expiresAt` (epoch ms) to stop the hosted checkout being payable after
 that time — for example, so a session abandoned for a later one cannot be paid
 as well. Stripe honours it (30 minutes to 24 hours from creation); a provider
 whose `capabilities.checkoutExpiry` is `false` refuses the call with
-`PROVIDER_ERROR` rather than leave the session open past your bound.
+`PROVIDER_ERROR` rather than leave the session open past your bound. The expiry
+is part of the derived idempotency key (Stripe refuses a replayed key whose
+parameters differ), so one computed from the clock makes every call a new
+request: pass your own `idempotencyKey` if a retry should get the first session
+back.
 
 ### Entitlements: `check` and `track`
 

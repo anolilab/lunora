@@ -142,6 +142,10 @@ export interface CheckoutRequest {
      * When the hosted checkout stops being payable (epoch ms). Stripe accepts 30 minutes to 24
      * hours from creation. Refused with `PROVIDER_ERROR` on an adapter whose
      * `capabilities.checkoutExpiry` is false: a caller that bounds the session is relying on it.
+     *
+     * Part of the derived idempotency key, because the provider refuses a replayed key whose
+     * parameters differ. An expiry computed from the clock therefore makes every call a new
+     * request; pass your own `idempotencyKey` to collapse a retry onto the first session.
      */
     readonly expiresAt?: number;
     /** Outbound idempotency key for the provider call; auto-derived when omitted. */
