@@ -32,10 +32,21 @@
     const bound = bindController(controller);
 
     let term = $state("");
+    // One row at a time asks to confirm a suspension: it revokes every session the
+    // user has, so a single click beside Impersonate is too easy to land by mistake.
+    let confirming = $state<string>();
+    let reason = $state("");
 
     const busy = $derived(bound.state.status === "busy");
     const users = $derived(bound.state.users);
     const page = $derived(adminUsersPage(bound.state));
+
+    const confirmSuspend = async (userId: string): Promise<void> => {
+        // A refused suspension keeps the step open, beside its error.
+        if (await controller.actions.suspend(userId, reason)) {
+            confirming = undefined;
+        }
+    };
 
     onMount(() => {
         void controller.actions.load();
@@ -94,13 +105,39 @@
                                     type="button">Impersonate</button
                                 >
                             {/if}
-                            {#if actions.suspend}
+                            {#if actions.suspend && confirming === user.id}
+                                <form
+                                    class="lu-saas-confirm"
+                                    onsubmit={(event) => {
+                                        event.preventDefault();
+                                        void confirmSuspend(user.id);
+                                    }}
+                                >
+                                    <input
+                                        aria-label={`Reason for suspending ${label}`}
+                                        bind:value={reason}
+                                        class="lu-saas-input"
+                                        placeholder="Reason (optional)"
+                                        type="text"
+                                    />
+                                    <button aria-label={`Confirm suspending ${label}`} class="lu-saas-button" disabled={busy} type="submit">Suspend</button>
+                                    <button
+                                        class="lu-saas-button lu-saas-button--quiet"
+                                        disabled={busy}
+                                        onclick={() => {
+                                            confirming = undefined;
+                                        }}
+                                        type="button">Cancel</button
+                                    >
+                                </form>
+                            {:else if actions.suspend}
                                 <button
                                     aria-label={`Suspend ${label}`}
                                     class="lu-saas-button lu-saas-button--quiet"
                                     disabled={busy}
                                     onclick={() => {
-                                        void controller.actions.suspend(user.id);
+                                        confirming = user.id;
+                                        reason = "";
                                     }}
                                     type="button">Suspend</button
                                 >

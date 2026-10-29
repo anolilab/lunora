@@ -72,6 +72,10 @@ const AdminUsers = ({ client, now, onSessionChange, viewerId }: AdminUsersProps)
         }),
     );
     const [term, setTerm] = useState("");
+    // One row at a time asks to confirm a suspension: it revokes every session the
+    // user has, so a single click beside Impersonate is too easy to land by mistake.
+    const [confirming, setConfirming] = useState<string>();
+    const [reason, setReason] = useState("");
 
     useEffect(() => {
         void controller.actions.load();
@@ -79,6 +83,13 @@ const AdminUsers = ({ client, now, onSessionChange, viewerId }: AdminUsersProps)
 
     const busy = state.status === "busy";
     const page = adminUsersPage(state);
+
+    const confirmSuspend = async (userId: string): Promise<void> => {
+        // A refused suspension keeps the step open, beside its error.
+        if (await controller.actions.suspend(userId, reason)) {
+            setConfirming(undefined);
+        }
+    };
 
     return (
         <Card subtitle={state.users ? `${(state.total ?? state.users.length).toString()} users` : undefined} title="Users">
@@ -153,13 +164,47 @@ const AdminUsers = ({ client, now, onSessionChange, viewerId }: AdminUsersProps)
                                                 Impersonate
                                             </button>
                                         ) : undefined}
-                                        {actions.suspend ? (
+                                        {actions.suspend && confirming === user.id ? (
+                                            <form
+                                                className="lu-saas-confirm"
+                                                onSubmit={(event) => {
+                                                    event.preventDefault();
+                                                    void confirmSuspend(user.id);
+                                                }}
+                                            >
+                                                <input
+                                                    aria-label={`Reason for suspending ${label}`}
+                                                    className="lu-saas-input"
+                                                    onChange={(event) => {
+                                                        setReason(event.target.value);
+                                                    }}
+                                                    placeholder="Reason (optional)"
+                                                    type="text"
+                                                    value={reason}
+                                                />
+                                                <button aria-label={`Confirm suspending ${label}`} className="lu-saas-button" disabled={busy} type="submit">
+                                                    Suspend
+                                                </button>
+                                                <button
+                                                    className="lu-saas-button lu-saas-button--quiet"
+                                                    disabled={busy}
+                                                    onClick={() => {
+                                                        setConfirming(undefined);
+                                                    }}
+                                                    type="button"
+                                                >
+                                                    Cancel
+                                                </button>
+                                            </form>
+                                        ) : undefined}
+                                        {actions.suspend && confirming !== user.id ? (
                                             <button
                                                 aria-label={`Suspend ${label}`}
                                                 className="lu-saas-button lu-saas-button--quiet"
                                                 disabled={busy}
                                                 onClick={() => {
-                                                    void controller.actions.suspend(user.id);
+                                                    setConfirming(user.id);
+                                                    setReason("");
                                                 }}
                                                 type="button"
                                             >

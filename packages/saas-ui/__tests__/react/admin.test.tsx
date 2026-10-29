@@ -18,17 +18,50 @@ describe("adminUsers", () => {
         expect(screen.getByLabelText("Suspend ada")).toBeInTheDocument();
     });
 
-    it("suspends through the client, then re-reads the list", async () => {
+    it("asks to confirm a suspension, then suspends with the reason and re-reads the list", async () => {
         const client = adminClient([adminUser("ada")]);
 
         render(<AdminUsers client={client} now={NOW} onSessionChange={vi.fn()} viewerId="me" />);
         fireEvent.click(await screen.findByLabelText("Suspend ada"));
 
+        expect(client.banUser).not.toHaveBeenCalled();
+
+        fireEvent.input(screen.getByLabelText("Reason for suspending ada"), { target: { value: "chargeback fraud" } });
+        fireEvent.click(screen.getByLabelText("Confirm suspending ada"));
+
+        // The step closes once the suspension and the re-read after it have settled.
         await vi.waitFor(() => {
-            expect(client.listUsers).toHaveBeenCalledTimes(2);
+            expect(screen.queryByLabelText("Confirm suspending ada")).not.toBeInTheDocument();
         });
 
+        expect(client.banUser).toHaveBeenCalledWith({ banReason: "chargeback fraud", userId: "ada" });
+        expect(client.listUsers).toHaveBeenCalledTimes(2);
+    });
+
+    it("backs out of a suspension without suspending anyone", async () => {
+        const client = adminClient([adminUser("ada")]);
+
+        render(<AdminUsers client={client} now={NOW} onSessionChange={vi.fn()} viewerId="me" />);
+        fireEvent.click(await screen.findByLabelText("Suspend ada"));
+        fireEvent.click(screen.getByText("Cancel"));
+
+        expect(screen.getByLabelText("Suspend ada")).toBeInTheDocument();
+        expect(client.banUser).not.toHaveBeenCalled();
+    });
+
+    it("keeps the confirm step open beside a refused suspension", async () => {
+        const client = adminClient([adminUser("ada")]);
+
+        client.banUser.mockResolvedValueOnce({ error: { message: "You cannot ban an admin", status: 403 } });
+
+        render(<AdminUsers client={client} now={NOW} onSessionChange={vi.fn()} viewerId="me" />);
+        fireEvent.click(await screen.findByLabelText("Suspend ada"));
+        fireEvent.click(screen.getByLabelText("Confirm suspending ada"));
+
+        await expect(screen.findByText("You cannot ban an admin")).resolves.toBeInTheDocument();
+
         expect(client.banUser).toHaveBeenCalledWith({ userId: "ada" });
+        expect(screen.getByLabelText("Confirm suspending ada")).toBeInTheDocument();
     });
 
     it("offers the way back on a suspended user, and not impersonation", async () => {
