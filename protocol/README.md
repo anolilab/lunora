@@ -913,7 +913,10 @@ refusals leave the socket as it was, still closing at its old expiry or window.
 Changed claims (`409 IDENTITY_CHANGED`) also close the socket at once with `4005`:
 the identity it was delivering under no longer holds. A client counts only the
 `{ ok: true }` body as success. On any refusal it SHOULD reconnect the socket
-under the current credential, which re-seeds as any upgrade does. A server
+under the current credential, which re-seeds as any upgrade does. After
+`IDENTITY_CHANGED` the reconnect MUST be cold (no `sinceSeq`, shape views
+emptied): the rows held were resolved under the old claims, and a resumed diff
+would not remove the ones the new claims cannot see. A server
 without the route answers `404`, so the same fallback covers it.
 
 A cookie session re-authenticates the same way, with no `Authorization` header:

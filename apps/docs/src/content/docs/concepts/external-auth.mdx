@@ -186,8 +186,9 @@ function. It:
   query, mutation or action sent with a lapsed token is refused
   `TOKEN_EXPIRED`, and an online call is not resent for you. With
   `authTokenOnUpgrade`, each refresh is handed to the open sockets in place,
-  so they keep their subscriptions. A socket the server will not refresh (the
-  token's claims changed, or the server predates the route) reconnects warm.
+  so they keep their subscriptions. A socket the server will not refresh
+  reconnects warm, unless the token's claims changed (a role, an `orgId`):
+  then every subscription re-seeds cold under the new claims.
 - refreshes again on `onTokenExpired`: a socket the server closed with `4001`,
   or a queued offline write refused on replay, which is held and sent again
   after the new token.

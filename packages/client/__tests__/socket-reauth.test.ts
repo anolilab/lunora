@@ -202,6 +202,21 @@ describe("socket identity revalidation", () => {
         client.close();
     });
 
+    it("keeps the re-auth on schedule when the same socket's identity is re-sent", async () => {
+        expect.assertions(1);
+
+        const { client, reauthCalls, sockets } = await openRevalidatingClient({ revalidateMs: 60_000, token: "token-1" });
+
+        // A context update re-sends `connect`, and the server answers each with the same socket's identity.
+        await vi.advanceTimersByTimeAsync(20_000);
+        sockets[0]?.receive({ connectionId: "conn-1", revalidateMs: 60_000, subject: "user-1", type: "identity" });
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        expect(reauthCalls()).toHaveLength(1);
+
+        client.close();
+    });
+
     it("presents the cookie session alone when the socket has no bearer", async () => {
         expect.assertions(2);
 
@@ -223,6 +238,33 @@ describe("socket identity revalidation", () => {
         await vi.advanceTimersByTimeAsync(30_000);
 
         expect(sockets[0]?.readyState).toBe(3);
+
+        client.close();
+    });
+
+    it("re-seeds cold when the server reports the socket's claims changed, so no old-tenant row is resumed from", async () => {
+        expect.assertions(3);
+
+        const { client, sockets } = await openRevalidatingClient({ reauthOk: false, revalidateMs: 60_000, token: "token-1" });
+
+        const subscribe = (sockets[0]?.frames() ?? []).find((frame) => frame.type === "subscribe") as { id: string } | undefined;
+
+        sockets[0]?.receive({ cursor: 7, epoch: "e1", id: subscribe?.id, type: "data", data: ["org-a row"] });
+        await settle();
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect(sockets[0]?.readyState).toBe(3);
+
+        sockets[0]?.triggerClose();
+        await vi.advanceTimersByTimeAsync(0);
+        await settle();
+        sockets[1]?.open();
+        await settle();
+
+        const resubscribe = (sockets[1]?.frames() ?? []).find((frame) => frame.type === "subscribe") as { query?: Record<string, unknown> } | undefined;
+
+        expect(resubscribe?.query).toBeDefined();
+        expect(resubscribe?.query).not.toHaveProperty("sinceSeq");
 
         client.close();
     });

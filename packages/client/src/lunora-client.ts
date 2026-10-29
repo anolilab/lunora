@@ -7709,9 +7709,16 @@ class LunoraClient {
             return;
         }
 
+        // A re-sent `connect` (a context update) is answered with the same socket's identity again, which
+        // does not move the server's deadline: re-arming on it would push the re-auth out past that deadline.
+        const sameSocket = conn.connectionId === message.connectionId;
+
         conn.connectionId = message.connectionId;
         conn.whisperAck = message.whisperAck === true;
-        this.armSocketRevalidation(conn, message.revalidateMs);
+
+        if (!sameSocket || conn.revalidateTimer === undefined) {
+            this.armSocketRevalidation(conn, message.revalidateMs);
+        }
 
         for (const subscriptionId of this.liveSocketGrants.get(connectionKey(shardKey))?.keys() ?? []) {
             this.grantWhenJoined(shardKey, subscriptionId, message.connectionId);
@@ -8812,17 +8819,29 @@ class LunoraClient {
             JSON.stringify({ connectionId }),
             bearer === null ? { "content-type": "application/json" } : { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
         )
-            // Only the route's own `{ ok: true }` counts: a catch-all 200 (an SPA fallback, a proxy) did not refresh anything.
-            .then(({ text }) => (JSON.parse(text) as { ok?: unknown } | null)?.ok === true)
-            .catch(() => false)
-            .then((reauthenticated) => {
+            .then(({ text }): "changed" | "ok" | "refused" => {
+                const body = JSON.parse(text) as { error?: { code?: unknown }; ok?: unknown } | null;
+
+                // Only the route's own `{ ok: true }` counts: a catch-all 200 (an SPA fallback, a proxy) did not refresh anything.
+                if (body?.ok === true) {
+                    return "ok";
+                }
+
+                return body?.error?.code === "IDENTITY_CHANGED" ? "changed" : "refused";
+            })
+            .catch(() => "refused" as const)
+            .then((outcome) => {
                 // A newer token, or a socket that has since been replaced, is already handled by whatever replaced it.
                 if (this.closed || this.authToken !== heldToken || conn.connectionId !== connectionId) {
                     return undefined;
                 }
 
-                if (reauthenticated) {
+                if (outcome === "ok") {
                     this.armSocketRevalidation(conn, conn.revalidateMs);
+                } else if (outcome === "changed") {
+                    // Same user, different claims (a role, an `orgId`): every value and shape row held was resolved
+                    // under the old ones, and a warm resume would only diff on top of them. Re-seed cold, everywhere.
+                    this.evictPreviousIdentitySession();
                 } else {
                     this.bounceShardSocket(conn);
                 }
