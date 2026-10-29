@@ -576,6 +576,50 @@ describe("saas template checkout", () => {
     });
 });
 
+describe("saas template admin subscriptions", () => {
+    type AdminSubscriptions = Handler<Row, Row[]>;
+
+    const setup = async (claims: Row) => {
+        env["APP_BASE_URL"] = "https://app.example.test";
+
+        const { adminSubscriptions } = await load<{ adminSubscriptions: AdminSubscriptions }>("templates", "saas", "lunora", "payment", "index.ts");
+        const database = createDatabase({});
+
+        database
+            .rows("payment_subscriptions")
+            .push({ _id: "s1", priceId: "price_pro", providerSubscriptionId: "sub_1", referenceId: "org-1", state: "active" });
+
+        return { adminSubscriptions, ctx: { auth: signedIn(claims), db: database.db, shardKey: "__root__" } };
+    };
+
+    it("refuses a platform admin on a tenant shard instead of reading its empty copy", async () => {
+        expect.assertions(1);
+
+        const { adminSubscriptions, ctx } = await setup({ appRole: "admin" });
+
+        await expect(adminSubscriptions({ args: {}, ctx: { ...ctx, shardKey: "org-1" } })).rejects.toMatchObject({
+            code: "FORBIDDEN",
+            message: expect.stringContaining("root shard"),
+        });
+    });
+
+    it("refuses anyone without the platform admin role", async () => {
+        expect.assertions(1);
+
+        const { adminSubscriptions, ctx } = await setup({ appRole: "user" });
+
+        await expect(adminSubscriptions({ args: {}, ctx })).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("platform admin") });
+    });
+
+    it("reads the root shard's subscriptions for a platform admin", async () => {
+        expect.assertions(1);
+
+        const { adminSubscriptions, ctx } = await setup({ appRole: "user,admin" });
+
+        await expect(adminSubscriptions({ args: {}, ctx })).resolves.toMatchObject([{ providerSubscriptionId: "sub_1", referenceId: "org-1" }]);
+    });
+});
+
 describe("presence heartbeat", () => {
     type Heartbeat = Handler<{ data?: Row; roomId: string; sessionId: string }, { lastSeen: number }>;
 

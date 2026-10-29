@@ -476,6 +476,13 @@ const requirePlatformAdmin = async (ctx: { auth: { getIdentity: () => Promise<{ 
 export const adminSubscriptions = query.query(async ({ ctx }): Promise<SubscriptionRow[]> => {
     await requirePlatformAdmin(ctx);
 
+    // A tenant shard holds an empty copy of the billing tables, so a read there
+    // would show "no subscriptions" rather than fail — refuse it as
+    // `billingReference` does.
+    if (ctx.shardKey !== ROOT_SHARD) {
+        throw new LunoraError("FORBIDDEN", "billing runs on the root shard — call it without a shardKey");
+    }
+
     const rows = await ctx.db.query("payment_subscriptions").collect();
 
     return rows.map((document) => toSubscriptionRow(document));
