@@ -567,8 +567,9 @@ const removePreview = async (
     let unrecorded: string[];
 
     try {
-        // KV is eventually consistent: the record read here can predate a resource a deploy just made. One that
-        // carries a planned name but is not on record keeps the record, so a later delete can still find it.
+        // KV is eventually consistent: the record read here can predate a resource a deploy just made. Writing
+        // this stale copy back would erase the newer one that lists it, so the record is then left untouched;
+        // a re-run finds what was already deleted gone, which counts as deleted.
         const recorded = new Set(record.resources.map((resource) => `${resource.kind}:${resource.name}`));
         const candidates = (planned?.resources ?? []).filter((resource) => !recorded.has(`${resource.kind}:${resource.name}`));
         const found = await Promise.all(
@@ -577,21 +578,23 @@ const removePreview = async (
 
         unrecorded = found.flat().map((resource) => `${resource.kind} "${resource.name}"`);
 
-        await (remaining.length === 0 && unrecorded.length === 0 ? deleteRecord(request, namespace, record) : writeRecord(request, namespace, left));
+        if (unrecorded.length === 0) {
+            await (remaining.length === 0 ? deleteRecord(request, namespace, record) : writeRecord(request, namespace, left));
+        }
     } catch (error) {
         return fail(logger, `preview "${record.name}": ${reason(error)}`, EXIT_CODE.FAILURE);
-    }
-
-    if (remaining.length > 0) {
-        return { code: EXIT_CODE.FAILURE, data: { preview: summarize(left) }, error: `${String(remaining.length)} preview resource(s) could not be deleted` };
     }
 
     if (unrecorded.length > 0) {
         return fail(
             logger,
-            `${unrecorded.join(", ")} exist(s) under this preview's names but not in the record read (a deploy may have just recorded it); the record is kept — run \`lunora preview delete ${record.name}\` again`,
+            `${unrecorded.join(", ")} exist(s) under this preview's names but not in the record read (a deploy may have just recorded it); the record was left as it is — run \`lunora preview delete ${record.name}\` again. If that keeps failing, the resource was never recorded (a deploy stopped between creating and recording it): delete it by hand, then run delete once more`,
             EXIT_CODE.FAILURE,
         );
+    }
+
+    if (remaining.length > 0) {
+        return { code: EXIT_CODE.FAILURE, data: { preview: summarize(left) }, error: `${String(remaining.length)} preview resource(s) could not be deleted` };
     }
 
     return { code: EXIT_CODE.SUCCESS, data: { deleted: summarize(record) } };

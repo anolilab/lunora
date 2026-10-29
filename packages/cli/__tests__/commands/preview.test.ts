@@ -107,6 +107,7 @@ const fakeAccount = (
     kvValues: Map<string, Map<string, string>>;
     r2: Set<string>;
     r2Objects: Map<string, Set<string>>;
+    staleReads: Map<string, string>;
     workers: Map<string, string | undefined>;
 } => {
     const d1 = new Map<string, string>();
@@ -115,6 +116,7 @@ const fakeAccount = (
     const r2 = new Set<string>();
     const r2Objects = new Map<string, Set<string>>();
     let hiddenKvListings = options.hiddenKvListings ?? 0;
+    const staleReads = new Map<string, string>();
     const workers = new Map<string, string | undefined>();
     const calls: { method: string; path: string }[] = [];
     let sequence = 0;
@@ -180,30 +182,43 @@ const fakeAccount = (
         return undefined;
     };
 
+    const kvValueRoute = (method: string, value: RegExpExecArray, body: string | undefined): Response => {
+        const values = kvValues.get(value[1] ?? "") ?? new Map<string, string>();
+        const key = decodeURIComponent(value[2] ?? "");
+
+        kvValues.set(value[1] ?? "", values);
+
+        if (method === "PUT") {
+            values.set(key, body ?? "");
+
+            return envelope(null);
+        }
+
+        if (method === "DELETE") {
+            values.delete(key);
+
+            return envelope(null);
+        }
+
+        const stale = staleReads.get(key);
+
+        // One read served from a location that has not seen the latest write yet.
+        if (stale !== undefined) {
+            staleReads.delete(key);
+
+            return new Response(stale, { status: 200 });
+        }
+
+        const stored = values.get(key);
+
+        return stored === undefined ? notFound() : new Response(stored, { status: 200 });
+    };
+
     const kvRoute = (method: string, path: string, search: URLSearchParams, body: string | undefined): Response | undefined => {
         const value = KV_VALUE_PATH.exec(path);
 
         if (value !== null) {
-            const values = kvValues.get(value[1] ?? "") ?? new Map<string, string>();
-            const key = decodeURIComponent(value[2] ?? "");
-
-            kvValues.set(value[1] ?? "", values);
-
-            if (method === "PUT") {
-                values.set(key, body ?? "");
-
-                return envelope(null);
-            }
-
-            if (method === "DELETE") {
-                values.delete(key);
-
-                return envelope(null);
-            }
-
-            const stored = values.get(key);
-
-            return stored === undefined ? notFound() : new Response(stored, { status: 200 });
+            return kvValueRoute(method, value, body);
         }
 
         const namespace = KV_NAMESPACE_PATH.exec(path);
@@ -362,7 +377,7 @@ const fakeAccount = (
         return handle(method, path, url.searchParams, typeof init?.body === "string" ? init.body : undefined);
     }) as typeof globalThis.fetch;
 
-    return { calls, d1, fetch, kv, kvValues, r2, r2Objects, workers };
+    return { calls, d1, fetch, kv, kvValues, r2, r2Objects, staleReads, workers };
 };
 
 const PREVIEW_DEPLOY_OUTPUT = `Uploaded lunora-app-preview-42 (2.21 sec)
@@ -1161,20 +1176,29 @@ describe("lunora preview", () => {
             expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
         });
 
-        it("keeps the record when a resource under the preview's names is missing from a stale read of it", async () => {
-            expect.assertions(3);
+        it("leaves the newer record alone when a stale read of it misses a resource, so a re-run deletes everything", async () => {
+            expect.assertions(6);
 
             const account = await deployed();
             const record = recordOf(account);
 
-            // KV served a record written before the R2 bucket was added to it.
-            record.set({ ...record.value, resources: record.value.resources.filter((resource) => resource.kind !== "r2") });
+            // One read is served a copy written before the R2 bucket was added to the record.
+            account.staleReads.set(
+                "lunora-app/42",
+                JSON.stringify({ ...record.value, resources: record.value.resources.filter((resource) => resource.kind !== "r2") }),
+            );
 
-            const result = await deleteIt(account);
+            const first = await deleteIt(account);
 
-            expect(result.error).toMatch(/r2 "lunora-app-preview-42-files" exist\(s\) under this preview's names but not in the record read/u);
-            expect(recordOf(account).value.version).toBe(1);
+            expect(first.error).toMatch(/r2 "lunora-app-preview-42-files" exist\(s\) under this preview's names but not in the record read/u);
+            expect(recordOf(account).value.resources.some((resource) => resource.kind === "r2")).toBe(true);
             expect(account.r2.has("lunora-app-preview-42-files")).toBe(true);
+
+            const second = await deleteIt(account);
+
+            expect(second.code).toBe(0);
+            expect(account.r2.size).toBe(0);
+            expect(recordOf(account).value.version).toBeUndefined();
         });
 
         it("empties a preview bucket that still holds objects, then deletes it", async () => {
