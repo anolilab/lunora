@@ -1,3 +1,22 @@
+## @lunora/cli [1.0.0-alpha.450](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.449...@lunora/cli@1.0.0-alpha.450) (2026-10-29)
+
+### Features
+
+* **saas-ui,templates:** add the composed SaaS kit ([#761](https://github.com/anolilab/lunora/issues/761)) ([35f662d](https://github.com/anolilab/lunora/commit/35f662d24e5992e606a86f989f55bda210dfdd11))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.270
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.141
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.371
+* **@lunora/config:** upgraded to 1.0.0-alpha.426
+* **@lunora/d1:** upgraded to 1.0.0-alpha.218
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.273
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.253
+* **@lunora/seed:** upgraded to 1.0.0-alpha.267
+* **@lunora/testing:** upgraded to 1.0.0-alpha.316
+
 ## @lunora/cli [1.0.0-alpha.449](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.448...@lunora/cli@1.0.0-alpha.449) (2026-10-29)
 
 

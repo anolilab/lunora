@@ -1,3 +1,15 @@
+## @lunora/payment [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.251...@lunora/payment@1.0.0-alpha.252) (2026-10-29)
+
+### Features
+
+* **saas-ui,templates:** add the composed SaaS kit ([#761](https://github.com/anolilab/lunora/issues/761)) ([35f662d](https://github.com/anolilab/lunora/commit/35f662d24e5992e606a86f989f55bda210dfdd11))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.251
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.170
+
 ## @lunora/payment [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.250...@lunora/payment@1.0.0-alpha.251) (2026-10-29)
 
 

@@ -1,3 +1,21 @@
+## lunorash [1.0.0-alpha.448](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.447...lunorash@1.0.0-alpha.448) (2026-10-29)
+
+### Features
+
+* **saas-ui,templates:** add the composed SaaS kit ([#761](https://github.com/anolilab/lunora/issues/761)) ([35f662d](https://github.com/anolilab/lunora/commit/35f662d24e5992e606a86f989f55bda210dfdd11))
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.450
+* **@lunora/client:** upgraded to 1.0.0-alpha.263
+* **@lunora/do:** upgraded to 1.0.0-alpha.261
+* **@lunora/observability:** upgraded to 1.0.0-alpha.183
+* **@lunora/platform:** upgraded to 1.0.0-alpha.76
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.181
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.253
+* **@lunora/server:** upgraded to 1.0.0-alpha.251
+
 ## lunorash [1.0.0-alpha.447](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.446...lunorash@1.0.0-alpha.447) (2026-10-29)
 
 

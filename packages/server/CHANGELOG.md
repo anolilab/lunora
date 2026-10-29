@@ -1,3 +1,17 @@
+## @lunora/server [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.250...@lunora/server@1.0.0-alpha.251) (2026-10-29)
+
+### Features
+
+* **saas-ui,templates:** add the composed SaaS kit ([#761](https://github.com/anolilab/lunora/issues/761)) ([35f662d](https://github.com/anolilab/lunora/commit/35f662d24e5992e606a86f989f55bda210dfdd11))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.156
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.170
+* **@lunora/observability:** upgraded to 1.0.0-alpha.183
+* **@lunora/storage:** upgraded to 1.0.0-alpha.161
+
 ## @lunora/server [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.249...@lunora/server@1.0.0-alpha.250) (2026-10-29)
 
 
