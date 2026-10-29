@@ -34,9 +34,11 @@
  *
  * It also wires the builder-wired integrations whose SDKs are heavy — `.browser()`
  * (`@cloudflare/playwright`, ~3 MiB), `.payment()` with Stripe, `.hyperdrive()` with postgres.js,
- * and an `@lunora/mcp/worker` handler — the way their docs say: through a loader the integration
- * awaits on first use. WHAT ALSO FAILS THE BUILD, in eager and lazy runs alike: any of those SDKs
- * being evaluated at startup (`INTEGRATION_SDKS`), reported with the static chain that reached it.
+ * `.hyperdriveGlobal()` on MySQL (mysql2), and every `@lunora/mcp/worker` server (the fetch
+ * handler, `createToolServer`, `createFunctionMcpServer`, and a `createPaidMcpServer` given a tool
+ * at module scope) — the way their docs say: through a loader the integration awaits on first use.
+ * WHAT ALSO FAILS THE BUILD, in eager and lazy runs alike: any of those SDKs being evaluated at
+ * startup (`INTEGRATION_SDKS`), reported with the static chain that reached it.
  *
  * Usage:
  *   pnpm run worker-startup:check     # fail when the eager graph exceeds the ceiling
@@ -81,6 +83,7 @@ const INTEGRATION_SDKS = [
     ["browser", "@cloudflare/playwright"],
     ["payment", "stripe"],
     ["hyperdrive", "postgres"],
+    ["hyperdrive", "mysql2"],
     ["mcp", "@modelcontextprotocol/sdk"],
 ];
 
@@ -111,6 +114,15 @@ const INTEGRATION_WIRING = {
             return postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString);
         }),
     )
+    .hyperdriveGlobal({
+        engine: "mysql",
+        exec: (env) =>
+            buildMysqlExec(async () => {
+                const { createPool } = await import("mysql2/promise");
+
+                return createPool({ flags: ["FOUND_ROWS"], uri: createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString });
+            }),
+    })
     .build();
 `,
     fetch: `        if (url.pathname === "/mcp") {
@@ -119,16 +131,36 @@ const INTEGRATION_WIRING = {
             return mcp(request);
         }
 
+        if (url.pathname === "/mcp/tools") {
+            return createToolServer({ name: "tools", version: "0.0.0" }, []).then((server) => serveStateless(server, request));
+        }
+
+        if (url.pathname === "/mcp/functions") {
+            return createFunctionMcpServer({ openRpcSpec: { methods: [], openrpc: "1.3.2" }, url: url.origin }).then((server) => serveStateless(server, request));
+        }
+
+        if (url.pathname === "/mcp/paid") {
+            return paid.fetchHandler(request, env, context);
+        }
+
         return app.fetch(request, env, context);`,
     imports: `import type { BrowserBindingLike } from "@lunora/browser";
 import { createBrowser } from "@lunora/browser";
 import type { HyperdriveLike } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
+import { buildMysqlExec } from "@lunora/hyperdrive/global";
 import type { McpFetchHandler } from "@lunora/mcp/worker";
-import { createMcpFetchHandler } from "@lunora/mcp/worker";
+import { createFunctionMcpServer, createMcpFetchHandler, createPaidMcpServer, createToolServer, serveStateless } from "@lunora/mcp/worker";
 import { createStripeAdapter } from "@lunora/payment/stripe";
 
 let mcp: McpFetchHandler | undefined;
+
+// Built and given a tool at module scope, as the paid-tools docs show: neither may load the SDK.
+const paid = createPaidMcpServer({ charge: { network: "base", recipient: { evm: "0x0000000000000000000000000000000000000000" } } });
+
+paid.tool({ annotations: { readOnlyHint: true }, description: "health check", inputSchema: { properties: {}, type: "object" }, name: "ping" }, () => ({
+    content: [{ text: "pong", type: "text" }],
+}));
 
 `,
 };
@@ -154,6 +186,7 @@ const materialize = (appDirectory, { procedures, tables }) => {
         "@lunora/mcp": "^0.0.0",
         "@lunora/payment": "^0.0.0",
         "@lunora/queue": "^0.0.0",
+        "@lunora/sql-store": "^0.0.0",
         "@lunora/workflow": "^0.0.0",
         ...Object.fromEntries(INTEGRATION_SDKS.map(([, name]) => [name, "*"])),
     };
@@ -242,6 +275,7 @@ import { defineSchema, defineTable, v } from "lunorash/server";
 
 export default defineSchema({
 ${tableDefinitions.join("\n")}
+    settings: defineTable({ key: v.string(), value: v.string() }).global({ backend: "hyperdrive" }),
 }).extend(ratelimit.extension);
 `,
         "utf8",
@@ -484,10 +518,9 @@ const eagerGraph = (appDirectory, outDirectory) => {
     // The forbidden-SDK check needs what is EVALUATED, which the count above over-approximates:
     // a barrel's metafile edge to a module the app never uses survives esbuild dropping that
     // module (sideEffects: false). So it stops at a module that put no bytes in the output,
-    // unless that module is a pure re-export barrel, which never has bytes of its own. The
-    // `@lunora/mcp/worker` barrel is the case in point: it re-exports `createToolServer`, whose
-    // static `@modelcontextprotocol/sdk` import must not count for an app that mounts only
-    // `createMcpFetchHandler`.
+    // unless that module is a pure re-export barrel, which never has bytes of its own. That is
+    // also why the fixture calls every MCP server builder: one it never calls is dropped, and a
+    // static SDK import in it would go unseen.
     const emitted = new Set(
         Object.values(outputs).flatMap((output) => Object.entries(output.inputs).flatMap(([path, { bytesInOutput }]) => (bytesInOutput > 0 ? [path] : []))),
     );
