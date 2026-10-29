@@ -48,13 +48,14 @@
             # 22.22 to match the leg that uploads from `test.yml`, so the base and the
             # PR reports are produced by the same runtime.
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
               "with":
                   "node-version": "22.22"
                   "cache-prefix": "coverage"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "enable-vis-cache": "true"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
