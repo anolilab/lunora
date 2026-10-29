@@ -655,7 +655,9 @@
         "if": "needs.files-changed.outputs.e2e == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 30
+        # 30 covered the playground and examples suites; the saas kit adds a cold boot of
+        # up to 4 minutes and a 3-minute test budget with two retries.
+        "timeout-minutes": 45
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -704,6 +706,16 @@
                   "CI": "true"
               "run": "pnpm run e2e:examples"
 
+            # The saas kit in a real browser. Its config materializes `templates/saas` from
+            # this checkout (`saas-app.mjs`: a symlink farm over the workspace's built
+            # packages and installed deps) and writes its own deterministic `.dev.vars`, so
+            # it needs nothing beyond the build and Chromium above — no secrets: the spec
+            # never reaches billing, and the Stripe client is only built on first use.
+            - "name": "Run SaaS kit E2E suite"
+              "env":
+                  "CI": "true"
+              "run": "pnpm run e2e:saas"
+
             - "name": "Upload Playwright report on failure"
               "if": "failure()"
               "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
@@ -712,6 +724,7 @@
                   "path": |
                       tests/e2e/playwright-report
                       tests/e2e/playwright-report-examples
+                      tests/e2e/playwright-report-saas
                   "retention-days": 7
 
     # Scaffold every template, install it, add the auth-ui payload, build, typecheck.

@@ -208,6 +208,9 @@ e2e:
     - "tests/e2e/**"
     - "packages/**"
     - "shared/**"
+    # The saas suite materializes this template with this script.
+    - "templates/saas/**"
+    - "scripts/materialize-template.mjs"
     - "pnpm-lock.yaml"
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
