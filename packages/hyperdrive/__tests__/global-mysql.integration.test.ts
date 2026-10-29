@@ -467,6 +467,16 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
             TEST_TIMEOUT,
         );
 
+        it(
+            "binds a string to ?? as a backtick-quoted identifier",
+            async () => {
+                expect.assertions(1);
+
+                await expect(harness.exec.all("SELECT ?? AS v FROM (SELECT 7 AS col) AS t", ["col"])).resolves.toStrictEqual([{ v: 7 }]);
+            },
+            TEST_TIMEOUT,
+        );
+
         it("rejects an undefined bind value instead of binding NULL", async () => {
             expect.assertions(1);
 

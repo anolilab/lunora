@@ -112,7 +112,7 @@ describe("fromMysql2", () => {
         const result = await sql.query<{ id: number }>("select id from t where org = ?", ["acme"]);
 
         expect(result).toBe(rows);
-        expect(mysqlQuery).toHaveBeenCalledWith("select id from t where org = ?", [{ toSqlString: expect.any(Function) }]);
+        expect(mysqlQuery).toHaveBeenCalledWith("select id from t where org = ?", [{ toSqlString: expect.any(Function), toString: expect.any(Function) }]);
         expect((mysqlQuery.mock.calls[0]?.[1] as [{ toSqlString: () => string }])[0].toSqlString()).toBe("'acme'");
     });
 

@@ -9,8 +9,9 @@
  * charset's default collation instead of the connection's, and comparing it
  * with a plain `'…'` literal then fails with "Illegal mix of collations".
  */
-const stringLiteral = (text: string): { toSqlString: () => string } => {
-    return { toSqlString: () => `'${text.replaceAll("\\", "\\\\").replaceAll("'", "''")}'` };
+const stringLiteral = (text: string): { toSqlString: () => string; toString: () => string } => {
+    // `toString` is what mysql2's `??` identifier escaper reads; it never calls `toSqlString`.
+    return { toSqlString: () => `'${text.replaceAll("\\", "\\\\").replaceAll("'", "''")}'`, toString: () => text };
 };
 
 /**
