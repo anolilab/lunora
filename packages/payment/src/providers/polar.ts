@@ -4,7 +4,8 @@
  * Polar is a Merchant-of-Record: there is no manual authorize/capture, so those throw. The public
  * `client` loads the small structural {@link PolarClientLike} (a real `@polar-sh/sdk` `Polar`
  * instance satisfies it with no cast) on the first provider call, so the SDK stays out of the
- * startup graph; internally it is used as the real `Polar`, so every call is checked against the SDK. Webhooks use the Standard Webhooks scheme (`webhook-id` / `webhook-timestamp` /
+ * startup graph; internally it is used as the real `Polar`, so every call is checked against the
+ * SDK. Webhooks use the Standard Webhooks scheme (`webhook-id` / `webhook-timestamp` /
  * `webhook-signature`), verified by {@link verifyStandardWebhook}. Client responses are camelCase
  * (period fields are `Date`s); raw webhook bodies are snake_case — handled accordingly.
  */

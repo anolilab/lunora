@@ -18,7 +18,8 @@
  *
  * The public `client` loads the small structural {@link AutumnClientLike} (a real `autumn-js`
  * `Autumn` instance satisfies it, no cast) on the first provider call, keeping the SDK out of the
- * startup graph; internally it is used as the real `Autumn` so calls are checked against the SDK. The SDK is resource-based (`billing.attach` / `billing.update` with a
+ * startup graph; internally it is used as the real `Autumn` so calls are checked against the SDK.
+ * The SDK is resource-based (`billing.attach` / `billing.update` with a
  * `cancelAction` / `billing.openCustomerPortal`, `customers.getOrCreate` / `customers.get`, top-level
  * `check` / `track`). Autumn identifies a subscription by the pair `(customerId, planId)`, so this
  * adapter encodes the Lunora `Subscription.id` as the composite `customerId::planId`. Autumn abstracts
@@ -325,6 +326,7 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
     const loadClient = lazyValue(async () => (await options.client()) as unknown as Autumn);
 
     return {
+        // Autumn abstracts Stripe money movement; there is no payment intent to cancel/capture/refund.
         cancelPayment: () => notSupported("manual payment cancellation"),
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {

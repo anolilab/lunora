@@ -8,8 +8,8 @@
  * Worker's startup graph; a failed load rejects that call and the next one retries. The loaded
  * client is typed as the small structural {@link StripeClientLike} (a real `Stripe` instance
  * satisfies it, no cast) to keep the published declarations lean; internally it is used as the real
- * `Stripe` type so every call is checked against the SDK, and webhooks are verified with the SDK's own `webhooks.constructEventAsync`.
- * Stripe amounts are already integer minor units (zero-decimal currencies included), matching money 1:1.
+ * `Stripe` type so every call is checked against the SDK, and webhooks are verified with the SDK's
+ * own `webhooks.constructEventAsync`. Stripe amounts are already integer minor units (zero-decimal currencies included), matching money 1:1.
  */
 import type { Stripe } from "stripe";
 
@@ -538,12 +538,11 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         identifier: "stripe",
 
         parseWebhook: async ({ headers, payload }: WebhookInput): Promise<WebhookAction> => {
-            const client = await loadClient();
-
             // The Stripe SDK does not check the secret itself, so a bound-but-empty
             // `STRIPE_WEBHOOK_SECRET` would verify against an attacker-known zero-length key.
             assertWebhookSecret(webhookSecret);
 
+            const client = await loadClient();
             const signatureHeader = headers.get("stripe-signature") ?? "";
 
             let event: Stripe.Event;
