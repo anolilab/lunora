@@ -5,8 +5,9 @@ import { runAgentLoop } from "../src/agent-loop";
 import createAgentContext from "../src/create-agent-context";
 import { defineAgent } from "../src/define-agent";
 import { functionTool } from "../src/function-tool";
+import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import type { AgentRunFunction, AgentRunInput } from "../src/types";
-import { DurableStepJournal, loopDefaults, memoryRuntime, scriptedGenerate, toolTurn } from "./loop-harness";
+import { DurableStepJournal, finalTurn, loopDefaults, memoryRuntime, scriptedGenerate, toolTurn } from "./loop-harness";
 
 const inputSchema = jsonSchema<{ id: string }>({ properties: { id: { type: "string" } }, required: ["id"], type: "object" });
 
@@ -61,6 +62,66 @@ describe("agent run shard", () => {
         expect(seen.filter((call) => call.ref === "rag:searchDocs").map((call) => call.options?.shardKey)).toStrictEqual(["org-a"]);
         // The loop's own thread reads and writes stay on the default shard.
         expect(seen.filter((call) => call.ref.startsWith("agents:")).every((call) => call.options?.shardKey === undefined)).toBe(true);
+    });
+
+    it("keeps episodic and graph memory on the default shard, where their agent-owned tables live", async () => {
+        expect.assertions(1);
+
+        const runtime = memoryRuntime({
+            handlers: {
+                [DEFAULT_AGENT_FUNCTION_PATHS.episodeRecall]: (): unknown => {
+                    return { context: "" };
+                },
+                [DEFAULT_AGENT_FUNCTION_PATHS.episodeUpsert]: (): unknown => {
+                    return { recorded: true };
+                },
+                [DEFAULT_AGENT_FUNCTION_PATHS.graphTraverse]: (): unknown => {
+                    return { context: "" };
+                },
+                [DEFAULT_AGENT_FUNCTION_PATHS.graphUpsert]: (): unknown => {
+                    return { entities: 1, relations: 0 };
+                },
+            },
+        });
+        const seen: SeenCall[] = [];
+        const run: AgentRunFunction = async (reference, args, options) => {
+            seen.push({ options, ref: reference["__lunoraRef"] });
+
+            return runtime.run(reference, args, options);
+        };
+        const memoryPaths = new Set<string>([
+            DEFAULT_AGENT_FUNCTION_PATHS.episodeRecall,
+            DEFAULT_AGENT_FUNCTION_PATHS.episodeUpsert,
+            DEFAULT_AGENT_FUNCTION_PATHS.graphTraverse,
+            DEFAULT_AGENT_FUNCTION_PATHS.graphUpsert,
+        ]);
+
+        for (const kind of ["episodic", "graph"] as const) {
+            // eslint-disable-next-line no-await-in-loop -- one run per memory kind, in order
+            await runAgentLoop(
+                loopDefaults(defineAgent({ memory: { kind }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" }), {
+                    extractEpisode: async () => {
+                        return { summary: "looked up an order" };
+                    },
+                    extractGraph: async () => {
+                        return { entities: [{ name: "o_42" }], relations: [] };
+                    },
+                    generate: scriptedGenerate([finalTurn("Shipped.")]),
+                    params: { input: "where is o_42?", owner: "user-a", shardKey: "org-a", threadKey: `thread-${kind}` },
+                    run,
+                    step: new DurableStepJournal(),
+                }),
+            );
+        }
+
+        // Recall and upsert must agree: both are `agents:*` functions over the agent's own
+        // unsharded tables, so an upsert on the default shard is only found by a recall there.
+        expect(seen.filter((call) => memoryPaths.has(call.ref)).map((call) => [call.ref, call.options?.shardKey])).toStrictEqual([
+            [DEFAULT_AGENT_FUNCTION_PATHS.episodeRecall, undefined],
+            [DEFAULT_AGENT_FUNCTION_PATHS.episodeUpsert, undefined],
+            [DEFAULT_AGENT_FUNCTION_PATHS.graphTraverse, undefined],
+            [DEFAULT_AGENT_FUNCTION_PATHS.graphUpsert, undefined],
+        ]);
     });
 
     it("leaves every call on the default shard when the run carries no shard", async () => {
