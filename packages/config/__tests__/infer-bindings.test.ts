@@ -747,6 +747,23 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(result.signals.join(" ")).toContain('agent "support" is declared but SupportAgentWorkflow is not exported');
     });
 
+    it("infers the AI binding for a declared agent that never imports @lunora/ai", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        // The startup-light entry: no `@lunora/ai` import, yet a `@cf/...` model runs on `env.AI`.
+        write(
+            "lunora/agents.ts",
+            `import { defineAgent } from "@lunora/agent/core";\n\nexport const support = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });\n`,
+        );
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAi).toBe(true);
+        expect(result.signals.join(" ")).toContain("or an agent is declared");
+    });
+
     it("reports no agents for a project without lunora/agents.ts", async () => {
         expect.assertions(1);
 
