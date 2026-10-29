@@ -75,7 +75,7 @@ const PRESENCE_DATA_MAX_BYTES = 4096;
 const presenceTenant = (identity: unknown): string => {
     const orgId = (identity as { orgId?: unknown } | null)?.orgId;
 
-    return typeof orgId === "string" && orgId !== "" ? orgId : "";
+    return typeof orgId === "string" ? orgId : "";
 };
 
 /** A single present member as returned by `listPresent`. */
