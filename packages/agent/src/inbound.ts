@@ -38,6 +38,7 @@ import { authenticatesFrom, createInboundEmailHandler, parseInboundEmail } from 
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
+import withRunShard from "./run-shard";
 import type { AgentDefinition, AgentWorkflowBindingLike } from "./types";
 
 /**
@@ -149,9 +150,11 @@ const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAg
                     return;
                 }
 
-                // `AgentEmailRun` is the run-input shape (input/owner/threadKey/title).
+                // `AgentEmailRun` is the run-input shape (input/owner/threadKey/title). An inbound
+                // run has no trusted shard, so a `shardKey` the mapper copied out of the email
+                // is dropped and the run's tools stay on the default shard.
                 // eslint-disable-next-line no-await-in-loop -- single dispatch then `return`; never iterates past the first claim
-                await binding.create({ params: run });
+                await binding.create({ params: withRunShard(run, undefined) });
 
                 return;
             }

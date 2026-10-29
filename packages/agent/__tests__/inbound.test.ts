@@ -287,6 +287,21 @@ describe(dispatchAgentEmail, () => {
         expect(rejects).toHaveLength(1);
     });
 
+    it("drops a shardKey the mapper's run carries, so the run's tools stay on the default shard", async () => {
+        expect.assertions(1);
+
+        const support = fakeBinding();
+        // The email is attacker-written; a mapper that folds its fields into the run must not
+        // aim the run's tools (admin-dispatched, past the shard gate) at another tenant.
+        const onEmail: AgentEmailMapper = () => ({ input: "x", shardKey: "victim-org", threadKey: "t" }) as unknown as ReturnType<AgentEmailMapper>;
+
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, className: "SupportAgentWorkflow" }]);
+
+        await handler(fakeMessage().message, { SupportAgentWorkflow: support.binding }, {});
+
+        expect(support.calls[0]?.params).toStrictEqual({ input: "x", threadKey: "t" });
+    });
+
     it("bounces the message (setReject) and never calls create() when the mapper's run carries the reserved branch-marker key", async () => {
         expect.assertions(2);
 

@@ -27,6 +27,7 @@ import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch
 import { fnv1a64Hex } from "../../../shared/fnv1a";
 import { importHmacKey } from "../../../shared/hmac-key";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
+import withRunShard from "./run-shard";
 import type { AgentChannelRun, AgentDefinition, AgentInboundChannelKind, AgentWorkflowBindingLike, InboundChannelEvent } from "./types";
 
 /** Max age (seconds) of a signed request before it is rejected as a replay. */
@@ -312,7 +313,8 @@ const startChannelRun = async (workflow: AgentWorkflowBindingLike, run: AgentCha
     // signed material, not on the digest; against ACCIDENTAL collision between
     // honest ids, 64 bits is ample.
     try {
-        await workflow.create({ id: `${channel}-${fnv1a64Hex(id)}`, params: run });
+        // No trusted shard for a webhook: a mapped `shardKey` is dropped (default shard).
+        await workflow.create({ id: `${channel}-${fnv1a64Hex(id)}`, params: withRunShard(run, undefined) });
     } catch (error) {
         if (isDuplicateInstanceError(error)) {
             return ack();

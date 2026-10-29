@@ -614,6 +614,24 @@ describe(dispatchAgentChannel, () => {
         await expect(handler(await slackRequest(secret, '{"event":{}}'), { SLACK_SECRET: secret }, NO_CONTEXT)).rejects.toThrow(NO_BINDING_PATTERN);
     });
 
+    it("drops a shardKey the mapper's run carries, so the run's tools stay on the default shard", async () => {
+        const { binding, created } = fakeBinding();
+        const agent = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    return { input: "x", shardKey: "victim-org", threadKey: "t" };
+                },
+                secret: "SLACK_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
+
+        await handler(await slackRequest(secret, '{"event":{}}'), { SupportAgentWorkflow: binding, SLACK_SECRET: secret }, NO_CONTEXT);
+
+        expect(created).toStrictEqual([{ input: "x", threadKey: "t" }]);
+    });
+
     it("rejects (throws, does not ack) a claimed run whose mapper injects the reserved branch-marker key", async () => {
         const { binding, created } = fakeBinding();
         const agent = {
