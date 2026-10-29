@@ -22,8 +22,8 @@ fails with "payments are not configured".
 **The auth screens.** The template ships the auth _server_ (better-auth with the
 `organization()` and `admin()` plugins, served at `/api/auth/*`) but not the
 screens: `lunora add auth-ui` copies them into `lunora/auth-ui/`, and they are
-yours to restyle. Mount them on the `/auth/*` path the landing page links to, in
-`src/routes/auth.$view.tsx`:
+yours to restyle. The landing page links to `/auth/sign-in`, which the template
+answers with a placeholder until then; replace `src/routes/auth.$view.tsx` with:
 
 ```tsx
 import { createFileRoute, useNavigate } from "@tanstack/react-router";

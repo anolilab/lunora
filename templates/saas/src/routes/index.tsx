@@ -33,7 +33,7 @@ function MarketingPage() {
                 <Link className="lu-saas-button" to="/dashboard">
                     Open the dashboard
                 </Link>
-                {/* The screen `lunora add auth-ui` gives you — see the README's first step. */}
+                {/* A placeholder until `lunora add auth-ui` — see the README's quickstart. */}
                 <a className="lu-saas-button lu-saas-button--quiet" href="/auth/sign-in">
                     Sign in
                 </a>
