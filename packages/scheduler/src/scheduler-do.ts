@@ -398,12 +398,12 @@ interface CancelRequestBody {
     id: string;
 }
 
-/** A `done:<id>` row: the job's last record plus how it ended. */
 /** A `dead:` row: the parked record and, since parks are indexed in `dt:`, when it was parked. */
 interface DeadRecord extends ScheduleRecord {
     completedAt?: number;
 }
 
+/** A `done:<id>` row: the job's last record plus how it ended. */
 interface TerminalRecord extends ScheduleRecord {
     completedAt: number;
     state: Extract<ScheduledJobState, "canceled" | "failed" | "succeeded">;
@@ -428,6 +428,11 @@ class SchedulerDO {
 
     private static terminalIndexKey(completedAt: number, id: string): string {
         return `${DONE_INDEX_PREFIX}${padTime(MAX_SCHEDULED_FOR_MS - completedAt)}:${id}`;
+    }
+
+    /** A cron run row's key: newest end first under its job's prefix. */
+    private static cronRunKey(run: CronRunRecord): string {
+        return `${CRON_RUN_PREFIX}${encodePoolName(run.name)}:${padTime(MAX_SCHEDULED_FOR_MS - run.endedAt)}:${run.runId}`;
     }
 
     /** A cron job name off an untrusted body, or `undefined` when absent or implausible. */
@@ -2444,6 +2449,16 @@ class SchedulerDO {
 
     /** Record a run whose lease lapsed without a `/cron/end`. */
     private async recordLostCronRun(lease: CronRunInFlight, now: number): Promise<void> {
+        // A `/cron/end` whose lease delete failed already recorded this run.
+        const recorded = await this.state.storage.list({
+            limit: CRON_HISTORY_LIMIT + MAX_STORAGE_BATCH,
+            prefix: `${CRON_RUN_PREFIX}${encodePoolName(lease.name)}:`,
+        });
+
+        if ([...recorded.keys()].some((key) => key.endsWith(`:${lease.runId}`))) {
+            return;
+        }
+
         await this.recordCronRun({
             durationMs: now - lease.startedAt,
             endedAt: now,
@@ -2468,9 +2483,14 @@ class SchedulerDO {
 
         if (entry?.[1].status === "skipped" && entry[1].reason === reason) {
             const [key, streak] = entry;
+            const folded = { ...streak, endedAt: now, skipped: streak.skipped + 1 };
 
-            await this.state.storage.delete(key);
-            await this.recordCronRun({ ...streak, endedAt: now, skipped: streak.skipped + 1 });
+            // Write the folded row before dropping the old one, so a failed write keeps the streak.
+            await this.recordCronRun(folded);
+
+            if (SchedulerDO.cronRunKey(folded) !== key) {
+                await this.state.storage.delete(key);
+            }
 
             return;
         }
@@ -2495,7 +2515,7 @@ class SchedulerDO {
     private async recordCronRun(run: CronRunRecord): Promise<void> {
         const prefix = `${CRON_RUN_PREFIX}${encodePoolName(run.name)}:`;
 
-        await this.state.storage.put(`${prefix}${padTime(MAX_SCHEDULED_FOR_MS - run.endedAt)}:${run.runId}`, run);
+        await this.state.storage.put(SchedulerDO.cronRunKey(run), run);
 
         // Each write adds one row, so the overflow past the limit is a handful
         // at most and one bounded page reaches all of it.
