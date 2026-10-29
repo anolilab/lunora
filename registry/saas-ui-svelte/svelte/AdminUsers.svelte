@@ -70,7 +70,10 @@
     {/if}
 
     {#if users === undefined}
-        <div aria-busy="true" class="lu-saas-list lu-saas-list--loading"></div>
+        <!-- Only while a read runs: after a failed first load the error stands alone. -->
+        {#if busy}
+            <div aria-busy="true" class="lu-saas-list lu-saas-list--loading"></div>
+        {/if}
     {:else if users.length === 0}
         <Empty title={bound.state.search.trim() === "" ? "No users yet" : "Nobody matches that search"} />
     {:else}

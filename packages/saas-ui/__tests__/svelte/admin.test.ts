@@ -114,6 +114,18 @@ describe("adminUsers", () => {
         expect(screen.getByText("Next")).toBeDisabled();
     });
 
+    it("drops the loading placeholder when the first load fails", async () => {
+        const client = adminClient([]);
+
+        client.listUsers.mockResolvedValueOnce({ error: { message: "Only admins may list users", status: 403 } });
+
+        const { container } = render(AdminUsers, { client, now: NOW, onSessionChange: vi.fn(), viewerId: "me" });
+
+        await expect(screen.findByText("Only admins may list users")).resolves.toBeInTheDocument();
+
+        expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    });
+
     it("searches by email on submit", async () => {
         const client = adminClient([]);
 

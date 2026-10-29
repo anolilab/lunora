@@ -121,7 +121,8 @@ const AdminUsers = ({ client, now, onSessionChange, viewerId }: AdminUsersProps)
                 </p>
             ) : undefined}
 
-            {state.users === undefined ? <div aria-busy="true" className="lu-saas-list lu-saas-list--loading" /> : undefined}
+            {/* Only while a read runs: after a failed first load the error stands alone. */}
+            {state.users === undefined && busy ? <div aria-busy="true" className="lu-saas-list lu-saas-list--loading" /> : undefined}
             {state.users?.length === 0 ? <Empty title={state.search.trim() === "" ? "No users yet" : "Nobody matches that search"} /> : undefined}
             {state.users !== undefined && state.users.length > 0 ? (
                 <table className="lu-saas-table">
