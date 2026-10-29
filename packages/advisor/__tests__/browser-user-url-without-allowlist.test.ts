@@ -87,7 +87,7 @@ describe("browser_user_url_without_allowlist", () => {
 
         const findings = browserUserUrlWithoutAllowlist.run({
             browserUrlAccesses: accesses,
-            configCalls: [createBrowser(["binding", "launch"])],
+            configCalls: [createBrowser(["binding", "playwright"])],
             schema: schema(),
         });
 

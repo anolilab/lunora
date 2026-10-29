@@ -252,13 +252,11 @@ interface LunoraBrowserOptions {
     allowedHosts?: string[];
     allowPrivateTargets?: boolean;
     binding: BrowserBindingLike;
-    connect?: BrowserConnectLike;
-    launch?: BrowserLaunchLike;
     maxCrawlDepth?: number;
     maxCrawlPages?: number;
+    playwright?: () => Promise<PlaywrightModuleLike> | PlaywrightModuleLike;
     resolveDns?: boolean;
     restApi?: BrowserRestApiOptions;
-    sessions?: BrowserSessionsLike;
     timeoutMs?: number;
 }
 ```
@@ -302,6 +300,16 @@ interface PdfOptions extends NavigateOptions {
         height: number;
         width: number;
     };
+}
+```
+
+### `PlaywrightModuleLike` (interface)
+
+```ts
+interface PlaywrightModuleLike {
+    readonly connect?: BrowserConnectLike;
+    readonly launch?: BrowserLaunchLike;
+    readonly sessions?: BrowserSessionsLike;
 }
 ```
 
