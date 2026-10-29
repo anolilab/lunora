@@ -5,6 +5,15 @@ import { useState } from "react";
 
 import type { AdminView } from "../core/admin-organizations";
 import { adminTotals, DEFAULT_ADMIN_VIEW, planOptions, selectOrganizations } from "../core/admin-organizations";
+import type { AdminSubscriptionRow, PastDueSubscriptions, SubscriptionsView } from "../core/admin-subscriptions";
+import {
+    DEFAULT_SUBSCRIPTIONS_VIEW,
+    selectSubscriptions,
+    subscriptionsSubtitle,
+    subscriptionStateOptions,
+    withPastDueFirst,
+} from "../core/admin-subscriptions";
+import type { Plan } from "../core/billing";
 import { planLabel, relativeTime } from "../core/format";
 import type { OrganizationRow } from "../core/types";
 import { Card, Empty } from "./primitives";
@@ -99,5 +108,121 @@ const AdminOrganizations = ({ now, rows, timeZone }: AdminOrganizationsProps): R
     );
 };
 
-export type { AdminOrganizationsProps };
-export { AdminOrganizations };
+interface AdminSubscriptionsProps {
+    /**
+     * Whether pages remain beyond `rows` — `status === "CanLoadMore" || status === "LoadingMore"`.
+     * Kept apart from `onLoadMore`, which is absent while a page is loading: the header
+     * must still say its totals are partial then. Defaults to whether `onLoadMore` is given.
+     */
+    hasMore?: boolean;
+
+    /**
+     * Fetch the next page — `usePaginatedQuery`'s `loadMore`. Pass it only while
+     * more pages remain (`status === "CanLoadMore"`); without it the rows are read
+     * as the whole table.
+     */
+    onLoadMore?: () => void;
+    /** The organisation list, for names. Subscriptions render with ids until it arrives. */
+    organizations: ReadonlyArray<OrganizationRow> | undefined;
+
+    /**
+     * Every past-due subscription — the saas template's `payment.adminPastDueSubscriptions`.
+     * Listed first whatever page they fall on, and the header's past-due count is
+     * then the whole table's. Without it, past-due rows show only as their pages load.
+     */
+    pastDue?: PastDueSubscriptions;
+    plans: ReadonlyArray<Plan>;
+    /** The pages loaded so far — `usePaginatedQuery`'s `results`. `undefined` while the first page is in flight. */
+    rows: ReadonlyArray<AdminSubscriptionRow> | undefined;
+}
+
+/**
+ * Every tenant's subscription, dunning tenants first. Read-only for the same
+ * reason as the organisation table: a change to a subscription is made in the
+ * provider's dashboard or through the tenant's own billing page, and the
+ * webhook brings it back here.
+ */
+const AdminSubscriptions = ({ hasMore, onLoadMore, organizations, pastDue, plans, rows: paged }: AdminSubscriptionsProps): ReactNode => {
+    const [view, setView] = useState<SubscriptionsView>(DEFAULT_SUBSCRIPTIONS_VIEW);
+
+    if (!paged) {
+        return (
+            <Card title="Subscriptions">
+                <div aria-busy="true" className="lu-saas-list lu-saas-list--loading" />
+            </Card>
+        );
+    }
+
+    const rows = withPastDueFirst(pastDue?.rows ?? [], paged);
+    const visible = selectSubscriptions(rows, organizations ?? [], plans, view);
+
+    return (
+        <Card subtitle={subscriptionsSubtitle(paged, hasMore ?? onLoadMore !== undefined, pastDue)} title="Subscriptions">
+            <div className="lu-saas-toolbar">
+                <input
+                    aria-label="Search subscriptions"
+                    className="lu-saas-input"
+                    onChange={(event) => {
+                        setView({ ...view, search: event.target.value });
+                    }}
+                    placeholder="Search"
+                    type="search"
+                    value={view.search}
+                />
+                <select
+                    aria-label="Filter by state"
+                    className="lu-saas-select"
+                    onChange={(event) => {
+                        setView({ ...view, state: event.target.value });
+                    }}
+                    value={view.state}
+                >
+                    {subscriptionStateOptions(rows).map((option) => (
+                        <option key={option.value} value={option.value}>
+                            {option.label}
+                        </option>
+                    ))}
+                </select>
+            </div>
+
+            {visible.length === 0 ? (
+                <Empty title={rows.length === 0 ? "No subscriptions yet" : "Nothing matches that filter"} />
+            ) : (
+                <table className="lu-saas-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Organization</th>
+                            <th scope="col">Plan</th>
+                            <th scope="col">State</th>
+                            <th scope="col">Seats</th>
+                            <th scope="col">Renewal</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {visible.map((subscription) => (
+                            <tr key={subscription.key}>
+                                <td>
+                                    {subscription.organization}
+                                    <code className="lu-saas-row__slug">{subscription.id}</code>
+                                </td>
+                                <td>{subscription.plan}</td>
+                                <td>{planLabel(subscription.state)}</td>
+                                <td>{subscription.quantity}</td>
+                                <td>{subscription.renewal}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            )}
+
+            {onLoadMore ? (
+                <button className="lu-saas-button lu-saas-button--quiet" onClick={onLoadMore} type="button">
+                    Load more
+                </button>
+            ) : undefined}
+        </Card>
+    );
+};
+
+export type { AdminOrganizationsProps, AdminSubscriptionsProps };
+export { AdminOrganizations, AdminSubscriptions };

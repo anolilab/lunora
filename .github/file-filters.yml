@@ -208,6 +208,9 @@ e2e:
     - "tests/e2e/**"
     - "packages/**"
     - "shared/**"
+    # The saas suite materializes this template with this script.
+    - "templates/saas/**"
+    - "scripts/materialize-template.mjs"
     - "pnpm-lock.yaml"
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
@@ -263,6 +266,7 @@ registry_sync:
 # Worker size budget. Separate from `packages` per the self-listing rule at the top.
 worker_size:
     - "scripts/check-worker-size.js"
+    - "scripts/materialize-template.mjs"
     - "worker-size.json"
     - ".github/workflows/test.yml"
     # This file too, or the hole reopens one level up.

@@ -8,5 +8,5 @@
         "noEmit": true
     },
     "include": ["**/*.ts", "playwright.config.ts", "globalSetup.ts", "globalTeardown.ts"],
-    "exclude": ["node_modules", "dist", "playwright-report", "test-results"]
+    "exclude": ["node_modules", "dist", "playwright-report", "test-results", ".saas-app"]
 }

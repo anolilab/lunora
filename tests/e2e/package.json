@@ -10,6 +10,7 @@
         "e2e:debug": "playwright test --debug",
         "e2e:examples": "playwright test --config playwright.examples.config.ts",
         "e2e:headed": "playwright test --headed",
+        "e2e:saas": "playwright test --config playwright.saas.config.ts",
         "e2e:ui": "playwright test --ui",
         "lint:types": "tsc --noEmit"
     },
