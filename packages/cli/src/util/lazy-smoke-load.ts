@@ -12,6 +12,7 @@ import { bindingsNeedingDatabase, findWranglerFile, mergeWranglerEnvironment, re
 
 import { sanitizeNamespace } from "../../../../shared/dispatch-namespace";
 import { findAvailablePort } from "./free-port";
+import collectIntegrationModules from "./integration-modules";
 import type { Logger } from "./logger";
 
 /** First port tried for the throwaway worker; clear of wrangler's own 8787 range so it never collides with `lunora dev`. */
@@ -44,6 +45,7 @@ interface ProbeResult {
     checked: number;
     deferredChecked: number;
     failures: ModuleFailure[];
+    integrations: { checked: number; failures: IntegrationFailure[] };
 }
 
 interface SmokeLoadOptions {
@@ -80,12 +82,30 @@ interface DeferredModule {
     label: string;
 }
 
+interface IntegrationFailure {
+    message: string;
+    specifier: string;
+}
+
 const isModuleFailure = (value: unknown): value is ModuleFailure =>
     typeof value === "object" &&
     value !== null &&
     typeof (value as ModuleFailure).functionPath === "string" &&
     ((value as ModuleFailure).deferred === undefined || ["agent", "module", "queue", "workflow"].includes((value as ModuleFailure).deferred as string)) &&
     typeof (value as ModuleFailure).message === "string";
+
+const isIntegrationFailure = (value: unknown): value is IntegrationFailure =>
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as IntegrationFailure).specifier === "string" &&
+    typeof (value as IntegrationFailure).message === "string";
+
+const isIntegrationResult = (value: unknown): value is ProbeResult["integrations"] =>
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as ProbeResult["integrations"]).checked === "number" &&
+    Array.isArray((value as ProbeResult["integrations"]).failures) &&
+    (value as ProbeResult["integrations"]).failures.every((item) => isIntegrationFailure(item));
 
 /**
  * Function paths carry the dispatch namespace, not the file: `billing/invoices.ts` is `billing_invoices` and
@@ -320,19 +340,19 @@ const probeLazyModules = async (port: number, runId: string, deadline: number): 
     }
 
     const text = await response.text().catch(() => "");
-    let body: Partial<{ checked: number; deferredChecked: number; failures: unknown[]; run: unknown }> | undefined;
+    let body: Partial<{ checked: number; deferredChecked: number; failures: unknown[]; integrations: unknown; run: unknown }> | undefined;
 
     try {
-        body = JSON.parse(text) as Partial<{ checked: number; deferredChecked: number; failures: unknown[]; run: unknown }>;
+        body = JSON.parse(text) as Partial<{ checked: number; deferredChecked: number; failures: unknown[]; integrations: unknown; run: unknown }>;
     } catch {
         body = undefined;
     }
 
-    const { checked, deferredChecked = 0, failures, run } = body ?? {};
+    const { checked, deferredChecked = 0, failures, integrations, run } = body ?? {};
 
-    if (typeof checked === "number" && Array.isArray(failures) && failures.every((item) => isModuleFailure(item))) {
+    if (typeof checked === "number" && Array.isArray(failures) && failures.every((item) => isModuleFailure(item)) && isIntegrationResult(integrations)) {
         // Another run's Worker bound this port first: `startDevProcess` saw a listener, not our child. Not this project's answer, so `undefined`.
-        return run === runId ? { checked, deferredChecked, failures } : undefined;
+        return run === runId ? { checked, deferredChecked, failures, integrations } : undefined;
     }
 
     // Not ours and not another run's: the project's routes answered in front of the Worker, so the project cannot ship as it is.
@@ -439,14 +459,20 @@ const startSmokeServer = (options: DevProcessOptions): Promise<DevProcess | unde
         throw error;
     });
 
-/** Logs a clean probe, or throws the list of modules the project has to fix. */
-const reportProbe = (cwd: string, { checked, deferredChecked, failures }: ProbeResult, logger: Logger): void => {
-    // Deferred event modules are counted apart so a project without any reads exactly as before.
-    const covered =
-        deferredChecked === 0 ? `${String(checked)} lazy function(s)` : `${String(checked)} lazy function(s) and ${String(deferredChecked)} deferred module(s)`;
+/** What was covered, for the success line: only the kinds the project has. */
+const describeCovered = ({ checked, deferredChecked, integrations }: ProbeResult): string =>
+    [
+        ...(checked > 0 ? [`${String(checked)} lazy function(s)`] : []),
+        ...(deferredChecked > 0 ? [`${String(deferredChecked)} deferred module(s)`] : []),
+        ...(integrations.checked > 0 ? [`${String(integrations.checked)} integration module(s) loaded with import()`] : []),
+    ].join(" and ");
 
-    if (failures.length === 0) {
-        logger.success(`${covered} evaluate cleanly`);
+/** Logs a clean probe, or throws the list of modules the project has to fix. */
+const reportProbe = (cwd: string, result: ProbeResult, logger: Logger): void => {
+    const { checked, deferredChecked, failures, integrations } = result;
+
+    if (failures.length === 0 && integrations.failures.length === 0) {
+        logger.success(`${describeCovered(result)} evaluate cleanly`);
 
         return;
     }
@@ -456,9 +482,19 @@ const reportProbe = (cwd: string, { checked, deferredChecked, failures }: ProbeR
 
     throw new SmokeLoadError(
         [
-            `${String(failures.length)} of ${deferredChecked === 0 ? `${String(checked)} lazy function(s)` : `${String(checked + deferredChecked)} lazy module(s)`} fail to load:`,
-            ...lines.slice(0, MAX_LISTED_MODULES),
-            ...more,
+            ...(failures.length === 0
+                ? []
+                : [
+                      `${String(failures.length)} of ${deferredChecked === 0 ? `${String(checked)} lazy function(s)` : `${String(checked + deferredChecked)} lazy module(s)`} fail to load:`,
+                      ...lines.slice(0, MAX_LISTED_MODULES),
+                      ...more,
+                  ]),
+            ...(integrations.failures.length === 0
+                ? []
+                : [
+                      `${String(integrations.failures.length)} of ${String(integrations.checked)} integration module(s) fail to load in workerd (each would fail its first use instead):`,
+                      ...integrations.failures.map(({ message, specifier }) => `  import("${specifier}"): ${message}`),
+                  ]),
             "Fix the module, or pass --no-smoke-load to ship anyway.",
         ].join("\n"),
     );
@@ -518,12 +554,14 @@ const prepareSmokeProcess = async (input: {
     environment: string | undefined;
     /** The generated `functions.ts`, or `undefined` when it has no lazy manifest to load. */
     functionsFile: string | undefined;
+    /** Package specifiers the Worker loads with `import()`, evaluated alongside the lazy modules. */
+    integrationModules: ReadonlyArray<string>;
     main: string;
     /** The first port to try; a retry starts above the port another run's Worker held. */
     preferred: number;
     toolchain: DriverToolchain;
 }): Promise<{ args: string[]; command: string; port: number; runId: string }> => {
-    const { configPath, cwd, deferred, directory, environment, functionsFile, main, preferred, toolchain } = input;
+    const { configPath, cwd, deferred, directory, environment, functionsFile, integrationModules, main, preferred, toolchain } = input;
 
     try {
         const entry = join(directory, "entry.ts");
@@ -531,6 +569,9 @@ const prepareSmokeProcess = async (input: {
         const runId = randomUUID();
 
         // The project's own entry is re-exported so Durable Object classes and bindings resolve exactly as in production.
+        // Each integration module gets a literal `import()`, so the bundler resolves and bundles it as the app's own does.
+        const loaders = integrationModules.map((specifier) => `    [${JSON.stringify(specifier)}, () => import(${JSON.stringify(specifier)})],`).join("\n");
+
         writeFileSync(
             entry,
             `export * from ${JSON.stringify(resolve(cwd, main))};
@@ -541,6 +582,24 @@ const runId = ${JSON.stringify(runId)};
 const deferred = [
 ${deferred.map((module) => `    { kind: ${JSON.stringify(module.kind)}, label: ${JSON.stringify(module.label)}, load: () => import(${JSON.stringify(module.file)}) },`).join("\n")}
 ];
+
+const integrationLoaders: ReadonlyArray<readonly [string, () => Promise<unknown>]> = [
+${loaders}
+];
+
+const loadIntegrationModules = async () => {
+    const failures: { message: string; specifier: string }[] = [];
+
+    for (const [specifier, load] of integrationLoaders) {
+        try {
+            await load();
+        } catch (error) {
+            failures.push({ message: error instanceof Error ? error.message : String(error), specifier });
+        }
+    }
+
+    return { checked: integrationLoaders.length, failures };
+};
 
 export default {
     async fetch() {
@@ -561,6 +620,7 @@ export default {
             checked: functions.checked,
             deferredChecked: deferred.length,
             failures: [...functions.failures, ...loaded.filter((failure) => failure !== undefined)],
+            integrations: await loadIntegrationModules(),
             run: runId,
         });
     },
@@ -600,9 +660,12 @@ export default {
 };
 
 /**
- * A lazy registry defers a module's evaluation errors to its first call. This runs the project's
- * real Worker entry plus `loadAllFunctions()` in workerd (`wrangler dev --local`) and returns an
- * error naming every module that fails to evaluate, so `build` and `deploy` can refuse to ship it.
+ * A lazy registry defers a module's evaluation errors to its first call, and so does an integration
+ * SDK the app hands over as a loader (`() => import("stripe")`), in eager builds too. This runs the
+ * project's real Worker entry in workerd (`wrangler dev --local`) with `loadAllFunctions()` (lazy
+ * builds) and every package the Worker loads with a literal `import()` (see
+ * `collectIntegrationModules`), and returns an error naming every module that fails to evaluate, so
+ * `build` and `deploy` can refuse to ship it. An eager app with no such `import()` is not checked.
  *
  * A failure of the project's modules blocks. So does a Worker that does not start (a broken entry, or a local
  * `wrangler dev` that cannot run the project) or that starts and then fails. A check that cannot run at all
@@ -612,14 +675,14 @@ export default {
  */
 const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | undefined> => {
     const { configPath, cwd, environment, launcher, logger, toolchain } = options;
-    const functionsFile = join(cwd, resolveSchemaDirectory(cwd), "_generated", "functions.ts");
-
+    const schemaDirectory = resolveSchemaDirectory(cwd);
+    const generatedFunctions = join(cwd, schemaDirectory, "_generated", "functions.ts");
     // The generated output decides, not the flag: `deploy --prebuilt` ships whatever an earlier
     // `build`/`prepare` wrote, and an eager registry has no lazy modules to check. A project can defer
     // workflows, agents or queues without a lazy function manifest (it declares no functions), so
     // either one starts the check.
-    const hasManifest = existsSync(functionsFile) && readFileSync(functionsFile, "utf8").includes("export const loadAllFunctions");
-    const schemaDirectory = resolveSchemaDirectory(cwd);
+    const hasManifest = existsSync(generatedFunctions) && readFileSync(generatedFunctions, "utf8").includes("export const loadAllFunctions");
+    const functionsFile = hasManifest ? generatedFunctions : undefined;
     const events = findDeferredModules(cwd, schemaDirectory);
 
     // Only lazy output starts the check: an eager build also emits loaders (`auth`, the specs, workflow
@@ -633,12 +696,14 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     const target = locateSmokeEntry(options);
 
     if ("skip" in target) {
-        logger.warn(`smoke-load skipped: ${target.skip}, so lazy modules are not evaluated before deploy`);
+        logger.warn(`smoke-load skipped: ${target.skip}, so lazy modules and import()ed integration modules are not evaluated before deploy`);
 
         return undefined;
     }
 
     const { main } = target;
+    // Only reached from lazy output (see above); an eager build's loaders are not probed.
+    const integrationModules = collectIntegrationModules(cwd, main, schemaDirectory);
 
     const output: string[] = [];
     let directory: string | undefined;
@@ -661,7 +726,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     try {
         directory = createRunDirectory(cwd);
 
-        logger.info("smoke-loading lazy function modules in workerd");
+        logger.info(functionsFile === undefined ? "smoke-loading import()ed integration modules in workerd" : "smoke-loading lazy function modules in workerd");
 
         // The free-port check and `wrangler dev`'s bind are not atomic, so another run can take the port in between.
         // Its Worker then answers the probe; that attempt is dropped and retried on the next port.
@@ -675,7 +740,8 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
                 deferred,
                 directory,
                 environment,
-                functionsFile: hasManifest ? functionsFile : undefined,
+                functionsFile,
+                integrationModules,
                 main,
                 preferred,
                 toolchain,

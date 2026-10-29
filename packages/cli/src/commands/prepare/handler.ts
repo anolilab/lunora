@@ -32,7 +32,7 @@ interface PrepareCommandOptions {
     /** Starts the smoke check's `wrangler dev`. Unset, the check launches a real server; a caller that must not launch one passes its own. */
     smokeLauncher?: DevProcessSpawner;
 
-    /** `false` (`--no-smoke-load`) skips the lazy smoke check. Default on. */
+    /** `false` (`--no-smoke-load`) skips the smoke check of lazy and `import()`ed integration modules. Default on. */
     smokeLoad?: boolean;
 
     /** Injected process runner for the `postcodegen` hook (tests). Defaults to the real spawner. */
