@@ -1,3 +1,16 @@
+## @lunora/auth [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.244...@lunora/auth@1.0.0-alpha.245) (2026-10-29)
+
+### Tests
+
+* **auth:** cover the org identity claims on workerd ([#1424](https://github.com/anolilab/lunora/issues/1424)) ([b86a2cf](https://github.com/anolilab/lunora/commit/b86a2cfd4d0abd1199150a6b78845a1af1b49633))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.428
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.254
+* **@lunora/server:** upgraded to 1.0.0-alpha.252
+
 ## @lunora/auth [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.243...@lunora/auth@1.0.0-alpha.244) (2026-10-29)
 
 ### Bug Fixes

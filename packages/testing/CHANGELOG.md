@@ -1,3 +1,19 @@
+## @lunora/testing [1.0.0-alpha.317](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.316...@lunora/testing@1.0.0-alpha.317) (2026-10-29)
+
+### Bug Fixes
+
+* **registry:** scope presence rooms to the caller's tenant ([#1419](https://github.com/anolilab/lunora/issues/1419)) ([cb3a4f5](https://github.com/anolilab/lunora/commit/cb3a4f567aa9c06956a136d1d03968065dd574e2))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.262
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.157
+* **@lunora/server:** upgraded to 1.0.0-alpha.252
+* **@lunora/observability:** upgraded to 1.0.0-alpha.184
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.182
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.171
+
 ## @lunora/testing [1.0.0-alpha.316](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.315...@lunora/testing@1.0.0-alpha.316) (2026-10-29)
 
 ### Features

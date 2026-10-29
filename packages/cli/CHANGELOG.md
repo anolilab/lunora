@@ -1,3 +1,21 @@
+## @lunora/cli [1.0.0-alpha.453](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.452...@lunora/cli@1.0.0-alpha.453) (2026-10-29)
+
+### Bug Fixes
+
+* **registry:** scope presence rooms to the caller's tenant ([#1419](https://github.com/anolilab/lunora/issues/1419)) ([cb3a4f5](https://github.com/anolilab/lunora/commit/cb3a4f567aa9c06956a136d1d03968065dd574e2))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.271
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.373
+* **@lunora/config:** upgraded to 1.0.0-alpha.428
+* **@lunora/d1:** upgraded to 1.0.0-alpha.219
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.274
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.254
+* **@lunora/seed:** upgraded to 1.0.0-alpha.268
+* **@lunora/testing:** upgraded to 1.0.0-alpha.317
+
 ## @lunora/cli [1.0.0-alpha.452](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.451...@lunora/cli@1.0.0-alpha.452) (2026-10-29)
 
 ### Features

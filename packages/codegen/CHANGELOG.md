@@ -1,3 +1,25 @@
+## @lunora/codegen [1.0.0-alpha.373](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.372...@lunora/codegen@1.0.0-alpha.373) (2026-10-29)
+
+### Bug Fixes
+
+* **registry:** scope presence rooms to the caller's tenant ([#1419](https://github.com/anolilab/lunora/issues/1419)) ([cb3a4f5](https://github.com/anolilab/lunora/commit/cb3a4f567aa9c06956a136d1d03968065dd574e2))
+
+### Documentation
+
+* add a page for the 1 s startup CPU limit (error 10021) ([#1411](https://github.com/anolilab/lunora/issues/1411)) ([6729aeb](https://github.com/anolilab/lunora/commit/6729aeb05bf94aefcdead0f1b6eb55e043876336))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.271
+* **@lunora/agent:** upgraded to 1.0.0-alpha.262
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.157
+* **@lunora/client:** upgraded to 1.0.0-alpha.264
+* **@lunora/do:** upgraded to 1.0.0-alpha.262
+* **@lunora/payment:** upgraded to 1.0.0-alpha.254
+* **@lunora/server:** upgraded to 1.0.0-alpha.252
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.171
+
 ## @lunora/codegen [1.0.0-alpha.372](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.371...@lunora/codegen@1.0.0-alpha.372) (2026-10-29)
 
 ### Bug Fixes

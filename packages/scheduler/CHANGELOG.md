@@ -1,3 +1,9 @@
+## @lunora/scheduler [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.156...@lunora/scheduler@1.0.0-alpha.157) (2026-10-29)
+
+### Bug Fixes
+
+* **registry:** scope presence rooms to the caller's tenant ([#1419](https://github.com/anolilab/lunora/issues/1419)) ([cb3a4f5](https://github.com/anolilab/lunora/commit/cb3a4f567aa9c06956a136d1d03968065dd574e2))
+
 ## @lunora/scheduler [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.155...@lunora/scheduler@1.0.0-alpha.156) (2026-10-29)
 
 

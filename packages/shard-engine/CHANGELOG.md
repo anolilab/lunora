@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.170...@lunora/shard-engine@1.0.0-alpha.171) (2026-10-29)
+
+### Bug Fixes
+
+* **do:** recheck ttl expiry before the sweep deletes a row ([#1425](https://github.com/anolilab/lunora/issues/1425)) ([0ed8388](https://github.com/anolilab/lunora/commit/0ed83882be6199e67a506406ab1294e229bc3347))
+
 ## @lunora/shard-engine [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.169...@lunora/shard-engine@1.0.0-alpha.170) (2026-10-29)
 
 
