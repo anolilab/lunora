@@ -1,3 +1,16 @@
+## @lunora/runtime [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.251...@lunora/runtime@1.0.0-alpha.252) (2026-10-29)
+
+### Features
+
+* **do,client,runtime:** batch a write's frames and re-auth open sockets ([#1396](https://github.com/anolilab/lunora/issues/1396)) ([dd260ba](https://github.com/anolilab/lunora/commit/dd260baa8cfa1aba3c86ef98206d156f1e49976b))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.182
+* **@lunora/do:** upgraded to 1.0.0-alpha.260
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.169
+
 ## @lunora/runtime [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.250...@lunora/runtime@1.0.0-alpha.251) (2026-10-29)
 
 
