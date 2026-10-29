@@ -4,9 +4,8 @@
 # was producing one.
 #
 # `test.yml` runs on `pull_request` and `merge_group` only — never `push`, by
-# design — and its upload step is additionally gated on those two events. The
-# merge queue is not in use (every recent `Tests` run is a `pull_request`), so no
-# run has ever uploaded a report for an `alpha` commit. The baseline froze at
+# design — and uploads coverage from `pull_request` alone, so no `Tests` run
+# uploads a report for an `alpha` commit. The baseline froze at
 # `95d33d67` on 2026-08-08, and by 2026-08-27 every PR comment was diffing today's
 # tree against a snapshot 1177 commits behind: a reported ~11% coverage "drop"
 # that was really 140 files added in the interim.

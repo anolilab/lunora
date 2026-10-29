@@ -56,17 +56,16 @@
         "if": "needs.files-changed.outputs.packages == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        # 45, not 30. The 22.22 leg runs `test:affected:coverage`, and a change to
-        # pnpm-lock.yaml / pnpm-workspace.yaml makes *every* package affected -- so
-        # this leg runs the whole suite under v8 coverage. That is ~25 min for
-        # @lunora/codegen alone, which left no room for the studio step after it and
-        # cancelled the job at 30 min with every test passing.
-        #
-        # 90, not 60: by 2026-10 a full-suite 22.22 leg took 37-58 min when it
-        # passed, and a leg that also boots extra workerd projects was cancelled at
-        # 60 mid-suite with every test so far passing. Affected-only runs are
-        # far shorter and unaffected by the ceiling.
-        "timeout-minutes": 90
+        # A change to pnpm-lock.yaml / pnpm-workspace.yaml makes *every* package
+        # affected, so the ceiling is sized for a whole-suite run. The longest leg is
+        # now a plain (coverage-free) run that still carries @lunora/codegen and
+        # @lunora/cli: the merge queue, and the 24.11 leg everywhere. vis runs five
+        # tasks on a 4-vCPU runner, which caps each vitest at ONE worker
+        # (tools/get-vitest-config.ts), so codegen alone takes ~20 min there and a
+        # wide leg ~30. The coverage leg is shorter: its three slowest suites run in
+        # `test-coverage-shards` instead, where they had taken 44, 24 and 10 min
+        # single-worker under coverage and held this job at 46+ min.
+        "timeout-minutes": 60
         "strategy":
             "fail-fast": false
             "matrix":
@@ -172,11 +171,21 @@
             # hang. The budget is unconditional now (apps/playground/vitest.config.ts)
             # and the suite runs here, on the leg without coverage. It has no
             # `test:coverage` script, so the 22.22 leg simply has nothing to run for it.
+            #
+            # Coverage runs on the 22.22 leg of a PR only. The merge queue re-tests a
+            # tree whose coverage the PR already reported, so it runs the plain suite on
+            # both legs; Codecov's base comes from coverage-baseline.yml on push.
+            #
+            # The coverage run leaves out the suites `test-coverage-shards` runs. Keep
+            # this query and that matrix in step: a suite dropped from the matrix but
+            # left here runs nowhere under coverage.
             - "name": "Run affected tests"
               "shell": "bash"
+              "env":
+                  "COVERAGE": "${{ matrix.node_version == '22.22' && github.event_name != 'merge_group' }}"
               "run": |
-                  if [ "${{ matrix.node_version }}" = "22.22" ]; then
-                      pnpm run test:affected:coverage
+                  if [ "${COVERAGE}" = "true" ]; then
+                      pnpm exec vis affected test:coverage --query "project!=lunora-e2e && project!=codegen && project!=cli && project!=hyperdrive"
                   else
                       pnpm run test:affected
                   fi
@@ -193,7 +202,198 @@
                   pnpm --filter "@lunora/studio" run test
 
             - "name": "Upload coverage to Codecov"
-              "if": "matrix.node_version == '22.22' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
+              # Same-repo PRs only: a fork has no token, and `github.event.pull_request`
+              # is empty on every other event.
+              "if": "matrix.node_version == '22.22' && github.event.pull_request.head.repo.full_name == github.repository"
+              "continue-on-error": true
+              "uses": "codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac" # v5.5.5
+              "with":
+                  "token": "${{ secrets.CODECOV_TOKEN }}"
+                  "fail_ci_if_error": false
+
+    # The three slowest suites under coverage, each on its own runner and the big two
+    # split with `vitest --shard`. Under vis on the 4-vCPU runner each vitest gets one
+    # worker; called directly here it gets every core, and sharding divides the rest.
+    #
+    # Thresholds are zeroed per shard because one shard covers a fraction of `src`
+    # and would fail every floor. The real floors are enforced on the merged blobs in
+    # `test-coverage-merge`, which produces the same numbers as an unsharded run.
+    #
+    # PR-only, like the coverage leg above; the merge queue runs these suites inside
+    # `test`. Each leg checks itself whether its project is affected, so an unaffected
+    # one stops after install instead of the whole matrix waiting on a gate job.
+    "test-coverage-shards":
+        "name": "Coverage (${{ matrix.project }} ${{ matrix.shard }}/${{ matrix.shards }})"
+        "if": "needs.files-changed.outputs.packages == 'true' && github.event_name != 'merge_group'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                # Shard counts size each leg to ~10 min of tests, from single-worker
+                # coverage timings of 2,616s (codegen), 1,436s (cli) and 625s (hyperdrive).
+                "include":
+                    - { "project": "codegen", "shard": 1, "shards": 3 }
+                    - { "project": "codegen", "shard": 2, "shards": 3 }
+                    - { "project": "codegen", "shard": 3, "shards": 3 }
+                    - { "project": "cli", "shard": 1, "shards": 2 }
+                    - { "project": "cli", "shard": 2, "shards": 2 }
+                    - { "project": "hyperdrive", "shard": 1, "shards": 1 }
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              # Full history so `vis affected` can resolve the PR base.
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "with":
+                  "fetch-depth": "0"
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "test"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # Output captured before grepping: under pipefail a `grep -q` that exits
+            # early SIGPIPEs vis and reads as "not affected". Output that matches
+            # neither line fails the leg rather than skipping it.
+            - "name": "Check whether ${{ matrix.project }} is affected"
+              "id": "affected"
+              "shell": "bash"
+              "env":
+                  "PROJECT": "${{ matrix.project }}"
+              "run": |
+                  out="$(pnpm exec vis affected test:coverage --dry-run --no-color --query "project=${PROJECT}" 2>&1)"
+                  if grep -q '^Affected projects:' <<<"${out}"; then
+                      echo "run=true" >> "${GITHUB_OUTPUT}"
+                  elif grep -qE 'No projects affected|No files changed' <<<"${out}"; then
+                      echo "::notice::${PROJECT} is not affected; this shard has nothing to run."
+                      echo "run=false" >> "${GITHUB_OUTPUT}"
+                  else
+                      printf '%s\n' "${out}"
+                      echo "::error::Could not tell from vis whether ${PROJECT} is affected."
+                      exit 1
+                  fi
+
+            - "name": "Build ${{ matrix.project }} and its dependencies"
+              "if": "steps.affected.outputs.run == 'true'"
+              "env":
+                  "PROJECT": "${{ matrix.project }}"
+              "run": |
+                  pnpm exec vis run build --query "project=${PROJECT}"
+
+            # vitest directly, not through vis: no VIS_TASK_SLOTS means no worker cap.
+            # The blob goes to a non-hidden path because upload-artifact skips hidden
+            # files, and vitest's default `.vitest-reports/` would upload nothing.
+            - "name": "Run ${{ matrix.project }} shard ${{ matrix.shard }}/${{ matrix.shards }} under coverage"
+              "if": "steps.affected.outputs.run == 'true'"
+              "env":
+                  "PROJECT": "${{ matrix.project }}"
+                  "SHARD": "${{ matrix.shard }}"
+                  "SHARDS": "${{ matrix.shards }}"
+              "run": |
+                  echo "vitest workers: $(( $(nproc) - 1 )) (nproc $(nproc))"
+                  pnpm --filter "@lunora/${PROJECT}" exec vitest run \
+                      --shard="${SHARD}/${SHARDS}" \
+                      --coverage \
+                      --coverage.thresholds.lines=0 \
+                      --coverage.thresholds.functions=0 \
+                      --coverage.thresholds.branches=0 \
+                      --coverage.thresholds.statements=0 \
+                      --reporter=dot \
+                      --reporter=blob \
+                      --outputFile.blob="${GITHUB_WORKSPACE}/blob-reports/${PROJECT}/blob-${SHARD}-${SHARDS}.json"
+
+            - "name": "Upload the shard's blob report"
+              "if": "steps.affected.outputs.run == 'true'"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "blob-${{ matrix.project }}-${{ matrix.shard }}"
+                  "path": "blob-reports"
+                  "if-no-files-found": "error"
+                  "retention-days": 1
+                  # A re-run of one failed shard re-uploads under the same name.
+                  "overwrite": true
+
+    # Merges each project's shard blobs, which enforces the package's real coverage
+    # thresholds on the whole suite, and uploads the merged report to Codecov.
+    # Needs no build: it replays results and runs no test.
+    "test-coverage-merge":
+        "name": "Coverage merge"
+        "if": "needs.files-changed.outputs.packages == 'true' && github.event_name != 'merge_group'"
+        "needs": ["files-changed", "test-coverage-shards"]
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 15
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            # After checkout, which cleans the workspace. No match is not an error:
+            # when no sharded project was affected there is nothing to merge, and every
+            # step below skips on the empty directory.
+            - "name": "Download the shard blob reports"
+              "uses": "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" # v4.3.0
+              "with":
+                  "pattern": "blob-*"
+                  "path": "blob-reports"
+                  "merge-multiple": true
+
+            # A shard whose upload went missing would otherwise merge into a report
+            # that silently covers part of the suite. Every shard of a project shares
+            # its affected verdict, so a project has all of its blobs or none.
+            - "name": "Assert every shard reported"
+              "if": "hashFiles('blob-reports/**') != ''"
+              "shell": "bash"
+              "run": |
+                  status=0
+                  for dir in blob-reports/*/; do
+                      project="$(basename "${dir}")"
+                      expected="$(find "${dir}" -name 'blob-*.json' | head -n 1 | sed -E 's/.*-([0-9]+)\.json$/\1/')"
+                      actual="$(find "${dir}" -name 'blob-*.json' | wc -l)"
+                      if [ "${actual}" -ne "${expected}" ]; then
+                          echo "::error::${project}: ${actual} of ${expected} shard blobs arrived."
+                          status=1
+                      fi
+                  done
+                  exit "${status}"
+
+            - "name": "Setup resources and environment"
+              "if": "hashFiles('blob-reports/**') != ''"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "test"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Merge the blobs and check coverage thresholds"
+              "if": "hashFiles('blob-reports/**') != ''"
+              "shell": "bash"
+              "run": |
+                  for dir in blob-reports/*/; do
+                      project="$(basename "${dir}")"
+                      pnpm --filter "@lunora/${project}" exec vitest --merge-reports "${GITHUB_WORKSPACE}/${dir}" --coverage --reporter=dot
+                  done
+
+            - "name": "Upload coverage to Codecov"
+              "if": "hashFiles('blob-reports/**') != '' && github.event.pull_request.head.repo.full_name == github.repository"
               "continue-on-error": true
               "uses": "codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac" # v5.5.5
               "with":
@@ -1078,6 +1278,8 @@
             [
                 "files-changed",
                 "test",
+                "test-coverage-shards",
+                "test-coverage-merge",
                 "test-workerd",
                 "test-celld",
                 "test-mysql",
