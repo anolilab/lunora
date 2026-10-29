@@ -1361,6 +1361,7 @@ interface LiveSocketControlCall {
     action: unknown;
     callerId: string;
     connectionId: string;
+    identity?: Record<string, unknown>;
     identityExpiry?: number;
     key: string;
     seq?: number;
@@ -2978,6 +2979,7 @@ interface SocketAttachment {
     liveGrants?: Record<string, string>;
     pageDeltas?: boolean;
     pendingSince?: number;
+    refreshBatch?: boolean;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     socketFunction?: string;
     socketPath?: string;

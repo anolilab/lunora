@@ -39,6 +39,56 @@ import type { OptimisticLayer, SubscriptionState } from "./subscription";
  */
 let acknowledgements = 0;
 
+/**
+ * What moved inside {@link withDeferredNotifications}, in order: a subscription whose value
+ * moved (once, however often it moved) or another held notification, such as a checkpoint.
+ */
+let deferredNotifications: Set<SubscriptionState | (() => void)> | undefined;
+
+/** Every callback gets `value`, the one that moved: a listener that writes optimistically must not change what the next one hears. */
+const fanValue = (callbacks: Iterable<(value: unknown) => void>, value: unknown): void => {
+    for (const callback of callbacks) {
+        try {
+            callback(value);
+        } catch {
+            /* user callback threw — ignore */
+        }
+    }
+};
+
+/**
+ * A held value notification, its callbacks and value taken now: one an earlier callback subscribes
+ * already has the value from the subscribe's replay, and one it unsubscribes must not hear it.
+ * Each callback is checked as it comes: once an earlier one has moved the value on (an optimistic
+ * write, a sign-out blanking it), the newer value has already reached every listener, and the
+ * batch's would land after it as a stale one.
+ */
+const heldValueNotification = (state: SubscriptionState): (() => void) => {
+    const callbacks = [...state.callbacks];
+    const value = state.lastValue;
+
+    return () => {
+        for (const callback of callbacks) {
+            if (state.lastValue !== value) {
+                return;
+            }
+
+            if (state.callbacks.has(callback)) {
+                fanValue([callback], value);
+            }
+        }
+    };
+};
+
+/** Run `notify` now, or with the rest of the batch when inside {@link withDeferredNotifications}. */
+export const deferNotification = (notify: () => void): void => {
+    if (deferredNotifications === undefined) {
+        notify();
+    } else {
+        deferredNotifications.add(notify);
+    }
+};
+
 /** The latest acknowledgement, sampled by a poll before it sends. */
 export const acknowledgementMark = (): number => acknowledgements;
 
@@ -76,11 +126,41 @@ export const notifySubscription = (state: SubscriptionState, value: unknown): vo
     // eslint-disable-next-line no-param-reassign -- in-place update of the shared subscription state
     state.lastValue = value;
 
-    for (const callback of state.callbacks) {
-        try {
-            callback(value);
-        } catch {
-            /* user callback threw — ignore */
+    if (deferredNotifications === undefined) {
+        fanValue(state.callbacks, value);
+    } else {
+        deferredNotifications.add(state);
+    }
+};
+
+/**
+ * Run `apply` with value callbacks held, then notify each subscription whose value
+ * moved — once, with its final value. Every value is committed before any callback
+ * runs, so a listener reading a sibling query never sees it a frame behind.
+ */
+export const withDeferredNotifications = (apply: () => void, live: () => boolean = () => true): void => {
+    const moved = new Set<SubscriptionState | (() => void)>();
+
+    deferredNotifications = moved;
+
+    try {
+        apply();
+    } finally {
+        deferredNotifications = undefined;
+
+        const pending = [...moved].map((item) => (typeof item === "function" ? item : heldValueNotification(item)));
+
+        for (const notify of pending) {
+            // A callback that closed the client ends the batch, as a closed socket ends a stream of frames.
+            if (!live()) {
+                break;
+            }
+
+            try {
+                notify();
+            } catch {
+                /* user callback threw — ignore */
+            }
         }
     }
 };

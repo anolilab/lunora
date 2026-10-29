@@ -615,6 +615,14 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Dispatch already in progress";
     };
+    readonly STALE_CREDENTIAL: {
+        readonly status: 409;
+        readonly title: "Stale credential";
+    };
+    readonly IDENTITY_CHANGED: {
+        readonly status: 409;
+        readonly title: "Socket identity changed";
+    };
     readonly FORBIDDEN_FANOUT: {
         readonly status: 403;
         readonly title: "Fan-out forbidden";

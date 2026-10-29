@@ -311,6 +311,8 @@ interface LiveSocketControlCall {
     action: unknown;
     callerId: string;
     connectionId: string;
+    /** The caller's verified claims; carried only by a `reauth`, which compares them with the socket's. */
+    identity?: Record<string, unknown>;
     identityExpiry?: number;
     key: string;
     /** Stamped by the owner when it forwards the call; a later call on the same subscription supersedes an earlier one. Absent on a call sent before sequencing. */

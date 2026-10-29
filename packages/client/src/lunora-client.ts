@@ -5,7 +5,9 @@ import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../shared/identity-header";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
+import { REFRESH_BATCH_CAPABILITY } from "../../../shared/refresh-batch";
 import { onSessionChanged } from "../../../shared/session-change";
+import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import { encodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import type { AdminHost } from "./admin/host";
 import { decodeRecordArgs } from "./admin/scheduler";
@@ -52,6 +54,7 @@ import {
     dropConfirmedLayers,
     refoldSubscription,
     rollbackOptimistic,
+    withDeferredNotifications,
 } from "./optimistic-layers";
 import isStaleVersion from "./persisted-version";
 import { resolvePersistenceAdapter } from "./persistence";
@@ -441,10 +444,26 @@ type ReplayIdentityVerdict = { credential: ReplayCredential; verdict: "match" } 
  * query with row deltas instead of re-sending the whole page on every write.
  *
  * Strictly additive: a server that does not recognise a token ignores it and
- * keeps sending what it always did. The token comes from `shared/` rather than
+ * keeps sending what it always did. `REFRESH_BATCH_CAPABILITY` says the client
+ * holds a `batchStart` … `batchEnd` bracket and applies it as one update.
+ *
+ * The tokens come from `shared/` rather than
  * being retyped here, so a mismatch with the server's gate is impossible.
  */
-const CLIENT_CAPABILITIES = [PAGE_DELTA_CAPABILITY] as const;
+const CLIENT_CAPABILITIES = [PAGE_DELTA_CAPABILITY, REFRESH_BATCH_CAPABILITY] as const;
+
+/**
+ * Whether a frame arriving inside a `batchStart` bracket waits for its `batchEnd`:
+ * every frame that moves a subscription's value or position. The rest (pokes, rooms,
+ * streams, identity) is not part of a refresh and is handled as it lands. An `error`
+ * without an id is the socket's own (`TOKEN_EXPIRED` before a close), never held.
+ */
+const isHeldInBatch = (message: ServerMessage): boolean =>
+    message.type === "data" ||
+    message.type === "delta" ||
+    message.type === "settled" ||
+    message.type === "resume" ||
+    (message.type === "error" && typeof message.id === "string");
 
 /** Room sends held before the socket opens; past this a `send` is refused rather than queued without bound. */
 const ROOM_PENDING_LIMIT = 100;
@@ -506,11 +525,11 @@ const resolveWsCredential = async (credential: WsCredentialSource): Promise<stri
     typeof credential === "function" ? await credential() : credential;
 
 /**
- * One live-grant control POST, bounded by {@link LIVE_CONTROL_TIMEOUT_MS}. The clock starts when
- * the POST is sent, not when it was queued, and covers the body read too: a stalled response
- * must not hold the chain behind it.
+ * One control POST (a live grant, a socket re-auth), bounded by {@link LIVE_CONTROL_TIMEOUT_MS}.
+ * The clock starts when the POST is sent, not when it was queued, and covers the body read too: a
+ * stalled response must not hold the chain behind it, nor keep a re-auth from falling back.
  */
-const sendLiveControl = async (fetchImpl: typeof fetch, url: string, body: string, headers: Record<string, string>): Promise<number> => {
+const sendControl = async (fetchImpl: typeof fetch, url: string, body: string, headers: Record<string, string>): Promise<{ status: number; text: string }> => {
     const controller = new AbortController();
     const timer = setTimeout(() => {
         controller.abort();
@@ -519,9 +538,7 @@ const sendLiveControl = async (fetchImpl: typeof fetch, url: string, body: strin
     try {
         const response = await fetchImpl(url, { body, credentials: "include", headers, method: "POST", signal: controller.signal });
 
-        await response.text();
-
-        return response.status;
+        return { status: response.status, text: await response.text() };
     } finally {
         clearTimeout(timer);
     }
@@ -3742,8 +3759,8 @@ class LunoraClient {
      *
      * A sign-in from signed-out is `"cold"`: the sockets upgraded anonymously,
      * and no view may resume from an anonymous cursor. A refreshed bearer under
-     * an unchanged identity is `"warm"`: the subscriptions resume from their
-     * cursors.
+     * an unchanged identity is `"warm"`: it is handed to the open sockets in
+     * place, and a socket that refuses it reconnects and resumes from its cursors.
      *
      * A sign-out or an account switch leaves a previous identity behind and is
      * evicted by `setAuthToken` before this is asked.
@@ -3775,7 +3792,7 @@ class LunoraClient {
             this.resetRoomSends();
             this.reconnectCold();
         } else if (reconnect === "warm") {
-            this.bounceShardSockets();
+            this.bounceShardSockets(true);
         }
     }
 
@@ -6455,6 +6472,7 @@ class LunoraClient {
                 // A new socket has confirmed no identity and rejoined no room yet.
                 conn.identityConfirmed = false;
                 conn.connectionId = undefined;
+                conn.heldFrames = undefined;
                 conn.roomsRejoined = false;
 
                 // See `ShardConnection.stableTimer` for why `open` is not proof.
@@ -6619,6 +6637,7 @@ class LunoraClient {
         // The socket's connection id names a socket that no longer exists: clear it so no grant
         // (or unsubscribe) posts against it, and drop the joins still waiting on its ack.
         conn.connectionId = undefined;
+        conn.heldFrames = undefined;
         conn.whisperAck = undefined;
         this.dropWhisperJoinWaiters(connectionKey(conn.shardKey));
         // Before the emit, so a listener never sees the dead socket's answers still counted.
@@ -6942,8 +6961,10 @@ class LunoraClient {
         // the server's `TOKEN_EXPIRED` rejection arrives as one, immediately
         // before it closes with 4001, so counting it would restore the reconnect
         // storm this moved the reset out of `onOpen` to fix.
+        const conn = this.getConnection(shardKey);
+
         if (message.type !== "error") {
-            this.getConnection(shardKey)?.reconnect.reset();
+            conn?.reconnect.reset();
         }
 
         // ANY frame bearing a subscription's id proves the server has taken that
@@ -6951,16 +6972,47 @@ class LunoraClient {
         // `error` that refuses it, or a `data`/`resume`/`settled` that overtakes
         // its own ack. Releasing here rather than in each handler is what keeps a
         // frame shape nobody anticipated from stalling the drain.
-        if (typeof (message as { id?: unknown }).id === "string") {
-            const conn = this.getConnection(shardKey);
-
-            if (conn) {
-                const { id } = message as { id: string };
-
-                this.settleSubscribeWatchdog(conn, id);
-            }
+        if (conn && typeof (message as { id?: unknown }).id === "string") {
+            this.settleSubscribeWatchdog(conn, (message as { id: string }).id);
         }
 
+        if (message.type === "batchStart") {
+            if (conn) {
+                conn.heldFrames = [];
+            }
+        } else if (message.type === "batchEnd") {
+            // Apply every frame held since `batchStart` in arrival order, then notify each
+            // subscription they moved once: without the hold, a write that changed a count
+            // and the list it counts rendered one of them a frame ahead of the other.
+            const held = conn?.heldFrames;
+
+            if (conn && held) {
+                const { socket } = conn;
+
+                conn.heldFrames = undefined;
+                withDeferredNotifications(
+                    () => {
+                        for (const frame of held) {
+                            // An `onError` that retired this socket (a sign-out, an account switch) ends the
+                            // batch: what is left belongs to the old session, and the reconnect re-seeds.
+                            if (conn.retired === true || conn.socket !== socket) {
+                                break;
+                            }
+
+                            this.dispatchServerMessage(frame, shardKey);
+                        }
+                    },
+                    () => !this.closed,
+                );
+            }
+        } else if (conn?.heldFrames && isHeldInBatch(message)) {
+            conn.heldFrames.push(message);
+        } else {
+            this.dispatchServerMessage(message, shardKey);
+        }
+    }
+
+    private dispatchServerMessage(message: ServerMessage, shardKey: string | undefined): void {
         switch (message.type) {
             case "ack": {
                 const state = this.subscriptions.getById(message.id);
@@ -7706,8 +7758,8 @@ class LunoraClient {
         const headers = this.rpcRequestHeaders({}, shardKey);
 
         this.liveControlChain = this.liveControlChain
-            .then(() => sendLiveControl(fetchImpl, joinUrl(this.url, controlPath), payload, headers))
-            .then((status) => {
+            .then(() => sendControl(fetchImpl, joinUrl(this.url, controlPath), payload, headers))
+            .then(({ status }) => {
                 // 404 and 401 are transient: a reconnect registers the grant again.
                 if (status >= 400 && status < 500 && status !== 404 && status !== 401) {
                     onRefused?.(status);
@@ -8553,28 +8605,48 @@ class LunoraClient {
      *
      * Non-terminal, unlike {@link close}: the `ShardConnection` records and the
      * subscriptions riding them survive, and the registered `close` handler
-     * (`handleDisconnect`) schedules the retry and replays the subscribes. This
-     * is the only way to move a WS credential — it lives in the upgrade URL.
+     * (`handleDisconnect`) schedules the retry and replays the subscribes. A
+     * credential rides the upgrade, so this is how a socket moves to a new
+     * identity.
+     *
+     * `inPlace` is a refreshed bearer for the same user: it is handed to each open
+     * shard socket (`SOCKET_REAUTH_PATH`), so a token lifetime no longer costs a
+     * reconnect and a full re-seed. A socket the server will not re-authenticate —
+     * not yet named by its `identity` frame, held under different claims, or behind a
+     * server without the route — is bounced. Route and scheduled sockets carry their
+     * bearer on the upgrade, so they are always bounced.
      */
-    private bounceShardSockets(): void {
-        for (const conn of this.connections.values()) {
-            if (conn.socket) {
-                // Retired as of now, not as of the `close` event — the gap
-                // between the two is where an already-queued frame lands with
-                // `conn.socket` still pointing here. See `ShardConnection.retired`.
-                conn.retired = true;
+    private bounceShardSockets(inPlace = false): void {
+        const { authToken: token, fetchImpl } = this;
 
-                try {
-                    conn.socket.close();
-                } catch {
-                    /* ignore */
-                }
-            } else if (conn.providerAttempt !== undefined) {
-                // A mint still pending under the old credential would never open the shard. Restarting claims the
-                // attempt, so the superseded mint's late result returns early and only the restarted one opens.
-                this.startShardSocket(conn, conn.shardKey).catch(() => {
-                    this.handleDisconnect(conn);
-                });
+        for (const conn of this.connections.values()) {
+            const { connectionId } = conn;
+
+            // `shard=` is kept even when empty, as on the upgrade URL: an explicit `""` names its own shard.
+            if (inPlace && token !== null && fetchImpl !== undefined && conn.socket !== undefined && connectionId !== undefined && conn.retired !== true) {
+                sendControl(
+                    fetchImpl,
+                    joinUrl(this.url, conn.shardKey === undefined ? SOCKET_REAUTH_PATH : `${SOCKET_REAUTH_PATH}?shard=${encodeURIComponent(conn.shardKey)}`),
+                    JSON.stringify({ connectionId }),
+                    {
+                        authorization: `Bearer ${token}`,
+                        "content-type": "application/json",
+                    },
+                )
+                    // Only the route's own `{ ok: true }` counts: a catch-all 200 (an SPA fallback, a proxy) did not refresh anything.
+                    .then(({ text }) => (JSON.parse(text) as { ok?: unknown } | null)?.ok === true)
+                    .catch(() => false)
+                    .then((reauthenticated) => {
+                        // A newer token, or a socket that has since been replaced, is already handled by whatever replaced it.
+                        if (!reauthenticated && !this.closed && this.authToken === token && conn.connectionId === connectionId) {
+                            this.bounceShardSocket(conn);
+                        }
+
+                        return undefined;
+                    })
+                    .catch(() => undefined);
+            } else {
+                this.bounceShardSocket(conn);
             }
         }
 
@@ -8582,6 +8654,28 @@ class LunoraClient {
         // otherwise a signed-out user keeps receiving on them.
         for (const bounce of this.supplementaryBounces) {
             bounce();
+        }
+    }
+
+    private bounceShardSocket(conn: ShardConnection): void {
+        if (conn.socket) {
+            // Retired as of now, not as of the `close` event — the gap
+            // between the two is where an already-queued frame lands with
+            // `conn.socket` still pointing here. See `ShardConnection.retired`.
+            // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+            conn.retired = true;
+
+            try {
+                conn.socket.close();
+            } catch {
+                /* ignore */
+            }
+        } else if (conn.providerAttempt !== undefined) {
+            // A mint still pending under the old credential would never open the shard. Restarting claims the
+            // attempt, so the superseded mint's late result returns early and only the restarted one opens.
+            this.startShardSocket(conn, conn.shardKey).catch(() => {
+                this.handleDisconnect(conn);
+            });
         }
     }
 

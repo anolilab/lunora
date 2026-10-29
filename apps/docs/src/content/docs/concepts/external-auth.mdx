@@ -185,7 +185,9 @@ function. It:
 - fetches the next token 10 seconds **before** the current one's `exp`. A
   query, mutation or action sent with a lapsed token is refused
   `TOKEN_EXPIRED`, and an online call is not resent for you. With
-  `authTokenOnUpgrade`, each refresh also reconnects the sockets warm.
+  `authTokenOnUpgrade`, each refresh is handed to the open sockets in place,
+  so they keep their subscriptions. A socket the server will not refresh (the
+  token's claims changed, or the server predates the route) reconnects warm.
 - refreshes again on `onTokenExpired`: a socket the server closed with `4001`,
   or a queued offline write refused on replay, which is held and sent again
   after the new token.
