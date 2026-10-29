@@ -53,7 +53,7 @@ Cron targets are **internal** functions (`internalMutation` / `internalAction` /
 All schedule helpers are UTC. `interval` takes exactly one of `minutes` / `hours`. `{ seconds }` is rejected at definition time — Cloudflare Cron Triggers have a one-minute floor, so the 6-field expression it would compile to is refused by `wrangler deploy`; use `ctx.scheduler.runAfter`/`runAt` for sub-minute work, or `{ minutes: 1 }` for the fastest cron-native cadence.
 
 ```ts
-crons.interval("sweep", { minutes: 30 }, internal.presence.sweep, { roomId: "lobby" });
+crons.interval("sweep", { minutes: 30 }, internal.presence.sweep, {});
 crons.daily("digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, {});
 crons.weekly("report", { dayOfWeek: "monday", hourUTC: 8, minuteUTC: 0 }, internal.reports.weekly, {});
 crons.monthly("invoice", { day: 1, hourUTC: 0, minuteUTC: 0 }, internal.billing.invoice, {});
@@ -68,7 +68,7 @@ The example `run` is a placeholder. Point a job at one of your own internal func
 
 ```ts
 // lunora/crons.ts
-crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, { roomId: "lobby" });
+crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, {});
 ```
 
 Then delete `lunora/crons/jobs.ts` (and the sample `heartbeat` job) once nothing references it.
