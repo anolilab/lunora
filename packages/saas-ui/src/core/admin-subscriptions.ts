@@ -11,10 +11,9 @@
  * exception: a newest-first page would leave an older past-due tenant unseen
  * until the admin paged back to it, so every past-due subscription arrives from
  * a read of its own (`payment.adminPastDueSubscriptions`) and is merged in ahead
- * of the pages. The
- * join happens here rather than in the query because the organisation names
- * already arrive with the organisation list, and the payment functions should
- * not have to know the kit's tenancy table exists.
+ * of the pages. The join happens here rather than in the query because the
+ * organisation names already arrive with the organisation list, and the payment
+ * functions should not have to know the kit's tenancy table exists.
  */
 import type { Plan } from "./billing";
 import { dayKey, planLabel } from "./format";

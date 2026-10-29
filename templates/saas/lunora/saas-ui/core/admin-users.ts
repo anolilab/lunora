@@ -378,6 +378,7 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
             search: async (term: string) => load(0, term),
             suspend: async (userId: string, reason?: string) => {
                 const trimmed = reason?.trim();
+
                 return write(userId, async () => client.banUser({ userId, ...(trimmed ? { banReason: trimmed } : {}) }), true);
             },
             unsuspend: async (userId: string) => write(userId, async () => client.unbanUser({ userId }), true),

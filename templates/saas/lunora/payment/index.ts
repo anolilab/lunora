@@ -6,8 +6,8 @@
  * entry so codegen picks them up — they surface in the generated `api` as
  * `payment/checkout`, `payment/check`, `payment/portal` and
  * `payment/mySubscriptions` — plus `payment/adminSubscriptions` and
- * `payment/adminPastDueSubscriptions`, which this kit adds for its platform admin — and `payment/track` in `internal`, for server
- * code only.
+ * `payment/adminPastDueSubscriptions`, which this kit adds for its platform
+ * admin — and `payment/track` in `internal`, for server code only.
  *
  * The functions are provider-agnostic: they call `ctx.payments.*` which is
  * wired in `createShardDO({ payment: (env) => ({ adapter: ..., ... }) })`.
@@ -447,8 +447,14 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
 /** The platform-wide roles that may read every tenant's billing — `PLATFORM_ADMIN_ROLES` in `lunora/saas`. */
 const PLATFORM_ADMIN_ROLES: ReadonlySet<string> = new Set(["admin"]);
 
-/** Refuse anyone but a platform admin — the `appRole` claim `lunora/server.ts` resolves from better-auth's `user.role`. */
-const requirePlatformAdmin = async (ctx: { auth: { getIdentity: () => Promise<{ appRole?: string } | null> } }): Promise<void> => {
+/**
+ * The platform admin's cross-tenant billing reads: a platform admin — the
+ * `appRole` claim `lunora/server.ts` resolves from better-auth's `user.role` — on
+ * the root shard. A tenant shard holds an empty copy of the billing tables, so a
+ * read there would show "no subscriptions" rather than fail — refuse it as
+ * `billingReference` does.
+ */
+const requireBillingAdmin = async (ctx: { auth: { getIdentity: () => Promise<{ appRole?: string } | null> }; shardKey: string }): Promise<void> => {
     const identity = await ctx.auth.getIdentity();
 
     if (!identity) {
@@ -459,16 +465,6 @@ const requirePlatformAdmin = async (ctx: { auth: { getIdentity: () => Promise<{ 
     if (!(identity.appRole?.split(",").some((role) => PLATFORM_ADMIN_ROLES.has(role.trim())) ?? false)) {
         throw new LunoraError("FORBIDDEN", "requires the platform admin role");
     }
-};
-
-/**
- * The platform admin's cross-tenant billing reads: a platform admin, on the root
- * shard. A tenant shard holds an empty copy of the billing tables, so a read there
- * would show "no subscriptions" rather than fail — refuse it as `billingReference`
- * does.
- */
-const requireBillingAdmin = async (ctx: Parameters<typeof requirePlatformAdmin>[0] & { shardKey: string }): Promise<void> => {
-    await requirePlatformAdmin(ctx);
 
     if (ctx.shardKey !== ROOT_SHARD) {
         throw new LunoraError("FORBIDDEN", "billing runs on the root shard — call it without a shardKey");
