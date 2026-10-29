@@ -81,4 +81,31 @@ describe("jobHistory", () => {
         expect(screen.getByTestId("job-history-row-gone")).toBeDefined();
         expect(screen.queryByTestId("job-history-load-more")).toBeNull();
     });
+
+    it("stops refreshing the first page once older pages are loaded, so no rows fall into the gap", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+
+        const loadJobs = vi.fn<(cursor?: string) => Promise<{ cursor?: string; records: ScheduledJobView[] }>>(async (cursor) =>
+            cursor === undefined ? { cursor: "page-2", records: JOBS.slice(0, 1) } : { records: JOBS.slice(1) },
+        );
+
+        render(
+            <LunoraProvider client={createMockClient().asClient}>
+                <JobHistory loadJobs={loadJobs} />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("job-history-load-more"));
+        await screen.findByTestId("job-history-row-dead");
+
+        const calls = loadJobs.mock.calls.length;
+
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect(loadJobs).toHaveBeenCalledTimes(calls);
+
+        vi.useRealTimers();
+    });
 });

@@ -60,7 +60,8 @@ export const JobHistory = ({ loadJobs }: JobHistoryProps = {}): ReactElement => 
     };
     const stateLabel = { canceled: t("canceled"), failed: t("failed"), pending: t("pending"), running: t("running"), succeeded: t("succeeded") };
 
-    useAutoRefresh(() => jobsQuery.poll(), true);
+    // Paused once older pages are loaded: refreshing page 1 alone would push rows into the gap before them.
+    useAutoRefresh(() => jobsQuery.poll(), older === undefined);
 
     return (
         <div className="flex flex-col gap-3" data-testid="lunora-job-history">
