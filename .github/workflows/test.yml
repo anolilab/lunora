@@ -364,11 +364,17 @@
             - "name": "Merge the blobs and check coverage thresholds"
               "if": "hashFiles('blob-reports/**') != ''"
               "shell": "bash"
+              # Check every package before failing, so one miss doesn't hide the others.
               "run": |
+                  failed=()
                   for dir in blob-reports/*/; do
                       project="$(basename "${dir}")"
-                      pnpm --filter "@lunora/${project}" exec vitest --merge-reports "${GITHUB_WORKSPACE}/${dir}" --coverage --reporter=dot
+                      pnpm --filter "@lunora/${project}" exec vitest --merge-reports "${GITHUB_WORKSPACE}/${dir}" --coverage --reporter=dot || failed+=("${project}")
                   done
+                  if [ "${#failed[@]}" -gt 0 ]; then
+                      echo "::error::coverage check failed for: ${failed[*]}"
+                      exit 1
+                  fi
 
             - "name": "Upload coverage to Codecov"
               "if": "hashFiles('blob-reports/**') != '' && github.event.pull_request.head.repo.full_name == github.repository"
