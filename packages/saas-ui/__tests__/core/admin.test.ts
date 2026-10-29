@@ -142,6 +142,23 @@ describe("createAdminUsersController", () => {
         expect(controller.getState().offset).toBe(0);
     });
 
+    it("stays on the page it shows when turning the page fails", async () => {
+        const client = createClient(Array.from({ length: 5 }, (_, index) => user({ id: `u${String(index)}` })));
+        const controller = createAdminUsersController(client, { limit: 2, onSessionChange: vi.fn() });
+
+        await controller.actions.load();
+        client.listUsers.mockRejectedValueOnce(new Error("offline"));
+        await controller.actions.nextPage();
+
+        expect(controller.getState().status).toBe("error");
+        expect(controller.getState().offset).toBe(0);
+        expect(adminUsersPage(controller.getState()).label).toBe("1–2 of 5");
+
+        await controller.actions.suspend("u1");
+
+        expect(client.listUsers.mock.lastCall?.[0].query.offset).toBe(0);
+    });
+
     it("keeps the page it is on when a write re-reads the list", async () => {
         const client = createClient(Array.from({ length: 3 }, (_, index) => user({ id: `u${String(index)}` })));
         const controller = createAdminUsersController(client, { limit: 2, onSessionChange: vi.fn() });

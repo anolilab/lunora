@@ -242,11 +242,15 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
     let ticket = 0;
     let writing = false;
 
-    const load = async (): Promise<void> => {
+    /**
+     * Read the page at `offset`. The offset is stored with the rows it answered
+     * with, never ahead of them: a failed page turn leaves the table, its label
+     * and the page a write re-reads all on the page still on screen.
+     */
+    const load = async (offset = store.get().offset): Promise<void> => {
         ticket += 1;
 
         const mine = ticket;
-        const { offset } = store.get();
         const search = store.get().search.trim();
 
         store.update({ error: undefined, status: "busy" });
@@ -280,7 +284,7 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
             return;
         }
 
-        store.update({ status: "idle", total: data.total, users: data.users });
+        store.update({ offset, status: "idle", total: data.total, users: data.users });
     };
 
     /**
@@ -325,26 +329,24 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
 
                 return ok;
             },
-            load,
+            load: async () => load(),
             nextPage: async () => {
                 if (adminUsersPage(store.get()).hasNext) {
-                    store.update({ offset: store.get().offset + limit });
-                    await load();
+                    await load(store.get().offset + limit);
                 }
             },
             previousPage: async () => {
                 const { offset } = store.get();
 
                 if (offset > 0) {
-                    store.update({ offset: Math.max(0, offset - limit) });
-                    await load();
+                    await load(Math.max(0, offset - limit));
                 }
             },
             search: async (term: string) => {
-                // A page number means nothing against a different result set.
-                store.update({ offset: 0, search: term });
+                store.update({ search: term });
 
-                return load();
+                // A page number means nothing against a different result set.
+                return load(0);
             },
             suspend: async (userId: string, reason?: string) => {
                 const trimmed = reason?.trim();
