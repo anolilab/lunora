@@ -159,4 +159,13 @@ describe("lazyAccessFacade", () => {
 
         expect(reads).toStrictEqual([1, 1, 1, 1, 1, 1]);
     });
+
+    it("reads the caller for hasGroup on its own", () => {
+        expect.assertions(2);
+
+        const readIdentity = vi.fn(() => identity({ groups: ["ops"] }));
+
+        expect(lazyAccessFacade(readIdentity, () => "user-1").hasGroup("ops")).toBe(true);
+        expect(readIdentity).toHaveBeenCalledTimes(1);
+    });
 });

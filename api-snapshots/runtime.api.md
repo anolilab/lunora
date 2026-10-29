@@ -549,9 +549,9 @@ interface CrossShardRelationCapabilities {
 ```ts
 interface CrossShardRelationOptions {
     fetch?: typeof globalThis.fetch;
-    identity?: Record<string, unknown>;
+    identity?: Record<string, unknown> | undefined;
     origin: string;
-    userId?: string;
+    userId?: string | undefined;
 }
 ```
 
