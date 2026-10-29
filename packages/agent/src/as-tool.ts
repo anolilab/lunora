@@ -7,6 +7,7 @@ import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { agentClassName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
+import withRunShard from "./run-shard";
 import type {
     AgentAsToolOptions,
     AgentMessageRow,
@@ -214,14 +215,13 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
             input: input.prompt,
             threadKey: childThreadKey,
             ...(context.owner === undefined ? {} : { owner: context.owner }),
-            // The child works for the same tenant, so its tools read the parent's shard.
-            ...(context.shardKey === undefined ? {} : { shardKey: context.shardKey }),
         };
 
         let instance: AgentWorkflowInstanceLike;
 
         try {
-            const handle = await binding.create({ id: childInstanceId, params });
+            // The child works for the same tenant, so its tools read the parent's shard.
+            const handle = await binding.create({ id: childInstanceId, params: withRunShard(params, context.shardKey) });
 
             instance = await binding.get(handle.id);
         } catch (error) {

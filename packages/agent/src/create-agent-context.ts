@@ -5,6 +5,7 @@ import { LunoraError } from "@lunora/errors";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
+import withRunShard from "./run-shard";
 import type { AgentBindingSpec, AgentHandle, AgentRunFunction, AgentRunInput, AgentWorkflowBindingLike } from "./types";
 
 /**
@@ -85,15 +86,7 @@ const createAgentContext = (
 
                 // The starting shard replaces a caller-supplied one: a public client reaching
                 // `agents:agentRun` was authorized for this shard, not the one it names.
-                const params: AgentRunInput = { ...input };
-
-                delete params.shardKey;
-
-                if (shardKey !== undefined) {
-                    params.shardKey = shardKey;
-                }
-
-                const instance = await resolve().create({ ...(options?.id === undefined ? {} : { id: options.id }), params });
+                const instance = await resolve().create({ ...(options?.id === undefined ? {} : { id: options.id }), params: withRunShard(input, shardKey) });
 
                 return { id: instance.id };
             },
