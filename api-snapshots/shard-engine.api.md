@@ -662,6 +662,7 @@ interface DatabaseWriterLike {
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
     delete: (table: string, id: string, options?: {
         hard?: boolean;
+        skipOnDelete?: boolean;
     }) => Promise<void>;
     deleteAll?: (tableName: string, options?: {
         chunkSize?: number;
