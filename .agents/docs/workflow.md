@@ -17,7 +17,7 @@ If hooks aren't firing, run `pnpm exec vis hook install` (or `vis hook validate`
 
 ## Release
 
-Independent per-package versioning via `multi-semantic-release`. Publishable packages ship a `.releaserc.json` extending `@anolilab/semantic-release-preset/pnpm`. Conventional Commits drive bumps; the `semantic-release.yml` workflow publishes on push to `alpha` / `main` / `next` / `beta`. Do not author `release` commits manually.
+Independent per-package versioning via `multi-semantic-release`. Publishable packages ship a `.releaserc.json` extending `@anolilab/semantic-release-preset/pnpm`. Conventional Commits drive bumps; the `semantic-release.yml` workflow publishes on push to `alpha` / `main` / `next` / `beta`. The root `release.config.mjs` removes `@semantic-release/git` from every package's plugin list: packages only tag and publish, and the workflow pushes all bumps, changelogs and the lockfile as one `chore(release)` commit, because each branch push rebuilds every merge-queue group. Do not author `release` commits manually.
 
 ## Internal scaffolding (`vis generate`)
 

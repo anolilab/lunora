@@ -47,7 +47,7 @@
               "with":
                   "egress-policy": "audit"
 
-            # Persist credentials so multi-semantic-release can push tags/release commits.
+            # Persist credentials so multi-semantic-release can push tags and this job the release commit.
             - "name": "Git checkout" # zizmor: ignore[artipacked]
               "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
               "with":
@@ -115,9 +115,8 @@
             - "name": "Verify no development-build artifacts"
               "run": "pnpm run dist:check"
 
-            # `prepare` installed the vis hooks during install. commitlint rejects the
-            # long changelog-bearing headers of machine-generated `chore(release):` commits,
-            # so the hooks have to be off for the rest of this job.
+            # `prepare` installed the vis hooks during install; they must not run on the
+            # machine-made tag and release-commit pushes for the rest of this job.
             - "name": "Disable git hooks for release commits"
               "run": "git config core.hooksPath /dev/null"
 
@@ -132,9 +131,12 @@
                   "GIT_COMMITTER_EMAIL": "github-actions[bot]@users.noreply.github.com"
               "run": "pnpm exec multi-semantic-release"
 
-            # The release bumps every package.json, but @semantic-release/git stages only
-            # per-package assets — the root pnpm-lock.yaml drifts, and a drifted lockfile
-            # fails `--frozen-lockfile`, blocking every later push to the branch.
+            # release.config.mjs drops @semantic-release/git, so the packages only tag and publish
+            # and their bumps are pushed here as ONE commit: each push to the branch rebuilds every
+            # merge-queue group, and a commit per package re-ran full CI ~40 times per release.
+            #
+            # The tags stay on the checked-out commit, which is already on the branch, so a lost
+            # push or a killed job can never leave a tag that `git tag --merged` misses (#1054).
             #
             # Retried against a re-fetched tip because the branch moves underneath the job:
             # a release takes ~15 minutes, and a PR merged in that window makes a single
@@ -142,8 +144,8 @@
             # lockfile matches whatever else landed meanwhile.
             #
             # `!cancelled()`, not `success()`: a release that failed partway still pushed the
-            # commits it completed, so the branch needs the sync more then, not less.
-            - "name": "Sync pnpm-lock.yaml with released manifests"
+            # tags it completed, so their bumps need to land more then, not less.
+            - "name": "Push the release commit"
               "if": "!cancelled()"
               "shell": "bash"
               # --ignore-scripts keeps postinstall away from the release token. hooksPath is
@@ -151,12 +153,59 @@
               # an earlier step failed.
               "env":
                   "BRANCH": "${{ github.ref_name }}"
+                  "GIT_AUTHOR_NAME": "github-actions-shell"
+                  "GIT_AUTHOR_EMAIL": "github-actions[bot]@users.noreply.github.com"
+                  "GIT_COMMITTER_NAME": "github-actions-shell"
+                  "GIT_COMMITTER_EMAIL": "github-actions[bot]@users.noreply.github.com"
               "run": |
                   set -euo pipefail
+
+                  git config core.hooksPath /dev/null
+
+                  released=()
+                  while IFS= read -r releaserc; do
+                      dir="$(dirname "${releaserc}")"
+
+                      # clean-package-json restores the manifest only on success; a publish that
+                      # failed after tagging leaves the stripped one beside this backup.
+                      if [[ -f "${dir}/package.json.back" ]]; then
+                          mv "${dir}/package.json.back" "${dir}/package.json"
+                      fi
+
+                      tag="$(jq -r '"\(.name)@\(.version)"' "${dir}/package.json")"
+
+                      # Only a bump whose tag was pushed: a package that failed before tagging
+                      # is released again from scratch by the next run.
+                      if git diff --quiet -- "${dir}/package.json" || ! git rev-parse --quiet --verify "refs/tags/${tag}" > /dev/null; then
+                          continue
+                      fi
+
+                      git add -- "${dir}/package.json" "${dir}/CHANGELOG.md"
+                      released+=("${tag}")
+                  done < <(git ls-files '*.releaserc.json')
+
+                  release_commit=""
+                  if (( ${#released[@]} > 0 )); then
+                      # No release notes in the body: this commit falls inside every released
+                      # package's next range, where a quoted `BREAKING CHANGE:` would count.
+                      git commit --quiet \
+                          --message "chore(release): publish ${#released[@]} package(s) [skip ci]" \
+                          --message "$(printf '%s\n' "${released[@]}")"
+                      release_commit="$(git rev-parse HEAD)"
+
+                      # Saved for the artifact below: if nothing lands, this commit dies with the
+                      # runner and the run's changelogs with it (a re-run sees the tags, releases nothing).
+                      git format-patch -1 --stdout "${release_commit}" > "${RUNNER_TEMP}/release-commit.patch"
+                  fi
 
                   for attempt in 1 2 3 4 5; do
                       git fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
                       git reset --hard "origin/${BRANCH}"
+
+                      if [[ -n "${release_commit}" ]] && ! git cherry-pick "${release_commit}"; then
+                          echo "::error::The release commit conflicts with ${BRANCH}. Its tags are pushed; 'git am' the release-commit artifact by hand, then refresh pnpm-lock.yaml."
+                          exit 1
+                      fi
 
                       pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts
 
@@ -168,20 +217,22 @@
                           exit 1
                       fi
 
-                      if git diff --quiet -- pnpm-lock.yaml; then
-                          echo "pnpm-lock.yaml already matches the manifests on ${BRANCH}."
+                      if ! git diff --quiet -- pnpm-lock.yaml; then
+                          git add -- pnpm-lock.yaml
+
+                          if [[ -n "${release_commit}" ]]; then
+                              git commit --quiet --amend --no-edit
+                          else
+                              git commit --quiet --message "chore(deps): sync pnpm-lock.yaml with released manifests [skip ci]"
+                          fi
+                      elif [[ -z "${release_commit}" ]]; then
+                          echo "Nothing released and pnpm-lock.yaml already matches the manifests on ${BRANCH}."
                           exit 0
                       fi
 
-                      git -c core.hooksPath=/dev/null \
-                          -c "user.name=github-actions-shell" \
-                          -c "user.email=github-actions[bot]@users.noreply.github.com" \
-                          commit \
-                          --message "chore(deps): sync pnpm-lock.yaml with released manifests [skip ci]" \
-                          -- pnpm-lock.yaml
-
                       if git push origin "HEAD:refs/heads/${BRANCH}"; then
-                          echo "Pushed the refreshed pnpm-lock.yaml on attempt ${attempt}."
+                          rm -f "${RUNNER_TEMP}/release-commit.patch"
+                          echo "Pushed the release commit on attempt ${attempt}."
                           exit 0
                       fi
 
@@ -189,8 +240,16 @@
                       sleep "$((attempt * 5))"
                   done
 
-                  echo "::error::Could not push the refreshed pnpm-lock.yaml after 5 attempts. Every frozen-lockfile install on ${BRANCH} will fail until someone runs 'pnpm install --lockfile-only --no-frozen-lockfile' and pushes the result."
+                  echo "::error::Could not push the release commit after 5 attempts. Its tags are pushed; 'git am' the release-commit artifact (if any) by hand, run 'pnpm install --lockfile-only --no-frozen-lockfile' and push."
                   exit 1
+
+            - "name": "Upload the unpushed release commit"
+              "if": "failure()"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "release-commit"
+                  "path": "${{ runner.temp }}/release-commit.patch"
+                  "if-no-files-found": "ignore"
 
             # Every commit this job pushes carries `[skip ci]`, so GitHub dispatches no
             # workflows for them and CodSpeed records no benchmark run at the new head.
