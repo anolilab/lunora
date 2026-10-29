@@ -68,4 +68,15 @@ describe("presence registry item — schema drift on upgrade", () => {
         expect(changes).toContainEqual(expect.objectContaining({ severity: "safe", type: "addedOptionalField" }));
         expect(changes.filter((change) => change.type === "addedRequiredField")).toStrictEqual([]);
     });
+
+    it("expires rows through the table TTL every shard's alarm runs, at the read-time cutoff", () => {
+        expect.assertions(1);
+
+        // `sweep` runs on whichever shard dispatches it, and a cron only reaches the
+        // root one; an organization's rooms live in its own shard. The alarm sweep
+        // codegen derives from `.ttl()` is what runs in each of them.
+        const ttlMs = Number(/PRESENCE_TTL_MS = ([\d_]+);/u.exec(itemSchema)?.[1]?.replaceAll("_", ""));
+
+        expect(snapshotOf(itemSchema).tables["presence_present"]?.ttl).toStrictEqual({ after: ttlMs, field: "lastSeen" });
+    });
 });

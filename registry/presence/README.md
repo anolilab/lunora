@@ -2,7 +2,7 @@
 
 Collaborative-awareness presence for Lunora — the "who's here" + cursors primitive (Convex [`@convex-dev/presence`](https://www.npmjs.com/package/@convex-dev/presence) parity). A room (a document, board, or channel) and the set of users/sessions currently looking at it, each carrying an optional awareness `data` blob (cursor, selection, name, color…).
 
-Built entirely from primitives Lunora already has — a live-query table plus a read-time TTL filter — so there's no new package and no Durable-Object-level support to enable.
+Built entirely from primitives Lunora already has — a live-query table, a read-time TTL filter and a table `.ttl()` — so there's no new package to install.
 
 ## Install
 
@@ -28,7 +28,7 @@ The functions surface in the generated `api` as `presence/heartbeat`, `presence/
 
 - **heartbeat** (mutation) upserts the caller's row for `(tenant, roomId, sessionId)` and stamps `lastSeen = now`. Re-heartbeats _patch_ the existing row, so subscribers receive a single-row delta rather than an insert/delete churn.
 - **listPresent** (query) returns the non-expired members of the caller's room, newest first. It filters `lastSeen > now - PRESENCE_TTL_MS` at read time, so a client that stops heart-beating silently drops out — **no reaper needed**.
-- **sweep** (internal mutation) hard-deletes expired rows to reclaim storage. It's _internal_ (server-only) so clients can't trigger bulk deletes; wire it to a cron or `runAfter` if your tables grow.
+- **sweep** (internal mutation) hard-deletes expired rows to reclaim storage. It's _internal_ (server-only) so clients can't trigger bulk deletes; the table's `.ttl()` already deletes expired rows in every shard, so it is an on-demand pass (see [Expired rows](#expired-rows)).
 
 ## Rooms are scoped to the caller's tenant
 
@@ -40,7 +40,7 @@ With `@lunora/auth`, the built-in identity carries `orgId` whenever the organiza
 
 To scope by something else (a team, a workspace), change `presenceTenant` — it is the one place the policy lives. Read the tenant from the identity, never from `args`: a tenant the client chooses is no boundary.
 
-Tune the time-to-live by editing `PRESENCE_TTL_MS` in `lunora/presence/schema.ts` (default 30s). Keep your client heartbeat cadence well under it.
+Tune the time-to-live by editing `PRESENCE_TTL_MS` in `lunora/presence/schema.ts` (default 30s), and the `.ttl()` `after` beside it to match. Keep your client heartbeat cadence well under it.
 
 ## Use it from React
 
@@ -72,9 +72,11 @@ function Room({ roomId }: { roomId: string }) {
 
 `setData(next)` replaces the awareness blob sent with subsequent heartbeats (and heartbeats once immediately) — use it to publish a moving cursor or a changed selection. `sessionId` defaults to one row per tab; pass your own to dedupe across tabs by user.
 
-## Sweep on a schedule (optional)
+## Expired rows
 
-`listPresent` never returns stale rows, so sweeping is purely about reclaiming storage. To run it, schedule the internal mutation from a cron. Called without arguments it deletes expired rows across every tenant and room — it is server-only, so crossing tenants is safe — up to 500 per run; a larger backlog drains over the following runs:
+`listPresent` never returns stale rows, so deleting them is purely about reclaiming storage, and the table does it on its own: `.ttl("lastSeen", { after: 30_000 })` in `lunora/presence/schema.ts` has every Durable Object's alarm delete its own expired rows. That matters in a sharded app — an organization's rooms live in its own shard, and nothing else reaches all of them. Keep that `after` equal to `PRESENCE_TTL_MS` when you change the TTL; codegen reads the literal, not the constant.
+
+The internal `sweep` mutation is an on-demand pass over **the shard it runs on**. Without arguments it deletes up to 500 expired rows across every tenant in that shard; with both `tenantId` (`""` for the app-wide tenant) and `roomId` it deletes that one room's. A cron dispatches to the root shard, so a scheduled `sweep` cleans only rooms that live there:
 
 ```ts
 // lunora/crons.ts
@@ -89,13 +91,11 @@ crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, {});
 export default crons;
 ```
 
-To sweep a single room instead, pass both its tenant (`""` for the app-wide tenant, otherwise the organization id) and its `roomId`: `{ roomId: "lobby", tenantId: "org_123" }`.
-
 ### Upgrading from untenanted rooms
 
-Rows written before rooms were tenant-scoped have no `tenantId` — which is why the column is optional. Every heartbeat, `listPresent` and join-time cleanup looks rows up by tenant, so those rows are invisible to them: members re-appear with their next heartbeat as new rows, and the old ones sit in storage. The next argument-less `sweep` reclaims them once they are past the TTL, so schedule one (or run it once) after upgrading.
+Rows written before rooms were tenant-scoped have no `tenantId` — which is why the column is optional. Every heartbeat, `listPresent` and join-time cleanup looks rows up by tenant, so those rows are invisible to them: members re-appear with their next heartbeat as new rows, and the old ones sit in storage. The table's `.ttl()` alarm deletes them once they are past the TTL, in every shard.
 
-The upgrade replaces the `byRoomSession` index with `byTenantRoomSession`, and the deploy's schema-drift gate reports a removed index as breaking: it cannot know that the only query using it was this item's own code, which the upgrade also replaced. No data migration covers that, so accept the new shape once — `lunora prepare --update-schema-baseline`, or `--allow-schema-drift` on that one `lunora deploy`.
+The deploy's schema-drift gate reports two breaking changes for this upgrade. The `byRoomSession` index is replaced by `byTenantRoomSession`, and the gate cannot know that the only query using it was this item's own code, which the upgrade also replaced. The new `.ttl()` deletes every row already past the cutoff on its first alarm, which for presence only enforces the expiry `listPresent` already applies at read time — so there is nothing to back-fill. Accept the new shape once: `lunora prepare --update-schema-baseline`, or `--allow-schema-drift` on that one `lunora deploy`.
 
 ## What you own
 

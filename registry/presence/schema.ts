@@ -5,8 +5,8 @@
  * room (a document, a board, a channel) and the set of users/sessions currently
  * looking at it, each carrying an optional `data` awareness blob (cursor,
  * selection, name, color…). Convex ships this as `@convex-dev/presence`; here
- * it's built from primitives Lunora already has — a live-query table plus a
- * read-time TTL filter, no Durable-Object-level support.
+ * it's built from primitives Lunora already has — a live-query table, a
+ * read-time TTL filter, and a table `.ttl()` that deletes expired rows.
  *
  * This file is YOURS to own and edit. `lunora add` splices a managed
  * `.extend(presence.extension)` into `lunora/schema.ts`, so the `present` table
@@ -33,6 +33,10 @@
  *   - `byLastSeen` — drives the cross-tenant `sweep`. It reads expired rows by
  *     age alone, which also reaches rows written before `tenantId` existed:
  *     every tenant-prefixed lookup misses those.
+ *
+ * Expiry: `.ttl("lastSeen", …)` has each Durable Object's alarm delete its own
+ * expired rows. That is what reaches every shard — an organization's rooms live
+ * in its shard, while a cron-dispatched `sweep` runs only on the root one.
  */
 import { definePlugin, defineSchemaExtension, defineTable, v } from "@lunora/server";
 
@@ -76,7 +80,10 @@ export const presence = definePlugin("presence", {
                 // The `(tenantId, roomId)` prefix also covers the per-room
                 // `listPresent`/`sweep` scans — a separate room index would be redundant.
                 .index("byTenantRoomSession", ["tenantId", "roomId", "sessionId"])
-                .index("byLastSeen", ["lastSeen"]),
+                .index("byLastSeen", ["lastSeen"])
+                // Keep `after` equal to PRESENCE_TTL_MS, written out: codegen reads this
+                // literal to build the shard's alarm sweep, and does not resolve a constant.
+                .ttl("lastSeen", { after: 30_000 }),
         },
     }),
 });

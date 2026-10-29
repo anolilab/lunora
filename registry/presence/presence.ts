@@ -20,12 +20,11 @@
  *     heartbeat first. Subscribe to it for a reactive "who's here" list; the TTL
  *     filter ({@link PRESENCE_TTL_MS}) drops members that stopped heart-beating,
  *     so no client-side reaping is needed.
- *   - **sweep** (internal mutation) — hard-delete expired rows, across every tenant
- *     by default or for one `(tenantId, roomId)` pair. Stale rows already vanish
- *     from `listPresent` via the read-time filter; this only reclaims storage — and
- *     a joining session already does that for its own room. It's *internal*
- *     (server-only) so a client can't trigger bulk deletes — wire it to a cron to
- *     also reclaim rooms nobody joins.
+ *   - **sweep** (internal mutation) — hard-delete expired rows in the shard it runs
+ *     on, across every tenant by default or for one `(tenantId, roomId)` pair. Stale
+ *     rows already vanish from `listPresent` via the read-time filter, and the
+ *     table's `.ttl()` alarm deletes them in every shard; this is an on-demand pass
+ *     on top. It's *internal* (server-only) so a client can't trigger bulk deletes.
  *
  * The client half is `usePresence` in `@lunora/react`, which calls `heartbeat`
  * on an interval and subscribes to `listPresent`.
@@ -243,9 +242,10 @@ export const listPresent = query.input({ roomId: v.string().max(256) }).query(as
 });
 
 /**
- * Hard-delete expired rows. Without arguments it deletes up to
- * {@link SWEEP_BATCH} of them across every tenant and room — schedule it from a
- * cron. Being internal (server-only), it may cross tenants. That path scans by
+ * Hard-delete expired rows in the shard this runs on — a cron dispatches to the
+ * root shard only, so organization shards rely on the table's `.ttl()` alarm.
+ * Without arguments it deletes up to {@link SWEEP_BATCH} of them across every
+ * tenant and room; being internal (server-only), it may cross tenants. That path scans by
  * `lastSeen` alone, so it also reclaims rows written before rooms were
  * tenant-scoped, which no `(tenantId, roomId)` lookup can reach. Pass both
  * `tenantId` (`""` for the app-wide tenant) and `roomId` to sweep just that room.
