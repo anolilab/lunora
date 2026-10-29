@@ -214,6 +214,8 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
             input: input.prompt,
             threadKey: childThreadKey,
             ...(context.owner === undefined ? {} : { owner: context.owner }),
+            // The child works for the same tenant, so its tools read the parent's shard.
+            ...(context.shardKey === undefined ? {} : { shardKey: context.shardKey }),
         };
 
         let instance: AgentWorkflowInstanceLike;

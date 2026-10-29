@@ -581,7 +581,7 @@ const emitAgentFragments = (
 
     return {
         build: `
-            const agents = createAgentContext(env, LUNORA_AGENTS, { exports: this.state.exports });
+            const agents = createAgentContext(env, LUNORA_AGENTS, { exports: this.state.exports, shardKey: this.currentShardKey() });
 `,
         // `agentSecrets` is the shard's secret-value store, woven only when the target can
         // hold one and the app imports `requestSecretTool`. Left off otherwise, so the

@@ -420,7 +420,8 @@ describe("emit (agents)", () => {
 
         expect(shard).toContain('import { createAgentContext } from "@lunora/agent";');
         expect(shard).toContain('{ className: "SupportAgentWorkflow", exportName: "support" },');
-        expect(shard).toContain("const agents = createAgentContext(env, LUNORA_AGENTS, { exports: this.state.exports });");
+        // The run carries the starting shard, so its tools reach that tenant's `.shardBy` rows.
+        expect(shard).toContain("const agents = createAgentContext(env, LUNORA_AGENTS, { exports: this.state.exports, shardKey: this.currentShardKey() });");
         expect(shard).toContain("agents,");
     });
 

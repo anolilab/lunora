@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import type { FlexibleSchema } from "ai";
 
+import appCallOptions from "./app-call-options";
 import { toFunctionReference } from "./paths";
 import type { AgentFunctionReference, AgentToolDefinition } from "./types";
 
@@ -69,7 +70,8 @@ const functionTool = <Input extends Record<string, unknown> = Record<string, unk
         description: options.description,
         // `idempotencyKey` pinned LAST so out-of-schema model input can never
         // override the call's own durable-step identity.
-        execute: (input, context) => context.run(target, { ...input, idempotencyKey: context.idempotencyKey }) as Promise<Output>,
+        execute: (input, context) =>
+            context.run(target, { ...input, idempotencyKey: context.idempotencyKey }, appCallOptions(context.shardKey)) as Promise<Output>,
         inputSchema: options.inputSchema,
         isLunoraAgentTool: true,
     };

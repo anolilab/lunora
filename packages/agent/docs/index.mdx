@@ -587,6 +587,20 @@ tools: {
 }
 ```
 
+### Sharded apps
+
+A run is tied to the shard of the mutation or action that started it
+(`ctx.agents.<name>.run(...)`, or a client's `agents:agentRun` call on that shard).
+`functionTool` targets and memory sources (`memory.source`, agentic `searchMemory` /
+`readMemory`) dispatch to that shard, so a tool over a `.shardBy("organizationId")`
+table sees the tenant's rows. A child started by `agentAsTool` inherits it. The
+agent's own thread, state and secrets stay on the default shard, where the client
+hooks subscribe. A hand-written `defineAgentTool` calls the default shard unless it
+passes the run's shard: `run(api.orders.byId, args, { shardKey: context.shardKey })`.
+
+Runs started outside `ctx.agents` (a scheduled job, inbound email, a channel) carry no
+shard, so their tools use the default shard.
+
 ## Sandbox tools (batteries-included browser + containers + filesystem)
 
 These tools give an agent a **headless browser**, a **sandboxed container**, and
