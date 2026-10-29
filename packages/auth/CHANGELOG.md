@@ -1,3 +1,32 @@
+## @lunora/auth [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.243...@lunora/auth@1.0.0-alpha.244) (2026-10-29)
+
+### Bug Fixes
+
+* **auth:** keep the session and identity in step with org membership ([#1417](https://github.com/anolilab/lunora/issues/1417)) ([d8dc0a5](https://github.com/anolilab/lunora/commit/d8dc0a57ebfb2c5dfa74271614e0109063984e60))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.427
+
+## @lunora/auth [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.242...@lunora/auth@1.0.0-alpha.243) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.426
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.253
+* **@lunora/server:** upgraded to 1.0.0-alpha.251
+
+## @lunora/auth [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.241...@lunora/auth@1.0.0-alpha.242) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.425
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.252
+* **@lunora/server:** upgraded to 1.0.0-alpha.250
+
 ## @lunora/auth [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.240...@lunora/auth@1.0.0-alpha.241) (2026-10-29)
 
 

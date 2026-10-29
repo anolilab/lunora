@@ -120,6 +120,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
             auth: { getIdentity: async () => null, userId: null },
             newId: () => "test-id",
             random: () => 0.5,
+            shardKey: "__root__",
             db: {} as QueryContext["db"],
             log: {} as QueryContext["log"],
             metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },

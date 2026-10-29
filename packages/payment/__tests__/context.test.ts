@@ -68,7 +68,7 @@ const fakeAdapter: PaymentAdapter = {
         throw new Error("not used");
     },
     cancelSubscription: async () => subscription("user_1"),
-    capabilities: { merchantOfRecord: false, portal: true, usageMetering: true },
+    capabilities: { checkoutExpiry: false, merchantOfRecord: false, portal: true, usageMetering: true },
     capturePayment: async () => {
         throw new Error("not used");
     },

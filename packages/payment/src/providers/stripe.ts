@@ -437,7 +437,7 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
             return subscriptionFromStripe(subscription);
         },
 
-        capabilities: { merchantOfRecord: false, portal: true, usageMetering: true },
+        capabilities: { checkoutExpiry: true, merchantOfRecord: false, portal: true, usageMetering: true },
 
         capturePayment: async (input: CaptureInput) => {
             const intent = await client.paymentIntents.capture(
@@ -455,6 +455,7 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                     cancel_url: input.cancelUrl,
                     client_reference_id: input.referenceId,
                     customer: input.customerId,
+                    expires_at: input.expiresAt === undefined ? undefined : Math.floor(input.expiresAt / 1000),
                     line_items: [{ price: input.priceId, quantity: input.quantity ?? 1 }],
                     // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
                     metadata: { ...input.metadata, referenceId: input.referenceId },

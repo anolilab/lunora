@@ -102,6 +102,12 @@ These are present regardless of kind:
   gets the same values. Without a key, and in queries and actions, it is
   `Math.random()`, which a replay does not reproduce. The values are derived, not
   random: use `crypto.getRandomValues` for a token or secret.
+- **`ctx.shardKey`**: the shard the function is running on, the key the caller
+  routed to, or `"__root__"` when it named none. The caller picks the shard, and
+  `authorizeShard` only decides whether it may enter it, not which functions run
+  there. A function whose rows belong on one shard checks this against what it
+  derives from the identity, for example
+  `ctx.shardKey === identity.activeOrganizationId`.
 
 `ctx.origin` is on mutations and actions only: the origin
 (`scheme://host[:port]`) the request behind the dispatch reached the worker on,

@@ -348,7 +348,7 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
             return constructedSubscription(customerId, productId, "canceled", false);
         },
 
-        capabilities: { merchantOfRecord: false, portal: true, usageMetering: true },
+        capabilities: { checkoutExpiry: false, merchantOfRecord: false, portal: true, usageMetering: true },
 
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),
 

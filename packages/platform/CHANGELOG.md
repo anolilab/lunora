@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.75...@lunora/platform@1.0.0-alpha.76) (2026-10-29)
+
+### Features
+
+* **saas-ui,templates:** add the composed SaaS kit ([#761](https://github.com/anolilab/lunora/issues/761)) ([35f662d](https://github.com/anolilab/lunora/commit/35f662d24e5992e606a86f989f55bda210dfdd11))
+
 ## @lunora/platform [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.74...@lunora/platform@1.0.0-alpha.75) (2026-10-25)
 
 ### Bug Fixes
