@@ -20,7 +20,7 @@
             "files": {
                 "lunora/saas-ui/core/activity.ts": "c873117e6e2cf7bd338e2b57805a0b2c162ac42cd7b58d5ccdf16ca83e01171b",
                 "lunora/saas-ui/core/admin-organizations.ts": "9ac5e994f45e93665254c3905f8b7d3b369088a98ff2f9fc3d9ea1134b073d6a",
-                "lunora/saas-ui/core/admin-subscriptions.ts": "88e9632da980f6cf122f57f81df82dd3c3eee82738cedac29426b3da26cf113e",
+                "lunora/saas-ui/core/admin-subscriptions.ts": "ca3265bbfcea30f66dfe6e9a4f7c0d538deacbb1f717efed662be8d8200cf56d",
                 "lunora/saas-ui/core/admin-users.ts": "66ab7e0007679b5f3770acd6abd222c6b4ad4c2f9d2d236ef86db19307d43f54",
                 "lunora/saas-ui/core/billing.ts": "d560e8ec6ea1790975abb6a0b349907b3030b41cf6596f4c8a929a306bf15045",
                 "lunora/saas-ui/core/create-form-controller.ts": "67028dc91afbad30def72bef6150c57d833680267e16c4c0446eefb2a652122c",

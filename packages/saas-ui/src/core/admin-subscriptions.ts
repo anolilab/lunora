@@ -75,8 +75,13 @@ const stateRank = (state: string): number => {
 /** The plan a subscription bills, whatever its state — unlike `currentPlan`, which only answers for an entitling one. */
 const planName = (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike): string => {
     const billed = new Set(subscription.priceIds ?? [subscription.priceId]);
+    // The primary price first: matched against the billed set alone, the catalog's
+    // order would decide, and an add-on listed before its base plan would name the row.
+    const plan =
+        plans.find((candidate) => candidate.priceId === subscription.priceId) ??
+        plans.find((candidate) => candidate.priceId !== undefined && billed.has(candidate.priceId));
 
-    return plans.find((plan) => plan.priceId !== undefined && billed.has(plan.priceId))?.name ?? subscription.priceId;
+    return plan?.name ?? subscription.priceId;
 };
 
 /** A subscription's identity: the payment store keys it by provider and provider id together. */

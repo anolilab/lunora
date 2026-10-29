@@ -425,6 +425,16 @@ describe("selectSubscriptions", () => {
         );
     });
 
+    it("names a multi-item subscription by its primary price, whatever the catalog's order", () => {
+        const catalog: Plan[] = [
+            { blurb: "", currency: "USD", features: [], id: "seats", name: "Extra seats", priceId: "price_seats", priceMinor: 500 },
+            ...plans,
+        ];
+        const row = subscription({ priceId: "price_pro", priceIds: ["price_pro", "price_seats"], referenceId: "org-a" });
+
+        expect(selectSubscriptions([row], organizations, catalog)[0]?.plan).toBe("Pro");
+    });
+
     it("names the plan a past-due subscription bills, which currentPlan would not", () => {
         expect(selectSubscriptions(subscriptions, organizations, plans, { search: "acme", state: "all" })[0]?.plan).toBe("Pro");
     });
