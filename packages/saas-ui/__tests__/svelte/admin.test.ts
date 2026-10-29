@@ -75,7 +75,7 @@ describe("adminUsers", () => {
 
         await expect(screen.findByText("Nobody matches that search")).resolves.toBeInTheDocument();
 
-        expect(client.listUsers).toHaveBeenLastCalledWith({ query: expect.objectContaining({ searchValue: "ada" }) });
+        expect(client.listUsers.mock.lastCall?.[0].query.searchValue).toBe("ada");
     });
 });
 
