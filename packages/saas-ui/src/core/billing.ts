@@ -132,18 +132,49 @@ const seatAlert = (usage: SeatUsage): string | undefined =>
 /** What `Gated` shows in place of a feature the plan lacks, when the caller passes no fallback. */
 const notEntitledLabel = (feature: string): string => `Your plan does not include ${feature}.`;
 
+/** ISO 4217 currencies whose minor unit is not a hundredth, for when there is no ICU data to ask. */
+const MINOR_UNIT_DIGITS: Readonly<Record<string, number>> = {
+    BHD: 3,
+    BIF: 0,
+    CLP: 0,
+    DJF: 0,
+    GNF: 0,
+    IQD: 3,
+    ISK: 0,
+    JOD: 3,
+    JPY: 0,
+    KMF: 0,
+    KRW: 0,
+    KWD: 3,
+    LYD: 3,
+    OMR: 3,
+    PYG: 0,
+    RWF: 0,
+    TND: 3,
+    UGX: 0,
+    VND: 0,
+    VUV: 0,
+    XAF: 0,
+    XOF: 0,
+    XPF: 0,
+};
+
 /**
- * Format a price for display. Falls back to a plain decimal when the runtime
- * has no ICU data (workerd builds without it), because a price rendered as
- * `12.00 USD` is worse than a crash only in the sense that nothing is.
+ * Format a price for display. `amountMinor` is in the currency's minor unit,
+ * which is a hundredth for most currencies but the whole yen or won, and a
+ * thousandth of a dinar. Falls back to a plain decimal when the runtime has no
+ * ICU data (workerd builds without it), because a price rendered as `12.00 USD`
+ * is worse than a crash only in the sense that nothing is.
  */
 const formatMoney = (amountMinor: number, currency: string, locale?: string): string => {
-    const major = amountMinor / 100;
-
     try {
-        return new Intl.NumberFormat(locale, { currency, style: "currency" }).format(major);
+        const format = new Intl.NumberFormat(locale, { currency, style: "currency" });
+
+        return format.format(amountMinor / 10 ** (format.resolvedOptions().maximumFractionDigits ?? 2));
     } catch {
-        return `${major.toFixed(2)} ${currency}`;
+        const digits = MINOR_UNIT_DIGITS[currency.toUpperCase()] ?? 2;
+
+        return `${(amountMinor / 10 ** digits).toFixed(digits)} ${currency}`;
     }
 };
 

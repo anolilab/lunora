@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Plan } from "../../src/core/billing";
 import {
@@ -180,5 +180,21 @@ describe("subscriptionNotice", () => {
 describe("formatMoney", () => {
     it("formats minor units as currency", () => {
         expect(formatMoney(2900, "USD", "en-US")).toBe("$29.00");
+    });
+
+    it("reads the minor unit from the currency, not as a hundredth", () => {
+        expect(formatMoney(2900, "JPY", "en-US")).toBe("¥2,900");
+        // ICU separates a code-style symbol with a no-break space.
+        expect(formatMoney(2900, "KWD", "en-US")).toBe("KWD\u00A02.900");
+    });
+
+    it("keeps the currency's minor unit when there is no ICU data", () => {
+        const numberFormat = vi.spyOn(Intl, "NumberFormat").mockImplementation(() => {
+            throw new RangeError("no ICU data");
+        });
+
+        expect([formatMoney(2900, "USD"), formatMoney(2900, "JPY"), formatMoney(2900, "KWD")]).toStrictEqual(["29.00 USD", "2900 JPY", "2.900 KWD"]);
+
+        numberFormat.mockRestore();
     });
 });
