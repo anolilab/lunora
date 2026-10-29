@@ -1,7 +1,7 @@
 # Plan 490 — Lazy function registry (Worker startup CPU scales with procedure count)
 
 **Baseline:** `947c714aa` (2026-10-13); email-guard prerequisite re-checked against `3e8806fd3` (2026-10-14)
-**Status:** PARTIAL — the lazy registry shipped opt-in (`--lazy-functions`, #1236/#1239). The pre-deploy smoke-load of §7 (error timing) is `lunora build|deploy`'s default for lazy builds. The §9 startup budget shipped as `pnpm run worker-startup:check` (#1165). Cheap levers shipped: the
+**Status:** PARTIAL — the lazy registry shipped opt-in (`--lazy-functions`, #1236/#1239). The pre-deploy smoke-load of §7 (error timing) is `lunora build|deploy`'s default for lazy builds, and for eager builds that load a package with `import()` (§3.2). The §9 startup budget shipped as `pnpm run worker-startup:check` (#1165). Cheap levers shipped: the
 `shard.ts` admin payloads parse on first use (#1175, §6 4(a)), and the generated `app.ts` loads
 `@lunora/auth` (through a generated `_generated/authModule.ts` that names the exports it uses) and
 the OpenAPI / OpenRPC / architecture documents with `import()` on the first event (§6 4(b)(c), §8;
@@ -205,8 +205,9 @@ bundle time (esbuild: `Could not resolve`). What moves to first use is only an S
 evaluation throws in workerd. The loaders themselves cannot be smoke-run (they are closures inside
 app-supplied thunks that need the binding or secret the thunk reads), but the module behind each is
 named by its literal specifier. So the pre-deploy smoke-load (`packages/cli/src/util/lazy-smoke-load.ts`)
-collects the package specifiers of every literal `import()` in the files the Worker reaches (the
-entry, what it imports, and the schema directory without `_generated`; `integration-modules.ts`),
+collects the package specifiers of every literal `import()` in the files the Worker loads (from the
+entry along relative imports, through `_generated` without collecting from it;
+`integration-modules.ts`),
 keeps those installed in the project, and `import()`s each one in workerd next to the lazy function
 modules. It runs in eager builds too when there is at least one. Not covered: an SDK a package loads
 for itself (the MCP SDK inside `@lunora/mcp`; its workerd suite is the check there), and every

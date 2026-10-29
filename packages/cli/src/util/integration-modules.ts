@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, extname, join, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { ts } from "ts-morph";
 
@@ -25,6 +25,9 @@ const packageName = (specifier: string): string =>
 
 /** Generated output and installed packages: never the app's own loaders. */
 const isOutsideApp = (path: string): boolean => path.split(sep).some((part) => part === "_generated" || part === "node_modules");
+
+/** Installed packages, which a relative import from the app never reaches into. */
+const isInstalled = (path: string): boolean => path.split(sep).includes("node_modules");
 
 /** The file a relative import names, the way the bundler finds it: as written, `.js` written for `.ts`, an added extension, or an index. */
 const resolveRelative = (from: string, specifier: string): string | undefined => {
@@ -103,23 +106,6 @@ const isInstalledFrom = (directory: string, name: string): boolean => {
     }
 };
 
-/** The entry and every source file of the schema directory: the files the Worker's own code lives in. */
-const rootFiles = (cwd: string, entry: string | undefined, schemaDirectory: string): string[] => {
-    const roots = entry !== undefined && existsSync(resolve(cwd, entry)) ? [resolve(cwd, entry)] : [];
-
-    try {
-        for (const file of readdirSync(join(cwd, schemaDirectory), { encoding: "utf8", recursive: true })) {
-            if (SOURCE_EXTENSIONS.includes(extname(file)) && !isOutsideApp(file)) {
-                roots.push(join(cwd, schemaDirectory, file));
-            }
-        }
-    } catch {
-        // No schema directory: the entry alone is walked.
-    }
-
-    return roots;
-};
-
 /**
  * The package specifiers the Worker loads with a literal `import()`, sorted: integration SDKs handed
  * over as loaders (`playwright: () => import("@cloudflare/playwright")`, a payment `client` or a
@@ -127,27 +113,31 @@ const rootFiles = (cwd: string, entry: string | undefined, schemaDirectory: stri
  * evaluation runs on first use, so an SDK that throws while evaluating in workerd would surface in
  * front of a user; the smoke check evaluates each one before the Worker ships.
  *
- * Walks the files the Worker can reach: the entry and the schema directory (`_generated` excluded,
- * since it imports only what codegen wrote), following relative imports. Only specifiers that
- * resolve from `cwd` are returned: the smoke entry imports them from under it, and one that does
- * not resolve there would fail the bundle rather than the module.
+ * Walks only the files the Worker loads: from the entry along relative imports, static and dynamic,
+ * through `_generated` (which is how the entry reaches the function modules) without collecting from
+ * it, since codegen's own `import()`s are not integration loaders. A file the Worker never loads
+ * (a colocated test, a seed script) is never read, so a Node-only `import()` in it cannot block a
+ * deploy. Only specifiers that resolve from `cwd` are returned: the smoke entry imports them from
+ * under it, and one that does not resolve there would fail the bundle rather than the module.
  *
  * Not covered: an SDK a package loads for itself (`@lunora/mcp` and `@modelcontextprotocol/sdk`),
  * since the app never names it.
  */
-const collectIntegrationModules = (cwd: string, entry: string | undefined, schemaDirectory: string): string[] => {
+const collectIntegrationModules = (cwd: string, entry: string | undefined): string[] => {
     const seen = new Set<string>();
     const packages = new Set<string>();
-    const queue = rootFiles(cwd, entry, schemaDirectory);
+    const queue = entry !== undefined && existsSync(resolve(cwd, entry)) ? [resolve(cwd, entry)] : [];
 
     for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
-        if (!seen.has(file) && !isOutsideApp(relative(cwd, file))) {
+        if (!seen.has(file) && !isInstalled(relative(cwd, file))) {
             seen.add(file);
 
             const { dynamicPackages, relative: imports } = scanFile(file);
 
-            for (const specifier of dynamicPackages) {
-                packages.add(specifier);
+            if (!isOutsideApp(relative(cwd, file))) {
+                for (const specifier of dynamicPackages) {
+                    packages.add(specifier);
+                }
             }
 
             queue.push(...imports.flatMap((specifier) => resolveRelative(file, specifier) ?? []));

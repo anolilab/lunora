@@ -703,7 +703,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
 
     const { main } = target;
     // Only reached from lazy output (see above); an eager build's loaders are not probed.
-    const integrationModules = collectIntegrationModules(cwd, main, schemaDirectory);
+    const integrationModules = collectIntegrationModules(cwd, main);
 
     const output: string[] = [];
     let directory: string | undefined;
