@@ -106,6 +106,20 @@ describe("watchPendingWork", () => {
         await write;
     });
 
+    it("names a notification left running", async () => {
+        expect.assertions(1);
+
+        const slow = deferred();
+        const ctx: Record<string, unknown> = { notify: { send: async () => slow.promise } };
+        const finish = watchPendingWork(ctx);
+        const sending = (ctx.notify as { send: () => Promise<string> }).send();
+
+        expect(finish()).toStrictEqual(["ctx.notify.send"]);
+
+        slow.resolve();
+        await sending;
+    });
+
     it("restores the original members so identity-keyed queues still find the facade", () => {
         expect.assertions(2);
 

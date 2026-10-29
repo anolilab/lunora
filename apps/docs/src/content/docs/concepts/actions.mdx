@@ -100,7 +100,8 @@ that already committed.
 ### Await everything you start
 
 Await every `ctx.runMutation`, `ctx.runQuery`, `ctx.runAction`, `ctx.fetch`,
-`ctx.storage.*` and `ctx.scheduler.*` call before the action returns. On
+`ctx.storage.*`, `ctx.scheduler.*`, `ctx.notify.*` and `ctx.push.*` call before
+the action returns. On
 Workers, work still running after the response is sent can be cancelled without
 an error, so a mutation that never committed looks like one that did. When an
 action returns with any of these calls still pending, Lunora logs one `warn`

@@ -15,7 +15,7 @@
 const CALL_KINDS = ["fetch", "runAction", "runMutation", "runQuery"] as const;
 
 /** `ctx` members that are objects of promise-returning methods. */
-const FACADE_KINDS = ["scheduler", "storage"] as const;
+const FACADE_KINDS = ["notify", "push", "scheduler", "storage"] as const;
 
 const isThenable = (value: unknown): value is PromiseLike<unknown> =>
     (typeof value === "object" || typeof value === "function") && value !== null && typeof (value as { then?: unknown }).then === "function";
