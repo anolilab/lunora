@@ -53,7 +53,7 @@ describe("fromNodePg", () => {
         const query = vi.fn<NodePgLike["query"]>().mockResolvedValue({ rows });
         const driver: NodePgLike = { query };
 
-        const sql = fromNodePg(driver);
+        const sql = fromNodePg(() => driver);
         const result = await sql.query<{ id: string }>("select id from t where org = $1", ["acme"]);
 
         expect(result).toBe(rows);
@@ -66,7 +66,9 @@ describe("fromNodePg", () => {
 
         const query = vi.fn<NodePgLike["query"]>().mockResolvedValue({ rows: [] });
 
-        await fromNodePg({ query }).query("select 1");
+        await fromNodePg(() => {
+            return { query };
+        }).query("select 1");
 
         expect(query).toHaveBeenCalledWith("select 1", []);
     });
@@ -80,7 +82,7 @@ describe("fromPostgresJs", () => {
         const unsafe = vi.fn<PostgresJsLike["unsafe"]>().mockResolvedValue(rows);
         const driver: PostgresJsLike = { unsafe };
 
-        const sql = fromPostgresJs(driver);
+        const sql = fromPostgresJs(() => driver);
         const result = await sql.query("select id from t");
 
         expect(result).toBe(rows);
@@ -92,11 +94,45 @@ describe("fromPostgresJs", () => {
 
         const unsafe = vi.fn<PostgresJsLike["unsafe"]>().mockResolvedValue([]);
 
-        await fromPostgresJs({ unsafe }).query("select id from t where org = $1", ["acme"]);
+        await fromPostgresJs(() => {
+            return { unsafe };
+        }).query("select id from t where org = $1", ["acme"]);
 
         // `prepare: true`: `.unsafe` defaults to unnamed statements, which Hyperdrive's
         // transaction pooling does not reliably support.
         expect(unsafe).toHaveBeenCalledWith("select id from t where org = $1", ["acme"], { prepare: true });
+    });
+
+    it("builds the driver on the first query, once, not when wrapped", async () => {
+        expect.assertions(3);
+
+        const unsafe = vi.fn<PostgresJsLike["unsafe"]>().mockResolvedValue([]);
+        const load = vi.fn<() => Promise<PostgresJsLike>>(async () => {
+            return { unsafe };
+        });
+        const sql = fromPostgresJs(load);
+
+        expect(load).not.toHaveBeenCalled();
+
+        await Promise.all([sql.query("select 1"), sql.query("select 2")]);
+
+        expect(load).toHaveBeenCalledTimes(1);
+        expect(unsafe).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects the query with the loader's own error and retries the load on the next one", async () => {
+        expect.assertions(3);
+
+        const unsafe = vi.fn<PostgresJsLike["unsafe"]>().mockResolvedValue([]);
+        const load = vi.fn<() => Promise<PostgresJsLike>>().mockRejectedValueOnce(new Error("Cannot find module 'postgres'"));
+
+        load.mockResolvedValue({ unsafe });
+
+        const sql = fromPostgresJs(load);
+
+        await expect(sql.query("select 1")).rejects.toThrow("Cannot find module 'postgres'");
+        await expect(sql.query("select 1")).resolves.toStrictEqual([]);
+        expect(load).toHaveBeenCalledTimes(2);
     });
 });
 
@@ -108,7 +144,7 @@ describe("fromMysql2", () => {
         const mysqlQuery = vi.fn<Mysql2Like["query"]>().mockResolvedValue([rows, []]);
         const connection: Mysql2Like = { query: mysqlQuery };
 
-        const sql = fromMysql2(connection);
+        const sql = fromMysql2(() => connection);
         const result = await sql.query<{ id: number }>("select id from t where org = ?", ["acme"]);
 
         expect(result).toBe(rows);
@@ -121,7 +157,9 @@ describe("fromMysql2", () => {
 
         const mysqlQuery = vi.fn<Mysql2Like["query"]>().mockResolvedValue([[], []]);
 
-        await fromMysql2({ query: mysqlQuery }).query("select 1");
+        await fromMysql2(() => {
+            return { query: mysqlQuery };
+        }).query("select 1");
 
         expect(mysqlQuery).toHaveBeenCalledWith("select 1", []);
     });
@@ -135,7 +173,9 @@ describe("fromMysql2", () => {
         const header = { affectedRows: 1, fieldCount: 0, insertId: 42, warningStatus: 0 };
         const mysqlQuery = vi.fn<Mysql2Like["query"]>().mockResolvedValue([header, undefined]);
 
-        const result = await fromMysql2({ query: mysqlQuery }).query("insert into t (id) values (?)", [42]);
+        const result = await fromMysql2(() => {
+            return { query: mysqlQuery };
+        }).query("insert into t (id) values (?)", [42]);
 
         expect(result).toStrictEqual([]);
     });
@@ -151,9 +191,21 @@ describe("adapter dbSystem stamp (read by ctx.sql auto-instrumentation)", () => 
 
         // The OTel `db.system.name` values: the span's system must be the real
         // engine, decided by which adapter built the client.
-        expect(fromPostgresJs({ unsafe }).dbSystem).toBe("postgresql");
-        expect(fromNodePg({ query }).dbSystem).toBe("postgresql");
-        expect(fromMysql2({ query: mysqlQuery }).dbSystem).toBe("mysql");
+        expect(
+            fromPostgresJs(() => {
+                return { unsafe };
+            }).dbSystem,
+        ).toBe("postgresql");
+        expect(
+            fromNodePg(() => {
+                return { query };
+            }).dbSystem,
+        ).toBe("postgresql");
+        expect(
+            fromMysql2(() => {
+                return { query: mysqlQuery };
+            }).dbSystem,
+        ).toBe("mysql");
     });
 });
 
@@ -203,7 +255,7 @@ describe.skipIf(!process.env.CI)("real Hyperdrive binding (CI-only)", () => {
                 const driver = postgres(connectionString, { max: 1 });
 
                 try {
-                    const sql = fromPostgresJs(driver);
+                    const sql = fromPostgresJs(() => driver);
 
                     await expect(sql.query("SELECT 1 + 1 AS sum")).resolves.toEqual([{ sum: 2 }]);
                     await expect(sql.query("SELECT title FROM todos WHERE id = $1", ["t1"])).resolves.toEqual([{ title: "ship hyperdrive" }]);
@@ -226,7 +278,7 @@ describe.skipIf(!process.env.CI)("real Hyperdrive binding (CI-only)", () => {
                 await client.connect();
 
                 try {
-                    const sql = fromNodePg(client);
+                    const sql = fromNodePg(() => client);
 
                     await expect(sql.query("SELECT 1 + 1 AS sum")).resolves.toEqual([{ sum: 2 }]);
                     await expect(sql.query("SELECT title FROM todos WHERE id = $1", ["t2"])).resolves.toEqual([{ title: "write tests" }]);
@@ -249,7 +301,7 @@ describe.skipIf(!process.env.CI)("real Hyperdrive binding (CI-only)", () => {
                 const pool = new Pool({ ...config, max: 1 });
 
                 try {
-                    const sql = fromNodePg(pool);
+                    const sql = fromNodePg(() => pool);
 
                     await expect(sql.query("SELECT 1 + 1 AS sum")).resolves.toEqual([{ sum: 2 }]);
                     await expect(sql.query("SELECT id FROM todos WHERE seq > $1 ORDER BY seq", [0])).resolves.toEqual([{ id: "t1" }, { id: "t2" }]);
@@ -320,7 +372,7 @@ describe.skipIf(!process.env.CI)("real Hyperdrive binding (CI-only)", () => {
                     // regresses to a parameter type that cannot accept
                     // `ExecuteValues`, the suite stops compiling here rather than
                     // passing behind an `as unknown as`.
-                    const sql = fromMysql2(connection);
+                    const sql = fromMysql2(() => connection);
 
                     await expect(sql.query("SELECT 1 + 1 AS sum")).resolves.toEqual([{ sum: 2 }]);
                     await expect(sql.query("SELECT title FROM hyperdrive_roundtrip WHERE id = ?", ["m1"])).resolves.toEqual([{ title: "ship hyperdrive" }]);

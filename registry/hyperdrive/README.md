@@ -35,10 +35,13 @@ The source file uses the `fromPostgresJs` adapter (for [`postgres.js`](https://g
 
 ```ts
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
-import postgres from "postgres";
 
 const { connectionString } = createHyperdrive(env.HYPERDRIVE);
-const sql = fromPostgresJs(postgres(connectionString, { fetch_types: false, max: 5 }));
+const sql = fromPostgresJs(async () => {
+    const { default: postgres } = await import("postgres");
+
+    return postgres(connectionString, { fetch_types: false, max: 5 });
+});
 const rows = await sql.query("select id, name from users where email = $1", [email]);
 ```
 
@@ -74,7 +77,7 @@ Lunora `action`s are public RPC. A client-callable "look a user up by email" is 
 | `fromNodePg`     | `@lunora/hyperdrive` | `pg`        |
 | `fromMysql2`     | `@lunora/hyperdrive` | `mysql2`    |
 
-All three follow the same pattern: `createHyperdrive(env.MY_BINDING)` returns `{ connectionString }`, pass that to your driver, then wrap with the adapter.
+All three follow the same pattern: `createHyperdrive(env.MY_BINDING)` returns `{ connectionString }`, and the adapter takes a loader that imports your driver and builds it from that string. The loader runs on the first query, which keeps the driver out of the Worker's startup graph.
 
 ## Action-only guardrails
 

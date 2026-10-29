@@ -51,13 +51,18 @@ the change feed, so live queries over it behave like any other.
 // src/server.ts — wire the driver once, on the app builder.
 import type { HyperdriveLike } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
-import postgres from "postgres";
 
 import { defineApp } from "../lunora/_generated/app";
 
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
-    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 })))
+    .hyperdrive((env) =>
+        fromPostgresJs(async () => {
+            const { default: postgres } = await import("postgres");
+
+            return postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 });
+        }),
+    )
     .build();
 ```
 
@@ -113,7 +118,13 @@ You supply the driver once, on the app builder, and Lunora memoizes it per bindi
 ```ts
 export default defineApp<Env>()
     .shard((env) => env.SHARD)
-    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 })))
+    .sourceClient((env, binding) =>
+        fromPostgresJs(async () => {
+            const { default: postgres } = await import("postgres");
+
+            return postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 });
+        }),
+    )
     .build();
 ```
 

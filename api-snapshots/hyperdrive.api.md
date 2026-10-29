@@ -106,19 +106,19 @@ const createHyperdrive: (binding: HyperdriveLike) => {
 ### `fromMysql2` (const)
 
 ```ts
-const fromMysql2: (connection: Mysql2Like) => SqlClient;
+const fromMysql2: (load: () => Promise<Mysql2Like> | Mysql2Like) => SqlClient;
 ```
 
 ### `fromNodePg` (const)
 
 ```ts
-const fromNodePg: (client: NodePgLike) => SqlClient;
+const fromNodePg: (load: () => Promise<NodePgLike> | NodePgLike) => SqlClient;
 ```
 
 ### `fromPostgresJs` (const)
 
 ```ts
-const fromPostgresJs: (client: PostgresJsLike) => SqlClient;
+const fromPostgresJs: (load: () => Promise<PostgresJsLike> | PostgresJsLike) => SqlClient;
 ```
 
 ### `projectSourceRow` (const)

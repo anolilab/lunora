@@ -66,7 +66,7 @@ const PROBES: Record<string, string> = {
     [ACCEPTANCE_PROBE]: `import postgres from "postgres";
 import { fromPostgresJs } from "../../src/create-hyperdrive";
 
-export const sql = fromPostgresJs(postgres("postgres://u@h/db"));
+export const sql = fromPostgresJs(() => postgres("postgres://u@h/db"));
 `,
     /** `unsafe`'s type parameter is constrained to an array: a scalar must be rejected. */
     "rejects-a-non-array-type-argument.ts": `import postgres from "postgres";
