@@ -23,19 +23,17 @@ The workflow keeps its filename because npm's trusted publishers are registered 
 
 ### What the release does on a push
 
-1. `vis release generate --from <last release tag on this channel>` writes a change file for everything since the last release (vis is changesets-style). Not `github.event.before`: a burst of merges during a release cancels every queued run but the last, and their commits would get no change file. The job checks out the branch tip and fails when the channel has no tag yet; dispatch with `base` then.
-2. `node scripts/vis-release.mjs` versions, writes changelogs, publishes to npm, tags the checked-out commit and pushes the tags. It commits nothing and never pushes the branch — `vis release ci release --auto-publish` tags its own release commit and pushes the branch once without a retry, so a branch that moved mid-run strands the tags off-branch.
-3. The push step commits every tagged bump, changelog and the re-synced lockfile as one `chore(release)` commit and pushes it, retrying against a re-fetched tip. One branch push per run, plus one tag push.
-
-A package that fails to publish is not retried by the next run (its change file was consumed, and the tags of the packages that did publish move the baseline past it): re-dispatch with `base` set to that run's baseline. The packages that did publish release once more.
+1. The job checks out the branch tip and resolves the baseline: this channel's last release tag (`git describe --match`), or the `base` dispatch input. Not `github.event.before`: a burst of merges during a release cancels every queued run but the last. A channel with no tag yet fails; dispatch with `base`.
+2. `vis release ci release --auto-publish --generate --generate-from <baseline>` writes one change file per package, versions, pushes ONE `chore(release)` commit (rebased and retried up to `pushRetries` when the branch moved), then publishes and pushes the tags. Tags point at the planned commit (`tagTarget: "source"`), so a rebased release commit never strands them. Versions an earlier run left unpublished are published first (`--publish-missing`, on by default). One branch push and one tag push per run; one concurrency group for all release branches.
+3. Released PRs and issues get a comment and the `released` label (`successWalk`).
 
 Locally: `vis release status --channel alpha` prints the pending plan, `vis release publish --dry-run` the dist-tag and versions it would publish, and `vis release doctor` checks the setup.
 
 ### Rules the release depends on
 
-- **Sibling ranges are restored after vis rewrites them.** vis's version step rewrites every specifier of a released sibling to `<operator><new version>` — `>=1.0.0-alpha.76 <2.0.0-0` becomes `>=1.0.0-alpha.252`. `scripts/vis-release-sibling-ranges.js` (a vis plugin in `release.plugins`) puts back every bounded range (`>=<floor> <ceiling>`) the new version still satisfies (an outgrown one is re-floored under its ceiling, and one past its ceiling aborts the release); exact pins and carets keep the `^<new version>` rewrite. `scripts/check-sibling-peer-ranges.js` fails the install on a sibling peer range without an upper bound, and if `updateInternalDependencies: "out-of-range"` disappears.
-- **`ignoreCommitPattern` limits releases to feat / fix / perf / revert / breaking**, as before. vis's `generate` maps every other conventional type to a patch.
-- **`release.changelog` points at `scripts/vis-changelog-format.js`.** `apps/docs` renders the public changelog feed by parsing `packages/*/CHANGELOG.md`, and needs the semantic-release heading shape plus `### Features` / `### Dependencies` sections. Neither built-in formatter emits those, so the feed would silently go quiet.
+- **`internalDependencyRanges: "preserve-satisfying"`.** Without it vis rewrites `>=1.0.0-alpha.76 <2.0.0-0` to `>=<new version>` (no ceiling). `scripts/check-sibling-peer-ranges.js` fails the install on a sibling peer range without an upper bound, and if `updateInternalDependencies: "out-of-range"` disappears.
+- **`ignoreCommitPattern` limits releases to feat / fix / perf / revert / breaking**, as before. vis maps every other conventional type to a patch; breaking commits bypass the pattern.
+- **`release.changelog` points at `scripts/vis-changelog-format.js`.** `apps/docs` parses `packages/*/CHANGELOG.md` for its changelog feed and needs the semantic-release heading shape plus `### Features` / `### Dependencies` sections.
 
 ## Internal scaffolding (`vis generate`)
 

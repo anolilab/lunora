@@ -1,7 +1,5 @@
 import { defineConfig } from "@visulima/vis/config";
 
-import { keepSiblingRanges } from "./scripts/vis-release-sibling-ranges";
-
 export default defineConfig({
     // `alpha` is the development branch, not `main`. vis only derives the
     // affected base from CI env vars for `pull_request`/`push` events — it has
@@ -166,8 +164,10 @@ export default defineConfig({
         formatChangedFiles: true,
         // vis would release every other type as a patch; breaking commits bypass this pattern.
         ignoreCommitPattern: ["^(build|chore|ci|deps|docs|refactor|security|style|test|translation)(\\([^)]*\\))?:"],
+        // Keeps promotion-safe sibling ranges (`>=1.0.0-alpha.76 <2.0.0-0`) that still admit
+        // the new version; the default rewrite drops the ceiling.
+        internalDependencyRanges: "preserve-satisfying",
         gitUser: { email: "github-actions[bot]@users.noreply.github.com", name: "github-actions-shell" },
-        plugins: [keepSiblingRanges],
         publish: {
             catalogResolution: "auto",
             cleanPackageJson: true,
@@ -176,6 +176,13 @@ export default defineConfig({
             publishArgs: ["--provenance"],
             publishStrategy: "npm-publish-tarball",
         },
+        // Rebase-and-retry the release commit when the branch moved mid-run.
+        pushRetries: 5,
+        // vis's stock walk skips prerelease channels, and every release here is one.
+        successWalk: { skipPrerelease: false },
+        // Tags go on the planned commit, which is already on the branch, so a lost or
+        // rebased release commit never strands a tag (#1054).
+        tagTarget: "source",
         // A satisfied sibling peer range does not release its consumer; asserted by
         // scripts/check-sibling-peer-ranges.js.
         updateInternalDependencies: "out-of-range",

@@ -11,16 +11,17 @@
  *
  * Two mechanisms interact here:
  *
- * 1. vis rewrites every released sibling's specifier to `<operator><new version>`;
- *    scripts/vis-release-sibling-ranges.js restores the ranges, and this guard fails
- *    on an unbounded sibling peer range in case it ever stops running. Exact pins
- *    become `^<new version>`. `updateInternalDependencies: "out-of-range"` (asserted
- *    below) keeps a satisfied range from cascading a release to its consumer.
+ * 1. vis.config.ts sets `internalDependencyRanges: "preserve-satisfying"`, so the
+ *    release keeps a sibling range that still admits the new version (vis's default
+ *    would write `>=<new version>` and drop the ceiling); this guard fails on an
+ *    unbounded sibling peer range as a backstop. Exact pins become `^<new version>`.
+ *    `updateInternalDependencies: "out-of-range"` (asserted below) keeps a satisfied
+ *    range from cascading a release to its consumer.
  *
  * 2. npm-semver prerelease matching is tuple-scoped: `>=1.0.0-alpha.24 <2.0.0-0`
  *    does NOT match a post-stable prerelease like `1.0.1-alpha.1`. If the alpha
- *    train continues past `1.0.0`, the release re-floors the range under its
- *    ceiling (`>=1.0.1-alpha.0 <2.0.0-0`), and aborts on a version past the ceiling.
+ *    train continues past `1.0.0`, the release rewrites that range, and this guard
+ *    fails the next install so a maintainer restores a bounded range.
  *
  * A second, report-only mode covers exact sibling `dependencies` pins (as
  * opposed to `peerDependencies`). Exact-pinned regular dependencies are this
@@ -100,8 +101,7 @@ for (const { dir, manifest } of manifests) {
             continue;
         }
 
-        // The shape vis's version step writes when scripts/vis-release-sibling-ranges.js
-        // did not run: the floor ratcheted to the newest version and the ceiling dropped.
+        // The shape vis writes for a range it does not preserve: floor ratcheted, ceiling dropped.
         if (specifier.startsWith(">=") && !specifier.includes("<")) {
             hasFailure = true;
 

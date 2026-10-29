@@ -10,18 +10,17 @@
         "branches": ["main", "alpha", "next", "beta"]
     "workflow_dispatch":
         "inputs":
-            # Overrides the derived baseline — e.g. to re-release a wave whose publish
-            # failed (its change file was consumed, so no later run picks it up).
+            # Overrides the derived baseline (this branch's last release tag).
             "base":
                 "description": "Release the commits AFTER this commit-ish (exclusive). Empty = since this branch's last release tag."
                 "required": false
                 "type": "string"
 
-# Never cancel an in-progress release (GitHub may still replace a run that is only
-# pending). A run cancelled after publishing but before its tag push leaves versions on
-# npm with no git tag, and those tags then have to be created by hand.
+# One group for every branch: alpha and main runs push tags and publish the same
+# packages, so they must not overlap. Never cancel a running release; a replaced
+# pending run loses nothing, the next run starts from the last release tag.
 "concurrency":
-    "group": "${{ github.workflow }}-${{ github.ref }}"
+    "group": "${{ github.workflow }}"
     "cancel-in-progress": false
 
 "permissions":
@@ -39,9 +38,9 @@
         # required-reviewer rules (configured in repo settings) can apply.
         "environment": "release"
         "permissions":
-            "contents": "write" # to publish a GitHub release + push lockfile sync
-            "issues": "write" # to comment on released issues
-            "pull-requests": "write" # to comment on released pull requests
+            "contents": "write" # to push the release commit + tags and create GitHub releases
+            "issues": "write" # successWalk: comment on + label released issues
+            "pull-requests": "write" # successWalk: comment on + label released pull requests
             "id-token": "write" # to enable OIDC for npm provenance
             "actions": "write" # to dispatch the CodSpeed baseline run below
 
@@ -55,14 +54,13 @@
               "with":
                   "egress-policy": "audit"
 
-            # Persist credentials so vis can push tags and this job the release commit.
+            # Persist credentials so vis can push the release commit and tags.
             - "name": "Git checkout" # zizmor: ignore[artipacked]
               "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
               "with":
                   "fetch-depth": 0
-                  # The branch tip, not the pushed sha: a run queued behind a release would
-                  # otherwise start without that release's bump commit, rewrite the same
-                  # manifests and changelogs, and conflict when its own commit is replayed.
+                  # The branch tip, not the pushed sha: a run queued behind a release must start
+                  # from that release's commit.
                   "ref": "${{ github.ref_name }}"
                   "token": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
               "env":
@@ -126,7 +124,8 @@
 
             # From this channel's own last tag (alpha can reach main's), not `github.event.before`:
             # cancelled queued runs would otherwise leave their commits without a change file.
-            - "name": "Derive change files"
+            - "name": "Resolve the release baseline"
+              "id": "baseline"
               "shell": "bash"
               "env":
                   "BASE": "${{ inputs.base }}"
@@ -159,12 +158,15 @@
                   fi
 
                   echo "Releasing ${from}..HEAD (baseline from ${origin}: ${ref})."
+                  echo "from=${from}" >> "${GITHUB_OUTPUT}"
 
-                  pnpm exec vis release generate --from "${from}" --name "ci-$(git rev-parse --short HEAD)"
-
-            # Tags the checked-out commit and commits nothing; the next step pushes the bumps.
+            # Writes one change file per package, versions, pushes ONE release commit (rebased
+            # and retried if the branch moved; each push rebuilds every merge-queue group), then
+            # publishes and pushes the tags. Versions a partly failed earlier run left
+            # unpublished are published first (`--publish-missing`, on by default).
             - "name": "Release"
               "env":
+                  "FROM": "${{ steps.baseline.outputs.from }}"
                   "GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
                   "GITHUB_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
                   "NPM_TOKEN": "${{ secrets.NPM_TOKEN }}"
@@ -174,109 +176,7 @@
                   "GIT_AUTHOR_EMAIL": "github-actions[bot]@users.noreply.github.com"
                   "GIT_COMMITTER_NAME": "github-actions-shell"
                   "GIT_COMMITTER_EMAIL": "github-actions[bot]@users.noreply.github.com"
-              "run": "node scripts/vis-release.mjs"
-
-            # ONE commit, because each branch push rebuilds every merge-queue group; retried against
-            # a re-fetched tip because the branch moves during the ~15-minute release.
-            # `!cancelled()`: a release that failed partway still pushed the tags it completed.
-            - "name": "Push the release commit"
-              "if": "!cancelled()"
-              "shell": "bash"
-              # --ignore-scripts keeps postinstall away from the release token. hooksPath is
-              # re-neutralised below because the step that disables the hooks is skipped when
-              # an earlier step failed.
-              "env":
-                  "BRANCH": "${{ github.ref_name }}"
-                  "GIT_AUTHOR_NAME": "github-actions-shell"
-                  "GIT_AUTHOR_EMAIL": "github-actions[bot]@users.noreply.github.com"
-                  "GIT_COMMITTER_NAME": "github-actions-shell"
-                  "GIT_COMMITTER_EMAIL": "github-actions[bot]@users.noreply.github.com"
-              "run": |
-                  set -euo pipefail
-
-                  git config core.hooksPath /dev/null
-
-                  released=()
-                  for manifest in packages/*/package.json; do
-                      dir="$(dirname "${manifest}")"
-                      tag="$(jq -r '"\(.name)@\(.version)"' "${manifest}")"
-
-                      # Only a bump whose tag exists; a failed publish needs a re-dispatch with `base`
-                      # (its change file was consumed).
-                      if git diff --quiet -- "${dir}/package.json" || ! git rev-parse --quiet --verify "refs/tags/${tag}" > /dev/null; then
-                          continue
-                      fi
-
-                      git add -- "${dir}/package.json" "${dir}/CHANGELOG.md"
-                      released+=("${tag}")
-                  done
-
-                  release_commit=""
-                  if (( ${#released[@]} > 0 )); then
-                      # No release notes in the body: this commit falls inside every released
-                      # package's next range, where a quoted `BREAKING CHANGE:` would count.
-                      git commit --quiet \
-                          --message "chore(release): publish ${#released[@]} package(s) [skip ci]" \
-                          --message "$(printf '%s\n' "${released[@]}")"
-                      release_commit="$(git rev-parse HEAD)"
-
-                      # Saved for the artifact below: if nothing lands, this commit dies with the
-                      # runner and the run's changelogs with it (a re-run sees the tags, releases nothing).
-                      git format-patch -1 --stdout "${release_commit}" > "${RUNNER_TEMP}/release-commit.patch"
-                  fi
-
-                  for attempt in 1 2 3 4 5; do
-                      git fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
-                      git reset --hard "origin/${BRANCH}"
-
-                      if [[ -n "${release_commit}" ]] && ! git cherry-pick "${release_commit}"; then
-                          echo "::error::The release commit conflicts with ${BRANCH}. Its tags are pushed; 'git am' the release-commit artifact by hand, then refresh pnpm-lock.yaml."
-                          exit 1
-                      fi
-
-                      pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts
-
-                      # Lint and Tests never run on push, so nothing else checks the tip a
-                      # release creates. Without this, a lockfile the branch cannot install
-                      # surfaces one push later, in an unrelated job's setup step.
-                      if ! pnpm install --frozen-lockfile --lockfile-only --ignore-scripts; then
-                          echo "::error::pnpm-lock.yaml still fails --frozen-lockfile after regeneration (mismatch above). Not pushing it."
-                          exit 1
-                      fi
-
-                      if ! git diff --quiet -- pnpm-lock.yaml; then
-                          git add -- pnpm-lock.yaml
-
-                          if [[ -n "${release_commit}" ]]; then
-                              git commit --quiet --amend --no-edit
-                          else
-                              git commit --quiet --message "chore(deps): sync pnpm-lock.yaml with released manifests [skip ci]"
-                          fi
-                      elif [[ -z "${release_commit}" ]]; then
-                          echo "Nothing released and pnpm-lock.yaml already matches the manifests on ${BRANCH}."
-                          exit 0
-                      fi
-
-                      if git push origin "HEAD:refs/heads/${BRANCH}"; then
-                          rm -f "${RUNNER_TEMP}/release-commit.patch"
-                          echo "Pushed the release commit on attempt ${attempt}."
-                          exit 0
-                      fi
-
-                      echo "Push rejected — ${BRANCH} moved during the release. Retrying."
-                      sleep "$((attempt * 5))"
-                  done
-
-                  echo "::error::Could not push the release commit after 5 attempts. Its tags are pushed; 'git am' the release-commit artifact (if any) by hand, run 'pnpm install --lockfile-only --no-frozen-lockfile' and push."
-                  exit 1
-
-            - "name": "Upload the unpushed release commit"
-              "if": "failure()"
-              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
-              "with":
-                  "name": "release-commit"
-                  "path": "${{ runner.temp }}/release-commit.patch"
-                  "if-no-files-found": "ignore"
+              "run": 'pnpm exec vis release ci release --auto-publish --generate --generate-from "${FROM}" --verbose'
 
             # Every commit this job pushes carries `[skip ci]`, so GitHub dispatches no
             # workflows for them and CodSpeed records no benchmark run at the new head.

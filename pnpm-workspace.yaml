@@ -358,7 +358,7 @@ catalogs:
     "@commitlint/cli": ^21.2.3
     "@commitlint/config-conventional": ^21.2.3
     cz-conventional-changelog: ^3.3.0
-    "@visulima/vis": 6.1.5
+    "@visulima/vis": 6.4.0
     "@visulima/tabular": 4.1.0
     "@visulima/error": 6.1.0
   test:
@@ -1120,15 +1120,15 @@ minimumReleaseAgeExclude:
   - '@visulima/packem@4.0.2'
   - '@visulima/rollup-plugin-css@3.0.2'
   - '@visulima/rollup-plugin-dts@2.1.0'
-  - '@visulima/vis@6.1.5'
-  - '@visulima/vis-binding-darwin-arm64@6.1.5'
-  - '@visulima/vis-binding-darwin-x64@6.1.5'
-  - '@visulima/vis-binding-linux-arm64-gnu@6.1.5'
-  - '@visulima/vis-binding-linux-arm64-musl@6.1.5'
-  - '@visulima/vis-binding-linux-x64-gnu@6.1.5'
-  - '@visulima/vis-binding-linux-x64-musl@6.1.5'
-  - '@visulima/vis-binding-win32-arm64-msvc@6.1.5'
-  - '@visulima/vis-binding-win32-x64-msvc@6.1.5'
+  - '@visulima/vis@6.4.0'
+  - '@visulima/vis-binding-darwin-arm64@6.4.0'
+  - '@visulima/vis-binding-darwin-x64@6.4.0'
+  - '@visulima/vis-binding-linux-arm64-gnu@6.4.0'
+  - '@visulima/vis-binding-linux-arm64-musl@6.4.0'
+  - '@visulima/vis-binding-linux-x64-gnu@6.4.0'
+  - '@visulima/vis-binding-linux-x64-musl@6.4.0'
+  - '@visulima/vis-binding-win32-arm64-msvc@6.4.0'
+  - '@visulima/vis-binding-win32-x64-msvc@6.4.0'
   - 'astro@6.4.6'
   - 'brace-expansion@1.1.17 || 1.1.18 || 2.1.3 || 2.1.4 || 5.0.8 || 5.0.9'
   - 'deslop-js@0.0.21'
