@@ -95,6 +95,34 @@ describe("shard admin import — `_id` conflict probe", () => {
         await expect(writer.get("notes", "shared-1")).resolves.toMatchObject({ title: "not a task" });
     });
 
+    it("prunes a delete row without the schema's onDelete cascade, so tables the import never names keep their rows", async () => {
+        expect.assertions(3);
+
+        const related: SchemaLike = {
+            tables: {
+                notes: { indexes: [], shape: { title: { kind: "string" } } },
+                tasks: {
+                    indexes: [],
+                    relationMap: { note: { field: "noteId", kind: "one", onDelete: "cascade", references: "_id", table: "notes" } },
+                    shape: { label: { kind: "string" }, noteId: { kind: "string" } },
+                },
+            },
+        };
+
+        runShardMigrations(harness.sql, related);
+
+        const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: related, sql: harness.sql });
+
+        await writer.insert("notes", { _id: "n1", title: "stale" }, { allowExplicitId: true });
+        await writer.insert("tasks", { _id: "t1", label: "kept", noteId: "n1" }, { allowExplicitId: true });
+
+        const result = await importShardRows(writer, related, { rows: [{ doc: { _id: "n1" }, op: "delete", table: "notes" }] });
+
+        expect(result).toMatchObject({ deleted: 1, errors: [] });
+        await expect(writer.get("notes", "n1")).resolves.toBeNull();
+        await expect(writer.get("tasks", "t1")).resolves.toMatchObject({ label: "kept" });
+    });
+
     it('overwrites a same-table `_id` under onConflict: "replace", keeping the row\'s `_creationTime`', async () => {
         expect.assertions(2);
 

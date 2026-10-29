@@ -186,7 +186,9 @@ effect. `--mode` chooses what happens instead:
 - `upsert` also overwrites those rows with the snapshot's copy, keeping each `_id`.
 - `replace` does what `upsert` does, then deletes the rows of the snapshot's tables
   that the snapshot lacks, so each table ends up holding exactly the snapshot's
-  rows. Tables the snapshot has no rows for are not touched.
+  rows. Tables the snapshot has no rows for are not touched, and the deletes run
+  no `onDelete` cascade, `set null` or `restrict`, so a row in such a table
+  keeps its reference to a deleted row.
 
 Every mode except `append` reads the target's rows for the snapshot's tables
 first and prints how many rows it would add, overwrite and delete per table

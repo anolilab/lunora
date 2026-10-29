@@ -202,6 +202,39 @@ describe("d1 admin export/import globals", () => {
     });
 
     describe("importGlobalRows", () => {
+        it("prunes a delete row without the schema's onDelete cascade, so tables the import never names keep their rows", async () => {
+            expect.assertions(3);
+
+            const related: SchemaLike = {
+                tables: {
+                    projects: { indexes: [], relationMap: {}, shape: { name: { kind: "string" } }, shardMode: { kind: "global" } },
+                    todos: {
+                        indexes: [],
+                        relationMap: { project: { field: "projectId", kind: "one", onDelete: "cascade", references: "_id", table: "projects" } },
+                        shape: { projectId: { kind: "string" }, title: { kind: "string" } },
+                        shardMode: { kind: "global" },
+                    },
+                },
+            };
+            const fresh = createD1Exec();
+
+            fresh.ddl(`CREATE TABLE "projects" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "name" TEXT)`);
+            fresh.ddl(`CREATE TABLE "todos" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "projectId" TEXT, "title" TEXT)`);
+
+            const relatedWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema: related });
+
+            await relatedWriter.insert("projects", { _id: "p1", name: "old" }, { allowExplicitId: true });
+            await relatedWriter.insert("todos", { _id: "t1", projectId: "p1", title: "kept" }, { allowExplicitId: true });
+
+            const result = await importGlobalRows(relatedWriter, related, { rows: [{ doc: { _id: "p1" }, op: "delete", table: "projects" }] });
+
+            expect(result).toMatchObject({ deleted: 1, errors: [] });
+            await expect(relatedWriter.get("projects", "p1")).resolves.toBeNull();
+            await expect(relatedWriter.get("todos", "t1")).resolves.toMatchObject({ title: "kept" });
+
+            fresh.close();
+        });
+
         it("inserts a batch and returns per-table counts", async () => {
             expect.assertions(3);
 

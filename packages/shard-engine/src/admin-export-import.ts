@@ -360,7 +360,9 @@ const deleteRowError = (schema: SchemaLike, row: ImportRow, line: number): Impor
 /**
  * Remove the stored row a delete row names. Hard, like the admin bulk delete: a
  * restore that left `.softDelete()` tombstones would still hold the rows it was
- * asked to remove. An `_id` already gone is `absent`, so a re-run converges.
+ * asked to remove. Without the schema's `onDelete` actions: the file says what
+ * each of its tables holds, and a cascade would change tables it never names. An
+ * `_id` already gone is `absent`, so a re-run converges.
  */
 const deleteOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row: ImportRow, line: number): Promise<RowOutcome> => {
     const envelopeError = deleteRowError(schema, row, line);
@@ -384,7 +386,7 @@ const deleteOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row:
     }
 
     try {
-        await writer.delete(row.table, id, { hard: true });
+        await writer.delete(row.table, id, { hard: true, skipOnDelete: true });
 
         return { kind: "deleted" };
     } catch (error: unknown) {

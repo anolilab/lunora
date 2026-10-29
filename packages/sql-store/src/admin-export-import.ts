@@ -453,9 +453,10 @@ type RowOutcome =
     | { kind: "skip" };
 
 /**
- * Remove the stored row a delete row names. Hard, matching the shard plane: a
- * restore that left `.softDelete()` tombstones would still hold the rows it was
- * asked to remove. An `_id` already gone is `absent`, so a re-run converges.
+ * Remove the stored row a delete row names. Hard and without `onDelete` actions,
+ * matching the shard plane: a restore that left `.softDelete()` tombstones would
+ * still hold the rows it was asked to remove, and a cascade would change tables
+ * the file never names. An `_id` already gone is `absent`, so a re-run converges.
  */
 const deleteOneRow = async (
     writer: DatabaseWriterLike,
@@ -487,7 +488,7 @@ const deleteOneRow = async (
     }
 
     try {
-        await writer.delete(table, id, { hard: true });
+        await writer.delete(table, id, { hard: true, skipOnDelete: true });
 
         return { kind: "deleted" };
     } catch (error: unknown) {

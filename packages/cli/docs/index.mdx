@@ -1380,7 +1380,10 @@ lunora import ./backup.ndjson --mode replace --dry-run   # what a full replace w
 | `require-empty` (`backup restore` default) | refused before anything is written, if any of the file's tables holds a row |                             |
 
 Only the tables the file names are compared, so `replace` never touches a table
-the file has no rows for (including an empty table in a backup). An `_id` held
+the file has no rows for (including an empty table in a backup). Its deletes
+skip the schema's `onDelete` actions for the same reason: no cascade, `set null`
+or `restrict` runs, so a row in a table the file leaves out keeps a reference to
+a row `replace` removed. An `_id` held
 by a different table is still refused. Every mode but `append` first reads the
 target's rows for those tables and prints a plan, one line per table:
 

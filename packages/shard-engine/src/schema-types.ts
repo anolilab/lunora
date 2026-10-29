@@ -818,7 +818,13 @@ export interface DatabaseWriterLike {
         | undefined
     >;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
-    delete: (table: string, id: string, options?: { hard?: boolean }) => Promise<void>;
+
+    /**
+     * `skipOnDelete` removes the row without running the schema's `onDelete` actions (cascade, set null,
+     * restrict), so no other row changes. Only a data restore uses it: its file already says what every
+     * table holds, and a cascade would reach tables the file does not name.
+     */
+    delete: (table: string, id: string, options?: { hard?: boolean; skipOnDelete?: boolean }) => Promise<void>;
 
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
 
