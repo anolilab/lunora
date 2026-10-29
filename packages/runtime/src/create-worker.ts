@@ -2953,10 +2953,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * holds the shard's single-writer gate, so it cannot read the default shard either.
      * The worker can tell, so it refuses the call before it reaches a shard.
      */
-    const assertAgentRunOnDefaultShard = (functionPath: string, shardKey: string): void => {
+    const assertAgentRunOnDefaultShard = (functionPath: string, shardKey: string | undefined): void => {
+        // `undefined` is a fan-out: it reaches every shard, never just the default one.
         if (functionPath === AGENT_RUN_FUNCTION_PATH && shardKey !== defaultShard) {
             throw new LunoraError(
-                `\`${AGENT_RUN_FUNCTION_PATH}\` runs on the default shard, where agent threads live; to run an agent's tools on shard "${shardKey}", start it from a mutation on that shard with \`ctx.agents.<name>.run\``,
+                `\`${AGENT_RUN_FUNCTION_PATH}\` runs on the default shard only, where agent threads live; to run an agent's tools on another shard, start it from a mutation on that shard with \`ctx.agents.<name>.run\``,
                 { code: "BAD_REQUEST", status: 400 },
             );
         }
@@ -4769,6 +4770,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     const authorizeRpcEnvelope = async (envelope: RpcEnvelope, identity: ResolvedIdentity | null): Promise<void> => {
+        // First, ahead of the fan-out branch below: every transport (RPC, batch, REST,
+        // `serverQuery`, auth dispatch) funnels through here, and a fan-out reaches shards
+        // a single-shard check never sees.
+        assertAgentRunOnDefaultShard(envelope.functionPath, envelope.fanOut ? undefined : (envelope.shardKey ?? defaultShard));
+
         // Reserved admin RPCs (`__lunora_admin__:*`, single-shard) are privileged
         // operator calls authorized by the shard DO's admin-bearer gate
         // (`isAdminAuthorized`), NOT by the per-tenant `authorizeShard` callback —
@@ -4793,8 +4799,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             return;
         }
-
-        assertAgentRunOnDefaultShard(envelope.functionPath, envelope.shardKey ?? defaultShard);
 
         // No per-shard gate and the caller named a non-default shard:
         // default-denied unless unauthenticated shard access is opted in.
