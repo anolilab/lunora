@@ -19,6 +19,10 @@ import { lunoraTest } from "../src/index";
  * total size — not just each value. It once bounded only the values, which let an
  * anonymous caller store about 1 MiB of awareness data per session.
  *
+ * Rooms are tenant-scoped from the identity's `orgId` claim. They were once keyed
+ * by the client's `roomId` alone, so any member of one organization could join or
+ * watch another organization's room by naming it.
+ *
  * The item imports its builders from `#lunora/_generated/server.js`, a module only
  * codegen writes, so the test bundles the item with that specifier pointed at the
  * base `@lunora/server` builders. Everything else is the shipped file.
@@ -49,7 +53,7 @@ const start = (): TestHarness => {
     return t;
 };
 
-describe("presence registry item — heartbeat payload bounds", () => {
+describe("presence registry item", () => {
     beforeAll(async () => {
         mkdirSync(outDirectory, { recursive: true });
 
@@ -136,5 +140,66 @@ export { v };`,
         await expect(t.mutation(item.heartbeat, { data: { ["k".repeat(65)]: 1 }, roomId: "room-1", sessionId: "sess-1" })).rejects.toThrow(
             /expected string length <= 64/u,
         );
+    });
+
+    describe("presence registry item — tenant scoping", () => {
+        it("keeps one organization's room invisible to another organization's member", async () => {
+            expect.assertions(3);
+
+            const t = start();
+            const ada = t.withIdentity({ orgId: "org-a", userId: "ada" });
+            const bob = t.withIdentity({ orgId: "org-b", userId: "bob" });
+            const eve = t.withIdentity({ userId: "eve" });
+
+            await ada.mutation(item.heartbeat, { data: { name: "Ada" }, roomId: "board", sessionId: "sess-ada" });
+
+            await expect(bob.query(item.listPresent, { roomId: "board" })).resolves.toStrictEqual([]);
+            // No `orgId` claim is the app-wide tenant, which holds no organization's rooms.
+            await expect(eve.query(item.listPresent, { roomId: "board" })).resolves.toStrictEqual([]);
+            await expect(ada.query(item.listPresent, { roomId: "board" })).resolves.toStrictEqual([
+                expect.objectContaining({ roomId: "board", sessionId: "sess-ada", userId: "ada" }),
+            ]);
+        });
+
+        it("files another organization's heartbeat under its own tenant, leaving the first room untouched", async () => {
+            expect.assertions(2);
+
+            const t = start();
+            const ada = t.withIdentity({ orgId: "org-a", userId: "ada" });
+            const bob = t.withIdentity({ orgId: "org-b", userId: "bob" });
+
+            await ada.mutation(item.heartbeat, { data: { name: "Ada" }, roomId: "board", sessionId: "sess-ada" });
+            // Same room name, same visible session id: lands in org-b's room, not on Ada's row.
+            await bob.mutation(item.heartbeat, { data: { name: "Bob" }, roomId: "board", sessionId: "sess-ada" });
+
+            await expect(ada.query(item.listPresent, { roomId: "board" })).resolves.toStrictEqual([
+                expect.objectContaining({ data: { name: "Ada" }, sessionId: "sess-ada", userId: "ada" }),
+            ]);
+            await expect(bob.query(item.listPresent, { roomId: "board" })).resolves.toStrictEqual([
+                expect.objectContaining({ data: { name: "Bob" }, sessionId: "sess-ada", userId: "bob" }),
+            ]);
+        });
+
+        it("reclaims only the joining tenant's expired rows, never another organization's", async () => {
+            expect.assertions(1);
+
+            const t = start();
+            const ada = t.withIdentity({ orgId: "org-a", userId: "ada" });
+
+            await t.run(async (ctx) => {
+                await ctx.db.insert("presence_present", { lastSeen: 0, roomId: "board", sessionId: "gone-a", tenantId: "org-a" });
+                await ctx.db.insert("presence_present", { lastSeen: 0, roomId: "board", sessionId: "gone-b", tenantId: "org-b" });
+            });
+
+            await ada.mutation(item.heartbeat, { roomId: "board", sessionId: "sess-ada" });
+
+            const left = await t.run(async (ctx) => {
+                const rows = await ctx.db.query("presence_present").collect();
+
+                return rows.map((row) => `${String(row["tenantId"])}/${String(row["sessionId"])}`).toSorted((a, b) => a.localeCompare(b));
+            });
+
+            expect(left).toStrictEqual(["org-a/sess-ada", "org-b/gone-b"]);
+        });
     });
 });

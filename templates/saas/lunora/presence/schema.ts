@@ -14,17 +14,22 @@
  * auto-prefixed with the plugin key — write the bare name here). The handlers in
  * `./index.ts` read/write that prefixed name via {@link PRESENCE_TABLE}.
  *
+ * Tenancy: every row carries the `tenantId` the handlers derive server-side
+ * from the caller's identity (see `presenceTenant` in `./index.ts`), never from
+ * `args`. A client names only the room; the same room name in two tenants is
+ * two separate rooms, and no argument reaches the other one.
+ *
  * Indexes:
  *
- *   - `byRoomSession` — drives the heartbeat upsert lookup (one row per
- *     `(roomId, sessionId)`), so re-heartbeats patch instead of churning.
- *     `sessionId` is client-supplied and `listPresent` exposes it to every room
- *     subscriber, so it is NOT an ownership key on its own — the heartbeat
- *     handler additionally rejects a patch whose existing row belongs to a
- *     different `userId`, so a participant can't reuse another visible
- *     `sessionId` to hijack their presence row. Its leading `roomId` prefix also
- *     serves the `listPresent` / `sweep` per-room scans, so no separate
- *     `byRoom` index is needed (a standalone one would be a redundant prefix).
+ *   - `byTenantRoomSession` — drives the heartbeat upsert lookup (one row per
+ *     `(tenantId, roomId, sessionId)`), so re-heartbeats patch instead of
+ *     churning. `sessionId` is client-supplied and `listPresent` exposes it to
+ *     every room subscriber, so it is NOT an ownership key on its own — the
+ *     heartbeat handler additionally rejects a patch whose existing row belongs
+ *     to a different `userId`, so a participant can't reuse another visible
+ *     `sessionId` to hijack their presence row. Its `(tenantId, roomId)` prefix
+ *     also serves the `listPresent` / `sweep` per-room scans, so no separate
+ *     room index is needed (a standalone one would be a redundant prefix).
  */
 import { definePlugin, defineSchemaExtension, defineTable, v } from "lunorash/server";
 
@@ -57,11 +62,14 @@ export const presence = definePlugin("presence", {
                 lastSeen: v.number(),
                 roomId: v.string(),
                 sessionId: v.string(),
+                // A separate column, not a `tenant:room` key: concatenation lets org `a:b`
+                // + room `c` collide with org `a` + room `b:c`. `""` is the app-wide tenant.
+                tenantId: v.string(),
                 userId: v.optional(v.string()),
             })
-                // `byRoomSession`'s leading `roomId` also covers the per-room
-                // `listPresent`/`sweep` scans — a separate `byRoom` would be redundant.
-                .index("byRoomSession", ["roomId", "sessionId"]),
+                // The `(tenantId, roomId)` prefix also covers the per-room
+                // `listPresent`/`sweep` scans — a separate room index would be redundant.
+                .index("byTenantRoomSession", ["tenantId", "roomId", "sessionId"]),
         },
     }),
 });

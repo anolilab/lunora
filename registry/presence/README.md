@@ -26,9 +26,27 @@ The functions surface in the generated `api` as `presence/heartbeat`, `presence/
 
 ## How it works
 
-- **heartbeat** (mutation) upserts the caller's row for `(roomId, sessionId)` and stamps `lastSeen = now`. Re-heartbeats _patch_ the existing row, so subscribers receive a single-row delta rather than an insert/delete churn.
-- **listPresent** (query) returns the non-expired members of a room, newest first. It filters `lastSeen > now - PRESENCE_TTL_MS` at read time, so a client that stops heart-beating silently drops out — **no reaper needed**.
+- **heartbeat** (mutation) upserts the caller's row for `(tenant, roomId, sessionId)` and stamps `lastSeen = now`. Re-heartbeats _patch_ the existing row, so subscribers receive a single-row delta rather than an insert/delete churn.
+- **listPresent** (query) returns the non-expired members of the caller's room, newest first. It filters `lastSeen > now - PRESENCE_TTL_MS` at read time, so a client that stops heart-beating silently drops out — **no reaper needed**.
 - **sweep** (internal mutation) hard-deletes expired rows to reclaim storage. It's _internal_ (server-only) so clients can't trigger bulk deletes; wire it to a cron or `runAfter` if your tables grow.
+
+## Rooms are scoped to the caller's tenant
+
+A client names only the room. The server files it under the tenant it derives from the caller's verified identity (`presenceTenant` in `lunora/presence/index.ts`), so `roomId: "lobby"` in organization A and in organization B are two separate rooms, and no argument reaches another tenant's. The tenant is stored in its own `tenantId` column and never returned to clients.
+
+The tenant is the identity's `orgId` claim — the one the `auth-auth0-jwt`, `auth-clerk-jwt` and `auth-workos-jwt` presets emit. Callers without one (anonymous, or an app with no organizations) share the app-wide tenant `""`, which is right for a single-tenant app and holds no organization's rooms.
+
+better-auth puts no organization on the identity by default. To scope presence by its organization plugin, forward the active organization from your `resolveIdentity`:
+
+```ts
+resolveIdentity: async (request) => {
+    const session = await auth.api.getSession({ headers: request.headers });
+
+    return session?.user.id ? { orgId: session.session.activeOrganizationId ?? undefined, userId: session.user.id } : null;
+},
+```
+
+To scope by something else (a team, a workspace), change `presenceTenant` — it is the one place the policy lives. Read the tenant from the identity, never from `args`: a tenant the client chooses is no boundary.
 
 Tune the time-to-live by editing `PRESENCE_TTL_MS` in `lunora/presence/schema.ts` (default 30s). Keep your client heartbeat cadence well under it.
 
@@ -64,7 +82,7 @@ function Room({ roomId }: { roomId: string }) {
 
 ## Sweep on a schedule (optional)
 
-`listPresent` never returns stale rows, so sweeping is purely about reclaiming storage. To run it, schedule the internal mutation from a cron:
+`listPresent` never returns stale rows, so sweeping is purely about reclaiming storage. To run it, schedule the internal mutation from a cron. It is server-only, so it takes the tenant explicitly (`""` for the app-wide tenant, otherwise the organization id):
 
 ```ts
 // lunora/crons.ts
@@ -74,11 +92,11 @@ import { internal } from "./_generated/internal";
 
 const crons = cronJobs();
 
-crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, { roomId: "lobby" });
+crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, { roomId: "lobby", tenantId: "" });
 
 export default crons;
 ```
 
 ## What you own
 
-Everything under `lunora/presence/` is copied into your repo — change the TTL, the table columns (add a `name`/`color` column instead of stuffing them in `data`), the sort order, or the functions however you like. This component is the idiomatic Lunora glue; once added, it's just your code.
+Everything under `lunora/presence/` is copied into your repo — change the TTL, the tenant policy, the table columns (add a `name`/`color` column instead of stuffing them in `data`), the sort order, or the functions however you like. This component is the idiomatic Lunora glue; once added, it's just your code.
