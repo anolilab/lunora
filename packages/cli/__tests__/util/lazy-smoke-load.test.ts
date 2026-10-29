@@ -56,7 +56,7 @@ describe(runLazySmokeLoad, () => {
             vi.fn<() => Promise<Response>>(async () => {
                 const entry = resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "");
 
-                return Response.json({ ...body, run: runIdOf(entry) });
+                return Response.json({ integrations: { checked: 0, failures: [] }, ...body, run: runIdOf(entry) });
             }),
         );
     };
@@ -86,9 +86,9 @@ describe(runLazySmokeLoad, () => {
         try {
             scaffoldProject(other);
 
-            const owners = new Map<number, { body: { checked: number; failures: unknown[] }; runId: string }>();
-            const clean = { checked: 1, failures: [] };
-            const broken = { checked: 1, failures: [{ functionPath: "posts:list", message: "boom" }] };
+            const owners = new Map<number, { body: { checked: number; failures: unknown[]; integrations: object }; runId: string }>();
+            const clean = { checked: 1, failures: [], integrations: { checked: 0, failures: [] } };
+            const broken = { checked: 1, failures: [{ functionPath: "posts:list", message: "boom" }], integrations: { checked: 0, failures: [] } };
 
             startDevProcess.mockImplementation(async (options) => {
                 if (!owners.has(options.port)) {
@@ -240,6 +240,58 @@ describe(runLazySmokeLoad, () => {
         await expect(run()).resolves.toBeUndefined();
         expect(startDevProcess).not.toHaveBeenCalled();
         expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    describe("integration modules loaded with import()", () => {
+        /** An eager project whose entry hands `stripe` to an integration through a loader, with `stripe` installed. */
+        const eagerWithLoader = (): void => {
+            writeFileSync(join(cwd, "lunora", "_generated", "functions.ts"), "export const LUNORA_FUNCTIONS = {};\n");
+            writeFileSync(join(cwd, "src", "index.ts"), 'import { payments } from "./payments.js";\n\nexport default { payments };\n');
+            writeFileSync(join(cwd, "src", "payments.ts"), 'export const payments = { client: async () => (await import("stripe")).default };\n');
+            mkdirSync(join(cwd, "node_modules", "stripe"), { recursive: true });
+            writeFileSync(join(cwd, "node_modules", "stripe", "package.json"), '{ "name": "stripe" }');
+        };
+
+        it("checks an eager build that loads an integration SDK with import(), without the lazy registry", async () => {
+            expect.assertions(3);
+
+            eagerWithLoader();
+
+            let entry = "";
+
+            startDevProcess.mockImplementation(async (options) => {
+                entry = readFileSync(resolve(options.cwd, options.args.find((argument) => argument.endsWith("entry.ts")) ?? ""), "utf8");
+
+                return { crashed: new Promise(() => {}), stop };
+            });
+            respondWith({ checked: 0, failures: [], integrations: { checked: 1, failures: [] } });
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(entry).toContain('["stripe", () => import("stripe")]');
+            expect(entry).not.toContain("loadAllFunctions");
+        });
+
+        it("blocks naming the module when an integration SDK fails to evaluate", async () => {
+            expect.assertions(2);
+
+            eagerWithLoader();
+            respondWith({ checked: 0, failures: [], integrations: { checked: 1, failures: [{ message: "process is not defined", specifier: "stripe" }] } });
+
+            const error = await run();
+
+            expect(error).toContain('import("stripe"): process is not defined');
+            expect(stop).toHaveBeenCalledWith();
+        });
+
+        it("stays quiet when the import()ed package is not installed where the smoke entry would resolve it", async () => {
+            expect.assertions(2);
+
+            eagerWithLoader();
+            rmSync(join(cwd, "node_modules"), { force: true, recursive: true });
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(startDevProcess).not.toHaveBeenCalled();
+        });
     });
 
     describe("what the smoke Worker runs", () => {

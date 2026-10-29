@@ -1166,8 +1166,10 @@ const runBeforeSpawnSteps = async (
 
 /**
  * A lazy registry defers a broken module's error to its first call, where an eager one fails the
- * upload. Evaluating every module in workerd here keeps that failure ahead of the upload. The
- * generated registry decides whether there is anything to check, so `--prebuilt` is covered too.
+ * upload, and an integration SDK handed over as a loader (`() => import("stripe")`) defers it in
+ * every build. Evaluating those modules in workerd here keeps that failure ahead of the upload. The
+ * generated registry and the app's `import()` calls decide whether there is anything to check, so
+ * `--prebuilt` is covered too.
  */
 const smokeLoadLazyModules = async (
     cwd: string,
