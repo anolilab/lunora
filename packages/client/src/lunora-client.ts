@@ -4034,9 +4034,11 @@ class LunoraClient {
         clearTimeout(conn.reconnectTimer);
         clearTimeout(conn.connectTimer);
         clearTimeout(conn.stableTimer);
+        clearTimeout(conn.revalidateTimer);
         conn.reconnectTimer = undefined;
         conn.connectTimer = undefined;
         conn.stableTimer = undefined;
+        conn.revalidateTimer = undefined;
         /* eslint-enable no-param-reassign */
     }
 
@@ -7709,6 +7711,7 @@ class LunoraClient {
 
         conn.connectionId = message.connectionId;
         conn.whisperAck = message.whisperAck === true;
+        this.armSocketRevalidation(conn, message.revalidateMs);
 
         for (const subscriptionId of this.liveSocketGrants.get(connectionKey(shardKey))?.keys() ?? []) {
             this.grantWhenJoined(shardKey, subscriptionId, message.connectionId);
@@ -8776,29 +8779,8 @@ class LunoraClient {
         for (const conn of this.connections.values()) {
             const { connectionId } = conn;
 
-            // `shard=` is kept even when empty, as on the upgrade URL: an explicit `""` names its own shard.
             if (inPlace && token !== null && fetchImpl !== undefined && conn.socket !== undefined && connectionId !== undefined && conn.retired !== true) {
-                sendControl(
-                    fetchImpl,
-                    joinUrl(this.url, conn.shardKey === undefined ? SOCKET_REAUTH_PATH : `${SOCKET_REAUTH_PATH}?shard=${encodeURIComponent(conn.shardKey)}`),
-                    JSON.stringify({ connectionId }),
-                    {
-                        authorization: `Bearer ${token}`,
-                        "content-type": "application/json",
-                    },
-                )
-                    // Only the route's own `{ ok: true }` counts: a catch-all 200 (an SPA fallback, a proxy) did not refresh anything.
-                    .then(({ text }) => (JSON.parse(text) as { ok?: unknown } | null)?.ok === true)
-                    .catch(() => false)
-                    .then((reauthenticated) => {
-                        // A newer token, or a socket that has since been replaced, is already handled by whatever replaced it.
-                        if (!reauthenticated && !this.closed && this.authToken === token && conn.connectionId === connectionId) {
-                            this.bounceShardSocket(conn);
-                        }
-
-                        return undefined;
-                    })
-                    .catch(() => undefined);
+                this.reauthenticateShardSocket(conn, connectionId, token);
             } else {
                 this.bounceShardSocket(conn);
             }
@@ -8809,6 +8791,73 @@ class LunoraClient {
         for (const bounce of this.supplementaryBounces) {
             bounce();
         }
+    }
+
+    /**
+     * Post a credential for `conn`'s socket to {@link SOCKET_REAUTH_PATH} and bounce the socket
+     * unless the server took it. `bearer` is `null` to present the cookie session alone, which
+     * the request carries on its own (`credentials: "include"`).
+     */
+    private reauthenticateShardSocket(conn: ShardConnection, connectionId: string, bearer: null | string): void {
+        const { authToken: heldToken, fetchImpl } = this;
+
+        if (fetchImpl === undefined) {
+            return;
+        }
+
+        // `shard=` is kept even when empty, as on the upgrade URL: an explicit `""` names its own shard.
+        sendControl(
+            fetchImpl,
+            joinUrl(this.url, conn.shardKey === undefined ? SOCKET_REAUTH_PATH : `${SOCKET_REAUTH_PATH}?shard=${encodeURIComponent(conn.shardKey)}`),
+            JSON.stringify({ connectionId }),
+            bearer === null ? { "content-type": "application/json" } : { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+        )
+            // Only the route's own `{ ok: true }` counts: a catch-all 200 (an SPA fallback, a proxy) did not refresh anything.
+            .then(({ text }) => (JSON.parse(text) as { ok?: unknown } | null)?.ok === true)
+            .catch(() => false)
+            .then((reauthenticated) => {
+                // A newer token, or a socket that has since been replaced, is already handled by whatever replaced it.
+                if (this.closed || this.authToken !== heldToken || conn.connectionId !== connectionId) {
+                    return undefined;
+                }
+
+                if (reauthenticated) {
+                    this.armSocketRevalidation(conn, conn.revalidateMs);
+                } else {
+                    this.bounceShardSocket(conn);
+                }
+
+                return undefined;
+            })
+            .catch(() => undefined);
+    }
+
+    /**
+     * Re-auth `conn`'s socket at half its revalidation window, leaving the other half for a slow
+     * worker before the server closes the socket with `4005`. A server that announced no window
+     * holds the socket to nothing, so nothing is armed.
+     */
+    private armSocketRevalidation(conn: ShardConnection, windowMs: number | undefined): void {
+        /* eslint-disable no-param-reassign -- the shared ShardConnection record is advanced in place */
+        clearTimeout(conn.revalidateTimer);
+        conn.revalidateTimer = undefined;
+        conn.revalidateMs = typeof windowMs === "number" && windowMs > 0 ? windowMs : undefined;
+
+        if (conn.revalidateMs === undefined) {
+            return;
+        }
+
+        conn.revalidateTimer = setTimeout(() => {
+            conn.revalidateTimer = undefined;
+
+            // The credential the upgrade presented: a bearer only when it rode the handshake, else the cookie.
+            // Presenting the other one could resolve different claims and close a socket nothing changed on.
+            if (conn.connectionId !== undefined && conn.socket !== undefined && conn.retired !== true) {
+                // eslint-disable-next-line unicorn/no-null -- `null` is `reauthenticateShardSocket`'s "cookie alone", mirroring `authToken`'s cleared value
+                this.reauthenticateShardSocket(conn, conn.connectionId, this.authTokenOnUpgrade ? this.authToken : null);
+            }
+        }, conn.revalidateMs / 2);
+        /* eslint-enable no-param-reassign */
     }
 
     private bounceShardSocket(conn: ShardConnection): void {

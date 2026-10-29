@@ -146,6 +146,15 @@ interface ShardConnection {
      */
     retired?: boolean;
 
+    /** The socket's revalidation window from its `identity` frame; `undefined` when it announced none. */
+    revalidateMs?: number;
+
+    /**
+     * Re-auths the socket in place within the `revalidateMs` window its `identity` frame
+     * announced; past that window the server closes it with `4005`. Cleared with the socket.
+     */
+    revalidateTimer?: ReturnType<typeof setTimeout>;
+
     /**
      * This socket has sent its room rejoins. Reset on every new socket: room sends wait for
      * it, so a send never reaches the server ahead of its `whisper_subscribe`.

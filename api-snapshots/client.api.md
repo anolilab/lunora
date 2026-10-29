@@ -2865,6 +2865,7 @@ interface ServerErrorMessage {
 ```ts
 interface ServerIdentityMessage {
     connectionId?: string;
+    revalidateMs?: number;
     subject: null | string;
     type: "identity";
     whisperAck?: boolean;

@@ -1005,6 +1005,14 @@ export interface ServerLiveMessage {
  */
 export interface ServerIdentityMessage {
     connectionId?: string;
+
+    /**
+     * Milliseconds within which the socket must be re-authenticated through
+     * `POST /_lunora/ws/reauth`, or the server closes it with `4005`. Present only
+     * for an authenticated subscription socket.
+     */
+    revalidateMs?: number;
+
     subject: null | string;
     type: "identity";
     whisperAck?: boolean;

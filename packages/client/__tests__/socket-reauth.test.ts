@@ -140,3 +140,102 @@ describe("socket re-authentication on a token refresh", () => {
         client.close();
     });
 });
+
+/** A client with one open socket whose identity frame announces `revalidateMs`; `token` is `undefined` for a cookie session. */
+const openRevalidatingClient = async ({ reauthOk = true, revalidateMs, token }: { reauthOk?: boolean; revalidateMs?: number; token?: string }) => {
+    const { sockets, WebSocket } = createSocketHarness();
+    const reauthResponse = reauthOk ? jsonResponse({ ok: true }) : jsonResponse({ error: { code: "IDENTITY_CHANGED" } }, { status: 409 });
+    const fetchMock = vi.fn<typeof fetch>(async (input) =>
+        (input as string).includes("/_lunora/ws/reauth") ? reauthResponse.clone() : jsonResponse({ result: { ok: true } }),
+    );
+    const client = new LunoraClient({
+        authTokenOnUpgrade: true,
+        fetch: fetchMock,
+        heartbeatIntervalMs: 0,
+        reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
+        url: "http://app.test",
+        WebSocket,
+    });
+
+    if (token !== undefined) {
+        client.setAuthToken(token, "user-1");
+    }
+
+    client.subscribe(fnRef("todos.list"), {}, () => undefined);
+    await settle();
+    sockets[0]?.open();
+    sockets[0]?.receive({ connectionId: "conn-1", ...(revalidateMs === undefined ? {} : { revalidateMs }), subject: "user-1", type: "identity" });
+    await settle();
+
+    const reauthCalls = () => fetchMock.mock.calls.filter(([input]) => (input as string).includes("/_lunora/ws/reauth"));
+
+    return { client, reauthCalls, sockets };
+};
+
+describe("socket identity revalidation", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("re-auths the socket in place within the window its identity frame announces, and again after each success", async () => {
+        expect.assertions(4);
+
+        const { client, reauthCalls, sockets } = await openRevalidatingClient({ revalidateMs: 60_000, token: "token-1" });
+
+        await vi.advanceTimersByTimeAsync(29_999);
+
+        expect(reauthCalls()).toHaveLength(0);
+
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect((reauthCalls()[0]?.[1]?.headers as Record<string, string> | undefined)?.authorization).toBe("Bearer token-1");
+
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect(reauthCalls()).toHaveLength(2);
+        expect(sockets[0]?.readyState).toBe(1);
+
+        client.close();
+    });
+
+    it("presents the cookie session alone when the socket has no bearer", async () => {
+        expect.assertions(2);
+
+        const { client, reauthCalls } = await openRevalidatingClient({ revalidateMs: 60_000 });
+
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect(reauthCalls()).toHaveLength(1);
+        expect(reauthCalls()[0]?.[1]?.headers).not.toHaveProperty("authorization");
+
+        client.close();
+    });
+
+    it("reconnects the socket when the server will not revalidate it", async () => {
+        expect.assertions(1);
+
+        const { client, sockets } = await openRevalidatingClient({ reauthOk: false, revalidateMs: 60_000, token: "token-1" });
+
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect(sockets[0]?.readyState).toBe(3);
+
+        client.close();
+    });
+
+    it("never re-auths a socket whose server announced no window", async () => {
+        expect.assertions(1);
+
+        const { client, reauthCalls } = await openRevalidatingClient({ token: "token-1" });
+
+        await vi.advanceTimersByTimeAsync(300_000);
+
+        expect(reauthCalls()).toHaveLength(0);
+
+        client.close();
+    });
+});
