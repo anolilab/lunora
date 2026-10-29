@@ -212,4 +212,24 @@ describe("schedulerPoolsPanel lag", () => {
         // The pool status is a separate read and still renders.
         await expect(screen.findByTestId("pools-table")).resolves.toBeDefined();
     });
+
+    it("treats a worker without the metric read as having no lag data", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getMetricSeries) {
+                    throw Object.assign(new Error("no such function"), { code: "FUNCTION_NOT_FOUND" });
+                }
+
+                return undefined;
+            },
+        });
+
+        render(withProvider(mock, <SchedulerPoolsPanel loadStatus={async () => STATUS} />));
+
+        await screen.findByTestId("pools-table");
+
+        expect(screen.queryByTestId("lag-error")).toBeNull();
+    });
 });

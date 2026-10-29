@@ -12,6 +12,7 @@ import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import type { MetricSeries, MetricSeriesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
+import { errorCode } from "../../lib/internal";
 
 /** The histogram the shard records per scheduled job: due time to dispatch, in ms. */
 const LAG_METRIC = "scheduler.lag_ms";
@@ -71,7 +72,10 @@ export const SchedulerPoolsPanel = ({ initialShardKey, loadStatus }: SchedulerPo
     // writes no table, so a live subscription would never re-run for it.
     const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const metricsQuery = useAdminQuery<MetricSeriesResult>(ADMIN_FUNCTIONS.getMetricSeries, {}, { shardKey: queryShardKey });
-    const { data: metrics, error: metricsError } = metricsQuery;
+    const { data: metrics, errorSource: metricsErrorSource } = metricsQuery;
+    // A worker predating `getMetricSeries` answers FUNCTION_NOT_FOUND: no lag data
+    // to show, not a failure — the Instruments table treats it the same way.
+    const metricsError = errorCode(metricsErrorSource) === "FUNCTION_NOT_FOUND" ? null : metricsQuery.error;
 
     // Separate timers: each poll backs off or stops on its own failures, so a
     // shard the token cannot read must not freeze the pool status, or the reverse.
