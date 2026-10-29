@@ -1,5 +1,5 @@
 {
-    "$comment": "Golden fixtures for the WebSocket subscription protocol (GET /_lunora/ws). `clientFrames` are frames a client MUST emit; a conforming client's builders produce these (compared as parsed JSON, key order irrelevant). `serverFrames` are frames a client MUST consume; each `expect` describes the observable effect (`valueWire` is the wire form of the value delivered to the callback, so encode(received) == valueWire). `shape` covers the poke-based partial-replication path. `pageDeltaFrames` is a SEPARATE set only an SDK that announced the `pageDelta` capability should run: each case applies its `frame` ON TOP of `baseWire` (merging, not replacing) and asserts the merged `valueWire`. It is deliberately not in `serverFrames`, which SDKs iterate wholesale and apply by replacement. `connect-with-caps` is the OPTIONAL capability-announcing form of the connect frame (protocol README 5.1.1) \u2014 an SDK that implements no capability tokens emits plain `connect` and is fully conforming, so only an SDK that has actually implemented a token should assert against it. Today no non-JS port announces a capability token, so `connect-with-caps` and `pageDeltaFrames` are asserted by `@lunora/client` alone — they are the reference's forward contract, not dead data.",
+    "$comment": "Golden fixtures for the WebSocket subscription protocol (GET /_lunora/ws). `clientFrames` are frames a client MUST emit; a conforming client's builders produce these (compared as parsed JSON, key order irrelevant). `serverFrames` are frames a client MUST consume; each `expect` describes the observable effect (`valueWire` is the wire form of the value delivered to the callback, so encode(received) == valueWire). `shape` covers the poke-based partial-replication path. `pageDeltaFrames` is a SEPARATE set only an SDK that announced the `pageDelta` capability should run: each case applies its `frame` ON TOP of `baseWire` (merging, not replacing) and asserts the merged `valueWire`. It is deliberately not in `serverFrames`, which SDKs iterate wholesale and apply by replacement. `refreshBatchFrames` is likewise separate, for an SDK that announced `refreshBatch`: frames between `batchStart` and `batchEnd` are held and applied together at the end, with one notification per subscription (README 5.5). `connect-with-caps` is the OPTIONAL capability-announcing form of the connect frame (protocol README 5.1.1) \u2014 an SDK that implements no capability tokens emits plain `connect` and is fully conforming, so only an SDK that has actually implemented a token should assert against it. Today no non-JS port announces a capability token, so `connect-with-caps`, `pageDeltaFrames` and `refreshBatchFrames` are asserted by `@lunora/client` alone — they are the reference's forward contract, not dead data.",
     "clientFrames": {
         "connect": {
             "clientId": "client-test",
@@ -392,6 +392,16 @@
             }
         }
     ],
+    "refreshBatchFrames": {
+        "$comment": "refreshBatch only. Nothing is delivered until `batchEnd`; then each subscription's callback runs once, with its last value in the bracket.",
+        "frames": [
+            { "type": "batchStart" },
+            { "data": { "n": 1 }, "id": "sub_1", "type": "data" },
+            { "data": { "n": 2 }, "id": "sub_1", "type": "data" },
+            { "type": "batchEnd" }
+        ],
+        "expect": { "deliveredBeforeEnd": 0, "valuesWire": [{ "n": 2 }] }
+    },
     "shape": {
         "shape-subscribe-cold": {
             "id": "shape_1",
