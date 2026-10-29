@@ -69,6 +69,8 @@ interface Behaviour {
     /** Put the caller behind a getter on the result, read only when the result is encoded. */
     readsOnEncode?: boolean;
     throws?: (run: number) => boolean;
+    /** Give the result a getter that throws, without reading the caller, when it is encoded. */
+    unencodable?: (run: number) => boolean;
     /** Leave the outcome unvouched, as a hand-written executor does. */
     untracked?: boolean;
 }
@@ -193,6 +195,15 @@ class TrackedShard extends ShardDO {
                     this.noteIdentityRead(functionPath);
 
                     return userId;
+                },
+            });
+        }
+
+        if (behaviour.unencodable?.(run) === true) {
+            Object.defineProperty(result, "broken", {
+                enumerable: true,
+                get: () => {
+                    throw new Error(`run ${String(run)} cannot be encoded`);
                 },
             });
         }
@@ -363,6 +374,20 @@ describe("shardDO live runs shared across identities", () => {
             expect(shard.runs).toHaveLength(1 + USERS.length);
             expect(sockets.map((ws) => lastData(ws)?.["owner"])).toStrictEqual(USERS);
         });
+    });
+
+    it("re-runs a joiner of another identity whose shared result failed to encode", async () => {
+        expect.assertions(2);
+
+        const shard = new TrackedShard(createFakeState(), {});
+
+        // Run 5 is the first write's shared run.
+        shard.behaviours.set("feed:unencodable", { reads: () => false, unencodable: (run) => run === 5 });
+
+        const sockets = await subscribeEach(shard, "feed:unencodable");
+
+        await expect(shard.writeCounted()).resolves.toBe(USERS.length);
+        expect(sockets.slice(1).map((ws) => lastData(ws)?.["run"])).toStrictEqual([6, 7, 8, 9]);
     });
 
     it("re-runs a joiner of another identity whose shared run failed instead of handing it the failure", async () => {

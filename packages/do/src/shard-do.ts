@@ -13140,9 +13140,9 @@ abstract class ShardDO {
      * socket with a different identity only takes the result if the path is still
      * unmarked once the run has settled (every accessor marks synchronously, and
      * the result is encoded before the run settles, see
-     * {@link ShardDO.settleIdentityUse}). Otherwise, and on a rejection whose
-     * message may carry the leader's data, it runs the query under its own
-     * identity.
+     * {@link ShardDO.settleIdentityUse}), and that encoding succeeded. Otherwise,
+     * and on a rejection whose message may carry the leader's data, it runs the
+     * query under its own identity.
      */
     private joinReactiveRun(
         run: SharedReactiveRun,
@@ -13157,7 +13157,12 @@ abstract class ShardDO {
 
         const ownRun = (): Promise<SubscriptionOutcome | null> => this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
 
-        return run.pending.then((outcome) => (outcome?.identityTracked === true && !this.identityReadPaths.has(functionPath) ? outcome : ownRun()), ownRun);
+        // An unmarked path's outcome is encoded in settle, so a missing encoding means it failed.
+        return run.pending.then(
+            (outcome) =>
+                outcome?.identityTracked === true && !this.identityReadPaths.has(functionPath) && this.encodedOutcomes.has(outcome) ? outcome : ownRun(),
+            ownRun,
+        );
     }
 
     /**
