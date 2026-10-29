@@ -198,7 +198,9 @@ Overwriting or deleting asks first, or needs `--yes` without a TTY or with
 `--format json`.
 `replace` is not atomic: it writes the snapshot's rows, and deletes only after
 that write is clean. A failed run leaves the old rows plus what was written,
-and re-running the same command finishes the job. See
+and re-running the same command finishes the job. The plan is read before the
+write, so stop writes to the target while a restore runs: a row written in
+between can land in a `require-empty` target or survive a `replace`. See
 [`lunora import`](/docs/packages/cli#lunora-export--lunora-import) for the
 exact semantics. The Studio import page offers append or overwrite (`upsert`);
 `replace` and `require-empty` are CLI-only.

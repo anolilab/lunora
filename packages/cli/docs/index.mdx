@@ -1404,6 +1404,9 @@ write came back clean. A run that fails part-way leaves the old rows plus what
 was written, never fewer rows than before. Re-running the same command
 converges: the write overwrites what already landed, and the deletes run once
 it is clean. A reader between the two passes sees both old and new rows. The
+plan is a read taken before the write, so `require-empty` and `replace` assume
+nothing else writes those tables meanwhile: stop writes to the target for the
+duration of a restore. The
 worker has to support each mode; an older one is detected before any row is
 sent.
 
