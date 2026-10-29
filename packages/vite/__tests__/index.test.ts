@@ -59,20 +59,23 @@ describe("index", () => {
 
     describe("lunora()", () => {
         it.each([
-            [undefined, "", false],
+            [false, "", false],
             [true, "", true],
-            [undefined, "1", true],
-        ])("generates with lazyFunctions=%s and child environment=%s", (lazyFunctions, environment, expected) => {
+            [false, "1", true],
+        ])("generates with codegen.lazyFunctions=%s in lunora.config and child environment=%s", (configured, environment, expected) => {
             expect.assertions(2);
 
             vi.stubEnv("LUNORA_LAZY_FUNCTIONS", environment);
+
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { codegen: { lazyFunctions: ${String(configured)} } };\n`, "utf8");
+
             writeFileSync(
                 join(workdir, "lunora", "messages.ts"),
                 'import { query } from "@lunora/server";\nexport const list = query({ handler: async () => [] });\n',
                 "utf8",
             );
 
-            const plugin = lunora({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false, lazyFunctions }).find(
+            const plugin = lunora({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false }).find(
                 (entry) => entry.name === "lunora:codegen",
             );
             (plugin?.configResolved as (this: unknown) => void).call(undefined);

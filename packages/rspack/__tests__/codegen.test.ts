@@ -8,7 +8,7 @@ import { resolveOptions } from "../src/options";
 import { createFixture } from "./fixture";
 
 describe("lazy function codegen", () => {
-    it.each([false, true])("keeps lazyFunctions=%s across regeneration", (lazyFunctions) => {
+    it.each([false, true])("keeps codegen.lazyFunctions=%s from lunora.config across regeneration", (lazyFunctions) => {
         expect.assertions(6);
 
         const projectRoot = createFixture();
@@ -17,7 +17,8 @@ describe("lazy function codegen", () => {
         });
         const source = join(projectRoot, "lunora", "messages.ts");
         writeFileSync(source, 'import { query } from "@lunora/server";\nexport const list = query({ handler: async () => [] });\n', "utf8");
-        const options = resolveOptions({ lazyFunctions, projectRoot });
+        writeFileSync(join(projectRoot, "lunora.config.ts"), `export default { codegen: { lazyFunctions: ${String(lazyFunctions)} } };\n`, "utf8");
+        const options = resolveOptions({ projectRoot });
         const logger = { error: vi.fn<(message: string) => void>(), info: vi.fn<(message: string) => void>(), warn: vi.fn<(message: string) => void>() };
         const functionsPath = join(projectRoot, "lunora", "_generated", "functions.ts");
         const shimPath = join(projectRoot, "lunora", "_generated", "fn", "lunora_messages_0.ts");

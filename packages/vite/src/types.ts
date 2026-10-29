@@ -81,8 +81,6 @@ export interface LunoraPluginOptions {
 
     /** Pass through to `@cloudflare/vite-plugin`. Pass `false` to opt out. Defaults to `true`. */
     cloudflare?: boolean | CloudflarePluginOptions;
-    /** Emit a per-module lazy function registry; omitted keeps the eager registry. */
-    lazyFunctions?: CodegenOptions["lazyFunctions"];
 
     /**
      * Inject `@visulima/vite-overlay` for runtime errors (dev only). Pass
@@ -138,6 +136,7 @@ export interface ResolvedLunoraPluginOptions {
      */
     generatedDir: string;
 
+    /** `LUNORA_LAZY_FUNCTIONS`, which `lunora dev`/`build` set for this process; `codegen.lazyFunctions` in `lunora.config.*` is read by codegen itself. */
     lazyFunctions: boolean;
     overlay: false | OverlayPluginOptions;
     projectRoot: string;

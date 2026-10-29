@@ -34,7 +34,8 @@ export interface CodegenOptions {
 
     /**
      * Emit a per-module lazy function registry when explicitly set to `true`.
-     * Omitted or `false` keeps the eager registry.
+     * `codegen.lazyFunctions: true` in `lunora.config.*` enables it too, and
+     * `false` here does not override that; with neither, the registry is eager.
      */
     lazyFunctions?: boolean;
 

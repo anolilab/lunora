@@ -86,6 +86,19 @@ describe("lazy deployment", () => {
             expect(functions).toContain("messages:latest");
             expect(functions).not.toContain("messages:list");
         });
+
+        it("regenerates lazily from lunora.config with neither the flag nor the environment", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(projectRoot, "lunora.config.ts"), "export default { codegen: { lazyFunctions: true } };\n");
+            const { spawner } = createRecordingSpawner();
+            const result = await run({ cwd: projectRoot, dryRun: true, interactive: false, logger, spawner, strictAdvisories: false });
+            const generated = join(projectRoot, "lunora", "_generated");
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(join(generated, "functions.ts"), "utf8")).toContain("export const LUNORA_FUNCTION_MANIFEST");
+            expect(existsSync(join(generated, "fn", "lunora_messages_0.ts"))).toBe(true);
+        });
     });
 
     describe("verify lazy metadata gate", () => {
@@ -114,6 +127,24 @@ describe("lazy deployment", () => {
             expect(result.code).toBe(enabled ? 1 : 0);
             expect(result.document?.data?.errors.join("\n").includes("lazy function registry needs literal")).toBe(enabled);
             expect(existsSync(join(projectRoot, "lunora", "_generated"))).toBe(false);
+        });
+
+        it("checks the lazy registry lunora.config opts into without a flag", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(projectRoot, "lunora.config.ts"), "export default { codegen: { lazyFunctions: true } };\n");
+            writeFileSync(
+                join(projectRoot, "lunora", "messages.ts"),
+                'import { query } from "@lunora/server";\nconst rest = true;\nconst base = query.expose({ rest });\nexport const list = base.query(() => []);\n',
+            );
+            const result = await runExecute<VerifyOptions, VerifyCommandData>(verify, {
+                commandName: "verify",
+                cwd: projectRoot,
+                options: { format: "json", strictAdvisories: false, typecheck: false },
+            });
+
+            expect(result.code).toBe(1);
+            expect(result.document?.data?.errors.join("\n")).toContain("lazy function registry needs literal");
         });
     });
 
