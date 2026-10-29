@@ -97,8 +97,11 @@ lunora preview delete 123             # Worker + every resource on its record
 - Resources are named `<worker>-preview-<name>-<binding>` and recorded in the
   account's `lunora-preview-registry` KV namespace; `delete` only removes what a
   record lists, and refuses anything production's config names.
-- Mintable secrets are minted fresh; a provider key reaches the preview only via
-  `--secret KEY` (value from the environment).
+- Mintable secrets are minted per deploy, or derived from
+  `LUNORA_PREVIEW_SECRET_SEED` when set (stable across deploys); a provider key
+  reaches the preview only via `--secret KEY` (value from the environment).
+- Production `vars` are copied; override one with `--var KEY=VALUE` (e.g. an
+  auth base URL pointing at the preview's workers.dev URL).
 - Refused (with the list) when the app binds Hyperdrive, services, queues,
   workflows, Vectorize or another binding a preview cannot isolate yet.
 - Token needs Workers Scripts, D1, Workers KV Storage and Workers R2 Storage:

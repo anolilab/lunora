@@ -14,6 +14,7 @@ const previewCommand: Command = {
         ["lunora preview deploy 123", "Deploy preview 123 as its own Worker with its own data, then print its URL"],
         ["lunora preview deploy 123 --seed", "Deploy, then fill the preview with `lunora seed` data"],
         ["lunora preview deploy 123 --secret RESEND_API_KEY", "Give the preview a secret, read from the environment"],
+        ["lunora preview deploy 123 --var AUTH_URL=https://app-preview-123.acme.workers.dev", "Override a production var in the preview"],
         ["lunora preview deploy 123 --dry-run", "Show the Worker, resources and env block a deploy would use"],
         ["lunora preview list", "List the previews on record"],
         ["lunora preview delete 123", "Delete the preview Worker and every resource recorded for it"],
@@ -35,6 +36,12 @@ const previewCommand: Command = {
         },
         { description: "deploy: run `lunora seed` against the preview once it is live", name: "seed", type: Boolean },
         TARGET_OPTION,
+        {
+            description: "deploy: set a var in the preview, over production's value (e.g. an auth base URL). KEY=VALUE, repeatable",
+            lazyMultiple: true,
+            name: "var",
+            type: String,
+        },
     ],
 };
 
@@ -46,4 +53,5 @@ export type PreviewOptions = CreateOptions<{
     secret: string[] | undefined;
     seed: boolean | undefined;
     target: string | undefined;
+    var: string[] | undefined;
 }>;

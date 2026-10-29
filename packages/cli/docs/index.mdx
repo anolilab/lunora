@@ -63,7 +63,7 @@ lunora deploy [--env <name>]            # codegen, validate wrangler, then wrang
               [--temporary]             #   --temporary deploys with no account (~60min, then claim)
               [--health-check]          #   --health-check probes /_lunora/health/ready after deploying
 lunora preview deploy <name>            # isolated copy: own Worker, Durable Objects, D1, KV, R2
-               [--seed] [--secret <KEY>] [--dry-run]
+               [--seed] [--secret <KEY>] [--var <KEY=VALUE>] [--dry-run]
 lunora preview list | delete <name>     # previews on record; delete removes everything recorded
 lunora link --url <url> [--env <name>]  # link this checkout to its deployed worker
 lunora verify [--api-spec <spec>]       # dry-run codegen + tsc --noEmit (no files written)
@@ -765,6 +765,7 @@ An isolated copy of the app per pull request, and the way to remove it.
 lunora preview deploy 123                         # deploy, migrate, print the URL
 lunora preview deploy 123 --seed                  # …then fill it with `lunora seed` data
 lunora preview deploy 123 --secret RESEND_API_KEY # give it a secret from the environment
+lunora preview deploy 123 --var AUTH_URL=https://my-app-preview-123.acme.workers.dev
 lunora preview deploy 123 --dry-run               # show the Worker, resources and env block
 lunora preview list
 lunora preview delete 123
@@ -782,23 +783,33 @@ against the preview, and `--seed` runs `lunora seed` against it afterwards. The
 preview never touches the project link, the schema baseline, or the
 architecture baseline.
 
-Secrets: the preview gets a freshly minted value for every secret Lunora can
-generate (its own `LUNORA_ADMIN_TOKEN`, `AUTH_SECRET`, …), uploaded with the
-deploy. A provider key is copied only when you name it with `--secret KEY`,
-and the value is read from the environment variable of the same name.
-Production's values are never read.
+Vars: production's `vars` and `define` are copied as they are. A value that
+must differ in the preview, such as an auth base URL or a CORS origin, is set
+with `--var KEY=VALUE` (repeatable). The preview's URL is known before the
+deploy: `https://<preview-worker>.<your-subdomain>.workers.dev`.
+
+Secrets: the preview gets a minted value for every secret Lunora can generate
+(its own `LUNORA_ADMIN_TOKEN`, `AUTH_SECRET`, …), uploaded with the deploy.
+Cloudflare secrets cannot be read back, so each deploy mints new values, which
+signs out a preview's sessions. Set `LUNORA_PREVIEW_SECRET_SEED` to any long
+random string and the values are derived from it, the preview Worker and the
+key instead, so they stay the same across deploys. A provider key is copied
+only when you name it with `--secret KEY`, and the value is read from the
+environment variable of the same name. Production's values are never read.
 
 What a preview owns is recorded in the account, in a KV namespace called
 `lunora-preview-registry`, one record per preview, written as soon as each
 resource exists. That way a fresh CI runner can delete it. `delete <name>`
 deletes the preview Worker (with its Durable Objects) and then each recorded
 resource. It refuses a preview with no record, a record whose Worker is not the
-derived preview name, and a record that names any id or name production's
-config (any environment) uses. A deploy never adopts an existing resource that
+derived preview name, a record that names any id or name production's config
+(any environment) uses, and a record whose ids no longer name the resources it
+lists. A deploy never adopts an existing resource that
 has a preview name but no record. The preview Worker carries a `LUNORA_PREVIEW`
 var (`<worker>/<name>`): a deploy refuses to replace a Worker with the preview's
-name that lacks it, and `delete` refuses to remove one. An R2 bucket that still holds objects cannot
-be deleted through the API, so it stays on record for the next `delete`.
+name that lacks it, and `delete` refuses to remove one. An R2 bucket is emptied before it is
+deleted. A resource that cannot be deleted stays on record for the next
+`delete`.
 
 An app that binds anything a preview cannot isolate yet is refused with the
 list: Hyperdrive, service bindings, queues, workflows, Vectorize, Analytics

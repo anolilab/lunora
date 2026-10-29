@@ -50,7 +50,6 @@ const SETTINGS_KEYS = new Set([
     "cache",
     "compatibility_date",
     "compatibility_flags",
-    "define",
     "dev",
     "env",
     "find_additional_modules",
@@ -79,9 +78,9 @@ const SETTINGS_KEYS = new Set([
 
 /**
  * Non-inheritable keys copied into the preview unchanged: each binds a capability, not production data
- * (`vars` and `secrets` are the config's own values and secret names).
+ * (`vars` and `secrets` are the config's own values and secret names, `define` its build-time constants).
  */
-const COPIED_KEYS = ["ai", "analytics", "browser", "images", "media", "secrets", "send_email", "vars", "version_metadata", "worker_loaders"] as const;
+const COPIED_KEYS = ["ai", "analytics", "browser", "define", "images", "media", "secrets", "send_email", "vars", "version_metadata", "worker_loaders"] as const;
 
 /** Non-inheritable keys left out: a preview's logs do not go to production's tail Workers. */
 const DROPPED_KEYS = new Set(["tail_consumers"]);
@@ -139,9 +138,6 @@ const PREVIEW_MARKER_VAR = "LUNORA_PREVIEW";
 
 const previewMarker = (names: Pick<PreviewPlan, "production" | "slug">): string => `${names.production}/${names.slug}`;
 
-/** Whether an `env` block is one a preview run wrote (it carries the marker), not one of production's environments. */
-const isPreviewBlock = (block: PreviewConfig | undefined): boolean => typeof block?.vars?.[PREVIEW_MARKER_VAR] === "string";
-
 const NON_SLUG_CHARACTERS = /[^a-z0-9]+/u;
 
 /** The preview's name in Cloudflare's alphabet: lowercase letters, digits and single dashes. */
@@ -172,6 +168,26 @@ const previewNames = (config: PreviewConfig, name: string): { error: string; nam
     };
 };
 
+/**
+ * Whether `env.<key>` is the block a preview run of `config` wrote: its key, Worker name and marker are all the
+ * ones the slug in its marker derives. Any other block, marked or not, is one of the user's environments.
+ */
+const isPreviewBlock = (config: PreviewConfig, key: string, block: PreviewConfig | undefined): boolean => {
+    const marker = block?.vars?.[PREVIEW_MARKER_VAR];
+    const production = typeof config.name === "string" ? config.name : "";
+
+    if (typeof marker !== "string" || production === "" || !marker.startsWith(`${production}/`)) {
+        return false;
+    }
+
+    const { names } = previewNames(config, marker.slice(production.length + 1));
+
+    return names !== undefined && previewMarker(names) === marker && names.environment === key && block?.name === names.worker;
+};
+
+/** The name of the resource a preview Worker owns for `binding`. */
+const previewResourceName = (worker: string, binding: string): string => boundedName(`${worker}-${binding}`, NAME_LIMIT);
+
 /** The plan for previewing `config` as `name`, or why it cannot be made. Pure: reads nothing, writes nothing. */
 const planPreview = (config: PreviewConfig, name: string): { error: string; plan?: never } | { error?: never; plan: PreviewPlan } => {
     const named = previewNames(config, name);
@@ -183,7 +199,7 @@ const planPreview = (config: PreviewConfig, name: string): { error: string; plan
     const { environment, worker } = named.names;
 
     // A block this command wrote and an interrupted run left behind is overwritten; any other is the user's.
-    if (config.env?.[environment] !== undefined && !isPreviewBlock(config.env[environment])) {
+    if (config.env?.[environment] !== undefined && !isPreviewBlock(config, environment, config.env[environment])) {
         return { error: `wrangler.jsonc already declares "env.${environment}"; a preview writes that block itself, so name the preview differently` };
     }
 
@@ -206,7 +222,7 @@ const planPreview = (config: PreviewConfig, name: string): { error: string; plan
         entriesOf((config as Record<string, unknown>)[key]).map((entry) => {
             const binding = String(entry.binding);
 
-            return { binding, kind, name: boundedName(`${worker}-${binding}`, NAME_LIMIT) };
+            return { binding, kind, name: previewResourceName(worker, binding) };
         }),
     );
 
@@ -241,7 +257,7 @@ const isolatedEntry = (kind: PreviewResourceKind, entry: Entry, plan: PreviewPla
  * The `env.<preview>` block. `routes: []` overrides production's inheritable routes and custom domains, and
  * `workers_dev` gives the preview its URL; `name` is set so wrangler's `<name>-<env>` default never applies.
  */
-const previewEnvironmentBlock = (config: PreviewConfig, plan: PreviewPlan, ids: ResourceIds): Entry => {
+const previewEnvironmentBlock = (config: PreviewConfig, plan: PreviewPlan, ids: ResourceIds, overrides: Readonly<Record<string, string>> = {}): Entry => {
     const source = config as Record<string, unknown>;
     const block: Entry = { name: plan.worker, routes: [], workers_dev: true };
     const marker = { [PREVIEW_MARKER_VAR]: previewMarker(plan) };
@@ -252,8 +268,10 @@ const previewEnvironmentBlock = (config: PreviewConfig, plan: PreviewPlan, ids: 
         }
     }
 
-    // Deployed with the Worker, so `delete` can tell a Worker this command made from one that merely has its name.
-    block.vars = { ...(isPresent(config.vars) ? config.vars : {}), ...marker };
+    // `--var` overrides production values a preview must not keep (an auth base URL, a CORS origin). The marker
+    // goes last and is deployed with the Worker, so `delete` can tell a Worker this command made from one that
+    // merely has its name.
+    block.vars = { ...(isPresent(config.vars) ? config.vars : {}), ...overrides, ...marker };
 
     if (isPresent(config.durable_objects)) {
         block.durable_objects = config.durable_objects;
@@ -291,7 +309,7 @@ const identitiesOf = (block: Record<string, unknown>): string[] => {
 /** Every resource identity and Worker name production's config (top level and every environment) points at. */
 const productionIdentities = (config: PreviewConfig): Set<string> =>
     new Set(
-        [config, ...Object.values(config.env ?? {}).filter((block) => !isPreviewBlock(block))].flatMap((block) =>
+        [config, ...Object.entries(config.env ?? {}).flatMap(([key, block]) => (isPreviewBlock(config, key, block) ? [] : [block]))].flatMap((block) =>
             identitiesOf(block as Record<string, unknown>),
         ),
     );
@@ -304,4 +322,4 @@ const productionCollisions = (config: PreviewConfig, candidates: ReadonlyArray<s
 };
 
 export type { PreviewConfig, PreviewPlan, PreviewResourceKind, ResourceIds };
-export { planPreview, PREVIEW_MARKER_VAR, previewEnvironmentBlock, previewMarker, previewNames, productionCollisions, resourceKey };
+export { planPreview, PREVIEW_MARKER_VAR, previewEnvironmentBlock, previewMarker, previewNames, previewResourceName, productionCollisions, resourceKey };

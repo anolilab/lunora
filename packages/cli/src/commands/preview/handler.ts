@@ -6,6 +6,7 @@
  * written into `wrangler.jsonc` for the run and restored afterwards. What it owns is kept in an account-side
  * record (see `./registry`), which is all `delete` acts on.
  */
+import { createHmac } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +43,7 @@ import {
     findResource,
     listRecords,
     readRecord,
+    recordedResourceState,
     recordKey,
     registryNamespace,
     workerMarker,
@@ -54,6 +56,9 @@ const PREVIEW_SUBCOMMANDS = ["deploy", "list", "delete"] as const;
 const REQUEST_TIMEOUT_MS = 15_000;
 
 const ADMIN_TOKEN_KEY = "LUNORA_ADMIN_TOKEN";
+
+/** When set, minted secrets are derived from it per preview Worker, so they survive a redeploy. */
+const SECRET_SEED_KEY = "LUNORA_PREVIEW_SECRET_SEED";
 
 /** What each target does instead. Only Cloudflare has the per-Worker namespaces and account resources a preview is made of. */
 const UNSUPPORTED_TARGETS: Readonly<Record<string, string>> = {
@@ -84,6 +89,8 @@ interface PreviewCommandOptions {
     spawner?: Spawner;
     subcommand: string | undefined;
     target?: string;
+    /** `--var KEY=VALUE` overrides, applied over production's `vars`. */
+    vars?: ReadonlyArray<string>;
 }
 
 interface PreviewSummary {
@@ -168,20 +175,51 @@ const accountRequest = (options: PreviewCommandOptions, config: PreviewConfig): 
     };
 };
 
+/** The `--var KEY=VALUE` overrides, or why one cannot be used. */
+const parseVariables = (entries: ReadonlyArray<string>): { error: string; variables?: never } | { error?: never; variables: Record<string, string> } => {
+    const variables: Record<string, string> = {};
+
+    for (const entry of entries) {
+        const separator = entry.indexOf("=");
+        const key = separator === -1 ? "" : entry.slice(0, separator);
+
+        if (key === "") {
+            return { error: `--var ${entry}: expected KEY=VALUE` };
+        }
+
+        if (key === PREVIEW_MARKER_VAR) {
+            return { error: `--var ${key}: the preview sets ${key} itself; \`delete\` relies on it` };
+        }
+
+        variables[key] = entry.slice(separator + 1);
+    }
+
+    return { variables };
+};
+
 const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
- * The secrets the preview deploys with: a fresh value for every key Lunora can mint (the admin token always,
- * so this run can migrate and seed), and the value from the environment for each `--secret` the user named.
- * Production's values are never read: Cloudflare cannot return them, and a preview must not hold them unasked.
+ * The secrets the preview deploys with: a value for every key Lunora can mint (the admin token always, so this
+ * run can migrate and seed), and the value from the environment for each `--secret` the user named. Production's
+ * values are never read: Cloudflare cannot return them, and a preview must not hold them unasked.
+ *
+ * Cloudflare secrets are write-only, so a minted value cannot be read back for the next deploy. With
+ * `LUNORA_PREVIEW_SECRET_SEED` set it is derived from the seed, the preview Worker and the key instead, which
+ * keeps sessions and tokens valid across redeploys without storing a value anywhere; without it, each deploy
+ * mints afresh.
  */
 const previewSecrets = async (
     cwd: string,
     config: PreviewConfig,
+    worker: string,
     options: PreviewCommandOptions,
 ): Promise<{ adminToken: string; error?: never; missing: string[]; values: Record<string, string> } | { error: string }> => {
     const environment = options.environment ?? process.env;
     const values: Record<string, string> = {};
+    const seed = environment[SECRET_SEED_KEY];
+    const mint = (key: string): string =>
+        seed === undefined || seed === "" ? generateSecretValue() : createHmac("sha256", seed).update(`${worker}/${key}`).digest("hex");
 
     for (const key of options.secrets ?? []) {
         const value = environment[key];
@@ -197,7 +235,7 @@ const previewSecrets = async (
 
     for (const key of [...fromPackages, ADMIN_TOKEN_KEY]) {
         if (values[key] === undefined && (mintableKeys.has(key) || key === ADMIN_TOKEN_KEY)) {
-            values[key] = generateSecretValue();
+            values[key] = mint(key);
         }
     }
 
@@ -227,6 +265,16 @@ const ensureResources = async (request: Request, namespace: string, plan: Previe
         const recorded = record.resources.find((resource) => resource.kind === planned.kind && resource.binding === planned.binding);
 
         if (recorded !== undefined) {
+            // eslint-disable-next-line no-await-in-loop -- see below
+            const state = await recordedResourceState(request, recorded);
+
+            // A recorded id that no longer names the recorded resource is never bound: it may be anyone's now.
+            if (state !== "present") {
+                throw new Error(
+                    `the record lists ${planned.kind} "${recorded.name}" (${recorded.id}), which is ${state === "missing" ? "gone" : "now a different resource"}; run \`lunora preview delete ${plan.slug}\`, then deploy again`,
+                );
+            }
+
             ids.set(resourceKey(planned.kind, planned.binding), recorded.id);
             logger.info(`reusing preview ${planned.kind} "${recorded.name}" for ${planned.binding}`);
 
@@ -280,10 +328,16 @@ const reportPlan = (logger: Logger, plan: PreviewPlan, block: Record<string, unk
 };
 
 /** Everything after the plan: record, resources, the env block, the deploy, then migrations (in the deploy) and the seed. */
-const shipPreview = async (context: PreviewContext, plan: PreviewPlan, options: PreviewCommandOptions, request: Request): Promise<PreviewCommandResult> => {
+const shipPreview = async (
+    context: PreviewContext,
+    plan: PreviewPlan,
+    variables: Readonly<Record<string, string>>,
+    options: PreviewCommandOptions,
+    request: Request,
+): Promise<PreviewCommandResult> => {
     const { config, cwd, wranglerPath } = context;
     const { logger } = options;
-    const secrets = await previewSecrets(cwd, config, options);
+    const secrets = await previewSecrets(cwd, config, plan.worker, options);
 
     if (secrets.error !== undefined) {
         return fail(logger, secrets.error);
@@ -340,7 +394,7 @@ const shipPreview = async (context: PreviewContext, plan: PreviewPlan, options: 
 
     const text = readFileSync(wranglerPath, "utf8");
 
-    writeFileSync(wranglerPath, applyModify(text, ["env", plan.environment], previewEnvironmentBlock(config, plan, ids)), "utf8");
+    writeFileSync(wranglerPath, applyModify(text, ["env", plan.environment], previewEnvironmentBlock(config, plan, ids, variables)), "utf8");
 
     const secretsFile = writeSecretsFile(secrets.values);
 
@@ -405,6 +459,13 @@ const shipPreview = async (context: PreviewContext, plan: PreviewPlan, options: 
 const deployPreview = async (context: PreviewContext, options: PreviewCommandOptions, name: string): Promise<PreviewCommandResult> => {
     const { cwd } = context;
     const { logger } = options;
+    const parsed = parseVariables(options.vars ?? []);
+
+    if (parsed.error !== undefined) {
+        return fail(logger, parsed.error);
+    }
+
+    const { variables } = parsed;
     // The preview's env block, and whatever reconcile adds to the top level, exist only for this run.
     const restore = snapshotPreviewConfig(cwd);
 
@@ -441,7 +502,7 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
             // Placeholder ids: a dry run makes no API call, so it shows the block's shape, not the account's ids.
             const ids = new Map(plan.resources.map((resource) => [resourceKey(resource.kind, resource.binding), `<${resource.name}>`]));
 
-            reportPlan(logger, plan, previewEnvironmentBlock(config, plan, ids));
+            reportPlan(logger, plan, previewEnvironmentBlock(config, plan, ids, variables));
             logger.info(
                 `  secrets: every one Lunora can mint, fresh${(options.secrets ?? []).length > 0 ? `; from the environment: ${(options.secrets ?? []).join(", ")}` : ""}`,
             );
@@ -455,7 +516,7 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
             return fail(logger, access.error, EXIT_CODE.AUTH);
         }
 
-        return await shipPreview({ ...context, config }, plan, options, access.request);
+        return await shipPreview({ ...context, config }, plan, variables, options, access.request);
     } finally {
         restore();
     }
@@ -465,7 +526,13 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
  * Delete the Worker, then each recorded resource; what could not be deleted stays on record for the next run,
  * and the record goes once nothing is left.
  */
-const removePreview = async (request: Request, namespace: string, record: PreviewRecord, logger: Logger): Promise<PreviewCommandResult> => {
+const removePreview = async (
+    request: Request,
+    namespace: string,
+    record: PreviewRecord,
+    planned: PreviewPlan | undefined,
+    logger: Logger,
+): Promise<PreviewCommandResult> => {
     try {
         const worker = await workerMarker(request, record.worker, PREVIEW_MARKER_VAR);
 
@@ -497,15 +564,34 @@ const removePreview = async (request: Request, namespace: string, record: Previe
     }
 
     const left = { ...record, resources: remaining, updatedAt: new Date().toISOString() };
+    let unrecorded: string[];
 
     try {
-        await (remaining.length === 0 ? deleteRecord(request, namespace, record) : writeRecord(request, namespace, left));
+        // KV is eventually consistent: the record read here can predate a resource a deploy just made. One that
+        // carries a planned name but is not on record keeps the record, so a later delete can still find it.
+        const recorded = new Set(record.resources.map((resource) => `${resource.kind}:${resource.name}`));
+        const candidates = (planned?.resources ?? []).filter((resource) => !recorded.has(`${resource.kind}:${resource.name}`));
+        const found = await Promise.all(
+            candidates.map(async (resource) => ((await findResource(request, resource.kind, resource.name)) === undefined ? [] : [resource])),
+        );
+
+        unrecorded = found.flat().map((resource) => `${resource.kind} "${resource.name}"`);
+
+        await (remaining.length === 0 && unrecorded.length === 0 ? deleteRecord(request, namespace, record) : writeRecord(request, namespace, left));
     } catch (error) {
         return fail(logger, `preview "${record.name}": ${reason(error)}`, EXIT_CODE.FAILURE);
     }
 
     if (remaining.length > 0) {
         return { code: EXIT_CODE.FAILURE, data: { preview: summarize(left) }, error: `${String(remaining.length)} preview resource(s) could not be deleted` };
+    }
+
+    if (unrecorded.length > 0) {
+        return fail(
+            logger,
+            `${unrecorded.join(", ")} exist(s) under this preview's names but not in the record read (a deploy may have just recorded it); the record is kept — run \`lunora preview delete ${record.name}\` again`,
+            EXIT_CODE.FAILURE,
+        );
     }
 
     return { code: EXIT_CODE.SUCCESS, data: { deleted: summarize(record) } };
@@ -553,6 +639,24 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
         );
     }
 
+    let states: ("changed" | "missing" | "present")[];
+
+    try {
+        states = await Promise.all(record.resources.map(async (resource) => recordedResourceState(request, resource)));
+    } catch (error) {
+        return fail(logger, `preview "${names.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
+    }
+
+    const changed = record.resources.filter((_resource, index) => states[index] === "changed");
+
+    // An id that now names a different resource means the record is stale or was edited: delete nothing.
+    if (changed.length > 0) {
+        return fail(
+            logger,
+            `the record for preview "${names.slug}" lists ${changed.map((resource) => `${resource.kind} ${resource.id}`).join(", ")}, which no longer name(s) the recorded resource; refusing to delete anything`,
+        );
+    }
+
     if (options.dryRun === true) {
         logger.info(`dry run: would delete Worker "${record.worker}" and its Durable Objects`);
 
@@ -563,7 +667,7 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
         return { code: EXIT_CODE.SUCCESS, data: { plan: summarize(record) } };
     }
 
-    return removePreview(request, namespace, record, logger);
+    return removePreview(request, namespace, record, planPreview(config, name).plan, logger);
 };
 
 const listPreviews = async (context: PreviewContext, options: PreviewCommandOptions): Promise<PreviewCommandResult> => {
@@ -635,6 +739,7 @@ const execute: CommandHandler<PreviewOptions> = defineHandler<PreviewOptions, Pr
         seed: options.seed === true,
         subcommand: argument[0],
         target: options.target,
+        vars: options.var,
     });
 
     return { code: result.code, data: result.data, error: result.error };

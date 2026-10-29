@@ -139,6 +139,8 @@ ${requirement}
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
 #   LUNORA_ADMIN_TOKEN     — the production worker's admin token
+#   LUNORA_PREVIEW_SECRET_SEED — optional: any long random string; previews then
+#                            keep their minted secrets across pushes
 env:
   CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
   CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -171,6 +173,8 @@ ${githubSetupSteps(pm)}
     steps:
 ${githubSetupSteps(pm)}
       - run: ${execLine(manager, ["preview", "deploy", `\${{ github.event.pull_request.number }}`])}
+        env:
+          LUNORA_PREVIEW_SECRET_SEED: \${{ secrets.LUNORA_PREVIEW_SECRET_SEED }}
 
   # Closing or merging the pull request deletes the preview Worker and every
   # resource recorded for it.
@@ -223,6 +227,8 @@ const buildGitlabContent = (manager: PackageManager): string => {
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
 #   LUNORA_ADMIN_TOKEN     — the production worker's admin token
+#   LUNORA_PREVIEW_SECRET_SEED — optional: any long random string; previews then
+#                            keep their minted secrets across pushes
 .lunora_base:
   image: ${pm.gitlabImage}
   stage: deploy

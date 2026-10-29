@@ -97,10 +97,12 @@ bucket the app binds gets a preview-owned copy. The deploy runs the normal
 pipeline under a transient `env.preview-<name>` block that clears production's
 routes and custom domains, then runs the data migrations against the preview
 and prints its `workers.dev` URL. It never writes to the project link or the
-schema baseline. A preview gets freshly minted values for the secrets Lunora
-can generate. A provider key is copied only when you pass `--secret KEY`, with
-the value taken from the environment. Production's secret values are never
-read.
+schema baseline. A preview gets minted values for the secrets Lunora can
+generate (derived from `LUNORA_PREVIEW_SECRET_SEED` when it is set, so they
+survive a redeploy). A provider key is copied only when you pass
+`--secret KEY`, with the value taken from the environment. Production's secret
+values are never read. Production's `vars` are copied; override one that must
+point at the preview, such as an auth base URL, with `--var KEY=VALUE`.
 
 What a preview owns is recorded in the account (a `lunora-preview-registry` KV
 namespace), so the job that deletes it does not need the runner that deployed

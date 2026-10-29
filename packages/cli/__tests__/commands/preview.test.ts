@@ -12,7 +12,7 @@ import { runCli } from "../../src/cli";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer/shared";
 import { runPreviewCommand } from "../../src/commands/preview/handler";
 import type { PreviewConfig, PreviewPlan } from "../../src/commands/preview/plan";
-import { planPreview, previewEnvironmentBlock, previewNames, resourceKey } from "../../src/commands/preview/plan";
+import { planPreview, previewEnvironmentBlock, previewNames, productionCollisions, resourceKey } from "../../src/commands/preview/plan";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import type { Spawner } from "../../src/util/spawn";
@@ -86,24 +86,35 @@ const KV_KEYS_PATH = /^\/storage\/kv\/namespaces\/([^/]+)\/keys$/u;
 const KV_NAMESPACE_PATH = /^\/storage\/kv\/namespaces\/([^/]+)$/u;
 const D1_PATH = /^\/d1\/database\/([^/]+)$/u;
 const R2_PATH = /^\/r2\/buckets\/([^/]+)$/u;
+const R2_OBJECTS_PATH = /^\/r2\/buckets\/([^/]+)\/objects$/u;
+const R2_OBJECT_PATH = /^\/r2\/buckets\/([^/]+)\/objects\/(.+)$/u;
 const SCRIPT_SETTINGS_PATH = /^\/workers\/scripts\/([^/]+)\/settings$/u;
 const SCRIPT_PATH = /^\/workers\/scripts\/([^/]+)$/u;
 const ACCOUNT_PREFIX = /^\/client\/v4\/accounts\/[^/]+/u;
 
-/** An in-memory Cloudflare account answering the REST calls a preview makes. */
-const fakeAccount = (): {
+/**
+ * An in-memory Cloudflare account answering the REST calls a preview makes. `keysPageSize` pages the KV keys
+ * listing by cursor; `hiddenKvListings` makes that many namespace listings come back empty, as a racing
+ * deploy that has not yet seen another's create would.
+ */
+const fakeAccount = (
+    options: { hiddenKvListings?: number; keysPageSize?: number } = {},
+): {
     calls: { method: string; path: string }[];
     d1: Map<string, string>;
     fetch: typeof globalThis.fetch;
     kv: Map<string, string>;
     kvValues: Map<string, Map<string, string>>;
     r2: Set<string>;
+    r2Objects: Map<string, Set<string>>;
     workers: Map<string, string | undefined>;
 } => {
     const d1 = new Map<string, string>();
     const kv = new Map<string, string>();
     const kvValues = new Map<string, Map<string, string>>();
     const r2 = new Set<string>();
+    const r2Objects = new Map<string, Set<string>>();
+    let hiddenKvListings = options.hiddenKvListings ?? 0;
     const workers = new Map<string, string | undefined>();
     const calls: { method: string; path: string }[] = [];
     let sequence = 0;
@@ -111,6 +122,62 @@ const fakeAccount = (): {
         sequence += 1;
 
         return `${prefix}-${String(sequence)}`;
+    };
+
+    const kvKeysRoute = (path: string, search: URLSearchParams): Response | undefined => {
+        const keys = KV_KEYS_PATH.exec(path);
+
+        if (keys !== null) {
+            const prefix = search.get("prefix") ?? "";
+            const matching = [...(kvValues.get(keys[1] ?? "")?.keys() ?? [])].filter((key) => key.startsWith(prefix));
+            const start = Number(search.get("cursor") ?? "0");
+            const size = options.keysPageSize ?? matching.length;
+            const next = start + size < matching.length ? String(start + size) : "";
+
+            return json({
+                errors: [],
+                result: matching.slice(start, start + size).map((name) => {
+                    return { name };
+                }),
+                result_info: { count: Math.min(size, matching.length - start), cursor: next },
+                success: true,
+            });
+        }
+
+        return undefined;
+    };
+
+    const kvNamespacesRoute = (method: string, path: string, body: string | undefined): Response | undefined => {
+        if (path === "/storage/kv/namespaces") {
+            if (method === "POST") {
+                const { title } = JSON.parse(body ?? "{}") as { title: string };
+
+                // Cloudflare refuses a second namespace with the same title.
+                if ([...kv.values()].includes(title)) {
+                    return json({ errors: [{ code: 10_014, message: "a namespace with this account ID and title already exists" }], success: false }, 400);
+                }
+
+                const id = nextId("kv");
+
+                kv.set(id, title);
+
+                return envelope({ id });
+            }
+
+            if (hiddenKvListings > 0) {
+                hiddenKvListings -= 1;
+
+                return envelope([]);
+            }
+
+            return envelope(
+                [...kv].map(([id, title]) => {
+                    return { id, title };
+                }),
+            );
+        }
+
+        return undefined;
     };
 
     const kvRoute = (method: string, path: string, search: URLSearchParams, body: string | undefined): Response | undefined => {
@@ -139,43 +206,19 @@ const fakeAccount = (): {
             return stored === undefined ? notFound() : new Response(stored, { status: 200 });
         }
 
-        const keys = KV_KEYS_PATH.exec(path);
-
-        if (keys !== null) {
-            const prefix = search.get("prefix") ?? "";
-
-            return envelope(
-                [...(kvValues.get(keys[1] ?? "")?.keys() ?? [])]
-                    .filter((key) => key.startsWith(prefix))
-                    .map((name) => {
-                        return { name };
-                    }),
-            );
-        }
-
         const namespace = KV_NAMESPACE_PATH.exec(path);
 
-        if (namespace !== null && method === "DELETE") {
-            return kv.delete(namespace[1] ?? "") ? envelope(null) : notFound();
-        }
+        if (namespace !== null) {
+            const id = namespace[1] ?? "";
 
-        if (path === "/storage/kv/namespaces") {
-            if (method === "POST") {
-                const id = nextId("kv");
-
-                kv.set(id, (JSON.parse(body ?? "{}") as { title: string }).title);
-
-                return envelope({ id });
+            if (method === "DELETE") {
+                return kv.delete(id) ? envelope(null) : notFound();
             }
 
-            return envelope(
-                [...kv].map(([id, title]) => {
-                    return { id, title };
-                }),
-            );
+            return kv.has(id) ? envelope({ id, title: kv.get(id) }) : notFound();
         }
 
-        return undefined;
+        return kvKeysRoute(path, search) ?? kvNamespacesRoute(method, path, body);
     };
 
     const storageRoute = (method: string, path: string, search: URLSearchParams, body: string | undefined): Response | undefined => {
@@ -199,10 +242,44 @@ const fakeAccount = (): {
 
         const database = D1_PATH.exec(path);
 
-        if (database !== null && method === "DELETE") {
+        if (database !== null) {
             const entry = [...d1].find(([, uuid]) => uuid === database[1]);
 
-            return entry !== undefined && d1.delete(entry[0]) ? envelope(null) : notFound();
+            if (method === "DELETE") {
+                return entry !== undefined && d1.delete(entry[0]) ? envelope(null) : notFound();
+            }
+
+            return entry === undefined ? notFound() : envelope({ name: entry[0], uuid: entry[1] });
+        }
+
+        return undefined;
+    };
+
+    const r2ObjectsRoute = (method: string, path: string): Response | undefined => {
+        const objects = R2_OBJECTS_PATH.exec(path);
+
+        if (objects !== null) {
+            const name = decodeURIComponent(objects[1] ?? "");
+
+            return r2.has(name)
+                ? envelope(
+                      [...(r2Objects.get(name) ?? [])].slice(0, 2).map((key) => {
+                          return { key };
+                      }),
+                  )
+                : notFound();
+        }
+
+        const object = R2_OBJECT_PATH.exec(path);
+
+        if (object !== null && method === "DELETE") {
+            const keys = r2Objects.get(decodeURIComponent(object[1] ?? ""));
+            const key = (object[2] ?? "")
+                .split("/")
+                .map((segment) => decodeURIComponent(segment))
+                .join("/");
+
+            return keys?.delete(key) === true ? envelope({ key }) : notFound();
         }
 
         return undefined;
@@ -215,12 +292,23 @@ const fakeAccount = (): {
             return envelope({});
         }
 
+        const objectsRouted = r2ObjectsRoute(method, path);
+
+        if (objectsRouted !== undefined) {
+            return objectsRouted;
+        }
+
         const bucket = R2_PATH.exec(path);
 
         if (bucket !== null) {
             const name = decodeURIComponent(bucket[1] ?? "");
 
             if (method === "DELETE") {
+                // R2 refuses to delete a bucket that still holds objects.
+                if ((r2Objects.get(name)?.size ?? 0) > 0) {
+                    return json({ errors: [{ code: 10_008, message: "The bucket you tried to delete is not empty" }], success: false }, 409);
+                }
+
                 return r2.delete(name) ? envelope(null) : notFound();
             }
 
@@ -274,7 +362,7 @@ const fakeAccount = (): {
         return handle(method, path, url.searchParams, typeof init?.body === "string" ? init.body : undefined);
     }) as typeof globalThis.fetch;
 
-    return { calls, d1, fetch, kv, kvValues, r2, workers };
+    return { calls, d1, fetch, kv, kvValues, r2, r2Objects, workers };
 };
 
 const PREVIEW_DEPLOY_OUTPUT = `Uploaded lunora-app-preview-42 (2.21 sec)
@@ -312,6 +400,8 @@ const wranglerAt = (
 
     return { deploys, spawner };
 };
+
+const PREVIEW_URL = "https://lunora-app-preview-42.acme.workers.dev";
 
 const CREDENTIALS = { CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_API_TOKEN: "token" };
 
@@ -415,6 +505,52 @@ describe("lunora preview", () => {
 
             expect(planPreview(leftover, "42").plan?.worker).toBe("lunora-app-preview-42");
             expect(planPreview(owned, "42").error).toMatch(/already declares "env.preview-42"/u);
+        });
+
+        it("copies the build-time constants, which wrangler does not inherit into an environment", () => {
+            expect.assertions(1);
+
+            const withDefine = { ...production, define: { __APP_VERSION__: '"1.2.3"' } } as PreviewConfig;
+            const plan = planOf(withDefine, "42");
+            const ids = new Map(plan.resources.map((resource) => [resourceKey(resource.kind, resource.binding), `preview-id-${resource.binding}`]));
+
+            expect(previewEnvironmentBlock(withDefine, plan, ids).define).toStrictEqual({ __APP_VERSION__: '"1.2.3"' });
+        });
+
+        it("applies --var overrides over production's vars, under the marker", () => {
+            expect.assertions(1);
+
+            const plan = planOf(production, "42");
+            const ids = new Map(plan.resources.map((resource) => [resourceKey(resource.kind, resource.binding), `preview-id-${resource.binding}`]));
+
+            expect(previewEnvironmentBlock(production, plan, ids, { LUNORA_PREVIEW: "spoofed", PUBLIC_FLAG: "off" }).vars).toStrictEqual({
+                LUNORA_PREVIEW: "lunora-app/42",
+                PUBLIC_FLAG: "off",
+            });
+        });
+
+        it("treats a marked environment as a preview's only when its key, Worker name and marker all match", () => {
+            expect.assertions(2);
+
+            // The user's own environment that happens to carry the marker var, for another preview.
+            const foreign = {
+                ...production,
+                env: { "preview-42": { name: "lunora-app-preview-42", vars: { LUNORA_PREVIEW: "lunora-app/7" } } },
+            } as PreviewConfig;
+            // A marked environment of the user's: its identities stay production's.
+            const marked = {
+                ...production,
+                env: {
+                    qa: {
+                        d1_databases: [{ binding: "DB", database_id: "qa-d1-uuid", database_name: "qa-db" }],
+                        name: "lunora-app-qa",
+                        vars: { LUNORA_PREVIEW: "lunora-app/qa" },
+                    },
+                },
+            } as PreviewConfig;
+
+            expect(planPreview(foreign, "42").error).toMatch(/already declares "env.preview-42"/u);
+            expect(productionCollisions(marked, ["qa-d1-uuid"])).toStrictEqual(["qa-d1-uuid"]);
         });
 
         it.each([
@@ -648,6 +784,139 @@ describe("lunora preview", () => {
             expect(account.calls).toHaveLength(0);
         });
 
+        it("deploys the --var overrides with the preview", async () => {
+            expect.assertions(2);
+
+            const account = fakeAccount();
+            const { deploys, spawner } = wranglerAt(workdir, account.workers);
+
+            const result = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+                vars: ["PUBLIC_FLAG=off", `AUTH_URL=${PREVIEW_URL}`],
+            });
+
+            expect(result.code).toBe(0);
+            expect((deploys[0]?.wrangler.env?.["preview-42"] as { vars: Record<string, string> }).vars).toStrictEqual({
+                AUTH_URL: PREVIEW_URL,
+                LUNORA_PREVIEW: "lunora-app/42",
+                PUBLIC_FLAG: "off",
+            });
+        });
+
+        it("refuses a --var that would replace the preview marker", async () => {
+            expect.assertions(1);
+
+            const result = await runPreviewCommand({
+                cwd: workdir,
+                dryRun: true,
+                environment: CREDENTIALS,
+                logger: silentLogger().logger,
+                name: "42",
+                subcommand: "deploy",
+                vars: [["LUNORA_PREVIEW", "lunora-app/7"].join("=")],
+            });
+
+            expect(result.error).toMatch(/the preview sets LUNORA_PREVIEW itself/u);
+        });
+
+        it("derives minted secrets from LUNORA_PREVIEW_SECRET_SEED, so a redeploy keeps them; without it each deploy mints afresh", async () => {
+            expect.assertions(3);
+
+            const tokens = async (environment: Record<string, string>): Promise<(string | undefined)[]> => {
+                const account = fakeAccount();
+                const { deploys, spawner } = wranglerAt(workdir, account.workers);
+
+                for (let run = 0; run < 2; run += 1) {
+                    // eslint-disable-next-line no-await-in-loop -- the second deploy is the redeploy
+                    await runPreviewCommand({
+                        adminFetch: adminRecorder().fetch,
+                        cwd: workdir,
+                        environment,
+                        fetch: account.fetch,
+                        healthFetch: healthy,
+                        logger: silentLogger().logger,
+                        name: "42",
+                        spawner,
+                        subcommand: "deploy",
+                    });
+                }
+
+                return deploys.map((deploy) => deploy.secrets.LUNORA_ADMIN_TOKEN);
+            };
+
+            const seeded = await tokens({ ...CREDENTIALS, LUNORA_PREVIEW_SECRET_SEED: "ci-seed" });
+            const fresh = await tokens({ ...CREDENTIALS, LUNORA_PREVIEW_SECRET_SEED: "" });
+
+            expect(seeded[0]).toMatch(/^[0-9a-f]{64}$/u);
+            expect(seeded[1]).toBe(seeded[0]);
+            expect(fresh[1]).not.toBe(fresh[0]);
+        });
+
+        it("refuses to rebind a recorded resource whose id now names a different resource", async () => {
+            expect.assertions(2);
+
+            const account = fakeAccount();
+            const { deploys, spawner } = wranglerAt(workdir, account.workers);
+            const deploy = async (): Promise<Awaited<ReturnType<typeof runPreviewCommand>>> =>
+                runPreviewCommand({
+                    adminFetch: adminRecorder().fetch,
+                    cwd: workdir,
+                    environment: CREDENTIALS,
+                    fetch: account.fetch,
+                    healthFetch: healthy,
+                    logger: silentLogger().logger,
+                    name: "42",
+                    spawner,
+                    subcommand: "deploy",
+                });
+
+            await deploy();
+
+            // The recorded uuid now belongs to an unrelated database.
+            const uuid = account.d1.get("lunora-app-preview-42-db") ?? "";
+
+            account.d1.delete("lunora-app-preview-42-db");
+            account.d1.set("billing-db", uuid);
+
+            const result = await deploy();
+
+            expect(result.error).toMatch(/now a different resource/u);
+            expect(deploys).toHaveLength(1);
+        });
+
+        it("writes to the registry another first deploy created while this one was looking", async () => {
+            expect.assertions(2);
+
+            // The first namespace listing misses the registry; the create is then refused as a duplicate title.
+            const account = fakeAccount({ hiddenKvListings: 1 });
+
+            account.kv.set("kv-registry", "lunora-preview-registry");
+
+            const { spawner } = wranglerAt(workdir, account.workers);
+            const result = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect(result.code).toBe(0);
+            expect(account.kvValues.get("kv-registry")?.has("lunora-app/42")).toBe(true);
+        });
+
         it("--dry-run shows the plan without calling Cloudflare or deploying", async () => {
             expect.assertions(4);
 
@@ -829,6 +1098,129 @@ describe("lunora preview", () => {
             expect(result.error).toMatch(/was not deployed as preview "42"; refusing to delete anything/u);
             expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
             expect(account.workers.has("lunora-app-preview-42")).toBe(true);
+        });
+
+        const recordOf = (
+            account: ReturnType<typeof fakeAccount>,
+        ): { set: (record: unknown) => void; value: Record<string, unknown> & { resources: Record<string, string>[] } } => {
+            const registry = [...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "";
+            const values = account.kvValues.get(registry);
+
+            return {
+                set: (record) => values?.set("lunora-app/42", JSON.stringify(record)),
+                value: JSON.parse(values?.get("lunora-app/42") ?? "{}") as Record<string, unknown> & { resources: Record<string, string>[] },
+            };
+        };
+
+        const deleteIt = async (account: ReturnType<typeof fakeAccount>): Promise<Awaited<ReturnType<typeof runPreviewCommand>>> =>
+            runPreviewCommand({
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                logger: silentLogger().logger,
+                name: "42",
+                subcommand: "delete",
+            });
+
+        it("refuses a record whose resource id now names an unrelated resource, and deletes nothing", async () => {
+            expect.assertions(3);
+
+            const account = await deployed();
+            const record = recordOf(account);
+
+            // An edited record: the D1 entry keeps the preview's name but points at someone else's database.
+            account.d1.set("billing-db", "billing-uuid");
+            record.set({
+                ...record.value,
+                resources: record.value.resources.map((resource) => (resource.kind === "d1" ? { ...resource, id: "billing-uuid" } : resource)),
+            });
+            account.calls.length = 0;
+
+            const result = await deleteIt(account);
+
+            expect(result.error).toMatch(/d1 billing-uuid, which no longer name\(s\) the recorded resource/u);
+            expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+            expect(account.d1.has("billing-db")).toBe(true);
+        });
+
+        it("refuses a record with a resource this CLI could not have written", async () => {
+            expect.assertions(2);
+
+            const account = await deployed();
+            const record = recordOf(account);
+
+            record.set({
+                ...record.value,
+                resources: [...record.value.resources, { binding: "PG", id: "prod-hd", kind: "hyperdrive", name: "lunora-app-preview-42-pg" }],
+            });
+            account.calls.length = 0;
+
+            const result = await deleteIt(account);
+
+            expect(result.error).toMatch(/is not one this CLI wrote/u);
+            expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+        });
+
+        it("keeps the record when a resource under the preview's names is missing from a stale read of it", async () => {
+            expect.assertions(3);
+
+            const account = await deployed();
+            const record = recordOf(account);
+
+            // KV served a record written before the R2 bucket was added to it.
+            record.set({ ...record.value, resources: record.value.resources.filter((resource) => resource.kind !== "r2") });
+
+            const result = await deleteIt(account);
+
+            expect(result.error).toMatch(/r2 "lunora-app-preview-42-files" exist\(s\) under this preview's names but not in the record read/u);
+            expect(recordOf(account).value.version).toBe(1);
+            expect(account.r2.has("lunora-app-preview-42-files")).toBe(true);
+        });
+
+        it("empties a preview bucket that still holds objects, then deletes it", async () => {
+            expect.assertions(3);
+
+            const account = await deployed();
+
+            account.r2Objects.set("lunora-app-preview-42-files", new Set(["a.txt", "uploads/b.png", "uploads/c d.png"]));
+
+            const result = await deleteIt(account);
+
+            expect(result.code).toBe(0);
+            expect(account.r2.size).toBe(0);
+            expect(account.r2Objects.get("lunora-app-preview-42-files")?.size).toBe(0);
+        });
+
+        it("lists every recorded preview across pages of the registry's keys", async () => {
+            expect.assertions(1);
+
+            const account = fakeAccount({ keysPageSize: 2 });
+            const { spawner } = wranglerAt(workdir, account.workers);
+
+            for (const name of ["1", "2", "3", "4", "5"]) {
+                // eslint-disable-next-line no-await-in-loop -- one preview at a time, as CI would
+                await runPreviewCommand({
+                    adminFetch: adminRecorder().fetch,
+                    cwd: workdir,
+                    environment: CREDENTIALS,
+                    fetch: account.fetch,
+                    healthFetch: healthy,
+                    logger: silentLogger().logger,
+                    name,
+                    spawner,
+                    subcommand: "deploy",
+                });
+            }
+
+            const listed = await runPreviewCommand({
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                logger: silentLogger().logger,
+                subcommand: "list",
+            });
+
+            expect(listed.data?.previews?.map((preview) => preview.name).toSorted()).toStrictEqual(["1", "2", "3", "4", "5"]);
         });
 
         it("--dry-run lists what would be deleted and deletes nothing", async () => {

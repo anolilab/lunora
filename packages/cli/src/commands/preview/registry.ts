@@ -9,6 +9,7 @@
  */
 import type { CloudflareRestOutcome } from "../../../../../shared/cloudflare-rest";
 import type { PreviewResourceKind } from "./plan";
+import { previewResourceName } from "./plan";
 
 type Request = (path: string, init?: RequestInit) => Promise<CloudflareRestOutcome>;
 
@@ -113,12 +114,48 @@ const createKvNamespace = async (request: Request, title: string): Promise<strin
 const registryNamespace = async (request: Request, create: boolean): Promise<string | undefined> => {
     const existing = await findKvNamespace(request, REGISTRY_TITLE);
 
-    return existing ?? (create ? createKvNamespace(request, REGISTRY_TITLE) : undefined);
+    if (existing !== undefined || !create) {
+        return existing;
+    }
+
+    try {
+        return await createKvNamespace(request, REGISTRY_TITLE);
+    } catch (error) {
+        // KV titles are unique per account: when two first deploys race, the loser's create is refused and
+        // both must write to the namespace the winner made.
+        const raced = await findKvNamespace(request, REGISTRY_TITLE);
+
+        if (raced === undefined) {
+            throw error;
+        }
+
+        return raced;
+    }
 };
 
 const recordKey = (production: string, slug: string): string => `${production}/${slug}`;
 
 const valuePath = (namespace: string, key: string): string => `/storage/kv/namespaces/${encodeURIComponent(namespace)}/values/${encodeURIComponent(key)}`;
+
+const RESOURCE_KINDS: ReadonlySet<unknown> = new Set<PreviewResourceKind>(["d1", "kv", "r2"]);
+
+/**
+ * A resource entry this CLI could have written for `worker`: a known kind, the name derived from the Worker and
+ * binding, and for R2 the name as its id. Anything else in an account-editable record is not acted on.
+ */
+const isRecordedResource = (worker: string, value: unknown): value is RecordedResource => {
+    const candidate = value as Partial<RecordedResource> | null;
+
+    return (
+        typeof candidate === "object" &&
+        candidate !== null &&
+        RESOURCE_KINDS.has(candidate.kind) &&
+        typeof candidate.binding === "string" &&
+        typeof candidate.id === "string" &&
+        candidate.name === previewResourceName(worker, candidate.binding) &&
+        (candidate.kind !== "r2" || candidate.id === candidate.name)
+    );
+};
 
 const isRecord = (value: unknown): value is PreviewRecord => {
     const candidate = value as Partial<PreviewRecord> | null;
@@ -129,7 +166,8 @@ const isRecord = (value: unknown): value is PreviewRecord => {
         candidate.version === 1 &&
         typeof candidate.worker === "string" &&
         typeof candidate.production === "string" &&
-        Array.isArray(candidate.resources)
+        Array.isArray(candidate.resources) &&
+        candidate.resources.every((resource) => isRecordedResource(candidate.worker as string, resource))
     );
 };
 
@@ -162,16 +200,36 @@ const deleteRecord = async (request: Request, namespace: string, record: Preview
     expectOk(await request(valuePath(namespace, recordKey(record.production, record.name)), { method: "DELETE" }), "removing the preview record");
 };
 
-/** Every recorded preview of `production`. */
+/** Every recorded preview of `production`. The keys listing is cursor-paged; a partial list is refused, not shown. */
 const listRecords = async (request: Request, namespace: string, production: string): Promise<PreviewRecord[]> => {
     const prefix = `${production}/`;
-    const body = expectOk(
-        await request(`/storage/kv/namespaces/${encodeURIComponent(namespace)}/keys?prefix=${encodeURIComponent(prefix)}`),
-        "listing preview records",
-    );
-    const names = (Array.isArray(body.result) ? (body.result as { name?: unknown }[]) : []).flatMap((entry) =>
-        typeof entry.name === "string" ? [entry.name] : [],
-    );
+    const names: string[] = [];
+    let cursor = "";
+
+    for (let page = 1; ; page += 1) {
+        if (page > MAX_PAGES) {
+            throw new Error(`the preview records of "${production}" span more than ${String(MAX_PAGES)} pages`);
+        }
+
+        const query = `prefix=${encodeURIComponent(prefix)}${cursor === "" ? "" : `&cursor=${encodeURIComponent(cursor)}`}`;
+        // eslint-disable-next-line no-await-in-loop -- each page's cursor comes from the previous page
+        const body = expectOk(await request(`/storage/kv/namespaces/${encodeURIComponent(namespace)}/keys?${query}`), "listing preview records");
+
+        names.push(
+            ...(Array.isArray(body.result) ? (body.result as { name?: unknown }[]) : []).flatMap((entry) =>
+                typeof entry.name === "string" ? [entry.name] : [],
+            ),
+        );
+
+        const info = (typeof body.result_info === "object" && body.result_info !== null ? body.result_info : {}) as { cursor?: unknown };
+
+        if (typeof info.cursor !== "string" || info.cursor === "") {
+            break;
+        }
+
+        cursor = info.cursor;
+    }
+
     const records = await Promise.all(names.map(async (key) => readRecord(request, namespace, key)));
 
     return records.filter((record): record is PreviewRecord => record !== undefined);
@@ -228,16 +286,74 @@ const RESOURCE_PATHS: Record<PreviewResourceKind, (id: string) => string> = {
     r2: (id) => `/r2/buckets/${encodeURIComponent(id)}`,
 };
 
-/** Delete one recorded resource; one already gone counts as deleted. Throws with Cloudflare's reason otherwise. */
+/**
+ * Whether a recorded id still identifies the resource of the recorded name: `present`, `missing` (gone), or
+ * `changed` (the id now names something else, so the record was edited or is stale and must not be acted on).
+ */
+const recordedResourceState = async (request: Request, resource: RecordedResource): Promise<"changed" | "missing" | "present"> => {
+    const outcome = await request(RESOURCE_PATHS[resource.kind](resource.id));
+
+    if (!outcome.ok && outcome.status === 404) {
+        return "missing";
+    }
+
+    const found = resultObject(expectOk(outcome, `looking up ${resource.kind} "${resource.name}"`));
+    const name = { d1: found.name, kv: found.title, r2: found.name }[resource.kind];
+
+    return name === resource.name ? "present" : "changed";
+};
+
+const objectPath = (bucket: string, key: string): string =>
+    `/r2/buckets/${encodeURIComponent(bucket)}/objects/${key
+        .split("/")
+        .map((segment) => encodeURIComponent(segment))
+        .join("/")}`;
+
+/** Delete every object in a preview bucket: R2 refuses to delete a bucket that still holds any. */
+const emptyBucket = async (request: Request, bucket: string): Promise<void> => {
+    // Each round lists what is left after the previous round's deletes, so no cursor is carried.
+    for (let round = 1; round <= MAX_PAGES; round += 1) {
+        // eslint-disable-next-line no-await-in-loop -- a round lists what the previous one left
+        const listed = await request(`/r2/buckets/${encodeURIComponent(bucket)}/objects?per_page=1000`);
+
+        if (!listed.ok && listed.status === 404) {
+            return;
+        }
+
+        const body = expectOk(listed, `listing the objects of R2 bucket "${bucket}"`);
+        const keys = (Array.isArray(body.result) ? (body.result as { key?: unknown }[]) : []).flatMap((entry) =>
+            typeof entry.key === "string" ? [entry.key] : [],
+        );
+
+        if (keys.length === 0) {
+            return;
+        }
+
+        for (const key of keys) {
+            // eslint-disable-next-line no-await-in-loop -- one request at a time stays under the REST API's rate limit
+            const outcome = await request(objectPath(bucket, key), { method: "DELETE" });
+
+            if (!outcome.ok && outcome.status !== 404) {
+                throw new Error(`deleting object "${key}" failed (${describeFailure(outcome)})`);
+            }
+        }
+    }
+
+    throw new Error(`R2 bucket "${bucket}" still holds objects after ${String(MAX_PAGES)} rounds of deletes`);
+};
+
+/** Delete one recorded resource (an R2 bucket is emptied first); one already gone counts as deleted. */
 const deleteResource = async (request: Request, resource: RecordedResource): Promise<void> => {
+    if (resource.kind === "r2") {
+        await emptyBucket(request, resource.id);
+    }
+
     const outcome = await request(RESOURCE_PATHS[resource.kind](resource.id), { method: "DELETE" });
 
     if (outcome.ok || outcome.status === 404) {
         return;
     }
 
-    // ponytail: R2 refuses to delete a bucket that still holds objects and the REST API cannot empty one; the
-    // resource stays on record so a re-run retries it once the bucket is emptied.
     throw new Error(describeFailure(outcome));
 };
 
@@ -280,7 +396,7 @@ const workersSubdomain = async (request: Request): Promise<string> => {
     return subdomain;
 };
 
-export type { PreviewRecord, Request };
+export type { PreviewRecord, RecordedResource, Request };
 export {
     createResource,
     deleteRecord,
@@ -289,6 +405,7 @@ export {
     findResource,
     listRecords,
     readRecord,
+    recordedResourceState,
     recordKey,
     registryNamespace,
     workerMarker,
