@@ -389,7 +389,7 @@ describe("saas template checkout", () => {
     interface Payment {
         checkout: Checkout;
         holdCheckout: Handler<{ priceId: string; referenceId: string }, { holdId: string; sessionExpiresAt: number } | { url: string }>;
-        settleCheckoutHold: Handler<{ holdId: string; url?: string }, void>;
+        settleCheckoutHold: Handler<{ holdId: string; url: string }, void>;
     }
 
     const NOW = 1_700_000_000_000;
@@ -402,7 +402,7 @@ describe("saas template checkout", () => {
         const payment = await load<Payment>("templates", "saas", "lunora", "payment", "index.ts");
         const database = createDatabase({ checkout_holds: [["referenceId"]] });
         let sessions = 0;
-        const createCheckout = vi.fn<(input: { email?: string; expiresAt?: number }) => Promise<{ url: string }>>(async () => {
+        const createCheckout = vi.fn<(input: { email?: string; expiresAt?: number; idempotencyKey?: string }) => Promise<{ url: string }>>(async () => {
             sessions += 1;
 
             return { url: `https://pay.example.test/session-${String(sessions)}` };
@@ -546,21 +546,33 @@ describe("saas template checkout", () => {
         clock.now += HOLD_MS + 1;
 
         await payment.checkout({ args: { priceId: "price_scale" }, ctx });
-        await payment.settleCheckoutHold({ args: { holdId: (stale as { holdId: string }).holdId }, ctx: { db: database.db, now: clock.now } });
+        await payment.settleCheckoutHold({
+            args: { holdId: (stale as { holdId: string }).holdId, url: "https://pay.example.test/stale" },
+            ctx: { db: database.db, now: clock.now },
+        });
 
         expect(database.rows("checkout_holds")).toHaveLength(1);
         expect(database.rows("checkout_holds")[0]).toMatchObject({ priceId: "price_scale", url: "https://pay.example.test/session-1" });
     });
 
-    it("drops the hold when the provider refuses to start the session", async () => {
-        expect.assertions(2);
+    it("keeps the hold when the provider call fails, and retries the same plan under the same key", async () => {
+        expect.assertions(5);
 
         const { createCheckout, ctx, database, payment } = await setup([]);
 
-        createCheckout.mockRejectedValueOnce(new Error("provider down"));
+        createCheckout.mockRejectedValueOnce(new Error("provider timed out"));
 
-        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx })).rejects.toThrow("provider down");
-        expect(database.rows("checkout_holds")).toHaveLength(0);
+        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx })).rejects.toThrow("provider timed out");
+        expect(database.rows("checkout_holds")).toHaveLength(1);
+        // The session may exist after all, so another plan must still wait for the hold.
+        await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).rejects.toMatchObject({ code: "CONFLICT" });
+
+        await payment.checkout({ args: { priceId: "price_pro" }, ctx });
+
+        const keys = createCheckout.mock.calls.map(([input]) => (input as { idempotencyKey?: string }).idempotencyKey);
+
+        expect(keys).toHaveLength(2);
+        expect(keys[1]).toBe(keys[0]);
     });
 });
 

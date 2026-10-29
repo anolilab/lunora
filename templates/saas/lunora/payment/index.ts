@@ -4,8 +4,9 @@
  * This file is YOURS: it's a normal Lunora module, copied into your project so
  * you own and edit it. Re-export the functions you want from your `lunora/`
  * entry so codegen picks them up — they surface in the generated `api` as
- * `payment/checkout`, `payment/track`, `payment/check`, `payment/portal`,
- * `payment/mySubscriptions`.
+ * `payment/checkout`, `payment/check`, `payment/portal` and
+ * `payment/mySubscriptions`, and `payment/track` in `internal`, for server code
+ * only.
  *
  * The functions are provider-agnostic: they call `ctx.payments.*` which is
  * wired in `createShardDO({ payment: (env) => ({ adapter: ..., ... }) })`.
@@ -206,8 +207,13 @@ export const holdCheckout = internalMutation
         if (hold && (hold["expiresAt"] as number) > ctx.now) {
             const url = hold["url"] as string | undefined;
 
-            if (hold["priceId"] === priceId && url !== undefined) {
-                return { url };
+            if (hold["priceId"] === priceId) {
+                // Started: hand back the same session. Not started, or not known to be (the
+                // provider call failed or is still running): retry under the same hold, which
+                // replays the provider's session if one was created rather than opening another.
+                return url === undefined
+                    ? { holdId: hold["_id"] as Id<"checkout_holds">, sessionExpiresAt: (hold["expiresAt"] as number) - CHECKOUT_HOLD_MARGIN_MS }
+                    : { url };
             }
 
             throw new LunoraError("CONFLICT", "a checkout for this organization is already in progress — finish it, or pick another plan once it expires");
@@ -225,18 +231,16 @@ export const holdCheckout = internalMutation
     });
 
 /**
- * Record the started session on the hold (`url`), or drop the hold when starting
- * it failed (no `url`). By id, not by organisation: a provider call that outlived
- * its hold must not settle the newer one a later checkout took in its place.
+ * Record the started session on the hold. By id, not by organisation: a provider
+ * call that outlived its hold must not settle the newer one a later checkout took
+ * in its place.
  */
 export const settleCheckoutHold = internalMutation
-    .input({ holdId: v.id("checkout_holds"), url: v.optional(v.string()) })
+    .input({ holdId: v.id("checkout_holds"), url: v.string() })
     .mutation(async ({ args: { holdId, url }, ctx }): Promise<void> => {
-        if (!(await ctx.db.get("checkout_holds", holdId))) {
-            return;
+        if (await ctx.db.get("checkout_holds", holdId)) {
+            await ctx.db.patch("checkout_holds", holdId, { url });
         }
-
-        await (url === undefined ? ctx.db.delete("checkout_holds", holdId) : ctx.db.patch("checkout_holds", holdId, { url }));
     });
 
 /**
@@ -278,26 +282,21 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
         return { url: pending.url };
     }
 
-    let url: string;
-
-    try {
-        ({ url } = await ctx.payments.createCheckout({
-            cancelUrl: billingPage("cancel"),
-            // A provider that mints a customer from an email needs it on the first
-            // checkout; the claim is verified at sign-in, never taken from the client.
-            email: (await ctx.auth.getIdentity())?.email,
-            expiresAt: pending.sessionExpiresAt,
-            mode: "subscription",
-            priceId,
-            referenceId,
-            successUrl: billingPage("success"),
-        }));
-    } catch (error) {
-        // Nothing was started, so nothing should block the next attempt.
-        await ctx.runMutation(internal.payment.settleCheckoutHold, { holdId: pending.holdId });
-
-        throw error;
-    }
+    // A failure here keeps the hold: a timeout or a dropped response can follow a
+    // session the provider did create. The hold's id is the idempotency key, so a
+    // retry for the same plan gets that session back rather than a second one.
+    const { url } = await ctx.payments.createCheckout({
+        cancelUrl: billingPage("cancel"),
+        // A provider that mints a customer from an email needs it on the first
+        // checkout; the claim is verified at sign-in, never taken from the client.
+        email: (await ctx.auth.getIdentity())?.email,
+        expiresAt: pending.sessionExpiresAt,
+        idempotencyKey: String(pending.holdId),
+        mode: "subscription",
+        priceId,
+        referenceId,
+        successUrl: billingPage("success"),
+    });
 
     await ctx.runMutation(internal.payment.settleCheckoutHold, { holdId: pending.holdId, url });
 
@@ -305,17 +304,22 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
 });
 
 /**
- * Record one metered usage event for the caller's organisation. `track` writes
- * the durable ledger (exactly-once by idempotency key) and, when the provider
- * supports it, forwards a meter event — best-effort.
+ * Record one metered usage event for an organisation. `track` writes the durable
+ * ledger (exactly-once by idempotency key) and, when the provider supports it,
+ * forwards a meter event — best-effort.
+ *
+ * Internal, not client-callable: usage is billed, so only the server code that
+ * did the billable work may record it, once it succeeded. Call it with
+ * \`ctx.runAction(internal.payment.track, { idempotencyKey, referenceId })\`, where
+ * the key names that piece of work, so a retried operation is counted once.
  */
-export const track = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
-    const referenceId = await billingReference(ctx);
+export const track = internalAction
+    .input({ idempotencyKey: v.string().max(255), referenceId: v.string() })
+    .action(async ({ args: { idempotencyKey, referenceId }, ctx }): Promise<{ recorded: boolean }> => {
+        const result = await ctx.payments.track({ featureId: API_CALLS, idempotencyKey, referenceId });
 
-    const result = await ctx.payments.track({ featureId: API_CALLS, referenceId });
-
-    return { recorded: result.recorded };
-});
+        return { recorded: result.recorded };
+    });
 
 /**
  * Check whether the caller's organisation is still under its metered allowance
