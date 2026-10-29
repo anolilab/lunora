@@ -19,20 +19,23 @@ If hooks aren't firing, run `pnpm exec vis hook install` (or `vis hook validate`
 
 Independent per-package versioning via `vis release` — the `release` block in `vis.config.ts` is the whole configuration; there is no per-package release file. Conventional Commits drive bumps; `.github/workflows/semantic-release.yml` publishes on push to `alpha` / `main` / `next` / `beta`. Do not author `release` commits manually.
 
-The workflow keeps its filename because npm's trusted publishers are registered against `semantic-release.yml` for every package — renaming it breaks publishing until all 52 entries are updated.
+The workflow keeps its filename because npm's trusted publishers are registered against `semantic-release.yml` for every package — renaming it breaks publishing until all 57 entries are updated.
 
 ### What the release does on a push
 
-1. `vis release generate --from ${{ github.event.before }}` derives a change file from the commits this push added (vis is changesets-style and `ci release` does not derive them itself), and commits it — `ci release` refuses a dirty tree.
-2. `vis release ci release --auto-publish` versions, writes changelogs, commits, tags, publishes to npm and pushes. It exits 0 with "Nothing to release" when the push carried nothing releasable.
-3. The lockfile is re-synced and pushed, and a CodSpeed baseline run is dispatched, exactly as before.
+1. `vis release generate --from ${{ github.event.before }}` writes a change file from the commits this push added (vis is changesets-style). A manual dispatch must pass the baseline as the `base` input; the job refuses to guess one.
+2. `node scripts/vis-release.mjs` versions, writes changelogs, publishes to npm, tags the checked-out commit and pushes the tags. It commits nothing and never pushes the branch — `vis release ci release --auto-publish` tags its own release commit and pushes the branch once without a retry, so a branch that moved mid-run strands the tags off-branch.
+3. The push step commits every tagged bump, changelog and the re-synced lockfile as one `chore(release)` commit and pushes it, retrying against a re-fetched tip. One branch push per run, plus one tag push.
 
-Locally: `vis release status --channel alpha` prints the pending plan, `vis release version --dry-run` shows what it would write, and `vis release doctor` checks the setup.
+A package that fails to publish is not retried by the next run (its change file was consumed): re-dispatch with `base` set to that run's baseline. The packages that did publish release once more.
 
-### Two rules the release depends on
+Locally: `vis release status --channel alpha` prints the pending plan, `vis release publish --dry-run` the dist-tag and versions it would publish, and `vis release doctor` checks the setup.
 
-- **`release.updateInternalDependencies: "out-of-range"`.** Sibling `peerDependencies` are promotion-safe ranges that a new alpha still satisfies, so they are left alone; sibling `dependencies` are rewritten to `^<new version>` when the release moves past them. `scripts/check-sibling-peer-ranges.js` fails the install if that setting disappears — under an unconditional rewrite every published consumer breaks at the 1.0.0 promotion.
-- **`release.changelog` points at `scripts/vis-changelog-format.js`.** `apps/docs` renders the public changelog feed by parsing `packages/*/CHANGELOG.md`, and needs the semantic-release heading shape plus `### Features` / `### Dependencies` sections. Neither built-in formatter emits those, so the feed would silently go quiet. The formatter also drops the machine `chore(release):` commits that `generate` transcribes verbatim.
+### Rules the release depends on
+
+- **Sibling ranges are restored after vis rewrites them.** vis's version step rewrites every specifier of a released sibling to `<operator><new version>` — `>=1.0.0-alpha.76 <2.0.0-0` becomes `>=1.0.0-alpha.252`. `scripts/vis-release-sibling-ranges.js` (a vis plugin, passed by `scripts/vis-release.mjs` because vis caches its config as JSON and drops plugin functions) puts back every range the new version still satisfies; exact pins become `^<new version>`. `scripts/check-sibling-peer-ranges.js` fails the install on a sibling peer range without an upper bound, and if `updateInternalDependencies: "out-of-range"` disappears.
+- **`ignoreCommitPattern` limits releases to feat / fix / perf / revert / breaking**, as before. vis's `generate` maps every other conventional type to a patch.
+- **`release.changelog` points at `scripts/vis-changelog-format.js`.** `apps/docs` renders the public changelog feed by parsing `packages/*/CHANGELOG.md`, and needs the semantic-release heading shape plus `### Features` / `### Dependencies` sections. Neither built-in formatter emits those, so the feed would silently go quiet.
 
 ## Internal scaffolding (`vis generate`)
 

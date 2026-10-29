@@ -11,14 +11,16 @@
  *
  * Two mechanisms interact here:
  *
- * 1. The release tool rewrites local sibling specifiers on every release. A mode
- *    that rewrites unconditionally replaces ANY specifier — ranges included —
- *    with the exact new version (that is how @lunora/replica's original
- *    `>=1.0.0-alpha.17 <2.0.0` peer got clobbered to `1.0.0-alpha.24`).
- *    `vis.config.ts` therefore sets `release.updateInternalDependencies:
- *    "out-of-range"`, which leaves a specifier alone while the new version still
- *    satisfies it (exact-pinned regular dependencies keep their lockstep bumps —
- *    an exact pin never satisfies the next version, so it is always rewritten).
+ * 1. The release tool rewrites local sibling specifiers on every release (that
+ *    is how @lunora/replica's original `>=1.0.0-alpha.17 <2.0.0` peer got
+ *    clobbered to `1.0.0-alpha.24`). vis rewrites every specifier of a released
+ *    sibling to `<operator><new version>`, so `>=1.0.0-alpha.76 <2.0.0-0` would
+ *    become `>=1.0.0-alpha.252`; scripts/vis-release-sibling-ranges.js puts back
+ *    every range the new version still satisfies, and this guard fails on a sibling
+ *    peer range with no upper bound in case it ever stops running. Exact-pinned
+ *    regular dependencies are left to vis (`^<new version>`). `vis.config.ts` also
+ *    sets `release.updateInternalDependencies: "out-of-range"`, so a satisfied
+ *    range does not cascade a release to its consumer.
  *
  * 2. npm-semver prerelease matching is tuple-scoped: `>=1.0.0-alpha.24 <2.0.0-0`
  *    does NOT match a post-stable prerelease like `1.0.1-alpha.1`. If the alpha
@@ -28,8 +30,8 @@
  *
  * A second, report-only mode covers exact sibling `dependencies` pins (as
  * opposed to `peerDependencies`). Exact-pinned regular dependencies are this
- * repo's *deliberate* lockstep convention (see point 1 above) — "out-of-range"
- * bumps them in lockstep whenever the CONSUMER package itself releases. But a
+ * repo's *deliberate* lockstep convention (see point 1 above) — the release
+ * rewrites them to `^<new version>` whenever the CONSUMER package itself releases. But a
  * consumer with no triggering commits since its dependency's last release
  * keeps its stale pin indefinitely — the terminal case is a `private: true`
  * package that never releases at all. For a published sibling that drift means
@@ -50,7 +52,7 @@
  * drift. (`workspace:*` peers pass the exact-pin peer check above.)
  *
  * The same report covers sibling `>=<floor>` RANGES (used for `@lunora/errors`
- * so every sibling dedupes onto one `LunoraError` class). "out-of-range" never raises
+ * so every sibling dedupes onto one `LunoraError` class). The release never raises
  * a floor the new version still satisfies, so a floor below the dependency's
  * current version is reported for a maintainer to raise by hand.
  *
@@ -100,7 +102,22 @@ let hasFailure = false;
 
 for (const { dir, manifest } of manifests) {
     for (const [name, specifier] of Object.entries(manifest.peerDependencies ?? {})) {
-        if (!isSibling(name) || typeof specifier !== "string" || !EXACT_VERSION_RE.test(specifier)) {
+        if (!isSibling(name) || typeof specifier !== "string") {
+            continue;
+        }
+
+        // The shape vis's version step writes when scripts/vis-release-sibling-ranges.js
+        // did not run: the floor ratcheted to the newest version and the ceiling dropped.
+        if (specifier.startsWith(">=") && !specifier.includes("<")) {
+            hasFailure = true;
+
+            console.error(`❌ packages/${dir}'s peerDependency "${name}" has no upper bound (${specifier}).`);
+            console.error('   The release rewrote a sibling range; restore the previous range, e.g. ">=<floor> <2.0.0-0".');
+
+            continue;
+        }
+
+        if (!EXACT_VERSION_RE.test(specifier)) {
             continue;
         }
 
@@ -168,11 +185,10 @@ if (dependencyWarnings > 0) {
     );
 }
 
-// The range fix only holds while the release tool leaves a satisfied specifier
-// alone. In `vis release` that is `updateInternalDependencies: "out-of-range"` —
-// the mode that rewrites a sibling specifier only when the new version no longer
-// satisfies it. Under an unconditional mode the next release rewrites every
-// sibling range back to an exact pin. Fail if that config drifts.
+// `updateInternalDependencies: "out-of-range"` cascades a release only to a consumer
+// whose sibling specifier the new version no longer satisfies. Under "patch" or
+// "minor" every release of a sibling also releases each package that peers on it
+// through a range. Fail if that config drifts.
 //
 // Read as text, not imported: vis.config.ts is TypeScript, and this runs from
 // `postinstall` where a failure turns every CI job red in its setup step.
@@ -183,13 +199,13 @@ try {
         hasFailure = true;
 
         console.error('❌ vis.config.ts no longer sets release.updateInternalDependencies: "out-of-range".');
-        console.error("   Without it, the release rewrites sibling peer RANGES back to exact pins on the next publish.");
+        console.error("   Without it, every release of a sibling also releases each package that peers on it through a range.");
     }
 } catch {
     hasFailure = true;
 
     console.error("❌ vis.config.ts is missing or unreadable.");
-    console.error('   Its release block must set updateInternalDependencies: "out-of-range" so sibling peer ranges survive releases.');
+    console.error('   Its release block must set updateInternalDependencies: "out-of-range".');
 }
 
 if (hasFailure) {
@@ -197,5 +213,5 @@ if (hasFailure) {
 }
 
 console.log(
-    '✅ No exact @lunora/* or lunorash peerDependency pins; private packages use workspace:/catalog: siblings; vis release keeps ranges (updateInternalDependencies: "out-of-range").',
+    '✅ No exact or unbounded @lunora/* or lunorash peerDependency ranges; private packages use workspace:/catalog: siblings; updateInternalDependencies: "out-of-range".',
 );

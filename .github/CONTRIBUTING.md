@@ -122,11 +122,11 @@ Pre-commit hooks (vis-native — installed by the root `prepare` script's `vis h
 
 ## Release process
 
-Releases run on **`multi-semantic-release`** triggered by `.github/workflows/semantic-release.yml` on pushes to `alpha` (and later, `main` / `next` / `beta`).
+Releases run on **`vis release`** triggered by `.github/workflows/semantic-release.yml` on pushes to `alpha` (and later, `main` / `next` / `beta`).
 
-You don't tag, you don't bump versions, and you never author a release commit by hand — each run tags every released package, then pushes all version bumps, changelogs and the lockfile as one `chore(release): … [skip ci]` commit. Conventional Commits drive the version bumps; the workflow generates changelogs and publishes per-package.
+You don't tag, you don't bump versions, and you never author a release commit by hand — each run tags every released package, then pushes all version bumps, changelogs and the lockfile as one `chore(release): … [skip ci]` commit. Conventional Commits drive the version bumps (`feat`, `fix`, `perf`, `revert` and breaking changes release; other types do not); the workflow generates changelogs and publishes per package.
 
-Every publishable package carries its own `.releaserc.json` (extending `@anolilab/semantic-release-preset/pnpm`), and the root `release.config.mjs` overrides its plugin list for all of them; only the three `private: true` internal packages lack one, and those are never published.
+The `release` block in the root `vis.config.ts` configures every publishable package; there is no per-package release file. The three `private: true` internal packages are never published.
 
 ## Help
 

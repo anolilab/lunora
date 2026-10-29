@@ -145,11 +145,10 @@ export default defineConfig({
     taskRunner: {
         parallel: 5,
     },
-    // `vis release` replaces multi-semantic-release + @anolilab/semantic-release-preset.
     // Every publishable package is released from here; there is no per-package release
-    // config any more (the 52 `.releaserc.json` files are gone). `.github/workflows/
-    // semantic-release.yml` is still named that because npm's trusted publishers are
-    // registered against that filename — the file drives `vis release` now.
+    // config. CI runs it through scripts/vis-release.mjs (see its header for why not
+    // `vis release ci release`). `.github/workflows/semantic-release.yml` keeps that name
+    // because npm's trusted publishers are registered against the filename.
     release: {
         // The subsystem prints an unstable warning (RFC §21.2) on every invocation.
         // Acknowledged deliberately, not silenced by accident.
@@ -172,7 +171,7 @@ export default defineConfig({
         },
         // Git tags were semantic-release's source of truth too, so every package continues
         // its existing version stream instead of restarting from whatever `package.json`
-        // happens to hold. All 4,925 existing tags parse under the default
+        // happens to hold. All 11,628 existing tags parse under the default
         // `{name}@{version}` pattern, so nothing needs backfilling.
         currentVersionResolver: "git-tag",
         // Every publishable package. Private ones (apps, examples, tests) are excluded by
@@ -181,6 +180,13 @@ export default defineConfig({
         // The version step rewrites package.json, which Prettier does check
         // (CHANGELOG.md is in .prettierignore, so only the manifest matters).
         formatChangedFiles: true,
+        // Only feat, fix, perf, revert and breaking commits release, as they did under
+        // @anolilab/semantic-release-preset (no entry in any CHANGELOG.md was released by
+        // anything else). vis's `generate` maps every other type to a patch, so without this a
+        // docs or test commit — or a `ci:` commit touching every package dir — would release.
+        // The `!` form is not matched, so `chore!:` still releases as breaking; a
+        // `BREAKING CHANGE:` footer under one of these types is dropped with its commit.
+        ignoreCommitPattern: ["^(build|chore|ci|deps|docs|refactor|security|style|test|translation)(\\([^)]*\\))?:"],
         gitUser: { email: "github-actions[bot]@users.noreply.github.com", name: "github-actions-shell" },
         publish: {
             catalogResolution: "auto",
@@ -193,13 +199,11 @@ export default defineConfig({
             publishArgs: ["--provenance"],
             publishStrategy: "npm-publish-tarball",
         },
-        // This is `.multi-releaserc.json`'s `deps.bump: "satisfy"`, under vis's name, and
-        // scripts/check-sibling-peer-ranges.js asserts it stays that way. Sibling
-        // peerDependencies are promotion-safe RANGES (`>=1.0.0-alpha.24 <2.0.0-0`) that a
-        // new alpha still satisfies, so they are left alone; exact-pinned sibling
-        // `dependencies` never satisfy the next version, so they keep their lockstep
-        // rewrite. Switching this to a mode that rewrites unconditionally re-breaks every
-        // published consumer at the 1.0.0 promotion.
+        // Only cascades to a sibling whose specifier the new version no longer satisfies, so
+        // a promotion-safe peer RANGE (`>=1.0.0-alpha.24 <2.0.0-0`) does not release its
+        // consumer. It does NOT stop vis rewriting that range when the consumer releases
+        // anyway — scripts/vis-release-sibling-ranges.js undoes that. Both are asserted by
+        // scripts/check-sibling-peer-ranges.js.
         updateInternalDependencies: "out-of-range",
     },
     staged: {

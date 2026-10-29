@@ -4,7 +4,7 @@
 # The FILENAME is load-bearing and must not change: npm's trusted publishers are
 # registered per package against `semantic-release.yml` (see
 # scripts/publish-name-placeholder.mjs), so renaming this file breaks publishing for
-# every package until all 52 trusted-publisher entries are updated.
+# every package until all 57 trusted-publisher entries are updated.
 
 "name": "Release"
 
@@ -27,9 +27,8 @@
                 "type": "string"
 
 # Never cancel an in-progress release (GitHub may still replace a run that is only
-# pending). A wave versions, commits, tags and publishes in sequence; a run cancelled
-# between the tag push and the publish leaves a tag whose version was never published,
-# and the next run refuses that tag as a collision rather than republishing over it.
+# pending). A run cancelled after publishing but before its tag push leaves versions on
+# npm with no git tag, and those tags then have to be created by hand.
 "concurrency":
     "group": "${{ github.workflow }}-${{ github.ref }}"
     "cancel-in-progress": false
@@ -65,7 +64,7 @@
               "with":
                   "egress-policy": "audit"
 
-            # Persist credentials so the release can push tags and release commits.
+            # Persist credentials so vis can push tags and this job the release commit.
             - "name": "Git checkout" # zizmor: ignore[artipacked]
               "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
               "with":
@@ -130,25 +129,23 @@
             - "name": "Disable git hooks for release commits"
               "run": "git config core.hooksPath /dev/null"
 
-            # `vis release` is change-file driven (changesets-style) and `ci release` does
-            # NOT derive them, so a commit-driven release has to write one first.
+            # `vis release` is change-file driven (changesets-style), so a commit-driven release
+            # writes one first. It stays uncommitted: the release step consumes it and the push
+            # step commits what that wrote.
             #
             # The baseline is exclusive (`generate` runs `git log <from>..HEAD`) and is
             # never guessed:
             #
             #   push     — `github.event.before`, the branch tip this push replaced, so the
-            #              range is exactly "the commits this push added". That also excludes
-            #              the previous run's own release commits — `generate` transcribes
-            #              commit subjects verbatim, so a wider range copies old changelog
-            #              headers into the new entry.
+            #              range is exactly "the commits this push added".
             #   dispatch — the required `base` input.
             #
             # Anything else fails the job: a force-push whose old tip is gone, a branch's
-            # first push, an unresolvable input. The `HEAD~1` fallback this replaces looked
-            # like a safe default and was not — a dispatch after N unreleased commits
-            # released only the last one, and the commits it skipped are unrecoverable: no
-            # change file is ever written for them, so the version and the changelog lose
-            # them for good. Failing is recoverable; under-releasing is not.
+            # first push, an unresolvable input. A `HEAD~1` fallback looks like a safe
+            # default and is not — a dispatch after N unreleased commits would release only
+            # the last one, and the commits it skipped are unrecoverable: no change file is
+            # ever written for them, so the version and the changelog lose them for good.
+            # Failing is recoverable; under-releasing is not.
             - "name": "Derive change files from this push"
               "shell": "bash"
               "env":
@@ -180,34 +177,29 @@
 
                   pnpm exec vis release generate --from "${from}" --name "ci-$(git rev-parse --short HEAD)"
 
-                  # `vis release ci release` refuses to run on a dirty tree, and the change
-                  # file it just wrote is untracked. Commit it so the release step sees a
-                  # clean tree; the version step deletes it again in the release commit.
-                  if [ -n "$(git status --porcelain -- .vis/release)" ]; then
-                      git -c "user.name=github-actions-shell" \
-                          -c "user.email=github-actions[bot]@users.noreply.github.com" \
-                          add -- .vis/release
-                      git -c "user.name=github-actions-shell" \
-                          -c "user.email=github-actions[bot]@users.noreply.github.com" \
-                          commit --message "chore(release): record pending change file [skip ci]"
-                  else
-                      echo "No change file written — nothing to release."
-                  fi
-
-            # Versions, writes changelogs, commits, tags, publishes and pushes — the whole
-            # wave. Exits 0 with "Nothing to release" when the push carried no releasable
-            # commit, so it is safe on every push to a release branch.
+            # Versions, writes changelogs, publishes, then tags the checked-out commit and
+            # pushes the tags — but commits nothing and never pushes the branch; the next
+            # step does that once. See the header of scripts/vis-release.mjs for why this is
+            # not `vis release ci release --auto-publish`.
             - "name": "Release"
               "env":
                   "GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
                   "GITHUB_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
                   "NPM_TOKEN": "${{ secrets.NPM_TOKEN }}"
                   "VIS_GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
-              "run": "pnpm exec vis release ci release --auto-publish"
+                  # The release tags are annotated, so `git tag -a` needs an identity.
+                  "GIT_AUTHOR_NAME": "github-actions-shell"
+                  "GIT_AUTHOR_EMAIL": "github-actions[bot]@users.noreply.github.com"
+                  "GIT_COMMITTER_NAME": "github-actions-shell"
+                  "GIT_COMMITTER_EMAIL": "github-actions[bot]@users.noreply.github.com"
+              "run": "node scripts/vis-release.mjs"
 
-            # The release bumps every package.json, but the release commit stages only the
-            # per-package files it wrote — the root pnpm-lock.yaml drifts, and a drifted
-            # lockfile fails `--frozen-lockfile`, blocking every later push to the branch.
+            # The release step only tags and publishes; its bumps are pushed here as ONE commit:
+            # each push to the branch rebuilds every merge-queue group, and a commit per package
+            # re-ran full CI ~40 times per release.
+            #
+            # The tags stay on the checked-out commit, which is already on the branch, so a lost
+            # push or a killed job can never leave a tag that `git tag --merged` misses (#1054).
             #
             # Retried against a re-fetched tip because the branch moves underneath the job:
             # a release takes ~15 minutes, and a PR merged in that window makes a single
@@ -234,26 +226,21 @@
                   git config core.hooksPath /dev/null
 
                   released=()
-                  while IFS= read -r releaserc; do
-                      dir="$(dirname "${releaserc}")"
+                  for manifest in packages/*/package.json; do
+                      dir="$(dirname "${manifest}")"
+                      tag="$(jq -r '"\(.name)@\(.version)"' "${manifest}")"
 
-                      # clean-package-json restores the manifest only on success; a publish that
-                      # failed after tagging leaves the stripped one beside this backup.
-                      if [[ -f "${dir}/package.json.back" ]]; then
-                          mv "${dir}/package.json.back" "${dir}/package.json"
-                      fi
-
-                      tag="$(jq -r '"\(.name)@\(.version)"' "${dir}/package.json")"
-
-                      # Only a bump whose tag was pushed: a package that failed before tagging
-                      # is released again from scratch by the next run.
+                      # Only a bump whose tag exists. A package that failed to publish is NOT
+                      # retried by the next run — its change file was consumed — so the job fails
+                      # (see the release step) and someone re-dispatches with `base` set to this
+                      # run's baseline; the packages that did publish then release once more.
                       if git diff --quiet -- "${dir}/package.json" || ! git rev-parse --quiet --verify "refs/tags/${tag}" > /dev/null; then
                           continue
                       fi
 
                       git add -- "${dir}/package.json" "${dir}/CHANGELOG.md"
                       released+=("${tag}")
-                  done < <(git ls-files '*.releaserc.json')
+                  done
 
                   release_commit=""
                   if (( ${#released[@]} > 0 )); then
