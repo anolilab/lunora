@@ -44,19 +44,18 @@ export const JobHistory = ({ loadJobs }: JobHistoryProps = {}): ReactElement => 
         setLoadingOlder(true);
         setOlderError(undefined);
 
-        const page = await load(nextCursor).catch((error: unknown) => {
-            setOlderError(errorMessage(error));
+        // Reset on both paths rather than in a `finally`, which React Compiler cannot lower.
+        try {
+            const page = await load(nextCursor);
 
-            return undefined;
-        });
-
-        if (page !== undefined) {
             setOlder((previous) => {
                 return { cursor: page.cursor, records: [...(previous?.records ?? []), ...page.records] };
             });
+            setLoadingOlder(false);
+        } catch (error: unknown) {
+            setOlderError(errorMessage(error));
+            setLoadingOlder(false);
         }
-
-        setLoadingOlder(false);
     };
     const stateLabel = { canceled: t("canceled"), failed: t("failed"), pending: t("pending"), running: t("running"), succeeded: t("succeeded") };
 
