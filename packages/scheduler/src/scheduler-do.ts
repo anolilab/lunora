@@ -2426,12 +2426,13 @@ class SchedulerDO {
         });
 
         // A run that died with no later tick to notice is reconciled here, so it
-        // reads as failed rather than running forever.
+        // reads as failed rather than running forever. Record first, release
+        // second, as in `/cron/end`: a failed write keeps the lease for a retry.
         for (const [key, lease] of lost) {
-            // eslint-disable-next-line no-await-in-loop -- a handful of lost leases at most; each delete-then-record pair stays ordered
-            await this.state.storage.delete(key);
-            // eslint-disable-next-line no-await-in-loop -- see above
+            // eslint-disable-next-line no-await-in-loop -- a handful of lost leases at most; each record-then-delete pair stays ordered
             await this.recordLostCronRun(lease, now);
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await this.state.storage.delete(key);
         }
         await this.forEachPage<CronRunRecord>(CRON_RUN_PREFIX, (run) => {
             runs.push(run);

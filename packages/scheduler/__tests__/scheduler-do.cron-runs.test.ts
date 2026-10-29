@@ -250,6 +250,24 @@ describe("schedulerDO cron runs", () => {
         await expect(runs(scheduler)).resolves.toMatchObject({ inFlight: [], runs: [{ runId, status: "failed" }] });
     });
 
+    it("keeps a lapsed lease when recording it as failed fails, and records it on the next read", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, env);
+        const lost = await acquire(scheduler, "digest");
+
+        setNow(1_700_000_000_000 + DISPATCH_LEASE_MS);
+
+        const put = vi.spyOn(state.storage, "put").mockRejectedValueOnce(new Error("storage unavailable"));
+
+        await scheduler.fetch(new Request("https://scheduler.internal/cron/runs")).catch(() => undefined);
+        put.mockRestore();
+
+        await expect(runs(scheduler)).resolves.toMatchObject({ inFlight: [], runs: [{ runId: lost, status: "failed" }] });
+    });
+
     it("refuses a begin without a name and an end without a valid status", async () => {
         expect.hasAssertions();
 
