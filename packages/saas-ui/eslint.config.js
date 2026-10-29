@@ -119,19 +119,11 @@ export default createConfig(
         rules: {
             "@typescript-eslint/naming-convention": "off",
             "@typescript-eslint/no-empty-object-type": "off",
-            "@typescript-eslint/no-explicit-any": "off",
             "@typescript-eslint/no-non-null-assertion": "off",
-            "@typescript-eslint/no-unnecessary-condition": "off",
-            "@typescript-eslint/no-unsafe-argument": "off",
-            "@typescript-eslint/no-unsafe-assignment": "off",
-            "@typescript-eslint/no-unsafe-call": "off",
-            "@typescript-eslint/no-unsafe-member-access": "off",
-            "@typescript-eslint/no-unsafe-return": "off",
             "@typescript-eslint/require-await": "off",
             "import/no-extraneous-dependencies": "off",
             "unicorn/no-null": "off",
             "unicorn/prevent-abbreviations": "off",
-            "unused-imports/no-unused-vars": "off",
             "react-perf/jsx-no-new-object-as-prop": "off",
             // Passing rows to a component is the test; hoisting every fixture to
             // module scope to satisfy a perf rule would obscure what each asserts.
