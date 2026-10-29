@@ -675,6 +675,8 @@ interface ProjectConfigLiterals {
     };
     codegen?: {
         exclude?: string[];
+        lazyFunctions?: boolean;
+        lazyFunctionsUnreadable?: true;
         unreadable?: boolean;
     };
     durableObjects?: {

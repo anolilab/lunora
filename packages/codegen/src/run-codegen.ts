@@ -74,7 +74,7 @@ import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, MutatorIR, ShapeIR, WorkflowIR } from "./ir";
 import { setStandardTypeResolver } from "./parse-validator";
 import { platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
-import { readMergeDurableObjects } from "./project-config-file";
+import { readMergeDurableObjects, readProjectLazyFunctions } from "./project-config-file";
 import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
 import { buildSchemaSnapshot } from "./schema-drift";
@@ -382,7 +382,11 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const startedAt = timingEnabled ? performance.now() : 0;
 
     const lunoraDirectory = join(options.projectRoot, options.lunoraDirectory ?? "lunora");
-    const lazyFunctions = options.lazyFunctions === true;
+    // Either opt-in enables the lazy registry, and `false` does not veto the
+    // project's: the config is what keeps every entry point that regenerates
+    // `_generated/` in agreement, so a caller that merely omits the flag must
+    // not rewrite it eager.
+    const lazyFunctions = options.lazyFunctions === true || readProjectLazyFunctions(options.projectRoot);
     const schemaPath = join(lunoraDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {

@@ -69,7 +69,6 @@ interface LunoraPluginOptions {
     allowUnauthenticatedShardAccess?: boolean;
     apiSpec?: CodegenOptions["apiSpec"];
     cloudflare?: boolean | CloudflarePluginOptions;
-    lazyFunctions?: CodegenOptions["lazyFunctions"];
     overlay?: boolean | OverlayPluginOptions;
     projectRoot?: string;
     schemaDir?: string;

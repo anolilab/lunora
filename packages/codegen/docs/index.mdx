@@ -87,11 +87,21 @@ Under `lunora dev`, codegen runs in watch mode: save a function or change the
 schema and the regenerated types are in the module graph before you switch
 windows.
 
-Pass `--lazy-functions` or set `LUNORA_LAZY_FUNCTIONS` to `1` or `true` in the
-shell to enable lazy imports for CLI `codegen`, `dev`, `prepare`, `build`,
-`deploy`, and `verify`, including dev watch runs and Studio edits. Either opt-in
-enables lazy imports; a false flag value does not override an enabled
-environment setting. With neither enabled, generation stays eager.
+To use the lazy registry for good, set it in `lunora.config.ts`:
+
+```ts
+export default { codegen: { lazyFunctions: true } } satisfies LunoraConfig;
+```
+
+Codegen reads the key itself, so every entry point that writes or checks
+`_generated/` agrees: CLI `codegen`, `dev`, `prepare`, `build`, `deploy` and
+`verify`, dev watch runs, Studio edits, and the Vite and Rspack plugins. Write
+it as a boolean literal; a computed value logs a warning and stays eager.
+
+For a single run, pass `--lazy-functions` or set `LUNORA_LAZY_FUNCTIONS` to `1`
+or `true` in the shell. Any one opt-in enables lazy imports; a false flag value
+does not override the config or an enabled environment setting. With none
+enabled, generation stays eager.
 `deploy --prebuilt` keeps the output from an earlier build without regenerating.
 
 ## Don't edit `_generated/`
@@ -154,8 +164,9 @@ Common options:
   `result.advisories` is empty. To keep the advisor but drop its lower levels,
   set `advisor.minSeverity` in `lunora.config.ts` instead (see below).
 - `apiSpec`: `"openapi"` (default), `"openrpc"`, `"both"`, or `"none"`.
-- `lazyFunctions`: set to `true` to emit per-module lazy imports; omitted or
-  `false` keeps the eager registry.
+- `lazyFunctions`: set to `true` to emit per-module lazy imports. Omitted or
+  `false` keeps the eager registry unless `codegen.lazyFunctions` in
+  `lunora.config.ts` enables it.
 - `lunoraDirectory`: override the `lunora` subdirectory name.
 
 ## Trimming advisories (`advisor.minSeverity`)

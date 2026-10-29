@@ -30,7 +30,6 @@ interface CompilerLike {
 ```ts
 interface LunoraRspackOptions {
     apiSpec?: CodegenOptions["apiSpec"];
-    lazyFunctions?: CodegenOptions["lazyFunctions"];
     projectRoot?: string;
     schemaDir?: string;
     target?: string;
