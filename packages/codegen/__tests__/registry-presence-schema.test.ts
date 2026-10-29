@@ -79,4 +79,14 @@ describe("presence registry item — schema drift on upgrade", () => {
 
         expect(snapshotOf(itemSchema).tables["presence_present"]?.ttl).toStrictEqual({ after: ttlMs, field: "lastSeen" });
     });
+
+    it("declares no lastSeen index of its own, since the engine already keeps one for the TTL", () => {
+        expect.assertions(1);
+
+        // Every heartbeat rewrites `lastSeen`, so a declared copy of the TTL's
+        // expression index would double the index writes on the hottest path.
+        const indexes = Object.values(snapshotOf(itemSchema).tables["presence_present"]?.indexes ?? {});
+
+        expect(indexes.filter(({ fields }) => fields[0] === "lastSeen")).toStrictEqual([]);
+    });
 });

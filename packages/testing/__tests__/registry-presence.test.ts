@@ -278,10 +278,27 @@ export { v };`,
             await expect(remaining(t)).resolves.toStrictEqual(["/gone-app", "org-a/gone-a-lobby", "org-a/live-a", "org-b/gone-b"]);
         });
 
+        it("sweeps a room in every tenant when given only its roomId, the shape crons written before tenant scoping pass", async () => {
+            expect.assertions(2);
+
+            const t = start();
+
+            await t.run(async (ctx) => {
+                await ctx.db.insert("presence_present", { lastSeen: 0, roomId: "lobby", sessionId: "gone-a", tenantId: "org-a" });
+                await ctx.db.insert("presence_present", { lastSeen: 0, roomId: "lobby", sessionId: "gone-b", tenantId: "org-b" });
+                await ctx.db.insert("presence_present", { lastSeen: 0, roomId: "lobby", sessionId: "gone-legacy" });
+                await ctx.db.insert("presence_present", { lastSeen: 0, roomId: "board", sessionId: "gone-a-board", tenantId: "org-a" });
+                await ctx.db.insert("presence_present", { lastSeen: NOW, roomId: "lobby", sessionId: "live-b", tenantId: "org-b" });
+            });
+
+            await expect(sweep(t, { roomId: "lobby" })).resolves.toStrictEqual({ deleted: 3 });
+            await expect(remaining(t)).resolves.toStrictEqual(["org-a/gone-a-board", "org-b/live-b"]);
+        });
+
         it("refuses a tenant without a room rather than guessing which rows it means", async () => {
             expect.assertions(1);
 
-            await expect(sweep(start(), { tenantId: "org-a" })).rejects.toThrow(/pass both tenantId and roomId/u);
+            await expect(sweep(start(), { tenantId: "org-a" })).rejects.toThrow(/a tenantId needs its roomId/u);
         });
     });
 });

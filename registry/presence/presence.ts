@@ -101,8 +101,8 @@ const JOIN_CLEANUP_BATCH = 50;
 
 /**
  * Expired rows one cross-tenant `sweep` deletes at most, so a backlog cannot push
- * the mutation past its read/write limits. A larger backlog drains over the
- * following cron ticks.
+ * the mutation past its read/write limits; the table's `.ttl()` alarm drains the
+ * rest.
  */
 const SWEEP_BATCH = 500;
 
@@ -243,14 +243,22 @@ export const listPresent = query.input({ roomId: v.string().max(256) }).query(as
 
 /**
  * Hard-delete expired rows in the shard this runs on — a cron dispatches to the
- * root shard only, so organization shards rely on the table's `.ttl()` alarm.
- * Without arguments it deletes up to {@link SWEEP_BATCH} of them across every
- * tenant and room; being internal (server-only), it may cross tenants. That path scans by
- * `lastSeen` alone, so it also reclaims rows written before rooms were
- * tenant-scoped, which no `(tenantId, roomId)` lookup can reach. Pass both
- * `tenantId` (`""` for the app-wide tenant) and `roomId` to sweep just that room.
- * Stale rows already vanish from `listPresent` via the read-time TTL filter, so
- * this is purely housekeeping.
+ * root shard only, so organization shards rely on the table's `.ttl()` alarm,
+ * and this is an on-demand pass on top of it.
+ *
+ *   - `{}` — up to {@link SWEEP_BATCH} expired rows of every tenant and room.
+ *   - `{ roomId }` — up to {@link SWEEP_BATCH} expired rows of that room in every
+ *     tenant: the shape crons written before rooms were tenant-scoped still pass.
+ *   - `{ roomId, tenantId }` — every expired row of that one room (`""` is the
+ *     app-wide tenant).
+ *
+ * Being internal (server-only), the first two may cross tenants. They match rows
+ * by `lastSeen` (and `roomId`) rather than through the tenant index, so they also
+ * reclaim rows written before rooms were tenant-scoped, which no `(tenantId,
+ * roomId)` lookup can reach. They filter a table scan rather than declare a
+ * `lastSeen` index: the `.ttl()` already makes the engine keep one, which
+ * `withIndex` cannot name, and a second would cost every heartbeat a second
+ * index write for a path that runs on demand.
  */
 export const sweep = internalMutation
     .input({ roomId: v.optional(v.string()), tenantId: v.optional(v.string()) })
@@ -262,13 +270,13 @@ export const sweep = internalMutation
             return { deleted: await deleteExpired(ctx, tenantId, roomId, cutoff) };
         }
 
-        if (tenantId !== undefined || roomId !== undefined) {
-            throw new LunoraError("BAD_REQUEST", "presence/sweep: pass both tenantId and roomId for one room, or neither to sweep every tenant.");
+        if (tenantId !== undefined) {
+            throw new LunoraError("BAD_REQUEST", "presence/sweep: a tenantId needs its roomId; pass neither, a roomId, or both.");
         }
 
         const stale = await ctx.db
             .query(PRESENCE_TABLE)
-            .withIndex("byLastSeen", (q) => q.lte("lastSeen", cutoff))
+            .filter((row) => (row["lastSeen"] as number) <= cutoff && (roomId === undefined || row["roomId"] === roomId))
             .take(SWEEP_BATCH);
 
         await Promise.all(stale.map((row) => ctx.db.delete(PRESENCE_TABLE, row["_id"] as never)));

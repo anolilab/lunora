@@ -76,7 +76,7 @@ function Room({ roomId }: { roomId: string }) {
 
 `listPresent` never returns stale rows, so deleting them is purely about reclaiming storage, and the table does it on its own: `.ttl("lastSeen", { after: 30_000 })` in `lunora/presence/schema.ts` has every Durable Object's alarm delete its own expired rows. That matters in a sharded app — an organization's rooms live in its own shard, and nothing else reaches all of them. Keep that `after` equal to `PRESENCE_TTL_MS` when you change the TTL; codegen reads the literal, not the constant.
 
-The internal `sweep` mutation is an on-demand pass over **the shard it runs on**. Without arguments it deletes up to 500 expired rows across every tenant in that shard; with both `tenantId` (`""` for the app-wide tenant) and `roomId` it deletes that one room's. A cron dispatches to the root shard, so a scheduled `sweep` cleans only rooms that live there:
+The internal `sweep` mutation is an on-demand pass over **the shard it runs on**. Without arguments it deletes up to 500 expired rows across every tenant in that shard; with a `roomId` alone, up to 500 of that room's in every tenant (the shape crons written before rooms were tenant-scoped pass, so they keep working); with both `tenantId` (`""` for the app-wide tenant) and `roomId`, that one room's. A `tenantId` without a `roomId` is refused. A cron dispatches to the root shard, so a scheduled `sweep` cleans only rooms that live there:
 
 ```ts
 // lunora/crons.ts
