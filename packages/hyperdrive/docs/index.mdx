@@ -464,15 +464,20 @@ const globalDb = createPostgresGlobalCtxDb(
 
 ```ts tab="MySQL"
 import { createMysqlGlobalCtxDb } from "@lunora/hyperdrive/global";
-import mysql from "mysql2/promise";
 
 // CLIENT_FOUND_ROWS is REQUIRED — the affected-rows OCC guard must see matched
 // (not changed) rows, or an idempotent patch reports 0 and raises a false conflict.
 // `disableEval` is required for mysql2 on Workers.
 // The server's sql_mode must not include NO_BACKSLASH_ESCAPES (see "Drivers & placeholders").
-const pool = mysql.createPool({ uri: env.HYPERDRIVE.connectionString, disableEval: true, flags: ["FOUND_ROWS"] });
+// The loader runs on the first statement, so mysql2 is not evaluated at Worker startup.
+const globalDb = createMysqlGlobalCtxDb(
+    async () => {
+        const { createPool } = await import("mysql2/promise");
 
-const globalDb = createMysqlGlobalCtxDb(pool, { schema });
+        return createPool({ uri: env.HYPERDRIVE.connectionString, disableEval: true, flags: ["FOUND_ROWS"] });
+    },
+    { schema },
+);
 ```
 
 </Tabs>
@@ -563,7 +568,7 @@ the engine rather than by Lunora's scorer.
 The convenience constructors cover the common path. For custom wiring, the
 lower-level pieces are also exported:
 
-- `buildPgExec(client)` / `buildMysqlExec(connection)` turn a driver into the
+- `buildPgExec(client)` / `buildMysqlExec(load)` turn a driver into the
   store's `SqlExec`.
 - `postgresDialect` / `mysqlDialect` are the engine dialects.
 - `createHyperdriveGlobalCtxDb({ engine, exec, ...storeOptions })` is the
@@ -691,9 +696,9 @@ From `@lunora/hyperdrive/global` (reactive `.global()` backend):
 | Export                                                      | Purpose                                                                                                                           |
 | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `createPostgresGlobalCtxDb(client, options)`                | Build a reactive Postgres `.global()` writer (`globalDb`)                                                                         |
-| `createMysqlGlobalCtxDb(connection, options)`               | Build a reactive MySQL `.global()` writer (needs `FOUND_ROWS`)                                                                    |
+| `createMysqlGlobalCtxDb(load, options)`                     | Build a reactive MySQL `.global()` writer (needs `FOUND_ROWS`)                                                                    |
 | `createHyperdriveGlobalCtxDb({ engine, exec, … })`          | General factory the two convenience constructors call                                                                             |
-| `buildPgExec(client)` / `buildMysqlExec(conn)`              | Wrap a driver as the store's `SqlExec`                                                                                            |
+| `buildPgExec(client)` / `buildMysqlExec(load)`              | Wrap a driver as the store's `SqlExec`                                                                                            |
 | `postgresDialect` / `mysqlDialect`                          | The engine dialects                                                                                                               |
 | `createPgVectorIndex({ client, name, dimensions })`         | A `pgvector`-backed index for `ctx.vectors` (no Vectorize binding); `name` is the SQL table identifier, not the `vectors` map key |
 | `exportHyperdriveGlobalRows` / `importHyperdriveGlobalRows` | The admin export/import of `.global()` rows (`lunora export`/`import`, `migrate d1-to-hyperdrive` and back); codegen wires them   |

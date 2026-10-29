@@ -227,7 +227,7 @@ const applyHyperdriveGlobalCdc: (options: {
 ### `buildMysqlExec` (const)
 
 ```ts
-const buildMysqlExec: (connection: Mysql2Client) => SqlExec;
+const buildMysqlExec: (load: () => Mysql2Client | Promise<Mysql2Client>) => SqlExec;
 ```
 
 ### `buildPgExec` (const)
@@ -251,7 +251,7 @@ const createHyperdriveGlobalIntrospector: (engine: HyperdriveEngine, exec: SqlEx
 ### `createMysqlGlobalCtxDb` (const)
 
 ```ts
-const createMysqlGlobalCtxDb: (connection: Mysql2Client, options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">) => DatabaseWriterLike;
+const createMysqlGlobalCtxDb: (load: () => Mysql2Client | Promise<Mysql2Client>, options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">) => DatabaseWriterLike;
 ```
 
 ### `createPgVectorIndex` (const)

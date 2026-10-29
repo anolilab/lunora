@@ -48,7 +48,7 @@ const createMysqlHarness = async (): Promise<MysqlHarness> => {
             await database.stop?.();
         },
         connection: { database: database.dbName, host: "127.0.0.1", port: database.port, user: database.username },
-        exec: buildMysqlExec(connection),
+        exec: buildMysqlExec(() => connection),
         query: async (sql, parameters = []) => {
             const [rows] = await connection.query(sql, parameters as unknown[]);
 
