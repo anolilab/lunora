@@ -36,15 +36,7 @@ A client names only the room. The server files it under the tenant it derives fr
 
 The tenant is the identity's `orgId` claim — the one the `auth-auth0-jwt`, `auth-clerk-jwt` and `auth-workos-jwt` presets emit. Callers without one (anonymous, or an app with no organizations) share the app-wide tenant `""`, which is right for a single-tenant app and holds no organization's rooms.
 
-better-auth puts no organization on the identity by default. To scope presence by its organization plugin, forward the active organization from your `resolveIdentity`:
-
-```ts
-resolveIdentity: async (request) => {
-    const session = await auth.api.getSession({ headers: request.headers });
-
-    return session?.user.id ? { orgId: session.session.activeOrganizationId ?? undefined, userId: session.user.id } : null;
-},
-```
+With `@lunora/auth`, the built-in identity carries `orgId` whenever the organization plugin is on: the caller's active organization, emitted only while their membership still exists. A removal can lag by up to the identity cache window (60 s by default; immediate with the `strict` preset), and an open subscription keeps the claim it connected with until it reconnects, so a removed member can stay in a room's member list until then. A `resolveIdentity` of your own replaces the built-in one, so forward the membership-checked organization as `orgId` from it.
 
 To scope by something else (a team, a workspace), change `presenceTenant` — it is the one place the policy lives. Read the tenant from the identity, never from `args`: a tenant the client chooses is no boundary.
 

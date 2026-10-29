@@ -65,12 +65,12 @@ const PRESENCE_DATA_MAX_BYTES = 4096;
  * The tenant whose rooms the caller can reach, from the verified identity and
  * never from `args` — a client-chosen tenant is no boundary at all.
  *
- * `orgId` is the claim the `auth-*-jwt` presets put on the identity. better-auth
- * forwards no organization by default: return
- * `orgId: session.session.activeOrganizationId` from your `resolveIdentity` to
- * get one. Without the claim every caller shares the app-wide tenant `""`, which
- * is right for a single-tenant app and holds no organization's rooms. Change
- * this function to change the policy (a team, a workspace…).
+ * `orgId` is the claim the `auth-*-jwt` presets and `@lunora/auth` (with the
+ * organization plugin) put on the identity. It can lag a membership removal by
+ * the identity cache window, and an open subscription keeps the claim it
+ * connected with. Without the claim every caller shares the app-wide tenant
+ * `""`, which is right for a single-tenant app and holds no organization's
+ * rooms. Change this function to change the policy (a team, a workspace…).
  */
 const presenceTenant = (identity: unknown): string => {
     const orgId = (identity as { orgId?: unknown } | null)?.orgId;
