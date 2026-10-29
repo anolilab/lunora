@@ -200,9 +200,11 @@ describe("project form", () => {
     it("mirrors the server's bounds so a user learns them while typing", () => {
         expect(validateName("")).toBe("Give the project a name.");
         expect(validateName("   ")).toBe("Give the project a name.");
-        expect(validateName("***")).toBe("Use at least one letter or number.");
         expect(validateName("a".repeat(121))).toBe("Keep it under 120 characters.");
         expect(validateName("Website")).toBeUndefined();
+        // The server slugs letters in any script, and gives a symbol-only name a slug of its own.
+        expect(validateName("日本語")).toBeUndefined();
+        expect(validateName("🚀")).toBeUndefined();
     });
 
     it("trims the name before it reaches the server", async () => {

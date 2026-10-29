@@ -11,8 +11,6 @@ import { createFormController } from "./create-form-controller";
 /** Matches the server's `name` bound in `registry/saas/saas.ts`. */
 const NAME_MAX_LENGTH = 120;
 
-const HAS_ALPHANUMERIC = /[a-z0-9]/iu;
-
 const validateName = (value: string): string | undefined => {
     const trimmed = value.trim();
 
@@ -22,12 +20,6 @@ const validateName = (value: string): string | undefined => {
 
     if (trimmed.length > NAME_MAX_LENGTH) {
         return `Keep it under ${NAME_MAX_LENGTH.toString()} characters.`;
-    }
-
-    // The server slugifies and rejects an empty slug; catching it here turns a
-    // round trip into instant feedback for a name like "***".
-    if (!HAS_ALPHANUMERIC.test(trimmed)) {
-        return "Use at least one letter or number.";
     }
 
     return undefined;
