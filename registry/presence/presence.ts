@@ -20,11 +20,12 @@
  *     heartbeat first. Subscribe to it for a reactive "who's here" list; the TTL
  *     filter ({@link PRESENCE_TTL_MS}) drops members that stopped heart-beating,
  *     so no client-side reaping is needed.
- *   - **sweep** (internal mutation) — hard-delete the expired rows for one tenant's room.
- *     Stale rows already vanish from `listPresent` via the read-time filter; this
- *     only reclaims storage — and a joining session already does that for its
- *     own room. It's *internal* (server-only) so a client can't trigger bulk
- *     deletes — wire it to a cron / `runAfter` to also reclaim rooms nobody joins.
+ *   - **sweep** (internal mutation) — hard-delete expired rows, across every tenant
+ *     by default or for one `(tenantId, roomId)` pair. Stale rows already vanish
+ *     from `listPresent` via the read-time filter; this only reclaims storage — and
+ *     a joining session already does that for its own room. It's *internal*
+ *     (server-only) so a client can't trigger bulk deletes — wire it to a cron to
+ *     also reclaim rooms nobody joins.
  *
  * The client half is `usePresence` in `@lunora/react`, which calls `heartbeat`
  * on an interval and subscribes to `listPresent`.
@@ -98,6 +99,13 @@ interface PresenceMember {
  * backlog would never insert its own row. The rest go on later joins and `sweep`.
  */
 const JOIN_CLEANUP_BATCH = 50;
+
+/**
+ * Expired rows one cross-tenant `sweep` deletes at most, so a backlog cannot push
+ * the mutation past its read/write limits. A larger backlog drains over the
+ * following cron ticks.
+ */
+const SWEEP_BATCH = 500;
 
 /**
  * Hard-delete up to `limit` rows of `tenantId`'s `roomId` last seen at or before
@@ -235,16 +243,37 @@ export const listPresent = query.input({ roomId: v.string().max(256) }).query(as
 });
 
 /**
- * Hard-delete every expired row for `roomId` in `tenantId` (`""` for the
- * app-wide tenant). Internal (server-only), so the caller names the tenant —
- * schedule it from a cron / `runAfter` to reclaim storage. Stale rows already
- * vanish from `listPresent` via the read-time TTL filter, so this is purely
- * housekeeping.
+ * Hard-delete expired rows. Without arguments it deletes up to
+ * {@link SWEEP_BATCH} of them across every tenant and room — schedule it from a
+ * cron. Being internal (server-only), it may cross tenants. That path scans by
+ * `lastSeen` alone, so it also reclaims rows written before rooms were
+ * tenant-scoped, which no `(tenantId, roomId)` lookup can reach. Pass both
+ * `tenantId` (`""` for the app-wide tenant) and `roomId` to sweep just that room.
+ * Stale rows already vanish from `listPresent` via the read-time TTL filter, so
+ * this is purely housekeeping.
  */
 export const sweep = internalMutation
-    .input({ roomId: v.string(), tenantId: v.string() })
+    .input({ roomId: v.optional(v.string()), tenantId: v.optional(v.string()) })
     .mutation(async ({ args: { roomId, tenantId }, ctx }): Promise<{ deleted: number }> => {
-        return { deleted: await deleteExpired(ctx, tenantId, roomId, ctx.now - PRESENCE_TTL_MS) };
+        const cutoff = ctx.now - PRESENCE_TTL_MS;
+
+        // `""` is the app-wide tenant, so presence is tested against `undefined`, never truthiness.
+        if (tenantId !== undefined && roomId !== undefined) {
+            return { deleted: await deleteExpired(ctx, tenantId, roomId, cutoff) };
+        }
+
+        if (tenantId !== undefined || roomId !== undefined) {
+            throw new LunoraError("BAD_REQUEST", "presence/sweep: pass both tenantId and roomId for one room, or neither to sweep every tenant.");
+        }
+
+        const stale = await ctx.db
+            .query(PRESENCE_TABLE)
+            .withIndex("byLastSeen", (q) => q.lte("lastSeen", cutoff))
+            .take(SWEEP_BATCH);
+
+        await Promise.all(stale.map((row) => ctx.db.delete(PRESENCE_TABLE, row["_id"] as never)));
+
+        return { deleted: stale.length };
     });
 
 export type { PresenceMember };

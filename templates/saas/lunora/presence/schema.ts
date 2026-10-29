@@ -28,8 +28,11 @@
  *     heartbeat handler additionally rejects a patch whose existing row belongs
  *     to a different `userId`, so a participant can't reuse another visible
  *     `sessionId` to hijack their presence row. Its `(tenantId, roomId)` prefix
- *     also serves the `listPresent` / `sweep` per-room scans, so no separate
- *     room index is needed (a standalone one would be a redundant prefix).
+ *     also serves the `listPresent` and targeted-`sweep` per-room scans, so no
+ *     separate room index is needed (a standalone one would be a redundant prefix).
+ *   - `byLastSeen` — drives the cross-tenant `sweep`. It reads expired rows by
+ *     age alone, which also reaches rows written before `tenantId` existed:
+ *     every tenant-prefixed lookup misses those.
  */
 import { definePlugin, defineSchemaExtension, defineTable, v } from "lunorash/server";
 
@@ -69,7 +72,8 @@ export const presence = definePlugin("presence", {
             })
                 // The `(tenantId, roomId)` prefix also covers the per-room
                 // `listPresent`/`sweep` scans — a separate room index would be redundant.
-                .index("byTenantRoomSession", ["tenantId", "roomId", "sessionId"]),
+                .index("byTenantRoomSession", ["tenantId", "roomId", "sessionId"])
+                .index("byLastSeen", ["lastSeen"]),
         },
     }),
 });

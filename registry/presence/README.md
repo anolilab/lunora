@@ -74,7 +74,7 @@ function Room({ roomId }: { roomId: string }) {
 
 ## Sweep on a schedule (optional)
 
-`listPresent` never returns stale rows, so sweeping is purely about reclaiming storage. To run it, schedule the internal mutation from a cron. It is server-only, so it takes the tenant explicitly (`""` for the app-wide tenant, otherwise the organization id):
+`listPresent` never returns stale rows, so sweeping is purely about reclaiming storage. To run it, schedule the internal mutation from a cron. Called without arguments it deletes expired rows across every tenant and room — it is server-only, so crossing tenants is safe — up to 500 per run; a larger backlog drains over the following runs:
 
 ```ts
 // lunora/crons.ts
@@ -84,10 +84,16 @@ import { internal } from "./_generated/internal";
 
 const crons = cronJobs();
 
-crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, { roomId: "lobby", tenantId: "" });
+crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, {});
 
 export default crons;
 ```
+
+To sweep a single room instead, pass both its tenant (`""` for the app-wide tenant, otherwise the organization id) and its `roomId`: `{ roomId: "lobby", tenantId: "org_123" }`.
+
+### Upgrading from untenanted rooms
+
+Rows written before rooms were tenant-scoped have no `tenantId`. Every heartbeat, `listPresent` and join-time cleanup looks rows up by tenant, so those rows are invisible to them: members re-appear with their next heartbeat as new rows, and the old ones sit in storage. The next argument-less `sweep` reclaims them once they are past the TTL, so schedule one (or run it once) after upgrading.
 
 ## What you own
 
