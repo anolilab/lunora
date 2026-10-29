@@ -235,8 +235,9 @@ class ReactiveCache {
         // only complete once the handler has actually run.
         // A point read's slice on the id index duplicates the `table:id` dep the
         // same read records, which `invalidate` finds by key; indexed as a range
-        // it would make every write walk one range per cached `get`.
-        const readRanges = ranges().filter((range) => !isPointRange(range));
+        // it would make every write walk one range per cached `get`. Kept when
+        // that dep is absent, since the range is then the only invalidation path.
+        const readRanges = ranges().filter((range) => !isPointRange(range) || !deps.has(depKey(range.table, range.lo)));
 
         const entry: CacheEntry = {
             bytes,
