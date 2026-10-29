@@ -50,6 +50,7 @@
  *     return {
  *         activeOrganizationId: member ? activeOrganizationId : undefined,
  *         appRole: (session.user as { role?: string | null }).role ?? undefined,
+ *         email: session.user.email || undefined,
  *         orgRole: member?.role,
  *         userId: session.user.id,
  *     };
@@ -82,6 +83,14 @@ export const identity = defineIdentity(
          * from {@link orgRole} rather than a higher value of it.
          */
         appRole: v.optional(v.string()),
+
+        /**
+         * The caller's email — better-auth's `user.email`, verified before sign-in
+         * succeeds (`requireEmailVerification`). A payment checkout hands it to
+         * the provider when it creates the organisation's first customer, which
+         * some providers (Polar, Dodo) cannot do without one.
+         */
+        email: v.optional(v.string()),
 
         /**
          * The caller's role in {@link activeOrganizationId} — `owner`,

@@ -124,7 +124,7 @@ const BILLING_ADMIN_ROLES: ReadonlySet<string> = new Set(["admin", "owner"]);
  * which would only admit a reference equal to the caller's user id.
  */
 const billingReference = async (
-    ctx: { auth: { getIdentity: () => Promise<{ activeOrganizationId?: string; orgRole?: string } | null> } },
+    ctx: { auth: { getIdentity: () => Promise<{ activeOrganizationId?: string; email?: string; orgRole?: string } | null> } },
     { adminOnly = false }: { adminOnly?: boolean } = {},
 ): Promise<string> => {
     const identity = await ctx.auth.getIdentity();
@@ -244,6 +244,16 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
         throw new LunoraError("UNPROCESSABLE", "unknown price — pick a plan from the catalog in lunora/plans.ts");
     }
 
+    // The hold below stops a second purchase only because the provider expires
+    // the first session when the hold ends. A provider that cannot is refused
+    // here, before a hold is taken, rather than by the facade after it.
+    if (!ctx.payments.adapter.capabilities.checkoutExpiry) {
+        throw new LunoraError(
+            "NOT_IMPLEMENTED",
+            `checkout needs a payment provider that can expire a session (capabilities.checkoutExpiry); ${ctx.payments.adapter.identifier} cannot`,
+        );
+    }
+
     // A checkout opens a NEW subscription. Started on top of one the provider is
     // still billing — `past_due` and `paused` included, not just `active` — it
     // bills the organisation for both. A plan change goes through the portal.
@@ -264,6 +274,9 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
     try {
         ({ url } = await ctx.payments.createCheckout({
             cancelUrl: billingPage("cancel"),
+            // A provider that mints a customer from an email needs it on the first
+            // checkout; the claim is verified at sign-in, never taken from the client.
+            email: (await ctx.auth.getIdentity())?.email,
             expiresAt: pending.sessionExpiresAt,
             mode: "subscription",
             priceId,

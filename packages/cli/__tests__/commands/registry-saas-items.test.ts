@@ -130,6 +130,21 @@ const createDatabase = (unique: Record<string, string[][]>) => {
                 assertUnique(table, next);
                 Object.assign(found, patch);
             },
+            replace: async (table: string, id: unknown, document: Row) => {
+                const found = find(table, id);
+
+                if (!found) {
+                    throw new Error(`no row ${String(id)} in ${table}`);
+                }
+
+                const next = { ...document, _id: found["_id"] };
+
+                assertUnique(table, next);
+                tables.set(
+                    table,
+                    rows(table).map((row) => (row === found ? next : row)),
+                );
+            },
             query: (table: string) => {
                 let predicate = (_row: Row) => true;
 
@@ -369,19 +384,19 @@ describe("saas template checkout", () => {
     const SESSION_MS = 35 * 60_000;
     const HOLD_MS = SESSION_MS + 60_000;
 
-    const setup = async (subscriptions: Row[]) => {
+    const setup = async (subscriptions: Row[], { checkoutExpiry = true } = {}) => {
         env["APP_BASE_URL"] = "https://app.example.test";
 
         const payment = await load<Payment>("templates", "saas", "lunora", "payment", "index.ts");
         const database = createDatabase({ checkout_holds: [["referenceId"]] });
         let sessions = 0;
-        const createCheckout = vi.fn<(input: { expiresAt?: number }) => Promise<{ url: string }>>(async () => {
+        const createCheckout = vi.fn<(input: { email?: string; expiresAt?: number }) => Promise<{ url: string }>>(async () => {
             sessions += 1;
 
             return { url: `https://pay.example.test/session-${String(sessions)}` };
         });
         const clock = { now: NOW };
-        const auth = signedIn({ activeOrganizationId: "org-1", orgRole: "owner" });
+        const auth = signedIn({ activeOrganizationId: "org-1", email: "owner@example.test", orgRole: "owner" });
         // The internal mutations run in the same shard, over the same database.
         const runMutation = async (reference: Record<typeof FUNCTION_PATH, string>, args: Row) => {
             const name = reference[FUNCTION_PATH].replace("payment.", "") as "holdCheckout" | "settleCheckoutHold";
@@ -390,7 +405,11 @@ describe("saas template checkout", () => {
         };
         const ctx = {
             auth,
-            payments: { createCheckout, listSubscriptions: vi.fn<() => Promise<Row[]>>(async () => subscriptions) },
+            payments: {
+                adapter: { capabilities: { checkoutExpiry }, identifier: checkoutExpiry ? "stripe" : "polar" },
+                createCheckout,
+                listSubscriptions: vi.fn<() => Promise<Row[]>>(async () => subscriptions),
+            },
             runMutation,
         };
         return { clock, createCheckout, ctx, database, payment };
@@ -412,6 +431,26 @@ describe("saas template checkout", () => {
 
         await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).resolves.toStrictEqual({ url: "https://pay.example.test/session-1" });
         expect(createCheckout).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a provider that cannot expire the session, before taking a hold", async () => {
+        expect.assertions(3);
+
+        const { createCheckout, ctx, database, payment } = await setup([], { checkoutExpiry: false });
+
+        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx })).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
+        expect(createCheckout).not.toHaveBeenCalled();
+        expect(database.rows("checkout_holds")).toHaveLength(0);
+    });
+
+    it("hands the provider the caller's verified email for a first customer", async () => {
+        expect.assertions(1);
+
+        const { createCheckout, ctx, payment } = await setup([]);
+
+        await payment.checkout({ args: { priceId: "price_pro" }, ctx });
+
+        expect(createCheckout.mock.calls[0]![0].email).toBe("owner@example.test");
     });
 
     it("has the provider expire the session before the hold ends", async () => {
@@ -545,6 +584,25 @@ describe("presence heartbeat", () => {
         // 121 expired rows (the 120 plus `closed-tab`): 50 go, 71 wait for the next join or a sweep.
         expect(lobby.filter((row) => (row["lastSeen"] as number) <= NOW - TTL)).toHaveLength(71);
         expect(lobby.map((row) => row["sessionId"])).toContain("new-tab");
+    });
+
+    it("clears a session's awareness data when a heartbeat carries none", async () => {
+        expect.assertions(2);
+
+        const beat = async (data?: Row) =>
+            heartbeat({
+                args: { roomId: "lobby", sessionId: "open-tab", ...(data === undefined ? {} : { data }) },
+                ctx: { auth: { userId: undefined }, db: database.db, ip: undefined, now: NOW },
+            });
+        const row = () => database.rows("presence_present").find((entry) => entry["sessionId"] === "open-tab");
+
+        await beat({ cursor: 3 });
+
+        expect(row()?.["data"]).toStrictEqual({ cursor: 3 });
+
+        await beat();
+
+        expect(row()).not.toHaveProperty("data");
     });
 
     it("leaves expired rows alone on a re-heartbeat, which does not grow the room", async () => {

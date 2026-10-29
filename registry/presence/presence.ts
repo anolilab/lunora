@@ -163,7 +163,9 @@ export const heartbeat = mutation
         };
 
         if (existing) {
-            await ctx.db.patch(PRESENCE_TABLE, existing["_id"] as never, row);
+            // A replace, not a patch: a heartbeat without `data` clears it, and a
+            // patch can only leave an omitted field as it was.
+            await ctx.db.replace(PRESENCE_TABLE, existing["_id"] as never, row);
         } else {
             // A new session is the one moment the room grows, and the only write
             // that is certain to happen: reclaim what the room has outgrown first.

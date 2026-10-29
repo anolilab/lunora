@@ -145,6 +145,7 @@ const resolveIdentity = async (env: Env, request: Request): Promise<{ [claim: st
     return {
         activeOrganizationId: member ? activeOrganizationId : undefined,
         appRole: role ?? undefined,
+        email: session.user.email || undefined,
         // The socket credential expiry: without it a signed-out user keeps an
         // already-open WebSocket streaming their tenant's rows.
         ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),

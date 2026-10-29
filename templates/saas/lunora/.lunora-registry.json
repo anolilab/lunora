@@ -12,7 +12,7 @@
         },
         "saas": {
             "files": {
-                "lunora/identity.ts": "dfaa6f604aa2cacfd21a12e4433b85873bd0e03aa4e64d557d08380ee61027e7",
+                "lunora/identity.ts": "f673b9c94648a12f88e90789cd92d68cd237678b2b5ec777597db363eceae06b",
                 "lunora/saas/index.ts": "dcd493cd37c42b26be988d9b46c02890423f82de1d3b10d143954103eaee2390"
             }
         },
@@ -20,7 +20,7 @@
             "files": {
                 "lunora/saas-ui/core/activity.ts": "c873117e6e2cf7bd338e2b57805a0b2c162ac42cd7b58d5ccdf16ca83e01171b",
                 "lunora/saas-ui/core/admin-organizations.ts": "9ac5e994f45e93665254c3905f8b7d3b369088a98ff2f9fc3d9ea1134b073d6a",
-                "lunora/saas-ui/core/billing.ts": "0c48c814e621fd481a8a9f0a7bc04dfd591616f7af1fe8802b3848a99ecbcfed",
+                "lunora/saas-ui/core/billing.ts": "da601d6e545314e55f79cf302da3f6a0189a91f1fd330c40976771e92a8df0a0",
                 "lunora/saas-ui/core/create-form-controller.ts": "67028dc91afbad30def72bef6150c57d833680267e16c4c0446eefb2a652122c",
                 "lunora/saas-ui/core/format.ts": "35e2dd31863c2030be251e9d55cc310534a02f55f0ac44cf644029af2659f0c9",
                 "lunora/saas-ui/core/index.ts": "9803bd3f42f6ee3d641b18af9458ba0d6e21b4ec1f4eaebe39ef5f2fcdc248eb",
@@ -50,7 +50,7 @@
         },
         "presence": {
             "files": {
-                "lunora/presence/index.ts": "23cd3a57bca1516b599cb2ab8d6cabe4514bfb36321c48765cbaf6aeee4f2bd4"
+                "lunora/presence/index.ts": "2f9ca3edd77e16a2d85b11c06d1a45bdc42af48fb72d47f04beeed1dfc54a4dd"
             }
         }
     },
