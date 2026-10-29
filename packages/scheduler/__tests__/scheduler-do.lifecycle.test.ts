@@ -167,6 +167,23 @@ describe("schedulerDO job lifecycle", () => {
         await expect(getJob(scheduler, "doomed")).resolves.toMatchObject({ state: "pending" });
     });
 
+    it("answers cancelled when the job was removed even if writing its outcome fails", async () => {
+        expect.hasAssertions();
+
+        pinClock(1_700_000_000_000);
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.run", id: "later", scheduledFor: Date.now() + 60_000 }));
+        vi.spyOn(state.storage, "put").mockRejectedValueOnce(new Error("storage unavailable"));
+
+        const response = await scheduler.fetch(post("/cancel", { id: "later" }));
+
+        await expect(response.json()).resolves.toStrictEqual({ cancelled: true });
+        expect(state.storageMap.has("id:later")).toBe(false);
+    });
+
     it("reports a cancelled pending job as canceled", async () => {
         expect.hasAssertions();
 

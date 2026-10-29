@@ -1977,7 +1977,8 @@ class SchedulerDO {
         }
 
         await this.removeRecord(record);
-        await this.writeTerminal(record, "canceled");
+        // The cancel already took effect; a failed outcome write costs only the history row.
+        await this.writeTerminal(record, "canceled").catch(() => undefined);
         await this.sweepTerminal().catch(() => undefined);
         // NOTE: cancel never releases a pool slot. A queued job holds none; a
         // job whose dispatch is in flight (its header survives until the kick
