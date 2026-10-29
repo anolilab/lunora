@@ -19,11 +19,12 @@ SDK**: you inject a client, so `dodopayments` stays an optional peer dependency.
 
 The adapter advertises these capabilities:
 
-| Capability         | Value  | What it means                                                                           |
-| ------------------ | :----: | --------------------------------------------------------------------------------------- |
-| `merchantOfRecord` | `true` | Dodo owns tax/VAT/GST, invoices, and disputes. Manual authorize/capture is not a thing. |
-| `portal`           | `true` | Native hosted customer portal (`customers.customerPortal.create`).                      |
-| `usageMetering`    | `true` | Usage-based billing via Dodo's event ingestion (`usageEvents.ingest`).                  |
+| Capability         |  Value  | What it means                                                                           |
+| ------------------ | :-----: | --------------------------------------------------------------------------------------- |
+| `checkoutExpiry`   | `false` | `createCheckout` refuses an `expiresAt` with `PROVIDER_ERROR`.                          |
+| `merchantOfRecord` | `true`  | Dodo owns tax/VAT/GST, invoices, and disputes. Manual authorize/capture is not a thing. |
+| `portal`           | `true`  | Native hosted customer portal (`customers.customerPortal.create`).                      |
+| `usageMetering`    | `true`  | Usage-based billing via Dodo's event ingestion (`usageEvents.ingest`).                  |
 
 ## Dodo Payments vs. Stripe: when to choose it
 

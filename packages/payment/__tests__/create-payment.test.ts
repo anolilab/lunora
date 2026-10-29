@@ -46,7 +46,7 @@ const fakeAdapter = (overrides: Partial<PaymentAdapter> = {}): PaymentAdapter =>
         cancelSubscription: async (id) => {
             return { ...subscription("user_1", "canceled"), id };
         },
-        capabilities: { merchantOfRecord: false, portal: true, usageMetering: true },
+        capabilities: { checkoutExpiry: true, merchantOfRecord: false, portal: true, usageMetering: true },
         capturePayment: async () => {
             throw new Error("not used");
         },
@@ -134,7 +134,7 @@ describe("createPayment", () => {
     });
 
     it("varies the checkout idempotency key with every request-shaping field", async () => {
-        expect.assertions(8);
+        expect.assertions(9);
 
         const base = {
             cancelUrl: "https://x/cancel",
@@ -171,9 +171,29 @@ describe("createPayment", () => {
         await expect(keyFor({ successUrl: "https://x/ok2" })).resolves.not.toBe(baseline);
         await expect(keyFor({ cancelUrl: "https://x/cancel2" })).resolves.not.toBe(baseline);
         await expect(keyFor({ metadata: { plan: "pro" } })).resolves.not.toBe(baseline);
+        await expect(keyFor({ expiresAt: 1_800_000_000_000 })).resolves.not.toBe(baseline);
 
         // An identical repeat still dedupes onto the same key.
         await expect(keyFor()).resolves.toBe(baseline);
+    });
+
+    it("refuses a checkout expiry the provider cannot honour, before reaching it", async () => {
+        expect.assertions(2);
+
+        const createCheckout = vi.fn<PaymentAdapter["createCheckout"]>();
+        const adapter = fakeAdapter({ capabilities: { checkoutExpiry: false, merchantOfRecord: true, portal: true, usageMetering: false }, createCheckout });
+        const payment = createPayment({ adapter, authorize: () => true, store: new MemoryPaymentStore() });
+
+        await expect(
+            payment.createCheckout({
+                expiresAt: 1_800_000_000_000,
+                mode: "subscription",
+                priceId: "price_1",
+                referenceId: "user_1",
+                successUrl: "https://x/ok",
+            }),
+        ).rejects.toMatchObject({ code: "PROVIDER_ERROR" });
+        expect(createCheckout).not.toHaveBeenCalled();
     });
 
     it("denies when the authorizer returns a truthy non-boolean", async () => {
@@ -1594,7 +1614,7 @@ describe("createPayment — attach / check / track", () => {
         const reported: number[] = [];
         const payment = createPayment({
             adapter: fakeAdapter({
-                capabilities: { merchantOfRecord: true, portal: true, usageMetering: false },
+                capabilities: { checkoutExpiry: false, merchantOfRecord: true, portal: true, usageMetering: false },
                 reportUsage: async (input) => {
                     reported.push(input.quantity);
                 },

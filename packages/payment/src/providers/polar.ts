@@ -280,7 +280,7 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
             return subscriptionFromPolar(subscription);
         },
 
-        capabilities: { merchantOfRecord: true, portal: true, usageMetering: true },
+        capabilities: { checkoutExpiry: false, merchantOfRecord: true, portal: true, usageMetering: true },
 
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),
 

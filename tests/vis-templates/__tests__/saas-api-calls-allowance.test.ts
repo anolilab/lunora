@@ -16,7 +16,7 @@ const notUsed = async (): Promise<never> => {
 const adapter: PaymentAdapter = {
     cancelPayment: notUsed,
     cancelSubscription: notUsed,
-    capabilities: { merchantOfRecord: false, portal: false, usageMetering: false },
+    capabilities: { checkoutExpiry: false, merchantOfRecord: false, portal: false, usageMetering: false },
     capturePayment: notUsed,
     createCheckout: notUsed,
     createPortalSession: notUsed,
