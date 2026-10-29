@@ -29,7 +29,8 @@
 "jobs":
     "release":
         "name": "Release"
-        "if": "github.repository == 'anolilab/lunora'"
+        # A dispatch from any other ref has no channel, and vis would publish it to `latest`.
+        "if": 'github.repository == ''anolilab/lunora'' && contains(fromJSON(''["main", "alpha", "next", "beta"]''), github.ref_name)'
         "runs-on": "ubuntu-latest"
         # 30 minutes was cut off mid-release (run 37775172245 was killed at 30m24s, after the lunorash tag was
         # pushed and before its channel note). The tag then looked "never released" to every later run (#1054).

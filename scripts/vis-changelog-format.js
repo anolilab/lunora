@@ -42,9 +42,6 @@ const SECTION_ORDER = [
 
 const BULLET = /^\s*[*-]\s+/;
 const CONVENTIONAL = /^(?<type>[a-z]+)(?:\((?<scope>[^)]*)\))?(?<breaking>!)?:\s*(?<subject>.+)$/i;
-// Release-job commits, which `vis release generate` would quote verbatim (visulima#864). Not keyed on
-// `[skip ci]`, which hand-written commits carry too; the lockfile sync keeps Renovate's `chore(deps):`.
-const RELEASE_COMMIT = /^\s*[*-]?\s*(?:release\([^)]+\):|chore\(release\):|chore\(deps\):\s*sync pnpm-lock\.yaml)/i;
 const ISSUE_REFERENCE = /\(#(?<number>\d+)\)\s*$/;
 
 const tagFor = (name, version) => `${name}@${version}`;
@@ -63,7 +60,7 @@ const groupEntries = (bodies) => {
         for (const rawLine of body.split("\n")) {
             const line = rawLine.trim();
 
-            if (line === "" || RELEASE_COMMIT.test(line)) {
+            if (line === "") {
                 continue;
             }
 
