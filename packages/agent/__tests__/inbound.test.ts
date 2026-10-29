@@ -2,7 +2,7 @@ import type { InboundEmail } from "@lunora/mail/inbound";
 import { describe, expect, it } from "vitest";
 
 import { dispatchAgentEmail } from "../src/inbound";
-import type { AgentEmailMapper } from "../src/types";
+import type { AgentEmailMapper, AgentEmailShardInput } from "../src/types";
 
 /** Build a minimal RFC 822 message `parseInboundEmail` (postal-mime) can parse, with the given `Authentication-Results`. */
 const rawEmail = (authenticationResults: string | undefined, from = "Alice <alice@example.com>"): string =>
@@ -302,25 +302,21 @@ describe(dispatchAgentEmail, () => {
         expect(support.calls[0]?.params).toStrictEqual({ input: "x", threadKey: "t" });
     });
 
-    it("starts the run on the shard resolveEmailShard names, never the mapper's", async () => {
-        expect.assertions(2);
+    it("keys resolveEmailShard on the routed envelope recipient, not the forgeable To: header or the mapper", async () => {
+        expect.assertions(1);
 
         const support = fakeBinding();
         const onEmail: AgentEmailMapper = () => ({ input: "x", shardKey: "victim-org", threadKey: "t" }) as unknown as ReturnType<AgentEmailMapper>;
-        const recipients: string[] = [];
-        // The app maps the routed recipient address to its tenant shard.
-        const resolveEmailShard = (email: InboundEmail): string => {
-            recipients.push(...email.to);
-
-            return "org-a";
-        };
-
+        const inboxes: Record<string, string> = { "help@tenant-a.example": "org-a", "help@tenant-b.example": "org-b" };
+        // The app maps its configured inbox addresses to tenant shards.
+        const resolveEmailShard = ({ envelopeTo }: AgentEmailShardInput): string | undefined => inboxes[envelopeTo];
         const handler = dispatchAgentEmail([{ agent: { onEmail, resolveEmailShard }, className: "SupportAgentWorkflow" }]);
+        // Routed to tenant B's inbox, but the sender wrote tenant A's address into `To:`.
+        const forgedTo = RAW_EMAIL.replace("To: support@myapp.com", "To: help@tenant-a.example");
 
-        await handler(fakeMessage().message, { SupportAgentWorkflow: support.binding }, {});
+        await handler({ ...fakeMessage(forgedTo).message, to: "help@tenant-b.example" }, { SupportAgentWorkflow: support.binding }, {});
 
-        expect(support.calls[0]?.params).toStrictEqual({ input: "x", shardKey: "org-a", threadKey: "t" });
-        expect(recipients).toHaveLength(1);
+        expect(support.calls[0]?.params).toStrictEqual({ input: "x", shardKey: "org-b", threadKey: "t" });
     });
 
     it("never starts a run when resolveEmailShard throws or returns a non-string", async () => {

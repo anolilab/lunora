@@ -152,10 +152,12 @@ const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAg
                 }
 
                 // The run's shard comes from the app's hook alone; a `shardKey` the mapper
-                // copied out of the email is dropped. A throwing hook fails the delivery,
-                // which the mail handler may retain and retry.
+                // copied out of the email is dropped. The hook keys on the envelope
+                // recipient Email Routing delivered to, not the sender-written `To:`
+                // header. A throwing hook fails the delivery, which the mail handler may
+                // retain and retry.
                 // eslint-disable-next-line no-await-in-loop -- single dispatch then `return`; never iterates past the first claim
-                const shardKey = await resolveInboundShard(target.agent.resolveEmailShard, email, "resolveEmailShard");
+                const shardKey = await resolveInboundShard(target.agent.resolveEmailShard, { email, envelopeTo: context.message.to }, "resolveEmailShard");
 
                 // eslint-disable-next-line no-await-in-loop -- single dispatch then `return`; never iterates past the first claim
                 await binding.create({ params: withRunShard(run, shardKey) });

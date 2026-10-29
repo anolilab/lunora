@@ -675,20 +675,56 @@ export interface AgentEmailRun {
 export type AgentEmailMapper = (email: InboundEmail) => AgentEmailRun | null | Promise<AgentEmailRun | null | undefined> | undefined;
 
 /**
- * Pick the shard an inbound-triggered run's tools use: the app maps a verified signal
- * (the recipient address Email Routing delivered to, the channel workspace the signing
- * secret belongs to) to a tenant shard. Return `undefined` for the default shard.
+ * Pick the shard an inbound-triggered run's tools use: the app maps a verified identity
+ * to a tenant shard. Return `undefined` for the default shard.
  *
  * This is the only way an inbound run gets a shard. A `shardKey` in the mapped run is
  * dropped, because the mapper's output is built from attacker-written content. The hook
- * runs after the sender or signature gate and after the mapper claimed the message.
- * Returning a shard is an authorization decision, since the run's tools dispatch past
- * `authorizeShard`, so never pass a payload field through without checking it against
- * a table you trust. A throw fails the delivery rather than falling back to the default
- * shard.
+ * runs after the sender or signature gate and after the mapper claimed the message, and
+ * it is handed only what the platform verified ({@link AgentEmailShardInput},
+ * {@link AgentChannelShardInput}). Returning a shard is an authorization decision, since
+ * the run's tools dispatch past `authorizeShard`: look the identity up in a table you
+ * trust. A throw fails the delivery rather than falling back to the default shard.
  * @experimental
  */
-export type AgentInboundShardResolver<Message> = (message: Message) => Promise<string | undefined> | string | undefined;
+export type AgentInboundShardResolver<Input> = (input: Input) => Promise<string | undefined> | string | undefined;
+
+/**
+ * What `resolveEmailShard` gets.
+ * @experimental
+ */
+export interface AgentEmailShardInput {
+    /**
+     * The parsed message, for context only. Its headers are sender-written: `email.to`
+     * is the `To:` header, which any sender can set to another tenant's address, and
+     * `email.from` is only as good as the authentication verdicts. Never derive the
+     * shard from it.
+     */
+    email: InboundEmail;
+
+    /**
+     * The SMTP envelope recipient Cloudflare Email Routing delivered this message to.
+     * Routing only delivers to addresses you configured, so this is the field to map
+     * to a tenant.
+     */
+    envelopeTo: string;
+}
+
+/**
+ * What `onInbound.resolveShard` gets: the channel and the workspace the signed payload
+ * belongs to, never the event's message content.
+ * @experimental
+ */
+export interface AgentChannelShardInput {
+    channel: AgentInboundChannelKind;
+
+    /**
+     * The provider-set tenant id from the signature-verified body: Slack `team_id`,
+     * GitHub `installation.id`, Discord `guild_id`. `undefined` when the payload carries
+     * none (a DM interaction, a GitHub event outside an app installation).
+     */
+    workspaceId: string | undefined;
+}
 
 /** The inbound webhook channels an agent can be triggered from — see `@lunora/agent/channels`. */
 export type AgentInboundChannelKind = "discord" | "github" | "slack";
@@ -734,7 +770,7 @@ export interface AgentInboundChannel {
     map: AgentChannelMapper;
 
     /** The shard a claimed event's run uses — see {@link AgentInboundShardResolver}. Default shard when absent. */
-    resolveShard?: AgentInboundShardResolver<InboundChannelEvent>;
+    resolveShard?: AgentInboundShardResolver<AgentChannelShardInput>;
 
     /**
      * The verification credential, from `env`: an env-var NAME (string) or an
@@ -908,9 +944,10 @@ export interface AgentConfig {
 
     /**
      * The shard an `onEmail` run's tools use — see {@link AgentInboundShardResolver}. Map
-     * the verified recipient (`email.to`), not the sender or body. Default shard when absent.
+     * `envelopeTo`, the routed recipient; the parsed headers are sender-written. Default
+     * shard when absent.
      */
-    resolveEmailShard?: AgentInboundShardResolver<InboundEmail>;
+    resolveEmailShard?: AgentInboundShardResolver<AgentEmailShardInput>;
 
     /**
      * Reusable {@link SkillDefinition}s to compose in — each contributes an

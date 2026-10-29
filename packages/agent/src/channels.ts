@@ -260,6 +260,50 @@ const ack = (): Response => new Response(undefined, { status: 200 });
 const sha256Hex = async (value: string): Promise<string> =>
     [...new Uint8Array(await crypto.subtle.digest("SHA-256", utf8(value)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
+/** A JSON body's object, or the JSON in a form-encoded Slack interactive `payload=`. */
+const parseSignedBody = (body: string): Record<string, unknown> | undefined => {
+    try {
+        const json = body.startsWith("payload=") ? new URLSearchParams(body).get("payload") : body;
+        const parsed: unknown = JSON.parse(json ?? "");
+
+        return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+const idString = (value: unknown): string | undefined => {
+    if (typeof value === "string" && value !== "") {
+        return value;
+    }
+
+    return typeof value === "number" ? String(value) : undefined;
+};
+
+/**
+ * The tenant id the provider stamped on a signature-verified body: Slack `team_id`
+ * (`team.id` on interactive payloads), GitHub `installation.id`, Discord `guild_id`. Only
+ * this, not the event, reaches `resolveShard`: the rest of the body carries text a user
+ * of that workspace wrote, and a shard derived from it would be theirs to choose.
+ */
+const verifiedWorkspaceId = (channel: AgentInboundChannelKind, body: string): string | undefined => {
+    const parsed = parseSignedBody(body);
+
+    if (parsed === undefined) {
+        return undefined;
+    }
+
+    if (channel === "slack") {
+        return idString(parsed["team_id"]) ?? idString((parsed["team"] as { id?: unknown } | undefined)?.id);
+    }
+
+    if (channel === "github") {
+        return idString((parsed["installation"] as { id?: unknown } | undefined)?.id);
+    }
+
+    return idString(parsed["guild_id"]);
+};
+
 /**
  * A stable per-delivery id for idempotent dispatch, taken ONLY from signed
  * material: Slack's `event_id` / Discord's interaction `id` from the (already
@@ -403,7 +447,11 @@ const dispatchAgentChannel =
             // A throwing hook answers non-2xx, so the provider redelivers instead of the
             // event running on the default shard.
             // eslint-disable-next-line no-await-in-loop -- single dispatch then return; never iterates past the first claim
-            const shardKey = await resolveInboundShard(config.resolveShard, event, "onInbound.resolveShard");
+            const shardKey = await resolveInboundShard(
+                config.resolveShard,
+                { channel, workspaceId: verifiedWorkspaceId(channel, body) },
+                "onInbound.resolveShard",
+            );
 
             // eslint-disable-next-line no-await-in-loop -- single dispatch then return; never iterates past the first claim
             return await startChannelRun(workflow, run satisfies AgentChannelRun, { channel, id: await deliveryId(channel, body), shardKey });
