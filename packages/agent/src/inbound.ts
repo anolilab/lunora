@@ -37,8 +37,8 @@ import type { ForwardableEmailMessageLike } from "@lunora/mail/inbound";
 import { authenticatesFrom, createInboundEmailHandler, parseInboundEmail } from "@lunora/mail/inbound";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { withRunShard } from "../../../shared/run-shard";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
-import withRunShard from "./run-shard";
 import type { AgentDefinition, AgentWorkflowBindingLike } from "./types";
 
 /**
