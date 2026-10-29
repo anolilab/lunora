@@ -6,6 +6,13 @@
 
     interface Props {
         /**
+         * Whether pages remain beyond `rows` — the paginated query's `CanLoadMore` or
+         * `LoadingMore`. Kept apart from `onLoadMore`, which is absent while a page is
+         * loading: the header must still say its totals are partial then. Defaults to
+         * whether `onLoadMore` is given.
+         */
+        hasMore?: boolean;
+        /**
          * Fetch the next page — the paginated query's `loadMore`. Pass it only while
          * more pages remain; without it the rows are read as the whole table.
          */
@@ -23,7 +30,7 @@
         rows: ReadonlyArray<AdminSubscriptionRow> | undefined;
     }
 
-    const { onLoadMore, organizations, pastDue, plans, rows: paged }: Props = $props();
+    const { hasMore, onLoadMore, organizations, pastDue, plans, rows: paged }: Props = $props();
 
     let view = $state<SubscriptionsView>({ ...DEFAULT_SUBSCRIPTIONS_VIEW });
 
@@ -33,7 +40,7 @@
     const states = $derived(rows ? subscriptionStateOptions(rows) : []);
 </script>
 
-<Card subtitle={paged ? subscriptionsSubtitle(paged, onLoadMore !== undefined, pastDue) : undefined} title="Subscriptions">
+<Card subtitle={paged ? subscriptionsSubtitle(paged, hasMore ?? onLoadMore !== undefined, pastDue) : undefined} title="Subscriptions">
     {#if !rows}
         <div aria-busy="true" class="lu-saas-list lu-saas-list--loading"></div>
     {:else}

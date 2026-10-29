@@ -76,6 +76,7 @@ function AdminPage() {
             ) : undefined}
             <AdminOrganizations now={now} rows={organizations} timeZone={timeZone} />
             <AdminSubscriptions
+                hasMore={subscriptions.status === "CanLoadMore" || subscriptions.status === "LoadingMore"}
                 onLoadMore={
                     subscriptions.status === "CanLoadMore"
                         ? () => {

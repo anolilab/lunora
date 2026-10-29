@@ -233,6 +233,13 @@ describe("adminSubscriptions", () => {
         expect(screen.getByText("1 paying in the 1 loaded · 1 past due")).toBeInTheDocument();
     });
 
+    it("keeps the totals marked partial while the next page loads", () => {
+        render(<AdminSubscriptions hasMore organizations={[]} plans={PLANS} rows={[adminSubscription("org-Acme", "active")]} />);
+
+        expect(screen.getByText("1 paying · 0 past due in the 1 loaded")).toBeInTheDocument();
+        expect(screen.queryByText("Load more")).not.toBeInTheDocument();
+    });
+
     it("marks itself busy while the query is undefined", () => {
         const { container } = render(<AdminSubscriptions organizations={undefined} plans={PLANS} rows={undefined} />);
 

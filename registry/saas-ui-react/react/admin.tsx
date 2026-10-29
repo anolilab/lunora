@@ -110,6 +110,13 @@ const AdminOrganizations = ({ now, rows, timeZone }: AdminOrganizationsProps): R
 
 interface AdminSubscriptionsProps {
     /**
+     * Whether pages remain beyond `rows` — `status === "CanLoadMore" || status === "LoadingMore"`.
+     * Kept apart from `onLoadMore`, which is absent while a page is loading: the header
+     * must still say its totals are partial then. Defaults to whether `onLoadMore` is given.
+     */
+    hasMore?: boolean;
+
+    /**
      * Fetch the next page — `usePaginatedQuery`'s `loadMore`. Pass it only while
      * more pages remain (`status === "CanLoadMore"`); without it the rows are read
      * as the whole table.
@@ -135,7 +142,7 @@ interface AdminSubscriptionsProps {
  * provider's dashboard or through the tenant's own billing page, and the
  * webhook brings it back here.
  */
-const AdminSubscriptions = ({ onLoadMore, organizations, pastDue, plans, rows: paged }: AdminSubscriptionsProps): ReactNode => {
+const AdminSubscriptions = ({ hasMore, onLoadMore, organizations, pastDue, plans, rows: paged }: AdminSubscriptionsProps): ReactNode => {
     const [view, setView] = useState<SubscriptionsView>(DEFAULT_SUBSCRIPTIONS_VIEW);
 
     if (!paged) {
@@ -150,7 +157,7 @@ const AdminSubscriptions = ({ onLoadMore, organizations, pastDue, plans, rows: p
     const visible = selectSubscriptions(rows, organizations ?? [], plans, view);
 
     return (
-        <Card subtitle={subscriptionsSubtitle(paged, onLoadMore !== undefined, pastDue)} title="Subscriptions">
+        <Card subtitle={subscriptionsSubtitle(paged, hasMore ?? onLoadMore !== undefined, pastDue)} title="Subscriptions">
             <div className="lu-saas-toolbar">
                 <input
                     aria-label="Search subscriptions"

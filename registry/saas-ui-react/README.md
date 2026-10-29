@@ -69,7 +69,8 @@ empty copy that would read as "no subscriptions". And it pages with
 `.paginate(paginationOpts)`, because the table only grows. The saas template
 has one to copy: `adminSubscriptions` in `templates/saas/lunora/payment/index.ts`,
 read in `templates/saas/src/routes/admin.tsx`. Read it with `usePaginatedQuery`,
-pass the loaded rows as `rows`, and pass `onLoadMore` while more pages remain;
+pass the loaded rows as `rows`, `hasMore` while pages remain (including while one
+is loading), and `onLoadMore` while another can be asked for;
 the paying total in the header then says it covers only the rows loaded. A
 newest-first page leaves an older tenant in dunning out of sight, so pass every
 past-due subscription as `pastDue` (`{ more, rows }`): they are listed first

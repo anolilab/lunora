@@ -799,13 +799,14 @@ interface AdminOrganizationsProps {
 ### `AdminSubscriptions` (const)
 
 ```ts
-const AdminSubscriptions: ({ onLoadMore, organizations, pastDue, plans, rows: paged }: AdminSubscriptionsProps) => ReactNode;
+const AdminSubscriptions: ({ hasMore, onLoadMore, organizations, pastDue, plans, rows: paged }: AdminSubscriptionsProps) => ReactNode;
 ```
 
 ### `AdminSubscriptionsProps` (interface)
 
 ```ts
 interface AdminSubscriptionsProps {
+    hasMore?: boolean;
     onLoadMore?: () => void;
     organizations: ReadonlyArray<OrganizationRow> | undefined;
     pastDue?: PastDueSubscriptions;
