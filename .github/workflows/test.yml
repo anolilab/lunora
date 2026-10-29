@@ -90,7 +90,8 @@
               "uses": "anolilab/workflows/step/node@eb82eb8edc331cd0e1514ded5560aec643c7eaa7" # v26.0.1
               "with":
                   "node-version": "${{ matrix.node_version }}"
-                  "cache-prefix": "test"
+                  # The action's key already holds node-version; named per leg to make that explicit.
+                  "cache-prefix": "test-${{ matrix.node_version }}"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
