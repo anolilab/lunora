@@ -176,6 +176,31 @@ describe("createAdminUsersController", () => {
         expect(client.listUsers.mock.lastCall?.[0].query).toMatchObject({ offset: 4, searchValue: "u" });
     });
 
+    it("drops a list answer that started before a write, and stays busy until the write's re-read", async () => {
+        const client = createClient([user({ id: "u1" })]);
+        const stale = deferred<AuthClientResult<{ users: AdminUserRow[] }>>();
+        const ban = deferred<AuthClientResult<unknown>>();
+
+        client.listUsers.mockImplementationOnce(async () => stale.promise);
+        client.banUser.mockImplementationOnce(async () => ban.promise);
+
+        const controller = createAdminUsersController(client, { onSessionChange: vi.fn() });
+        const listing = controller.actions.load();
+        const suspending = controller.actions.suspend("u1");
+
+        stale.resolve(ok({ users: [user({ id: "stale" })] }));
+        await listing;
+
+        expect(controller.getState().users).toBeUndefined();
+        expect(controller.getState().status).toBe("busy");
+
+        ban.resolve(ok({}));
+        await suspending;
+
+        expect(controller.getState().status).toBe("idle");
+        expect(controller.getState().users?.map((row) => row.id)).toStrictEqual(["u1"]);
+    });
+
     it("keeps the page it is on when a write re-reads the list", async () => {
         const client = createClient(Array.from({ length: 3 }, (_, index) => user({ id: `u${String(index)}` })));
         const controller = createAdminUsersController(client, { limit: 2, onSessionChange: vi.fn() });

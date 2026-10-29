@@ -289,16 +289,23 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
     };
 
     /**
-     * Run one write against one row. `false` when it did not run or did not
-     * succeed — which is what keeps a double-clicked Impersonate from navigating
-     * away having impersonated nobody.
+     * Run one write against one row, then `reread` if it succeeded. `false` when
+     * it did not run or did not succeed — which is what keeps a double-clicked
+     * Impersonate from navigating away having impersonated nobody.
+     *
+     * The write takes a ticket of its own, so a list read already in flight is
+     * disowned: its rows predate the write, and landing mid-write would show them
+     * and set the table idle while the write is still running. The re-read runs
+     * inside the write's window for the same reason — nothing starts between the
+     * write and the read that shows its effect.
      */
-    const write = async (userId: string, run: () => Promise<AuthClientResult<unknown>>): Promise<boolean> => {
+    const write = async (userId: string, run: () => Promise<AuthClientResult<unknown>>, reread = false): Promise<boolean> => {
         if (writing) {
             return false;
         }
 
         writing = true;
+        ticket += 1;
         store.update({ error: undefined, pendingUserId: userId, status: "busy" });
 
         try {
@@ -310,6 +317,12 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
                 store.update({ error: authErrorMessage(error), status: "error" });
 
                 return false;
+            }
+
+            // Only after a write that happened: a reload clears the error, and a
+            // refused write has to stay on screen.
+            if (reread) {
+                await load();
             }
 
             return true;
@@ -347,25 +360,9 @@ const createAdminUsersController = (client: AdminUsersClient, options: AdminUser
             search: async (term: string) => load(0, term),
             suspend: async (userId: string, reason?: string) => {
                 const trimmed = reason?.trim();
-                const ok = await write(userId, async () => client.banUser({ userId, ...(trimmed ? { banReason: trimmed } : {}) }));
-
-                // Re-read only after a write that happened: a reload clears the
-                // error, and a refused suspension has to stay on screen.
-                if (ok) {
-                    await load();
-                }
-
-                return ok;
+                return write(userId, async () => client.banUser({ userId, ...(trimmed ? { banReason: trimmed } : {}) }), true);
             },
-            unsuspend: async (userId: string) => {
-                const ok = await write(userId, async () => client.unbanUser({ userId }));
-
-                if (ok) {
-                    await load();
-                }
-
-                return ok;
-            },
+            unsuspend: async (userId: string) => write(userId, async () => client.unbanUser({ userId }), true),
         },
         destroy: () => {
             ticket += 1;
