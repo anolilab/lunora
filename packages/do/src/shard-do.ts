@@ -2784,8 +2784,8 @@ abstract class ShardDO {
      */
     private writeGeneration = 0;
 
-    /** In-flight subscription seeds by run key, valid for one `stamp`; see {@link ShardDO.resolveSeedOutcome}. */
-    private seedRuns: { runs: Map<string, Promise<SubscriptionOutcome | null>>; stamp: string } | undefined;
+    /** In-flight subscription seeds by stamp and run key; see {@link ShardDO.resolveSeedOutcome}. */
+    private readonly seedRuns = new Map<string, Promise<SubscriptionOutcome | null>>();
 
     /**
      * Per-socket poke baseline for shape subscriptions: maps each shape's
@@ -12956,13 +12956,10 @@ abstract class ShardDO {
             return this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
         }
 
-        if (this.seedRuns?.stamp !== stamp) {
-            this.seedRuns = { runs: new Map(), stamp };
-        }
-
-        const { runs } = this.seedRuns;
-        const key = this.reactiveRunKey(functionPath, args, attachment);
-        const inFlight = runs.get(key);
+        // Keyed by stamp too rather than one map per stamp: admin seeds stamp no
+        // epoch, so interleaved admin and user seeds would keep evicting each other.
+        const key = `${stamp}\u0000${this.reactiveRunKey(functionPath, args, attachment)}`;
+        const inFlight = this.seedRuns.get(key);
 
         if (inFlight !== undefined) {
             return inFlight;
@@ -12975,12 +12972,12 @@ abstract class ShardDO {
             isAdmin,
             socketIdentity(attachment),
         ).finally(() => {
-            if (runs.get(key) === shared) {
-                runs.delete(key);
+            if (this.seedRuns.get(key) === shared) {
+                this.seedRuns.delete(key);
             }
         });
 
-        runs.set(key, shared);
+        this.seedRuns.set(key, shared);
 
         return shared;
     }

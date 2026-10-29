@@ -144,6 +144,14 @@ class DedupShard extends ShardDO {
         this.cdcCursor = (this.cdcCursor ?? 0) + 1;
     }
 
+    /**
+     * Set the CDC cursor outright. Lets a test interleave seeds under two live
+     * stamps, as admin seeds (no epoch) and user seeds (an epoch) do on one shard.
+     */
+    public setCursor(cursor: number | undefined): void {
+        this.cdcCursor = cursor;
+    }
+
     /** Let later runs through while the already-parked ones stay parked. */
     public unparkLaterRuns(): void {
         this.hold = undefined;
@@ -523,7 +531,7 @@ describe("shardDO reactive dedup (identity-independent runs)", () => {
                 },
             ],
         ])("a seed that starts after %s does not join a run from before it", async (_label, advance) => {
-            expect.assertions(1);
+            expect.assertions(2);
 
             const shard = new DedupShard(createFakeState(), {});
 
@@ -545,6 +553,36 @@ describe("shardDO reactive dedup (identity-independent runs)", () => {
 
             release();
             await seedA;
+
+            expect(firstRun(wsB, "sub-B")).not.toBe(firstRun(wsA, "sub-A"));
+        });
+
+        it("a seed under another stamp does not stop later seeds joining an in-flight run", async () => {
+            expect.assertions(2);
+
+            const shard = new DedupShard(createFakeState(), {});
+            const wsA = connect(shard, attachmentFor("user-A"));
+            const wsOther = connect(shard, attachmentFor("user-A"));
+            const wsB = connect(shard, attachmentFor("user-A"));
+            const release = shard.holdRuns();
+            const seedUnder = async (ws: FakeWebSocket, subId: string, cursor: number | undefined): Promise<{ seed: Promise<void> }> => {
+                shard.setCursor(cursor);
+
+                const reached = shard.seedsReached(1);
+                const seed = shard.driveSubscribe(ws, subId, "messages:list");
+
+                await reached;
+
+                // Boxed: an async function returning the bare promise would await the parked seed.
+                return { seed };
+            };
+            const seeds = [await seedUnder(wsA, "sub-A", undefined), await seedUnder(wsOther, "sub-other", 7), await seedUnder(wsB, "sub-B", undefined)];
+
+            release();
+            await Promise.all(seeds.map(async ({ seed }) => seed));
+
+            expect(shard.runs).toHaveLength(2);
+            expect(firstRun(wsB, "sub-B")).toBe(firstRun(wsA, "sub-A"));
         });
 
         it("sequential seeds each run: a finished seed is not retained", async () => {
