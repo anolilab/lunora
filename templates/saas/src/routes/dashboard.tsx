@@ -89,6 +89,10 @@ function OrganizationDashboard({ name, organizationId, orgRole, userId }: Organi
     // The clock is read once per mount and passed down, so "4m ago" is stable
     // within a render pass and the server render agrees with its hydration.
     const [now] = useState(() => Date.now());
+    // Calendar days are the viewer's, not the Worker's (always UTC). The feed
+    // only renders once its live query resolves in the browser, so this is the
+    // browser's zone by then.
+    const [timeZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
 
     /*
      * The cards hand back a plain string id — they are framework-agnostic and
@@ -112,7 +116,7 @@ function OrganizationDashboard({ name, organizationId, orgRole, userId }: Organi
                 onCreate={create}
                 rows={payload?.projects}
             />
-            <ActivityFeed now={now} rows={payload?.activity} />
+            <ActivityFeed now={now} rows={payload?.activity} timeZone={timeZone} />
         </main>
     );
 }

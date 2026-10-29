@@ -12,6 +12,8 @@ interface ActivityFeedProps {
     /** Resolve an actor id to a display name. Defaults to the id itself. */
     resolveActor?: (actorId: string) => string;
     rows: ReadonlyArray<ActivityRow> | undefined;
+    /** IANA zone the feed's days are read in — the viewer's. UTC when omitted. */
+    timeZone?: string;
 }
 
 /**
@@ -23,7 +25,7 @@ interface ActivityFeedProps {
  * which is the failure mode the grouping is meant to avoid — so the default is
  * there to keep the component renderable, not because ids are acceptable.
  */
-const ActivityFeed = ({ now, resolveActor, rows }: ActivityFeedProps): ReactNode => {
+const ActivityFeed = ({ now, resolveActor, rows, timeZone }: ActivityFeedProps): ReactNode => {
     if (!rows) {
         return (
             <Card title="Activity">
@@ -42,7 +44,7 @@ const ActivityFeed = ({ now, resolveActor, rows }: ActivityFeedProps): ReactNode
 
     return (
         <Card title="Activity">
-            {groupActivityByDay(rows, now).map((group) => (
+            {groupActivityByDay(rows, now, timeZone).map((group) => (
                 <div className="lu-saas-feed__group" key={group.day}>
                     <h3 className="lu-saas-feed__day">{group.day}</h3>
                     <ul className="lu-saas-feed__list">

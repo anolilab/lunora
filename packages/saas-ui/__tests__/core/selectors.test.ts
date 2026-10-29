@@ -97,6 +97,16 @@ describe("groupActivityByDay", () => {
         expect(groups[1]!.entries[0]!.sentence).toBe("joined the organization");
     });
 
+    it("reads the day in the viewer's time zone", () => {
+        // 23:30 UTC on 10 September is already 11 September in Berlin (UTC+2).
+        const lateEvening = Date.UTC(2026, 8, 10, 23, 30);
+        const rows = [activity({ action: "project.created", createdAt: lateEvening })];
+
+        expect(groupActivityByDay(rows, NOW)[0]!.day).toBe("2026-09-10");
+        expect(groupActivityByDay(rows, NOW, "Europe/Berlin")[0]!.day).toBe("2026-09-11");
+        expect(relativeTime(lateEvening, lateEvening + 30 * DAY, "Europe/Berlin")).toBe("2026-09-11");
+    });
+
     it("renders an unknown action as a sentence rather than an identifier", () => {
         expect(describeActivity(activity({ action: "invoice.paid", createdAt: NOW }))).toBe("paid the invoice");
     });

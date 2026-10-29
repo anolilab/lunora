@@ -12,6 +12,8 @@ import { Card, Empty } from "./primitives";
 interface AdminOrganizationsProps {
     now: number;
     rows: ReadonlyArray<OrganizationRow> | undefined;
+    /** IANA zone an older update's date is shown in — the viewer's. UTC when omitted. */
+    timeZone?: string;
 }
 
 /**
@@ -23,7 +25,7 @@ interface AdminOrganizationsProps {
  * impersonation, which puts the admin inside the tenant with the tenant's own
  * authorisation applied.
  */
-const AdminOrganizations = ({ now, rows }: AdminOrganizationsProps): ReactNode => {
+const AdminOrganizations = ({ now, rows, timeZone }: AdminOrganizationsProps): ReactNode => {
     const [view, setView] = useState<AdminView>(DEFAULT_ADMIN_VIEW);
 
     if (!rows) {
@@ -87,7 +89,7 @@ const AdminOrganizations = ({ now, rows }: AdminOrganizationsProps): ReactNode =
                                 </td>
                                 <td>{planLabel(organization.plan)}</td>
                                 <td>{organization.seats}</td>
-                                <td>{relativeTime(organization.updatedAt, now)}</td>
+                                <td>{relativeTime(organization.updatedAt, now, timeZone)}</td>
                             </tr>
                         ))}
                     </tbody>

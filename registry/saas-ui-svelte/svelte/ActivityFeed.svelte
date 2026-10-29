@@ -9,11 +9,13 @@
         /** Resolve an actor id to a display name — members live in better-auth, not here. */
         resolveActor?: (actorId: string) => string;
         rows: ReadonlyArray<ActivityRow> | undefined;
+        /** IANA zone the feed's days are read in — the viewer's. UTC when omitted. */
+        timeZone?: string;
     }
 
-    const { now, resolveActor, rows }: Props = $props();
+    const { now, resolveActor, rows, timeZone }: Props = $props();
 
-    const groups = $derived(rows ? groupActivityByDay(rows, now) : []);
+    const groups = $derived(rows ? groupActivityByDay(rows, now, timeZone) : []);
 </script>
 
 <Card title="Activity">

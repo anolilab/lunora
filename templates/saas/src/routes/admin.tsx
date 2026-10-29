@@ -27,6 +27,10 @@ function AdminPage() {
     const [failure, setFailure] = useState<SubscriptionError>();
     const rows = useQuery(api.saas.listOrganizations, {}, { onError: setFailure });
     const [now] = useState(() => Date.now());
+    // Calendar days are the viewer's, not the Worker's (always UTC). The table
+    // only renders once its live query resolves in the browser, so this is the
+    // browser's zone by then.
+    const [timeZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
 
     if (failure) {
         return (
@@ -42,7 +46,7 @@ function AdminPage() {
 
     return (
         <main style={{ margin: "2rem auto", maxWidth: "56rem", padding: "0 1rem" }}>
-            <AdminOrganizations now={now} rows={rows} />
+            <AdminOrganizations now={now} rows={rows} timeZone={timeZone} />
         </main>
     );
 }

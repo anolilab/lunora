@@ -1,8 +1,9 @@
 /**
- * Presentation helpers. Pure and timezone-naive by construction: every one
- * takes the clock as an argument rather than reading `Date.now()`, so a test
- * asserts a string instead of a moving target, and a server render and the
- * client hydration that follows it agree.
+ * Presentation helpers. Pure by construction: every one takes the clock, and
+ * the time zone a calendar day is read in, as arguments rather than reading
+ * `Date.now()` or the host's zone, so a test asserts a string instead of a
+ * moving target, and a server render and the client hydration that follows it
+ * agree. The zone defaults to UTC; a view passes the viewer's.
  */
 
 const WHITESPACE = /\s+/u;
@@ -13,11 +14,29 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-/** The `YYYY-MM-DD` a timestamp falls in — the grouping key for a feed. */
-const dayKey = (timestamp: number): string => new Date(timestamp).toISOString().slice(0, 10);
+/** One formatter per zone: building an `Intl.DateTimeFormat` costs far more than formatting with one, and a feed formats every row. */
+const dayFormatters = new Map<string, Intl.DateTimeFormat>();
 
-/** Elapsed time in words — "just now", "4m ago", "3h ago", "2d ago" — then an absolute date. */
-const relativeTime = (timestamp: number, now: number): string => {
+/**
+ * The `YYYY-MM-DD` a timestamp falls in, in `timeZone` (an IANA name) — the
+ * grouping key for a feed. An event at 23:30 in Berlin belongs to that evening
+ * for a Berlin viewer, not to the next UTC day.
+ */
+const dayKey = (timestamp: number, timeZone = "UTC"): string => {
+    let formatter = dayFormatters.get(timeZone);
+
+    if (!formatter) {
+        formatter = new Intl.DateTimeFormat("en-US", { day: "2-digit", month: "2-digit", timeZone, year: "numeric" });
+        dayFormatters.set(timeZone, formatter);
+    }
+
+    const parts = Object.fromEntries(formatter.formatToParts(timestamp).map((part) => [part.type, part.value]));
+
+    return `${String(parts["year"])}-${String(parts["month"])}-${String(parts["day"])}`;
+};
+
+/** Elapsed time in words — "just now", "4m ago", "3h ago", "2d ago" — then the date in `timeZone`. */
+const relativeTime = (timestamp: number, now: number, timeZone?: string): string => {
     const elapsed = Math.max(0, now - timestamp);
 
     if (elapsed < MINUTE) {
@@ -36,7 +55,7 @@ const relativeTime = (timestamp: number, now: number): string => {
         return `${Math.floor(elapsed / DAY).toString()}d ago`;
     }
 
-    return dayKey(timestamp);
+    return dayKey(timestamp, timeZone);
 };
 
 /** Up to two initials for an avatar fallback. Never more: three stops reading as initials. */

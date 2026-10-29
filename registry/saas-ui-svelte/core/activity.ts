@@ -66,13 +66,14 @@ const describeActivity = (row: ActivityRow): string => {
  * Group a feed into days, newest first, preserving the server's ordering within
  * each day. The server already returns `createdAt` descending, so this does not
  * re-sort: doing so would quietly paper over a query that stopped being ordered.
+ * Days are calendar days in `timeZone` (UTC when omitted) — pass the viewer's.
  */
-const groupActivityByDay = (rows: ReadonlyArray<ActivityRow>, now: number): ReadonlyArray<ActivityGroup> => {
+const groupActivityByDay = (rows: ReadonlyArray<ActivityRow>, now: number, timeZone?: string): ReadonlyArray<ActivityGroup> => {
     const groups: ActivityGroup[] = [];
     let current: { day: string; entries: ActivityEntry[] } | undefined;
 
     for (const row of rows) {
-        const day = dayKey(row.createdAt);
+        const day = dayKey(row.createdAt, timeZone);
 
         if (current?.day !== day) {
             current = { day, entries: [] };
@@ -84,7 +85,7 @@ const groupActivityByDay = (rows: ReadonlyArray<ActivityRow>, now: number): Read
             id: row._id,
             sentence: describeActivity(row),
             timestamp: row.createdAt,
-            when: relativeTime(row.createdAt, now),
+            when: relativeTime(row.createdAt, now, timeZone),
         });
     }
 

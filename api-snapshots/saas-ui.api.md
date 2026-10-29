@@ -337,7 +337,7 @@ const currentSubscription: <T extends SubscriptionLike>(subscriptions: ReadonlyA
 ### `dayKey` (const)
 
 ```ts
-const dayKey: (timestamp: number) => string;
+const dayKey: (timestamp: number, timeZone?: string) => string;
 ```
 
 ### `deriveOverviewStats` (const)
@@ -355,7 +355,7 @@ const formatMoney: (amountMinor: number, currency: string, locale?: string) => s
 ### `groupActivityByDay` (const)
 
 ```ts
-const groupActivityByDay: (rows: ReadonlyArray<ActivityRow>, now: number) => ReadonlyArray<ActivityGroup>;
+const groupActivityByDay: (rows: ReadonlyArray<ActivityRow>, now: number, timeZone?: string) => ReadonlyArray<ActivityGroup>;
 ```
 
 ### `initials` (const)
@@ -427,7 +427,7 @@ const projectCounts: (rows: ReadonlyArray<ProjectRow>) => { active: number; arch
 ### `relativeTime` (const)
 
 ```ts
-const relativeTime: (timestamp: number, now: number) => string;
+const relativeTime: (timestamp: number, now: number, timeZone?: string) => string;
 ```
 
 ### `seatAlert` (const)
@@ -471,7 +471,7 @@ const subscriptionNotice: (subscription: SubscriptionLike | undefined) => string
 ### `ActivityFeed` (const)
 
 ```ts
-const ActivityFeed: ({ now, resolveActor, rows }: ActivityFeedProps) => ReactNode;
+const ActivityFeed: ({ now, resolveActor, rows, timeZone }: ActivityFeedProps) => ReactNode;
 ```
 
 ### `ActivityFeedProps` (interface)
@@ -481,13 +481,14 @@ interface ActivityFeedProps {
     now: number;
     resolveActor?: (actorId: string) => string;
     rows: ReadonlyArray<ActivityRow> | undefined;
+    timeZone?: string;
 }
 ```
 
 ### `AdminOrganizations` (const)
 
 ```ts
-const AdminOrganizations: ({ now, rows }: AdminOrganizationsProps) => ReactNode;
+const AdminOrganizations: ({ now, rows, timeZone }: AdminOrganizationsProps) => ReactNode;
 ```
 
 ### `AdminOrganizationsProps` (interface)
@@ -496,6 +497,7 @@ const AdminOrganizations: ({ now, rows }: AdminOrganizationsProps) => ReactNode;
 interface AdminOrganizationsProps {
     now: number;
     rows: ReadonlyArray<OrganizationRow> | undefined;
+    timeZone?: string;
 }
 ```
 

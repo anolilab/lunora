@@ -7,9 +7,11 @@
     interface Props {
         now: number;
         rows: ReadonlyArray<OrganizationRow> | undefined;
+        /** IANA zone an older update's date is shown in — the viewer's. UTC when omitted. */
+        timeZone?: string;
     }
 
-    const { now, rows }: Props = $props();
+    const { now, rows, timeZone }: Props = $props();
 
     let view = $state<AdminView>({ ...DEFAULT_ADMIN_VIEW });
 
@@ -61,7 +63,7 @@
                             <td>{organization.name}<code class="lu-saas-row__slug">{organization.slug}</code></td>
                             <td>{planLabel(organization.plan)}</td>
                             <td>{organization.seats}</td>
-                            <td>{relativeTime(organization.updatedAt, now)}</td>
+                            <td>{relativeTime(organization.updatedAt, now, timeZone)}</td>
                         </tr>
                     {/each}
                 </tbody>
