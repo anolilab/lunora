@@ -604,7 +604,7 @@ abstract class ShardDO {
         iterator: (signal: AbortSignal) => AsyncIterable<unknown>;
     };
     protected runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: (scope?: QueryReadScope) => Promise<R>, attribution?: QueryAttribution, outer?: QueryReadScope): Promise<R>;
-    protected getCtxDbReadHook(scope?: QueryReadScope): (table: string, idOrScan?: string) => void;
+    protected getCtxDbReadHook(scope?: QueryReadScope): (table: string, idOrScan?: string, exact?: boolean) => void;
     protected getCtxDbReadRangeHook(scope?: QueryReadScope): (range: KeyRange) => void;
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
     protected ctxDbTuning(): {

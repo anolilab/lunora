@@ -713,8 +713,11 @@ export interface IndexRangeBuilderLike {
 /** Notifies hibernated subscribers that a row in `table` changed. */
 export type BroadcastDelta = (delta: MutationDelta) => void;
 
-/** Records that a query touched `table`. */
-export type ReadHook = (table: string, idOrScan?: string) => void;
+/**
+ * Records that a query touched `table`. `exact` marks a point read whose result
+ * depends on row `idOrScan` alone, which lets a subscription narrow to it.
+ */
+export type ReadHook = (table: string, idOrScan?: string, exact?: boolean) => void;
 
 /** The argument a connection-lifecycle hook receives. */
 export interface LifecycleEvent {

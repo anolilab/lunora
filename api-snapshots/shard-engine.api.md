@@ -2075,7 +2075,7 @@ interface ReactorsResult {
 
 ```ts
 interface ReadFootprint {
-    onRead: (table: string, idOrScan?: string) => void;
+    onRead: (table: string, idOrScan?: string, exact?: boolean) => void;
     onReadRange: (range: KeyRange) => void;
     ranges: () => Map<string, KeyRange[]> | undefined;
     tables: Set<string>;
@@ -2085,7 +2085,7 @@ interface ReadFootprint {
 ### `ReadHook` (type)
 
 ```ts
-type ReadHook = (table: string, idOrScan?: string) => void;
+type ReadHook = (table: string, idOrScan?: string, exact?: boolean) => void;
 ```
 
 ### `ReadTablePageOptions` (interface)

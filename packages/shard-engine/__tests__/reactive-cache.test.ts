@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { createDependencyTracker, depKey, SCAN_DEP } from "../src/dependency-tracker";
 import { ReactiveCache, reactiveCacheKey, stableStringify } from "../src/reactive-cache";
+import { idIndexKey, idRange } from "../src/read-write-set";
 
 /**
  * Standalone tests for the reactive-cache primitive — kept framework-agnostic
@@ -187,6 +188,34 @@ describe("reactiveCache", () => {
 
         expect(spy.calls).toBe(2);
         expect(fresh).toBe(2);
+    });
+
+    it("keeps a range on a declared index named like the implicit id index", async () => {
+        expect.assertions(1);
+
+        const cache = new ReactiveCache();
+        const spy = spyCounter();
+        const declared = { hi: "b", index: "!id", lo: "a", table: "users" };
+
+        await cache.run("users:range", new Set<string>(), spy.run, () => [declared]);
+        cache.invalidate("users", "u9", [{ index: "!id", key: "a1" }]);
+        await cache.run("users:range", new Set<string>(), spy.run, () => [declared]);
+
+        expect(spy.calls).toBe(2);
+    });
+
+    it("keeps a point-read range whose row dep was not recorded", async () => {
+        expect.assertions(1);
+
+        const cache = new ReactiveCache();
+        const spy = spyCounter();
+        const point = idRange("users", "u1");
+
+        await cache.run("users:get:u1", new Set<string>(), spy.run, () => [point]);
+        cache.invalidate("users", "u1", [idIndexKey("u1")]);
+        await cache.run("users:get:u1", new Set<string>(), spy.run, () => [point]);
+
+        expect(spy.calls).toBe(2);
     });
 
     it("scan invalidation: any write to a table blows *scan entries on it", async () => {

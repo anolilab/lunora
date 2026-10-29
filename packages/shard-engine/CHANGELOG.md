@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.167...@lunora/shard-engine@1.0.0-alpha.168) (2026-10-29)
+
+### Performance Improvements
+
+* **shard-engine,do:** narrow by-id reads and share identical seeds ([#1393](https://github.com/anolilab/lunora/issues/1393)) ([9cec499](https://github.com/anolilab/lunora/commit/9cec499342aa0e6954dd9ffd2f8b12cb57069e71))
+
 ## @lunora/shard-engine [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.166...@lunora/shard-engine@1.0.0-alpha.167) (2026-10-28)
 
 ### ⚠ BREAKING CHANGES
