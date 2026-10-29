@@ -1174,8 +1174,8 @@ const dispatchSemanticMemory = async (
     const memorySource = toFunctionReference(source.source);
     const { topK } = source;
     const stepName = memoryStepName("memory:retrieve", source.key);
-    const retrieved = await step.do(stepName, async () =>
-        run(memorySource, { query: input, ...(topK === undefined ? {} : { topK }) }, appCallOptions(shardKey)), );
+    const args = { query: input, ...(topK === undefined ? {} : { topK }) };
+    const retrieved = await step.do(stepName, async () => run(memorySource, args, appCallOptions(shardKey)));
 
     return readRetrievedContext(retrieved);
 };
