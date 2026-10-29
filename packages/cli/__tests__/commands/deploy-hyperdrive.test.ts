@@ -322,6 +322,25 @@ describe("hyperdrive on deploy", () => {
                 ]);
             });
 
+            it("skips the caching check on a dry run", async () => {
+                expect.assertions(1);
+
+                writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: "real-id" }], name: "app" });
+
+                const api = hyperdriveApi([]);
+
+                await provisionHyperdrive({
+                    cwd: root,
+                    disableCaching: true,
+                    dryRun: true,
+                    environment: CREDENTIALS,
+                    fetch: api,
+                    logger: recordingLogger().logger,
+                });
+
+                expect(api).not.toHaveBeenCalled();
+            });
+
             it("skips the caching check without API credentials", async () => {
                 expect.assertions(1);
 

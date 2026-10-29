@@ -579,8 +579,8 @@ const warnCachingOn = async (
 const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise<string | undefined> => {
     const environment = options.environment ?? process.env;
 
-    // The "check" phase is followed by "create" in the same deploy; asking once is enough.
-    if (options.disableCaching === true && options.checkOnly !== true) {
+    // The "check" phase is followed by "create" in the same deploy; asking once is enough. A dry run calls no API.
+    if (options.disableCaching === true && options.checkOnly !== true && options.dryRun !== true) {
         await warnCachingOn(options, environment);
     }
 
