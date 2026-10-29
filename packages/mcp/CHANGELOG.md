@@ -1,3 +1,12 @@
+## @lunora/mcp [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.271...@lunora/mcp@1.0.0-alpha.272) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.262
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.169
+* **@lunora/auth:** upgraded to 1.0.0-alpha.242
+
 ## @lunora/mcp [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.270...@lunora/mcp@1.0.0-alpha.271) (2026-10-29)
 
 

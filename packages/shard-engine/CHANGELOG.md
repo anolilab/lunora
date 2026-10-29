@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.168...@lunora/shard-engine@1.0.0-alpha.169) (2026-10-29)
+
+### Features
+
+* **do,client,runtime:** batch a write's frames and re-auth open sockets ([#1396](https://github.com/anolilab/lunora/issues/1396)) ([dd260ba](https://github.com/anolilab/lunora/commit/dd260baa8cfa1aba3c86ef98206d156f1e49976b))
+
 ## @lunora/shard-engine [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.167...@lunora/shard-engine@1.0.0-alpha.168) (2026-10-29)
 
 ### Performance Improvements
