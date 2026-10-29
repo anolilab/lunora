@@ -1121,6 +1121,7 @@ interface ScheduleRecord {
     attempts?: number;
     enqueuedAt: number;
     error?: string;
+    firstDueAt?: number;
     functionPath?: string;
     id: string;
     instanceName?: string;

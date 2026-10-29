@@ -1174,6 +1174,9 @@ export interface ScheduleRecord {
     /** Why the job was dead-lettered. Set on a parked record. */
     error?: string;
 
+    /** The due time a pooled job had before its full pool first re-armed it; `scheduledFor` then moves with each re-arm. */
+    firstDueAt?: number;
+
     /**
      * The `ns:fn` path dispatched on fire. Absent when the job targets a durable
      * workflow/agent instead — exactly one of `functionPath` /
