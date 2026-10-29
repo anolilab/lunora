@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,7 +28,10 @@ const json = (value: unknown): Awaited<ReturnType<StreamingFetchLike>> => {
  * endpoints, including `?onConflict=replace` and `op: "delete"` rows (only under `?deletes=true`). `refuse`
  * names `_id`s whose write it reports as a row error.
  */
-const fakeWorker = (initial: Record<string, Doc[]>, options: { canDelete?: boolean; refuse?: ReadonlyArray<string> } = {}) => {
+const fakeWorker = (
+    initial: Record<string, Doc[]>,
+    options: { canDelete?: boolean; onExport?: () => void; refuse?: ReadonlyArray<string>; vanish?: ReadonlyArray<string> } = {},
+) => {
     const stored = new Map(Object.entries(initial).map(([table, docs]) => [table, new Map(docs.map((doc) => [doc._id, doc]))]));
     const writes: string[] = [];
 
@@ -42,6 +45,10 @@ const fakeWorker = (initial: Record<string, Doc[]>, options: { canDelete?: boole
 
         if (row.op === "delete") {
             return table.delete(row.doc._id) ? "deleted" : "noop";
+        }
+
+        if (options.vanish?.includes(row.doc._id) === true) {
+            return "noop";
         }
 
         if (options.refuse?.includes(row.doc._id) === true) {
@@ -64,6 +71,8 @@ const fakeWorker = (initial: Record<string, Doc[]>, options: { canDelete?: boole
         const body = typeof init?.body === "string" ? init.body : "";
 
         if (pathname === "/_lunora/admin/export") {
+            options.onExport?.();
+
             const { tables } = JSON.parse(body) as { tables: string[] };
             const lines = tables.flatMap((table) => [...(stored.get(table)?.values() ?? [])].map((doc) => `${JSON.stringify({ doc, table })}\n`));
 
@@ -190,6 +199,52 @@ describe("lunora import --mode", () => {
         expect(result.code).toBe(1);
         expect(worker.ids("users")).toStrictEqual(["u1", "u2"]);
         expect(lines.join("\n")).toMatch(/were NOT deleted; fix the errors and re-run the same command/u);
+    });
+
+    it("replace deletes nothing when --verify finds a row the worker never accounted for", async () => {
+        expect.assertions(2);
+
+        // `--verify` checks row parity only for a converted export, so the source is a Firestore dump.
+        const dump = join(workDir, "dump");
+
+        mkdirSync(dump, { recursive: true });
+        writeFileSync(join(dump, "users.json"), JSON.stringify({ u1: { name: { stringValue: "a" } }, u3: { name: { stringValue: "b" } } }), "utf8");
+
+        const worker = fakeWorker({ users: [{ _id: "u1" }, { _id: "u2" }] }, { vanish: ["u3"] });
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: worker.fetchImpl,
+            file: dump,
+            from: "firebase",
+            logger: capture().logger,
+            mode: "replace",
+            token: "t",
+            verify: true,
+            yes: true,
+        });
+
+        expect(result.code).toBe(1);
+        expect(worker.ids("users")).toStrictEqual(["u1", "u2"]);
+    });
+
+    it("replace keeps a row the file gained after the plan read it", async () => {
+        expect.assertions(2);
+
+        const file = writeFile(SNAPSHOT);
+        const worker = fakeWorker(
+            { users: [{ _id: "u1" }, { _id: "u2", name: "stored" }] },
+            {
+                onExport: () => {
+                    writeFileSync(file, `${readFileSync(file, "utf8")}\n${JSON.stringify({ doc: { _id: "u2", name: "added" }, table: "users" })}`, "utf8");
+                },
+            },
+        );
+
+        const result = await runImportCommand({ fetchImpl: worker.fetchImpl, file, logger: capture().logger, mode: "replace", token: "t", yes: true });
+
+        expect(result.code).toBe(0);
+        expect(worker.stored.get("users")?.get("u2")).toStrictEqual({ _id: "u2", name: "added" });
     });
 
     it("replace is refused before anything moves by a worker that cannot delete rows", async () => {

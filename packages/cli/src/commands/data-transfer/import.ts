@@ -783,7 +783,8 @@ const runImportPass = async (
         transferredPaths: storage.transferredPaths,
         unresolvedPaths,
     });
-    // The check pass indexes what it sends, so the plan can match the file's `_id`s against the target's without a third read.
+    // Both passes index what they send: the check pass so the plan can match the file's `_id`s against the target's without a
+    // third read, the write pass so the prune never deletes a row it just wrote.
     const indexedToRow =
         sourceIndex === undefined
             ? toRow
@@ -1029,14 +1030,22 @@ const planAndConfirm = async (
 
 /**
  * Delete the stored rows the file lacks, after a clean write pass. Each delete
- * carries the row as exported, so it routes to the shard that holds it.
+ * carries the row as exported, so it routes to the shard that holds it. A row
+ * the write pass sent is never deleted, even if the plan's read of the file
+ * lacked it: the file changed between the passes, and its newer content wins.
  */
-const pruneMissingRows = async (plan: ImportPlan, target: ImportPassTarget): Promise<{ batcher: ImportBatcher; failure: unknown }> => {
+const pruneMissingRows = async (plan: ImportPlan, target: ImportPassTarget, written: SourceIndex): Promise<{ batcher: ImportBatcher; failure: unknown }> => {
     // Only this pass asks for deletes; the endpoint refuses a delete row on any other request.
     const batcher = createImportBatcher({ ...target, maxBatchBytes: MAX_IMPORT_BATCH_BYTES, requestUrl: `${target.requestUrl}?deletes=true` });
 
     try {
         for (const row of plan.deletions) {
+            const id = row.doc["_id"];
+
+            if (typeof id === "string" && written.get(row.table)?.ids.has(id) === true) {
+                continue;
+            }
+
             // eslint-disable-next-line no-await-in-loop -- the batcher POSTs when full; deletes go out in order
             await batcher.push(JSON.stringify({ doc: row.doc, op: "delete", table: row.table }));
         }
@@ -1061,8 +1070,7 @@ const pruneMissingRows = async (plan: ImportPlan, target: ImportPassTarget): Pro
 const pruneAfterWrite = async (
     options: ImportCommandOptions,
     plan: ImportPlan | undefined,
-    write: ImportBatcher,
-    streamFailure: unknown,
+    write: { batcher: ImportBatcher; streamFailure: unknown; verifyFailed: boolean; written: SourceIndex },
     target: ImportPassTarget,
 ): Promise<{ failed: boolean; totals?: ImportTotals }> => {
     if (plan === undefined || options.mode !== "replace" || plan.deletions.length === 0) {
@@ -1071,7 +1079,10 @@ const pruneAfterWrite = async (
 
     const count = String(plan.deletions.length);
 
-    if (streamFailure !== undefined || write.totals.errors.length > 0 || write.totals.failed.length > 0) {
+    const { totals: written } = write.batcher;
+
+    // `--verify`'s parity and storage checks are part of "the write came back clean": a run they fail must not delete.
+    if (write.streamFailure !== undefined || write.verifyFailed || written.errors.length > 0 || written.failed.length > 0) {
         options.logger.error(
             `--mode replace: the write did not finish cleanly, so the ${count} stored row(s) the file lacks were NOT deleted; fix the errors and re-run the same command`,
         );
@@ -1081,7 +1092,7 @@ const pruneAfterWrite = async (
 
     options.logger.info(`--mode replace: deleting ${count} stored row(s) the file lacks`);
 
-    const { batcher, failure } = await pruneMissingRows(plan, target);
+    const { batcher, failure } = await pruneMissingRows(plan, target, write.written);
     const { totals } = batcher;
 
     if (failure !== undefined || totals.errors.length > 0 || totals.failed.length > 0) {
@@ -1202,20 +1213,30 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
             : `POST ${requestUrl} -> import ${options.file}`,
     );
 
-    const { batcher, remapReport, sourceRows, streamFailure, unresolvedPaths } = await runImportPass(options, source, storage, { ...target, requestUrl });
-    const prune = await pruneAfterWrite(options, importPlan, batcher, streamFailure, target);
-    const totals = withPruneTotals(batcher.totals, prune.totals);
-
-    const { conflicts, deleted, errors, failed: failedShards, inserted, received, replaced, warnings } = totals;
+    const written: SourceIndex = new Map();
+    const { batcher, remapReport, sourceRows, streamFailure, unresolvedPaths } = await runImportPass(
+        options,
+        source,
+        storage,
+        { ...target, requestUrl },
+        written,
+    );
 
     // Parity over an aborted run only restates the abort, so skip it there and
     // let the failure be the verdict. A replaced row is accounted for the way a
     // conflict is: present in the target, just not newly inserted.
     const parityMismatch =
-        options.verify === true && streamFailure === undefined ? checkRowParity(options.logger, sourceRows, { conflicts: conflicts + replaced, inserted }) : 0;
+        options.verify === true && streamFailure === undefined
+            ? checkRowParity(options.logger, sourceRows, { conflicts: batcher.totals.conflicts + batcher.totals.replaced, inserted: batcher.totals.inserted })
+            : 0;
     const unmigratedFailure = storageIdMap !== undefined && reportStorageOutcome(options.logger, remapReport, options.verify === true);
 
     const unresolvedPathFailure = reportUntransferredPaths(options.logger, unresolvedPaths, options.verify === true);
+    const verifyFailed = parityMismatch > 0 || unmigratedFailure || unresolvedPathFailure;
+    const prune = await pruneAfterWrite(options, importPlan, { batcher, streamFailure, verifyFailed, written }, target);
+    const totals = withPruneTotals(batcher.totals, prune.totals);
+
+    const { conflicts, deleted, errors, failed: failedShards, inserted, received, replaced, warnings } = totals;
 
     const insertedTotal = Object.values(inserted).reduce((a, b) => a + b, 0);
     const body = buildImportBody(totals, storageIdMap, remapReport, importPlan);
@@ -1226,14 +1247,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     // so without this the run reported a clean success over missing data.
     logUnreachedShards(options.logger, failedShards);
 
-    const failed =
-        streamFailure !== undefined ||
-        errors.length > 0 ||
-        failedShards.length > 0 ||
-        parityMismatch > 0 ||
-        unmigratedFailure ||
-        unresolvedPathFailure ||
-        prune.failed;
+    const failed = streamFailure !== undefined || errors.length > 0 || failedShards.length > 0 || verifyFailed || prune.failed;
 
     // The batcher's roll-up, spelled out for a human. Pretty mode only: in json
     // the same object IS the document's `summary`, and printing it here too said
