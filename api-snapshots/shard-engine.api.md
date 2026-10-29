@@ -4480,6 +4480,12 @@ const isSoftDeleted: (row: Record<string, unknown>, column: string) => boolean;
 const isSourceDue: (refresh: SourceRefresh | undefined, lastPolledMs: number | undefined, nowMs: number) => boolean;
 ```
 
+### `isTtlExpired` (const)
+
+```ts
+const isTtlExpired: (sql: SqlExec, spec: TtlSweepSpec, id: string, now: number) => boolean;
+```
+
 ### `isVacuousFilterClause` (const)
 
 ```ts

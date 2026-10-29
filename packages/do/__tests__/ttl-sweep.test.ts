@@ -264,6 +264,123 @@ describe("ttl sweep", () => {
         });
     });
 
+    describe("a row refreshed while the sweep awaits an earlier delete", () => {
+        /**
+         * Two expired rows on a table whose delete trigger awaits a gate the test
+         * holds — the stand-in for a trigger doing real I/O, the one place the
+         * sweep yields to another request between paging the ids and deleting
+         * them. While the first delete is parked, the "other" row's TTL field is
+         * refreshed the way a presence heartbeat would.
+         */
+        const raceSchema = (onDeleteTrigger: (id: string) => Promise<void>): SchemaLike => {
+            const triggerMap = {
+                parkOnDelete: { handler: async (_context: unknown, event: { id: string }) => onDeleteTrigger(event.id), op: "delete", timing: "after" },
+            } as const;
+
+            return {
+                tables: {
+                    beats: { indexes: [], shape: { lastSeen: { kind: "number" } }, triggerMap, ttlPolicy: { after: 30_000, field: "lastSeen" } },
+                    presence: {
+                        indexes: [],
+                        shape: { deletedAt: { kind: "number" }, lastSeen: { kind: "number" } },
+                        softDeleteMode: { field: "deletedAt" },
+                        triggerMap,
+                        ttlPolicy: { after: 30_000, field: "lastSeen" },
+                    },
+                },
+            };
+        };
+
+        class RaceShard extends ShardDO {
+            public readonly broadcastKeys: string[] = [];
+
+            public constructor(
+                state: ShardDOState,
+                private readonly schema: SchemaLike,
+                private readonly spec: TtlSweepSpec,
+            ) {
+                super(state, {});
+            }
+
+            // eslint-disable-next-line class-methods-use-this -- override stub; RPCs never dispatch in this test
+            public override handleRpc(): Promise<unknown> {
+                return Promise.reject(new Error("handleRpc must not run"));
+            }
+
+            protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+                const writer = createShardContextDatabase({
+                    broadcast: (delta) => {
+                        this.broadcastKeys.push(delta.key);
+                        this.recordChangedTable(delta.table);
+                    },
+                    schema: this.schema,
+                    sql: this.sql as never,
+                });
+
+                await writer.delete(args.table, args.id ?? "");
+
+                return { id: args.id ?? null, op: args.op };
+            }
+
+            protected override ttlSweeps(): ReadonlyArray<TtlSweepSpec> {
+                return [this.spec];
+            }
+        }
+
+        it.each([
+            { softDeleteField: undefined, table: "beats" },
+            { softDeleteField: "deletedAt", table: "presence" },
+        ])("keeps the refreshed row alive on $table", async ({ softDeleteField, table }) => {
+            expect.assertions(4);
+
+            const entered = Promise.withResolvers<string>();
+            const gate = Promise.withResolvers<undefined>();
+            let parked = false;
+            const schema = raceSchema(async (id) => {
+                // Park only the sweep's first delete; the refresh below is a patch, not a delete.
+                if (!parked) {
+                    parked = true;
+                    entered.resolve(id);
+                    await gate.promise;
+                }
+            });
+
+            runShardMigrations(harness.sql, schema);
+
+            const writer = createShardContextDatabase({ schema, sql: harness.sql });
+            const stale = Date.now() - 60_000;
+
+            await writer.insert(table, { _id: "a", lastSeen: stale }, { allowExplicitId: true });
+            await writer.insert(table, { _id: "b", lastSeen: stale }, { allowExplicitId: true });
+
+            const state: ShardDOState = {
+                acceptWebSocket() {},
+                getWebSockets() {
+                    return [];
+                },
+                storage: { sql: harness.sql as unknown as ShardDOState["storage"]["sql"] },
+            };
+            const shard = new RaceShard(state, schema, { after: 30_000, field: "lastSeen", softDeleteField, table });
+            const sweep = shard.alarm();
+
+            const swept = await entered.promise;
+            const refreshed = swept === "a" ? "b" : "a";
+
+            await writer.patch(table, refreshed, { lastSeen: Date.now() });
+            gate.resolve(undefined);
+            await sweep;
+
+            const survivor = await writer.get(table, refreshed);
+            const remaining = await writer.query(table).collect();
+
+            expect(survivor).not.toBeNull();
+            expect(survivor?.["deletedAt"] ?? null).toBeNull();
+            // The swept row went through the writer; the skipped one was never touched or announced.
+            expect(shard.broadcastKeys).toStrictEqual([swept]);
+            expect(remaining.map((row) => row["_id"])).toStrictEqual([refreshed]);
+        });
+    });
+
     describe("alarm-path headroom (plan 207 step 2)", () => {
         const ADMIN_TOKEN = "s3cret-admin";
 
