@@ -56,15 +56,8 @@
         "if": "needs.files-changed.outputs.packages == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        # A change to pnpm-lock.yaml / pnpm-workspace.yaml makes *every* package
-        # affected, so the ceiling is sized for a whole-suite run. The longest leg is
-        # now a plain (coverage-free) run that still carries @lunora/codegen and
-        # @lunora/cli: the merge queue, and the 24.11 leg everywhere. vis runs five
-        # tasks on a 4-vCPU runner, which caps each vitest at ONE worker
-        # (tools/get-vitest-config.ts), so codegen alone takes ~20 min there and a
-        # wide leg ~30. The coverage leg is shorter: its three slowest suites run in
-        # `test-coverage-shards` instead, where they had taken 44, 24 and 10 min
-        # single-worker under coverage and held this job at 46+ min.
+        # Sized for a whole-suite plain run (lockfile change), which still carries codegen
+        # and cli at one vitest worker each: ~30 min.
         "timeout-minutes": 60
         "strategy":
             "fail-fast": false
@@ -97,6 +90,8 @@
               "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
               "with":
                   "node-version": "${{ matrix.node_version }}"
+                  # npm 12 (v26's `latest`) refuses node < 24.15.
+                  "npm-version": "11.6.x"
                   "cache-prefix": "test"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
@@ -173,13 +168,8 @@
             # and the suite runs here, on the leg without coverage. It has no
             # `test:coverage` script, so the 22.22 leg simply has nothing to run for it.
             #
-            # Coverage runs on the 22.22 leg of a PR only. The merge queue re-tests a
-            # tree whose coverage the PR already reported, so it runs the plain suite on
-            # both legs; Codecov's base comes from coverage-baseline.yml on push.
-            #
-            # The coverage run leaves out the suites `test-coverage-shards` runs. Keep
-            # this query and that matrix in step: a suite dropped from the matrix but
-            # left here runs nowhere under coverage.
+            # Coverage on PRs only; the merge queue re-tests what the PR already reported.
+            # The excluded projects must match the `test-coverage-shards` matrix.
             - "name": "Run affected tests"
               "shell": "bash"
               "env":
@@ -203,8 +193,7 @@
                   pnpm --filter "@lunora/studio" run test
 
             - "name": "Upload coverage to Codecov"
-              # Same-repo PRs only: a fork has no token, and `github.event.pull_request`
-              # is empty on every other event.
+              # Same-repo PRs only: forks have no token.
               "if": "matrix.node_version == '22.22' && github.event.pull_request.head.repo.full_name == github.repository"
               "continue-on-error": true
               "uses": "codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac" # v5.5.5
@@ -212,17 +201,10 @@
                   "token": "${{ secrets.CODECOV_TOKEN }}"
                   "fail_ci_if_error": false
 
-    # The three slowest suites under coverage, each on its own runner and the big two
-    # split with `vitest --shard`. Under vis on the 4-vCPU runner each vitest gets one
-    # worker; called directly here it gets every core, and sharding divides the rest.
-    #
-    # Thresholds are zeroed per shard because one shard covers a fraction of `src`
-    # and would fail every floor. The real floors are enforced on the merged blobs in
-    # `test-coverage-merge`, which produces the same numbers as an unsharded run.
-    #
-    # PR-only, like the coverage leg above; the merge queue runs these suites inside
-    # `test`. Each leg checks itself whether its project is affected, so an unaffected
-    # one stops after install instead of the whole matrix waiting on a gate job.
+    # The slowest coverage suites, sharded on their own runners. Under vis each vitest
+    # gets one worker; called directly it gets every core.
+    # Shards zero the thresholds (each covers part of `src`); `test-coverage-merge`
+    # enforces the real ones on the merged result.
     "test-coverage-shards":
         "name": "Coverage (${{ matrix.project }} ${{ matrix.shard }}/${{ matrix.shards }})"
         "if": "needs.files-changed.outputs.packages == 'true' && github.event_name != 'merge_group'"
@@ -232,8 +214,7 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                # Shard counts size each leg to ~10 min of tests, from single-worker
-                # coverage timings of 2,616s (codegen), 1,436s (cli) and 625s (hyperdrive).
+                # Sized for ~5-10 min of tests per leg.
                 "include":
                     - { "project": "codegen", "shard": 1, "shards": 3 }
                     - { "project": "codegen", "shard": 2, "shards": 3 }
@@ -257,8 +238,7 @@
               "uses": "anolilab/workflows/step/node@1dad797acf6f13291e54558f34b02d165db14dbd" # v26.0.0
               "with":
                   "node-version": "22.22"
-                  # Per leg: the vis cache key carries the job id but not the matrix,
-                  # so legs sharing a prefix would race for one key.
+                  # Per leg: the vis cache key has the job id but not the matrix.
                   "cache-prefix": "test-coverage-${{ matrix.project }}-${{ matrix.shard }}"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
@@ -267,9 +247,8 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # Output captured before grepping: under pipefail a `grep -q` that exits
-            # early SIGPIPEs vis and reads as "not affected". Output that matches
-            # neither line fails the leg rather than skipping it.
+            # Captured first: under pipefail an early-exiting `grep -q` SIGPIPEs vis.
+            # Unrecognised output fails the leg instead of skipping it.
             - "name": "Check whether ${{ matrix.project }} is affected"
               "id": "affected"
               "shell": "bash"
@@ -295,9 +274,7 @@
               "run": |
                   pnpm exec vis run build --query "project=${PROJECT}"
 
-            # vitest directly, not through vis: no VIS_TASK_SLOTS means no worker cap.
-            # The blob goes to a non-hidden path because upload-artifact skips hidden
-            # files, and vitest's default `.vitest-reports/` would upload nothing.
+            # Non-hidden blob path: upload-artifact skips vitest's default `.vitest-reports/`.
             - "name": "Run ${{ matrix.project }} shard ${{ matrix.shard }}/${{ matrix.shards }} under coverage"
               "if": "steps.affected.outputs.run == 'true'"
               "env":
@@ -328,9 +305,8 @@
                   # A re-run of one failed shard re-uploads under the same name.
                   "overwrite": true
 
-    # Merges each project's shard blobs, which enforces the package's real coverage
-    # thresholds on the whole suite, and uploads the merged report to Codecov.
-    # Needs no build: it replays results and runs no test.
+    # Merges each project's shard blobs, enforcing its real coverage thresholds, and
+    # uploads to Codecov. Replays results only, so no build.
     "test-coverage-merge":
         "name": "Coverage merge"
         "if": "needs.files-changed.outputs.packages == 'true' && github.event_name != 'merge_group'"
@@ -346,9 +322,8 @@
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
-            # After checkout, which cleans the workspace. No match is not an error:
-            # when no sharded project was affected there is nothing to merge, and every
-            # step below skips on the empty directory.
+            # After checkout, which cleans the workspace. No blobs = nothing affected; the
+            # steps below skip.
             - "name": "Download the shard blob reports"
               "uses": "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" # v4.3.0
               "with":
@@ -356,9 +331,7 @@
                   "path": "blob-reports"
                   "merge-multiple": true
 
-            # A shard whose upload went missing would otherwise merge into a report
-            # that silently covers part of the suite. Every shard of a project shares
-            # its affected verdict, so a project has all of its blobs or none.
+            # A missing blob would silently merge into a partial report.
             - "name": "Assert every shard reported"
               "if": "hashFiles('blob-reports/**') != ''"
               "shell": "bash"
