@@ -316,11 +316,10 @@ const isWaitTimeoutError = (error: unknown): boolean => error instanceof Error &
  * deterministically named durable event `approval:<toolCallId>`. A workflow
  * replay memoizes the resolved wait, so the run resumes with the recorded
  * decision without pausing (or re-persisting) again. Named ONLY from the
- * replay-stable `call.id`. The wait carries a timeout (default
- * 3 days, configurable via the agent's
- * `approvalTimeout` and bounded by {@link approvalTimeoutMs}) so a
- * never-answered approval ends as a rejection instead of hibernating the run
- * forever.
+ * replay-stable `call.id`. The wait carries a timeout (default 3 days,
+ * configurable via the agent's `approvalTimeout` and bounded by
+ * {@link approvalTimeoutMs}) so a never-answered approval ends as a rejection
+ * instead of hibernating the run forever.
  *
  * The wait's match `type` is scoped to THIS call (`agent-approval:<call.id>`,
  * the same format `component.ts`'s `agentResolveApproval` sends) — native CF

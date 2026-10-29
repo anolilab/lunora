@@ -1,6 +1,3 @@
-export { default as createAgentContext } from "./create-agent-context";
-export { defineAgent, defineAgentTool, isAgentDefinition } from "./define-agent";
-
 /**
  * The part of `@lunora/agent` a Worker evaluates at startup: the definition builders
  * a `lunora/agents.ts` calls at module scope, and what the generated shard and agent
@@ -9,6 +6,9 @@ export { defineAgent, defineAgentTool, isAgentDefinition } from "./define-agent"
  * run. The `@lunora/agent` barrel re-exports all of this plus the heavy tools and
  * runtime, so importing from it puts them back in the startup graph.
  */
+
+export { default as createAgentContext } from "./create-agent-context";
+export { defineAgent, defineAgentTool, isAgentDefinition } from "./define-agent";
 export type { FunctionToolOptions } from "./function-tool";
 export { functionTool } from "./function-tool";
 export { default as jsonSchema } from "./json-schema";
