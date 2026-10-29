@@ -216,6 +216,7 @@ describe("saas kit functions", () => {
             db,
             log: { info: vi.fn<(message: string) => void>() },
             now: NOW,
+            shardKey: "org-1",
         };
 
         return { db, rows, saas, writer };
@@ -296,6 +297,17 @@ describe("saas kit functions", () => {
 
             expect(rows("saas_activity").map((row) => row["createdAt"])).toStrictEqual([NOW, NOW]);
             expect(rows("saas_projects")[0]!["archivedAt"]).toBe(NOW);
+        });
+
+        it("refuses to write anywhere but the organisation's own shard", async () => {
+            expect.assertions(2);
+
+            const { rows, saas, writer } = await setup();
+
+            await expect(saas.createProject({ args: { name: "Website" }, ctx: { ...writer, shardKey: "__root__" } })).rejects.toMatchObject({
+                code: "FORBIDDEN",
+            });
+            expect(rows("saas_projects")).toHaveLength(0);
         });
 
         it("still refuses the name of a live project", async () => {
@@ -411,6 +423,7 @@ describe("saas template checkout", () => {
                 listSubscriptions: vi.fn<() => Promise<Row[]>>(async () => subscriptions),
             },
             runMutation,
+            shardKey: "__root__",
         };
         return { clock, createCheckout, ctx, database, payment };
     };
@@ -431,6 +444,15 @@ describe("saas template checkout", () => {
 
         await expect(payment.checkout({ args: { priceId: "price_scale" }, ctx })).resolves.toStrictEqual({ url: "https://pay.example.test/session-1" });
         expect(createCheckout).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses to run off the root shard, where the billing tables are empty copies", async () => {
+        expect.assertions(2);
+
+        const { createCheckout, ctx, payment } = await setup([]);
+
+        await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx: { ...ctx, shardKey: "org-1" } })).rejects.toMatchObject({ code: "FORBIDDEN" });
+        expect(createCheckout).not.toHaveBeenCalled();
     });
 
     it("refuses a provider that cannot expire the session, before taking a hold", async () => {

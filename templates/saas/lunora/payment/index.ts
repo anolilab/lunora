@@ -107,6 +107,9 @@ const appOrigin = (): string => {
     return new URL(value).origin;
 };
 
+/** The shard a call that names none runs on, and the one the provider webhook reaches. */
+const ROOT_SHARD = "__root__";
+
 /** The org roles allowed to start a subscription or open the billing portal — the same pair `lunora/saas` lets write projects. */
 const BILLING_ADMIN_ROLES: ReadonlySet<string> = new Set(["admin", "owner"]);
 
@@ -124,7 +127,7 @@ const BILLING_ADMIN_ROLES: ReadonlySet<string> = new Set(["admin", "owner"]);
  * which would only admit a reference equal to the caller's user id.
  */
 const billingReference = async (
-    ctx: { auth: { getIdentity: () => Promise<{ activeOrganizationId?: string; email?: string; orgRole?: string } | null> } },
+    ctx: { auth: { getIdentity: () => Promise<{ activeOrganizationId?: string; email?: string; orgRole?: string } | null> }; shardKey: string },
     { adminOnly = false }: { adminOnly?: boolean } = {},
 ): Promise<string> => {
     const identity = await ctx.auth.getIdentity();
@@ -137,6 +140,13 @@ const billingReference = async (
 
     if (!identity.activeOrganizationId) {
         throw new LunoraError("UNPROCESSABLE", "billing is per-organization — create or switch to one first");
+    }
+
+    // The billing tables, the checkout hold and the webhook all live on the root
+    // shard. A caller may also enter its own organisation's shard, which holds
+    // empty copies of them, so a check run there would see no subscription.
+    if (ctx.shardKey !== ROOT_SHARD) {
+        throw new LunoraError("FORBIDDEN", "billing runs on the root shard — call it without a shardKey");
     }
 
     // better-auth joins several roles with commas (`"admin,owner"`), so test

@@ -163,6 +163,13 @@ const requireOrganization = async (ctx: MutationCtx | QueryCtx): Promise<{ organ
         throw new LunoraError("UNPROCESSABLE", "no active organization — create or switch to one first");
     }
 
+    // The caller picks the shard, and `authorizeShard` also admits the root shard
+    // that `me` and billing run on. Run anywhere but the tenant's own shard, a
+    // read sees none of its rows and a write lands where the dashboard never looks.
+    if (ctx.shardKey !== organizationId) {
+        throw new LunoraError("FORBIDDEN", "call this on the active organization's shard ({ shardKey: organizationId })");
+    }
+
     return { organizationId, orgRole, userId };
 };
 

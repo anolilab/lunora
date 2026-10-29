@@ -221,7 +221,9 @@ const app = defineApp<Env>()
         /**
          * A caller may enter their own tenant's shard, plus the root shard —
          * which holds the billing tables and serves `saas.me`, so every
-         * signed-in user needs it. (An unsharded table exists in every shard, so
+         * signed-in user needs it. This decides only where a caller may go,
+         * not which function runs there: the tenant functions check
+         * `ctx.shardKey` against the organisation, and billing against root. (An unsharded table exists in every shard, so
          * the rate-limit buckets are per organisation: a function running on a
          * tenant's shard counts against that tenant's copy.)
          *
