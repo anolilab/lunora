@@ -2,14 +2,15 @@
  * Polar adapter.
  *
  * Polar is a Merchant-of-Record: there is no manual authorize/capture, so those throw. The public
- * `client` is the small structural {@link PolarClientLike} (a real `@polar-sh/sdk` `Polar` instance
- * satisfies it with no cast); internally it is used as the real `Polar`, so every call is checked
- * against the SDK. Webhooks use the Standard Webhooks scheme (`webhook-id` / `webhook-timestamp` /
+ * `client` loads the small structural {@link PolarClientLike} (a real `@polar-sh/sdk` `Polar`
+ * instance satisfies it with no cast) on the first provider call, so the SDK stays out of the
+ * startup graph; internally it is used as the real `Polar`, so every call is checked against the SDK. Webhooks use the Standard Webhooks scheme (`webhook-id` / `webhook-timestamp` /
  * `webhook-signature`), verified by {@link verifyStandardWebhook}. Client responses are camelCase
  * (period fields are `Date`s); raw webhook bodies are snake_case — handled accordingly.
  */
 import type { Polar } from "@polar-sh/sdk";
 
+import { lazyValue } from "../../../../shared/lazy-value";
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
 import { asRecord, readBoolean, readEpochMs, readNumber, readString, referenceFromMetadata } from "../json";
@@ -49,7 +50,7 @@ interface PolarClientLike {
 }
 
 interface PolarAdapterOptions {
-    readonly client: PolarClientLike;
+    readonly client: () => Promise<PolarClientLike> | PolarClientLike;
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }
@@ -266,13 +267,15 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
 export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
-    // Use the injected client as the real `Polar` internally so every call is checked against the SDK.
-    const client = options.client as unknown as Polar;
+    // Use the loaded client as the real `Polar` internally so every call is checked against the SDK.
+    const loadClient = lazyValue(async () => (await options.client()) as unknown as Polar);
 
     return {
         cancelPayment: () => notSupported("manual payment cancellation"),
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {
+            const client = await loadClient();
+
             const subscription = cancelOptions?.atPeriodEnd
                 ? await client.subscriptions.update({ id: subscriptionId, subscriptionUpdate: { cancelAtPeriodEnd: true } })
                 : await client.subscriptions.revoke({ id: subscriptionId });
@@ -285,6 +288,8 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),
 
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
+            const client = await loadClient();
+
             const checkout = await client.checkouts.create({
                 // Bind the checkout to the customer the facade already reused/minted for this reference,
                 // else Polar mints a SECOND orphan customer at completion (leaving the stored customer
@@ -305,12 +310,16 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
         },
 
         createPortalSession: async (input: PortalInput) => {
+            const client = await loadClient();
+
             const session = await client.customerSessions.create({ customerId: input.customerId });
 
             return { url: session.customerPortalUrl };
         },
 
         getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
+            const client = await loadClient();
+
             // Polar requires an email to mint a customer (pass it on first checkout via `CheckoutInput.email`);
             // `type: "individual"` selects the individual variant of Polar's customer-create union.
             //
@@ -340,9 +349,17 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
             return { createdAt: Date.now(), email: customer.email ?? undefined, id: customer.id, provider: "polar", referenceId: ref.referenceId };
         },
 
-        getPaymentStatus: async (sessionId) => orderToSession(await client.orders.get({ id: sessionId })),
+        getPaymentStatus: async (sessionId) => {
+            const client = await loadClient();
 
-        getSubscriptionStatus: async (subscriptionId) => subscriptionFromPolar(await client.subscriptions.get({ id: subscriptionId })),
+            return orderToSession(await client.orders.get({ id: sessionId }));
+        },
+
+        getSubscriptionStatus: async (subscriptionId) => {
+            const client = await loadClient();
+
+            return subscriptionFromPolar(await client.subscriptions.get({ id: subscriptionId }));
+        },
 
         identifier: "polar",
 
@@ -369,6 +386,8 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
         },
 
         refundPayment: async (input) => {
+            const client = await loadClient();
+
             // Polar refunds a NET amount and refunds the matching tax on top; the ledger (and so
             // `input.amount`) is tax-inclusive, like the `totalAmount` a capture books. A full refund
             // sends what is still refundable; a partial one converts gross to net at the order's ratio.
@@ -418,6 +437,8 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
         },
 
         reportUsage: async (input: ReportUsageInput) => {
+            const client = await loadClient();
+
             // Polar event ingestion: one event per usage record, keyed to the customer by its
             // external id (the reference id we set on customer creation). Metadata carries the value.
             //
@@ -439,12 +460,16 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
         },
 
         resumeSubscription: async (subscriptionId) => {
+            const client = await loadClient();
+
             const subscription = await client.subscriptions.update({ id: subscriptionId, subscriptionUpdate: { cancelAtPeriodEnd: false } });
 
             return subscriptionFromPolar(subscription);
         },
 
         updateSubscription: async (subscriptionId, patch: SubscriptionPatch) => {
+            const client = await loadClient();
+
             // Polar's plan change (`productId`) and seat change (`seats`) are separate update variants,
             // so one call cannot carry both. Refuse the combined patch rather than drop one half.
             if (patch.priceId !== undefined && patch.quantity !== undefined) {

@@ -20,9 +20,12 @@ is a stateless translator; the store owns all state.
 
 Outbound calls carry idempotency keys wherever the provider accepts one (no
 double-charge), and every mutation is
-authorized per-caller. Each adapter takes the provider's SDK client by injection.
-The provider SDKs are **optional peer dependencies**, so you install (and bundle) only
-the providers you actually use.
+authorized per-caller. Each adapter takes a loader for the provider's SDK client,
+called on the first provider call and reused, so the SDK stays out of the
+Worker's startup graph. A static import of the SDK in the entry
+(`import Stripe from "stripe"`) is evaluated at startup and defeats this. The
+provider SDKs are **optional peer dependencies**, so you install (and bundle)
+only the providers you actually use.
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
 
@@ -67,14 +70,17 @@ authorizer ties `referenceId` to `ctx.auth.userId`.
 ```ts
 import { createStripeAdapter } from "@lunora/payment/stripe";
 import { createShardDO } from "./_generated/shard";
-import Stripe from "stripe";
 
 export const ShardDO = createShardDO({
     payment: (env) => ({
         adapter: createStripeAdapter({
-            // The adapter types its client as the real `Stripe` instance (an optional peer dependency),
-            // so it's passed straight through — the fetch HTTP client is required on workerd.
-            client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }),
+            // A real `Stripe` instance satisfies the loaded client's type, so no cast — the fetch
+            // HTTP client is required on workerd.
+            client: async () => {
+                const { default: Stripe } = await import("stripe");
+
+                return new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
+            },
             webhookSecret: env.STRIPE_WEBHOOK_SECRET,
         }),
         // Override the default "caller owns the referenceId" rule for org/workspace keys. It runs per
@@ -102,7 +108,7 @@ The thunk returns `PaymentsFromContextOptions`:
 
 ### Provider adapters
 
-Every adapter takes its client by injection and verifies inbound webhooks. Each
+Every adapter takes a client loader and verifies inbound webhooks. Each
 lives at its **own subpath** so importing one never loads another provider's SDK:
 
 ```ts
@@ -119,11 +125,11 @@ const dodo = createDodoPaymentsAdapter({ client, webhookSecret });
 const creem = createCreemAdapter({ client, webhookSecret });
 ```
 
-| Option                    | Stripe | Polar | Autumn | Dodo | Creem | Notes                                                          |
-| ------------------------- | :----: | :---: | :----: | :--: | :---: | -------------------------------------------------------------- |
-| `client`                  |   ✓    |   ✓   |   ✓    |  ✓   |   ✓   | The provider's injected SDK client (e.g. a `Stripe` instance). |
-| `webhookSecret`           |   ✓    |   ✓   |   ✓    |  ✓   |   ✓   | Signing secret for inbound webhook verification.               |
-| `webhookToleranceSeconds` |   ✓    |   ✓   |   ✓    |  ✓   |       | Optional clock-skew tolerance (schemes that sign a timestamp). |
+| Option                    | Stripe | Polar | Autumn | Dodo | Creem | Notes                                                                    |
+| ------------------------- | :----: | :---: | :----: | :--: | :---: | ------------------------------------------------------------------------ |
+| `client`                  |   ✓    |   ✓   |   ✓    |  ✓   |   ✓   | Loads the provider's SDK client (e.g. a `Stripe` instance) on first use. |
+| `webhookSecret`           |   ✓    |   ✓   |   ✓    |  ✓   |   ✓   | Signing secret for inbound webhook verification.                         |
+| `webhookToleranceSeconds` |   ✓    |   ✓   |   ✓    |  ✓   |       | Optional clock-skew tolerance (schemes that sign a timestamp).           |
 
 Stripe is a PSP (manual authorize/capture available). Polar, Dodo Payments, and
 Creem are Merchants-of-Record: `merchantOfRecord` is `true` and they own
@@ -146,10 +152,13 @@ verified with the `creem-signature` HMAC-SHA256 header.
 ```ts
 import type { CreemClientLike } from "@lunora/payment/creem";
 import { createCreemAdapter } from "@lunora/payment/creem";
-import { Creem } from "creem";
 
 const creem = createCreemAdapter({
-    client: new Creem() as unknown as CreemClientLike,
+    client: async () => {
+        const { Creem } = await import("creem");
+
+        return new Creem({ apiKey: env.CREEM_API_KEY }) as unknown as CreemClientLike;
+    },
     webhookSecret: env.CREEM_WEBHOOK_SECRET,
 });
 ```
@@ -172,16 +181,19 @@ outbound webhook stream). Autumn's dashboard can still emit Standard Webhooks
 (Svix) events, so `parseWebhook` is provided as a best-effort convenience;
 `reconcile` remains the reliable path for subscription drift.
 
-Construct the client from `autumn-js` and inject it (the cast keeps the package
-free of a hard `autumn-js` dependency):
+Load the client from `autumn-js` (the cast keeps the package free of a hard
+`autumn-js` dependency):
 
 ```ts
 import type { AutumnClientLike } from "@lunora/payment/autumn";
 import { createAutumnAdapter } from "@lunora/payment/autumn";
-import { Autumn } from "autumn-js";
 
 const autumn = createAutumnAdapter({
-    client: new Autumn({ secretKey: env.AUTUMN_SECRET_KEY }) as unknown as AutumnClientLike,
+    client: async () => {
+        const { Autumn } = await import("autumn-js");
+
+        return new Autumn({ secretKey: env.AUTUMN_SECRET_KEY }) as unknown as AutumnClientLike;
+    },
     webhookSecret: env.AUTUMN_WEBHOOK_SECRET,
 });
 ```
@@ -191,8 +203,8 @@ have no cross-provider equivalent: **entities** (per-seat/per-workspace
 sub-customers), **referrals**, usage-**events** analytics, the **plan catalog**,
 and a native **checkout** (prepaid feature quantities, entity scoping, reward
 codes, opting out of a plan's trial). It is kept separate so the
-provider-agnostic surface stays generic. Share the same injected client between
-the two. (Credit systems need no extra method: Autumn models them as features,
+provider-agnostic surface stays generic. It takes a constructed `Autumn` client,
+not a loader. (Credit systems need no extra method: Autumn models them as features,
 so their balances flow through `check` / `listBalances` like any other.)
 
 ```ts
@@ -217,16 +229,19 @@ from Standard Webhooks (the `dodopayments` SDK exposes the full, verified event
 catalog: `payment.*`, `subscription.*`, `refund.*`, …). It supports usage-based
 billing, so `reportUsage` ingests Dodo usage-events.
 
-Construct the client from `dodopayments` and inject it (the cast keeps the
-package free of a hard `dodopayments` dependency):
+Load the client from `dodopayments` (the cast keeps the package free of a hard
+`dodopayments` dependency):
 
 ```ts
 import type { DodoPaymentsClientLike } from "@lunora/payment/dodopayments";
 import { createDodoPaymentsAdapter } from "@lunora/payment/dodopayments";
-import DodoPayments from "dodopayments";
 
 const dodo = createDodoPaymentsAdapter({
-    client: new DodoPayments({ bearerToken: env.DODO_PAYMENTS_API_KEY }) as unknown as DodoPaymentsClientLike,
+    client: async () => {
+        const { default: DodoPayments } = await import("dodopayments");
+
+        return new DodoPayments({ bearerToken: env.DODO_PAYMENTS_API_KEY }) as unknown as DodoPaymentsClientLike;
+    },
     webhookSecret: env.DODO_PAYMENTS_WEBHOOK_KEY,
 });
 ```

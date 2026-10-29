@@ -12,7 +12,8 @@
  *
  * Stripe is the first-class adapter (via `@lunora/payment/stripe`) — see that
  * subpath for `createStripeAdapter({ client, webhookSecret })`, which takes a
- * single options object; Polar and other providers are supported via the
+ * single options object whose `client` is a loader (`stripe` is imported on the
+ * first provider call, keeping it out of the Worker's startup graph); Polar and other providers are supported via the
  * `PaymentAdapter` contract.
  *
  * **Post-add wiring** (see `docs` in registry.json):
