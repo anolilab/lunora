@@ -15,15 +15,11 @@
         "branches": ["main", "alpha", "next", "beta"]
     "workflow_dispatch":
         "inputs":
-            # A dispatch carries no `github.event.before`, and there is no safe way to
-            # guess one: any baseline narrower than the real one silently drops every
-            # earlier unreleased commit from the change file, the version and the
-            # changelog. So the operator states it. Find it with
-            # `git describe --tags --abbrev=0 <branch>` — the tag of that branch's last
-            # release.
+            # Overrides the derived baseline — e.g. to re-release a wave whose publish
+            # failed (its change file was consumed, so no later run picks it up).
             "base":
-                "description": "Release the commits AFTER this commit-ish (exclusive) — normally the last release tag, e.g. @lunora/cli@1.0.0-alpha.245."
-                "required": true
+                "description": "Release the commits AFTER this commit-ish (exclusive). Empty = since this branch's last release tag."
+                "required": false
                 "type": "string"
 
 # Never cancel an in-progress release (GitHub may still replace a run that is only
@@ -69,6 +65,10 @@
               "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
               "with":
                   "fetch-depth": 0
+                  # The branch tip, not the pushed sha: a run queued behind a release would
+                  # otherwise start without that release's bump commit, rewrite the same
+                  # manifests and changelogs, and conflict when its own commit is replayed.
+                  "ref": "${{ github.ref_name }}"
                   "token": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
               "env":
                   "GIT_COMMITTER_NAME": "GitHub Actions Shell"
@@ -133,24 +133,21 @@
             # writes one first. It stays uncommitted: the release step consumes it and the push
             # step commits what that wrote.
             #
-            # The baseline is exclusive (`generate` runs `git log <from>..HEAD`) and is
-            # never guessed:
+            # The range starts at this branch's last release tag, not at `github.event.before`.
+            # A new run only replaces a PENDING one in the concurrency group, so a burst of
+            # merges during a release cancels every queued run but the last — and with
+            # `before` as the baseline the cancelled pushes' commits would never get a change
+            # file. Every run tags the commit it checked out, so the last tag marks exactly
+            # what has been released; a run that released nothing leaves its range to the next.
             #
-            #   push     — `github.event.before`, the branch tip this push replaced, so the
-            #              range is exactly "the commits this push added".
-            #   dispatch — the required `base` input.
-            #
-            # Anything else fails the job: a force-push whose old tip is gone, a branch's
-            # first push, an unresolvable input. A `HEAD~1` fallback looks like a safe
-            # default and is not — a dispatch after N unreleased commits would release only
-            # the last one, and the commits it skipped are unrecoverable: no change file is
-            # ever written for them, so the version and the changelog lose them for good.
-            # Failing is recoverable; under-releasing is not.
-            - "name": "Derive change files from this push"
+            # Channel-scoped, because a branch can reach another channel's tags (alpha merged
+            # into main). No tag at all — a channel's first release — fails rather than walk
+            # the whole history; dispatch with `base` then.
+            - "name": "Derive change files"
               "shell": "bash"
               "env":
                   "BASE": "${{ inputs.base }}"
-                  "BEFORE": "${{ github.event.before }}"
+                  "BRANCH": "${{ github.ref_name }}"
               "run": |
                   set -euo pipefail
 
@@ -158,8 +155,13 @@
                       ref="${BASE}"
                       origin="the 'base' input"
                   else
-                      ref="${BEFORE:-}"
-                      origin="github.event.before"
+                      case "${BRANCH}" in
+                          alpha | beta) match=(--match "*@*-${BRANCH}.*") ;;
+                          *) match=(--match "*@*" --exclude "*-alpha.*" --exclude "*-beta.*") ;;
+                      esac
+
+                      ref="$(git describe --tags --abbrev=0 "${match[@]}" HEAD 2> /dev/null || true)"
+                      origin="the last ${BRANCH} release tag"
                   fi
 
                   from=""
@@ -169,11 +171,11 @@
                   fi
 
                   if [ -z "${from}" ]; then
-                      echo "::error::No release baseline: ${origin} is '${ref:-unset}', which this checkout cannot resolve to a commit. Re-run this workflow from the Actions tab with 'base' set to the last released commit-ish on this branch (git describe --tags --abbrev=0). Refusing to guess one: a guessed baseline drops every earlier unreleased commit from the version and the changelog, and nothing recovers them."
+                      echo "::error::No release baseline: ${origin} is '${ref:-unset}', which this checkout cannot resolve to a commit. Re-run this workflow from the Actions tab with 'base' set to the last released commit-ish on this branch."
                       exit 1
                   fi
 
-                  echo "Releasing ${from}..HEAD (baseline from ${origin})."
+                  echo "Releasing ${from}..HEAD (baseline from ${origin}: ${ref})."
 
                   pnpm exec vis release generate --from "${from}" --name "ci-$(git rev-parse --short HEAD)"
 

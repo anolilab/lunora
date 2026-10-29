@@ -23,11 +23,11 @@ The workflow keeps its filename because npm's trusted publishers are registered 
 
 ### What the release does on a push
 
-1. `vis release generate --from ${{ github.event.before }}` writes a change file from the commits this push added (vis is changesets-style). A manual dispatch must pass the baseline as the `base` input; the job refuses to guess one.
+1. `vis release generate --from <last release tag on this channel>` writes a change file for everything since the last release (vis is changesets-style). Not `github.event.before`: a burst of merges during a release cancels every queued run but the last, and their commits would get no change file. The job checks out the branch tip and fails when the channel has no tag yet; dispatch with `base` then.
 2. `node scripts/vis-release.mjs` versions, writes changelogs, publishes to npm, tags the checked-out commit and pushes the tags. It commits nothing and never pushes the branch — `vis release ci release --auto-publish` tags its own release commit and pushes the branch once without a retry, so a branch that moved mid-run strands the tags off-branch.
 3. The push step commits every tagged bump, changelog and the re-synced lockfile as one `chore(release)` commit and pushes it, retrying against a re-fetched tip. One branch push per run, plus one tag push.
 
-A package that fails to publish is not retried by the next run (its change file was consumed): re-dispatch with `base` set to that run's baseline. The packages that did publish release once more.
+A package that fails to publish is not retried by the next run (its change file was consumed, and the tags of the packages that did publish move the baseline past it): re-dispatch with `base` set to that run's baseline. The packages that did publish release once more.
 
 Locally: `vis release status --channel alpha` prints the pending plan, `vis release publish --dry-run` the dist-tag and versions it would publish, and `vis release doctor` checks the setup.
 
