@@ -16,6 +16,10 @@
  * and the present-list updates reactively as rows are inserted / patched.
  * - **Per-row subscription delta merge** means a single heartbeat patch
  * re-sends only the changed row to subscribers, not the whole list.
+ * - **Tenant-scoped rooms**: the client names a room, and the server files it
+ * under the caller's tenant ({@link DefinePresenceOptions.tenant}, by default
+ * the verified identity's `orgId` claim), so the same `roomId` in two
+ * organizations is two rooms and no argument reaches another tenant's.
  * - **TTL by read-time filter**: `listPresent` filters `lastSeen > now - ttl`,
  * so a client that stops heart-beating silently disappears from the list
  * without any reaper. The read filter only HIDES stale rows; each heartbeat
@@ -109,11 +113,22 @@ interface PresenceMember {
     data?: Record<string, unknown>;
     /** Last heartbeat time (epoch ms). */
     lastSeen: number;
-    /** The room / channel / document this presence is scoped to. */
+    /** The room / channel / document this presence is scoped to, as the client named it. */
     roomId: string;
     /** Authenticated user id, when known. */
     userId?: string;
 }
+
+/**
+ * The default tenant policy: the verified identity's `orgId` claim — the one the
+ * `auth-*-jwt` presets and `@lunora/auth` (organization plugin) emit — or the
+ * app-wide tenant `""` when there is none. `""` holds no organization's rooms.
+ */
+const orgTenant = (identity: Record<string, unknown> | null): string => {
+    const orgId = identity?.["orgId"];
+
+    return typeof orgId === "string" ? orgId : "";
+};
 
 /** Options for {@link definePresence}. */
 interface DefinePresenceOptions {
@@ -144,6 +159,21 @@ interface DefinePresenceOptions {
     maxSessions?: number;
 
     /**
+     * The tenant whose rooms the caller can reach, derived from the verified
+     * identity (`ctx.auth.getIdentity()`), never from `args` — a client-chosen
+     * tenant is no boundary. Read only server-verified claims here. Rooms of
+     * different tenants never meet: the same `roomId` under two tenants is two
+     * rooms, and heartbeat, `listPresent`, the heartbeat reap and the
+     * disconnect cleanup are all pinned to the caller's tenant.
+     *
+     * Defaults to the identity's `orgId` claim, or `""` (the app-wide tenant)
+     * when it is absent — right for a single-tenant app. An identity's claims can
+     * lag a membership change by the identity cache window, and a socket keeps
+     * the claims it connected with, so its disconnect cleanup targets that tenant.
+     */
+    tenant?: (identity: Record<string, unknown> | null) => string;
+
+    /**
      * How long (ms) a heartbeat keeps a member present. `listPresent` excludes
      * rows whose `lastSeen` is older than `now - ttlMs`. Defaults to 30s.
      */
@@ -156,7 +186,8 @@ interface PresenceFunctions {
      * Connection-lifecycle hook: the instant a client's WebSocket drops, hard-
      * delete its presence row so it disappears from `listPresent` with no TTL
      * lag. Targets the row by the `{ roomId, sessionId }` the client passed as
-     * the connection `context`, and only deletes it when the disconnecting
+     * the connection `context`, within the socket's own tenant (from its verified
+     * identity, never the context), and only deletes it when the disconnecting
      * VERIFIED identity owns the row (so a forged context can't evict another
      * member). The TTL filter + `sweep` remain the fallback for ungraceful drops
      * where no `context` was recorded.
@@ -164,8 +195,8 @@ interface PresenceFunctions {
     disconnect: RegisteredLifecycleHook;
 
     /**
-     * Upsert the caller's presence row for `roomId` and stamp `lastSeen = now`.
-     * Keyed by `(roomId, sessionId)` — re-heartbeats patch the existing row so
+     * Upsert the caller's presence row for `roomId` in their tenant and stamp
+     * `lastSeen = now`. Keyed by `(tenantId, roomId, sessionId)` — re-heartbeats patch the existing row so
      * subscribers receive a single-row delta, not a churn of insert/delete. A
      * heartbeat may only patch a row owned by the same identity (an existing row
      * held by a different `userId` is refused with `FORBIDDEN`), so a client
@@ -181,19 +212,21 @@ interface PresenceFunctions {
     >;
 
     /**
-     * Live query returning the non-expired members of `roomId`, newest heartbeat
-     * first. Subscribe to it for a reactive "who's here" list.
+     * Live query returning the non-expired members of `roomId` in the caller's
+     * tenant, newest heartbeat first. Subscribe to it for a reactive "who's here" list.
      */
     listPresent: RegisteredQuery<{ roomId: ReturnType<typeof v.string> }, PresenceMember[]>;
 
     /**
-     * Internal mutation that hard-deletes every expired row for `roomId`. Stale
+     * Internal mutation that hard-deletes every expired row for `roomId` in
+     * `tenantId` (`""` for the app-wide tenant). Server-only, so the caller names
+     * the tenant. Stale
      * rows already vanish from `listPresent` via the read-time TTL filter, and
      * active rooms self-clean via the heartbeat's opportunistic reap; this is
      * optional hardening for bulk cleanup of rooms that went quiet with stale
      * rows left behind (schedule it on a cron / `runAfter` if you care).
      */
-    sweep: RegisteredMutation<{ roomId: ReturnType<typeof v.string> }, { deleted: number }>;
+    sweep: RegisteredMutation<{ roomId: ReturnType<typeof v.string>; tenantId: ReturnType<typeof v.string> }, { deleted: number }>;
 }
 
 /** The component shape `definePresence` returns: the presence extension + typed functions. */
@@ -201,8 +234,9 @@ type PresenceComponent = Component<{ [PRESENCE_BARE_TABLE]: ReturnType<typeof de
 
 /**
  * The presence schema extension: a single `present` table, auto-namespaced to
- * `presence_present` at merge time, indexed by `(roomId, sessionId)` for the
- * heartbeat upsert and by `roomId` for `listPresent`.
+ * `presence_present` at merge time, indexed by `(tenantId, roomId, sessionId)`
+ * for the heartbeat upsert and by `(tenantId, roomId, lastSeen)` for
+ * `listPresent`, the reap and `sweep`.
  */
 // Explicit type on this exported const (isolatedDeclarations can't infer it
 // from the generic call). The loose `ReturnType<typeof defineTable>` table type
@@ -215,15 +249,16 @@ const presenceExtension = defineSchemaExtension(PRESENCE_KEY, {
             lastSeen: v.number(),
             roomId: v.string(),
             sessionId: v.string(),
+            // A separate column, not a `tenant:room` key: concatenation lets
+            // tenant `a:b` + room `c` collide with tenant `a` + room `b:c`.
+            tenantId: v.string(),
             userId: v.optional(v.string()),
         })
-            // Drives the heartbeat upsert lookup.
-            .index("byRoomSession", ["roomId", "sessionId"])
-            // Drives the `sweep` per-room scan.
-            .index("byRoom", ["roomId"])
-            // Drives `listPresent`'s bounded newest-first read and the
-            // heartbeat's oldest-first opportunistic reap.
-            .index("byRoomLastSeen", ["roomId", "lastSeen"]),
+            // Drives the heartbeat upsert lookup and the disconnect cleanup.
+            .index("byTenantRoomSession", ["tenantId", "roomId", "sessionId"])
+            // Drives `listPresent`'s bounded newest-first read, the heartbeat's
+            // oldest-first opportunistic reap and the `sweep` per-room scan.
+            .index("byTenantRoomLastSeen", ["tenantId", "roomId", "lastSeen"]),
     },
 }) as unknown as SchemaExtension<{ [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable> }, typeof PRESENCE_KEY>;
 
@@ -241,11 +276,12 @@ const { mutation, query } = initLunora.dataModel().create();
  * (callable only server-side, e.g. from a cron) since hard-deletes shouldn't be
  * client triggered. `listPresent` stays a plain public query so the client can
  * subscribe to it.
- * @param options presence configuration (TTL).
+ * @param options presence configuration (TTL, tenant policy).
  * @returns a component bundling the extension and the presence functions.
  */
 const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent => {
     const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
+    const tenantOf = options.tenant ?? orgTenant;
     // A grace window longer than the TTL would never hide the row before the
     // TTL filter already does, so clamp it; negative values disable the grace.
     const disconnectGraceMs = Math.max(0, Math.min(options.disconnectGraceMs ?? 0, ttlMs));
@@ -265,6 +301,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
         .mutation(async ({ args, ctx: context }): Promise<{ lastSeen: number }> => {
             const lastSeen = Date.now();
             const userId = context.auth.userId ?? undefined;
+            const tenantId = tenantOf(await context.auth.getIdentity());
 
             // Bound the arbitrary awareness blob so a client can't grow the
             // presence table (and the subscriber delta) without limit.
@@ -274,7 +311,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
 
             const existing = await context.db
                 .query(PRESENCE_TABLE)
-                .withIndex("byRoomSession", (q) => q.eq("roomId", args.roomId).eq("sessionId", args.sessionId))
+                .withIndex("byTenantRoomSession", (q) => q.eq("tenantId", tenantId).eq("roomId", args.roomId).eq("sessionId", args.sessionId))
                 .first();
 
             // Ownership gate: `sessionId` is client-chosen and every member's
@@ -292,6 +329,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
                 lastSeen,
                 roomId: args.roomId,
                 sessionId: args.sessionId,
+                tenantId,
                 ...(args.data === undefined ? {} : { data: args.data }),
                 ...(userId === undefined ? {} : { userId }),
             };
@@ -309,7 +347,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
             const reapCutoff = lastSeen - ttlMs - Math.max(disconnectGraceMs, ttlMs);
             const oldest = await context.db
                 .query(PRESENCE_TABLE)
-                .withIndex("byRoomLastSeen", (q) => q.eq("roomId", args.roomId))
+                .withIndex("byTenantRoomLastSeen", (q) => q.eq("tenantId", tenantId).eq("roomId", args.roomId))
                 .order("asc")
                 .take(REAP_BATCH);
             const expired = oldest.filter((oldRow) => (oldRow["lastSeen"] as number) <= reapCutoff);
@@ -321,6 +359,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
 
     const listPresent = query.input({ roomId: v.string() }).query(async ({ args, ctx: context }): Promise<PresenceMember[]> => {
         const cutoff = Date.now() - ttlMs;
+        const tenantId = tenantOf(await context.auth.getIdentity());
 
         // Bounded newest-first read over the `(roomId, lastSeen)` index: cost
         // scales with `maxSessions`, not with however many rows the room has
@@ -329,7 +368,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
         // counts session rows; the dedup below then collapses a user's tabs.
         const rows = await context.db
             .query(PRESENCE_TABLE)
-            .withIndex("byRoomLastSeen", (q) => q.eq("roomId", args.roomId))
+            .withIndex("byTenantRoomLastSeen", (q) => q.eq("tenantId", tenantId).eq("roomId", args.roomId))
             .order("desc")
             .take(maxSessions);
 
@@ -379,12 +418,12 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
         return members;
     });
 
-    const sweep = mutation.input({ roomId: v.string() }).mutation(async ({ args, ctx: context }): Promise<{ deleted: number }> => {
+    const sweep = mutation.input({ roomId: v.string(), tenantId: v.string() }).mutation(async ({ args, ctx: context }): Promise<{ deleted: number }> => {
         const cutoff = Date.now() - ttlMs;
 
         const stale = await context.db
             .query(PRESENCE_TABLE)
-            .withIndex("byRoom", (q) => q.eq("roomId", args.roomId))
+            .withIndex("byTenantRoomLastSeen", (q) => q.eq("tenantId", args.tenantId).eq("roomId", args.roomId))
             .filter((row) => (row["lastSeen"] as number) <= cutoff)
             .collect();
 
@@ -412,9 +451,13 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
             return;
         }
 
+        // The tenant comes from the socket's verified identity (the DO runs this
+        // hook under it), never from the client-stamped context — so a socket
+        // can only ever reach rows in its own tenant.
+        const tenantId = tenantOf(await context.auth.getIdentity());
         const existing = await context.db
             .query(PRESENCE_TABLE)
-            .withIndex("byRoomSession", (q) => q.eq("roomId", roomId).eq("sessionId", sessionId))
+            .withIndex("byTenantRoomSession", (q) => q.eq("tenantId", tenantId).eq("roomId", roomId).eq("sessionId", sessionId))
             .first();
 
         if (!existing) {
