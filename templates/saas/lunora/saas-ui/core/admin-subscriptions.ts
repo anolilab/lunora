@@ -4,7 +4,10 @@
  *
  * The payment tables are root-scoped (a provider webhook carries no tenant to
  * pick a shard by), so this is one root-shard read, not a fan-out — the same
- * shape of cross-tenant read as the `.global()` organisation projection. The
+ * shape of cross-tenant read as the `.global()` organisation projection. It is
+ * paged (the saas template's `payment.adminSubscriptions` is a cursor query), so
+ * the rows here are the pages loaded so far, and the filter, the ordering and
+ * the totals cover those rather than the whole table. The
  * join happens here rather than in the query because the organisation names
  * already arrive with the organisation list, and the payment functions should
  * not have to know the kit's tenancy table exists.
@@ -129,5 +132,17 @@ const subscriptionTotals = (subscriptions: ReadonlyArray<AdminSubscriptionRow>):
     };
 };
 
+/**
+ * The card's header. While more pages remain the totals are of the loaded rows
+ * only, and say so — a "0 past due" over the first page is not a fact about
+ * every tenant.
+ */
+const subscriptionsSubtitle = (subscriptions: ReadonlyArray<AdminSubscriptionRow>, hasMore: boolean): string => {
+    const { pastDue, paying } = subscriptionTotals(subscriptions);
+    const totals = `${paying.toString()} paying · ${pastDue.toString()} past due`;
+
+    return hasMore ? `${totals} in the ${subscriptions.length.toString()} loaded` : totals;
+};
+
 export type { AdminSubscriptionRow, SubscriptionListing, SubscriptionsView };
-export { DEFAULT_SUBSCRIPTIONS_VIEW, selectSubscriptions, subscriptionStateOptions, subscriptionTotals };
+export { DEFAULT_SUBSCRIPTIONS_VIEW, selectSubscriptions, subscriptionsSubtitle, subscriptionStateOptions, subscriptionTotals };

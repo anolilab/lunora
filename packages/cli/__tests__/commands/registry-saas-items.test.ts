@@ -147,6 +147,13 @@ const createDatabase = (unique: Record<string, string[][]>) => {
             },
             query: (table: string) => {
                 let predicate = (_row: Row) => true;
+                let descending = false;
+
+                const ordered = (): Row[] => {
+                    const matching = rows(table).filter((row) => predicate(row));
+
+                    return descending ? matching.toReversed() : matching;
+                };
 
                 const query = {
                     collect: async () => rows(table).filter((row) => predicate(row)),
@@ -158,6 +165,27 @@ const createDatabase = (unique: Record<string, string[][]>) => {
                         return query;
                     },
                     first: async () => rows(table).find((row) => predicate(row)) ?? null,
+                    order: (direction: "asc" | "desc") => {
+                        descending = direction === "desc";
+
+                        return query;
+                    },
+                    // Keyset over the row's `_id`, the way the engine's cursor names a position rather than an offset.
+                    paginate: async ({ cursor, endCursor, numItems }: { cursor?: string | null; endCursor?: string | null; numItems: number }) => {
+                        const all = ordered();
+                        const from = cursor ? all.findIndex((row) => row["_id"] === cursor) + 1 : 0;
+
+                        if (endCursor) {
+                            const to = all.findIndex((row) => row["_id"] === endCursor) + 1;
+
+                            return { continueCursor: endCursor, isDone: true, page: all.slice(from, to) };
+                        }
+
+                        const page = all.slice(from, from + numItems);
+                        const isDone = from + numItems >= all.length;
+
+                        return { continueCursor: isDone ? null : (page.at(-1)?.["_id"] as string), isDone, page };
+                    },
                     take: async (limit: number) =>
                         rows(table)
                             .filter((row) => predicate(row))
@@ -577,17 +605,29 @@ describe("saas template checkout", () => {
 });
 
 describe("saas template admin subscriptions", () => {
-    type AdminSubscriptions = Handler<Row, Row[]>;
+    interface Page {
+        continueCursor: string | null;
+        isDone: boolean;
+        page: Row[];
+    }
 
-    const setup = async (claims: Row) => {
+    type AdminSubscriptions = Handler<{ paginationOpts: { cursor?: string | null; endCursor?: string | null; numItems: number } }, Page>;
+
+    const setup = async (claims: Row, count = 1) => {
         env["APP_BASE_URL"] = "https://app.example.test";
 
         const { adminSubscriptions } = await load<{ adminSubscriptions: AdminSubscriptions }>("templates", "saas", "lunora", "payment", "index.ts");
         const database = createDatabase({});
 
-        database
-            .rows("payment_subscriptions")
-            .push({ _id: "s1", priceId: "price_pro", providerSubscriptionId: "sub_1", referenceId: "org-1", state: "active" });
+        for (let index = 1; index <= count; index += 1) {
+            database.rows("payment_subscriptions").push({
+                _id: `s${String(index)}`,
+                priceId: "price_pro",
+                providerSubscriptionId: `sub_${String(index)}`,
+                referenceId: `org-${String(index)}`,
+                state: "active",
+            });
+        }
 
         return { adminSubscriptions, ctx: { auth: signedIn(claims), db: database.db, shardKey: "__root__" } };
     };
@@ -597,7 +637,7 @@ describe("saas template admin subscriptions", () => {
 
         const { adminSubscriptions, ctx } = await setup({ appRole: "admin" });
 
-        await expect(adminSubscriptions({ args: {}, ctx: { ...ctx, shardKey: "org-1" } })).rejects.toMatchObject({
+        await expect(adminSubscriptions({ args: { paginationOpts: { numItems: 10 } }, ctx: { ...ctx, shardKey: "org-1" } })).rejects.toMatchObject({
             code: "FORBIDDEN",
             message: expect.stringContaining("root shard"),
         });
@@ -608,15 +648,38 @@ describe("saas template admin subscriptions", () => {
 
         const { adminSubscriptions, ctx } = await setup({ appRole: "user" });
 
-        await expect(adminSubscriptions({ args: {}, ctx })).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("platform admin") });
+        await expect(adminSubscriptions({ args: { paginationOpts: { numItems: 10 } }, ctx })).rejects.toMatchObject({
+            code: "FORBIDDEN",
+            message: expect.stringContaining("platform admin"),
+        });
     });
 
-    it("reads the root shard's subscriptions for a platform admin", async () => {
-        expect.assertions(1);
+    it("pages the root shard's subscriptions newest first, carrying the organisation each bills", async () => {
+        expect.assertions(4);
 
-        const { adminSubscriptions, ctx } = await setup({ appRole: "user,admin" });
+        const { adminSubscriptions, ctx } = await setup({ appRole: "user,admin" }, 3);
+        const first = await adminSubscriptions({ args: { paginationOpts: { cursor: null, numItems: 2 } }, ctx });
 
-        await expect(adminSubscriptions({ args: {}, ctx })).resolves.toMatchObject([{ providerSubscriptionId: "sub_1", referenceId: "org-1" }]);
+        expect(first.page.map((row) => [row["providerSubscriptionId"], row["referenceId"]])).toStrictEqual([
+            ["sub_3", "org-3"],
+            ["sub_2", "org-2"],
+        ]);
+        expect(first.isDone).toBe(false);
+
+        const second = await adminSubscriptions({ args: { paginationOpts: { cursor: first.continueCursor, numItems: 2 } }, ctx });
+
+        expect(second.page.map((row) => row["providerSubscriptionId"])).toStrictEqual(["sub_1"]);
+        expect(second.isDone).toBe(true);
+    });
+
+    it("caps a page however many rows the caller asks for", async () => {
+        expect.assertions(2);
+
+        const { adminSubscriptions, ctx } = await setup({ appRole: "admin" }, 150);
+        const page = await adminSubscriptions({ args: { paginationOpts: { numItems: 10_000 } }, ctx });
+
+        expect(page.page).toHaveLength(100);
+        expect(page.isDone).toBe(false);
     });
 });
 

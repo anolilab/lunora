@@ -1,27 +1,31 @@
 <script lang="ts">
     import type { AdminSubscriptionRow, OrganizationRow, Plan, SubscriptionsView } from "../core";
-    import { DEFAULT_SUBSCRIPTIONS_VIEW, planLabel, selectSubscriptions, subscriptionStateOptions, subscriptionTotals } from "../core";
+    import { DEFAULT_SUBSCRIPTIONS_VIEW, planLabel, selectSubscriptions, subscriptionStateOptions, subscriptionsSubtitle } from "../core";
     import Card from "./Card.svelte";
     import Empty from "./Empty.svelte";
 
     interface Props {
+        /**
+         * Fetch the next page — the paginated query's `loadMore`. Pass it only while
+         * more pages remain; without it the rows are read as the whole table.
+         */
+        onLoadMore?: () => void;
         /** The organisation list, for names. Subscriptions render with ids until it arrives. */
         organizations: ReadonlyArray<OrganizationRow> | undefined;
         plans: ReadonlyArray<Plan>;
-        /** `undefined` while the query is in flight. */
+        /** The pages loaded so far. `undefined` while the first page is in flight. */
         rows: ReadonlyArray<AdminSubscriptionRow> | undefined;
     }
 
-    const { organizations, plans, rows }: Props = $props();
+    const { onLoadMore, organizations, plans, rows }: Props = $props();
 
     let view = $state<SubscriptionsView>({ ...DEFAULT_SUBSCRIPTIONS_VIEW });
 
-    const totals = $derived(rows ? subscriptionTotals(rows) : { pastDue: 0, paying: 0 });
     const visible = $derived(rows ? selectSubscriptions(rows, organizations ?? [], plans, view) : []);
     const states = $derived(rows ? subscriptionStateOptions(rows) : []);
 </script>
 
-<Card subtitle={rows ? `${totals.paying} paying · ${totals.pastDue} past due` : undefined} title="Subscriptions">
+<Card subtitle={rows ? subscriptionsSubtitle(rows, onLoadMore !== undefined) : undefined} title="Subscriptions">
     {#if !rows}
         <div aria-busy="true" class="lu-saas-list lu-saas-list--loading"></div>
     {:else}
@@ -71,6 +75,10 @@
                     {/each}
                 </tbody>
             </table>
+        {/if}
+
+        {#if onLoadMore}
+            <button class="lu-saas-button lu-saas-button--quiet" onclick={onLoadMore} type="button">Load more</button>
         {/if}
     {/if}
 </Card>

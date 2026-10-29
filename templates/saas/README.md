@@ -113,7 +113,9 @@ you are in and takes you back. It has to be on every page: the admin queries
 refuse the user you are impersonating, so `/admin` is the one place you cannot
 stop from.
 
-Subscriptions are read from the root shard by `payment.adminSubscriptions`.
+Subscriptions are read from the root shard by `payment.adminSubscriptions`,
+50 at a time, newest first; **Load more** fetches the next page. While pages
+remain, the header's totals say they cover only the rows loaded.
 
 ## Before you deploy
 

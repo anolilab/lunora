@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AdminSubscriptionRow } from "../../src/core/admin-subscriptions";
-import { selectSubscriptions, subscriptionStateOptions, subscriptionTotals } from "../../src/core/admin-subscriptions";
+import { selectSubscriptions, subscriptionsSubtitle, subscriptionStateOptions, subscriptionTotals } from "../../src/core/admin-subscriptions";
 import type { AdminUserRow, AdminUsersClient, AuthClientResult } from "../../src/core/admin-users";
 import {
     createAdminUsersController,
@@ -320,5 +320,10 @@ describe("selectSubscriptions", () => {
     it("totals the paying and the past-due, and offers only the states present", () => {
         expect(subscriptionTotals(subscriptions)).toStrictEqual({ pastDue: 1, paying: 2 });
         expect(subscriptionStateOptions(subscriptions).map((option) => option.value)).toStrictEqual(["all", "past_due", "active", "canceled"]);
+    });
+
+    it("says the totals cover only the loaded rows while more pages remain", () => {
+        expect(subscriptionsSubtitle(subscriptions, false)).toBe("2 paying · 1 past due");
+        expect(subscriptionsSubtitle(subscriptions, true)).toBe("2 paying · 1 past due in the 4 loaded");
     });
 });

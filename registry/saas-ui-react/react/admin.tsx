@@ -6,7 +6,7 @@ import { useState } from "react";
 import type { AdminView } from "../core/admin-organizations";
 import { adminTotals, DEFAULT_ADMIN_VIEW, planOptions, selectOrganizations } from "../core/admin-organizations";
 import type { AdminSubscriptionRow, SubscriptionsView } from "../core/admin-subscriptions";
-import { DEFAULT_SUBSCRIPTIONS_VIEW, selectSubscriptions, subscriptionStateOptions, subscriptionTotals } from "../core/admin-subscriptions";
+import { DEFAULT_SUBSCRIPTIONS_VIEW, selectSubscriptions, subscriptionsSubtitle, subscriptionStateOptions } from "../core/admin-subscriptions";
 import type { Plan } from "../core/billing";
 import { planLabel, relativeTime } from "../core/format";
 import type { OrganizationRow } from "../core/types";
@@ -103,10 +103,16 @@ const AdminOrganizations = ({ now, rows, timeZone }: AdminOrganizationsProps): R
 };
 
 interface AdminSubscriptionsProps {
+    /**
+     * Fetch the next page — `usePaginatedQuery`'s `loadMore`. Pass it only while
+     * more pages remain (`status === "CanLoadMore"`); without it the rows are read
+     * as the whole table.
+     */
+    onLoadMore?: () => void;
     /** The organisation list, for names. Subscriptions render with ids until it arrives. */
     organizations: ReadonlyArray<OrganizationRow> | undefined;
     plans: ReadonlyArray<Plan>;
-    /** `undefined` while the query is in flight. */
+    /** The pages loaded so far — `usePaginatedQuery`'s `results`. `undefined` while the first page is in flight. */
     rows: ReadonlyArray<AdminSubscriptionRow> | undefined;
 }
 
@@ -116,7 +122,7 @@ interface AdminSubscriptionsProps {
  * provider's dashboard or through the tenant's own billing page, and the
  * webhook brings it back here.
  */
-const AdminSubscriptions = ({ organizations, plans, rows }: AdminSubscriptionsProps): ReactNode => {
+const AdminSubscriptions = ({ onLoadMore, organizations, plans, rows }: AdminSubscriptionsProps): ReactNode => {
     const [view, setView] = useState<SubscriptionsView>(DEFAULT_SUBSCRIPTIONS_VIEW);
 
     if (!rows) {
@@ -127,11 +133,10 @@ const AdminSubscriptions = ({ organizations, plans, rows }: AdminSubscriptionsPr
         );
     }
 
-    const totals = subscriptionTotals(rows);
     const visible = selectSubscriptions(rows, organizations ?? [], plans, view);
 
     return (
-        <Card subtitle={`${totals.paying.toString()} paying · ${totals.pastDue.toString()} past due`} title="Subscriptions">
+        <Card subtitle={subscriptionsSubtitle(rows, onLoadMore !== undefined)} title="Subscriptions">
             <div className="lu-saas-toolbar">
                 <input
                     aria-label="Search subscriptions"
@@ -188,6 +193,12 @@ const AdminSubscriptions = ({ organizations, plans, rows }: AdminSubscriptionsPr
                     </tbody>
                 </table>
             )}
+
+            {onLoadMore ? (
+                <button className="lu-saas-button lu-saas-button--quiet" onClick={onLoadMore} type="button">
+                    Load more
+                </button>
+            ) : undefined}
         </Card>
     );
 };

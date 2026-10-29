@@ -56,6 +56,7 @@ import { env as workerEnv } from "cloudflare:workers";
 
 import { LunoraError } from "@lunora/errors";
 import type { SubscriptionState } from "@lunora/payment";
+import type { PaginationResult } from "lunorash/server";
 import { internal } from "#lunora/_generated/internal.js";
 import { action, internalAction, internalMutation, query, v } from "#lunora/_generated/server.js";
 import type { CloudflareBindings, Id } from "#lunora/_generated/server.js";
@@ -460,8 +461,14 @@ const requirePlatformAdmin = async (ctx: { auth: { getIdentity: () => Promise<{ 
     }
 };
 
+/** The most rows one admin subscription page may ask for, whatever `numItems` says. */
+const ADMIN_SUBSCRIPTIONS_PAGE_MAX = 100;
+
+const pageCursor = v.optional(v.union(v.string(), v.null()));
+
 /**
- * Every tenant's subscriptions, for the platform admin's subscription table.
+ * Every tenant's subscriptions, newest first, a page at a time — for the
+ * platform admin's subscription table, which reads it with `usePaginatedQuery`.
  *
  * One root-shard read, not a fan-out: the billing tables are root-scoped (see
  * `lunora/schema.ts`), so every subscription the webhooks have written is here.
@@ -470,23 +477,32 @@ const requirePlatformAdmin = async (ctx: { auth: { getIdentity: () => Promise<{ 
  * does not exist. The admin screen joins the rows to organisation names itself,
  * from `saas.listOrganizations`.
  *
- * Unpaged, like `listOrganizations`: thread a cursor through once the customer
- * count outgrows one response.
+ * Paged because this table only grows: one response holding every subscription
+ * ever written would be re-sent to the admin on each webhook. `numItems` is
+ * capped here rather than trusted, so a caller cannot ask for the whole table in
+ * one page. `endCursor` is declared because `usePaginatedQuery` sends it, and
+ * input validation would otherwise strip it.
  */
-export const adminSubscriptions = query.query(async ({ ctx }): Promise<SubscriptionRow[]> => {
-    await requirePlatformAdmin(ctx);
+export const adminSubscriptions = query
+    .input({ paginationOpts: v.object({ cursor: pageCursor, endCursor: pageCursor, numItems: v.number() }) })
+    .query(async ({ args: { paginationOpts }, ctx }): Promise<PaginationResult<SubscriptionRow>> => {
+        await requirePlatformAdmin(ctx);
 
-    // A tenant shard holds an empty copy of the billing tables, so a read there
-    // would show "no subscriptions" rather than fail — refuse it as
-    // `billingReference` does.
-    if (ctx.shardKey !== ROOT_SHARD) {
-        throw new LunoraError("FORBIDDEN", "billing runs on the root shard — call it without a shardKey");
-    }
+        // A tenant shard holds an empty copy of the billing tables, so a read there
+        // would show "no subscriptions" rather than fail — refuse it as
+        // `billingReference` does.
+        if (ctx.shardKey !== ROOT_SHARD) {
+            throw new LunoraError("FORBIDDEN", "billing runs on the root shard — call it without a shardKey");
+        }
 
-    const rows = await ctx.db.query("payment_subscriptions").collect();
+        const numItems = Math.min(Math.max(Math.floor(paginationOpts.numItems), 1), ADMIN_SUBSCRIPTIONS_PAGE_MAX);
+        const result = await ctx.db
+            .query("payment_subscriptions")
+            .order("desc")
+            .paginate({ ...paginationOpts, numItems });
 
-    return rows.map((document) => toSubscriptionRow(document));
-});
+        return { ...result, page: result.page.map((document) => toSubscriptionRow(document)) };
+    });
 
 /**
  * Apply a verified provider webhook. Called by the `POST /payment/webhook` HTTP

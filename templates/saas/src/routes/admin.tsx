@@ -1,5 +1,5 @@
 import type { SubscriptionError } from "@lunora/react";
-import { useQuery } from "@lunora/react";
+import { usePaginatedQuery, useQuery } from "@lunora/react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 
@@ -9,6 +9,9 @@ import { AdminOrganizations, AdminSubscriptions, AdminUsers } from "../../lunora
 import { authClient } from "../auth-client";
 
 import "../../lunora/saas-ui/styles.css";
+
+/** Subscriptions per page of the admin table. */
+const SUBSCRIPTIONS_PAGE = 50;
 
 export const Route = createFileRoute("/admin")({
     component: AdminPage,
@@ -33,8 +36,9 @@ function AdminPage() {
     // forever. The refusal arrives here instead.
     const [failure, setFailure] = useState<SubscriptionError>();
     const organizations = useQuery(api.saas.listOrganizations, {}, { onError: setFailure });
-    // No `shardKey`: the billing tables live on the root shard.
-    const subscriptions = useQuery(api.payment.adminSubscriptions, {}, { onError: setFailure });
+    // No `shardKey`: the billing tables live on the root shard. Paged, because the
+    // table holds every subscription any tenant has ever had.
+    const subscriptions = usePaginatedQuery(api.payment.adminSubscriptions, {}, { initialNumItems: SUBSCRIPTIONS_PAGE, onError: setFailure });
     const { data: session } = authClient.useSession();
     const [now] = useState(() => Date.now());
     // Calendar days are the viewer's, not the Worker's (always UTC). The table
@@ -68,7 +72,18 @@ function AdminPage() {
                 />
             ) : undefined}
             <AdminOrganizations now={now} rows={organizations} timeZone={timeZone} />
-            <AdminSubscriptions organizations={organizations} plans={PLANS} rows={subscriptions} />
+            <AdminSubscriptions
+                onLoadMore={
+                    subscriptions.status === "CanLoadMore"
+                        ? () => {
+                              subscriptions.loadMore(SUBSCRIPTIONS_PAGE);
+                          }
+                        : undefined
+                }
+                organizations={organizations}
+                plans={PLANS}
+                rows={subscriptions.status === "LoadingFirstPage" ? undefined : subscriptions.results}
+            />
         </main>
     );
 }

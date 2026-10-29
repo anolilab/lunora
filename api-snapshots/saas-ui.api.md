@@ -688,6 +688,12 @@ const subscriptionStateOptions: (subscriptions: ReadonlyArray<AdminSubscriptionR
 const subscriptionTotals: (subscriptions: ReadonlyArray<AdminSubscriptionRow>) => { pastDue: number; paying: number; };
 ```
 
+### `subscriptionsSubtitle` (const)
+
+```ts
+const subscriptionsSubtitle: (subscriptions: ReadonlyArray<AdminSubscriptionRow>, hasMore: boolean) => string;
+```
+
 ### `userActions` (const)
 
 ```ts
@@ -750,13 +756,14 @@ interface AdminOrganizationsProps {
 ### `AdminSubscriptions` (const)
 
 ```ts
-const AdminSubscriptions: ({ organizations, plans, rows }: AdminSubscriptionsProps) => ReactNode;
+const AdminSubscriptions: ({ onLoadMore, organizations, plans, rows }: AdminSubscriptionsProps) => ReactNode;
 ```
 
 ### `AdminSubscriptionsProps` (interface)
 
 ```ts
 interface AdminSubscriptionsProps {
+    onLoadMore?: () => void;
     organizations: ReadonlyArray<OrganizationRow> | undefined;
     plans: ReadonlyArray<Plan>;
     rows: ReadonlyArray<AdminSubscriptionRow> | undefined;

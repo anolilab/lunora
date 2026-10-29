@@ -122,6 +122,23 @@ describe("adminSubscriptions", () => {
         expect(screen.getByText("Globex")).toBeInTheDocument();
     });
 
+    it("asks for the next page while one remains, and says the totals are partial", () => {
+        const onLoadMore = vi.fn();
+        const { rerender } = render(
+            <AdminSubscriptions onLoadMore={onLoadMore} organizations={[]} plans={PLANS} rows={[adminSubscription("org-Acme", "active")]} />,
+        );
+
+        expect(screen.getByText("1 paying · 0 past due in the 1 loaded")).toBeInTheDocument();
+
+        fireEvent.click(screen.getByText("Load more"));
+
+        expect(onLoadMore).toHaveBeenCalledTimes(1);
+
+        rerender(<AdminSubscriptions organizations={[]} plans={PLANS} rows={[adminSubscription("org-Acme", "active")]} />);
+
+        expect(screen.queryByText("Load more")).not.toBeInTheDocument();
+    });
+
     it("marks itself busy while the query is undefined", () => {
         const { container } = render(<AdminSubscriptions organizations={undefined} plans={PLANS} rows={undefined} />);
 
