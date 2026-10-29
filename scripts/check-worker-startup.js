@@ -32,6 +32,12 @@
  * declares one push queue, one workflow and one agent that import the same shared module, so a
  * `LUNORA_LAZY_FUNCTIONS=1` run shows what the lazy build defers beyond the function registry.
  *
+ * It also wires the builder-wired integrations whose SDKs are heavy — `.browser()`
+ * (`@cloudflare/playwright`, ~3 MiB), `.payment()` with Stripe, `.hyperdrive()` with postgres.js,
+ * and an `@lunora/mcp/worker` handler — the way their docs say: through a loader the integration
+ * awaits on first use. WHAT ALSO FAILS THE BUILD, in eager and lazy runs alike: any of those SDKs
+ * being evaluated at startup (`INTEGRATION_SDKS`), reported with the static chain that reached it.
+ *
  * Usage:
  *   pnpm run worker-startup:check     # fail when the eager graph exceeds the ceiling
  *   pnpm run worker-startup:update    # re-baseline after an intentional change
@@ -62,6 +68,71 @@ const kib = (bytes) => `${(bytes / 1024).toFixed(1)} KiB`;
 
 const PROCEDURES_PER_MODULE = 20;
 
+/** A module made only of `import` / `export … from` / `export { … }` statements. */
+const REEXPORT_ONLY =
+    /^(?:\s*(?:import\s*(?:type\s*)?(?:\{[^}]*\}|\*\s*as\s*[\w$]+|[\w$]+)\s*from\s*|export\s*(?:type\s*)?(?:\{[^}]*\}|\*(?:\s*as\s*[\w$]+)?)\s*(?:from\s*)?)(?:["'][^"']*["'])?\s*;?)*\s*$/u;
+
+/**
+ * `[owning package, SDK]` for each heavy SDK an app hands to a builder-wired integration. The
+ * reference app wires all of them the documented way; none may be statically reachable from its
+ * entry, or every isolate evaluates it at startup whether or not a request ever uses it.
+ */
+const INTEGRATION_SDKS = [
+    ["browser", "@cloudflare/playwright"],
+    ["payment", "stripe"],
+    ["hyperdrive", "postgres"],
+    ["mcp", "@modelcontextprotocol/sdk"],
+];
+
+/**
+ * The integrations, wired into the template's entry the way their docs say: each SDK reaches its
+ * integration only through a loader the integration awaits on first use, so it stays out of the
+ * static graph. A static `import Stripe from "stripe"` here, or an integration that evaluated its
+ * loader eagerly or imported the SDK at module scope, fails the forbidden-SDK check below.
+ */
+const INTEGRATION_WIRING = {
+    builder: `    .browser((env) =>
+        createBrowser({ allowedHosts: ["example.com"], binding: env.BROWSER as BrowserBindingLike, playwright: async () => await import("@cloudflare/playwright") }),
+    )
+    .payment((env) => ({
+        adapter: createStripeAdapter({
+            client: async () => {
+                const { default: Stripe } = await import("stripe");
+
+                return new Stripe(String(env.STRIPE_SECRET_KEY), { httpClient: Stripe.createFetchHttpClient() });
+            },
+            webhookSecret: String(env.STRIPE_WEBHOOK_SECRET),
+        }),
+    }))
+    .hyperdrive((env) =>
+        fromPostgresJs(async () => {
+            const { default: postgres } = await import("postgres");
+
+            return postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString);
+        }),
+    )
+    .build();
+`,
+    fetch: `        if (url.pathname === "/mcp") {
+            mcp ??= createMcpFetchHandler({ token: String(env.LUNORA_ADMIN_TOKEN), url: url.origin });
+
+            return mcp(request);
+        }
+
+        return app.fetch(request, env, context);`,
+    imports: `import type { BrowserBindingLike } from "@lunora/browser";
+import { createBrowser } from "@lunora/browser";
+import type { HyperdriveLike } from "@lunora/hyperdrive";
+import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
+import type { McpFetchHandler } from "@lunora/mcp/worker";
+import { createMcpFetchHandler } from "@lunora/mcp/worker";
+import { createStripeAdapter } from "@lunora/payment/stripe";
+
+let mcp: McpFetchHandler | undefined;
+
+`,
+};
+
 /** Lay the reference app out as a symlink farm over the workspace (see check-worker-size.js). */
 const materialize = (appDirectory, { procedures, tables }) => {
     cpSync(join(rootDir, "templates", "standalone"), appDirectory, { recursive: true });
@@ -75,7 +146,17 @@ const materialize = (appDirectory, { procedures, tables }) => {
     const manifestPath = join(appDirectory, "package.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 
-    manifest.dependencies = { ...manifest.dependencies, "@lunora/agent": "^0.0.0", "@lunora/queue": "^0.0.0", "@lunora/workflow": "^0.0.0" };
+    manifest.dependencies = {
+        ...manifest.dependencies,
+        "@lunora/agent": "^0.0.0",
+        "@lunora/browser": "^0.0.0",
+        "@lunora/hyperdrive": "^0.0.0",
+        "@lunora/mcp": "^0.0.0",
+        "@lunora/payment": "^0.0.0",
+        "@lunora/queue": "^0.0.0",
+        "@lunora/workflow": "^0.0.0",
+        ...Object.fromEntries(INTEGRATION_SDKS.map(([, name]) => [name, "*"])),
+    };
     writeFileSync(manifestPath, `${JSON.stringify(manifest, undefined, 4)}\n`, "utf8");
 
     // The bindings `generateApp`'s queue, workflow and agent need. The template's config is JSONC,
@@ -86,7 +167,9 @@ const materialize = (appDirectory, { procedures, tables }) => {
         wranglerPath,
         readFileSync(wranglerPath, "utf8").replace(
             '"main":',
-            `"queues": { "producers": [{ "binding": "QUEUE_JOBS", "queue": "jobs" }], "consumers": [{ "queue": "jobs" }] },
+            `"browser": { "binding": "BROWSER" },
+    "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "00000000000000000000000000000000" }],
+    "queues": { "producers": [{ "binding": "QUEUE_JOBS", "queue": "jobs" }], "consumers": [{ "queue": "jobs" }] },
     "workflows": [
         { "name": "nightly", "binding": "WORKFLOW_NIGHTLY", "class_name": "NightlyWorkflow" },
         { "name": "agent-support", "binding": "AGENT_SUPPORT", "class_name": "SupportAgentWorkflow" },
@@ -115,7 +198,18 @@ const materialize = (appDirectory, { procedures, tables }) => {
     const host = join(rootDir, "packages", "runtime", "node_modules");
 
     symlinkSync(join(host, "wrangler"), join(modules, "wrangler"));
-    symlinkSync(join(host, "@cloudflare"), join(modules, "@cloudflare"));
+    mkdirSync(join(modules, "@cloudflare"), { recursive: true });
+
+    for (const name of readdirSync(join(host, "@cloudflare"))) {
+        symlinkSync(join(host, "@cloudflare", name), join(modules, "@cloudflare", name));
+    }
+
+    // The integration SDKs, each from the package that declares it as its peer.
+    for (const [owner, name] of INTEGRATION_SDKS) {
+        mkdirSync(dirname(join(modules, name)), { recursive: true });
+        symlinkSync(join(rootDir, "packages", owner, "node_modules", name), join(modules, name));
+    }
+
     mkdirSync(join(modules, ".bin"), { recursive: true });
     symlinkSync(join(host, ".bin", "wrangler"), join(modules, ".bin", "wrangler"));
 
@@ -206,11 +300,34 @@ export const support = defineAgent({ instructions: typeof shared(), model: "@cf/
         "utf8",
     );
 
+    // One action per action-tier integration, so codegen wires `ctx.browser`, `ctx.payments` and
+    // `ctx.sql` and the generated `defineApp` grows `.browser()`, `.payment()` and `.hyperdrive()`.
+    writeFileSync(
+        join(lunora, "integrations.ts"),
+        `import { action, v } from "#lunora/_generated/server.js";
+
+export const render = action.input({ url: v.string() }).action(async ({ args, ctx }) => (await ctx.browser.screenshot(args.url)).byteLength);
+
+export const billing = action.input({ referenceId: v.string() }).action(async ({ args, ctx }) => (await ctx.payments.check({ feature: "export", referenceId: args.referenceId })).allowed);
+
+export const external = action.input({}).action(async ({ ctx }) => (await ctx.sql.query("select 1")).length);
+`,
+        "utf8",
+    );
+
     const entry = join(appDirectory, "src", "server.ts");
+    const source = readFileSync(entry, "utf8");
+    const wired = source
+        .replace("    .build();", INTEGRATION_WIRING.builder)
+        .replace("        return app.fetch(request, env, context);", INTEGRATION_WIRING.fetch);
+
+    if (wired === source || !wired.includes(INTEGRATION_WIRING.builder) || !wired.includes(INTEGRATION_WIRING.fetch)) {
+        fail("check-worker-startup: the template entry changed shape — update INTEGRATION_WIRING's splice points.");
+    }
 
     writeFileSync(
         entry,
-        `${readFileSync(entry, "utf8")}
+        `${INTEGRATION_WIRING.imports}${wired}
 export * from "../lunora/_generated/agents.js";
 export * from "../lunora/_generated/workflows.js";
 `,
@@ -296,14 +413,14 @@ const build = (appDirectory) => {
  * metafile does not tag an entry point, so the roots are the inputs nothing else
  * imports; a dynamic-only module is not reachable, which is the point.
  */
-const eagerGraph = (outDirectory) => {
+const eagerGraph = (appDirectory, outDirectory) => {
     const metafilePath = join(outDirectory, "bundle-meta.json");
 
     if (!existsSync(metafilePath)) {
         fail("check-worker-startup: `lunora build` wrote no bundle-meta.json — the out-dir layout may have changed.");
     }
 
-    const { inputs } = JSON.parse(readFileSync(metafilePath, "utf8"));
+    const { inputs, outputs } = JSON.parse(readFileSync(metafilePath, "utf8"));
     const imported = new Set();
 
     for (const input of Object.values(inputs)) {
@@ -313,24 +430,46 @@ const eagerGraph = (outDirectory) => {
     }
 
     const roots = Object.keys(inputs).filter((path) => !imported.has(path));
-    const seen = new Set();
-    const stack = [...roots];
 
-    while (stack.length > 0) {
-        const path = stack.pop();
+    /**
+     * Breadth-first over static edges, remembering who first reached each module so a hit can
+     * name the shortest chain that pulled it in. `leaves` follows no edge out of a module.
+     */
+    const walk = (leaves) => {
+        const importer = new Map(roots.map((path) => [path, undefined]));
+        const queue = roots.filter((path) => inputs[path]);
+        const seen = new Set(queue);
 
-        if (seen.has(path) || !inputs[path]) {
-            continue;
-        }
+        for (let index = 0; index < queue.length; index++) {
+            const path = queue[index];
 
-        seen.add(path);
+            if (leaves(path)) {
+                continue;
+            }
 
-        for (const edge of inputs[path].imports) {
-            if (edge.kind !== "dynamic-import") {
-                stack.push(edge.path);
+            for (const edge of inputs[path].imports) {
+                if (edge.kind !== "dynamic-import" && !seen.has(edge.path) && inputs[edge.path]) {
+                    seen.add(edge.path);
+                    importer.set(edge.path, path);
+                    queue.push(edge.path);
+                }
             }
         }
-    }
+
+        const chainTo = (path) => {
+            const chain = [];
+
+            for (let current = path; current !== undefined; current = importer.get(current)) {
+                chain.unshift(current);
+            }
+
+            return chain;
+        };
+
+        return { chainTo, seen };
+    };
+
+    const { seen } = walk(() => false);
 
     if (roots.length === 0 || seen.size < 50) {
         fail(`check-worker-startup: measured ${seen.size} modules from ${roots.length} roots — the metafile layout may have changed.`);
@@ -342,7 +481,29 @@ const eagerGraph = (outDirectory) => {
         bytes += inputs[path].bytes;
     }
 
-    return { bytes, modules: seen.size, total: Object.keys(inputs).length };
+    // The forbidden-SDK check needs what is EVALUATED, which the count above over-approximates:
+    // a barrel's metafile edge to a module the app never uses survives esbuild dropping that
+    // module (sideEffects: false). So it stops at a module that put no bytes in the output,
+    // unless that module is a pure re-export barrel, which never has bytes of its own. The
+    // `@lunora/mcp/worker` barrel is the case in point: it re-exports `createToolServer`, whose
+    // static `@modelcontextprotocol/sdk` import must not count for an app that mounts only
+    // `createMcpFetchHandler`.
+    const emitted = new Set(
+        Object.values(outputs).flatMap((output) => Object.entries(output.inputs).flatMap(([path, { bytesInOutput }]) => (bytesInOutput > 0 ? [path] : []))),
+    );
+    const reexportOnly = (path) => {
+        const source = join(appDirectory, path);
+
+        return existsSync(source) && REEXPORT_ONLY.test(readFileSync(source, "utf8").replaceAll(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gmu, ""));
+    };
+    const evaluated = walk((path) => !emitted.has(path) && !reexportOnly(path));
+    const forbidden = INTEGRATION_SDKS.flatMap(([, name]) => {
+        const hit = [...evaluated.seen].find((path) => path.includes(`node_modules/${name}/`) && emitted.has(path));
+
+        return hit === undefined ? [] : [{ chain: evaluated.chainTo(hit), name }];
+    });
+
+    return { bytes, forbidden, modules: seen.size, total: Object.keys(inputs).length };
 };
 
 /** Advisory only: `wrangler check startup`, median Active ms over a few runs. */
@@ -386,7 +547,7 @@ try {
     materialize(appDirectory, baseline);
     const outDirectory = build(appDirectory);
 
-    graph = eagerGraph(outDirectory);
+    graph = eagerGraph(appDirectory, outDirectory);
     cpu = skipCpu ? undefined : advisoryCpu(appDirectory, 5);
 } finally {
     rmSync(root, { force: true, recursive: true });
@@ -403,6 +564,14 @@ process.stdout.write(
 if (cpu) {
     process.stdout.write(
         `  advisory CPU (local, NOT a gate): median ${cpu.median.toFixed(0)} ms, min ${cpu.min.toFixed(0)}, max ${cpu.max.toFixed(0)} — Cloudflare's limit is 1000 ms of ITS cpu, at least ~1.4x slower than this.\n`,
+    );
+}
+
+if (graph.forbidden.length > 0) {
+    fail(
+        `An integration SDK is statically reachable from the reference Worker's entry, so every isolate evaluates it at\n` +
+            `startup whether or not a request uses it. Load it on first use (a loader the integration awaits), not at\n` +
+            `module scope:\n${graph.forbidden.map(({ chain, name }) => `  ${name}:\n    ${chain.join("\n    -> ")}`).join("\n")}`,
     );
 }
 
