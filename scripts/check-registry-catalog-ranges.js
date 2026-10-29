@@ -141,7 +141,8 @@ for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
         continue;
     }
 
-    for (const [name, specifier] of Object.entries({ ...manifest.dependencies, ...manifest.devDependencies })) {
+    // Each section on its own: a spread would let a devDependencies range hide the dependencies one.
+    for (const [name, specifier] of [...Object.entries(manifest.dependencies ?? {}), ...Object.entries(manifest.devDependencies ?? {})]) {
         if (!isBetterAuthFamily(name) || typeof specifier !== "string") {
             continue;
         }
