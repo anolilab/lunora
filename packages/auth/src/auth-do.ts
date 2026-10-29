@@ -43,6 +43,7 @@ import { handleAuthRequest } from "./handler";
 import type { MoveOrder } from "./jurisdiction-move";
 import { handleMoveRequest, MOVE_PATH } from "./jurisdiction-move";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
+import { identityFromSession } from "./session-identity";
 import type { SqlExecutor } from "./sql-store";
 
 /**
@@ -421,21 +422,11 @@ class LunoraAuthDO {
      * Resolve the identity behind a request's headers — the worker's
      * `resolveIdentity` in DO mode.
      *
-     * Answers `{ email, expiresAtMs, name, role, userId }`, or `{}` for an
-     * anonymous request; never the session record itself. The narrow reply keeps
-     * the rest of the session material inside the object.
-     *
-     * `email` and `name` are the claims `ctx.auth.getIdentity()` is documented to
-     * carry ("email, name, roles, custom claims"). Dropping them made the
-     * documented `me` query — `identity?.email` — resolve `undefined` on both
-     * built-in wirings, so the doc and the built-in resolver disagreed.
-     *
-     * `expiresAtMs` is the socket credential expiry the runtime forwards as
-     * `x-lunora-identity-exp`: without it the DO's expiry check never fires and a
-     * signed-out, banned or lapsed user keeps streaming their RLS-scoped rows over
-     * an already-open WebSocket. `role` is what `readIdentityRoles` reads for RLS
-     * role grants — the D1 wiring forwards it, so dropping it here would make
-     * `.auth({ d1 })` -> `.auth({ namespace })` silently turn every grant off.
+     * Answers the {@link identityFromSession} claims (shared with the D1 wiring, so
+     * moving `.auth({ d1 })` -> `.auth({ namespace })` keeps every claim RLS and
+     * `ctx.auth.getIdentity()` read), or `{}` for an anonymous request; never the
+     * session record itself. The narrow reply keeps the rest of the session material
+     * inside the object.
      */
     async #resolveSession(request: Request): Promise<Response> {
         if (!this.#isTrustedCaller(request)) {
@@ -446,25 +437,8 @@ class LunoraAuthDO {
         // The worker forwards the original request's headers, so the session cookie
         // arrives here intact.
         const session = await auth.api.getSession({ headers: request.headers });
-        const userId = session?.user.id;
 
-        if (userId === undefined) {
-            return Response.json({});
-        }
-
-        // better-auth hands back a `Date`; anything else means the adapter did not
-        // hydrate it, and a missing expiry is safer to omit than to guess at.
-        const expiresAt = session?.session.expiresAt;
-        const user = session?.user as { email?: unknown; name?: unknown; role?: unknown } | undefined;
-        const role = user?.role;
-
-        return Response.json({
-            ...(typeof user?.email === "string" && user.email.length > 0 ? { email: user.email } : {}),
-            ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
-            ...(typeof user?.name === "string" && user.name.length > 0 ? { name: user.name } : {}),
-            ...(typeof role === "string" && role.length > 0 ? { role } : {}),
-            userId,
-        });
+        return Response.json(identityFromSession(session) ?? {});
     }
 
     /**

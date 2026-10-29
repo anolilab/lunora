@@ -173,6 +173,21 @@ That's the whole change: the new tables (`organization`, `member`,
 `invitation`, …) are discovered by `ensureMigrated` next time the worker
 boots.
 
+The session's active organization lands on the identity as `orgId` (and its
+active team as `teamId` with `organization({ teams: { enabled: true } })`), so a
+function scopes to the caller's tenant without a custom `resolveIdentity`:
+
+```ts
+const identity = await ctx.auth.getIdentity();
+const orgId = typeof identity?.orgId === "string" ? identity.orgId : undefined;
+```
+
+Creating an organization, `setActive`, accepting an invitation and leaving all
+move it, and the caller's next request sees the new value. A member removed by
+someone else keeps the old `orgId` until their session cookie cache expires. An
+open live subscription keeps the identity of its WebSocket upgrade until it
+reconnects.
+
 To define **custom roles + permissions** beyond the built-in `user` / `admin`,
 use `createAccessControl` (re-exported from `@lunora/auth/plugins`) and pass the
 resulting roles into `admin({ ac, roles })` / `organization({ ac, roles })`.

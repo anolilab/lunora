@@ -398,7 +398,7 @@ class AppBuilder<Env extends object> {
         // Captured before the branch so the narrowing survives — reading
         // `this.authDeclaration.namespace` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
-        const { authDiscoveryPathsFor, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest } = deferred.auth;
+        const { authDiscoveryPathsFor, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, identityFromSession } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
@@ -457,39 +457,10 @@ class AppBuilder<Env extends object> {
                     return null;
                 }
 
-                const session = await auth.api.getSession({ headers: (request as Request).headers });
-
-                if (!session?.user?.id) {
-                    return null;
-                }
-
-                // `role` rides along so `rls(policies, { roles })` and `auth.can(...)`
-                // work on this wiring without a hand-written resolver. better-auth's
-                // `admin()` plugin owns that column (comma-joined for multiple roles)
-                // and only an administrator can write it; it is absent when the plugin
-                // is off, which reads as no roles.
-                //
-                // `expiresAtMs` is the socket credential expiry the runtime forwards
-                // as `x-lunora-identity-exp`. Without it the DO's expiry check never
-                // fires, so a signed-out, banned or lapsed user keeps streaming their
-                // RLS-scoped rows over an already-open WebSocket while every HTTP call
-                // is anonymous. better-auth hands back a `Date`; anything else means
-                // the adapter did not hydrate it, and omitting beats guessing.
-                const expiresAt = session.session.expiresAt;
-                // `email` and `name` are the claims `ctx.auth.getIdentity()` is
-                // documented to carry ("email, name, roles, custom claims"). Without
-                // them the documented `me` query — `identity?.email` — resolves
-                // `undefined` on the built-in wiring. Empty strings are dropped so an
-                // absent claim reads as absent rather than as "".
-                const user = session.user as { email?: unknown; name?: unknown; role?: unknown };
-
-                return {
-                    ...(typeof user.email === "string" && user.email.length > 0 ? { email: user.email } : {}),
-                    ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
-                    ...(typeof user.name === "string" && user.name.length > 0 ? { name: user.name } : {}),
-                    role: user.role,
-                    userId: session.user.id,
-                };
+                // `identityFromSession` is shared with the DO wiring, so both modes put
+                // the same claims (role, expiry, profile, active organization and team) on
+                // the identity, and it is unit-tested where this template cannot be.
+                return identityFromSession(await auth.api.getSession({ headers: (request as Request).headers }));
             };
             const authInstance = getAuth();
 

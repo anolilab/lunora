@@ -62,6 +62,8 @@ export { LunoraAuthHeadersError, withAuthPlugins } from "./middleware";
 export { default as authTables } from "./schema";
 export type { SessionPolicy } from "./session";
 export { sessionPresets, validateSessionPolicy } from "./session";
+export type { SessionIdentity, SessionLike } from "./session-identity";
+export { identityFromSession } from "./session-identity";
 export type { SqlExecutor } from "./sql-store";
 export { createSqlAuthStore, d1Executor } from "./sql-store";
 export type { AuthQuery, AuthRow, AuthStore, AuthWhereClause } from "./store";

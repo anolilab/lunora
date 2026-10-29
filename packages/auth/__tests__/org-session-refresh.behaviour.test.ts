@@ -1,7 +1,7 @@
-import { parseSetCookieHeader } from "better-auth/cookies";
 import { organization } from "better-auth/plugins/organization";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import CookieJar from "./helpers/cookie-jar";
 import createMemoryAuth from "./helpers/memory-auth";
 
 /**
@@ -13,31 +13,6 @@ import createMemoryAuth from "./helpers/memory-auth";
  */
 
 const PASSWORD = "correct horse battery staple";
-
-/** A browser's view of cookies: each `Set-Cookie` replaces the cookie of that name. */
-class CookieJar {
-    readonly #cookies = new Map<string, string>();
-
-    public absorb(headers: Headers | undefined): void {
-        const raw = headers?.get("set-cookie");
-
-        if (!raw) {
-            return;
-        }
-
-        for (const [name, { value }] of parseSetCookieHeader(raw)) {
-            this.#cookies.set(name, value);
-        }
-    }
-
-    public has(fragment: string): boolean {
-        return [...this.#cookies.keys()].some((name) => name.includes(fragment));
-    }
-
-    public headers(): Headers {
-        return new Headers({ cookie: [...this.#cookies].map(([name, value]) => `${name}=${value}`).join("; ") });
-    }
-}
 
 describe("organization endpoints refresh the session cookie cache", () => {
     // The endpoint map is generic over the resolved plugin set; `any` skips re-deriving it.

@@ -639,13 +639,7 @@ interface DoAuthWiring {
     authHandler: (request: Request) => Promise<Response | undefined>;
     discoveryHandler: (request: Request) => Promise<Response | undefined>;
     jurisdictionMove?: AuthJurisdictionMove;
-    resolveIdentity: (request: Request) => Promise<null | {
-        email?: string;
-        expiresAtMs?: number;
-        name?: string;
-        role?: string;
-        userId: string;
-    }>;
+    resolveIdentity: (request: Request) => Promise<SessionIdentity | null>;
 }
 ```
 
@@ -817,6 +811,38 @@ interface ReadAuthAuditOptions {
     event?: string;
     limit?: number;
     sinceSeq?: number;
+}
+```
+
+### `SessionIdentity` (type)
+
+```ts
+type SessionIdentity = {
+    email?: string;
+    expiresAtMs?: number;
+    name?: string;
+    orgId?: string;
+    role?: string;
+    teamId?: string;
+    userId: string;
+};
+```
+
+### `SessionLike` (interface)
+
+```ts
+interface SessionLike {
+    session: {
+        activeOrganizationId?: unknown;
+        activeTeamId?: unknown;
+        expiresAt?: unknown;
+    };
+    user: {
+        email?: unknown;
+        id?: unknown;
+        name?: unknown;
+        role?: unknown;
+    };
 }
 ```
 
@@ -1068,6 +1094,12 @@ const handleAuthDiscoveryRequest: (auth: LunoraAuth, request: Request) => Promis
 
 ```ts
 const handleAuthRequest: (auth: LunoraAuth, request: Request, basePath?: string) => Promise<Response | undefined>;
+```
+
+### `identityFromSession` (const)
+
+```ts
+const identityFromSession: (session: SessionLike | null | undefined) => SessionIdentity | null;
 ```
 
 ### `isDevEnvironment` (const)
@@ -1888,6 +1920,10 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `handleAuthRequest` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `identityFromSession` (const)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
