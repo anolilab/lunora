@@ -1249,6 +1249,10 @@ const dispatchInjectedSource = async (
         step: AgentStepLike;
     },
 ): Promise<string | undefined> => {
+    // Only a semantic source follows the run's shard: its `source` is an app function over
+    // the app's (possibly `.shardBy`) tables. Episodic and graph memory read the agent's own
+    // unsharded tables, which their run-end upserts write on the default shard, so a recall
+    // anywhere else would find nothing.
     if (source.kind === "episodic") {
         return dispatchEpisodicMemory(source, deps.owner, deps.episodeRecall, deps.step, deps.run);
     }
