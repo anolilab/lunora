@@ -30,7 +30,14 @@ const json = (value: unknown): Awaited<ReturnType<StreamingFetchLike>> => {
  */
 const fakeWorker = (
     initial: Record<string, Doc[]>,
-    options: { canDelete?: boolean; onExport?: () => void; refuse?: ReadonlyArray<string>; vanish?: ReadonlyArray<string> } = {},
+    options: {
+        canDelete?: boolean;
+        onExport?: () => void;
+        refuse?: ReadonlyArray<string>;
+        /** Tables whose delete rows fail the whole request, as a `.global()` importer without delete support does. */
+        undeletable?: ReadonlyArray<string>;
+        vanish?: ReadonlyArray<string>;
+    } = {},
 ) => {
     const stored = new Map(Object.entries(initial).map(([table, docs]) => [table, new Map(docs.map((doc) => [doc._id, doc]))]));
     const writes: string[] = [];
@@ -84,6 +91,16 @@ const fakeWorker = (
         const deletes = searchParams.get("deletes") === "true";
         const result = { conflicts: 0, deleted: 0, errors: [] as unknown[], inserted: {} as Record<string, number>, received: 0, replaced: 0 };
         const rows = body.split("\n").filter((entry) => entry.trim().length > 0);
+
+        if (
+            rows.some((raw) => {
+                const row = JSON.parse(raw) as { op?: string; table: string };
+
+                return row.op === "delete" && options.undeletable?.includes(row.table) === true;
+            })
+        ) {
+            return { body: null, json: async () => undefined, ok: false, status: 400, text: async () => "delete rows target global tables" };
+        }
 
         result.received = rows.length;
 
@@ -271,6 +288,19 @@ describe("lunora import --mode", () => {
 
         expect(result.code).toBe(0);
         expect(exports).toBe(0);
+    });
+
+    it("replace writes nothing when the worker would refuse some of the planned deletes", async () => {
+        expect.assertions(3);
+
+        const worker = fakeWorker({ settings: [{ _id: "s1" }, { _id: "s2" }], users: [{ _id: "u1" }, { _id: "u2" }] }, { undeletable: ["settings"] });
+        const file = writeFile([...SNAPSHOT, { doc: { _id: "s1" }, table: "settings" }]);
+
+        const result = await runImportCommand({ fetchImpl: worker.fetchImpl, file, logger: capture().logger, mode: "replace", token: "t", yes: true });
+
+        expect(result.code).toBe(1);
+        expect(result.error).toMatch(/would refuse the deletes/u);
+        expect(worker.writes).toStrictEqual([]);
     });
 
     it("replace is refused before anything moves by a worker that cannot delete rows", async () => {

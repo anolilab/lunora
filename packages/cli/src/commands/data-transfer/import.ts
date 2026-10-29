@@ -1059,6 +1059,36 @@ const pruneMissingRows = async (plan: ImportPlan, target: ImportPassTarget, writ
 };
 
 /**
+ * Why the worker would refuse the planned deletes, checked as a dry run before
+ * anything is written. Deletes travel in batches, so a worker that takes the
+ * shard deletes but refuses a `.global()` one (a hand-wired importer without
+ * delete support) would otherwise leave the prune half-applied, and every re-run
+ * would stop at the same batch.
+ */
+const pruneRefusal = async (plan: ImportPlan | undefined, mode: ImportMode, target: ImportPassTarget): Promise<string | undefined> => {
+    if (plan === undefined || mode !== "replace" || plan.deletions.length === 0) {
+        return undefined;
+    }
+
+    const batcher = createImportBatcher({ ...target, maxBatchBytes: MAX_IMPORT_BATCH_BYTES, requestUrl: `${target.requestUrl}?dryRun=true&deletes=true` });
+
+    try {
+        for (const row of plan.deletions) {
+            // eslint-disable-next-line no-await-in-loop -- the batcher POSTs when full; the check mirrors the prune's batches
+            await batcher.push(JSON.stringify({ doc: row.doc, op: "delete", table: row.table }));
+        }
+
+        await batcher.flush();
+    } catch (error: unknown) {
+        return failureMessage(error);
+    }
+
+    const [first] = batcher.totals.errors;
+
+    return first === undefined ? undefined : `${String(batcher.totals.errors.length)} planned delete(s) refused, first: ${first.table} ${first.message}`;
+};
+
+/**
  * `--mode replace`'s second step: delete the stored rows the file lacks, and only
  * once every row of the file landed. A write that stopped or left a row unwritten
  * deletes nothing, so a failed run leaves the old rows plus what was written —
@@ -1199,6 +1229,15 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     }
 
     const importPlan = planned.plan;
+    const deleteRefusal = await pruneRefusal(importPlan, mode, target);
+
+    if (deleteRefusal !== undefined) {
+        const error = `import: ${options.file} was not written: the worker would refuse the deletes --mode replace needs (${deleteRefusal})`;
+
+        options.logger.error(error);
+
+        return { body: undefined, code: 1, error, inserted: 0 };
+    }
 
     // Phase 2: move the files, so no imported document can reference an object
     // that is not there yet.
