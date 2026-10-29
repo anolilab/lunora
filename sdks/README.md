@@ -1172,10 +1172,10 @@ assumed:
   and would catch nothing today. The `clientFrames` goldens that DO exist are the
   ones that once diverged.
 
-The `connect-with-caps` and `pageDeltaFrames` goldens stay opt-in, as
-`ws-frames.json`'s own comment declares: a client that has not announced the
-`pageDelta` token never receives such a frame, and running those cases would hold
-it to a merge it correctly does not do.
+The `connect-with-caps`, `pageDeltaFrames` and `refreshBatchFrames` goldens stay
+opt-in, as `ws-frames.json`'s own comment declares: a client that has not
+announced the `pageDelta` or `refreshBatch` token never receives such a frame, and
+running those cases would hold it to a merge or a hold it correctly does not do.
 
 ### The decoder leniencies, and where they went
 

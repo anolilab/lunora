@@ -11,6 +11,7 @@
  */
 
 import type { ConnectionStatus } from "./connection-state";
+import { withDeferredNotifications } from "./optimistic-layers";
 import type { SubscriptionError } from "./subscription";
 
 // ---------------------------------------------------------------------------
@@ -113,8 +114,24 @@ interface TabCoordinatorOptions {
 type WsFollowerMessage =
     { tabId: string; ts: number; type: "heartbeat" } | { tabId: string; ts: number; type: "claim-leadership" } | { tabId: string; type: "yield-leadership" };
 
+/**
+ * `more` marks every snapshot of one flush but the last, so a follower applies the whole
+ * flush as one update, as the leader did. A follower that predates it applies each frame
+ * as it lands, as before.
+ */
+type SubscriptionDataMessage = {
+    cursor?: number;
+    data: unknown;
+    epoch?: string;
+    identity?: string | null;
+    key: string;
+    more?: true;
+    tabId: string;
+    type: "subscription-data";
+};
+
 type WsLeaderMessage =
-    | { cursor?: number; data: unknown; epoch?: string; identity?: string | null; key: string; tabId: string; type: "subscription-data" }
+    | SubscriptionDataMessage
     | { error: SubscriptionError; identity?: string | null; key: string; tabId: string; type: "subscription-error" }
     | {
           clientId?: string;
@@ -172,6 +189,9 @@ class TabCoordinator {
      * whole value for every tab on the channel.
      */
     private readonly pendingData = new Map<string, WsLeaderMessage>();
+
+    /** Snapshots received under `more`, per leader tab, applied with the frame that closes their flush. */
+    private readonly heldData = new Map<string, SubscriptionDataMessage[]>();
 
     private heartbeatTimer: ReturnType<typeof setInterval> | undefined = undefined;
     private leaderCheckTimer: ReturnType<typeof setInterval> | undefined = undefined;
@@ -477,9 +497,49 @@ class TabCoordinator {
             return;
         }
 
-        for (const frame of frames) {
-            this.bc?.postMessage(frame);
+        let posted: WsLeaderMessage | undefined;
+        let closed = true;
+
+        for (const [index, frame] of frames.entries()) {
+            const more = index < frames.length - 1;
+
+            try {
+                this.bc?.postMessage(more ? { ...frame, more: true } : frame);
+                posted = frame;
+                closed = !more;
+            } catch {
+                // A value structured clone refuses (a `URL` in a result) skips that key; the rest still go out.
+            }
         }
+
+        // The closing frame failed: re-post the last one that went out, unmarked, so followers release what they hold.
+        if (!closed && posted !== undefined) {
+            this.bc?.postMessage(posted);
+        }
+    }
+
+    /** Hold a snapshot marked `more`; on the one that closes its flush, apply them all and notify once. */
+    private applySubscriptionData(message: SubscriptionDataMessage): void {
+        // Kept per tab: during a split brain two leaders post at once, and one's closing frame must not release the other's.
+        const held = this.heldData.get(message.tabId) ?? [];
+
+        held.push(message);
+
+        if (message.more === true) {
+            this.heldData.set(message.tabId, held);
+
+            return;
+        }
+
+        this.heldData.delete(message.tabId);
+        withDeferredNotifications(
+            () => {
+                for (const frame of held) {
+                    this.onSubscriptionData?.(frame.key, frame.data, frame.cursor, frame.epoch, frame.identity);
+                }
+            },
+            () => this.running,
+        );
     }
 
     private handleMessage(message: TabCoordinatorMessage): void {
@@ -511,7 +571,7 @@ class TabCoordinator {
                     break; // ignore our own broadcasts
                 }
 
-                this.onSubscriptionData?.(message.key, message.data, message.cursor, message.epoch, message.identity);
+                this.applySubscriptionData(message);
 
                 break;
             }
@@ -542,6 +602,9 @@ class TabCoordinator {
                 // waiting for the next health-check tick (up to
                 // `leaderTimeout`) before even starting the claim window would
                 // double the freeze every remaining tab experiences.
+                // A flush the departing leader never closed is never released.
+                this.heldData.delete(message.tabId);
+
                 if (this.knownLeader === message.tabId) {
                     this.knownLeader = undefined;
 
@@ -691,7 +754,8 @@ class TabCoordinator {
         const elapsed = Date.now() - this.lastHeartbeat;
 
         if (elapsed > this.leaderTimeout) {
-            // Leader is gone — attempt to claim.
+            // Leader is gone — attempt to claim. A flush it never closed is never released.
+            this.heldData.delete(this.knownLeader);
             this.knownLeader = undefined;
             this.claimAndPromote();
         }

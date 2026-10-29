@@ -476,6 +476,10 @@ export const ERROR_CATALOG = {
         status: 409,
         title: "Dispatch already in progress",
     },
+    /** A socket re-auth carried a credential older than the one the socket already holds; the socket keeps its newer one. */
+    STALE_CREDENTIAL: { status: 409, title: "Stale credential" },
+    /** A socket re-auth resolved to different claims than the socket was opened with; the client must reconnect to change identity. */
+    IDENTITY_CHANGED: { status: 409, title: "Socket identity changed" },
     FORBIDDEN_FANOUT: { status: 403, title: "Fan-out forbidden" },
     GLOBAL_SEARCH_SCORES_UNSUPPORTED: { status: 400, title: "collectWithScores() is unsupported on a global table" },
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
