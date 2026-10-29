@@ -56,7 +56,7 @@ import { LunoraError } from "@lunora/errors";
 import type { SubscriptionState } from "@lunora/payment";
 import { internal } from "#lunora/_generated/internal.js";
 import { action, internalAction, internalMutation, query, v } from "#lunora/_generated/server.js";
-import type { CloudflareBindings } from "#lunora/_generated/server.js";
+import type { CloudflareBindings, Id } from "#lunora/_generated/server.js";
 
 import { API_CALLS, PLANS } from "../plans.js";
 
@@ -186,7 +186,7 @@ const CHECKOUT_HOLD_MARGIN_MS = 60_000;
  */
 export const holdCheckout = internalMutation
     .input({ priceId: v.string(), referenceId: v.string() })
-    .mutation(async ({ args: { priceId, referenceId }, ctx }): Promise<{ sessionExpiresAt: number } | { url: string }> => {
+    .mutation(async ({ args: { priceId, referenceId }, ctx }): Promise<{ holdId: Id<"checkout_holds">; sessionExpiresAt: number } | { url: string }> => {
         const hold = await ctx.db
             .query("checkout_holds")
             .withIndex("byReference", (q) => q.eq("referenceId", referenceId))
@@ -209,25 +209,24 @@ export const holdCheckout = internalMutation
             await ctx.db.delete("checkout_holds", hold["_id"] as never);
         }
 
-        await ctx.db.insert("checkout_holds", { expiresAt: sessionExpiresAt + CHECKOUT_HOLD_MARGIN_MS, priceId, referenceId });
+        const holdId = await ctx.db.insert("checkout_holds", { expiresAt: sessionExpiresAt + CHECKOUT_HOLD_MARGIN_MS, priceId, referenceId });
 
-        return { sessionExpiresAt };
+        return { holdId, sessionExpiresAt };
     });
 
-/** Record the started session on the hold (`url`), or drop the hold when starting it failed (no `url`). */
+/**
+ * Record the started session on the hold (`url`), or drop the hold when starting
+ * it failed (no `url`). By id, not by organisation: a provider call that outlived
+ * its hold must not settle the newer one a later checkout took in its place.
+ */
 export const settleCheckoutHold = internalMutation
-    .input({ referenceId: v.string(), url: v.optional(v.string()) })
-    .mutation(async ({ args: { referenceId, url }, ctx }): Promise<void> => {
-        const hold = await ctx.db
-            .query("checkout_holds")
-            .withIndex("byReference", (q) => q.eq("referenceId", referenceId))
-            .first();
-
-        if (!hold) {
+    .input({ holdId: v.id("checkout_holds"), url: v.optional(v.string()) })
+    .mutation(async ({ args: { holdId, url }, ctx }): Promise<void> => {
+        if (!(await ctx.db.get("checkout_holds", holdId))) {
             return;
         }
 
-        await (url === undefined ? ctx.db.delete("checkout_holds", hold["_id"] as never) : ctx.db.patch("checkout_holds", hold["_id"] as never, { url }));
+        await (url === undefined ? ctx.db.delete("checkout_holds", holdId) : ctx.db.patch("checkout_holds", holdId, { url }));
     });
 
 /**
@@ -285,12 +284,12 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
         }));
     } catch (error) {
         // Nothing was started, so nothing should block the next attempt.
-        await ctx.runMutation(internal.payment.settleCheckoutHold, { referenceId });
+        await ctx.runMutation(internal.payment.settleCheckoutHold, { holdId: pending.holdId });
 
         throw error;
     }
 
-    await ctx.runMutation(internal.payment.settleCheckoutHold, { referenceId, url });
+    await ctx.runMutation(internal.payment.settleCheckoutHold, { holdId: pending.holdId, url });
 
     return { url };
 });

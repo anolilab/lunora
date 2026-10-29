@@ -376,8 +376,8 @@ describe("saas template checkout", () => {
 
     interface Payment {
         checkout: Checkout;
-        holdCheckout: Handler<{ priceId: string; referenceId: string }, { sessionExpiresAt: number } | { url: string }>;
-        settleCheckoutHold: Handler<{ referenceId: string; url?: string }, void>;
+        holdCheckout: Handler<{ priceId: string; referenceId: string }, { holdId: string; sessionExpiresAt: number } | { url: string }>;
+        settleCheckoutHold: Handler<{ holdId: string; url?: string }, void>;
     }
 
     const NOW = 1_700_000_000_000;
@@ -513,6 +513,21 @@ describe("saas template checkout", () => {
         clock.now += HOLD_MS + 1;
 
         await expect(payment.checkout({ args: { priceId: "price_pro" }, ctx })).resolves.toStrictEqual({ url: "https://pay.example.test/session-2" });
+    });
+
+    it("leaves a newer hold alone when a stale provider call settles", async () => {
+        expect.assertions(2);
+
+        const { clock, ctx, database, payment } = await setup([]);
+        const stale = await payment.holdCheckout({ args: { priceId: "price_pro", referenceId: "org-1" }, ctx: { db: database.db, now: clock.now } });
+
+        clock.now += HOLD_MS + 1;
+
+        await payment.checkout({ args: { priceId: "price_scale" }, ctx });
+        await payment.settleCheckoutHold({ args: { holdId: (stale as { holdId: string }).holdId }, ctx: { db: database.db, now: clock.now } });
+
+        expect(database.rows("checkout_holds")).toHaveLength(1);
+        expect(database.rows("checkout_holds")[0]).toMatchObject({ priceId: "price_scale", url: "https://pay.example.test/session-1" });
     });
 
     it("drops the hold when the provider refuses to start the session", async () => {
