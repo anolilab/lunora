@@ -84,8 +84,9 @@ const createAgentContext = (
                     throw new LunoraError("BAD_REQUEST", `@lunora/agent: run input ${BRANCH_MARKER_REJECTION}`);
                 }
 
-                // The starting shard replaces a caller-supplied one: a public client reaching
-                // `agents:agentRun` was authorized for this shard, not the one it names.
+                // The starting shard replaces a caller-supplied one: an app mutation forwarding
+                // its args may hand a client's input through, and that client was authorized
+                // for this shard, not the one it names.
                 const instance = await resolve().create({ ...(options?.id === undefined ? {} : { id: options.id }), params: withRunShard(input, shardKey) });
 
                 return { id: instance.id };

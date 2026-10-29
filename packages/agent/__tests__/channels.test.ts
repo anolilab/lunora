@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchAgentChannel, verifyDiscord, verifyGithub, verifySlack } from "../src/channels";
+import type { InboundChannelEvent } from "../src/types";
 
 /** The Worker ctx the handler takes; these tests bind agents on env, so it carries no exports. */
 const NO_CONTEXT = {};
@@ -198,6 +199,8 @@ const discordRequest = async (privateKey: CryptoKey, body: string, timestamp = S
         method: "POST",
     });
 };
+
+const RESOLVE_SHARD_PATTERN = /resolveShard/u;
 
 describe(dispatchAgentChannel, () => {
     const secret = "app-slack-secret";
@@ -630,6 +633,74 @@ describe(dispatchAgentChannel, () => {
         await handler(await slackRequest(secret, '{"event":{}}'), { SupportAgentWorkflow: binding, SLACK_SECRET: secret }, NO_CONTEXT);
 
         expect(created).toStrictEqual([{ input: "x", threadKey: "t" }]);
+    });
+
+    it("starts the run on the shard the app's resolveShard hook names, never the mapper's", async () => {
+        const { binding, created } = fakeBinding();
+        const seen: unknown[] = [];
+        const agent = {
+            onInbound: {
+                channel: "slack" as const,
+                map: () => {
+                    return { input: "x", shardKey: "victim-org", threadKey: "t" };
+                },
+                // The app maps the verified workspace to its tenant shard.
+                resolveShard: (event: InboundChannelEvent) => {
+                    seen.push(event.channel);
+
+                    return (event.json() as { team_id?: string }).team_id === "T1" ? "org-a" : undefined;
+                },
+                secret: "SLACK_SECRET",
+            },
+        };
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
+
+        await handler(
+            await slackRequest(secret, '{"event":{},"event_id":"e1","team_id":"T1"}'),
+            { SupportAgentWorkflow: binding, SLACK_SECRET: secret },
+            NO_CONTEXT,
+        );
+        await handler(
+            await slackRequest(secret, '{"event":{},"event_id":"e2","team_id":"T9"}'),
+            { SupportAgentWorkflow: binding, SLACK_SECRET: secret },
+            NO_CONTEXT,
+        );
+
+        expect(created).toStrictEqual([
+            { input: "x", shardKey: "org-a", threadKey: "t" },
+            { input: "x", threadKey: "t" },
+        ]);
+        expect(seen).toStrictEqual(["slack", "slack"]);
+    });
+
+    it("fails the delivery (no run, no default-shard fallback) when resolveShard throws or returns junk", async () => {
+        const { binding, created } = fakeBinding();
+        const agentWith = (resolveShard: () => unknown) => {
+            return {
+                onInbound: {
+                    channel: "slack" as const,
+                    map: () => {
+                        return { input: "x", threadKey: "t" };
+                    },
+                    resolveShard: resolveShard as () => string,
+                    secret: "SLACK_SECRET",
+                },
+            };
+        };
+        const env = { SupportAgentWorkflow: binding, SLACK_SECRET: secret };
+        const throwing = dispatchAgentChannel([
+            {
+                agent: agentWith(() => {
+                    throw new Error("tenant lookup failed");
+                }),
+                className: "SupportAgentWorkflow",
+            },
+        ]);
+        const junk = dispatchAgentChannel([{ agent: agentWith(() => ""), className: "SupportAgentWorkflow" }]);
+
+        await expect(throwing(await slackRequest(secret, '{"event":{}}'), env, NO_CONTEXT)).rejects.toThrow("tenant lookup failed");
+        await expect(junk(await slackRequest(secret, '{"event":{}}'), env, NO_CONTEXT)).rejects.toThrow(RESOLVE_SHARD_PATTERN);
+        expect(created).toHaveLength(0);
     });
 
     it("rejects (throws, does not ack) a claimed run whose mapper injects the reserved branch-marker key", async () => {

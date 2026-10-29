@@ -28,6 +28,7 @@ import { fnv1a64Hex } from "../../../shared/fnv1a";
 import { importHmacKey } from "../../../shared/hmac-key";
 import { withRunShard } from "../../../shared/run-shard";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
+import resolveInboundShard from "./inbound-shard";
 import type { AgentChannelRun, AgentDefinition, AgentInboundChannelKind, AgentWorkflowBindingLike, InboundChannelEvent } from "./types";
 
 /** Max age (seconds) of a signed request before it is rejected as a replay. */
@@ -297,7 +298,13 @@ const deliveryId = async (channel: AgentInboundChannelKind, body: string): Promi
  * failure (service error, quota, bad binding) is rethrown so the handler returns
  * non-2xx and the provider redelivers rather than the event being lost.
  */
-const startChannelRun = async (workflow: AgentWorkflowBindingLike, run: AgentChannelRun, channel: AgentInboundChannelKind, id: string): Promise<Response> => {
+const startChannelRun = async (
+    workflow: AgentWorkflowBindingLike,
+    run: AgentChannelRun,
+    delivery: { channel: AgentInboundChannelKind; id: string; shardKey: string | undefined },
+): Promise<Response> => {
+    const { channel, id, shardKey } = delivery;
+
     // `run` derives from an inbound channel webhook mapper — reject the reserved
     // workflow branch-marker key at this trust boundary before it ever reaches
     // `create()`. Thrown (not acked): a forged marker must not be reported as
@@ -313,8 +320,8 @@ const startChannelRun = async (workflow: AgentWorkflowBindingLike, run: AgentCha
     // signed material, not on the digest; against ACCIDENTAL collision between
     // honest ids, 64 bits is ample.
     try {
-        // No trusted shard for a webhook: a mapped `shardKey` is dropped (default shard).
-        await workflow.create({ id: `${channel}-${fnv1a64Hex(id)}`, params: withRunShard(run, undefined) });
+        // The shard is the app's `resolveShard` verdict; a mapped `shardKey` is dropped.
+        await workflow.create({ id: `${channel}-${fnv1a64Hex(id)}`, params: withRunShard(run, shardKey) });
     } catch (error) {
         if (isDuplicateInstanceError(error)) {
             return ack();
@@ -393,8 +400,13 @@ const dispatchAgentChannel =
                 );
             }
 
+            // A throwing hook answers non-2xx, so the provider redelivers instead of the
+            // event running on the default shard.
             // eslint-disable-next-line no-await-in-loop -- single dispatch then return; never iterates past the first claim
-            return await startChannelRun(workflow, run satisfies AgentChannelRun, channel, await deliveryId(channel, body));
+            const shardKey = await resolveInboundShard(config.resolveShard, event, "onInbound.resolveShard");
+
+            // eslint-disable-next-line no-await-in-loop -- single dispatch then return; never iterates past the first claim
+            return await startChannelRun(workflow, run satisfies AgentChannelRun, { channel, id: await deliveryId(channel, body), shardKey });
         }
 
         // No target's secret verified ⇒ unauthenticated; a verified-but-declined event is a 204.

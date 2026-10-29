@@ -674,6 +674,22 @@ export interface AgentEmailRun {
  */
 export type AgentEmailMapper = (email: InboundEmail) => AgentEmailRun | null | Promise<AgentEmailRun | null | undefined> | undefined;
 
+/**
+ * Pick the shard an inbound-triggered run's tools use: the app maps a verified signal
+ * (the recipient address Email Routing delivered to, the channel workspace the signing
+ * secret belongs to) to a tenant shard. Return `undefined` for the default shard.
+ *
+ * This is the only way an inbound run gets a shard. A `shardKey` in the mapped run is
+ * dropped, because the mapper's output is built from attacker-written content. The hook
+ * runs after the sender or signature gate and after the mapper claimed the message.
+ * Returning a shard is an authorization decision, since the run's tools dispatch past
+ * `authorizeShard`, so never pass a payload field through without checking it against
+ * a table you trust. A throw fails the delivery rather than falling back to the default
+ * shard.
+ * @experimental
+ */
+export type AgentInboundShardResolver<Message> = (message: Message) => Promise<string | undefined> | string | undefined;
+
 /** The inbound webhook channels an agent can be triggered from — see `@lunora/agent/channels`. */
 export type AgentInboundChannelKind = "discord" | "github" | "slack";
 
@@ -716,6 +732,9 @@ export interface AgentInboundChannel {
     channel: AgentInboundChannelKind;
     /** Map a verified event to a run (or `null` to decline). */
     map: AgentChannelMapper;
+
+    /** The shard a claimed event's run uses — see {@link AgentInboundShardResolver}. Default shard when absent. */
+    resolveShard?: AgentInboundShardResolver<InboundChannelEvent>;
 
     /**
      * The verification credential, from `env`: an env-var NAME (string) or an
@@ -886,6 +905,12 @@ export interface AgentConfig {
      * unknown-tool-name recovery as the only repair path.
      */
     repairToolCall?: ToolCallRepairFunction<ToolSet>;
+
+    /**
+     * The shard an `onEmail` run's tools use — see {@link AgentInboundShardResolver}. Map
+     * the verified recipient (`email.to`), not the sender or body. Default shard when absent.
+     */
+    resolveEmailShard?: AgentInboundShardResolver<InboundEmail>;
 
     /**
      * Reusable {@link SkillDefinition}s to compose in — each contributes an
@@ -1096,10 +1121,11 @@ export interface AgentRunInput {
     replyRef?: AgentReplyRef;
 
     /**
-     * The shard whose app data the run's tools read and write. `ctx.agents.<name>.run`
-     * sets it to the shard of the mutation or action that starts the run and overwrites
-     * any value in the input: `agents:agentRun` passes a public client's input through,
-     * and that client was authorized for its own shard only.
+     * The shard whose app data the run's tools read and write. Set only by the boundary
+     * that starts the run, from a source it trusts: `ctx.agents.<name>.run` uses the
+     * shard of the mutation or action that calls it, a scheduled run the scheduling
+     * shard, an inbound run the app's `resolveEmailShard` / `resolveShard` hook. A
+     * value in the input is always overwritten, since the input may be a client's.
      */
     shardKey?: string;
     /** The thread key — reuse to continue a conversation. */

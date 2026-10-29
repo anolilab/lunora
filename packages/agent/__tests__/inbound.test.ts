@@ -302,6 +302,55 @@ describe(dispatchAgentEmail, () => {
         expect(support.calls[0]?.params).toStrictEqual({ input: "x", threadKey: "t" });
     });
 
+    it("starts the run on the shard resolveEmailShard names, never the mapper's", async () => {
+        expect.assertions(2);
+
+        const support = fakeBinding();
+        const onEmail: AgentEmailMapper = () => ({ input: "x", shardKey: "victim-org", threadKey: "t" }) as unknown as ReturnType<AgentEmailMapper>;
+        const recipients: string[] = [];
+        // The app maps the routed recipient address to its tenant shard.
+        const resolveEmailShard = (email: InboundEmail): string => {
+            recipients.push(...email.to);
+
+            return "org-a";
+        };
+
+        const handler = dispatchAgentEmail([{ agent: { onEmail, resolveEmailShard }, className: "SupportAgentWorkflow" }]);
+
+        await handler(fakeMessage().message, { SupportAgentWorkflow: support.binding }, {});
+
+        expect(support.calls[0]?.params).toStrictEqual({ input: "x", shardKey: "org-a", threadKey: "t" });
+        expect(recipients).toHaveLength(1);
+    });
+
+    it("never starts a run when resolveEmailShard throws or returns a non-string", async () => {
+        expect.assertions(1);
+
+        const support = fakeBinding();
+        const onEmail: AgentEmailMapper = () => {
+            return { input: "x", threadKey: "t" };
+        };
+        const throwing = dispatchAgentEmail([
+            {
+                agent: {
+                    onEmail,
+                    resolveEmailShard: () => {
+                        throw new Error("tenant lookup failed");
+                    },
+                },
+                className: "SupportAgentWorkflow",
+            },
+        ]);
+        const junk = dispatchAgentEmail([{ agent: { onEmail, resolveEmailShard: (() => 42) as unknown as () => string }, className: "SupportAgentWorkflow" }]);
+
+        await Promise.allSettled([
+            throwing(fakeMessage().message, { SupportAgentWorkflow: support.binding }, {}),
+            junk(fakeMessage().message, { SupportAgentWorkflow: support.binding }, {}),
+        ]);
+
+        expect(support.calls).toHaveLength(0);
+    });
+
     it("bounces the message (setReject) and never calls create() when the mapper's run carries the reserved branch-marker key", async () => {
         expect.assertions(2);
 

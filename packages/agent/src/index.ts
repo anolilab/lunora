@@ -48,6 +48,7 @@ export type {
     AgentGenerateOptions,
     AgentGenerateResult,
     AgentHandle,
+    AgentInboundShardResolver,
     AgentInstructionsContext,
     AgentLiveEvent,
     AgentMemoryOptions,
