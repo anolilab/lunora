@@ -20,7 +20,7 @@
             "files": {
                 "lunora/saas-ui/core/activity.ts": "c873117e6e2cf7bd338e2b57805a0b2c162ac42cd7b58d5ccdf16ca83e01171b",
                 "lunora/saas-ui/core/admin-organizations.ts": "9ac5e994f45e93665254c3905f8b7d3b369088a98ff2f9fc3d9ea1134b073d6a",
-                "lunora/saas-ui/core/admin-subscriptions.ts": "bbd05eb6886b36aaa52bc84c593e1277d489251fc7af5b598f61d43cedb96d1a",
+                "lunora/saas-ui/core/admin-subscriptions.ts": "8c7b7730ed05e93539cef301749f9331d78fc9e73c801f9b00074c7683fbbb4f",
                 "lunora/saas-ui/core/admin-users.ts": "53a065117e0a65701ca73d995623f7b4c9a66c92dfe69e539cdf0068cbb22ee4",
                 "lunora/saas-ui/core/billing.ts": "d560e8ec6ea1790975abb6a0b349907b3030b41cf6596f4c8a929a306bf15045",
                 "lunora/saas-ui/core/create-form-controller.ts": "67028dc91afbad30def72bef6150c57d833680267e16c4c0446eefb2a652122c",
@@ -35,7 +35,7 @@
                 "lunora/saas-ui/core/types.ts": "11154af93b79c09660af2246c0219f2b93e0343818961c2ed82b9941af2b04ad",
                 "lunora/saas-ui/react/activity.tsx": "bb755cf86077464f49204867396ea0841fdb4f10ca900559786c43e86c82e240",
                 "lunora/saas-ui/react/admin-users.tsx": "aba5611bf1738e9d0bb3d828d45ef884c7882f9773d93a89de676057832da2aa",
-                "lunora/saas-ui/react/admin.tsx": "be2416805866710258db621a78c310129114fcdaa12c4cd867147759f34c3cb0",
+                "lunora/saas-ui/react/admin.tsx": "f8ff89a56b7e1922230c83fa47d335ea2ae375fdd7d4e2be6e4a33b4114b038e",
                 "lunora/saas-ui/react/billing.tsx": "6975ce4e11b0207bf738a578695ed3c8eec111342f32c39123f5cbf3c7743156",
                 "lunora/saas-ui/react/index.ts": "45a4cb32193e97e13ee111d193fabae21258c51fe437cc7109c85c1b08f31582",
                 "lunora/saas-ui/react/overview.tsx": "5243bac4deeae6d08983223580dcba324ae6119b398de5ed0509258c030f049b",

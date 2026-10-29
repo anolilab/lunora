@@ -18,6 +18,8 @@ import type { OrganizationRow, SubscriptionLike } from "./types";
 
 /** A subscription as an admin query returns it: the billing slice plus whose it is. */
 interface AdminSubscriptionRow extends SubscriptionLike {
+    /** The billing provider (`stripe`, `polar`, …). Its subscription ids are unique only within it. */
+    provider: string;
     providerSubscriptionId: string;
     /** The organisation id the subscription bills. */
     referenceId: string;
@@ -26,7 +28,10 @@ interface AdminSubscriptionRow extends SubscriptionLike {
 interface SubscriptionListing {
     cancelAtPeriodEnd: boolean;
     currentPeriodEnd?: number;
+    /** The provider's own subscription id, as shown and searched. */
     id: string;
+    /** `provider:id` — unique where `id` alone is not, so it is the row's key. */
+    key: string;
     /** The organisation's name, or its id when the projection has no row for it (a deleted tenant). */
     organization: string;
     /** The catalog's name for the plan billed, or the raw price id when the catalog does not list it. */
@@ -64,6 +69,10 @@ const planName = (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike): s
     return plans.find((plan) => plan.priceId !== undefined && billed.has(plan.priceId))?.name ?? subscription.priceId;
 };
 
+/** A subscription's identity: the payment store keys it by provider and provider id together. */
+const subscriptionKey = (subscription: Pick<AdminSubscriptionRow, "provider" | "providerSubscriptionId">): string =>
+    `${subscription.provider}:${subscription.providerSubscriptionId}`;
+
 const renewal = (subscription: SubscriptionLike): string => {
     if (subscription.state === "canceled" || subscription.currentPeriodEnd === undefined) {
         return "—";
@@ -91,6 +100,7 @@ const selectSubscriptions = (
                     cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
                     currentPeriodEnd: subscription.currentPeriodEnd,
                     id: subscription.providerSubscriptionId,
+                    key: subscriptionKey(subscription),
                     organization: organization?.name ?? subscription.referenceId,
                     plan: planName(plans, subscription),
                     quantity: subscription.quantity,

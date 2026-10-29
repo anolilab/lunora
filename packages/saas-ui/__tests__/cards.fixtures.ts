@@ -89,7 +89,15 @@ const PLANS: Plan[] = [
 ];
 
 const adminSubscription = (referenceId: string, state: string): AdminSubscriptionRow => {
-    return { cancelAtPeriodEnd: false, priceId: "price_pro", providerSubscriptionId: `sub_${referenceId}`, quantity: 3, referenceId, state };
+    return {
+        cancelAtPeriodEnd: false,
+        priceId: "price_pro",
+        provider: "stripe",
+        providerSubscriptionId: `sub_${referenceId}`,
+        quantity: 3,
+        referenceId,
+        state,
+    };
 };
 
 export { activity, adminClient, adminSubscription, adminUser, CREATED_SENTENCE, HOUR, noop, NOW, organization, PLANS, project };

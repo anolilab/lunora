@@ -188,6 +188,14 @@ describe("adminSubscriptions", () => {
         expect(screen.queryByText("Load more")).not.toBeInTheDocument();
     });
 
+    it("lists two providers' subscriptions that share an id as two rows", () => {
+        const rows = [adminSubscription("org-Acme", "active"), { ...adminSubscription("org-Acme", "past_due"), provider: "polar" }];
+
+        render(AdminSubscriptions, { organizations: [], plans: PLANS, rows });
+
+        expect(screen.getAllByText("sub_org-Acme")).toHaveLength(2);
+    });
+
     it("marks itself busy while the query is undefined", () => {
         const { container } = render(AdminSubscriptions, { organizations: undefined, plans: PLANS, rows: undefined });
 

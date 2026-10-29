@@ -52,6 +52,7 @@ interface ActivityRow {
 
 ```ts
 interface AdminSubscriptionRow extends SubscriptionLike {
+    provider: string;
     providerSubscriptionId: string;
     referenceId: string;
 }
@@ -459,6 +460,7 @@ interface SubscriptionListing {
     cancelAtPeriodEnd: boolean;
     currentPeriodEnd?: number;
     id: string;
+    key: string;
     organization: string;
     plan: string;
     quantity: number;

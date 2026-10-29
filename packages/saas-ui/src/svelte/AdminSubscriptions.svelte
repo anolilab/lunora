@@ -64,7 +64,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {#each visible as subscription (subscription.id)}
+                    {#each visible as subscription (subscription.key)}
                         <tr>
                             <td>{subscription.organization}<code class="lu-saas-row__slug">{subscription.id}</code></td>
                             <td>{subscription.plan}</td>

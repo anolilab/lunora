@@ -179,7 +179,7 @@ const AdminSubscriptions = ({ onLoadMore, organizations, plans, rows }: AdminSub
                     </thead>
                     <tbody>
                         {visible.map((subscription) => (
-                            <tr key={subscription.id}>
+                            <tr key={subscription.key}>
                                 <td>
                                     {subscription.organization}
                                     <code className="lu-saas-row__slug">{subscription.id}</code>

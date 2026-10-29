@@ -342,6 +342,7 @@ describe("selectSubscriptions", () => {
         return {
             cancelAtPeriodEnd: false,
             priceId: "price_pro",
+            provider: "stripe",
             providerSubscriptionId: `sub_${overrides.referenceId}`,
             quantity: 1,
             state: "active",
@@ -390,6 +391,18 @@ describe("selectSubscriptions", () => {
     it("totals the paying and the past-due, and offers only the states present", () => {
         expect(subscriptionTotals(subscriptions)).toStrictEqual({ pastDue: 1, paying: 2 });
         expect(subscriptionStateOptions(subscriptions).map((option) => option.value)).toStrictEqual(["all", "past_due", "active", "canceled"]);
+    });
+
+    it("keys a row by provider and id, which is what makes it unique", () => {
+        const rows = [
+            subscription({ providerSubscriptionId: "sub_1", referenceId: "org-a" }),
+            subscription({ provider: "polar", providerSubscriptionId: "sub_1", referenceId: "org-b" }),
+        ];
+        const listed = selectSubscriptions(rows, organizations, plans);
+
+        expect(new Set(listed.map((row) => row.key))).toStrictEqual(new Set(["polar:sub_1", "stripe:sub_1"]));
+        expect(listed.map((row) => row.id)).toStrictEqual(["sub_1", "sub_1"]);
+        expect(selectSubscriptions(rows, organizations, plans, { search: "SUB_1", state: "all" })).toHaveLength(2);
     });
 
     it("says the totals cover only the loaded rows while more pages remain", () => {
