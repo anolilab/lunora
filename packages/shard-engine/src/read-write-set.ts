@@ -297,9 +297,9 @@ const rangeContains = (range: KeyRange, entry: IndexKeyEntry): boolean => range.
 /**
  * The index name for a row's own id. Every table has it implicitly, whether or
  * not it declares indexes, so a by-id read can be narrowed to the one row it
- * named. The `!` keeps it out of the `defineTable` name space; even a user index
- * that collided would only add touches, never hide one, because every written
- * row carries its id key.
+ * named. A user index that took the same name would only add touches, never
+ * hide one: every written row carries its id key, and a row lacking its key on
+ * any declared index reports its whole position as unknown.
  */
 const ID_INDEX = "!id";
 

@@ -2139,9 +2139,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * as well as the one it entered, and only the outgoing image can prove the
      * former.
      *
-     * Returns `undefined` when no image is available (the position is then
-     * unknown), which makes the cache drop every range dependency on the table
-     * — the same conservative behaviour as before ranges existed.
+     * Returns `undefined` when no image is available or an image has no key on
+     * some declared index (the position is then unknown), which makes the cache
+     * drop every range dependency on the table — the same conservative
+     * behaviour as before ranges existed.
      */
     const rowIndexKeys = (tableName: string, ...images: (Record<string, unknown> | undefined)[]): IndexKeyEntry[] | undefined => {
         const indexes = schema.tables[tableName]?.indexes ?? [];
@@ -2160,7 +2161,18 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     entries.push(idIndexKey(keyedId));
                 }
 
-                entries.push(...indexKeysForRow(indexes, image, serializeSqlValue));
+                const declared = indexKeysForRow(indexes, image, serializeSqlValue);
+
+                // An index this image has no key on (a missing optional field,
+                // an unencodable value) leaves its position unknown. The id key
+                // alone would make the list look complete, and the batch gate
+                // folds rows together, so another row's key on that index would
+                // stand in for this one's.
+                if (declared.length < indexes.length) {
+                    return undefined;
+                }
+
+                entries.push(...declared);
             }
         }
 

@@ -26,6 +26,10 @@ const schema: SchemaLike = {
             indexes: [],
             shape: { body: { kind: "string" } },
         },
+        pairs: {
+            indexes: [{ fields: ["a", "b"], name: "by_a_b" }],
+            shape: { a: { kind: "string" }, b: { kind: "optional" } },
+        },
     },
 };
 
@@ -191,6 +195,24 @@ describe("subscription point reads", () => {
         await database.patch("messages", idA, { channel: "c2" });
 
         expect(keys).toStrictEqual([idA]);
+    });
+
+    it("a row with no key on a declared index re-runs that index's readers, even batched with a keyed row", async () => {
+        expect.assertions(1);
+
+        const memo = await subscribe(async (database) =>
+            database
+                .query("pairs")
+                .withIndex("by_a_b", (q) => q.eq("a", "1"))
+                .collect(),
+        );
+
+        await expect(
+            reruns(memo, async (database) => {
+                await database.insert("pairs", { a: "1" });
+                await database.insert("pairs", { a: "2", b: "x" });
+            }),
+        ).resolves.toBe(true);
     });
 
     it("a get mixed with a predicated read of the same table stays whole-table", async () => {
