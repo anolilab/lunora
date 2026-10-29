@@ -65,6 +65,7 @@ describe("discover/migrations", () => {
             export const e = defineMigration({ id: "spread", table: "t", up: (doc) => ({ ...doc }) });
             export const f = defineMigration({ id: "two-statements", table: "t", up: (doc) => { console.log(doc); return doc; } });
             export const g = defineMigration({ id: "other-value", table: "t", up: (doc, context) => context });
+            export const h = defineMigration({ id: "wrapped", table: "t", up: ((doc) => doc) });
         `,
             );
 
@@ -78,6 +79,7 @@ describe("discover/migrations", () => {
                 parenthesized: true,
                 spread: false,
                 "two-statements": false,
+                wrapped: true,
             });
         });
 

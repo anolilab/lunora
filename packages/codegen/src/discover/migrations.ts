@@ -61,7 +61,8 @@ const unparenthesized = (node: Node): Node => (Node.isParenthesizedExpression(no
  */
 const hasIdentityUp = (object: ObjectLiteralExpression): boolean => {
     const property = findObjectProperty(object, "up");
-    const up = property !== undefined && Node.isPropertyAssignment(property) ? property.getInitializer() : property;
+    const initializer = property !== undefined && Node.isPropertyAssignment(property) ? property.getInitializer() : property;
+    const up = initializer === undefined ? undefined : unparenthesized(initializer);
 
     if (up === undefined || !(Node.isArrowFunction(up) || Node.isFunctionExpression(up) || Node.isMethodDeclaration(up))) {
         return false;
