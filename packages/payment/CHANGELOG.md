@@ -1,3 +1,9 @@
+## @lunora/payment [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.252...@lunora/payment@1.0.0-alpha.253) (2026-10-29)
+
+### Features
+
+* **saas-ui,templates:** add the admin users and subscriptions views to the kit ([#1418](https://github.com/anolilab/lunora/issues/1418)) ([3159b3d](https://github.com/anolilab/lunora/commit/3159b3d6854c4997cdfe2c5f25f20cfaf428ae74))
+
 ## @lunora/payment [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.251...@lunora/payment@1.0.0-alpha.252) (2026-10-29)
 
 ### Features
