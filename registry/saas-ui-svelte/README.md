@@ -30,15 +30,22 @@ themselves, because the adapter differs per framework and the wiring differs per
 meta-framework — a component that fetches cannot be rendered in a story, a test,
 or somebody else's route.
 
-Your route owns the subscription:
+Your route owns the subscription. The tenant's rows live on its own shard, so
+every tenant call carries `{ shardKey: organizationId }`, the organization id
+`api.saas.me` returns; the `saas` functions refuse to run anywhere else:
 
-```tsx
-import { ActivityFeed, AdminOrganizations, OverviewStats, ProjectsCard } from "./lunora/saas-ui/svelte";
+```svelte
+<script lang="ts">
+    import { mutation, query } from "@lunora/svelte";
+    import { OverviewStats, ProjectsCard } from "./lunora/saas-ui/svelte";
 
-const overview = useQuery(api.saas.overview, {});
+    const shard = { shardKey: organizationId };
+    const overview = query(api.saas.overview, {}, shard);
+    const { mutate: createProject } = mutation(api.saas.createProject);
+</script>
 
 <OverviewStats now={Date.now()} payload={$overview} />
-<ProjectsCard canWrite={isAdmin} onArchive={archive} onCreate={(name) => createProject({ name })} rows={$overview?.projects} />
+<ProjectsCard canWrite={isAdmin} onArchive={archive} onCreate={(name) => createProject({ name }, shard)} rows={$overview?.projects} />
 ```
 
 Every query is live, so a project created in one tab appears in the others
