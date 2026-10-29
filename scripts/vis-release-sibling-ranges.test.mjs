@@ -44,6 +44,12 @@ test("keeps the rewrite when the new version has outgrown the range", () => {
     assert.equal(restored, undefined);
 });
 
+test("lets a caret it wrote for an exact pin keep rising", () => {
+    const restored = restoreSiblingRanges({ dependencies: { "@lunora/wire": "^1.0.0-alpha.4" } }, { dependencies: { "@lunora/wire": "^1.0.0-alpha.5" } });
+
+    assert.equal(restored, undefined);
+});
+
 test("leaves exact pins, protocols and non-siblings alone", () => {
     const restored = restoreSiblingRanges(
         {

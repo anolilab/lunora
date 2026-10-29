@@ -72,8 +72,8 @@ const packagesDir = join(rootDir, "packages");
 /** Matches an exact, range-free semver literal (`1.0.0`, `1.0.0-alpha.24`). */
 const EXACT_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
-/** Captures the floor of a `>=<floor> …` range (`>=1.0.0-alpha.51 <2.0.0-0`). */
-const RANGE_FLOOR_RE = /^>=\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s|$)/;
+/** Captures the floor of a `>=<floor> …` or `^<floor>` range (`>=1.0.0-alpha.51 <2.0.0-0`). */
+const RANGE_FLOOR_RE = /^(?:>=|\^)\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s|$)/;
 
 const isSibling = (name) => name === "lunorash" || name.startsWith("@lunora/");
 

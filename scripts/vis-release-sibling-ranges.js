@@ -10,9 +10,11 @@
  * why those ranges exist.
  *
  * So after the version step writes the manifests, every sibling specifier that was
- * a range at HEAD and still admits the version vis just wrote is put back. Exact
- * pins are left as vis rewrote them (`^<new version>`), and a range the new version
- * has outgrown keeps vis's rewrite so the release never ships an unsatisfiable one.
+ * a bounded range at HEAD (`>=<floor> <ceiling>`, the deliberate promotion-safe
+ * shape) and still admits the version vis just wrote is put back. Anything else —
+ * an exact pin, or the `^<version>` vis wrote for one last time — keeps vis's
+ * rewrite, so those floors keep rising in lockstep. A range the new version has
+ * outgrown keeps the rewrite too, so the release never ships an unsatisfiable one.
  *
  * Wired up in vis.config.ts as `release.plugins`.
  */
@@ -28,8 +30,8 @@ const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "peerDependencies"
 const isSibling = (name) => name === "lunorash" || name.startsWith("@lunora/");
 
 /**
- * Returns `after` with every sibling specifier that was a satisfied range in
- * `before` restored, or `undefined` when nothing needed restoring.
+ * Returns `after` with every sibling specifier that was a satisfied bounded range
+ * in `before` restored, or `undefined` when nothing needed restoring.
  */
 export const restoreSiblingRanges = (before, after) => {
     let changed = false;
@@ -46,7 +48,7 @@ export const restoreSiblingRanges = (before, after) => {
         for (const [name, specifier] of Object.entries(current)) {
             const old = previous[name];
 
-            if (!isSibling(name) || typeof old !== "string" || old === specifier || semver.valid(old) || semver.validRange(old) === null) {
+            if (!isSibling(name) || typeof old !== "string" || old === specifier || !old.includes("<") || semver.validRange(old) === null) {
                 continue;
             }
 
