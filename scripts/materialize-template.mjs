@@ -16,21 +16,42 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import semver from "semver";
+
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Workspace directories whose `node_modules` may already hold a template's third-party dependency. */
 const HOST_GROUPS = ["packages", "examples", "apps", "tests"];
 
-/** The installed copy of `name` somewhere in the workspace, or `undefined`. */
-const findInstalled = (name) => {
+/**
+ * An installed copy of `name` somewhere in the workspace that satisfies the
+ * template's `range`, so the materialized app runs the dependency contract its
+ * manifest declares rather than whichever copy happens to be found first. Throws
+ * when copies exist but none fits; `undefined` when none is installed at all.
+ */
+const findInstalled = (name, range) => {
+    const found = [];
+
     for (const group of HOST_GROUPS) {
         for (const directory of readdirSync(join(rootDir, group))) {
             const candidate = join(rootDir, group, directory, "node_modules", name);
 
             if (existsSync(join(candidate, "package.json"))) {
-                return candidate;
+                const { version } = JSON.parse(readFileSync(join(candidate, "package.json"), "utf8"));
+
+                if (range === undefined || semver.satisfies(version, range)) {
+                    return candidate;
+                }
+
+                found.push(version);
             }
         }
+    }
+
+    if (found.length > 0) {
+        throw new Error(
+            `no installed \`${name}\` satisfies the template's "${range}" (the workspace has ${[...new Set(found)].join(", ")}) — align the template's range.`,
+        );
     }
 
     return undefined;
@@ -114,7 +135,10 @@ const materializeTemplate = (template, appDirectory, { name: projectName }) => {
             continue;
         }
 
-        const source = name === "wrangler" ? join(rootDir, "packages", "runtime", "node_modules", "wrangler") : findInstalled(name);
+        const source =
+            name === "wrangler"
+                ? join(rootDir, "packages", "runtime", "node_modules", "wrangler")
+                : findInstalled(name, dependencies[name] ?? devDependencies[name]);
 
         if (source === undefined) {
             throw new Error(`templates/${template} depends on \`${name}\`, which no workspace package has installed — add it to one.`);
