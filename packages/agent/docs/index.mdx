@@ -1082,15 +1082,18 @@ fixed generic reason (never reflecting internal error detail back to the sender)
 
 **Shard.** A run started from email uses the default shard. To run a tenant's tools,
 add `resolveEmailShard`. It is called after the sender check and after `onEmail` claimed
-the message, and it maps a signal you trust to a shard:
+the message, with `{ envelopeTo, email }`. Key it on `envelopeTo`, the SMTP recipient
+Email Routing delivered to. Routing only delivers to addresses you configured, so that
+field is trustworthy. The parsed headers are not: `email.to` is the `To:` header, which a
+sender can set to another tenant's inbox, and `email.from` is only as good as its
+authentication verdicts.
 
 ```ts
 export const support = defineAgent({
     // …
     onEmail: (email) => ({ input: wrapUntrusted(email.text ?? ""), threadKey: email.messageId ?? email.from }),
-    // Email Routing delivered to this address, so it is one you configured. Look it up;
-    // never pass a header or body field through.
-    resolveEmailShard: (email) => tenantForInbox(email.to[0]),
+    // Look the routed address up in your own table; never pass a header or body field through.
+    resolveEmailShard: ({ envelopeTo }) => tenantForInbox(envelopeTo),
 });
 ```
 
@@ -1163,16 +1166,18 @@ are exported too if you wire your own routing.
 > payload field; the run dispatches RLS-bypassed under whatever `owner` you set.
 
 **Shard.** A channel run uses the default shard unless `onInbound.resolveShard` names one.
-It receives the verified event, runs after `map` claimed it, and follows the same rules as
-`resolveEmailShard`. Map the workspace or installation the signing secret belongs to, not a
-payload field you have not checked. A throw answers non-2xx, so the provider redelivers.
+It runs after `map` claimed the event and follows the same rules as `resolveEmailShard`.
+It gets `{ channel, workspaceId }` and nothing from the message itself: `workspaceId` is
+the tenant id the provider stamped on the signed body (Slack `team_id`, GitHub
+`installation.id`, Discord `guild_id`). The rest of the body is text a member of that
+workspace wrote. A throw answers non-2xx, so the provider redelivers.
 
 ```ts
 onInbound: {
     channel: "slack",
     secret: "SLACK_SIGNING_SECRET",
     map: (event) => ({ input: "…", threadKey: "…" }),
-    resolveShard: (event) => tenantForSlackTeam((event.json() as { team_id?: string }).team_id),
+    resolveShard: ({ workspaceId }) => tenantForSlackTeam(workspaceId),
 },
 ```
 

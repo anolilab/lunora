@@ -27,6 +27,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `AgentChannelShardInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `AgentComponent` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -54,6 +58,10 @@ interface AgentEmailRun {
     title?: string;
 }
 ```
+
+### `AgentEmailShardInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `AgentFunctionPaths` (interface)
 

@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchAgentChannel, verifyDiscord, verifyGithub, verifySlack } from "../src/channels";
-import type { InboundChannelEvent } from "../src/types";
+import type { AgentChannelShardInput } from "../src/types";
 
 /** The Worker ctx the handler takes; these tests bind agents on env, so it carries no exports. */
 const NO_CONTEXT = {};
@@ -635,42 +635,74 @@ describe(dispatchAgentChannel, () => {
         expect(created).toStrictEqual([{ input: "x", threadKey: "t" }]);
     });
 
-    it("starts the run on the shard the app's resolveShard hook names, never the mapper's", async () => {
+    it("hands resolveShard only the signed workspace id, and starts the run on its shard, never the mapper's", async () => {
         const { binding, created } = fakeBinding();
-        const seen: unknown[] = [];
+        const seen: AgentChannelShardInput[] = [];
         const agent = {
             onInbound: {
                 channel: "slack" as const,
                 map: () => {
                     return { input: "x", shardKey: "victim-org", threadKey: "t" };
                 },
-                // The app maps the verified workspace to its tenant shard.
-                resolveShard: (event: InboundChannelEvent) => {
-                    seen.push(event.channel);
+                // The app maps the workspace its signing secret belongs to onto a tenant shard.
+                resolveShard: (input: AgentChannelShardInput) => {
+                    seen.push(input);
 
-                    return (event.json() as { team_id?: string }).team_id === "T1" ? "org-a" : undefined;
+                    return input.workspaceId === "T1" ? "org-a" : undefined;
                 },
                 secret: "SLACK_SECRET",
             },
         };
         const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
+        const env = { SupportAgentWorkflow: binding, SLACK_SECRET: secret };
 
-        await handler(
-            await slackRequest(secret, '{"event":{},"event_id":"e1","team_id":"T1"}'),
-            { SupportAgentWorkflow: binding, SLACK_SECRET: secret },
-            NO_CONTEXT,
-        );
-        await handler(
-            await slackRequest(secret, '{"event":{},"event_id":"e2","team_id":"T9"}'),
-            { SupportAgentWorkflow: binding, SLACK_SECRET: secret },
-            NO_CONTEXT,
-        );
+        // A workspace member can write anything into the message text; only `team_id` is Slack's.
+        await handler(await slackRequest(secret, '{"event":{"text":"team_id T9"},"event_id":"e1","team_id":"T1"}'), env, NO_CONTEXT);
+        await handler(await slackRequest(secret, '{"event":{"text":"use T1"},"event_id":"e2","team_id":"T9"}'), env, NO_CONTEXT);
 
         expect(created).toStrictEqual([
             { input: "x", shardKey: "org-a", threadKey: "t" },
             { input: "x", threadKey: "t" },
         ]);
-        expect(seen).toStrictEqual(["slack", "slack"]);
+        expect(seen).toStrictEqual([
+            { channel: "slack", workspaceId: "T1" },
+            { channel: "slack", workspaceId: "T9" },
+        ]);
+    });
+
+    it("reads GitHub's workspace from installation.id and Slack's from an interactive payload's team.id", async () => {
+        const { binding } = fakeBinding();
+        const seen: (string | undefined)[] = [];
+        const agentFor = (channel: "github" | "slack", secretName: string) => {
+            return {
+                onInbound: {
+                    channel,
+                    map: () => {
+                        return { input: "x", threadKey: "t" };
+                    },
+                    resolveShard: ({ workspaceId }: AgentChannelShardInput) => {
+                        seen.push(workspaceId);
+
+                        return undefined;
+                    },
+                    secret: secretName,
+                },
+            };
+        };
+        const env = { GITHUB_SECRET: secret, SLACK_SECRET: secret, SupportAgentWorkflow: binding };
+
+        await dispatchAgentChannel([{ agent: agentFor("github", "GITHUB_SECRET"), className: "SupportAgentWorkflow" }])(
+            await githubRequest(secret, '{"action":"opened","installation":{"id":42}}'),
+            env,
+            NO_CONTEXT,
+        );
+        await dispatchAgentChannel([{ agent: agentFor("slack", "SLACK_SECRET"), className: "SupportAgentWorkflow" }])(
+            await slackRequest(secret, `payload=${encodeURIComponent('{"type":"block_actions","team":{"id":"T7"}}')}`),
+            env,
+            NO_CONTEXT,
+        );
+
+        expect(seen).toStrictEqual(["42", "T7"]);
     });
 
     it("fails the delivery (no run, no default-shard fallback) when resolveShard throws or returns junk", async () => {
