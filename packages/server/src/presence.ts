@@ -196,11 +196,12 @@ interface PresenceFunctions {
 
     /**
      * Upsert the caller's presence row for `roomId` in their tenant and stamp
-     * `lastSeen = now`. Keyed by `(tenantId, roomId, sessionId)` — re-heartbeats patch the existing row so
-     * subscribers receive a single-row delta, not a churn of insert/delete. A
-     * heartbeat may only patch a row owned by the same identity (an existing row
-     * held by a different `userId` is refused with `FORBIDDEN`), so a client
-     * can't overwrite another member's awareness data via a guessed `sessionId`.
+     * `lastSeen = now`. Keyed by `(tenantId, roomId, sessionId)` — re-heartbeats
+     * patch the existing row so subscribers receive a single-row delta, not a
+     * churn of insert/delete. A heartbeat may only patch a row owned by the
+     * same identity (an existing row held by a different `userId` is refused
+     * with `FORBIDDEN`), so a client can't overwrite another member's awareness
+     * data via a guessed `sessionId`.
      */
     heartbeat: RegisteredMutation<
         {
@@ -213,18 +214,19 @@ interface PresenceFunctions {
 
     /**
      * Live query returning the non-expired members of `roomId` in the caller's
-     * tenant, newest heartbeat first. Subscribe to it for a reactive "who's here" list.
+     * tenant, newest heartbeat first. Subscribe to it for a reactive "who's
+     * here" list.
      */
     listPresent: RegisteredQuery<{ roomId: ReturnType<typeof v.string> }, PresenceMember[]>;
 
     /**
      * Internal mutation that hard-deletes every expired row for `roomId` in
      * `tenantId` (`""` for the app-wide tenant). Server-only, so the caller names
-     * the tenant. Stale
-     * rows already vanish from `listPresent` via the read-time TTL filter, and
-     * active rooms self-clean via the heartbeat's opportunistic reap; this is
-     * optional hardening for bulk cleanup of rooms that went quiet with stale
-     * rows left behind (schedule it on a cron / `runAfter` if you care).
+     * the tenant. Stale rows already vanish from `listPresent` via the
+     * read-time TTL filter, and active rooms self-clean via the heartbeat's
+     * opportunistic reap; this is optional hardening for bulk cleanup of rooms
+     * that went quiet with stale rows left behind (schedule it on a cron /
+     * `runAfter` if you care).
      */
     sweep: RegisteredMutation<{ roomId: ReturnType<typeof v.string>; tenantId: ReturnType<typeof v.string> }, { deleted: number }>;
 }
