@@ -38,7 +38,7 @@ const INSTALLED = Symbol.for("lunora.codegen.sharedLibSourceFiles");
 
 const prototype = DocumentRegistry.prototype as SharedRegistry & { [INSTALLED]?: true };
 
-// Under the default isolation each spec file gets its own process; without it (`isolate: false`) the setup file reruns against an already patched ts-morph and must not wrap the wrappers.
+// The cache is shared only by Projects in the same Vitest setup/module context; if setup reruns against an already patched ts-morph, avoid wrapping the wrappers.
 if (prototype[INSTALLED] === undefined) {
     const libTexts = new Map(getLibFiles().map((file) => [LIB_FOLDER + file.fileName, file.text]));
     const settingsKeys = ts.createDocumentRegistry();
