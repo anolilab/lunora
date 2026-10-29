@@ -302,7 +302,8 @@
                   "name": "blob-${{ matrix.project }}-${{ matrix.shard }}"
                   "path": "blob-reports"
                   "if-no-files-found": "error"
-                  "retention-days": 1
+                  # Long enough for "Re-run failed jobs" to still find the passing shards' blobs.
+                  "retention-days": 7
                   # A re-run of one failed shard re-uploads under the same name.
                   "overwrite": true
 
