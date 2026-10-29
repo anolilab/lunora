@@ -71,9 +71,12 @@ export const SchedulerPoolsPanel = ({ initialShardKey, loadStatus }: SchedulerPo
     // writes no table, so a live subscription would never re-run for it.
     const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const metricsQuery = useAdminQuery<MetricSeriesResult>(ADMIN_FUNCTIONS.getMetricSeries, {}, { shardKey: queryShardKey });
-    const { data: metrics } = metricsQuery;
+    const { data: metrics, error: metricsError } = metricsQuery;
 
-    useAutoRefresh(() => Promise.all([statusQuery.poll(), metricsQuery.poll()]), true);
+    // Separate timers: each poll backs off or stops on its own failures, so a
+    // shard the token cannot read must not freeze the pool status, or the reverse.
+    useAutoRefresh(() => statusQuery.poll(), true);
+    useAutoRefresh(() => metricsQuery.poll(), true);
 
     const lag = (Array.isArray(metrics?.series) ? metrics.series : [])
         .filter((series) => series.name === LAG_METRIC && series.count > 0)
@@ -123,7 +126,13 @@ export const SchedulerPoolsPanel = ({ initialShardKey, loadStatus }: SchedulerPo
                 </p>
             </div>
 
-            {lag.length > 0 && (
+            {metricsError !== null && (
+                <p className="text-sm text-destructive" data-testid="lag-error" role="alert">
+                    {metricsError}
+                </p>
+            )}
+
+            {metricsError === null && lag.length > 0 && (
                 <Card className="overflow-hidden py-0">
                     <CardContent className="px-0">
                         <Table data-testid="lag-table">

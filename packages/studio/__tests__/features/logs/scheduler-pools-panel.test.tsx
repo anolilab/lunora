@@ -190,4 +190,26 @@ describe("schedulerPoolsPanel lag", () => {
 
         await expect(screen.findByTestId("lag-scope")).resolves.toBeDefined();
     });
+
+    it("shows a failed lag read instead of hiding the table", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getMetricSeries) {
+                    throw new Error("shard unreachable");
+                }
+
+                return undefined;
+            },
+        });
+
+        render(withProvider(mock, <SchedulerPoolsPanel loadStatus={async () => STATUS} />));
+
+        const banner = await screen.findByTestId("lag-error");
+
+        expect(banner.textContent).toContain("shard unreachable");
+        // The pool status is a separate read and still renders.
+        await expect(screen.findByTestId("pools-table")).resolves.toBeDefined();
+    });
 });
