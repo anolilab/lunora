@@ -297,6 +297,8 @@ const runBackupRestore = async (options: BackupCommandOptions, destination: Back
             cwd: options.cwd,
             fetchImpl: options.fetchImpl,
             file: snapshot.path,
+            // Without it the import's json guard never fires, and a prompt would draw on the stdout the summary owns.
+            format: options.format,
             logger: options.logger,
             dryRun: options.dryRun,
             mode: options.mode ?? "require-empty",

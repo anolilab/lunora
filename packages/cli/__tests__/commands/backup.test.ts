@@ -229,6 +229,48 @@ describe("lunora backup", () => {
         expect(logs.join("\n")).toMatch(/--mode require-empty, and the target already holds users \(1 rows\)/u);
     });
 
+    it("restore under --format json refuses to prompt even on a TTY, so no prompt reaches the json stdout", async () => {
+        expect.assertions(2);
+
+        const { logger, logs } = capturingLogger();
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+        const importCalls: string[] = [];
+        const tty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+
+        Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+
+        try {
+            const result = await runBackupCommand({
+                cwd: workDir,
+                fetchImpl: capturingImportFetch(importCalls, NDJSON),
+                format: "json",
+                logger,
+                mode: "upsert",
+                subcommand: "restore",
+                target: created.entry?.id,
+                token: "t",
+                url: "http://localhost:8787",
+            });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(logs.join("\n")).toContain("cannot prompt here");
+        } finally {
+            if (tty === undefined) {
+                delete (process.stdin as { isTTY?: boolean }).isTTY;
+            } else {
+                Object.defineProperty(process.stdin, "isTTY", tty);
+            }
+        }
+    });
+
     it("restore --mode upsert imports in overwrite mode", async () => {
         expect.assertions(2);
 
