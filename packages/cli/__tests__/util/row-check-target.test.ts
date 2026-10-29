@@ -74,6 +74,14 @@ describe(rowCheckTargetRefusal, () => {
         expect(rowCheckTargetRefusal(cwd, undefined, "https://[::ffff:8.8.8.8]")).toBeUndefined();
     });
 
+    it("refuses an unlisted custom domain for an env with no routes when another env declares some", () => {
+        expect.assertions(1);
+
+        wrangler({ env: { staging: { routes: ["staging.acme.com/*"] } }, name: "app" });
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://old.acme.net")).toContain("routes to no declared route");
+    });
+
     it("takes a custom domain at its word when no routes are declared", () => {
         expect.assertions(1);
 

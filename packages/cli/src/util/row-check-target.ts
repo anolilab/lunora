@@ -198,9 +198,16 @@ const wranglerRefusal = (cwd: string, environment: string | undefined, host: str
 
     const own = ownRouteHosts(wrangler, environment);
 
-    return own.length > 0 && !own.some((routeHost) => matchesRouteHost(host, routeHost))
-        ? `${refused}: this deploy${scope} routes to ${own.join(", ")}, not ${host}`
-        : undefined;
+    if (own.some((routeHost) => matchesRouteHost(host, routeHost))) {
+        return undefined;
+    }
+
+    // Only a project that declares no routes anywhere has nothing to compare a custom domain with.
+    if (own.length === 0 && Object.values(wrangler?.env ?? {}).every((block) => routeHosts(block).length === 0)) {
+        return undefined;
+    }
+
+    return `${refused}: this deploy${scope} routes to ${own.length === 0 ? "no declared route" : own.join(", ")}, not ${host}`;
 };
 
 /**
