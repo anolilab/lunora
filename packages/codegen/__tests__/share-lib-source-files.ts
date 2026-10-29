@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { ts } from "ts-morph";
 
 /**
- * Vitest setup file: every ts-morph `Project` in a worker reuses one parsed and
+ * Vitest setup file: every ts-morph `Project` in a spec file reuses one parsed and
  * bound copy of TypeScript's lib `.d.ts` files instead of parsing its own.
  *
  * Parsing and binding the libs is most of what a Project's first type query
@@ -38,7 +38,7 @@ const INSTALLED = Symbol.for("lunora.codegen.sharedLibSourceFiles");
 
 const prototype = DocumentRegistry.prototype as SharedRegistry & { [INSTALLED]?: true };
 
-// Setup files run once per spec file, but ts-morph is externalised and stays loaded across them: patch once.
+// Under the default isolation each spec file gets its own process; without it (`isolate: false`) the setup file reruns against an already patched ts-morph and must not wrap the wrappers.
 if (prototype[INSTALLED] === undefined) {
     const libTexts = new Map(getLibFiles().map((file) => [LIB_FOLDER + file.fileName, file.text]));
     const settingsKeys = ts.createDocumentRegistry();
