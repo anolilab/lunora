@@ -39,6 +39,9 @@ function AdminPage() {
     // No `shardKey`: the billing tables live on the root shard. Paged, because the
     // table holds every subscription any tenant has ever had.
     const subscriptions = usePaginatedQuery(api.payment.adminSubscriptions, {}, { initialNumItems: SUBSCRIPTIONS_PAGE, onError: setFailure });
+    // Every past-due subscription, listed first: a newest-first page would leave an
+    // older tenant in dunning out of sight until someone paged back to it.
+    const pastDue = useQuery(api.payment.adminPastDueSubscriptions, {}, { onError: setFailure });
     const { data: session } = authClient.useSession();
     const [now] = useState(() => Date.now());
     // Calendar days are the viewer's, not the Worker's (always UTC). The table
@@ -81,6 +84,7 @@ function AdminPage() {
                         : undefined
                 }
                 organizations={organizations}
+                pastDue={pastDue}
                 plans={PLANS}
                 rows={subscriptions.status === "LoadingFirstPage" ? undefined : subscriptions.results}
             />

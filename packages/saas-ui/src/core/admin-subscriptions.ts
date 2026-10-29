@@ -7,7 +7,11 @@
  * shape of cross-tenant read as the `.global()` organisation projection. It is
  * paged (the saas template's `payment.adminSubscriptions` is a cursor query), so
  * the rows here are the pages loaded so far, and the filter, the ordering and
- * the totals cover those rather than the whole table. The
+ * the paying total cover those rather than the whole table. Dunning is the
+ * exception: a newest-first page would leave an older past-due tenant unseen
+ * until the admin paged back to it, so every past-due subscription arrives from
+ * a read of its own (`payment.adminPastDueSubscriptions`) and is merged in ahead
+ * of the pages. The
  * join happens here rather than in the query because the organisation names
  * already arrive with the organisation list, and the payment functions should
  * not have to know the kit's tenancy table exists.
@@ -23,6 +27,12 @@ interface AdminSubscriptionRow extends SubscriptionLike {
     providerSubscriptionId: string;
     /** The organisation id the subscription bills. */
     referenceId: string;
+}
+
+/** The dunning read: every past-due subscription, up to a cap that `more` says was hit. */
+interface PastDueSubscriptions {
+    more: boolean;
+    rows: ReadonlyArray<AdminSubscriptionRow>;
 }
 
 interface SubscriptionListing {
@@ -143,16 +153,32 @@ const subscriptionTotals = (subscriptions: ReadonlyArray<AdminSubscriptionRow>):
 };
 
 /**
- * The card's header. While more pages remain the totals are of the loaded rows
- * only, and say so — a "0 past due" over the first page is not a fact about
- * every tenant.
+ * The rows the table lists: every past-due subscription first, then the pages
+ * loaded so far, without the past-due rows a page repeats. The table's own sort
+ * then only orders what is here — it is presentation, not what brings dunning up.
  */
-const subscriptionsSubtitle = (subscriptions: ReadonlyArray<AdminSubscriptionRow>, hasMore: boolean): string => {
-    const { pastDue, paying } = subscriptionTotals(subscriptions);
-    const totals = `${paying.toString()} paying · ${pastDue.toString()} past due`;
+const withPastDueFirst = (pastDue: ReadonlyArray<AdminSubscriptionRow>, paged: ReadonlyArray<AdminSubscriptionRow>): ReadonlyArray<AdminSubscriptionRow> => {
+    const seen = new Set(pastDue.map((subscription) => subscriptionKey(subscription)));
 
-    return hasMore ? `${totals} in the ${subscriptions.length.toString()} loaded` : totals;
+    return [...pastDue, ...paged.filter((subscription) => !seen.has(subscriptionKey(subscription)))];
 };
 
-export type { AdminSubscriptionRow, SubscriptionListing, SubscriptionsView };
-export { DEFAULT_SUBSCRIPTIONS_VIEW, selectSubscriptions, subscriptionsSubtitle, subscriptionStateOptions, subscriptionTotals };
+/**
+ * The card's header. While more pages remain the totals are of the loaded rows
+ * only, and say so — a "0 past due" over the first page is not a fact about
+ * every tenant. Given the dunning read, the past-due count is the whole table's
+ * (with a `+` past its cap), and only the paying count is partial.
+ */
+const subscriptionsSubtitle = (subscriptions: ReadonlyArray<AdminSubscriptionRow>, hasMore: boolean, pastDue?: PastDueSubscriptions): string => {
+    const totals = subscriptionTotals(subscriptions);
+    const loaded = hasMore ? ` in the ${subscriptions.length.toString()} loaded` : "";
+
+    if (pastDue === undefined) {
+        return `${totals.paying.toString()} paying · ${totals.pastDue.toString()} past due${loaded}`;
+    }
+
+    return `${totals.paying.toString()} paying${loaded} · ${pastDue.rows.length.toString()}${pastDue.more ? "+" : ""} past due`;
+};
+
+export type { AdminSubscriptionRow, PastDueSubscriptions, SubscriptionListing, SubscriptionsView };
+export { DEFAULT_SUBSCRIPTIONS_VIEW, selectSubscriptions, subscriptionsSubtitle, subscriptionStateOptions, subscriptionTotals, withPastDueFirst };

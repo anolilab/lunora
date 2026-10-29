@@ -1,6 +1,6 @@
 <script lang="ts">
-    import type { AdminSubscriptionRow, OrganizationRow, Plan, SubscriptionsView } from "../core";
-    import { DEFAULT_SUBSCRIPTIONS_VIEW, planLabel, selectSubscriptions, subscriptionStateOptions, subscriptionsSubtitle } from "../core";
+    import type { AdminSubscriptionRow, OrganizationRow, PastDueSubscriptions, Plan, SubscriptionsView } from "../core";
+    import { DEFAULT_SUBSCRIPTIONS_VIEW, planLabel, selectSubscriptions, subscriptionStateOptions, subscriptionsSubtitle, withPastDueFirst } from "../core";
     import Card from "./Card.svelte";
     import Empty from "./Empty.svelte";
 
@@ -12,20 +12,28 @@
         onLoadMore?: () => void;
         /** The organisation list, for names. Subscriptions render with ids until it arrives. */
         organizations: ReadonlyArray<OrganizationRow> | undefined;
+        /**
+         * Every past-due subscription — the saas template's `payment.adminPastDueSubscriptions`.
+         * Listed first whatever page they fall on, and the header's past-due count is
+         * then the whole table's. Without it, past-due rows show only as their pages load.
+         */
+        pastDue?: PastDueSubscriptions;
         plans: ReadonlyArray<Plan>;
         /** The pages loaded so far. `undefined` while the first page is in flight. */
         rows: ReadonlyArray<AdminSubscriptionRow> | undefined;
     }
 
-    const { onLoadMore, organizations, plans, rows }: Props = $props();
+    const { onLoadMore, organizations, pastDue, plans, rows: paged }: Props = $props();
 
     let view = $state<SubscriptionsView>({ ...DEFAULT_SUBSCRIPTIONS_VIEW });
+
+    const rows = $derived(paged ? withPastDueFirst(pastDue?.rows ?? [], paged) : undefined);
 
     const visible = $derived(rows ? selectSubscriptions(rows, organizations ?? [], plans, view) : []);
     const states = $derived(rows ? subscriptionStateOptions(rows) : []);
 </script>
 
-<Card subtitle={rows ? subscriptionsSubtitle(rows, onLoadMore !== undefined) : undefined} title="Subscriptions">
+<Card subtitle={paged ? subscriptionsSubtitle(paged, onLoadMore !== undefined, pastDue) : undefined} title="Subscriptions">
     {#if !rows}
         <div aria-busy="true" class="lu-saas-list lu-saas-list--loading"></div>
     {:else}

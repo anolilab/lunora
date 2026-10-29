@@ -72,7 +72,12 @@ empty copy that would read as "no subscriptions". And it pages with
 has one to copy: `adminSubscriptions` in `templates/saas/lunora/payment/index.ts`,
 read in `templates/saas/src/routes/admin.tsx`. Read it with `paginatedQuery` from `@lunora/svelte`,
 pass the loaded rows as `rows`, and pass `onLoadMore` while more pages remain;
-the totals in the header then say they cover only the rows loaded. The
+the paying total in the header then says it covers only the rows loaded. A
+newest-first page leaves an older tenant in dunning out of sight, so pass every
+past-due subscription as `pastDue` (`{ more, rows }`): they are listed first
+whatever page they fall on, and the past-due count is the whole table's. The
+template reads them with `adminPastDueSubscriptions`, over the `by_state` index
+`@lunora/payment` declares on `payment_subscriptions`. The
 organisation names come from the `organizations` prop, so the query does not
 need to know the kit's tenancy table exists.
 

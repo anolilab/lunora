@@ -202,6 +202,25 @@ describe("adminSubscriptions", () => {
         errors.mockRestore();
     });
 
+    it("lists a past-due tenant first although no loaded page holds it", () => {
+        const older = adminSubscription("org-Globex", "past_due");
+
+        render(
+            <AdminSubscriptions
+                onLoadMore={vi.fn()}
+                organizations={[organization("Acme", "pro", 3), organization("Globex", "pro", 3)]}
+                pastDue={{ more: false, rows: [older] }}
+                plans={PLANS}
+                rows={[adminSubscription("org-Acme", "active")]}
+            />,
+        );
+
+        const rows = screen.getAllByRole("row").slice(1);
+
+        expect(rows.map((row) => row.querySelector("td")?.firstChild?.textContent)).toStrictEqual(["Globex", "Acme"]);
+        expect(screen.getByText("1 paying in the 1 loaded · 1 past due")).toBeInTheDocument();
+    });
+
     it("marks itself busy while the query is undefined", () => {
         const { container } = render(<AdminSubscriptions organizations={undefined} plans={PLANS} rows={undefined} />);
 

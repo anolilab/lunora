@@ -299,6 +299,15 @@ interface OverviewPayload {
 }
 ```
 
+### `PastDueSubscriptions` (interface)
+
+```ts
+interface PastDueSubscriptions {
+    more: boolean;
+    rows: ReadonlyArray<AdminSubscriptionRow>;
+}
+```
+
 ### `Plan` (interface)
 
 ```ts
@@ -719,7 +728,7 @@ const subscriptionTotals: (subscriptions: ReadonlyArray<AdminSubscriptionRow>) =
 ### `subscriptionsSubtitle` (const)
 
 ```ts
-const subscriptionsSubtitle: (subscriptions: ReadonlyArray<AdminSubscriptionRow>, hasMore: boolean) => string;
+const subscriptionsSubtitle: (subscriptions: ReadonlyArray<AdminSubscriptionRow>, hasMore: boolean, pastDue?: PastDueSubscriptions) => string;
 ```
 
 ### `userActions` (const)
@@ -744,6 +753,12 @@ const userLabel: (user: Pick<AdminUserRow, "email" | "name">) => string;
 
 ```ts
 const userStatusLabel: (user: AdminUserRow, now: number) => string;
+```
+
+### `withPastDueFirst` (const)
+
+```ts
+const withPastDueFirst: (pastDue: ReadonlyArray<AdminSubscriptionRow>, paged: ReadonlyArray<AdminSubscriptionRow>) => ReadonlyArray<AdminSubscriptionRow>;
 ```
 
 ## `@lunora/saas-ui/react`
@@ -784,7 +799,7 @@ interface AdminOrganizationsProps {
 ### `AdminSubscriptions` (const)
 
 ```ts
-const AdminSubscriptions: ({ onLoadMore, organizations, plans, rows }: AdminSubscriptionsProps) => ReactNode;
+const AdminSubscriptions: ({ onLoadMore, organizations, pastDue, plans, rows: paged }: AdminSubscriptionsProps) => ReactNode;
 ```
 
 ### `AdminSubscriptionsProps` (interface)
@@ -793,6 +808,7 @@ const AdminSubscriptions: ({ onLoadMore, organizations, plans, rows }: AdminSubs
 interface AdminSubscriptionsProps {
     onLoadMore?: () => void;
     organizations: ReadonlyArray<OrganizationRow> | undefined;
+    pastDue?: PastDueSubscriptions;
     plans: ReadonlyArray<Plan>;
     rows: ReadonlyArray<AdminSubscriptionRow> | undefined;
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AdminSubscriptionRow } from "../../src/core/admin-subscriptions";
-import { selectSubscriptions, subscriptionsSubtitle, subscriptionStateOptions, subscriptionTotals } from "../../src/core/admin-subscriptions";
+import { selectSubscriptions, subscriptionsSubtitle, subscriptionStateOptions, subscriptionTotals, withPastDueFirst } from "../../src/core/admin-subscriptions";
 import type { AdminUserRow, AdminUsersClient, AuthClientResult } from "../../src/core/admin-users";
 import {
     adminUsersPage,
@@ -464,6 +464,23 @@ describe("selectSubscriptions", () => {
         expect(new Set(listed.map((row) => row.key))).toStrictEqual(new Set(["polar:sub_1", "stripe:sub_1"]));
         expect(listed.map((row) => row.id)).toStrictEqual(["sub_1", "sub_1"]);
         expect(selectSubscriptions(rows, organizations, plans, { search: "SUB_1", state: "all" })).toHaveLength(2);
+    });
+
+    it("lists every past-due subscription first, once, whatever page it is on", () => {
+        const older = subscription({ referenceId: "org-z", state: "past_due" });
+        const paged = [subscription({ referenceId: "org-a" }), subscription({ referenceId: "org-b", state: "past_due" })];
+        const pastDue = [older, paged[1]!];
+
+        expect(withPastDueFirst(pastDue, paged).map((row) => row.referenceId)).toStrictEqual(["org-z", "org-b", "org-a"]);
+        expect(withPastDueFirst([], paged)).toStrictEqual(paged);
+    });
+
+    it("counts past-due across the whole table when the dunning read is given", () => {
+        const paged = [subscription({ referenceId: "org-a" }), subscription({ referenceId: "org-b" })];
+        const rows = [subscription({ referenceId: "org-z", state: "past_due" })];
+
+        expect(subscriptionsSubtitle(paged, true, { more: false, rows })).toBe("2 paying in the 2 loaded · 1 past due");
+        expect(subscriptionsSubtitle(paged, false, { more: true, rows })).toBe("2 paying · 1+ past due");
     });
 
     it("says the totals cover only the loaded rows while more pages remain", () => {

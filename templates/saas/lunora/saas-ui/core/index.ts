@@ -10,8 +10,15 @@ export type { ActivityEntry, ActivityGroup } from "./activity";
 export { groupActivityByDay } from "./activity";
 export type { AdminView, OrganizationSort } from "./admin-organizations";
 export { adminTotals, DEFAULT_ADMIN_VIEW, planOptions, selectOrganizations } from "./admin-organizations";
-export type { AdminSubscriptionRow, SubscriptionListing, SubscriptionsView } from "./admin-subscriptions";
-export { DEFAULT_SUBSCRIPTIONS_VIEW, selectSubscriptions, subscriptionsSubtitle, subscriptionStateOptions, subscriptionTotals } from "./admin-subscriptions";
+export type { AdminSubscriptionRow, PastDueSubscriptions, SubscriptionListing, SubscriptionsView } from "./admin-subscriptions";
+export {
+    DEFAULT_SUBSCRIPTIONS_VIEW,
+    selectSubscriptions,
+    subscriptionsSubtitle,
+    subscriptionStateOptions,
+    subscriptionTotals,
+    withPastDueFirst,
+} from "./admin-subscriptions";
 export type {
     AdminUserRow,
     AdminUsersClient,

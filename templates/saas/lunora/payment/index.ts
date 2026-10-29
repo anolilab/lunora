@@ -5,8 +5,8 @@
  * you own and edit it. Re-export the functions you want from your `lunora/`
  * entry so codegen picks them up — they surface in the generated `api` as
  * `payment/checkout`, `payment/check`, `payment/portal` and
- * `payment/mySubscriptions` — plus `payment/adminSubscriptions`, which this kit
- * adds for its platform admin — and `payment/track` in `internal`, for server
+ * `payment/mySubscriptions` — plus `payment/adminSubscriptions` and
+ * `payment/adminPastDueSubscriptions`, which this kit adds for its platform admin — and `payment/track` in `internal`, for server
  * code only.
  *
  * The functions are provider-agnostic: they call `ctx.payments.*` which is
@@ -461,6 +461,20 @@ const requirePlatformAdmin = async (ctx: { auth: { getIdentity: () => Promise<{ 
     }
 };
 
+/**
+ * The platform admin's cross-tenant billing reads: a platform admin, on the root
+ * shard. A tenant shard holds an empty copy of the billing tables, so a read there
+ * would show "no subscriptions" rather than fail — refuse it as `billingReference`
+ * does.
+ */
+const requireBillingAdmin = async (ctx: Parameters<typeof requirePlatformAdmin>[0] & { shardKey: string }): Promise<void> => {
+    await requirePlatformAdmin(ctx);
+
+    if (ctx.shardKey !== ROOT_SHARD) {
+        throw new LunoraError("FORBIDDEN", "billing runs on the root shard — call it without a shardKey");
+    }
+};
+
 /** The most rows one admin subscription page may ask for, whatever `numItems` says. */
 const ADMIN_SUBSCRIPTIONS_PAGE_MAX = 100;
 
@@ -486,14 +500,7 @@ const pageCursor = v.optional(v.union(v.string(), v.null()));
 export const adminSubscriptions = query
     .input({ paginationOpts: v.object({ cursor: pageCursor, endCursor: pageCursor, numItems: v.number() }) })
     .query(async ({ args: { paginationOpts }, ctx }): Promise<PaginationResult<SubscriptionRow>> => {
-        await requirePlatformAdmin(ctx);
-
-        // A tenant shard holds an empty copy of the billing tables, so a read there
-        // would show "no subscriptions" rather than fail — refuse it as
-        // `billingReference` does.
-        if (ctx.shardKey !== ROOT_SHARD) {
-            throw new LunoraError("FORBIDDEN", "billing runs on the root shard — call it without a shardKey");
-        }
+        await requireBillingAdmin(ctx);
 
         const numItems = Math.min(Math.max(Math.floor(paginationOpts.numItems), 1), ADMIN_SUBSCRIPTIONS_PAGE_MAX);
         const result = await ctx.db
@@ -503,6 +510,27 @@ export const adminSubscriptions = query
 
         return { ...result, page: result.page.map((document) => toSubscriptionRow(document)) };
     });
+
+/** The most past-due subscriptions the dunning read returns. */
+const PAST_DUE_MAX = 100;
+
+/**
+ * Every `past_due` subscription, whatever page it would fall on — the dunning
+ * list the admin table puts first. `adminSubscriptions` pages newest first, so an
+ * older tenant in dunning would otherwise only appear once the admin had paged
+ * back to it; this reads them through the `by_state` index instead, a bounded
+ * read however large the table is. `more` says the cap was hit.
+ */
+export const adminPastDueSubscriptions = query.query(async ({ ctx }): Promise<{ more: boolean; rows: SubscriptionRow[] }> => {
+    await requireBillingAdmin(ctx);
+
+    const rows = await ctx.db
+        .query("payment_subscriptions")
+        .withIndex("by_state", (q) => q.eq("state", "past_due"))
+        .take(PAST_DUE_MAX + 1);
+
+    return { more: rows.length > PAST_DUE_MAX, rows: rows.slice(0, PAST_DUE_MAX).map((document) => toSubscriptionRow(document)) };
+});
 
 /**
  * Apply a verified provider webhook. Called by the `POST /payment/webhook` HTTP

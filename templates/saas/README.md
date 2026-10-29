@@ -114,8 +114,11 @@ refuse the user you are impersonating, so `/admin` is the one place you cannot
 stop from.
 
 Subscriptions are read from the root shard by `payment.adminSubscriptions`,
-50 at a time, newest first; **Load more** fetches the next page. While pages
-remain, the header's totals say they cover only the rows loaded.
+50 at a time, newest first; **Load more** fetches the next page. Every past-due
+subscription comes from `payment.adminPastDueSubscriptions`, a read over the
+`by_state` index, and is listed first whatever page it falls on, so the past-due
+count is the whole table's; while pages remain, the paying count says it covers
+only the rows loaded.
 
 ## Before you deploy
 
