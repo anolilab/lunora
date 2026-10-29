@@ -90,7 +90,7 @@ const deleteExpired = async (ctx: MutationCtx, roomId: string, cutoff: number, l
         .filter((row) => (row["lastSeen"] as number) <= cutoff);
     const stale = limit === undefined ? await expired.collect() : await expired.take(limit);
 
-    await Promise.all(stale.map((row) => ctx.db.delete(row["_id"] as never)));
+    await Promise.all(stale.map((row) => ctx.db.delete(PRESENCE_TABLE, row["_id"] as never)));
 
     return stale.length;
 };
@@ -163,7 +163,7 @@ export const heartbeat = mutation
         };
 
         if (existing) {
-            await ctx.db.patch(existing["_id"] as never, row);
+            await ctx.db.patch(PRESENCE_TABLE, existing["_id"] as never, row);
         } else {
             // A new session is the one moment the room grows, and the only write
             // that is certain to happen: reclaim what the room has outgrown first.

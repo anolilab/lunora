@@ -205,14 +205,17 @@ const organizations = (ctx: MutationCtx | QueryCtx): OrganizationsReader =>
  * matching `ctx.db.insert("<table>", …)` inside a procedure — an insert hidden
  * behind a helper is reported as `table_without_insert`.
  */
-const activityRow = (entry: {
-    action: string;
-    actorId: string;
-    meta?: Record<string, unknown>;
-    organizationId: string;
-    subjectId?: string;
-    subjectType: string;
-}): Record<string, unknown> => ({ ...entry, createdAt: Date.now() });
+const activityRow = (
+    now: number,
+    entry: {
+        action: string;
+        actorId: string;
+        meta?: Record<string, unknown>;
+        organizationId: string;
+        subjectId?: string;
+        subjectType: string;
+    },
+): Record<string, unknown> => ({ ...entry, createdAt: now });
 
 /** Joins an archived project's slug to its id, freeing the slug. `~` never survives {@link toSlug}. */
 const ARCHIVED_SLUG_MARK = "~archived~";
@@ -351,14 +354,14 @@ export const createProject = mutation
         if (clash) {
             const clashId = clash["_id"] as Id<"saas_projects">;
 
-            await ctx.db.patch(clashId, { slug: `${slug}${ARCHIVED_SLUG_MARK}${String(clashId)}` });
+            await ctx.db.patch(SAAS_PROJECTS_TABLE, clashId, { slug: `${slug}${ARCHIVED_SLUG_MARK}${String(clashId)}` });
         }
 
         const projectId = await ctx.db.insert("saas_projects", { createdBy: userId, name, organizationId, slug });
 
         await ctx.db.insert(
             "saas_activity",
-            activityRow({
+            activityRow(ctx.now, {
                 action: "project.created",
                 actorId: userId,
                 meta: { name },
@@ -382,7 +385,7 @@ export const archiveProject = mutation
     .use(rateLimit(limiter, "project", { key: byCaller }))
     .mutation(async ({ args: { projectId }, ctx }): Promise<void> => {
         const { organizationId, userId } = await requireWriter(ctx);
-        const project = await ctx.db.get(projectId);
+        const project = await ctx.db.get(SAAS_PROJECTS_TABLE, projectId);
 
         // The shard gate already confines this call to the caller's own tenant;
         // the explicit check is what makes that a guarantee rather than an
@@ -395,10 +398,10 @@ export const archiveProject = mutation
             return;
         }
 
-        await ctx.db.patch(projectId, { archivedAt: Date.now() });
+        await ctx.db.patch(SAAS_PROJECTS_TABLE, projectId, { archivedAt: ctx.now });
         await ctx.db.insert(
             "saas_activity",
-            activityRow({
+            activityRow(ctx.now, {
                 action: "project.archived",
                 actorId: userId,
                 meta: { name: project.name },
@@ -468,7 +471,7 @@ export const syncOrganization = internalMutation
     })
     .mutation(async ({ args: { name, organizationId, plan, seats, slug, status }, ctx }): Promise<void> => {
         const existing = await organizations(ctx).findFirst({ where: { organizationId } });
-        const updatedAt = Date.now();
+        const updatedAt = ctx.now;
 
         if (existing?.["status"] === "deleted") {
             return;
@@ -478,7 +481,7 @@ export const syncOrganization = internalMutation
             const slug = `${DELETED_SLUG_PREFIX}${organizationId}`;
 
             if (existing) {
-                await ctx.db.patch(existing["_id"] as Id<"saas_organizations">, { slug, status, updatedAt });
+                await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"] as Id<"saas_organizations">, { slug, status, updatedAt });
             } else {
                 await ctx.db.insert("saas_organizations", { name, organizationId, plan: plan ?? "free", seats: seats ?? 0, slug, status, updatedAt });
             }
@@ -491,7 +494,7 @@ export const syncOrganization = internalMutation
             // read from `ctx.db` is `Doc<"saas_organizations">` in your project,
             // where this cast is the identity. The item itself compiles against the
             // base, table-generic context, which cannot know that.
-            await ctx.db.patch(existing["_id"] as Id<"saas_organizations">, {
+            await ctx.db.patch(SAAS_ORGANIZATIONS_TABLE, existing["_id"] as Id<"saas_organizations">, {
                 name,
                 slug,
                 updatedAt,

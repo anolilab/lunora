@@ -1,7 +1,7 @@
 import { webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/internal";
 
 const app = httpRouter();
 

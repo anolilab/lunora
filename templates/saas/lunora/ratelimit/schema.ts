@@ -16,10 +16,10 @@
  *
  * The `by_key` index is what `createDbStore` looks rows up by; keep it.
  */
-import type { Middleware } from "lunorash/server";
-import { defineSchemaExtension, defineTable, definePlugin, v } from "lunorash/server";
-import { createDbStore, RateLimiter } from "lunorash/ratelimit";
 import type { RateLimitConfigMap } from "lunorash/ratelimit";
+import { createDbStore, RateLimiter } from "lunorash/ratelimit";
+import type { Middleware } from "lunorash/server";
+import { definePlugin, defineSchemaExtension, defineTable, v } from "lunorash/server";
 
 /**
  * Named limits this app enforces. Edit freely — add your own named limits and
@@ -50,7 +50,7 @@ export const makeRateLimiter = (ctx: { db: unknown }): RateLimiter<LimitName> =>
 /**
  * Middleware that injects `ctx.api.ratelimit` — a per-request limiter helper —
  * for any procedure that opts in with `.use(ratelimit.middleware)`. Convention
- * (see `@lunora/server` `definePlugin`): helpers hang off `ctx.api.<key>`.
+ * (see `definePlugin`): helpers hang off `ctx.api.<key>`.
  */
 const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { api: Record<string, unknown>; db: unknown }> = ({ ctx, next }) =>
     next({
@@ -62,9 +62,9 @@ const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { a
 
 /**
  * The rate-limit plugin: a schema extension (`ratelimit_buckets`) + middleware
- * (`ctx.api.ratelimit`). `lunora/schema.ts` wires the extension in via the
- * managed `.extend(ratelimit.extension)` block; attach the middleware yourself
- * with `c.mutation.use(ratelimit.middleware)`.
+ * (`ctx.api.ratelimit`). `lunora/schema.ts` wires the extension in with
+ * `.extend(ratelimit.extension)`; attach the middleware yourself with
+ * `c.mutation.use(ratelimit.middleware)`.
  */
 export const ratelimit = definePlugin("ratelimit", {
     extension: defineSchemaExtension("ratelimit", {
