@@ -56,6 +56,30 @@ const fanValue = (callbacks: Iterable<(value: unknown) => void>, value: unknown)
     }
 };
 
+/**
+ * A held value notification, its callbacks and value taken now: one an earlier callback subscribes
+ * already has the value from the subscribe's replay, and one it unsubscribes must not hear it.
+ * Each callback is checked as it comes: once an earlier one has moved the value on (an optimistic
+ * write, a sign-out blanking it), the newer value has already reached every listener, and the
+ * batch's would land after it as a stale one.
+ */
+const heldValueNotification = (state: SubscriptionState): (() => void) => {
+    const callbacks = [...state.callbacks];
+    const value = state.lastValue;
+
+    return () => {
+        for (const callback of callbacks) {
+            if (state.lastValue !== value) {
+                return;
+            }
+
+            if (state.callbacks.has(callback)) {
+                fanValue([callback], value);
+            }
+        }
+    };
+};
+
 /** Run `notify` now, or with the rest of the batch when inside {@link withDeferredNotifications}. */
 export const deferNotification = (notify: () => void): void => {
     if (deferredNotifications === undefined) {
@@ -124,29 +148,18 @@ export const withDeferredNotifications = (apply: () => void, live: () => boolean
     } finally {
         deferredNotifications = undefined;
 
-        // Callbacks are taken before any runs: one an earlier callback subscribes already has
-        // the value from the subscribe's replay, and one it unsubscribes must not hear it.
-        const pending = [...moved].map((item) => (typeof item === "function" ? item : ([item, [...item.callbacks], item.lastValue] as const)));
+        const pending = [...moved].map((item) => (typeof item === "function" ? item : heldValueNotification(item)));
 
-        for (const item of pending) {
+        for (const notify of pending) {
             // A callback that closed the client ends the batch, as a closed socket ends a stream of frames.
             if (!live()) {
                 break;
             }
 
-            if (typeof item === "function") {
-                try {
-                    item();
-                } catch {
-                    /* user callback threw — ignore */
-                }
-            } else {
-                const [state, callbacks, value] = item;
-
-                fanValue(
-                    callbacks.filter((callback) => state.callbacks.has(callback)),
-                    value,
-                );
+            try {
+                notify();
+            } catch {
+                /* user callback threw — ignore */
             }
         }
     }

@@ -194,4 +194,38 @@ describe("refresh batch", () => {
 
         client.close();
     });
+
+    it("leaves a listener on the value an earlier listener moved it to, not the batch's older one", async () => {
+        expect.assertions(1);
+
+        const { client, ids, socket } = await twoSubscriptions();
+        const heard: unknown[] = [];
+
+        // Two listeners on `todos.list`: the first replaces the value optimistically as it hears the batch's.
+        client.subscribe(fnRef("todos.list"), {}, (value) => {
+            if (value === "a") {
+                client
+                    .mutation(
+                        fnRef("todos.edit"),
+                        {},
+                        {
+                            optimisticUpdate: (store) => {
+                                store.setQuery(fnRef("todos.list"), {}, "edited");
+                            },
+                        },
+                    )
+                    .catch(() => undefined);
+            }
+        });
+        client.subscribe(fnRef("todos.list"), {}, (value) => heard.push(value));
+
+        socket?.receive({ type: "batchStart" });
+        socket?.receive({ data: 1, id: ids[0], type: "data" });
+        socket?.receive({ data: "a", id: ids[1], type: "data" });
+        socket?.receive({ type: "batchEnd" });
+
+        expect(heard.at(-1)).toBe("edited");
+
+        client.close();
+    });
 });

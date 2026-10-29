@@ -32,7 +32,7 @@ import {
     RESUBSCRIBE_CONCURRENCY,
     SOCKET_STABLE_MS,
 } from "./client-tuning";
-import { deriveWsUrl, joinUrl, parseSocketUrl, serializeSocketUrl, withQuery } from "./client-urls";
+import { deriveWsUrl, joinUrl, parseSocketUrl, serializeSocketUrl } from "./client-urls";
 import type { ConnectionStatus, ManagedSocketState, ShardConnection, WSState } from "./connection-state";
 import { connectionKey, decodeServerFrame, flushPendingStreams, isLiveStatus, sendOn } from "./connection-state";
 import { TabCoordinator } from "./cross-tab";
@@ -8622,11 +8622,17 @@ class LunoraClient {
         for (const conn of this.connections.values()) {
             const { connectionId } = conn;
 
+            // `shard=` is kept even when empty, as on the upgrade URL: an explicit `""` names its own shard.
             if (inPlace && token !== null && fetchImpl !== undefined && conn.socket !== undefined && connectionId !== undefined && conn.retired !== true) {
-                sendControl(fetchImpl, joinUrl(this.url, withQuery(SOCKET_REAUTH_PATH, { shard: conn.shardKey })), JSON.stringify({ connectionId }), {
-                    authorization: `Bearer ${token}`,
-                    "content-type": "application/json",
-                })
+                sendControl(
+                    fetchImpl,
+                    joinUrl(this.url, conn.shardKey === undefined ? SOCKET_REAUTH_PATH : `${SOCKET_REAUTH_PATH}?shard=${encodeURIComponent(conn.shardKey)}`),
+                    JSON.stringify({ connectionId }),
+                    {
+                        authorization: `Bearer ${token}`,
+                        "content-type": "application/json",
+                    },
+                )
                     // Only the route's own `{ ok: true }` counts: a catch-all 200 (an SPA fallback, a proxy) did not refresh anything.
                     .then(({ text }) => (JSON.parse(text) as { ok?: unknown } | null)?.ok === true)
                     .catch(() => false)

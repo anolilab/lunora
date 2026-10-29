@@ -4,7 +4,7 @@ import { LunoraClient } from "../src/lunora-client";
 import { createSocketHarness, fnRef, jsonResponse, settle } from "./lib/harness";
 
 /** A React Native-style client (bearer on the upgrade) with one open, identified socket. */
-const openClient = async (reauthStatus: number, reauthBody?: unknown, hang = false) => {
+const openClient = async (reauthStatus: number, reauthBody?: unknown, hang = false, shardKey?: string) => {
     const { sockets, WebSocket } = createSocketHarness();
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
         if (!(input as string).includes("/_lunora/ws/reauth")) {
@@ -32,7 +32,7 @@ const openClient = async (reauthStatus: number, reauthBody?: unknown, hang = fal
     });
 
     client.setAuthToken("token-1", "user-1");
-    client.subscribe(fnRef("todos.list"), {}, () => undefined);
+    client.subscribe(fnRef("todos.list"), {}, () => undefined, shardKey === undefined ? {} : { shardKey });
     await settle();
     sockets[0]?.open();
     sockets[0]?.receive({ connectionId: "conn-1", subject: "user-1", type: "identity" });
@@ -123,6 +123,19 @@ describe("socket re-authentication on a token refresh", () => {
         await vi.advanceTimersByTimeAsync(10_000);
 
         expect(sockets[0]?.readyState).toBe(3);
+
+        client.close();
+    });
+
+    it("names an explicit empty shard key, as the socket's own upgrade did", async () => {
+        expect.assertions(1);
+
+        const { client, reauthCalls } = await openClient(200, undefined, false, "");
+
+        client.setAuthToken("token-2", "user-1");
+        await settle();
+
+        expect(reauthCalls()[0]?.[0]).toBe("http://app.test/_lunora/ws/reauth?shard=");
 
         client.close();
     });
