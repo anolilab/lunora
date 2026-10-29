@@ -15,13 +15,14 @@ builds only, the push-queue registry, the `onEmail` agent definitions and the mo
 generated workflow and agent `WorkflowEntrypoint` classes; on the startup gate's fixture (now with a
 queue, a workflow and an agent) that cut the lazy eager graph from 979 modules / 5,982 KiB to 581 /
 3,693 KiB. Phase 3 (§3.2) moves the builder-wired integration SDKs (`@cloudflare/playwright`,
-the payment provider SDKs, the Hyperdrive drivers, `@modelcontextprotocol/sdk` behind
-`@lunora/mcp`'s HTTP handlers) behind loaders the integrations await on first use, in eager and
-lazy builds alike; with those integrations wired, the gate fixture's lazy graph went from 1,299
-modules / 9,100 KiB to 808 / 4,801 KiB. Still open: the lazy registry as
-the default, lighter shared builders (§8 last paragraph), the `@lunora/agent` barrel that the shard
-imports for `ctx.agents` (§3.1), and extending the smoke-load to eager
-builds now that `authModule.ts` and the spec modules evaluate on the first event.
+the payment provider SDKs, the Hyperdrive drivers including `mysql2` for `.hyperdriveGlobal`, and
+`@modelcontextprotocol/sdk` behind every `@lunora/mcp` server builder) behind loaders the
+integrations await on first use, in eager and lazy builds alike; with those integrations wired, the
+gate fixture's lazy graph went from 1,299 modules / 9,100 KiB to 808 / 4,801 KiB. The smoke-load
+of a lazy build also evaluates every package the app loads with a literal `import()` (§3.2).
+Still open: the lazy registry as the default, lighter shared builders (§8 last paragraph), the
+`@lunora/agent` barrel that the shard imports for `ctx.agents` (§3.1), and extending the smoke-load
+to eager builds now that `authModule.ts` and the spec modules evaluate on the first event.
 The email-guard prerequisite (§8) has shipped (#1159). Measurement scripts are not committed; §6 says
 what to add.
 
@@ -186,20 +187,31 @@ app's own entry, because the injection contract was a value the entry had to bui
 `import postgres from "postgres"` feeding the `defineApp()` thunks). A lazy registry cannot reach that
 edge, so the fix is an API change, and it applies to eager builds too:
 
-| Integration                                                                 | Before                                              | Now                                                                                     |
-| --------------------------------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `.browser()` / `createBrowser`                                              | `launch` / `connect` / `sessions` values            | one `playwright: () => import("@cloudflare/playwright")` loader                         |
-| `.payment()` / `create{Stripe,Polar,Autumn,Creem,DodoPayments}Adapter`      | `client` instance                                   | `client: () => Client \| Promise<Client>`; the SDK is `import()`ed inside the loader    |
-| `.hyperdrive()` / `fromPostgresJs`, `fromNodePg`, `fromMysql2`              | a driver instance                                   | a loader returning the driver (`pg` may `await connect()` in it)                        |
-| `@lunora/mcp/worker` `createMcpFetchHandler`, `createAuthedMcpFetchHandler` | imported `Server` and the transport at module scope | `import()` the server module per request; `serveStateless` loads the transport per call |
+| Integration                                                                  | Before                                               | Now                                                                                     |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `.browser()` / `createBrowser`                                               | `launch` / `connect` / `sessions` values             | one `playwright: () => import("@cloudflare/playwright")` loader                         |
+| `.payment()` / `create{Stripe,Polar,Autumn,Creem,DodoPayments}Adapter`       | `client` instance                                    | `client: () => Client \| Promise<Client>`; the SDK is `import()`ed inside the loader    |
+| `.hyperdrive()` / `fromPostgresJs`, `fromNodePg`, `fromMysql2`               | a driver instance                                    | a loader returning the driver (`pg` may `await connect()` in it)                        |
+| `@lunora/mcp/worker` `createMcpFetchHandler`, `createAuthedMcpFetchHandler`  | imported `Server` and the transport at module scope  | `import()` the server module per request; `serveStateless` loads the transport per call |
+| `createToolServer`, `createFunctionMcpServer` (and the docs / local servers) | built a `Server` synchronously                       | async: `Promise<Server>`, the SDK `import()`ed when the server is built                 |
+| `createPaidMcpServer`                                                        | compiled each tool's schema with the SDK at `tool()` | same sync API; the first request compiles the schemas and builds the server             |
+| `.hyperdriveGlobal` / `buildMysqlExec`, `createMysqlGlobalCtxDb`             | a `mysql2` connection, flags checked at construction | a loader; the `CLIENT_FOUND_ROWS` check runs when it resolves, before any statement     |
+| `createAutumnFeatures`                                                       | `client` instance                                    | `client` loader, like `createAutumnAdapter`                                             |
 
 The loaders run on the first call that needs the SDK and are memoised (`shared/lazy-value.ts`); a
 rejected load reaches that caller unchanged and is not cached, so the next call retries. Each
 `import()` keeps a string-literal specifier, so a missing package still fails `lunora build` at
 bundle time (esbuild: `Could not resolve`). What moves to first use is only an SDK whose module
-evaluation throws in workerd. The pre-deploy smoke-load does not cover that: the loaders are
-closures inside app-supplied thunks that generated code never names, and they need the binding
-or secret the thunk reads.
+evaluation throws in workerd. The loaders themselves cannot be smoke-run (they are closures inside
+app-supplied thunks that need the binding or secret the thunk reads), but the module behind each is
+named by its literal specifier. So the pre-deploy smoke-load (`packages/cli/src/util/lazy-smoke-load.ts`)
+collects the package specifiers of every literal `import()` in the files the Worker reaches (the
+entry, what it imports, and the schema directory without `_generated`; `integration-modules.ts`),
+keeps those installed in the project, and `import()`s each one in workerd next to the lazy function
+modules. It runs in eager builds too when there is at least one. Not covered: an SDK a package loads
+for itself (the MCP SDK inside `@lunora/mcp`; its workerd suite is the check there), and every
+project the smoke-load already skips (containers, a Hyperdrive binding with no local database, which
+includes the gate fixture).
 
 Durable Object input gate: `ctx.browser`, `ctx.payments` and `ctx.sql` are ActionCtx-only, and the
 loaders run inside the action body, immediately before the network call the action was about to
@@ -214,7 +226,7 @@ mutation's gated span, and completes there (workerd delivers I/O begun inside th
 already awaits the Postgres round trip). No load starts outside a gate and is awaited inside one,
 which is the reset 475a5d927 guards against. Caching the exec across requests would break this.
 
-Measured with `pnpm run worker-startup:check` (the fixture now wires all four, through loaders),
+Measured with `pnpm run worker-startup:check` (the fixture wires all four, through loaders),
 local `build:prod` (modules / KiB in the static graph). The lazy "before" ran on the old package
 builds. The eager "before" ran the old wiring against the new builds, so its MCP figure is about
 5 modules low:
@@ -233,15 +245,21 @@ the count over-approximates. The gate's forbidden-SDK check follows only modules
 the output (or are pure re-export barrels), which is what fails if any of the four SDKs is evaluated
 at startup again; reverting the `createMcpFetchHandler` deferral turns it red.
 
-Remaining eager:
+The fixture then grew to cover the rest: `.hyperdriveGlobal` on MySQL (a
+`.global({ backend: "hyperdrive" })` table, with `mysql2` added to the forbidden SDKs) and every MCP
+server builder (`createToolServer` and `createFunctionMcpServer` awaited in `fetch`, a
+`createPaidMcpServer` given a tool at module scope). The fixture has to call each builder: one it
+never calls is dropped by esbuild, and its static SDK import would go unseen. With the extended
+fixture the eager graph is 1,239 modules / 7,080 KiB and the lazy one 824 / 4,668 KiB (the new
+baseline); the module counts rose by the `.hyperdriveGlobal` store, and the bytes fell because the
+`@lunora/mcp/worker` barrel no longer has static SDK edges. Restoring the synchronous
+`createToolServer` or `createPaidMcpServer` (1,377 / 1,387 modules), or a static `mysql2` import in
+the entry, turns the gate red.
 
-- `createToolServer`, `createPaidMcpServer`, `createFunctionMcpServer` return or build an MCP `Server`
-  synchronously, so an app that uses them still evaluates the SDK at startup. Deferring them means
-  an async constructor, a separate change.
-- `buildMysqlExec` (`.hyperdriveGlobal` on MySQL) still takes the raw `mysql2` connection: it checks
-  the connection's `flags` synchronously (`assertFoundRows`). The Postgres global path takes a
-  `fromPostgresJs` client and is lazy.
-- `createAutumnFeatures` takes its client directly; it is not a builder-wired adapter.
+`.hyperdriveGlobal` and the input gate: `buildMysqlExec(load)` loads nothing when it is built, for
+the reason given above for `buildPgExec(fromPostgresJs(load))`; its first statement starts the
+`import("mysql2/promise")` inside the mutation's gated span. A connection that lacks
+`CLIENT_FOUND_ROWS` fails that statement and is not kept, so every later statement fails too.
 
 ## 4. Other concerns checked
 
