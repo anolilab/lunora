@@ -16,9 +16,9 @@ import baseOptions from "./emit-app-options";
  * Every other emit test asserts substrings, which is how the emitted resolver once
  * shipped without a credential expiry. So this suite lifts the resolver out of the
  * emitted `app.ts`, compiles it, and CALLS it. The claims themselves come from
- * `@lunora/auth`'s `identityFromSession` (tested there, shared with the DO wiring);
- * what is asserted here is that the emitted code hands it the session for the
- * request and returns its answer.
+ * `@lunora/auth`'s `resolveSessionIdentity` (tested there, shared with the DO wiring);
+ * what is asserted here is that the emitted code hands it the auth instance and the
+ * request headers and returns its answer.
  */
 
 type EmittedResolver = (request: Request) => Promise<Record<string, unknown> | null>;
@@ -28,11 +28,11 @@ const scratch = mkdtempSync(join(tmpdir(), "lunora-emit-app-auth-"));
 /**
  * Compile the emitted D1-mode `resolveIdentity` and load it as a real module.
  *
- * `getAuth` and `identityFromSession` are closure variables in the generated worker
+ * `getAuth` and `resolveSessionIdentity` are closure variables in the generated worker
  * (the latter destructured from the lazily imported auth module), so the wrapper
  * takes them as parameters — they are the resolver's only free bindings.
  */
-const emittedD1Resolver = async (getAuth: () => unknown, identityFromSession: (session: unknown) => unknown): Promise<EmittedResolver> => {
+const emittedD1Resolver = async (getAuth: () => unknown, resolveSessionIdentity: (auth: unknown, headers: Headers) => unknown): Promise<EmittedResolver> => {
     const source = emitApp({ ...baseOptions, hasAuth: true });
     const match = /options\.resolveIdentity = (async \(request\) => \{[\s\S]*?\n {12}\});/u.exec(source);
 
@@ -49,17 +49,17 @@ const emittedD1Resolver = async (getAuth: () => unknown, identityFromSession: (s
     // there is no restructuring that removes the sink and keeps the test. The
     // suppression is scoped to this one query on this one line.
     // codeql[js/bad-code-sanitization]
-    const compiled = transformSync(`export const build = (getAuth, identityFromSession) => (${match[1]});`, { loader: "ts" }).code;
+    const compiled = transformSync(`export const build = (getAuth, resolveSessionIdentity) => (${match[1]});`, { loader: "ts" }).code;
 
     const file = join(scratch, `resolver-${randomUUID()}.mjs`);
 
     writeFileSync(file, compiled);
 
     const loaded = (await import(pathToFileURL(file).href)) as {
-        build: (getAuth: () => unknown, identityFromSession: (session: unknown) => unknown) => EmittedResolver;
+        build: (getAuth: () => unknown, resolveSessionIdentity: (auth: unknown, headers: Headers) => unknown) => EmittedResolver;
     };
 
-    return loaded.build(getAuth, identityFromSession);
+    return loaded.build(getAuth, resolveSessionIdentity);
 };
 
 const request = (): Request => new Request("https://app.example/_lunora/rpc", { headers: { cookie: "session=abc" } });
@@ -69,30 +69,27 @@ describe("emitApp — the emitted `.auth({ d1 })` identity resolver", () => {
         rmSync(scratch, { force: true, recursive: true });
     });
 
-    it("maps the session of the request's own headers through identityFromSession", async () => {
+    it("resolves the identity from the request's own headers through resolveSessionIdentity", async () => {
         expect.assertions(3);
 
-        const session = { session: { activeOrganizationId: "org-1" }, user: { id: "u1" } };
-        const getSession = vi.fn<(input: { headers: Headers }) => Promise<unknown>>(() => Promise.resolve(session));
-        const identityFromSession = vi.fn<(input: unknown) => unknown>(() => {
+        const auth = { api: {} };
+        const resolveSessionIdentity = vi.fn<(input: unknown, headers: Headers) => unknown>(() => {
             return { orgId: "org-1", userId: "u1" };
         });
-        const resolve = await emittedD1Resolver(() => {
-            return { api: { getSession } };
-        }, identityFromSession);
+        const resolve = await emittedD1Resolver(() => auth, resolveSessionIdentity);
 
         await expect(resolve(request())).resolves.toStrictEqual({ orgId: "org-1", userId: "u1" });
-        expect(getSession.mock.calls[0]?.[0].headers.get("cookie")).toBe("session=abc");
-        expect(identityFromSession).toHaveBeenCalledWith(session);
+        expect(resolveSessionIdentity.mock.calls[0]?.[0]).toBe(auth);
+        expect(resolveSessionIdentity.mock.calls[0]?.[1].get("cookie")).toBe("session=abc");
     });
 
     it("is anonymous while the auth instance is unavailable", async () => {
         expect.assertions(2);
 
-        const identityFromSession = vi.fn<(input: unknown) => unknown>();
-        const resolve = await emittedD1Resolver(() => undefined, identityFromSession);
+        const resolveSessionIdentity = vi.fn<(input: unknown) => unknown>();
+        const resolve = await emittedD1Resolver(() => undefined, resolveSessionIdentity);
 
         await expect(resolve(request())).resolves.toBeNull();
-        expect(identityFromSession).not.toHaveBeenCalled();
+        expect(resolveSessionIdentity).not.toHaveBeenCalled();
     });
 });

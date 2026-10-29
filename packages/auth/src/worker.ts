@@ -9,5 +9,5 @@ export { createAuth } from "./create-auth";
 export { authDiscoveryPathsFor, handleAuthDiscoveryRequest } from "./discovery";
 export { createDoAuthWiring } from "./do-wiring";
 export { handleAuthRequest } from "./handler";
-export { identityFromSession } from "./session-identity";
+export { resolveSessionIdentity } from "./session-identity";
 export { d1Executor } from "./sql-store";

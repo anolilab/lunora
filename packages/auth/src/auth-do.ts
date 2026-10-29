@@ -43,7 +43,7 @@ import { handleAuthRequest } from "./handler";
 import type { MoveOrder } from "./jurisdiction-move";
 import { handleMoveRequest, MOVE_PATH } from "./jurisdiction-move";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
-import { identityFromSession } from "./session-identity";
+import { resolveSessionIdentity } from "./session-identity";
 import type { SqlExecutor } from "./sql-store";
 
 /**
@@ -422,7 +422,7 @@ class LunoraAuthDO {
      * Resolve the identity behind a request's headers — the worker's
      * `resolveIdentity` in DO mode.
      *
-     * Answers the {@link identityFromSession} claims (shared with the D1 wiring, so
+     * Answers the {@link resolveSessionIdentity} claims (shared with the D1 wiring, so
      * moving `.auth({ d1 })` -> `.auth({ namespace })` keeps every claim RLS and
      * `ctx.auth.getIdentity()` read), or `{}` for an anonymous request; never the
      * session record itself. The narrow reply keeps the rest of the session material
@@ -433,12 +433,9 @@ class LunoraAuthDO {
             return Response.json({ error: "unauthorized" }, { status: 401 });
         }
 
-        const auth = this.#ensureReady();
         // The worker forwards the original request's headers, so the session cookie
         // arrives here intact.
-        const session = await auth.api.getSession({ headers: request.headers });
-
-        return Response.json(identityFromSession(session) ?? {});
+        return Response.json((await resolveSessionIdentity(this.#ensureReady(), request.headers)) ?? {});
     }
 
     /**

@@ -296,7 +296,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
               `        // Captured before the branch so the narrowing survives — reading
         // \`this.authDeclaration.namespace\` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
-        const { authDiscoveryPathsFor, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, identityFromSession } = deferred.auth;
+        const { authDiscoveryPathsFor, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
@@ -355,10 +355,11 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                     return null;
                 }
 
-                // \`identityFromSession\` is shared with the DO wiring, so both modes put
-                // the same claims (role, expiry, profile, active organization and team) on
-                // the identity, and it is unit-tested where this template cannot be.
-                return identityFromSession(await auth.api.getSession({ headers: (request as Request).headers }));
+                // \`resolveSessionIdentity\` is shared with the DO wiring, so both modes put
+                // the same claims (role, expiry, profile, and the active organization and
+                // team checked against membership) on the identity, and it is unit-tested
+                // where this template cannot be.
+                return resolveSessionIdentity(auth, (request as Request).headers);
             };
             const authInstance = getAuth();
 

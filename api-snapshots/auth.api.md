@@ -828,24 +828,6 @@ type SessionIdentity = {
 };
 ```
 
-### `SessionLike` (interface)
-
-```ts
-interface SessionLike {
-    session: {
-        activeOrganizationId?: unknown;
-        activeTeamId?: unknown;
-        expiresAt?: unknown;
-    };
-    user: {
-        email?: unknown;
-        id?: unknown;
-        name?: unknown;
-        role?: unknown;
-    };
-}
-```
-
 ### `SessionPolicy` (type)
 
 ```ts
@@ -1096,12 +1078,6 @@ const handleAuthDiscoveryRequest: (auth: LunoraAuth, request: Request) => Promis
 const handleAuthRequest: (auth: LunoraAuth, request: Request, basePath?: string) => Promise<Response | undefined>;
 ```
 
-### `identityFromSession` (const)
-
-```ts
-const identityFromSession: (session: SessionLike | null | undefined) => SessionIdentity | null;
-```
-
 ### `isDevEnvironment` (const)
 
 ```ts
@@ -1173,6 +1149,12 @@ const readAuthAuditLog: (executor: SqlExecutor, options?: ReadAuthAuditOptions) 
 
 ```ts
 const resolveAuthOptions: (options: LunoraAuthOptions) => LunoraAuthOptions;
+```
+
+### `resolveSessionIdentity` (const)
+
+```ts
+const resolveSessionIdentity: (auth: LunoraAuth, headers: Headers) => Promise<SessionIdentity | null>;
 ```
 
 ### `revokeSignUpInvitation` (const)
@@ -1923,11 +1905,11 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
-### `identityFromSession` (const)
+### `lunoraD1Adapter` (const)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
-### `lunoraD1Adapter` (const)
+### `resolveSessionIdentity` (const)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 

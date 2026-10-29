@@ -1,3 +1,5 @@
+import type { LunoraAuth } from "./create-auth";
+
 /**
  * The claims both built-in wirings (D1 and the auth Durable Object) put on the
  * Lunora identity, derived from one better-auth `getSession` result. Each optional
@@ -21,9 +23,10 @@ type SessionIdentity = {
     name?: string;
 
     /**
-     * The session's active organization (`organization()` plugin). Named `orgId`
-     * because that is the claim the `@lunora/jwt-auth` presets emit, so tenant-scoped
-     * code reads one name whichever authority issued the identity.
+     * The session's active organization (`organization()` plugin), present only
+     * while the user is still a member of it. Named `orgId` because that is the claim
+     * the `@lunora/jwt-auth` presets emit, so tenant-scoped code reads one name
+     * whichever authority issued the identity.
      */
     orgId?: string;
 
@@ -34,7 +37,10 @@ type SessionIdentity = {
      */
     role?: string;
 
-    /** The session's active team (`organization({ teams: { enabled: true } })`). */
+    /**
+     * The session's active team (`organization({ teams: { enabled: true } })`),
+     * present only while it belongs to `orgId` and the user is still on it.
+     */
     teamId?: string;
 
     userId: string;
@@ -49,14 +55,9 @@ interface SessionLike {
 const nonEmpty = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
 /**
- * Reduce a better-auth session to the Lunora identity: `ctx.auth.userId` plus the
- * claims `ctx.auth.getIdentity()` returns.
- *
- * `orgId` / `teamId` exist only on a session whose app runs the organization plugin,
- * so no plugin check is needed here. They are read from the session the request
- * carries, so they follow `set-active` / create / accept-invitation on the next
- * request (see `org-session-refresh`); an open WebSocket keeps the identity it was
- * upgraded with until it reconnects.
+ * Reduce a better-auth session to the Lunora identity, taking `orgId` / `teamId`
+ * from the session as-is. Unverified: {@link resolveSessionIdentity} is what the
+ * wirings call.
  * @param session The `auth.api.getSession` result, or `null` when signed out.
  * @returns The identity, or `null` for an anonymous request.
  */
@@ -88,5 +89,79 @@ const identityFromSession = (session: SessionLike | null | undefined): SessionId
     };
 };
 
+/**
+ * Resolve a request's session to the Lunora identity: `ctx.auth.userId` plus the
+ * claims `ctx.auth.getIdentity()` returns. Both built-in wirings (the D1 resolver
+ * codegen emits and the auth Durable Object) call this.
+ *
+ * `orgId` / `teamId` are checked against the store before they are emitted, because
+ * the session's `activeOrganizationId` / `activeTeamId` outlive the membership they
+ * stand for. better-auth (1.7.7) clears them only on the caller's own current
+ * session: a member removed by someone else, the other sessions of a member who
+ * left, every member of a deleted organization, and anyone removed through
+ * `createAuthAdmin` or SCIM (which write the tables directly, past any endpoint
+ * hook) keep them. `setActiveOrganization` never clears `activeTeamId` either, so a
+ * switch leaves the previous organization's team behind. Checking here covers every
+ * one of those paths; clearing sessions on removal would cover only the endpoints,
+ * and the session cookie cache would still serve the old value on top.
+ *
+ * The cost is one `member` read (plus `team` and `teamMember` when a team is active)
+ * per resolution of a session that has an active organization, and the worker
+ * memoises resolutions per credential, so the claim can lag a removal by up to that
+ * memo window. A read that throws propagates rather than emitting an unchecked claim.
+ * @param auth The better-auth instance.
+ * @param headers The request headers carrying the session.
+ * @returns The identity, or `null` for an anonymous request.
+ */
+const resolveSessionIdentity = async (auth: LunoraAuth, headers: Headers): Promise<SessionIdentity | null> => {
+    const identity = identityFromSession(await auth.api.getSession({ headers }));
+
+    if (identity === null || (identity.orgId === undefined && identity.teamId === undefined)) {
+        return identity;
+    }
+
+    const { orgId, teamId, ...verified } = identity;
+
+    if (orgId === undefined) {
+        return verified;
+    }
+
+    const { adapter } = await auth.$context;
+    const { userId } = identity;
+    const [member, team, teamMember] = await Promise.all([
+        adapter.findOne({
+            model: "member",
+            where: [
+                { field: "organizationId", value: orgId },
+                { field: "userId", value: userId },
+            ],
+        }),
+        teamId === undefined
+            ? undefined
+            : adapter.findOne({
+                  model: "team",
+                  where: [
+                      { field: "id", value: teamId },
+                      { field: "organizationId", value: orgId },
+                  ],
+              }),
+        teamId === undefined
+            ? undefined
+            : adapter.findOne({
+                  model: "teamMember",
+                  where: [
+                      { field: "teamId", value: teamId },
+                      { field: "userId", value: userId },
+                  ],
+              }),
+    ]);
+
+    if (!member) {
+        return verified;
+    }
+
+    return { ...verified, orgId, ...(team && teamMember ? { teamId } : {}) };
+};
+
 export type { SessionIdentity, SessionLike };
-export { identityFromSession };
+export { identityFromSession, resolveSessionIdentity };
