@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { importShardRows } from "../src/admin-export-import";
+import { importShardRows, parseImportShardArgs } from "../src/admin-export-import";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -121,6 +121,42 @@ describe("shard admin import — `_id` conflict probe", () => {
         expect(result).toMatchObject({ deleted: 1, errors: [] });
         await expect(writer.get("notes", "n1")).resolves.toBeNull();
         await expect(writer.get("tasks", "t1")).resolves.toMatchObject({ label: "kept" });
+    });
+
+    it('refuses a direct shard import row whose `op` is not "delete", and writes nothing for it', async () => {
+        expect.assertions(2);
+
+        const writer = writerFor(harness);
+
+        await writer.insert("notes", { _id: "n1", title: "stored" }, { allowExplicitId: true });
+
+        const result = await importShardRows(
+            writer,
+            schema,
+            parseImportShardArgs({ rows: [{ doc: { _id: "n2", title: "typo" }, op: "deleet", table: "notes" }] }),
+        );
+
+        expect(result.errors).toStrictEqual([{ code: "BAD_ROW", line: 1, message: 'row `op` must be "delete" when set, got "deleet"', table: "notes" }]);
+        await expect(writer.get("notes", "n2")).resolves.toBeNull();
+    });
+
+    it("reports a delete whose ownership probe fails as an error, never as an absent row", async () => {
+        expect.assertions(2);
+
+        const base = writerFor(harness);
+
+        await base.insert("notes", { _id: "n1", title: "stored" }, { allowExplicitId: true });
+
+        const writer: DatabaseWriterLike = {
+            ...base,
+            lookupById: async () => {
+                throw new Error("storage unavailable");
+            },
+        };
+        const result = await importShardRows(writer, schema, { rows: [{ doc: { _id: "n1" }, op: "delete", table: "notes" }] });
+
+        expect(result.errors).toHaveLength(1);
+        await expect(base.get("notes", "n1")).resolves.toMatchObject({ title: "stored" });
     });
 
     it('overwrites a same-table `_id` under onConflict: "replace", keeping the row\'s `_creationTime`', async () => {

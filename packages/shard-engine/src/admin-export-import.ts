@@ -64,7 +64,8 @@ type ImportConflictMode = "replace" | "skip";
  * an insert would be.
  */
 interface ImportRow extends ExportRow {
-    op?: "delete";
+    /** `"delete"` removes the row the doc's `_id` names; any other value is refused as a BAD_ROW, never read as an insert. */
+    op?: string;
 }
 
 interface ImportShardArgs {
@@ -279,15 +280,20 @@ type RowOutcome =
  * same id and every by-id read resolving to whichever the probe hit first. It is
  * reported per row instead.
  */
+/** The table that holds `explicitId`, `undefined` when none does. A failed probe throws. */
+const findIdOwner = async (writer: DatabaseWriterLike, table: string, explicitId: string): Promise<string | undefined> => {
+    if (writer.lookupById) {
+        const located = await writer.lookupById(explicitId);
+
+        return located === null ? undefined : located.tableName;
+    }
+
+    return (await writer.get(table, explicitId)) === null ? undefined : table;
+};
+
 const locateExistingId = async (writer: DatabaseWriterLike, table: string, explicitId: string): Promise<string | undefined> => {
     try {
-        if (writer.lookupById) {
-            const located = await writer.lookupById(explicitId);
-
-            return located === null ? undefined : located.tableName;
-        }
-
-        return (await writer.get(table, explicitId)) === null ? undefined : table;
+        return await findIdOwner(writer, table, explicitId);
     } catch {
         // An unknown-table failure here is surfaced when the insert runs against
         // the real schema.
@@ -372,20 +378,23 @@ const deleteOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row:
     }
 
     const id = row.doc["_id"] as string;
-    const owner = await locateExistingId(writer, row.table, id);
 
-    if (owner === undefined) {
-        return { kind: "absent" };
-    }
-
-    if (owner !== row.table) {
-        return {
-            error: { code: "ID_COLLISION", line, message: `_id "${id}" belongs to table "${owner}", not "${row.table}"`, table: row.table },
-            kind: "error",
-        };
-    }
-
+    // One `try` over the probe and the delete: a probe that fails is an error row, never `absent`, or a prune
+    // would report a clean run over a row it never removed.
     try {
+        const owner = await findIdOwner(writer, row.table, id);
+
+        if (owner === undefined) {
+            return { kind: "absent" };
+        }
+
+        if (owner !== row.table) {
+            return {
+                error: { code: "ID_COLLISION", line, message: `_id "${id}" belongs to table "${owner}", not "${row.table}"`, table: row.table },
+                kind: "error",
+            };
+        }
+
         await writer.delete(row.table, id, { hard: true, skipOnDelete: true });
 
         return { kind: "deleted" };
@@ -466,6 +475,22 @@ const importOneRow = async (
     }
 };
 
+/** A row whose `op` is set to anything but `"delete"` is refused, never read as an insert. */
+const opError = (row: ImportRow, line: number): ImportError | undefined =>
+    row.op === undefined || row.op === "delete"
+        ? undefined
+        : { code: "BAD_ROW", line, message: `row \`op\` must be "delete" when set, got ${JSON.stringify(row.op)}`, table: row.table };
+
+const applyRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row: ImportRow, line: number, onConflict: ImportConflictMode): Promise<RowOutcome> => {
+    const refused = opError(row, line);
+
+    if (refused !== undefined) {
+        return { error: refused, kind: "error" };
+    }
+
+    return row.op === "delete" ? deleteOneRow(writer, schema, row, line) : importOneRow(writer, schema, row, line, onConflict);
+};
+
 const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportShardArgs): Promise<ImportShardResult> => {
     const errors: ImportError[] = [];
     const inserted: Record<string, number> = {};
@@ -481,7 +506,7 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
         // nothing else, so the caller can refuse a file before the first real
         // chunk lands.
         if (args.dryRun === true) {
-            const shapeError = row.op === "delete" ? deleteRowError(schema, row, line) : rowShapeError(schema, row, line);
+            const shapeError = opError(row, line) ?? (row.op === "delete" ? deleteRowError(schema, row, line) : rowShapeError(schema, row, line));
 
             if (shapeError !== undefined) {
                 errors.push(shapeError);
@@ -490,12 +515,8 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
             continue;
         }
 
-        const outcome =
-            row.op === "delete"
-                ? // eslint-disable-next-line no-await-in-loop -- rows apply in stream order through one SQLite handle; line-number attribution depends on the sequence
-                  await deleteOneRow(writer, schema, row, line)
-                : // eslint-disable-next-line no-await-in-loop -- rows are inserted in stream order through one SQLite handle; line-number attribution depends on the sequence
-                  await importOneRow(writer, schema, row, line, args.onConflict ?? "skip");
+        // eslint-disable-next-line no-await-in-loop -- rows apply in stream order through one SQLite handle; line-number attribution depends on the sequence
+        const outcome = await applyRow(writer, schema, row, line, args.onConflict ?? "skip");
 
         switch (outcome.kind) {
             case "absent": {
@@ -556,6 +577,15 @@ const parseExportShardArgs = (args: Record<string, unknown>): ExportShardAdminAr
     return { batchSize, tables };
 };
 
+/** Any `op` is kept, so a misspelt one is refused by `importShardRows` rather than dropped into an insert. */
+const keptOp = (op: unknown): { op?: string } => {
+    if (op === undefined) {
+        return {};
+    }
+
+    return { op: typeof op === "string" ? op : JSON.stringify(op) };
+};
+
 /** Coerce loosely-typed admin args into the import shape. */
 const parseImportShardArgs = (args: Record<string, unknown>): ImportShardAdminArgs => {
     const rawRows = Array.isArray(args["rows"]) ? (args["rows"] as unknown[]) : [];
@@ -575,7 +605,7 @@ const parseImportShardArgs = (args: Record<string, unknown>): ImportShardAdminAr
             continue;
         }
 
-        rows.push({ doc: candidate.doc as Record<string, unknown>, ...(candidate.op === "delete" ? { op: "delete" as const } : {}), table: candidate.table });
+        rows.push({ doc: candidate.doc as Record<string, unknown>, ...keptOp(candidate.op), table: candidate.table });
     }
 
     const startLine = typeof args["startLine"] === "number" ? args["startLine"] : undefined;
