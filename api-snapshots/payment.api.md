@@ -1079,7 +1079,7 @@ interface AutumnFeaturesClientLike {
 
 ```ts
 interface AutumnFeaturesOptions {
-    readonly client: AutumnFeaturesClientLike;
+    readonly client: () => Promise<AutumnFeaturesClientLike> | AutumnFeaturesClientLike;
 }
 ```
 

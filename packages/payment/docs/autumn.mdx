@@ -240,16 +240,14 @@ and usage. Autumn also ships concepts with no cross-provider equivalent:
 **plan catalog**, and a native **checkout** (prepaid feature quantities, entity
 scoping, reward codes, opting out of a plan's trial). These live in a companion facade,
 `createAutumnFeatures`, kept separate so the provider-agnostic surface stays
-generic. It takes a constructed client rather than a loader, so build it from the
-same loader inside the handler that uses it (never at module top level, which
-would load the SDK at startup):
+generic. It takes the same kind of loader as the adapter and runs it on its first
+call, so it can be built at module scope without loading the SDK at startup:
 
 ```ts
 import type { AutumnFeaturesClientLike } from "@lunora/payment/autumn-features";
 import { createAutumnFeatures } from "@lunora/payment/autumn-features";
 
-const client = await loadAutumn();
-const autumnFeatures = createAutumnFeatures({ client: client as unknown as AutumnFeaturesClientLike });
+const autumnFeatures = createAutumnFeatures({ client: async () => (await loadAutumn()) as unknown as AutumnFeaturesClientLike });
 
 await autumnFeatures.entities.create(userId, { featureId: "seats", id: "workspace_a", name: "Workspace A" });
 const usage = await autumnFeatures.events.aggregate(userId, { featureId: "api_calls", range: "30d" });

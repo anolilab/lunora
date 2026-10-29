@@ -203,15 +203,21 @@ have no cross-provider equivalent: **entities** (per-seat/per-workspace
 sub-customers), **referrals**, usage-**events** analytics, the **plan catalog**,
 and a native **checkout** (prepaid feature quantities, entity scoping, reward
 codes, opting out of a plan's trial). It is kept separate so the
-provider-agnostic surface stays generic. It takes a constructed `Autumn` client,
-not a loader. (Credit systems need no extra method: Autumn models them as features,
+provider-agnostic surface stays generic. It takes a client loader, like the
+adapter, and runs it on its first call. (Credit systems need no extra method: Autumn models them as features,
 so their balances flow through `check` / `listBalances` like any other.)
 
 ```ts
 import type { AutumnFeaturesClientLike } from "@lunora/payment/autumn-features";
 import { createAutumnFeatures } from "@lunora/payment/autumn-features";
 
-const autumnFeatures = createAutumnFeatures({ client: client as unknown as AutumnFeaturesClientLike });
+const autumnFeatures = createAutumnFeatures({
+    client: async () => {
+        const { Autumn } = await import("autumn-js");
+
+        return new Autumn({ secretKey: env.AUTUMN_SECRET_KEY }) as unknown as AutumnFeaturesClientLike;
+    },
+});
 
 await autumnFeatures.entities.create(userId, { featureId: "seats", id: "workspace_a", name: "Workspace A" });
 const usage = await autumnFeatures.events.aggregate(userId, { featureId: "api_calls", range: "30d" });
