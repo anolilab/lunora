@@ -66,6 +66,21 @@ const mappedIpv4 = (host: string): string | undefined => {
     return [Math.floor(high / 256), high % 256, Math.floor(low / 256), low % 256].join(".");
 };
 
+/**
+ * A hostname in the one spelling every comparison below uses: lowercase, without the trailing dot of a fully qualified name.
+ * DNS treats `app.workers.dev.` and `app.workers.dev` as one host, but a suffix or equality test does not, and `localhost.` would pass as a deployed worker.
+ * The URL parser has already lowercased, punycoded and normalised IP literals.
+ */
+const canonicalHost = (hostname: string): string => {
+    let end = hostname.length;
+
+    while (end > 0 && hostname[end - 1] === ".") {
+        end -= 1;
+    }
+
+    return hostname.slice(0, end).toLowerCase();
+};
+
 /** Whether `host` can only be a dev worker, never a deployed one. */
 const isPrivateHost = (host: string): boolean => {
     const lower = host.toLowerCase();
@@ -214,22 +229,15 @@ const linkRefusal = (cwd: string, environment: string | undefined, parsed: URL, 
     return `${refused}: this checkout links it to ${owner}, not this deploy${scope}`;
 };
 
-/** Why the wrangler config rules `host` out: a `*.workers.dev` name it does not deploy, or a custom domain another env routes to or this env does not. */
-const wranglerRefusal = (cwd: string, environment: string | undefined, host: string, urlPath: string, refused: string, scope: string): string | undefined => {
-    const wrangler = readWranglerNames(cwd);
-
-    if (host.endsWith(".workers.dev")) {
-        const worker = deployedWorkerName(wrangler, environment);
-
-        if (worker !== undefined && host.split(".")[0] !== worker) {
-            return `${refused}: this deploy ships the Worker "${worker}"${scope}`;
-        }
-
-        // The Worker name is only the first label; the account subdomain after it cannot be read from the config, so a
-        // same-named Worker in another account would pass. Only a link recorded for this deploy ties the host to the account.
-        return `${refused}: no link ties this *.workers.dev host to your account${scope}; run \`lunora link --url https://${host}${environment === undefined ? "" : ` --env ${environment}`}\` once the Worker is deployed, then deploy again (or confirm the drift yourself with --allow-schema-drift)`;
-    }
-
+/** Why the config rules out a custom domain: another env's route, or not one of the routes this env deploys to. */
+const customDomainRefusal = (
+    wrangler: WranglerNames | undefined,
+    environment: string | undefined,
+    host: string,
+    urlPath: string,
+    refused: string,
+    scope: string,
+): string | undefined => {
     const other = otherEnvironmentRoutingTo(wrangler, environment, host, urlPath);
 
     if (other !== undefined) {
@@ -250,10 +258,29 @@ const wranglerRefusal = (cwd: string, environment: string | undefined, host: str
     return `${refused}: this deploy${scope} routes to ${own.length === 0 ? "no declared route" : own.join(", ")}, not ${host}`;
 };
 
+/** Why the wrangler config rules `host` out: a `*.workers.dev` name it does not deploy, or a custom domain another env routes to or this env does not. */
+const wranglerRefusal = (cwd: string, environment: string | undefined, host: string, urlPath: string, refused: string, scope: string): string | undefined => {
+    const wrangler = readWranglerNames(cwd);
+
+    if (host.endsWith(".workers.dev")) {
+        const worker = deployedWorkerName(wrangler, environment);
+
+        if (worker !== undefined && host.split(".")[0] !== worker) {
+            return `${refused}: this deploy ships the Worker "${worker}"${scope}`;
+        }
+
+        // The Worker name is only the first label; the account subdomain after it cannot be read from the config, so a
+        // same-named Worker in another account would pass. Only a link recorded for this deploy ties the host to the account.
+        return `${refused}: no link ties this *.workers.dev host to your account${scope}; run \`lunora link --url https://${host}${environment === undefined ? "" : ` --env ${environment}`}\` once the Worker is deployed, then deploy again (or confirm the drift yourself with --allow-schema-drift)`;
+    }
+
+    return customDomainRefusal(wrangler, environment, host, urlPath, refused, scope);
+};
+
 /** Why the config rules out a URL the project link vouches for: another Worker's name, or a route that belongs to another env. */
 const staleLinkRefusal = (cwd: string, environment: string | undefined, parsed: URL, refused: string, scope: string): string | undefined => {
     const wrangler = readWranglerNames(cwd);
-    const host = parsed.hostname.toLowerCase();
+    const host = canonicalHost(parsed.hostname);
 
     if (host.endsWith(".workers.dev")) {
         const worker = deployedWorkerName(wrangler, environment);
@@ -263,15 +290,7 @@ const staleLinkRefusal = (cwd: string, environment: string | undefined, parsed: 
             : `${refused}: this deploy ships the Worker "${worker}", not the one the link names${scope}`;
     }
 
-    const other = otherEnvironmentRoutingTo(wrangler, environment, host, parsed.pathname);
-
-    if (other === undefined) {
-        return undefined;
-    }
-
-    const label = other === "production" ? "production" : `--env ${other}`;
-
-    return `${refused}: wrangler routes it to ${label}, not this deploy${scope}`;
+    return customDomainRefusal(wrangler, environment, host, parsed.pathname, refused, scope);
 };
 
 /**
@@ -294,14 +313,16 @@ const rowCheckTargetRefusal = (cwd: string, environment: string | undefined, url
     const refused = `refused ${deploymentKey(parsed)} as the deployment to read rows from`;
     const scope = environment === undefined ? "" : ` (--env ${environment})`;
 
-    if (isPrivateHost(parsed.hostname)) {
+    const host = canonicalHost(parsed.hostname);
+
+    if (isPrivateHost(host)) {
         return `${refused}: it is a local or private address, not the worker this deploy ships to`;
     }
 
     const fromLink = linkRefusal(cwd, environment, parsed, refused, scope);
 
     if (fromLink === undefined) {
-        return wranglerRefusal(cwd, environment, parsed.hostname.toLowerCase(), parsed.pathname, refused, scope);
+        return wranglerRefusal(cwd, environment, host, parsed.pathname, refused, scope);
     }
 
     // A link names the URL a deploy once published. Since then the Worker may have been renamed or the env's routes moved, so a

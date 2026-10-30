@@ -141,4 +141,35 @@ describe(rowCheckTargetRefusal, () => {
 
         expect(rowCheckTargetRefusal(cwd, undefined, "https://api.acme.com")).toBeUndefined();
     });
+
+    it.each(["https://other.acme.workers.dev.", "https://OTHER.ACME.WORKERS.DEV", "https://other.acme.workers.dev.."])(
+        "treats %s as the *.workers.dev host it is, so an unlinked one is refused",
+        (url) => {
+            expect.assertions(1);
+
+            expect(rowCheckTargetRefusal(cwd, undefined, url)).toContain("refused");
+        },
+    );
+
+    it.each(["http://localhost./", "http://LOCALHOST./", "http://app.localhost./", "http://127.0.0.1./"])(
+        "treats %s as a local address, not a deployed worker",
+        (url) => {
+            expect.assertions(1);
+
+            expect(rowCheckTargetRefusal(cwd, undefined, url)).toContain("local or private address");
+        },
+    );
+
+    it("holds a linked custom domain against the routes the current env deploys, not only other envs' routes", () => {
+        expect.assertions(2);
+
+        wrangler({ name: "app", routes: ["api.acme.com/*"] });
+        link("https://old.acme.com");
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://old.acme.com")).toContain("routes to api.acme.com");
+
+        link("https://api.acme.com");
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://api.acme.com")).toBeUndefined();
+    });
 });
