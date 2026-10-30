@@ -156,7 +156,17 @@ const tokenBucket = (config: RateLimitConfig, prior: RateLimitValue | undefined,
     }
 
     const deficit = options.count - available;
-    const retryAfter = Math.ceil(deficit / ratePerMs);
+    let retryAfter = Math.ceil(deficit / ratePerMs);
+
+    // The division can land a hair short in floating point: the refill projected at `now + retryAfter` is then a
+    // fraction below `count`, and a caller who waits exactly that long is refused again. Check the promise with the
+    // same projection the admit test uses and step forward until it holds (one or two milliseconds at most). Only
+    // for a count the bucket can hold: a larger one is never admitted, so the projection would never catch up.
+    if (options.count <= capacity) {
+        while (projectTokenBucket(config, prior, options.now + retryAfter).available < options.count) {
+            retryAfter += 1;
+        }
+    }
 
     // Reserve lets the caller proceed now and pay later, but never beyond what
     // the bucket could ever hold.

@@ -134,6 +134,25 @@ describe("token bucket", () => {
     });
 });
 
+describe("token bucket retry-after", () => {
+    it("names a wait that admits the request even when the refill lands on a rounding edge", () => {
+        expect.assertions(2);
+
+        // Found by the retry-after property: 1 token at t=0, 3 at t=36, then 4 at t=36. The deficit divides to a wait
+        // whose refill, in floating point, falls a hair short of the 4 tokens asked for.
+        const config: RateLimitConfig = { kind: "token bucket", period: 1000, rate: 5 };
+        const first = evaluate(config, undefined, { consume: true, count: 1, now: 0, reserve: false });
+        const second = evaluate(config, first.value, { consume: true, count: 3, now: 36, reserve: false });
+        const denied = evaluate(config, second.value, { consume: true, count: 4, now: 36, reserve: false });
+
+        expect(denied.status.ok).toBe(false);
+
+        const retried = evaluate(config, second.value, { consume: true, count: 4, now: 36 + denied.status.retryAfter, reserve: false });
+
+        expect(retried.status.ok).toBe(true);
+    });
+});
+
 describe("fixed window", () => {
     it("grants rate tokens at the window start", () => {
         expect.assertions(2);
