@@ -1,3 +1,9 @@
+## @lunora/ratelimit [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.184...@lunora/ratelimit@1.0.0-alpha.185) (2026-10-30)
+
+### Bug Fixes
+
+* **ratelimit:** keep ill-formed keys on their own budget, never fail open ([#1430](https://github.com/anolilab/lunora/issues/1430)) ([ddd681e](https://github.com/anolilab/lunora/commit/ddd681eeeef0c3b8c55cba3ff756b3fdfcd7d873))
+
 ## @lunora/ratelimit [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.183...@lunora/ratelimit@1.0.0-alpha.184) (2026-10-30)
 
 ### ⚠ BREAKING CHANGES

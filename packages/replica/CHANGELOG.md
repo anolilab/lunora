@@ -1,3 +1,9 @@
+## @lunora/replica [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.230...@lunora/replica@1.0.0-alpha.231) (2026-10-30)
+
+### Bug Fixes
+
+* **replica:** store event log entries frozen ([#1431](https://github.com/anolilab/lunora/issues/1431)) ([3c06850](https://github.com/anolilab/lunora/commit/3c06850c8d4ab7f47b1d4d73ffee68ce866d595f))
+
 ## @lunora/replica [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.229...@lunora/replica@1.0.0-alpha.230) (2026-10-30)
 
 

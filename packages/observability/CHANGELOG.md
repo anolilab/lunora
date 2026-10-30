@@ -1,3 +1,9 @@
+## @lunora/observability [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.187...@lunora/observability@1.0.0-alpha.188) (2026-10-30)
+
+### Bug Fixes
+
+* **observability:** buffer a frozen copy of each span ([#1426](https://github.com/anolilab/lunora/issues/1426)) ([24631f4](https://github.com/anolilab/lunora/commit/24631f401c17aa6527fedcdec64cf8eaa675053c))
+
 ## @lunora/observability [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.186...@lunora/observability@1.0.0-alpha.187) (2026-10-30)
 
 
