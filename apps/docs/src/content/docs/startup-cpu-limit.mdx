@@ -126,8 +126,10 @@ regenerating.
   below does not cover them.)
 - **So `lunora build`, `prepare` and `deploy` smoke-load lazy builds.** Before
   shipping, they boot the Worker in workerd (`wrangler dev --local`), evaluate
-  every lazy module, and refuse to ship if any fails, naming each failing
-  module. Whether this runs depends on the generated output, not the flag, so
+  every lazy function module and every deferred event module (the push-queue
+  registry, `lunora/workflows.ts` and `lunora/agents.ts`), and refuse to ship if
+  any fails, naming each failing module. A project that defers only workflows,
+  agents or queues, with no lazy function manifest, is checked too. Whether this runs depends on the generated output, not the flag, so
   `deploy --prebuilt` is covered too. Pass `--no-smoke-load` to skip it. It is
   skipped with a warning, not an error, when it cannot run: a target that is
   not workerd, an entry that is not a file on disk, a project that declares

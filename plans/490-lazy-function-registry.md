@@ -16,8 +16,7 @@ generated workflow and agent `WorkflowEntrypoint` classes; on the startup gate's
 queue, a workflow and an agent) that cut the lazy eager graph from 979 modules / 5,982 KiB to 581 /
 3,693 KiB. Still open: the lazy registry as
 the default, lighter shared builders (§8 last paragraph), the `@lunora/agent` barrel that the shard
-imports for `ctx.agents` (§3.1), smoke-loading the `import()` targets in `workflows.ts` /
-`agents.ts`, and extending the smoke-load to eager
+imports for `ctx.agents` (§3.1), and extending the smoke-load to eager
 builds now that `authModule.ts` and the spec modules evaluate on the first event.
 The email-guard prerequisite (§8) has shipped (#1159). Measurement scripts are not committed; §6 says
 what to add.
@@ -168,10 +167,11 @@ generated `shard.ts` imports `createAgentContext` from the `@lunora/agent` barre
 `@lunora/agent/context` subpath would remove most of it, but it changes eager output, so it is left
 for its own change.
 
-Smoke-load coverage: the queue target lives in `app.ts`, so a smoke-load that walks the `import()`
-targets of `app.ts` / `shard.ts` evaluates every queue module. The workflow and agent loaders must
-live in `workflows.ts` / `agents.ts` (the entry re-exports those classes), so the smoke-load has to
-read those two files as well, or a broken workflow module surfaces on its first production run.
+Smoke-load coverage: the generated output decides what is deferred. The smoke entry imports the queue
+registry (`app.ts` holds `import("./queues.js")`), `lunora/workflows.ts` and `lunora/agents.ts` (the
+`import()` targets in `_generated/workflows.ts`, `agents.ts` and the `onEmail` block of `app.ts`), so
+a broken module blocks `build`/`deploy` instead of failing its first production run. A failure is
+reported as `<file> (queue|workflow|agent)`, and a project that defers only these still gets the check.
 
 ## 4. Other concerns checked
 

@@ -39,6 +39,13 @@ const MODULE_EXTENSIONS = new Set([".js", ".mjs", ".mts", ".ts", ".tsx"]);
  */
 const UNDEFINED_IMPORT_SYMPTOM = /\(void 0\)|is not a function|before initialization|of undefined/u;
 
+/** What the smoke Worker reports: the lazy functions covered, the deferred event modules covered, and what failed. */
+interface ProbeResult {
+    checked: number;
+    deferredChecked: number;
+    failures: ModuleFailure[];
+}
+
 interface SmokeLoadOptions {
     /** `src/worker.ts` when the project composes its own entry; otherwise wrangler's `main` is used. */
     composedEntry?: string;
@@ -53,14 +60,31 @@ interface SmokeLoadOptions {
 }
 
 interface ModuleFailure {
+    /**
+     * Set on a failing deferred event module (`queue`, `workflow` or `agent`); `functionPath` is then
+     * `<kind>:<file>` rather than `<namespace>:<export>`. Function failures never carry it.
+     */
+    deferred?: DeferredKind;
     functionPath: string;
     message: string;
+}
+
+/** The generated modules a lazy build loads with `import()` on an event rather than at startup. */
+type DeferredKind = "agent" | "queue" | "workflow";
+
+interface DeferredModule {
+    /** Absolute path the probe imports. */
+    file: string;
+    kind: DeferredKind;
+    /** Project-relative path, for the error message. */
+    label: string;
 }
 
 const isModuleFailure = (value: unknown): value is ModuleFailure =>
     typeof value === "object" &&
     value !== null &&
     typeof (value as ModuleFailure).functionPath === "string" &&
+    ((value as ModuleFailure).deferred === undefined || ["agent", "queue", "workflow"].includes((value as ModuleFailure).deferred as string)) &&
     typeof (value as ModuleFailure).message === "string";
 
 /**
@@ -90,12 +114,24 @@ const functionFilesByNamespace = (cwd: string): Map<string, string> => {
     return files;
 };
 
+const hintFor = (message: string): string =>
+    UNDEFINED_IMPORT_SYMPTOM.test(message)
+        ? "\n      hint: if this module is part of a circular import, an import it reads is still undefined while it evaluates"
+        : "";
+
 /** `lunora/posts.ts (list, add): message`, one block per failing module, so a module with ten functions is one entry. */
 const formatFailures = (cwd: string, failures: ReadonlyArray<ModuleFailure>): string[] => {
     const files = functionFilesByNamespace(cwd);
     const modules = new Map<string, { exports: string[]; message: string; namespace: string }>();
+    const deferredLines: string[] = [];
 
-    for (const { functionPath, message } of failures) {
+    for (const { deferred, functionPath, message } of failures) {
+        if (deferred !== undefined) {
+            deferredLines.push(`  ${functionPath.slice(deferred.length + 1)} (${deferred}): ${message}${hintFor(message)}`);
+
+            continue;
+        }
+
         const split = functionPath.lastIndexOf(":");
         const namespace = functionPath.slice(0, split);
         const key = `${namespace}\0${message}`;
@@ -105,13 +141,63 @@ const formatFailures = (cwd: string, failures: ReadonlyArray<ModuleFailure>): st
         modules.set(key, entry);
     }
 
-    return [...modules.values()].map(({ exports, message, namespace }) => {
-        const hint = UNDEFINED_IMPORT_SYMPTOM.test(message)
-            ? "\n      hint: if this module is part of a circular import, an import it reads is still undefined while it evaluates"
-            : "";
+    return [
+        ...[...modules.values()].map(
+            ({ exports, message, namespace }) => `  ${files.get(namespace) ?? namespace} (${exports.join(", ")}): ${message}${hintFor(message)}`,
+        ),
+        ...deferredLines,
+    ];
+};
 
-        return `  ${files.get(namespace) ?? namespace} (${exports.join(", ")}): ${message}${hint}`;
-    });
+/** The first existing `<base><ext>` or `<base>/index<ext>`, the way the generated `../workflows.js` import resolves to source. */
+const resolveSourceModule = (base: string): string | undefined => {
+    for (const extension of MODULE_EXTENSIONS) {
+        for (const candidate of [`${base}${extension}`, join(base, `index${extension}`)]) {
+            if (existsSync(candidate)) {
+                return candidate;
+            }
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * The modules the generated output loads with `import()` on an event: the push-queue registry and the
+ * email-agent definitions (both in `app.ts`), the workflow definitions (`workflows.ts`) and the agent
+ * definitions (`agents.ts`). The generated text decides, not the flag, as for the function manifest. A
+ * module an eager build imports statically is evaluated at startup already, so it is never listed.
+ */
+const findDeferredModules = (cwd: string, schemaDirectory: string): DeferredModule[] => {
+    const generated = join(cwd, schemaDirectory, "_generated");
+    const read = (name: string): string => {
+        try {
+            return readFileSync(join(generated, name), "utf8");
+        } catch {
+            return "";
+        }
+    };
+    const app = read("app.ts");
+    const found: DeferredModule[] = [];
+    const add = (kind: DeferredKind, file: string | undefined): void => {
+        if (file !== undefined) {
+            found.push({ file, kind, label: relative(cwd, file).split(sep).join("/") });
+        }
+    };
+
+    if (app.includes('import("./queues.js")')) {
+        add("queue", resolveSourceModule(join(generated, "queues")));
+    }
+
+    if (read("workflows.ts").includes('import("../workflows.js")')) {
+        add("workflow", resolveSourceModule(join(cwd, schemaDirectory, "workflows")));
+    }
+
+    if (read("agents.ts").includes('import("../agents.js")') || app.includes('import("../agents.js")')) {
+        add("agent", resolveSourceModule(join(cwd, schemaDirectory, "agents")));
+    }
+
+    return found;
 };
 
 /**
@@ -170,7 +256,7 @@ const locateSmokeEntry = ({ composedEntry, configPath, cwd, environment, toolcha
  * with a 5xx after booting, one that never answers, or one that answers with something that is not the
  * probe's result is the project's fault and blocks. Only a result from another run's Worker is passed over (`undefined`).
  */
-const probeLazyModules = async (port: number, runId: string, deadline: number): Promise<{ checked: number; failures: ModuleFailure[] } | undefined> => {
+const probeLazyModules = async (port: number, runId: string, deadline: number): Promise<ProbeResult | undefined> => {
     const response = await fetch(`http://127.0.0.1:${String(port)}/_lunora/__smoke_load`, {
         signal: AbortSignal.timeout(Math.max(0, deadline - Date.now())),
     }).catch((error: unknown) => {
@@ -189,19 +275,19 @@ const probeLazyModules = async (port: number, runId: string, deadline: number): 
     }
 
     const text = await response.text().catch(() => "");
-    let body: Partial<{ checked: number; failures: unknown[]; run: unknown }> | undefined;
+    let body: Partial<{ checked: number; deferredChecked: number; failures: unknown[]; run: unknown }> | undefined;
 
     try {
-        body = JSON.parse(text) as Partial<{ checked: number; failures: unknown[]; run: unknown }>;
+        body = JSON.parse(text) as Partial<{ checked: number; deferredChecked: number; failures: unknown[]; run: unknown }>;
     } catch {
         body = undefined;
     }
 
-    const { checked, failures, run } = body ?? {};
+    const { checked, deferredChecked = 0, failures, run } = body ?? {};
 
     if (typeof checked === "number" && Array.isArray(failures) && failures.every((item) => isModuleFailure(item))) {
         // Another run's Worker bound this port first: `startDevProcess` saw a listener, not our child. Not this project's answer, so `undefined`.
-        return run === runId ? { checked, failures } : undefined;
+        return run === runId ? { checked, deferredChecked, failures } : undefined;
     }
 
     // Not ours and not another run's: the project's routes answered in front of the Worker, so the project cannot ship as it is.
@@ -309,9 +395,13 @@ const startSmokeServer = (options: DevProcessOptions): Promise<DevProcess | unde
     });
 
 /** Logs a clean probe, or throws the list of modules the project has to fix. */
-const reportProbe = (cwd: string, { checked, failures }: { checked: number; failures: ModuleFailure[] }, logger: Logger): void => {
+const reportProbe = (cwd: string, { checked, deferredChecked, failures }: ProbeResult, logger: Logger): void => {
+    // Deferred event modules are counted apart so a project without any reads exactly as before.
+    const covered =
+        deferredChecked === 0 ? `${String(checked)} lazy function(s)` : `${String(checked)} lazy function(s) and ${String(deferredChecked)} deferred module(s)`;
+
     if (failures.length === 0) {
-        logger.success(`${String(checked)} lazy function(s) evaluate cleanly`);
+        logger.success(`${covered} evaluate cleanly`);
 
         return;
     }
@@ -321,7 +411,7 @@ const reportProbe = (cwd: string, { checked, failures }: { checked: number; fail
 
     throw new SmokeLoadError(
         [
-            `${String(failures.length)} of ${String(checked)} lazy function(s) fail to load:`,
+            `${String(failures.length)} of ${deferredChecked === 0 ? `${String(checked)} lazy function(s)` : `${String(checked + deferredChecked)} lazy module(s)`} fail to load:`,
             ...lines.slice(0, MAX_LISTED_MODULES),
             ...more,
             "Fix the module, or pass --no-smoke-load to ship anyway.",
@@ -378,15 +468,17 @@ const createRunDirectory = (cwd: string): string => {
 const prepareSmokeProcess = async (input: {
     configPath: string | undefined;
     cwd: string;
+    deferred: ReadonlyArray<DeferredModule>;
     directory: string;
     environment: string | undefined;
-    functionsFile: string;
+    /** The generated `functions.ts`, or `undefined` when it has no lazy manifest to load. */
+    functionsFile: string | undefined;
     main: string;
     /** The first port to try; a retry starts above the port another run's Worker held. */
     preferred: number;
     toolchain: DriverToolchain;
 }): Promise<{ args: string[]; command: string; port: number; runId: string }> => {
-    const { configPath, cwd, directory, environment, functionsFile, main, preferred, toolchain } = input;
+    const { configPath, cwd, deferred, directory, environment, functionsFile, main, preferred, toolchain } = input;
 
     try {
         const entry = join(directory, "entry.ts");
@@ -397,13 +489,35 @@ const prepareSmokeProcess = async (input: {
         writeFileSync(
             entry,
             `export * from ${JSON.stringify(resolve(cwd, main))};
-import { loadAllFunctions } from ${JSON.stringify(functionsFile)};
-
+${functionsFile === undefined ? "" : `import { loadAllFunctions } from ${JSON.stringify(functionsFile)};\n`}
 const runId = ${JSON.stringify(runId)};
+
+// Deferred event modules, evaluated here so a module that throws on import blocks like a function module does.
+const deferred = [
+${deferred.map((module) => `    { kind: ${JSON.stringify(module.kind)}, label: ${JSON.stringify(module.label)}, load: () => import(${JSON.stringify(module.file)}) },`).join("\n")}
+];
 
 export default {
     async fetch() {
-        return Response.json({ ...(await loadAllFunctions()), run: runId });
+        const functions = ${functionsFile === undefined ? "{ checked: 0, failures: [] }" : "await loadAllFunctions()"};
+        const loaded = await Promise.all(
+            deferred.map(async ({ kind, label, load }) => {
+                try {
+                    await load();
+
+                    return undefined;
+                } catch (error) {
+                    return { deferred: kind, functionPath: kind + ":" + label, message: error instanceof Error ? error.message : String(error) };
+                }
+            }),
+        );
+
+        return Response.json({
+            checked: functions.checked,
+            deferredChecked: deferred.length,
+            failures: [...functions.failures, ...loaded.filter((failure) => failure !== undefined)],
+            run: runId,
+        });
     },
 };
 `,
@@ -456,8 +570,13 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     const functionsFile = join(cwd, resolveSchemaDirectory(cwd), "_generated", "functions.ts");
 
     // The generated output decides, not the flag: `deploy --prebuilt` ships whatever an earlier
-    // `build`/`prepare` wrote, and an eager registry has no lazy modules to check.
-    if (!existsSync(functionsFile) || !readFileSync(functionsFile, "utf8").includes("export const loadAllFunctions")) {
+    // `build`/`prepare` wrote, and an eager registry has no lazy modules to check. A project can defer
+    // workflows, agents or queues without a lazy function manifest (it declares no functions), so
+    // either one starts the check.
+    const hasManifest = existsSync(functionsFile) && readFileSync(functionsFile, "utf8").includes("export const loadAllFunctions");
+    const deferred = findDeferredModules(cwd, resolveSchemaDirectory(cwd));
+
+    if (!hasManifest && deferred.length === 0) {
         return undefined;
     }
 
@@ -503,9 +622,10 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
             const { args, command, port, runId } = await prepareSmokeProcess({
                 configPath,
                 cwd,
+                deferred,
                 directory,
                 environment,
-                functionsFile,
+                functionsFile: hasManifest ? functionsFile : undefined,
                 main,
                 preferred,
                 toolchain,
