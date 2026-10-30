@@ -392,7 +392,8 @@ const createFakeScheduler = (
                         ...job,
                         attempts,
                         completedAt: nowMs,
-                        error: error instanceof Error ? error.message : String(error),
+                        // The dead-letter reason `SchedulerDO` records, not the handler's message.
+                        error: `after ${String(attempts)} attempts`,
                         state: "failed",
                     });
                 } else {

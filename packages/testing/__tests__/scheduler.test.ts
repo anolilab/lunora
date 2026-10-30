@@ -668,7 +668,10 @@ describe("fake scheduler", () => {
 
             expect(t.scheduler.failures()).toHaveLength(1);
             expect(t.scheduler.list()).toHaveLength(0);
-            await expect(t.run(async (ctx) => ctx.scheduler.get(jobId))).resolves.toMatchObject({ error: "boom:always", state: "failed" });
+            await expect(t.run(async (ctx) => ctx.scheduler.get(jobId))).resolves.toMatchObject({
+                error: `after ${String(MAX_RETRY_ATTEMPTS + 1)} attempts`,
+                state: "failed",
+            });
         });
 
         it("pins the virtual clock a terminal failure costs: the whole backoff schedule, not one tick", async () => {
