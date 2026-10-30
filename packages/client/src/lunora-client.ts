@@ -1,5 +1,5 @@
 import { LunoraError, OFFLINE_NOT_QUEUED_HINT } from "@lunora/errors";
-import { decodeWire, encodeWire, stableWireKey, WIRE_TAG } from "@lunora/wire";
+import { decodeWire, encodeWire, stableWireKey } from "@lunora/wire";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";

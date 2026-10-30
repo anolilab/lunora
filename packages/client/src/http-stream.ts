@@ -29,7 +29,7 @@
  * and a consumer `.cancel()` / external abort all end the stream.
  */
 import { HTTP_STREAM_NO_BODY_HINT, LunoraError } from "@lunora/errors";
-import { decodeWire, parseWire } from "@lunora/wire";
+import { decodeWire } from "@lunora/wire";
 
 import frameHintOption from "./frame-hint";
 import { createReconnect } from "./reconnect";
