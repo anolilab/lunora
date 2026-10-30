@@ -574,6 +574,58 @@ const refusesAsNotQueued = (onlineOnly: boolean | undefined, networkDown: boolea
 const RESOLVED_PROMISE = Promise.resolve();
 
 /**
+ * Pump a `streamRpc` body to its terminal frame. The pump runs off its own controller, tied here to the caller's
+ * signal: one read can carry several frames, so a cancel can land between frames already buffered, and nothing
+ * after it may be delivered. An aborted call rejects with the signal's reason rather than resolving.
+ */
+const pumpStreamRpcBody = async (
+    body: ReadableStream<Uint8Array>,
+    signal: AbortSignal | undefined,
+    onFrame: ((frame: unknown) => void) | undefined,
+): Promise<{ failure: Error | undefined; terminal: string | undefined }> => {
+    let terminal: string | undefined;
+    let failure: Error | undefined;
+    const pumpAbort = new AbortController();
+    const forwardAbort = (): void => {
+        pumpAbort.abort(signal?.reason);
+    };
+
+    signal?.addEventListener("abort", forwardAbort, { once: true });
+
+    try {
+        // No resume state to track on a one-shot call, so the pump's observers are empty.
+        await pumpSseBody(
+            body,
+            {
+                complete: (data: string) => {
+                    if (signal?.aborted !== true) {
+                        terminal = data;
+                    }
+                },
+                fail: (error: Error) => {
+                    failure = error;
+                },
+                push: (frame: unknown) => {
+                    if (signal?.aborted !== true) {
+                        onFrame?.(frame);
+                    }
+                },
+            },
+            {},
+            pumpAbort,
+        );
+    } finally {
+        signal?.removeEventListener("abort", forwardAbort);
+    }
+
+    if (signal?.aborted === true) {
+        throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted.", "AbortError");
+    }
+
+    return { failure, terminal };
+};
+
+/**
  * Lunora browser/edge client. Talks RPC over HTTP and real-time deltas over
  * a single multiplexed WebSocket.
  *
@@ -3670,26 +3722,7 @@ class LunoraClient {
             throw new LunoraError("HTTP_STREAM_NO_BODY", "LunoraClient: streaming response has no body");
         }
 
-        let terminal: string | undefined;
-        let failure: Error | undefined;
-
-        // No resume state to track on a one-shot call, so the pump's observers are empty.
-        await pumpSseBody(
-            response.body,
-            {
-                complete: (data: string) => {
-                    terminal = data;
-                },
-                fail: (error: Error) => {
-                    failure = error;
-                },
-                push: (frame: unknown) => {
-                    options.onFrame?.(frame);
-                },
-            },
-            {},
-            new AbortController(),
-        );
+        const { failure, terminal } = await pumpStreamRpcBody(response.body, options.signal, options.onFrame);
 
         if (failure !== undefined) {
             throw failure;

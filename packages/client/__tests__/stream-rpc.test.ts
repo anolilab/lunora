@@ -62,6 +62,33 @@ describe("lunoraClient.streamRpc", () => {
         expect(result).toStrictEqual({ degraded: false, reply: "Two rows." });
     });
 
+    it("stops at a cancel even when the rest of the answer arrived in the same chunk", async () => {
+        expect.assertions(2);
+
+        // One read carries a narration frame AND the terminal frame, so the cancel lands between two frames the
+        // reader has already buffered; nothing after it may be delivered, and the call must not resolve.
+        const fetchMock = vi.fn<typeof fetch>(async () =>
+            sseResponse([`${frame({ text: "Two", type: "delta" })}${frame({ text: " rows.", type: "delta" })}${terminal({ reply: "Two rows." })}`]),
+        );
+        const controller = new AbortController();
+        const seen: unknown[] = [];
+
+        await expect(
+            client(fetchMock).streamRpc(
+                CHAT,
+                { prompt: "how many?" },
+                {
+                    onFrame: (value) => {
+                        seen.push(value);
+                        controller.abort();
+                    },
+                    signal: controller.signal,
+                },
+            ),
+        ).rejects.toMatchObject({ name: "AbortError" });
+        expect(seen).toStrictEqual([{ text: "Two", type: "delta" }]);
+    });
+
     it("posts the ordinary RPC envelope with the bearer, on the ordinary RPC path", async () => {
         expect.assertions(4);
 
