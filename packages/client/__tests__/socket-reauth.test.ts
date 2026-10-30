@@ -254,6 +254,53 @@ describe("socket identity revalidation", () => {
         client.close();
     });
 
+    it("keeps the socket when an earlier re-auth is refused after a later one succeeded", async () => {
+        expect.assertions(2);
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const answers: ((response: Response) => void)[] = [];
+        const fetchMock = vi.fn<typeof fetch>(async (input) =>
+            (input as string).includes("/_lunora/ws/reauth")
+                ? new Promise<Response>((resolve) => {
+                      answers.push(resolve);
+                  })
+                : jsonResponse({ result: { ok: true } }),
+        );
+        const client = new LunoraClient({
+            authTokenOnUpgrade: true,
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            url: "http://app.test",
+            WebSocket,
+        });
+
+        client.setAuthToken("token-1", "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        sockets[0]?.receive({ connectionId: "conn-1", revalidateMs: 60_000, subject: "user-1", type: "identity" });
+        await settle();
+
+        // Three requests for one socket, all under a token that is in force again by the time they answer.
+        await vi.advanceTimersByTimeAsync(30_000);
+        client.setAuthToken("token-2", "user-1");
+        await settle();
+        client.setAuthToken("token-1", "user-1");
+        await settle();
+
+        expect(answers).toHaveLength(3);
+
+        // The newest succeeds first; the earliest is refused afterwards.
+        answers[2]?.(jsonResponse({ ok: true }));
+        await settle();
+        answers[0]?.(jsonResponse({ error: { code: "STALE_CREDENTIAL" } }, { status: 409 }));
+        await settle();
+
+        expect(sockets[0]?.readyState).toBe(1);
+
+        client.close();
+    });
+
     it("presents the cookie session alone when the socket has no bearer", async () => {
         expect.assertions(2);
 
