@@ -929,26 +929,23 @@ describe("createWorker — aiChat data-sharing level", () => {
         expect(forwarded).not.toContain("__lunora_admin__:runSql");
     });
 
-    it("falls back to the safe default when the configured level is not a level", async () => {
-        expect.hasAssertions();
+    it.each(["off", "none", "false", "Disabled", "schema_and_everything"])(
+        "turns the assistant off when the configured level %s is not a level",
+        async (typo) => {
+            expect.assertions(2);
 
-        const forwarded: string[] = [];
-        // A typo in the wrangler var must not read as "everything allowed" — it
-        // fails closed to the default, which is the whole point of `asOptInLevel`.
-        const worker = createWorker({
-            adminToken: ADMIN_TOKEN,
-            aiChatBinding: scriptedBinding(['```tool\n{"name":"runSql","sql":"SELECT 1"}\n```', "No."]),
-            // Cast because the option is typed as the closed union — a hand-written
-            // typo is now a compile error. What this asserts is the OTHER path: the
-            // value codegen passes comes off `env` and is genuinely unvalidated.
-            aiOptInLevel: "schema_and_everything" as never,
-            shardDO: recordingShard(forwarded),
-        });
+            // An operator who writes `off` or `Disabled` meant to turn the assistant off. Falling back to the
+            // default level instead kept sending schema names to the inference provider, so a value that is not
+            // on the ladder disables it. An UNSET var still takes the default (covered by the tests above).
+            const binding = scriptedBinding(["never asked"]);
+            const worker = createWorker({ adminToken: ADMIN_TOKEN, aiChatBinding: binding, shardDO: recordingShard([]) });
 
-        await decoded(await worker.fetch(rpc({ prompt: "read it" }), {}, fakeContext));
+            const body = await decoded(await worker.fetch(rpc({ prompt: "read it" }), { LUNORA_AI_OPT_IN: typo }, fakeContext));
 
-        expect(forwarded).not.toContain("__lunora_admin__:runSql");
-    });
+            expect(body["reason"]).toBe("ai-disabled");
+            expect(binding.run).not.toHaveBeenCalled();
+        },
+    );
 
     it("never reaches the model at all when the assistant is disabled", async () => {
         expect.hasAssertions();
@@ -1149,28 +1146,29 @@ describe("createWorker — aiAvailable admin RPC", () => {
         expect(body["level"]).toBe("schema");
     });
 
-    it("reports the level the chat gate actually enforces, including a typo's fallback", async () => {
-        expect.assertions(3);
+    it("reports the level the chat gate actually enforces, including what a typo turns into", async () => {
+        expect.assertions(4);
 
-        const forwarded: string[] = [];
+        const binding = scriptedBinding(["never asked"]);
         // Same worker, two questions: what does the probe SAY, and what does the
-        // gate DO? A typo in the wrangler var fails closed to `schema`, and the
-        // readout must show `schema` rather than the string nobody honours.
+        // gate DO? A typo in the wrangler var turns the assistant off, and the
+        // readout must show `disabled` rather than the string nobody honours.
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
-            aiChatBinding: scriptedBinding(['```tool\n{"name":"runSql","sql":"SELECT 1"}\n```', "No."]),
+            aiChatBinding: binding,
             aiOptInLevel: "schema_and_everything" as never,
-            shardDO: recordingShard(forwarded),
+            shardDO: recordingShard([]),
         });
 
         const body = await decoded(await worker.fetch(probe(), {}, fakeContext));
 
-        expect(body["level"]).toBe("schema");
+        expect(body["available"]).toBe(false);
+        expect(body["level"]).toBe("disabled");
 
         const chat = await decoded(await worker.fetch(rpc({ prompt: "read it" }), {}, fakeContext));
 
-        expect(forwarded).not.toContain("__lunora_admin__:runSql");
-        expect(((chat["toolCalls"] ?? []) as { needs?: string }[])[0]?.needs).toBe("schema_and_log_and_data");
+        expect(chat["reason"]).toBe("ai-disabled");
+        expect(binding.run).not.toHaveBeenCalled();
     });
 
     it("reports unavailable, with the level, when the assistant is turned off", async () => {

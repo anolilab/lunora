@@ -337,8 +337,9 @@ title })`. The panel moved to `features/assistant/assistant-panel.tsx` and is
       anyway gets a refusal naming the tier, so it can tell the operator what to
       change.
     - **The level is server-side and defaults to `schema`.** It reads
-      `env.LUNORA_AI_OPT_IN` through `WorkerOptions.aiOptInLevel`; an unrecognised
-      value falls back to the default rather than the top tier. This is a
+      `env.LUNORA_AI_OPT_IN` through `WorkerOptions.aiOptInLevel`; an unset value
+      takes the default, and a set value that is not a level turns the assistant
+      off, so a typo never shares more than the operator meant. This is a
       deliberate behaviour change to W4: the operator already holds an admin
       bearer and could run any read statement themselves, so the gate is not
       protecting them from their own database — it decides whether rows their END

@@ -43,12 +43,21 @@ const DEFAULT_AI_OPT_IN_LEVEL: AiOptInLevel = "schema";
  * Narrow a configured value to a level.
  *
  * Lives here because {@link OPT_IN_LADDER} is the only list of valid levels, and
- * a second one at the worker would be the copy that drifts. Anything
- * unrecognised — a typo in a wrangler var, an absent binding — takes
- * {@link DEFAULT_AI_OPT_IN_LEVEL} rather than the top tier, so a misconfiguration
- * fails closed.
+ * a second one at the worker would be the copy that drifts.
+ *
+ * An UNSET value (no var, or an empty one) takes {@link DEFAULT_AI_OPT_IN_LEVEL}.
+ * A value that is set but is not a level turns the assistant OFF: an operator who
+ * writes `off`, `false` or `Disabled` meant to stop it, and falling back to the
+ * default would keep sending schema names to the inference provider while the
+ * deployment looked switched off. A typo therefore never shares more than the
+ * operator asked for, and the Studio shows `disabled`, so the mistake is visible.
  */
-const asOptInLevel = (raw: unknown): AiOptInLevel =>
-    typeof raw === "string" && (OPT_IN_LADDER as ReadonlyArray<string>).includes(raw) ? (raw as AiOptInLevel) : DEFAULT_AI_OPT_IN_LEVEL;
+const asOptInLevel = (raw: unknown): AiOptInLevel => {
+    if (raw === undefined || raw === null || raw === "") {
+        return DEFAULT_AI_OPT_IN_LEVEL;
+    }
+
+    return typeof raw === "string" && (OPT_IN_LADDER as ReadonlyArray<string>).includes(raw) ? (raw as AiOptInLevel) : "disabled";
+};
 
 export { asOptInLevel, OPT_IN_LADDER };
