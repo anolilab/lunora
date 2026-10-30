@@ -152,9 +152,16 @@ const isInternalTable = (name: string, dialect: SqlDialect): boolean => isIntern
 /** `information_schema`'s scope for the connection's own schema/database, so a shared server never shows another database's tables. */
 const schemaScope = (dialect: SqlDialect): SQL => (dialect.name === "postgres" ? sql`current_schema()` : sql`DATABASE()`);
 
-/** The primary-key columns of a SQLite `PRAGMA table_info` result, in key order as the pragma lists them. */
+/**
+ * The primary-key columns of a SQLite `PRAGMA table_info` result, in key order. The pragma lists columns
+ * in declaration order and gives each key column its 1-based position in `pk`, so `PRIMARY KEY (b, a)`
+ * must be sorted on `pk` to come back as `[b, a]`.
+ */
 const sqlitePrimaryKey = (info: ReadonlyArray<Record<string, unknown>>): string[] =>
-    info.filter((column) => Number(column["pk"] ?? 0) > 0).map((column) => String(column["name"]));
+    info
+        .filter((column) => Number(column["pk"] ?? 0) > 0)
+        .toSorted((left, right) => Number(left["pk"]) - Number(right["pk"]))
+        .map((column) => String(column["name"]));
 
 /**
  * The catalog reads, the only SQL here that differs by engine. SQLite keeps the

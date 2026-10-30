@@ -627,8 +627,9 @@ const recheckOwner = async (
     exec: SqlContextExec,
     found: { owners: Map<string, Set<string>> },
     row: ReadyRow & { explicitId: string },
+    onConflict: ImportGlobalArgs["onConflict"],
 ): Promise<RowOutcome | undefined> => {
-    const { explicitId, line, table } = row;
+    const { decoded, explicitId, line, table } = row;
     let owner: string | undefined;
 
     try {
@@ -643,7 +644,12 @@ const recheckOwner = async (
 
     recordOwner(found, explicitId, owner);
 
-    return owner === table ? { kind: "conflict" } : { error: collisionError(owner, explicitId, line, table), kind: "error" };
+    if (owner !== table) {
+        return { error: collisionError(owner, explicitId, line, table), kind: "error" };
+    }
+
+    // The row appeared in its own table after the batched probe: under replace it is the row to overwrite, as the per-row probe would have found it.
+    return onConflict === "replace" ? writeRow(writer, table, decoded, explicitId, line) : { kind: "conflict" };
 };
 
 /** Resolve one prepared import row to a single outcome, isolating the per-row branching from the accumulation loop. */
@@ -687,7 +693,7 @@ const importOneRow = async (
     } else if (outcome.kind === "error" && outcome.error.code === "CONFLICT" && existingId === undefined) {
         // Only a unique-index breach can mean the id was taken since the probe. Any other failure (a trigger or companion
         // write after the base row landed) keeps its own error: the recheck would find the row this very insert stored.
-        return (await recheckOwner(writer, schema, dialect, args.exec, found, { ...row, explicitId })) ?? outcome;
+        return (await recheckOwner(writer, schema, dialect, args.exec, found, { ...row, explicitId }, args.onConflict)) ?? outcome;
     }
 
     return outcome;

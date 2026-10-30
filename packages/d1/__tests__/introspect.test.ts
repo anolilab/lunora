@@ -182,6 +182,22 @@ describe("d1 introspect", () => {
             await expect(readGlobalTablePage(harness.exec, schema, { offset: Number.NaN, table: "organizations" })).resolves.toMatchObject({ total: 2 });
         });
 
+        it("orders a composite key in key order, not column-declaration order", async () => {
+            // Declared columns (org, member) but keyed (member, org): the page must order on the key.
+            expect.assertions(1);
+
+            harness.ddl(`CREATE TABLE "seats" ("org" TEXT, "member" TEXT, PRIMARY KEY ("member", "org")) WITHOUT ROWID`);
+            await harness.exec.run(`INSERT INTO "seats" VALUES ('b', 'x'), ('a', 'y'), ('a', 'x')`, []);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { table: "seats" });
+
+            expect(page.rows).toStrictEqual([
+                { member: "x", org: "a" },
+                { member: "x", org: "b" },
+                { member: "y", org: "a" },
+            ]);
+        });
+
         it("reads an external table's `PRAGMA table_info` once per page, for both its columns and its order key", async () => {
             expect.assertions(2);
 

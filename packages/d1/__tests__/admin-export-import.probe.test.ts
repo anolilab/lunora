@@ -179,6 +179,42 @@ describe("d1 import ownership probe", () => {
         await expect(writer.get("alpha", "spawned")).resolves.toMatchObject({ label: "trigger" });
     });
 
+    it("overwrites a row whose id appeared since the batch probe under replace", async () => {
+        expect.assertions(2);
+
+        const base = schemaOf(["alpha"]);
+        const triggerSchema = {
+            tables: {
+                alpha: {
+                    ...base.tables["alpha"]!,
+                    triggerMap: {
+                        mirror: {
+                            handler: async (context: { db: DatabaseWriterLike }, event: { id: string }) => {
+                                if (event.id === "first") {
+                                    await context.db.insert("alpha", { _id: "spawned", label: "trigger" }, { allowExplicitId: true });
+                                }
+                            },
+                            op: "insert",
+                            timing: "after",
+                        },
+                    },
+                },
+            },
+        } as never as SchemaLike;
+        const writer = writerFor(triggerSchema);
+        const result = await importGlobalRows(writer, triggerSchema, {
+            exec: counting().exec,
+            onConflict: "replace",
+            rows: [
+                { doc: { _id: "first", label: "a" }, table: "alpha" },
+                { doc: { _id: "spawned", label: "b" }, table: "alpha" },
+            ],
+        });
+
+        expect(result).toMatchObject({ conflicts: 0, errors: [], inserted: { alpha: 1 }, replaced: 1 });
+        await expect(writer.get("alpha", "spawned")).resolves.toMatchObject({ label: "b" });
+    });
+
     it("returns the original insert error when the recheck probe itself fails", async () => {
         expect.assertions(3);
 
