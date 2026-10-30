@@ -133,7 +133,7 @@ const chooseMode = (mode: string): void => {
 const messageRows = (...ids: string[]): string => ids.map((id) => JSON.stringify({ doc: { _id: id, text: id }, table: "messages" })).join("\n");
 
 /** A shard that holds `stored` ids in `messages`, honours dry runs, replace and delete rows, and reports what each call did. */
-const createModeClient = (stored: string[]): MockClientHooks =>
+const createModeClient = (stored: string[], options: { failDeletes?: boolean } = {}): MockClientHooks =>
     createMockClient({
         query: (reference, args): unknown => {
             if (reference === ADMIN_FUNCTIONS.listTables) {
@@ -150,6 +150,10 @@ const createModeClient = (stored: string[]): MockClientHooks =>
 
             const { dryRun, rows } = args as { dryRun?: boolean; rows: (ExportRow & { op?: string })[] };
             const deleted = rows.filter((row) => row.op === "delete").length;
+
+            if (options.failDeletes === true && dryRun !== true && deleted > 0) {
+                throw new Error("connection reset");
+            }
             const written = rows.length - deleted;
 
             return dryRun === true
@@ -347,6 +351,57 @@ describe("exportImportPanel", () => {
                     (call[1] as { rows: { op?: string }[] }).rows.every((row) => row.op === undefined),
             ),
         ).toBe(true);
+    });
+
+    it("reports a failed prune as a prune failure, not as unsent file rows", async () => {
+        expect.assertions(3);
+
+        const mock = createModeClient(["m1", "m2"], { failDeletes: true });
+
+        render(renderPanel(mock));
+        chooseMode("replace");
+        importText(messageRows("m1", "m3"));
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("connection reset");
+        expect(error.textContent).toMatch(/every file row is written/iu);
+        expect(error.textContent).not.toContain("Rows from line");
+    });
+
+    it("drops a shown plan once the mode or the file changes, so it never sits beside inputs it was not made for", async () => {
+        expect.assertions(3);
+
+        render(renderPanel(createModeClient(["m1"])));
+        chooseMode("replace");
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([withEnd(messageRows("m1"))], "shard.ndjson")] } });
+        fireEvent.click(screen.getByTestId("ei-plan"));
+        await screen.findByTestId("ei-plan-result");
+
+        chooseMode("upsert");
+
+        expect(screen.queryByTestId("ei-plan-result")).toBeNull();
+
+        fireEvent.click(screen.getByTestId("ei-plan"));
+        await screen.findByTestId("ei-plan-result");
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([withEnd(messageRows("m2"))], "other.ndjson")] } });
+
+        expect(screen.queryByTestId("ei-plan-result")).toBeNull();
+        expect(screen.getByTestId("ei-mode")).toHaveProperty("value", "upsert");
+    });
+
+    it("words the upsert option and its confirmation for what upsert does: new _ids inserted, existing ones overwritten, nothing deleted", () => {
+        expect.assertions(2);
+
+        render(renderPanel(createModeClient([])));
+
+        expect(screen.getByRole("option", { name: /new _id values are inserted/u })).toBe(true);
+
+        chooseMode("upsert");
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([withEnd(messageRows("m1"))], "shard.ndjson")] } });
+        fireEvent.click(screen.getByTestId("ei-import"));
+
+        expect(screen.getByTestId("ei-import-confirm").textContent).not.toMatch(/delete/iu);
     });
 
     it("require-empty refuses a file whose table already holds rows, and sends nothing", async () => {

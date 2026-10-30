@@ -629,8 +629,17 @@ const pruneStored = async (options: {
     });
 
     if (total.errors.length > 0) {
-        throw new Error(t("Stopped while deleting the rows the file lacks. Every file row is written; import again to finish the deletes."));
+        throw new Error(total.errors[0]?.message ?? "a delete was refused");
     }
+};
+
+/** The confirmation on the Import button: what this mode will do to the shard's stored rows. */
+const importConfirmLabel = (mode: ImportMode, t: Translate): string => {
+    if (mode === "replace") {
+        return t("Import (overwrites rows and may delete rows)?");
+    }
+
+    return mode === "upsert" ? t("Import (overwrites rows)?") : t("Import (writes rows)?");
 };
 
 /** Why the shard cannot honour the import, read from its answer to the empty probe, or `undefined` when it can. */
@@ -813,7 +822,25 @@ const sendImport = async (
     try {
         await forEachRowChunk(source(), sendChunk);
 
-        await pruneStored({ client, deletions, onConflict, onProgress, shardKey, t, total });
+        try {
+            await pruneStored({ client, deletions, onConflict, onProgress, shardKey, t, total });
+        } catch (error_) {
+            // Every file row is written; only the removal of the rows the file lacks failed, and a delete may have landed. The file-row
+            // resumption text would send the operator to a line that was already sent.
+            return {
+                failure: {
+                    message: t(
+                        "Every file row is written, but removing the stored rows the file lacks failed: {message}. Import again to finish the deletes.",
+                        {
+                            message: errorMessage(error_),
+                        },
+                    ),
+                    refused: true,
+                    rows: sent,
+                },
+                total,
+            };
+        }
 
         return { failure: undefined, total };
     } catch (error_) {
@@ -1037,6 +1064,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
     const onFileChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setImportFile(event.target.files?.[0] ?? null);
+        setPlan(null);
         // A replacement file has its own rows, so the table picked for the previous one must not carry over to it.
         setCsvPick(null);
     };
@@ -1045,8 +1073,15 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         setCsvPick({ shardKey, table });
     };
 
+    // A plan is made for one file, one shard and one mode, so changing any of them drops it.
     const onModeChange = (event: ChangeEvent<HTMLSelectElement>): void => {
         setMode(event.target.value as ImportMode);
+        setPlan(null);
+    };
+
+    const onShardChange = (value: string): void => {
+        setShardKey(value);
+        setPlan(null);
     };
 
     return (
@@ -1057,7 +1092,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                 </header>
                 <CardContent className="flex flex-col gap-3 p-4">
                     <div className="flex flex-wrap items-center gap-2">
-                        <ShardInput onChange={setShardKey} testId="ei-shard-input" value={shardKey} />
+                        <ShardInput onChange={onShardChange} testId="ei-shard-input" value={shardKey} />
                         <Button data-testid="ei-export" disabled={busy} onClick={runExport} type="button">
                             {t("Export")}
                         </Button>
@@ -1113,7 +1148,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                         >
                             <option value="append">{t("Append: rows whose _id already exists are left unchanged and counted as conflicts")}</option>
                             <option value="upsert">
-                                {t("Overwrite rows whose _id already exists (otherwise they are left unchanged and counted as conflicts)")}
+                                {t("Upsert: new _id values are inserted, rows whose _id already exists are overwritten, nothing is deleted")}
                             </option>
                             <option value="replace">{t("Replace: overwrite, then delete this shard's rows of the file's tables that the file lacks")}</option>
                             <option value="require-empty">{t("Require empty: refuse unless the file's tables hold no rows in this shard")}</option>
@@ -1121,14 +1156,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                     </Label>
 
                     <div className="flex flex-wrap items-center gap-2">
-                        <ConfirmButton
-                            confirmLabel={
-                                mode === "upsert" || mode === "replace" ? t("Import (overwrites rows and may delete rows)?") : t("Import (writes rows)?")
-                            }
-                            disabled={busy || !importReady}
-                            onConfirm={runImport}
-                            testId="ei-import"
-                        >
+                        <ConfirmButton confirmLabel={importConfirmLabel(mode, t)} disabled={busy || !importReady} onConfirm={runImport} testId="ei-import">
                             {t("Import")}
                         </ConfirmButton>
                         <Button data-testid="ei-plan" disabled={busy || !importReady} onClick={runPlan} type="button" variant="outline">
