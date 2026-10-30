@@ -37,7 +37,9 @@ import type { ForwardableEmailMessageLike } from "@lunora/mail/inbound";
 import { authenticatesFrom, createInboundEmailHandler, parseInboundEmail } from "@lunora/mail/inbound";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { withRunShard } from "../../../shared/run-shard";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
+import resolveInboundShard from "./inbound-shard";
 import type { AgentDefinition, AgentWorkflowBindingLike } from "./types";
 
 /**
@@ -46,10 +48,10 @@ import type { AgentDefinition, AgentWorkflowBindingLike } from "./types";
  */
 interface AgentEmailTarget {
     /**
-     * The agent definition — only its `onEmail` mapper is read, deciding whether
-     * this agent claims the message and, if so, the run to start.
+     * The agent definition — its `onEmail` mapper decides whether this agent claims
+     * the message and the run to start; `resolveEmailShard` picks the run's shard.
      */
-    agent: Pick<AgentDefinition, "onEmail">;
+    agent: Pick<AgentDefinition, "onEmail" | "resolveEmailShard">;
     /** The agent's export key (its generated class name), resolved off `ctx.exports` or `env`. */
     className: string;
 }
@@ -149,9 +151,16 @@ const dispatchAgentEmail = (targets: ReadonlyArray<AgentEmailTarget>): InboundAg
                     return;
                 }
 
-                // `AgentEmailRun` is the run-input shape (input/owner/threadKey/title).
+                // The run's shard comes from the app's hook alone; a `shardKey` the mapper
+                // copied out of the email is dropped. The hook keys on the envelope
+                // recipient Email Routing delivered to, not the sender-written `To:`
+                // header. A throwing hook fails the delivery, which the mail handler may
+                // retain and retry.
                 // eslint-disable-next-line no-await-in-loop -- single dispatch then `return`; never iterates past the first claim
-                await binding.create({ params: run });
+                const shardKey = await resolveInboundShard(target.agent.resolveEmailShard, { email, envelopeTo: context.message.to }, "resolveEmailShard");
+
+                // eslint-disable-next-line no-await-in-loop -- single dispatch then `return`; never iterates past the first claim
+                await binding.create({ params: withRunShard(run, shardKey) });
 
                 return;
             }

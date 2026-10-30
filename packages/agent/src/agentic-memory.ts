@@ -1,5 +1,6 @@
 import { jsonSchema } from "@ai-sdk/provider-utils";
 
+import appCallOptions from "./app-call-options";
 import { toFunctionReference } from "./paths";
 import type { AgentConfig, AgentFunctionReference, AgentMemorySource, AgentToolDefinition, AnyAgentTool, SkillDefinition } from "./types";
 
@@ -150,7 +151,7 @@ const buildSearchTool = (
             // A model-supplied `topK` is clamped to `[1, MAX_SEARCH_TOPK]`; an absent
             // or garbage value falls back to the author's trusted configured `topK`.
             const topK = clampSearchTopK(input.topK) ?? configuredTopK;
-            const retrieved = await context.run(target, { query: input.query, ...(topK === undefined ? {} : { topK }) });
+            const retrieved = await context.run(target, { query: input.query, ...(topK === undefined ? {} : { topK }) }, appCallOptions(context.shardKey));
 
             return toSearchResults(retrieved, snippetChars);
         },
@@ -165,7 +166,7 @@ const buildReadTool = (readReference: NonNullable<AgentMemorySource["read"]>): A
 
     return {
         description: "Fetch the full text of a memory document by the `id` from a search hit.",
-        execute: (input, context) => context.run(target, { id: input.id }),
+        execute: (input, context) => context.run(target, { id: input.id }, appCallOptions(context.shardKey)),
         inputSchema: readInputSchema,
         isLunoraAgentTool: true,
     };

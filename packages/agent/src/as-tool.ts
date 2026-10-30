@@ -3,6 +3,7 @@ import { LunoraError } from "@lunora/errors";
 import { isDuplicateInstanceError } from "@lunora/workflow";
 
 import { fnv1a64Hex } from "../../../shared/fnv1a";
+import { withRunShard } from "../../../shared/run-shard";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { agentClassName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
@@ -219,7 +220,8 @@ const agentAsTool = (options: AgentAsToolOptions): AgentToolDefinition<AgentSubT
         let instance: AgentWorkflowInstanceLike;
 
         try {
-            const handle = await binding.create({ id: childInstanceId, params });
+            // The child works for the same tenant, so its tools read the parent's shard.
+            const handle = await binding.create({ id: childInstanceId, params: withRunShard(params, context.shardKey) });
 
             instance = await binding.get(handle.id);
         } catch (error) {

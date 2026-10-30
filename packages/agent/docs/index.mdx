@@ -587,6 +587,35 @@ tools: {
 }
 ```
 
+### Sharded apps
+
+A run records the shard its tools use, and only the code that starts the run sets it.
+Any `shardKey` in the run input is dropped, because that input may come from a client,
+an email or a webhook.
+
+| Started by                                              | Tools run on                                                                                    |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `ctx.agents.<name>.run(...)` in a mutation or action    | that function's shard                                                                           |
+| `ctx.scheduler.runAfter` / `runAt` with `agents.<name>` | the scheduling shard, unless you pass `{ shardKey }`                                            |
+| an `agentAsTool` parent                                 | the parent run's shard                                                                          |
+| inbound email / a channel                               | what your `resolveEmailShard` / `onInbound.resolveShard` returns; the default shard without one |
+| a client's `agents:agentRun`; a cron                    | the default shard (a cron's args are yours, so a `shardKey` in them is kept)                    |
+
+`functionTool` targets and semantic memory sources (`memory.source`, the agentic
+`searchMemory` / `readMemory` tools) dispatch to the run's shard, so a tool over a
+`.shardBy("organizationId")` table sees the tenant's rows. A hand-written
+`defineAgentTool` uses the default shard unless it passes the run's shard:
+`run(api.orders.byId, args, { shardKey: context.shardKey })`.
+
+The agent's own state stays on the default shard: threads, messages, synced state,
+secrets, and episodic and graph memory. Those are `agents:*` tables without a tier
+modifier, written by the loop on the default shard, and the client hooks subscribe there.
+Episodic and graph recall read the same shard their run-end upserts write. Semantic
+memory differs because its `source` is your function over your tables. For the same
+reason the worker refuses `agents:agentRun` (400) on any other shard, including as a
+fan-out: its in-flight check reads the thread table. To run a tenant's tools, start the
+run from a mutation on the tenant's shard with `ctx.agents.<name>.run`.
+
 ## Sandbox tools (batteries-included browser + containers + filesystem)
 
 These tools give an agent a **headless browser**, a **sandboxed container**, and
@@ -1051,6 +1080,28 @@ mapped field as attacker-controlled input. A message no agent claims is
 dropped silently; a throw while parsing or dispatching bounces the message with a
 fixed generic reason (never reflecting internal error detail back to the sender).
 
+**Shard.** A run started from email uses the default shard. To run a tenant's tools,
+add `resolveEmailShard`. It is called after the sender check and after `onEmail` claimed
+the message, with `{ envelopeTo, email }`. Key it on `envelopeTo`, the SMTP recipient
+Email Routing delivered to. Routing only delivers to addresses you configured, so that
+field is trustworthy. The parsed headers are not: `email.to` is the `To:` header, which a
+sender can set to another tenant's inbox, and `email.from` is only as good as its
+authentication verdicts.
+
+```ts
+export const support = defineAgent({
+    // …
+    onEmail: (email) => ({ input: wrapUntrusted(email.text ?? ""), threadKey: email.messageId ?? email.from }),
+    // Look the routed address up in your own table; never pass a header or body field through.
+    resolveEmailShard: ({ envelopeTo }) => tenantForInbox(envelopeTo),
+});
+```
+
+Returning a shard is an authorization decision: the run's tools dispatch past
+`authorizeShard`. A `shardKey` in the mapped run is always dropped. A hook that throws, or
+that returns anything but a non-empty string or `undefined`, fails the delivery instead of
+falling back to the default shard.
+
 The auto-wired handler is registered _before_ any manual `.onEmail(...)` you add
 to the app builder, so a hand-registered handler still wins if you need full
 control.
@@ -1113,6 +1164,22 @@ are exported too if you wire your own routing.
 > attacker-controlled. Derive the run `owner` from the verified channel identity
 > (the workspace / installation the secret belongs to), never from an arbitrary
 > payload field; the run dispatches RLS-bypassed under whatever `owner` you set.
+
+**Shard.** A channel run uses the default shard unless `onInbound.resolveShard` names one.
+It runs after `map` claimed the event and follows the same rules as `resolveEmailShard`.
+It gets `{ channel, workspaceId }` and nothing from the message itself: `workspaceId` is
+the tenant id the provider stamped on the signed body (Slack `team_id`, GitHub
+`installation.id`, Discord `guild_id`). The rest of the body is text a member of that
+workspace wrote. A throw answers non-2xx, so the provider redelivers.
+
+```ts
+onInbound: {
+    channel: "slack",
+    secret: "SLACK_SIGNING_SECRET",
+    map: (event) => ({ input: "…", threadKey: "…" }),
+    resolveShard: ({ workspaceId }) => tenantForSlackTeam(workspaceId),
+},
+```
 
 ## Access control
 

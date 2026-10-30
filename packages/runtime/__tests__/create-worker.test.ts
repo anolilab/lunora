@@ -224,6 +224,58 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.shardKey).toBe("tenant-1");
     });
 
+    it("refuses agents:agentRun on a non-default shard before forwarding it", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, defaultShardKey: "tenant-1", shardDO: shard.namespace });
+        const agentRun = async (shardKey?: string): Promise<Response> =>
+            worker.fetch(
+                new Request("https://app.example/_lunora/rpc", {
+                    body: JSON.stringify({ args: { agent: "support", input: "hi", threadKey: "t" }, functionPath: "agents:agentRun", shardKey }),
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+        // The agent's thread rows live on the default shard; a run-start check anywhere
+        // else reads an empty table.
+        const refused = await agentRun("org-a");
+
+        await agentRun();
+        await agentRun("tenant-1");
+
+        expect(refused.status).toBe(400);
+        await expect(refused.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+        expect(shard.calls.map((call) => call.shardKey)).toStrictEqual(["tenant-1", "tenant-1"]);
+    });
+
+    it("refuses agents:agentRun sent as a fan-out, even when fan-out is authorized", async () => {
+        expect.assertions(3);
+
+        const fanOut = vi.fn<() => never>();
+        const worker = createWorker({ authorizeFanOut: () => true, queryCoordinator: { fanOut } as never, shardDO: shard.namespace });
+
+        // A fan-out reaches every shard, so it would run the in-flight check on each
+        // shard's empty thread table and start a run per shard.
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({
+                    args: { agent: "support", input: "hi", threadKey: "t" },
+                    fanOut: { merge: { kind: "concat" }, table: "messages" },
+                    functionPath: "agents:agentRun",
+                }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+        expect(fanOut).not.toHaveBeenCalled();
+    });
+
     it("rejects non-POST RPC requests with 405", async () => {
         expect.assertions(2);
 

@@ -21,9 +21,17 @@ import { regionHintFromRequest } from "../../../shared/region-hint";
 import { RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
 import { parseMinSeq, REPLICA_NAME_INFIX, replicaName } from "../../../shared/replica-name";
 import type { RestExposure } from "../../../shared/rest-surface";
+import { withRunShard } from "../../../shared/run-shard";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
-import { checkBearerToken, isReservedRelationFunctionPath, SCHEDULER_DISPATCH_PATH, verifySchedulerDispatch } from "../../../shared/scheduler-dispatch";
+import {
+    AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE,
+    checkBearerToken,
+    isAgentRunOffDefaultShard,
+    isReservedRelationFunctionPath,
+    SCHEDULER_DISPATCH_PATH,
+    verifySchedulerDispatch,
+} from "../../../shared/scheduler-dispatch";
 import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import { buildSystemDispatchHeaders, readForwardedDispatchIdentity } from "../../../shared/system-dispatch-headers";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
@@ -940,6 +948,16 @@ interface WorkerOptions {
      * per-shard admin gate uses.
      */
     adminToken?: string;
+
+    /**
+     * The generated class names of the app's agent workflows (`SupportAgentWorkflow`).
+     * Codegen wires it. A scheduled job that starts one of them gets its run shard
+     * (`AgentRunInput.shardKey`) from the scheduler record, never from the job's args:
+     * the record's `shardKey` is stamped server-side by the scheduling shard and signed
+     * with the dispatch, while the args may carry a public mutation's client input. A
+     * plain workflow's params are passed through untouched.
+     */
+    agentWorkflows?: ReadonlyArray<string>;
 
     /**
      * Opt into an authorization-open posture for sharded and fan-out access.
@@ -2941,6 +2959,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const noticeDroppedTrace = createDroppedTraceNotice(options.trustInboundTraceContext);
     const defaultShard = options.defaultShardKey ?? "__root__";
 
+    // The worker knows `defaultShardKey`; the shard DO does not (see shared/scheduler-dispatch).
+    const assertAgentRunOnDefaultShard = (functionPath: string, shardKey: string | undefined): void => {
+        if (isAgentRunOffDefaultShard(functionPath, shardKey, defaultShard)) {
+            throw new LunoraError(AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, { code: "BAD_REQUEST", status: 400 });
+        }
+    };
+
     // Every admin fan-out (export, sync, apply, migrate, backup) goes through the
     // coordinator, so a worker configured without one gets a default whose
     // registry serves root and `.global()` tables and refuses to guess at a
@@ -3369,6 +3394,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // cron target is app-authored — neither can legitimately be the reserved
         // fan-out-only reader, and this path stamps the system flag below.
         assertNotReservedRelationPath(functionPath);
+        assertAgentRunOnDefaultShard(functionPath, shardKey);
 
         // `x-lunora-system` marks this as a trusted server-initiated dispatch so the
         // shard may run `internal` functions (scheduled/cron jobs are typically
@@ -3461,6 +3487,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 throw error;
             }
         }
+    };
+
+    /**
+     * A scheduled agent run's shard is the record's, which the scheduling shard stamped and
+     * the dispatch signature covers; a `shardKey` in the args may be a client's (see
+     * {@link WorkerOptions.agentWorkflows}). A plain workflow's params are its own.
+     */
+    const scheduledWorkflowParams = (workflow: string, args: Record<string, unknown>, recordShard: unknown): Record<string, unknown> => {
+        if (options.agentWorkflows?.includes(workflow) !== true) {
+            return args;
+        }
+
+        return withRunShard(args, typeof recordShard === "string" && recordShard.length > 0 ? recordShard : undefined);
     };
 
     /**
@@ -3722,7 +3761,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // as a string. The wire form IS JSON-safe, so it travels intact and
             // `@lunora/workflow`'s `createWorkflowRunContext` decodes it where the
             // handler reads `params`.
-            await startWorkflowInstance(candidate.workflow, args, { context, env }, "scheduled workflow", recordId);
+            await startWorkflowInstance(
+                candidate.workflow,
+                scheduledWorkflowParams(candidate.workflow, args, candidate.shardKey),
+                { context, env },
+                "scheduled workflow",
+                recordId,
+            );
 
             await releasePoolSlot(candidate);
 
@@ -4747,6 +4792,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     const authorizeRpcEnvelope = async (envelope: RpcEnvelope, identity: ResolvedIdentity | null): Promise<void> => {
+        // First, ahead of the fan-out branch below: every transport (RPC, batch, REST,
+        // `serverQuery`, auth dispatch) funnels through here, and a fan-out reaches shards
+        // a single-shard check never sees.
+        assertAgentRunOnDefaultShard(envelope.functionPath, envelope.fanOut ? undefined : (envelope.shardKey ?? defaultShard));
+
         // Reserved admin RPCs (`__lunora_admin__:*`, single-shard) are privileged
         // operator calls authorized by the shard DO's admin-bearer gate
         // (`isAdminAuthorized`), NOT by the per-tenant `authorizeShard` callback —

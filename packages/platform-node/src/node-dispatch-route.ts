@@ -29,7 +29,13 @@ import type { DirectShardDirectory } from "@lunora/platform";
 import { resolveShard, toErrorResponse } from "@lunora/runtime";
 
 import { readBodyTextCapped } from "../../../shared/read-body-text-capped";
-import { isReservedRelationFunctionPath, SCHEDULER_DISPATCH_PATH, verifySchedulerDispatch } from "../../../shared/scheduler-dispatch";
+import {
+    AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE,
+    isAgentRunOffDefaultShard,
+    isReservedRelationFunctionPath,
+    SCHEDULER_DISPATCH_PATH,
+    verifySchedulerDispatch,
+} from "../../../shared/scheduler-dispatch";
 import { buildSystemDispatchHeaders, readForwardedDispatchIdentity } from "../../../shared/system-dispatch-headers";
 
 /** Upper bound on a dispatch body, matching the runtime's default body budget. */
@@ -114,6 +120,10 @@ const handle = async (request: Request, options: NodeDispatchRouteOptions): Prom
     }
 
     const shardKey = typeof candidate["shardKey"] === "string" && candidate["shardKey"].length > 0 ? candidate["shardKey"] : options.defaultShardKey;
+
+    if (isAgentRunOffDefaultShard(candidate["functionPath"], shardKey, options.defaultShardKey)) {
+        throw new LunoraError("BAD_REQUEST", AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE);
+    }
 
     return options.invoke({
         args: (candidate["args"] ?? {}) as Record<string, unknown>,

@@ -30,6 +30,7 @@ export type {
     FsToolOptions,
 } from "./sandbox";
 export { browserTool, containerFsTool, containerTool, fsTool } from "./sandbox";
+export { default as withAgentScheduleShard } from "./schedule-shard";
 export type { SecretRequestInput } from "./secret-request-tool";
 export { requestSecretTool, SecretUnavailableError, withSecret } from "./secret-request-tool";
 export { defineSkill, isSkillDefinition } from "./skill";
@@ -37,16 +38,19 @@ export type {
     AgentApprovalContext,
     AgentAsToolOptions,
     AgentBindingSpec,
+    AgentChannelShardInput,
     AgentConfig,
     AgentDefinition,
     AgentEmailMapper,
     AgentEmailRun,
+    AgentEmailShardInput,
     AgentFunctionPaths,
     AgentFunctionReference,
     AgentGenerate,
     AgentGenerateOptions,
     AgentGenerateResult,
     AgentHandle,
+    AgentInboundShardResolver,
     AgentInstructionsContext,
     AgentLiveEvent,
     AgentMemoryOptions,

@@ -774,6 +774,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // `@lunora/runtime`) so it can import the add-on packages the app installed.
     const authModuleContent = emitAuthModule(dependencies.has("@lunora/auth"));
     const appContent = emitApp({
+        agentWorkflows: agents.map((agent) => agent.className),
         // Usage-only, never a dependency signal: each long-tail method's
         // parameter type reads `ShardConfig[configKey]` (e.g. `.kv()` reads
         // `ShardConfig["kv"]`), and the shard emits that config field on the

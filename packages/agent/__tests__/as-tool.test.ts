@@ -404,6 +404,25 @@ describe("child-run reporting", () => {
         await expect(tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run))).resolves.toMatch(TURN_CAP_PATTERN);
     });
 
+    it("starts the child on the PARENT run's shard and reads its thread on the default one", async () => {
+        const binding = mockAgentBinding(["complete"]);
+        const shardOptions: unknown[] = [];
+        const { run: childRun } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 1 }]);
+        const run: AgentToolContext["run"] = async (reference, args, options) => {
+            shardOptions.push(options?.shardKey);
+
+            return childRun(reference, args, options);
+        };
+
+        const tool = agentAsTool({ description: "d", name: "research", wait: immediate });
+
+        await tool.execute({ prompt: "go" }, context({ ResearchAgentWorkflow: binding }, run, { shardKey: "org-a" }));
+
+        // The child's tools read the same tenant; its thread, like the parent's, is on the default shard.
+        expect(binding.created[0]?.params).toStrictEqual({ depth: 1, input: "go", shardKey: "org-a", threadKey: "thread-1::sub::research::call_9" });
+        expect(shardOptions).toStrictEqual([undefined]);
+    });
+
     it("creates the child thread under the PARENT run's owner", async () => {
         const binding = mockAgentBinding(["complete"]);
         const { run } = runWithChildThread([{ content: "the answer", role: "assistant", seq: 1 }]);

@@ -182,6 +182,21 @@ const assertMemorySourcesConfigured = (config: AgentConfig, skills: ReadonlyArra
 };
 
 /**
+ * A non-function shard hook would be skipped at delivery and the run would land on the
+ * default shard, which is exactly the tenant mix-up the hook exists to prevent.
+ */
+const assertInboundShardHooks = (config: AgentConfig): void => {
+    for (const [label, hook] of [
+        ["resolveEmailShard", config.resolveEmailShard],
+        ["onInbound.resolveShard", config.onInbound?.resolveShard],
+    ] as const) {
+        if (hook !== undefined && typeof hook !== "function") {
+            throw new LunoraError("INTERNAL", `@lunora/agent: \`${label}\` must be a function`);
+        }
+    }
+};
+
+/**
  * Reject an `approvalTimeout` that resolves to no wait at all.
  *
  * `approvalTimeoutMs` clamps the UPPER bound and nothing guarded the lower one,
@@ -259,6 +274,7 @@ const defineAgent = (config: AgentConfig): AgentDefinition => {
     }
 
     assertPositiveApprovalTimeout(config.approvalTimeout);
+    assertInboundShardHooks(config);
 
     const skills = config.skills ?? [];
 

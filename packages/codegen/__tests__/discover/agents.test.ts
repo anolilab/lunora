@@ -414,20 +414,26 @@ describe("emit (agents)", () => {
     });
 
     it("emitShard wires createAgentContext into the built ctx", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const shard = emitShard({ agents: discoverSupportAgent(), schema: EMPTY_SCHEMA });
 
-        expect(shard).toContain('import { createAgentContext } from "@lunora/agent";');
+        expect(shard).toContain('import { createAgentContext, withAgentScheduleShard } from "@lunora/agent";');
         expect(shard).toContain('{ className: "SupportAgentWorkflow", exportName: "support" },');
-        expect(shard).toContain("const agents = createAgentContext(env, LUNORA_AGENTS, { exports: this.state.exports });");
+        // The run carries the starting shard, so its tools reach that tenant's `.shardBy` rows.
+        expect(shard).toContain("const agents = createAgentContext(env, LUNORA_AGENTS, { exports: this.state.exports, shardKey: this.currentShardKey() });");
         expect(shard).toContain("agents,");
+        // A scheduled agent run starts on this shard too.
+        expect(shard).toContain("withAgentScheduleShard((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, LUNORA_AGENTS, this.currentShardKey())");
     });
 
     it("emitShard stays agent-free without definitions", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        expect(emitShard({ schema: EMPTY_SCHEMA })).not.toContain("LUNORA_AGENTS");
+        const shard = emitShard({ schema: EMPTY_SCHEMA });
+
+        expect(shard).not.toContain("LUNORA_AGENTS");
+        expect(shard).not.toContain("withAgentScheduleShard");
     });
 });
 

@@ -5,19 +5,20 @@ import type { AgentMemoryOptions, AgentToolContext } from "../src/types";
 import { passthroughStep } from "./loop-harness";
 
 /** A minimal `AgentToolContext` whose `run` records the dispatched args and returns a canned result. */
-const captureContext = (calls: { args: Record<string, unknown> | undefined }[], retrieved: unknown): AgentToolContext => {
+const captureContext = (calls: { args: Record<string, unknown> | undefined; shardKey?: string }[], retrieved: unknown, shardKey?: string): AgentToolContext => {
     return {
         env: {},
         getState: async () => undefined,
         idempotencyKey: "tool:searchMemory:call_1",
         instanceId: "wf-1",
         reportProgress: () => {},
-        run: async (_reference, args) => {
-            calls.push({ args });
+        run: async (_reference, args, options) => {
+            calls.push({ args, ...(options?.shardKey === undefined ? {} : { shardKey: options.shardKey }) });
 
             return retrieved;
         },
         setState: async () => {},
+        ...(shardKey === undefined ? {} : { shardKey }),
         step: passthroughStep,
         threadKey: "thread-1",
         toolCallId: "call_1",
@@ -101,6 +102,16 @@ describe(collectAgenticMemoryTools, () => {
         await tool?.execute?.({ query: "q", topK: Number.NaN }, captureContext(calls, { chunks: [], sources: [] }));
 
         expect(calls[0]?.args?.["topK"]).toBe(3);
+    });
+
+    it("searches and reads the source on the run's shard", async () => {
+        const calls: { args: Record<string, unknown> | undefined; shardKey?: string }[] = [];
+        const tools = collectAgenticMemoryTools({ memory: { mode: "agentic", read: "rag:readDoc", source: "rag:searchDocs" }, model: "m" }, []);
+
+        await tools["searchMemory"]?.execute?.({ query: "q" }, captureContext(calls, { chunks: [], sources: [] }, "org-a"));
+        await tools["readMemory"]?.execute?.({ id: "d" }, captureContext(calls, "text", "org-a"));
+
+        expect(calls.map((call) => call.shardKey)).toStrictEqual(["org-a", "org-a"]);
     });
 
     it("floors `snippetChars: 0` to a one-char snippet instead of a bare ellipsis", async () => {

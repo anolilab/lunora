@@ -31,6 +31,21 @@ const RELATION_FUNCTION_PREFIX = "__lunora_relation__:";
  */
 const isReservedRelationFunctionPath = (functionPath: string): boolean => functionPath.startsWith(RELATION_FUNCTION_PREFIX);
 
+/** `@lunora/agent`'s public run-start mutation. A literal, so no host depends on that package. */
+const AGENT_RUN_FUNCTION_PATH = "agents:agentRun";
+
+/**
+ * True for an `agents:agentRun` call bound anywhere but the default shard (a fan-out
+ * passes `undefined`). Its in-flight check reads the agent thread table, which the loop
+ * writes on the default shard, and a shard DO can neither tell that it is not the default
+ * nor read the default from inside a mutation, so every host refuses the call up front.
+ */
+const isAgentRunOffDefaultShard = (functionPath: string, shardKey: string | undefined, defaultShardKey: string): boolean =>
+    functionPath === AGENT_RUN_FUNCTION_PATH && shardKey !== defaultShardKey;
+
+/** The refusal message for {@link isAgentRunOffDefaultShard}. */
+const AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE = `\`${AGENT_RUN_FUNCTION_PATH}\` runs on the default shard only, where agent threads live; to run an agent's tools on another shard, start it from a mutation on that shard with \`ctx.agents.<name>.run\``;
+
 /**
  * Admin bearer check: `Authorization: Bearer <token>` compared in constant time.
  * An absent or empty `expected` token never authenticates.
@@ -82,4 +97,13 @@ const verifySchedulerDispatch = async (request: Request, rawBody: string, creden
 };
 
 export type { SchedulerDispatchCredentials };
-export { checkBearerToken, isReservedRelationFunctionPath, RELATION_FUNCTION_PREFIX, SCHEDULER_DISPATCH_PATH, verifySchedulerDispatch };
+export {
+    AGENT_RUN_FUNCTION_PATH,
+    AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE,
+    checkBearerToken,
+    isAgentRunOffDefaultShard,
+    isReservedRelationFunctionPath,
+    RELATION_FUNCTION_PREFIX,
+    SCHEDULER_DISPATCH_PATH,
+    verifySchedulerDispatch,
+};

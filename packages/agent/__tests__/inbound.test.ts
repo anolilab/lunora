@@ -2,7 +2,7 @@ import type { InboundEmail } from "@lunora/mail/inbound";
 import { describe, expect, it } from "vitest";
 
 import { dispatchAgentEmail } from "../src/inbound";
-import type { AgentEmailMapper } from "../src/types";
+import type { AgentEmailMapper, AgentEmailShardInput } from "../src/types";
 
 /** Build a minimal RFC 822 message `parseInboundEmail` (postal-mime) can parse, with the given `Authentication-Results`. */
 const rawEmail = (authenticationResults: string | undefined, from = "Alice <alice@example.com>"): string =>
@@ -285,6 +285,70 @@ describe(dispatchAgentEmail, () => {
         await handler(message, {}, {});
 
         expect(rejects).toHaveLength(1);
+    });
+
+    it("drops a shardKey the mapper's run carries, so the run's tools stay on the default shard", async () => {
+        expect.assertions(1);
+
+        const support = fakeBinding();
+        // The email is attacker-written; a mapper that folds its fields into the run must not
+        // aim the run's tools (admin-dispatched, past the shard gate) at another tenant.
+        const onEmail: AgentEmailMapper = () => ({ input: "x", shardKey: "victim-org", threadKey: "t" }) as unknown as ReturnType<AgentEmailMapper>;
+
+        const handler = dispatchAgentEmail([{ agent: { onEmail }, className: "SupportAgentWorkflow" }]);
+
+        await handler(fakeMessage().message, { SupportAgentWorkflow: support.binding }, {});
+
+        expect(support.calls[0]?.params).toStrictEqual({ input: "x", threadKey: "t" });
+    });
+
+    it("keys resolveEmailShard on the routed envelope recipient, not the forgeable To: header or the mapper", async () => {
+        expect.assertions(1);
+
+        const support = fakeBinding();
+        const onEmail: AgentEmailMapper = () => ({ input: "x", shardKey: "victim-org", threadKey: "t" }) as unknown as ReturnType<AgentEmailMapper>;
+        const inboxes: Record<string, string> = { "help@tenant-a.example": "org-a", "help@tenant-b.example": "org-b" };
+        // The app maps its configured inbox addresses to tenant shards.
+        const resolveEmailShard = ({ envelopeTo }: AgentEmailShardInput): string | undefined => inboxes[envelopeTo];
+        const handler = dispatchAgentEmail([{ agent: { onEmail, resolveEmailShard }, className: "SupportAgentWorkflow" }]);
+        // Routed to tenant B's inbox, but the sender wrote tenant A's address into `To:`.
+        const forgedTo = RAW_EMAIL.replace("To: support@myapp.com", "To: help@tenant-a.example");
+
+        await handler({ ...fakeMessage(forgedTo).message, to: "help@tenant-b.example" }, { SupportAgentWorkflow: support.binding }, {});
+
+        expect(support.calls[0]?.params).toStrictEqual({ input: "x", shardKey: "org-b", threadKey: "t" });
+    });
+
+    it("never starts a run when resolveEmailShard throws or returns a non-string", async () => {
+        expect.assertions(2);
+
+        const support = fakeBinding();
+        const onEmail: AgentEmailMapper = () => {
+            return { input: "x", threadKey: "t" };
+        };
+        const throwing = dispatchAgentEmail([
+            {
+                agent: {
+                    onEmail,
+                    resolveEmailShard: () => {
+                        throw new Error("tenant lookup failed");
+                    },
+                },
+                className: "SupportAgentWorkflow",
+            },
+        ]);
+        const junk = dispatchAgentEmail([{ agent: { onEmail, resolveEmailShard: (() => 42) as unknown as () => string }, className: "SupportAgentWorkflow" }]);
+
+        const thrown = fakeMessage();
+        const junked = fakeMessage();
+
+        await throwing(thrown.message, { SupportAgentWorkflow: support.binding }, {});
+        await junk(junked.message, { SupportAgentWorkflow: support.binding }, {});
+
+        // Both deliveries fail (bounced), rather than falling back to the default shard.
+        expect([...thrown.rejects, ...junked.rejects]).toHaveLength(2);
+
+        expect(support.calls).toHaveLength(0);
     });
 
     it("bounces the message (setReject) and never calls create() when the mapper's run carries the reserved branch-marker key", async () => {
