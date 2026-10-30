@@ -331,6 +331,25 @@ describe("socket identity revalidation", () => {
         expect(ws.closes[0]).toBe(4005);
     });
 
+    it("seeds nothing when the window passes while a new subscription's query is still running", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = openTenantSocket();
+
+        shard.duringQuery = () => {
+            vi.setSystemTime(NOW + WINDOW);
+        };
+        await shard.webSocketMessage(
+            ws as unknown as WebSocket,
+            JSON.stringify({ id: "sub-2", query: { args: {}, functionPath: "messages:list" }, type: "subscribe" }),
+        );
+
+        expect(dataFrames(ws)).toStrictEqual([]);
+        expect(ws.closes[0]).toBe(4005);
+    });
+
     it("gives a socket accepted before the window existed one window, then closes it", async () => {
         expect.assertions(4);
 

@@ -14149,12 +14149,6 @@ abstract class ShardDO {
                     // stalls the others. Mirrors the `handleStream` gate.
                     await awaitWsDrain(ws);
 
-                    // The authorization, the query and the drain above all yield: the window or the credential
-                    // can lapse in any of them, and the rows in hand are the lapsed identity's.
-                    if (this.dropIfLapsed(ws)) {
-                        return;
-                    }
-
                     this.pushSubscriptionData(ws, subId, outcome, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery, permit);
                     this.subscriptionFailures.clear(ws, subId);
                 } catch (error) {
@@ -14756,11 +14750,6 @@ abstract class ShardDO {
                     }
 
                     await awaitWsDrain(ws);
-
-                    // The drain can outlast the credential or the revalidation window.
-                    if (this.dropIfLapsed(ws)) {
-                        return;
-                    }
 
                     if (this.sendPoke(ws, parts, checkpoint, frameEpoch, undefined)) {
                         delivered += 1;
@@ -16277,6 +16266,11 @@ abstract class ShardDO {
         epoch: string | undefined,
         baseCheckpoint: number | undefined,
     ): boolean {
+        // The one send for every shape frame (seed, poke, global poll): checked here, after the awaits that built it.
+        if (this.dropIfLapsed(ws)) {
+            return false;
+        }
+
         this.pokeSequence += 1;
         const pokeId = `poke-${String(this.pokeSequence)}`;
         const frames = buildPokeFrames(parts, {
@@ -16561,7 +16555,9 @@ abstract class ShardDO {
         delivery: SocketDelivery,
         permit?: SubscriptionDeliveryPermit,
     ): void {
-        if (!this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
+        // Every row-bearing subscription frame (seed, refresh, resume) passes here after its awaited query and drain,
+        // so checking at the send is what keeps a socket that lapsed meanwhile from receiving the rows in hand.
+        if (this.dropIfLapsed(ws) || !this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
             return;
         }
         const existing = this.socketIndex.memo(ws, subId);
