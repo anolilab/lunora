@@ -5541,8 +5541,8 @@ interface InProcessRuntime {
         database: DatabaseWriter;
         rawDatabase: DatabaseWriter;
     };
-    resetHeadroom: () => void;
     runInTransaction: <R>(body: () => Promise<R> | R) => Promise<R>;
+    runWithBudget: <R>(body: () => R) => R;
 }
 ```
 
@@ -5551,6 +5551,7 @@ interface InProcessRuntime {
 ```ts
 interface InProcessRuntimeOptions {
     enforceRls?: boolean;
+    headroomScope?: HeadroomScope;
     scheduler?: unknown;
     sql: SqlExec;
 }

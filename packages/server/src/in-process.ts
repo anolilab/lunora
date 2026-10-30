@@ -17,7 +17,8 @@ import type { SchemaLike, SqlExec } from "@lunora/shard-engine";
 import { createShardCtxDb, RLS_UNWRAP_SYMBOL, runShardMigrations } from "@lunora/shard-engine";
 
 import { beginDeferredSchedules } from "./deferred-schedules";
-import DispatchHeadroom from "./dispatch-headroom";
+import type { HeadroomScope } from "./dispatch-headroom";
+import { DispatchHeadroom } from "./dispatch-headroom";
 import type { FacadeEntry, FacadeWriterLike } from "./facade";
 import { bindTableFacade } from "./facade";
 import type { DatabaseWriter, Schema } from "./types";
@@ -75,6 +76,13 @@ interface InProcessRuntimeOptions {
     enforceRls?: boolean;
 
     /**
+     * Where each dispatch's resource budget lives. Supply an `AsyncLocalStorage` when queries or
+     * actions can overlap, so a dispatch resumed after an await keeps its own budget; without one
+     * the budget is swapped at each entry, which is only right for entries that do not overlap.
+     */
+    headroomScope?: HeadroomScope;
+
+    /**
      * The `ctx.scheduler` the consumer installs, when it installs one. A
      * scheduler wrapped with `withDeferredSchedules` has the jobs a mutation
      * schedules held until its COMMIT and dropped on its ROLLBACK, exactly as the
@@ -95,9 +103,6 @@ interface InProcessRuntime {
      */
     createWriters: (identity: ResolvedIdentity) => { database: DatabaseWriter; rawDatabase: DatabaseWriter };
 
-    /** Start a new top-level dispatch with a full resource budget. Call before every query/action entry. */
-    resetHeadroom: () => void;
-
     /**
      * Run `body` as one top-level entry: serialized behind every other entry that
      * came through here, inside a BEGIN/COMMIT span that rolls back on a throw,
@@ -105,6 +110,9 @@ interface InProcessRuntime {
      * must not observe another entry's uncommitted writes may use it too.
      */
     runInTransaction: <R>(body: () => Promise<R> | R) => Promise<R>;
+
+    /** Run `body` as one top-level dispatch with a full resource budget. Wrap every query/action entry. */
+    runWithBudget: <R>(body: () => R) => R;
 }
 
 /**
@@ -125,8 +133,8 @@ const createInProcessRuntime = (schema: Schema, options: InProcessRuntimeOptions
     runShardMigrations(sql, ddlSchema);
 
     // One meter for the whole runtime (every identity view shares the one SQLite
-    // handle, and top-level entries are serialized), reset at each top-level entry.
-    const headroom = new DispatchHeadroom();
+    // handle), re-budgeted at each top-level entry.
+    const headroom = new DispatchHeadroom(options.headroomScope);
 
     /**
      * Glue the per-table facade (`ctx.db.notes.findMany(...)`) onto a writer,
@@ -188,7 +196,6 @@ const createInProcessRuntime = (schema: Schema, options: InProcessRuntimeOptions
             // `runMutationTransaction` does.
             const settleSchedules = beginDeferredSchedules({ scheduler });
 
-            headroom.reset();
             execStatement("BEGIN");
             transactionOpen = true;
 
@@ -216,7 +223,7 @@ const createInProcessRuntime = (schema: Schema, options: InProcessRuntimeOptions
             }
         };
 
-        const result = mutationQueue.then(runTransaction);
+        const result = mutationQueue.then(() => headroom.run(runTransaction));
 
         // Advance the queue tail whether or not this entry succeeds, so a rejected
         // mutation never wedges every later one.
@@ -230,9 +237,7 @@ const createInProcessRuntime = (schema: Schema, options: InProcessRuntimeOptions
 
     return {
         createWriters,
-        resetHeadroom: () => {
-            headroom.reset();
-        },
+        runWithBudget: (body) => headroom.run(body),
         runInTransaction,
     };
 };

@@ -1,10 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DatabaseSync } from "node:sqlite";
 
-import type { SqlExec } from "@lunora/shard-engine";
+import type { SqlExec, TransactionHeadroomTracker } from "@lunora/shard-engine";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
-import DispatchHeadroom from "../src/dispatch-headroom";
+import { DispatchHeadroom } from "../src/dispatch-headroom";
 import { createInProcessRuntime, resolveInProcessIdentity, runRegisteredFunction } from "../src/in-process";
 import { defineSchema, defineTable } from "../src/schema";
 
@@ -69,10 +70,41 @@ describe(DispatchHeadroom, () => {
 
         const headroom = new DispatchHeadroom();
 
-        headroom.recordDocumentRead("doc", 10);
-        headroom.reset();
-        headroom.recordDocumentRead("doc", 10);
+        headroom.run(() => {
+            headroom.recordDocumentRead("doc", 10);
+        });
+        headroom.run(() => {
+            headroom.recordDocumentRead("doc", 10);
+        });
 
         expect(headroom.headroom().readBytes).toBe(10);
+    });
+
+    it("keeps each overlapping dispatch on its own budget", async () => {
+        expect.assertions(2);
+
+        const headroom = new DispatchHeadroom(new AsyncLocalStorage<TransactionHeadroomTracker>());
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const first = headroom.run(async () => {
+            headroom.recordReadBytes(10);
+            await gate;
+            headroom.recordReadBytes(10);
+
+            return headroom.headroom().readBytes;
+        });
+        const second = headroom.run(async () => {
+            headroom.recordReadBytes(1);
+            await gate;
+
+            return headroom.headroom().readBytes;
+        });
+
+        release();
+
+        await expect(first).resolves.toBe(20);
+        await expect(second).resolves.toBe(1);
     });
 });
