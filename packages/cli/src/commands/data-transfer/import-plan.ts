@@ -38,7 +38,7 @@ const parseImportMode = (raw: string | undefined, fallback: ImportMode): ImportM
 const overwrites = (mode: ImportMode): boolean => mode === "upsert" || mode === "replace";
 
 /** The source file's rows per table, and the `_id`s they carry. */
-type SourceIndex = Map<string, { ids: Set<string>; rows: number }>;
+type SourceIndex = Map<string, { duplicates: number; ids: Set<string>; rows: number }>;
 
 /** Record one wire row (`{"table":…,"doc":…}`) the import will send. */
 const recordSourceRow = (index: SourceIndex, wireRow: string): void => {
@@ -51,13 +51,18 @@ const recordSourceRow = (index: SourceIndex, wireRow: string): void => {
     let entry = index.get(table);
 
     if (entry === undefined) {
-        entry = { ids: new Set(), rows: 0 };
+        entry = { duplicates: 0, ids: new Set(), rows: 0 };
         index.set(table, entry);
     }
 
     entry.rows += 1;
 
     if (typeof doc?._id === "string") {
+        // A later copy of an `_id` the file already carried overwrites the first (or is a conflict under `append`); it adds nothing.
+        if (entry.ids.has(doc._id)) {
+            entry.duplicates += 1;
+        }
+
         entry.ids.add(doc._id);
     }
 };
@@ -86,7 +91,7 @@ const planImport = async (target: ExportTarget, index: SourceIndex, mode: Import
     const tables = new Map<string, TablePlan>();
 
     for (const [table, entry] of index) {
-        tables.set(table, { add: entry.rows, delete: 0, existing: 0, source: entry.rows, table, target: 0 });
+        tables.set(table, { add: entry.rows - entry.duplicates, delete: 0, existing: entry.duplicates, source: entry.rows, table, target: 0 });
     }
 
     const deletions: ExportedRow[] = [];
