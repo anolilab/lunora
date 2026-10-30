@@ -1773,6 +1773,8 @@ export interface ImportError {
 /** Result of a single `__lunora_admin__:importShard` invocation against one shard. */
 export interface ImportShardResult {
     conflicts: number;
+    /** Stored rows removed by `op: "delete"` rows under `deletes: true`; absent from a shard built before delete rows. */
+    deleted?: number;
     errors: ImportError[];
     inserted: Record<string, number>;
     /** Existing rows overwritten under `onConflict: "replace"`; absent from a shard built before replace imports. */

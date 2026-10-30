@@ -458,6 +458,199 @@ interface ImportFailure {
 /** The rows a shard reported as written, summed over its tables. */
 const insertedRowCount = (inserted: Record<string, number>): number => Object.values(inserted).reduce((sum, count) => sum + count, 0);
 
+/** How an import treats the rows the shard already holds; the same four modes as `lunora import --mode`. */
+type ImportMode = "append" | "replace" | "require-empty" | "upsert";
+
+/** Delete rows as import entries, numbered from 1: a delete names the `_id` to remove, and the shard is already addressed. */
+const deleteEntries = (deletions: ReadonlyArray<ExportRow>): ImportEntry[] =>
+    deletions.map((row, index) => {
+        return { line: index + 1, row };
+    });
+
+/**
+ * What an import would do to the shard: per table the rows it adds, the stored rows its `_id`s match, and, under `replace`, the stored
+ * rows it deletes. Reads the shard's rows for the file's tables, one table per call.
+ */
+const planShardImport = async (
+    client: ImportClient,
+    shardKey: string,
+    entries: AsyncIterable<ImportEntry> | Iterable<ImportEntry>,
+    mode: ImportMode,
+): Promise<{ deletions: ExportRow[]; lines: string[]; tables: { stored: number; table: string }[] }> => {
+    const source = new Map<string, { duplicates: number; ids: Set<string>; rows: number }>();
+
+    for await (const { row } of entries) {
+        const entry = source.get(row.table) ?? { duplicates: 0, ids: new Set<string>(), rows: 0 };
+        const id = row.doc["_id"];
+
+        source.set(row.table, entry);
+        entry.rows += 1;
+
+        if (typeof id === "string") {
+            if (entry.ids.has(id)) {
+                entry.duplicates += 1;
+            }
+
+            entry.ids.add(id);
+        }
+    }
+
+    const deletions: ExportRow[] = [];
+    const lines: string[] = [];
+    const tables: { stored: number; table: string }[] = [];
+
+    for (const [table, entry] of [...source].toSorted(([a], [b]) => a.localeCompare(b))) {
+        // eslint-disable-next-line no-await-in-loop -- one table per call, so a large shard is never one response
+        const { rows } = (await client.query(EXPORT_SHARD, { tables: [table] }, callOptions(shardKey))) as { rows: ExportRow[] };
+        let add = entry.rows - entry.duplicates;
+        let existing = entry.duplicates;
+        let toDelete = 0;
+
+        for (const stored of rows) {
+            const id = stored.doc["_id"];
+
+            if (typeof id === "string" && entry.ids.has(id)) {
+                existing += 1;
+                add -= 1;
+            } else if (mode === "replace" && typeof id === "string") {
+                toDelete += 1;
+                deletions.push({ doc: { _id: id }, op: "delete", table } as unknown as ExportRow);
+            }
+        }
+
+        tables.push({ stored: rows.length, table });
+        lines.push(
+            `${table}: ${entry.rows.toString()} in file, ${rows.length.toString()} stored — ${add.toString()} to add, ${existing.toString()} existing, ${toDelete.toString()} to delete`,
+        );
+    }
+
+    return { deletions, lines, tables };
+};
+
+/**
+ * The part of an import that depends on what the shard already holds: the plan, `require-empty`'s refusal, and the check of the deletes a
+ * `replace` would make. A failure comes back with the totals to show; otherwise the deletions to send after the file's rows.
+ */
+const decideFromPlan = async (options: {
+    client: ImportClient;
+    mode: ImportMode;
+    onConflict: "replace" | "skip";
+    planOnly: boolean;
+    shardKey: string;
+    source: ImportSource;
+    t: Translate;
+}): Promise<{ deletions: ExportRow[]; plan?: string[] } | { failure: ImportFailure; plan?: string[]; total?: ImportShardResult }> => {
+    const { client, mode, onConflict, planOnly, shardKey, source, t } = options;
+
+    // `replace` and `require-empty` need the plan to decide; `upsert` and `append` only show it on request, since it costs a read of
+    // every stored row of the file's tables.
+    if (mode !== "replace" && mode !== "require-empty" && !planOnly) {
+        return { deletions: [] };
+    }
+
+    let planned: Awaited<ReturnType<typeof planShardImport>>;
+
+    try {
+        planned = await planShardImport(client, shardKey, source(), mode);
+    } catch (error_) {
+        return { failure: { message: errorMessage(error_), rows: 0 } };
+    }
+
+    const occupied = planned.tables.find((entry) => entry.stored > 0);
+
+    if (mode === "require-empty" && occupied !== undefined) {
+        return {
+            failure: {
+                message: t("Nothing was sent: --mode require-empty needs the file's tables to hold no rows, and {table} already holds {count}.", {
+                    count: occupied.stored,
+                    table: occupied.table,
+                }),
+                rows: 0,
+            },
+            plan: planned.lines,
+        };
+    }
+
+    // The deletes are checked before the first row is written, so a shard that would refuse them leaves the data as it was.
+    const refused: ImportShardResult = { conflicts: 0, errors: [], inserted: {} };
+
+    if (!planOnly && planned.deletions.length > 0) {
+        try {
+            await forEachRowChunk(deleteEntries(planned.deletions), async (rows, startLine) => {
+                const result = (await client.query(
+                    IMPORT_SHARD,
+                    { deletes: true, dryRun: true, onConflict, rows, startLine },
+                    callOptions(shardKey),
+                )) as ImportShardResult;
+
+                refused.errors.push(...result.errors);
+            });
+        } catch (error_) {
+            return { failure: { message: errorMessage(error_), rows: 0 } };
+        }
+
+        if (refused.errors.length > 0) {
+            return {
+                failure: { message: t("Nothing was written, because some deletes would be refused. Fix the rows listed below and import again."), rows: 0 },
+                total: refused,
+            };
+        }
+    }
+
+    return { deletions: planned.deletions, plan: planned.lines };
+};
+
+/**
+ * Remove the stored rows a `replace` found the file lacks. Runs after every file row is written and clean, so a failed run never leaves
+ * fewer rows than before, and a re-run converges.
+ */
+const pruneStored = async (options: {
+    client: ImportClient;
+    deletions: ReadonlyArray<ExportRow>;
+    onConflict: "replace" | "skip";
+    onProgress: (text: string) => void;
+    shardKey: string;
+    t: Translate;
+    total: ImportShardResult;
+}): Promise<void> => {
+    const { client, deletions, onConflict, onProgress, shardKey, t, total } = options;
+
+    await forEachRowChunk(deleteEntries(deletions), async (rows, startLine) => {
+        onProgress(t("Deleting {count} stored rows the file lacks…", { count: deletions.length }));
+
+        const result = (await client.query(
+            IMPORT_SHARD,
+            { deletes: true, dryRun: false, onConflict, rows, startLine },
+            callOptions(shardKey),
+        )) as ImportShardResult;
+
+        total.deleted = (total.deleted ?? 0) + (result.deleted ?? 0);
+        total.errors.push(...result.errors);
+    });
+
+    if (total.errors.length > 0) {
+        throw new Error(t("Stopped while deleting the rows the file lacks. Every file row is written; import again to finish the deletes."));
+    }
+};
+
+/** Why the shard cannot honour the import, read from its answer to the empty probe, or `undefined` when it can. */
+const probeRefusal = (probe: DryRunAnswer, mode: ImportMode, onConflict: "replace" | "skip", t: Translate): string | undefined => {
+    if (probe.dryRun !== true) {
+        return t("This shard predates import checks, so it would write the file while checking it. Nothing was sent. Update the app and import again.");
+    }
+
+    // A shard built before replace imports ignores the mode and would report every existing row as a conflict; one that has it
+    // always answers with a `replaced` count, even for no rows.
+    if (onConflict === "replace" && typeof probe.replaced !== "number") {
+        return t("This shard cannot overwrite existing rows. Nothing was sent. Update the app and import again.");
+    }
+
+    // A shard built before delete rows ignores the flag and the rows; one that has them always answers with a `deleted` count.
+    return mode === "replace" && typeof probe.deleted !== "number"
+        ? t("This shard cannot delete rows. Nothing was sent. Update the app and import again.")
+        : undefined;
+};
+
 /**
  * Stream a file into the shard. Resolves `undefined` when every chunk landed; otherwise the message to show, how many rows the completed
  * chunks sent, and, when a chunk's request failed without an answer, the line that chunk starts at: its rows may have been written. The file
@@ -472,9 +665,11 @@ const sendImport = async (
     onProgress: (text: string) => void,
     file: File,
     csvTable: null | string,
-    onConflict: "replace" | "skip",
-): Promise<{ failure: ImportFailure | undefined; total: ImportShardResult }> => {
-    const total: ImportShardResult = { conflicts: 0, errors: [], inserted: {}, replaced: 0 };
+    mode: ImportMode,
+    planOnly: boolean,
+): Promise<{ failure: ImportFailure | undefined; plan?: string[]; total: ImportShardResult }> => {
+    const onConflict = mode === "upsert" || mode === "replace" ? "replace" : "skip";
+    const total: ImportShardResult = { conflicts: 0, deleted: 0, errors: [], inserted: {}, replaced: 0 };
     let prepared: { rows: number; source: ImportSource };
 
     // A CSV cell is coerced to its column's kind, so the kinds must be read first. Without them the file cannot be checked, and it is
@@ -519,25 +714,10 @@ const sendImport = async (
         // echoes `dryRun: true` in its answer.
         const probe = (await client.query(IMPORT_SHARD, { dryRun: true, onConflict, rows: [], startLine: 1 }, callOptions(shardKey))) as DryRunAnswer;
 
-        if (probe.dryRun !== true) {
-            return {
-                failure: {
-                    message: t(
-                        "This shard predates import checks, so it would write the file while checking it. Nothing was sent. Update the app and import again.",
-                    ),
-                    rows: 0,
-                },
-                total,
-            };
-        }
+        const unsupported = probeRefusal(probe, mode, onConflict, t);
 
-        // A shard built before replace imports ignores the mode and would report every existing row as a conflict; one that has it
-        // always answers with a `replaced` count, even for no rows.
-        if (onConflict === "replace" && typeof probe.replaced !== "number") {
-            return {
-                failure: { message: t("This shard cannot overwrite existing rows. Nothing was sent. Update the app and import again."), rows: 0 },
-                total,
-            };
+        if (unsupported !== undefined) {
+            return { failure: { message: unsupported, rows: 0 }, total };
         }
 
         await forEachRowChunk(source(), async (rows, startLine) => {
@@ -555,6 +735,18 @@ const sendImport = async (
             total: check,
         };
     }
+
+    const planned = await decideFromPlan({ client, mode, onConflict, planOnly, shardKey, source, t });
+
+    if ("failure" in planned) {
+        return { failure: planned.failure, plan: planned.plan, total: planned.total ?? total };
+    }
+
+    if (planOnly) {
+        return { failure: undefined, plan: planned.plan, total };
+    }
+
+    const { deletions } = planned;
 
     let sent = 0;
     let nextLine = 1;
@@ -578,6 +770,7 @@ const sendImport = async (
 
         pending.startLine = undefined;
         total.conflicts += result.conflicts;
+        total.deleted = (total.deleted ?? 0) + (result.deleted ?? 0);
         total.replaced = (total.replaced ?? 0) + (result.replaced ?? 0);
         total.errors.push(...result.errors);
 
@@ -620,6 +813,8 @@ const sendImport = async (
     try {
         await forEachRowChunk(source(), sendChunk);
 
+        await pruneStored({ client, deletions, onConflict, onProgress, shardKey, t, total });
+
         return { failure: undefined, total };
     } catch (error_) {
         // A refusal clears `pending` before it throws, so only a request that never answered leaves it set. `rows` counts the rows of the
@@ -635,8 +830,9 @@ const ImportResultSummary = ({ result }: { readonly result: ImportShardResult })
     return (
         <div className="flex flex-col gap-2" data-testid="ei-import-result">
             <p className="text-sm text-muted-foreground">
-                {t("Inserted {inserted}, replaced {replaced}, {conflicts} conflicts, {errors} errors.", {
+                {t("Inserted {inserted}, replaced {replaced}, deleted {deleted}, {conflicts} conflicts, {errors} errors.", {
                     conflicts: result.conflicts,
+                    deleted: result.deleted ?? 0,
                     errors: result.errors.length,
                     inserted: insertedRowCount(result.inserted),
                     replaced: result.replaced ?? 0,
@@ -689,7 +885,8 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
     const [importResult, setImportResult] = useState<ImportShardResult | null>(null);
     const [progress, setProgress] = useState<null | string>(null);
     const [exported, setExported] = useState<ExportedShard | null>(null);
-    const [replace, setReplace] = useState<boolean>(false);
+    const [mode, setMode] = useState<ImportMode>("append");
+    const [plan, setPlan] = useState<null | string[]>(null);
 
     const csvFile = importFile !== null && isCsvFile(importFile);
     const csvTarget = csvPick !== null && csvPick.shardKey === shardKey ? csvPick.table : "";
@@ -737,13 +934,23 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         }
     };
 
-    const importShard = async (file: File, csvTable: null | string): Promise<void> => {
+    const importShard = async (file: File, csvTable: null | string, planOnly = false): Promise<void> => {
         setBusy(true);
         setError(null);
         setImportResult(null);
         setExported(null);
+        setPlan(null);
 
-        const { failure, total } = await sendImport(client, t, shardKey, setProgress, file, csvTable, replace ? "replace" : "skip");
+        const { failure, plan: planned, total } = await sendImport(client, t, shardKey, setProgress, file, csvTable, mode, planOnly);
+
+        if (planned !== undefined) {
+            setPlan(planned);
+        }
+
+        if (failure === undefined && planOnly) {
+            // A plan writes nothing, so there is nothing to record or invalidate.
+            return;
+        }
 
         if (failure === undefined) {
             recordShard(shardKey);
@@ -811,6 +1018,17 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         }
     };
 
+    const runPlan = (): void => {
+        if (importFile !== null && importReady) {
+            fireAndForget(
+                importShard(importFile, csvFile ? csvTarget : null, true).finally(() => {
+                    setProgress(null);
+                    setBusy(false);
+                }),
+            );
+        }
+    };
+
     const download = (): void => {
         if (exported !== null) {
             downloadFile(`${exported.shardKey.trim() === "" ? "shard" : exported.shardKey.trim()}.ndjson`, exported.blob, NDJSON_MIME);
@@ -827,8 +1045,8 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         setCsvPick({ shardKey, table });
     };
 
-    const onReplaceChange = (event: ChangeEvent<HTMLInputElement>): void => {
-        setReplace(event.target.checked);
+    const onModeChange = (event: ChangeEvent<HTMLSelectElement>): void => {
+        setMode(event.target.value as ImportMode);
     };
 
     return (
@@ -884,28 +1102,50 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
                     {csvFile && <CsvTablePicker onChange={onCsvTableChange} shardKey={shardKey} value={csvTarget} />}
 
-                    <Label className="flex items-center gap-2 text-xs font-normal text-muted-foreground" htmlFor="ei-replace">
-                        <input
-                            checked={replace}
-                            className="size-4 accent-primary"
-                            data-testid="ei-replace"
-                            id="ei-replace"
-                            onChange={onReplaceChange}
-                            type="checkbox"
-                        />
-                        {t("Overwrite rows whose _id already exists (otherwise they are left unchanged and counted as conflicts)")}
+                    <Label className="flex flex-col gap-1 text-xs font-normal text-muted-foreground" htmlFor="ei-mode">
+                        {t("Import mode")}
+                        <select
+                            className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
+                            data-testid="ei-mode"
+                            id="ei-mode"
+                            onChange={onModeChange}
+                            value={mode}
+                        >
+                            <option value="append">{t("Append: rows whose _id already exists are left unchanged and counted as conflicts")}</option>
+                            <option value="upsert">
+                                {t("Overwrite rows whose _id already exists (otherwise they are left unchanged and counted as conflicts)")}
+                            </option>
+                            <option value="replace">{t("Replace: overwrite, then delete this shard's rows of the file's tables that the file lacks")}</option>
+                            <option value="require-empty">{t("Require empty: refuse unless the file's tables hold no rows in this shard")}</option>
+                        </select>
                     </Label>
 
                     <div className="flex flex-wrap items-center gap-2">
-                        <ConfirmButton confirmLabel={t("Import (writes rows)?")} disabled={busy || !importReady} onConfirm={runImport} testId="ei-import">
+                        <ConfirmButton
+                            confirmLabel={
+                                mode === "upsert" || mode === "replace" ? t("Import (overwrites rows and may delete rows)?") : t("Import (writes rows)?")
+                            }
+                            disabled={busy || !importReady}
+                            onConfirm={runImport}
+                            testId="ei-import"
+                        >
                             {t("Import")}
                         </ConfirmButton>
+                        <Button data-testid="ei-plan" disabled={busy || !importReady} onClick={runPlan} type="button" variant="outline">
+                            {t("Show plan")}
+                        </Button>
                     </div>
 
                     {progress !== null && (
                         <p className="text-sm text-muted-foreground" data-testid="ei-progress" role="status">
                             {progress}
                         </p>
+                    )}
+
+                    {plan !== null && (
+                        <pre className="whitespace-pre-wrap text-xs text-muted-foreground" data-testid="ei-plan-result">
+                            {[t("Import plan"), ...plan.map((line) => `  ${line}`)].join("\n")}
+                        </pre>
                     )}
 
                     {importResult !== null && <ImportResultSummary result={importResult} />}
