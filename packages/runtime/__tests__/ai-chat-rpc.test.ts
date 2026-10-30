@@ -1358,6 +1358,56 @@ describe("createWorker — aiChat operator approval", () => {
         expect(body["reply"]).toBe("Two rows.");
     });
 
+    it("honours a ticket another isolate minted when the deployment sets an approval secret", async () => {
+        expect.hasAssertions();
+
+        // A fresh module instance stands in for a second isolate: the per-isolate key lives in module state.
+        const SECRET = "x".repeat(40);
+        const env = { LUNORA_AI_APPROVAL_SECRET: SECRET };
+        const proposal = await decoded(await topTier([]).fetch(rpc({ prompt: "show me the messages" }), env, fakeContext));
+        const { sql, ticket } = proposal["pendingApproval"] as { sql: string; ticket: string };
+
+        vi.resetModules();
+
+        const { createWorker: createInOtherIsolate } = await import("../src/create-worker");
+        const forwarded: { args: Record<string, unknown>; functionPath: string }[] = [];
+
+        await decoded(
+            await createInOtherIsolate({
+                adminToken: ADMIN_TOKEN,
+                aiChatBinding: scriptedBinding(["Two rows."]),
+                aiOptInLevel: "schema_and_log_and_data",
+                shardDO: argumentRecordingShard(forwarded),
+            }).fetch(rpc({ approval: { allow: true, sql, ticket }, prompt: "show me the messages" }), env, fakeContext),
+        );
+
+        expect(forwarded.find((call) => call.functionPath === "__lunora_admin__:runSql")?.args).toStrictEqual({ sql: WANTED });
+    });
+
+    it("still refuses a ticket from another isolate when no approval secret is set", async () => {
+        expect.hasAssertions();
+
+        const proposal = await decoded(await topTier([]).fetch(rpc({ prompt: "show me the messages" }), {}, fakeContext));
+        const { sql, ticket } = proposal["pendingApproval"] as { sql: string; ticket: string };
+
+        vi.resetModules();
+
+        const { createWorker: createInOtherIsolate } = await import("../src/create-worker");
+        const forwarded: { args: Record<string, unknown>; functionPath: string }[] = [];
+
+        await decoded(
+            await createInOtherIsolate({
+                adminToken: ADMIN_TOKEN,
+                aiChatBinding: wantsRows(),
+                aiOptInLevel: "schema_and_log_and_data",
+                shardDO: argumentRecordingShard(forwarded),
+            }).fetch(rpc({ approval: { allow: true, sql, ticket }, prompt: "show me the messages" }), {}, fakeContext),
+        );
+
+        // Fails safe: the read does not run, and the operator is asked again.
+        expect(forwarded.some((call) => call.functionPath === "__lunora_admin__:runSql")).toBe(false);
+    });
+
     it("does not honour a verified ticket attached to a different statement", async () => {
         expect.hasAssertions();
 

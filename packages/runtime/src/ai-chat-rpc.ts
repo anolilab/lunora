@@ -79,8 +79,15 @@ const AI_ONE_SHOT_OPS: ReadonlySet<string> = new Set([
 
 /** Closure-scoped worker helpers the handler borrows. */
 interface AiChatRpcDeps {
+    /**
+     * The deployment's approval-ticket secret (`LUNORA_AI_APPROVAL_SECRET`), or
+     * undefined. Read off the worker's env, never the request: a key the caller
+     * supplied would let the caller mint its own approvals.
+     */
+    approvalSecret: (env: unknown) => string | undefined;
     /** Throw 403 (`ADMIN_FORBIDDEN`) unless the request carries a valid admin bearer. */
     assertAdmin: (request: Request) => void;
+
     /** The worker's root shard key, used when the caller names no shard. */
     defaultShardKey: () => string;
 
@@ -320,6 +327,7 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
              * the transport.
              */
             approval: args["approval"],
+            approvalSecret: deps.approvalSecret(env),
             // Excerpts the Studio chose (the digest lives there, not here); the engine caps and fences them.
             knowledge: args["knowledge"],
             ...(typeof args["model"] === "string" ? { model: args["model"] } : {}),

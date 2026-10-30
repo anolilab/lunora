@@ -3862,6 +3862,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // from the same two vars, so it behaves identically.
         getBinding: (env) => options.aiChatBinding ?? (envVariable(env, "AI") as AiRunBinding | undefined),
         optInLevel: (env) => asOptInLevel(options.aiOptInLevel ?? envVariable(env, "LUNORA_AI_OPT_IN")),
+        approvalSecret: (env) => {
+            const secret = envVariable(env, "LUNORA_AI_APPROVAL_SECRET");
+
+            return typeof secret === "string" ? secret : undefined;
+        },
     };
 
     const aiChat = buildAiChat(aiRpcDeps);

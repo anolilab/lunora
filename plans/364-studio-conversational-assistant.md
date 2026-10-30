@@ -427,12 +427,16 @@ say about the framework it was reading them in.
     request, still run through validation, the level check and the read-only gate)
     rather than re-asking the model and hoping it words the read identically. An
     approval the browser invents unlocks nothing, and a real ticket attached to a
-    different statement unlocks nothing either. The signing key is random per isolate, because the only
-    other secret this op has is the admin token and the browser holds that. The
-    ceiling is stated where it lives (`shared/ai-chat.ts`): a recycled isolate
-    invalidates outstanding tickets, and the failure is one-directional — an
-    unrecognised ticket reads as "not approved", so the card comes back and nothing
-    runs unapproved.
+    different statement unlocks nothing either. The signing key cannot be the admin
+    token, because the browser holds that. A deployment sets `LUNORA_AI_APPROVAL_SECRET`
+    (32+ characters, `wrangler secret put LUNORA_AI_APPROVAL_SECRET`), which the worker
+    reads off its env and never off the request, so a ticket verifies on whichever
+    isolate the operator's answer reaches. Without it the key is random per isolate:
+    a ticket then does not survive the isolate that minted it, and the failure is
+    one-directional — an unrecognised ticket reads as "not approved", so the card
+    comes back and nothing runs unapproved — but approving is unreliable once a
+    deployment runs more than one isolate. A secret shorter than 32 characters is
+    ignored rather than trusted.
 
     **Order.** `classifyStatement` runs BEFORE anything is shown, so a write is
     refused in the loop and never becomes a card asking an operator to approve

@@ -185,23 +185,29 @@ const APPROVAL_TTL_MS = 10 * 60 * 1000;
 const TICKET_CAP = 200;
 
 /**
- * The key approval tickets are signed with — random, per isolate, never sent
- * anywhere.
+ * The key approval tickets are signed with.
  *
  * It cannot be the admin token: the browser HOLDS that, so a ticket keyed on it
  * would be one the browser could mint, which is the whole property being bought.
- * There is no other secret this op has that the caller does not, so the key is
- * generated here and kept in memory.
  *
- * ponytail: per-isolate key, so a ticket does not survive the isolate that minted
- * it. The failure is benign and one-directional — an unrecognised ticket reads as
- * "not approved", so the turn shows the card again and the operator clicks once
- * more; nothing runs unapproved. Move to a shared secret only if a real
- * deployment shows operators re-approving often.
+ * A deployment that sets `LUNORA_AI_APPROVAL_SECRET` (the transport passes it as
+ * {@link ChatArgs.approvalSecret}) signs with that, so a ticket verifies on
+ * whichever isolate the operator's answer reaches. Without one, the key is random
+ * per isolate and kept in memory: a ticket then does not survive the isolate that
+ * minted it, which fails safe (an unrecognised ticket reads as "not approved", so
+ * the card shows again and nothing runs unapproved) but makes approving unreliable
+ * once a deployment runs more than one isolate.
  */
 let approvalKey: string | undefined;
 
-const approvalSecret = (): string => {
+/** Shorter than this is not a secret worth the name; it is ignored rather than trusted. */
+const MIN_APPROVAL_SECRET_LENGTH = 32;
+
+const approvalSecret = (configured: string | undefined): string => {
+    if (configured !== undefined && configured.length >= MIN_APPROVAL_SECRET_LENGTH) {
+        return configured;
+    }
+
     approvalKey ??= crypto.randomUUID();
 
     return approvalKey;
@@ -215,10 +221,10 @@ const approvalSecret = (): string => {
 const ticketPayload = (expiresAt: string, shardKey: string, sql: string): string => `v1.${expiresAt}.${JSON.stringify(shardKey)}.${sql}`;
 
 /** Mint a ticket binding `sql`, run against `shardKey`, to an expiry. Shaped like `ws-admin-token.ts`'s, for the same stateless reason. */
-const mintTicket = async (shardKey: string, sql: string): Promise<string> => {
+const mintTicket = async (secret: string | undefined, shardKey: string, sql: string): Promise<string> => {
     const expiresAt = String(Date.now() + APPROVAL_TTL_MS);
 
-    return `v1.${expiresAt}.${await signCanonical(approvalSecret(), ticketPayload(expiresAt, shardKey, sql))}`;
+    return `v1.${expiresAt}.${await signCanonical(approvalSecret(secret), ticketPayload(expiresAt, shardKey, sql))}`;
 };
 
 /**
@@ -228,7 +234,7 @@ const mintTicket = async (shardKey: string, sql: string): Promise<string> => {
  * a since-recycled isolate, one forged for a different statement, and one issued
  * for a different shard are all "not approved", which is the fail-closed direction.
  */
-const ticketApproves = async (ticket: string, shardKey: string, sql: string): Promise<boolean> => {
+const ticketApproves = async (secret: string | undefined, ticket: string, shardKey: string, sql: string): Promise<boolean> => {
     const [version, expiresAt, signature] = ticket.split(".");
 
     if (version !== "v1" || expiresAt === undefined || signature === undefined) {
@@ -242,7 +248,7 @@ const ticketApproves = async (ticket: string, shardKey: string, sql: string): Pr
     }
 
     try {
-        return await verifyCanonical(approvalSecret(), ticketPayload(expiresAt, shardKey, sql), fromBase64Url(signature));
+        return await verifyCanonical(approvalSecret(secret), ticketPayload(expiresAt, shardKey, sql), fromBase64Url(signature));
     } catch {
         // `fromBase64Url` throws on a signature that is not base64 at all.
         return false;
@@ -258,7 +264,11 @@ const ticketApproves = async (ticket: string, shardKey: string, sql: string): Pr
  * against are the same string. `shardKey` is the shard THIS request reads from:
  * a ticket issued for another shard verifies against nothing here.
  */
-const verifiedApproval = async (value: unknown, shardKey: string): Promise<{ readonly allow: boolean; readonly sql: string } | undefined> => {
+const verifiedApproval = async (
+    value: unknown,
+    shardKey: string,
+    secret: string | undefined,
+): Promise<{ readonly allow: boolean; readonly sql: string } | undefined> => {
     if (typeof value !== "object" || value === null) {
         return undefined;
     }
@@ -267,7 +277,7 @@ const verifiedApproval = async (value: unknown, shardKey: string): Promise<{ rea
     const trimmed = capped(ticket, TICKET_CAP);
     const statement = capped(sql, STATEMENT_CAP);
 
-    if (typeof allow !== "boolean" || trimmed === "" || statement === "" || !(await ticketApproves(trimmed, shardKey, statement))) {
+    if (typeof allow !== "boolean" || trimmed === "" || statement === "" || !(await ticketApproves(secret, trimmed, shardKey, statement))) {
         return undefined;
     }
 
@@ -304,6 +314,11 @@ export interface ChatArgs {
      * they gave one. Caller-supplied, and narrowed and verified by {@link verifiedApproval}.
      */
     readonly approval?: unknown;
+    /**
+     * The deployment's `LUNORA_AI_APPROVAL_SECRET`, resolved by the transport from
+     * the worker's env and never from the request. See {@link approvalSecret}.
+     */
+    readonly approvalSecret?: string;
     /** Model id override, capped like every other caller-supplied field. */
     readonly model?: string;
     /**
@@ -873,7 +888,7 @@ const generateChat = async (
     const { truncated, turns } = budgetTranscript(rawArgs.transcript);
     const model = modelFor(rawArgs.model);
     const system = chatSystemPrompt(level);
-    const approved = await verifiedApproval(rawArgs.approval, rawArgs.shardKey);
+    const approved = await verifiedApproval(rawArgs.approval, rawArgs.shardKey, rawArgs.approvalSecret);
     const toolCalls: ChatToolReport[] = [];
 
     /** Record a tool outcome once, for both the running narration and the final result. */
@@ -1002,7 +1017,7 @@ const generateChat = async (
                 return {
                     degraded: false,
                     partial: false,
-                    pendingApproval: { name: call.name, sql: call.sql, ticket: await mintTicket(rawArgs.shardKey, call.sql) },
+                    pendingApproval: { name: call.name, sql: call.sql, ticket: await mintTicket(rawArgs.approvalSecret, rawArgs.shardKey, call.sql) },
                     reply: withoutToolBlock(reply),
                     toolCalls,
                     truncated,
