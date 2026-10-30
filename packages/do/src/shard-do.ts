@@ -3530,6 +3530,11 @@ abstract class ShardDO {
         if (url.pathname === "/_lunora/route") {
             return jsonResponse({ relayCount: 0 });
         }
+        // The socket's scheduled re-auth: it moves a deadline and compares claims, and delivers nothing, so it is not
+        // a mode the authorization hook has to cover. Refusing it would reconnect every socket each half window.
+        if (url.pathname === SOCKET_REAUTH_PATH && request.method === "POST") {
+            return this.runner.handleFetch(request);
+        }
         if (url.pathname !== "/rpc" || request.method !== "POST") {
             return jsonResponse({ error: { code: "NOT_IMPLEMENTED", message: DELIVERY_MODE_UNSUPPORTED } }, 501);
         }
@@ -17301,7 +17306,12 @@ abstract class ShardDO {
 
         // A hibernated socket accepted before the window existed carries a user and no deadline, and would keep
         // that identity until it happened to reconnect. It gets one window from the first time it is seen.
-        if (attachment.revalidateAt === undefined && attachment.userId !== undefined && attachment.socketFunction === undefined) {
+        if (
+            attachment.revalidateAt === undefined &&
+            attachment.userId !== undefined &&
+            attachment.socketPath === undefined &&
+            attachment.socketFunction === undefined
+        ) {
             // Mutated in place too: a caller that writes its own copy back must not erase the deadline, which
             // the next call would then grant afresh.
             Object.assign(attachment, revalidationStamp(undefined, attachment.userId, Date.now()));

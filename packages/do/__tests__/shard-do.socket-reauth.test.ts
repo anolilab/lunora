@@ -476,6 +476,22 @@ describe("socket identity revalidation", () => {
         expect(ws.closes[0]).toBe(4005);
     });
 
+    it("leaves a route socket that predates `socketFunction` out of the legacy deadline", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const shard = new ReauthShard(createState(), {});
+        const ws = createFakeWebSocket();
+
+        // A route socket marks itself with `socketPath`; it has no re-auth channel, so a window would only close it.
+        shard.register(ws, { connectionId: "conn-1", socketPath: "/rooms/a", subs: {}, userId: "user-1" });
+        await shard.webSocketMessage(ws as unknown as WebSocket, JSON.stringify({ type: "ping" }));
+
+        expect(ws.attachment?.revalidateAt).toBeUndefined();
+        expect(ws.closes).toStrictEqual([]);
+    });
+
     it("gives a socket accepted before the window existed one window, then closes it", async () => {
         expect.assertions(4);
 

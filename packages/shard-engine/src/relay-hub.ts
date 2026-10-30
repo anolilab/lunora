@@ -24,6 +24,7 @@
 import { LunoraError, toErrorBody } from "@lunora/errors";
 import { decodeWire, encodeWire } from "@lunora/wire";
 
+import { isIdentityExpired } from "../../../shared/identity-header";
 import { connectionIdRelay } from "../../../shared/relay-name";
 import type { SqlExec } from "./ctx-db";
 import type { RelayMemoRow, RelayShapeMemo } from "./ctx-db-relay-memos";
@@ -2353,7 +2354,14 @@ class RelayMember extends RelayLink {
         let matched = 0;
 
         for (const ws of this.host.getWebSockets()) {
-            const { connectionId, shapes } = this.host.readAttachment(ws);
+            const { connectionId, expiresAt, revalidateAt, shapes } = this.host.readAttachment(ws);
+
+            // A socket past its credential or its revalidation window is owed nothing. The relay cannot close it (the
+            // lapse teardown lives on the DO class), but it must not be sent rows meanwhile; the next frame the DO
+            // handles for it closes it.
+            if (isIdentityExpired(expiresAt) || isIdentityExpired(revalidateAt)) {
+                continue;
+            }
 
             // Address first, hydrate second. A targeted (per-socket proxy) poke
             // concerns exactly one connection, and this relay holds thousands —

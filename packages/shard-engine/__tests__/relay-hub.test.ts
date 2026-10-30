@@ -548,7 +548,7 @@ describe("relay hub", () => {
                 return link;
             };
 
-            return { fanout, frames, linkFor, relay: linkFor(), sending, socket };
+            return { attachment, fanout, frames, linkFor, relay: linkFor(), sending, socket };
         };
 
         const poke = (relay: NonNullable<ReturnType<typeof createRelayLink>>, fromCursor: number, checkpoint: number): Promise<Response> =>
@@ -597,6 +597,22 @@ describe("relay hub", () => {
                 .find((frame) => frame["type"] === "pokePart");
 
             expect(part?.["baseCheckpoint"]).toBe(10);
+        });
+
+        it.each([
+            ["a revalidation window that has passed", { revalidateAt: Date.now() - 1 }],
+            ["a credential that has expired", { expiresAt: Date.now() - 1 }],
+        ])("delivers no poke to a socket past %s", async (_name, lapse) => {
+            expect.assertions(1);
+
+            const { attachment, frames, relay, socket } = relayFor(10);
+
+            await relay.seedRelayShape(socket, "s1", OPEN_SHAPE, {});
+            Object.assign(attachment, lapse);
+            await poke(relay, 10, 20);
+
+            // Only the seed went out: an idle socket past its deadline is not sent rows it can no longer be shown.
+            expect(frames).toStrictEqual(["seed"]);
         });
 
         it("still refuses a poke the socket is genuinely behind, rather than skipping the gap", async () => {
