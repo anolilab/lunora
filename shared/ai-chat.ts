@@ -438,11 +438,23 @@ const chatTurn = (value: unknown): ChatTurn | undefined => {
  * @returns the kept turns, newest-last, and whether anything was dropped.
  */
 const budgetTranscript = (raw: unknown): { readonly truncated: boolean; readonly turns: ChatTurn[] } => {
-    const parsed = Array.isArray(raw) ? raw.map((entry) => chatTurn(entry)).filter((turn): turn is ChatTurn => turn !== undefined) : [];
-    let truncated = parsed.length !== (Array.isArray(raw) ? raw.length : 0);
-    const kept = parsed.slice(-MAX_TRANSCRIPT_TURNS);
+    const entries: ReadonlyArray<unknown> = Array.isArray(raw) ? raw : [];
+    const kept: ChatTurn[] = [];
+    let index = entries.length - 1;
 
-    truncated ||= kept.length !== parsed.length;
+    // Newest-first, and only until the turn cap is full: the caller sends the array, so parsing every entry before
+    // capping would let one oversized request make the worker validate entries it can never use. An invalid entry is
+    // skipped, so the cap still fills with the newest valid turns.
+    for (; index >= 0 && kept.length < MAX_TRANSCRIPT_TURNS; index -= 1) {
+        const parsed = chatTurn(entries[index]);
+
+        if (parsed !== undefined) {
+            kept.unshift(parsed);
+        }
+    }
+
+    // Truncated when anything was dropped: an invalid entry among those read, or older entries never read.
+    let truncated = index >= 0 || kept.length !== entries.length;
 
     let total = 0;
     const withinBudget: ChatTurn[] = [];
@@ -1036,4 +1048,4 @@ const generateChat = async (
     return degraded("ai-error");
 };
 
-export { asOptInLevel, generateChat, MAX_TOOL_CALLS, MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_TURNS, OPT_IN_LADDER, TOOL_LEVEL };
+export { asOptInLevel, budgetTranscript, generateChat, MAX_TOOL_CALLS, MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_TURNS, OPT_IN_LADDER, TOOL_LEVEL };
