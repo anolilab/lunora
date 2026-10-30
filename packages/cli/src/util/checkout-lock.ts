@@ -128,4 +128,4 @@ const acquireCheckoutLock = (cwd: string, hooks: LockHooks = {}): CheckoutLock =
 };
 
 export type { LockHooks };
-export default acquireCheckoutLock;
+export { acquireCheckoutLock };

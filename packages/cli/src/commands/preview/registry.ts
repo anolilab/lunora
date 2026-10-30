@@ -355,20 +355,64 @@ const lockQuery = async (request: Request, database: string, sql: string, params
     };
 };
 
-/** The lock database's id, made on first use. Nothing else is ever stored in it. */
+const OWNER_TABLE = "lunora_preview_lock_owner";
+const OWNER_MARKER = "lunora-preview-locks/v1";
+const CREATE_OWNER = `CREATE TABLE IF NOT EXISTS ${OWNER_TABLE} (marker TEXT NOT NULL)`;
+const INSERT_OWNER = `INSERT INTO ${OWNER_TABLE} (marker) VALUES (?)`;
+const FIND_OWNER_TABLE = "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?";
+const SELECT_OWNER = `SELECT marker FROM ${OWNER_TABLE}`;
+
+/** Whether the database carries the marker only this tooling writes. Read-only: it changes nothing in a database it does not own. */
+const ownsLockDatabase = async (request: Request, database: string): Promise<boolean> => {
+    const table = await lockQuery(request, database, FIND_OWNER_TABLE, [OWNER_TABLE]);
+
+    if ((table?.rows.length ?? 0) === 0) {
+        return false;
+    }
+
+    const marker = await lockQuery(request, database, SELECT_OWNER, []);
+
+    return marker?.rows.some((row) => row.marker === OWNER_MARKER) === true;
+};
+
+/**
+ * The lock database's id. A database named like it is only used when it carries the marker this tooling writes right
+ * after making it: a database this tooling did not create (production's, say) is never written to, whatever its name.
+ * A first run racing the creator may look before the marker lands, so it looks a few times before refusing.
+ */
 const lockDatabase = async (request: Request): Promise<string> => {
     let id = await findResource(request, "d1", LOCK_DATABASE);
+    let created = false;
 
     if (id === undefined) {
         try {
             id = await createResource(request, "d1", LOCK_DATABASE);
+            created = true;
         } catch (error) {
-            // Two first runs can race the create; both must use the database the winner made.
+            // Two first runs can race the create; the loser uses the database the winner made, once it is marked.
             id = await findResource(request, "d1", LOCK_DATABASE);
 
             if (id === undefined) {
                 throw error;
             }
+        }
+    }
+
+    if (created) {
+        await lockQuery(request, id, CREATE_OWNER, []);
+        await lockQuery(request, id, INSERT_OWNER, [OWNER_MARKER]);
+    } else {
+        let owned = false;
+
+        for (let attempt = 0; attempt < 3 && !owned; attempt += 1) {
+            // eslint-disable-next-line no-await-in-loop -- a creator that is still writing its marker needs a moment
+            owned = await ownsLockDatabase(request, id);
+        }
+
+        if (!owned) {
+            throw new Error(
+                `a D1 database named "${LOCK_DATABASE}" exists but was not made by lunora preview (it has no ${OWNER_TABLE} marker), so it is not used or written to. Rename it, or delete it if it is an empty leftover, then run this again`,
+            );
         }
     }
 
@@ -418,6 +462,44 @@ const takeLease = async (
     return { held: "just now" };
 };
 
+const RENEW_LOCK = "UPDATE lunora_preview_locks SET expires_at = unixepoch() + ? WHERE app_id = ? AND name = ? AND owner_token = ?";
+
+/**
+ * Keep this run's hold from lapsing while it works: a deploy with migrations and a seed, or a cleanup of a large
+ * bucket, can outlast the hold's lifetime, and a lapsed hold is one another run may take over. Renews every third of
+ * the lifetime; `onLost` is called if the row is no longer this run's. Returns the stop to call when the run ends.
+ */
+const keepLease = (
+    request: Request,
+    database: string,
+    appId: string,
+    slug: string,
+    token: string,
+    onLost: () => void,
+    everyMs = (LOCK_SECONDS * 1000) / 3,
+): (() => void) => {
+    const renew = async (): Promise<void> => {
+        try {
+            const result = await lockQuery(request, database, RENEW_LOCK, [LOCK_SECONDS, appId, slug, token]);
+
+            if (result?.changes !== 1) {
+                onLost();
+            }
+        } catch {
+            // A renewal that fails to reach D1 is tried again next time; only a row that is gone or taken means the hold is lost.
+        }
+    };
+    const timer = setInterval(() => {
+        renew().catch(() => undefined);
+    }, everyMs);
+
+    timer.unref();
+
+    return () => {
+        clearInterval(timer);
+    };
+};
+
 /** Let go of the preview if this run still holds it; a hold that cannot be released lapses by itself. */
 const releaseLease = async (request: Request, database: string, appId: string, slug: string, token: string): Promise<void> => {
     try {
@@ -462,16 +544,55 @@ const resolvePending = async (request: Request, resource: RecordedResource): Pro
     return id === undefined ? undefined : { ...resource, id, pending: undefined };
 };
 
-const objectPath = (bucket: string, key: string): string =>
-    `/r2/buckets/${encodeURIComponent(bucket)}/objects/${key
+/** The most deletes in flight at once while emptying a bucket: fast enough for a large one, gentle on the REST API's rate limit. */
+const DELETE_CONCURRENCY = 10;
+
+/**
+ * The REST path of one object, or why it cannot be addressed safely. A key's `.` and `..` segments are resolved by
+ * the URL parser whether or not they are percent-encoded, so a key like `../../../d1/database/<id>` would address a
+ * different resource than the object; anyone who can write an object into a preview bucket (an upload feature on
+ * the public preview) chooses its key. Such a key is refused, and the path is checked to stay under the bucket.
+ */
+const objectPath = (bucket: string, key: string): { error: string; path?: never } | { error?: never; path: string } => {
+    const prefix = `/r2/buckets/${encodeURIComponent(bucket)}/objects/`;
+    const path = `${prefix}${key
         .split("/")
         .map((segment) => encodeURIComponent(segment))
         .join("/")}`;
 
+    if (key.split("/").some((segment) => segment === "." || segment === "..")) {
+        return { error: `the object key ${JSON.stringify(key)} has a "." or ".." segment, which cannot be addressed without leaving the bucket` };
+    }
+
+    // What the request resolves to, as the URL parser sees it: it must still be this bucket's own object.
+    if (!new URL(`https://api.invalid/accounts/a${path}`).pathname.startsWith(`/accounts/a${prefix}`)) {
+        return { error: `the object key ${JSON.stringify(key)} resolves outside bucket "${bucket}"` };
+    }
+
+    return { path };
+};
+
+const deleteObject = async (request: Request, bucket: string, key: string): Promise<void> => {
+    const target = objectPath(bucket, key);
+
+    if (target.error !== undefined) {
+        throw new Error(`${target.error}; remove the object by hand, then delete the preview again`);
+    }
+
+    const outcome = await request(target.path, { method: "DELETE" });
+
+    if (!outcome.ok && outcome.status !== 404) {
+        throw new Error(`deleting object "${key}" failed (${describeFailure(outcome)})`);
+    }
+};
+
 /** Delete every object in a preview bucket: R2 refuses to delete a bucket that still holds any. */
 const emptyBucket = async (request: Request, bucket: string): Promise<void> => {
-    // Each round lists what is left after the previous round's deletes, so no cursor is carried.
-    for (let round = 1; round <= MAX_PAGES; round += 1) {
+    let previous = "";
+
+    // Each round lists what is left after the previous round's deletes, so no cursor is carried. A bucket of any size
+    // empties; a round that leaves the same objects as the one before made no progress, and that is the failure.
+    for (;;) {
         // eslint-disable-next-line no-await-in-loop -- a round lists what the previous one left
         const listed = await request(`/r2/buckets/${encodeURIComponent(bucket)}/objects?per_page=1000`);
 
@@ -488,17 +609,19 @@ const emptyBucket = async (request: Request, bucket: string): Promise<void> => {
             return;
         }
 
-        for (const key of keys) {
-            // eslint-disable-next-line no-await-in-loop -- one request at a time stays under the REST API's rate limit
-            const outcome = await request(objectPath(bucket, key), { method: "DELETE" });
+        const signature = `${String(keys.length)}:${keys[0] ?? ""}:${keys.at(-1) ?? ""}`;
 
-            if (!outcome.ok && outcome.status !== 404) {
-                throw new Error(`deleting object "${key}" failed (${describeFailure(outcome)})`);
-            }
+        if (signature === previous) {
+            throw new Error(`R2 bucket "${bucket}" still holds the same ${String(keys.length)} objects after deleting them`);
+        }
+
+        previous = signature;
+
+        for (let start = 0; start < keys.length; start += DELETE_CONCURRENCY) {
+            // eslint-disable-next-line no-await-in-loop -- a small batch at a time stays under the REST API's rate limit
+            await Promise.all(keys.slice(start, start + DELETE_CONCURRENCY).map(async (key) => deleteObject(request, bucket, key)));
         }
     }
-
-    throw new Error(`R2 bucket "${bucket}" still holds objects after ${String(MAX_PAGES)} rounds of deletes`);
 };
 
 /** Delete one recorded resource (an R2 bucket is emptied first); one already gone counts as deleted. */
@@ -562,6 +685,7 @@ export {
     deleteResource,
     deleteWorker,
     findResource,
+    keepLease,
     listRecords,
     lockDatabase,
     readRecord,

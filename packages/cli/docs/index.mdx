@@ -221,7 +221,7 @@ Additional flags:
 
 - `--add <list>`: add features non-interactively after scaffolding — a comma-separated list of the values in the [`lunora add` table](#lunora-add), each applied with its shipped defaults. Bypasses the interactive picker and its sub-prompts.
 - `--dry-run`: walk every step (prompts and output included) without writing files, installing, or running git.
-- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch, a [`lunora preview deploy <number>`](#lunora-preview) on every pull / merge request, and a `lunora preview delete <number>` once it is closed or merged (a fork's or Dependabot's pull request, and a fork's merge request, gets a `lunora deploy --dry-run` check instead, since it receives no secrets). Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables (on GitLab mark every production one, `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN` included, Masked **and Protected** with Environment scope `production`: protected variables reach only protected branches and tags, so a merge-request pipeline, which runs your project's code, gets none of them, and only the `deploy` job declares `environment: production`). On GitLab, previews need their own `CLOUDFLARE_API_TOKEN` (Workers Scripts, D1, KV and R2 edit; never the production token) and `CLOUDFLARE_ACCOUNT_ID`, Masked but not Protected, with Environment scope `preview/*`, which only the preview jobs receive. After the first deploy set `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN`, which let the production deploy's drift gate read the stored rows. That read only happens for a custom domain on a declared route: a `*.workers.dev` URL needs a project link, and `.lunora/` is not committed, so on `*.workers.dev` a tightening in CI still needs a migration or `--allow-schema-drift`.
+- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch, a [`lunora preview deploy <number>`](#lunora-preview) on every pull / merge request, and a `lunora preview delete <number>` once it is closed or merged (a fork's or Dependabot's pull request, and a fork's merge request, gets a `lunora deploy --dry-run` check instead, since it receives no secrets). Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables, and on GitHub a separate `CLOUDFLARE_PREVIEW_API_TOKEN` that only the `lunora preview` steps receive (on GitLab mark every production one, `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN` included, Masked **and Protected** with Environment scope `production`: protected variables reach only protected branches and tags, so a merge-request pipeline, which runs your project's code, gets none of them, and only the `deploy` job declares `environment: production`). On GitLab, previews need their own `CLOUDFLARE_API_TOKEN` (Workers Scripts, D1, KV and R2 edit; never the production token) and `CLOUDFLARE_ACCOUNT_ID`, Masked but not Protected, with Environment scope `preview/*`, which only the preview jobs receive. After the first deploy set `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN`, which let the production deploy's drift gate read the stored rows. That read only happens for a custom domain on a declared route: a `*.workers.dev` URL needs a project link, and `.lunora/` is not committed, so on `*.workers.dev` a tightening in CI still needs a migration or `--allow-schema-drift`.
 
 ### `lunora add`
 
@@ -842,10 +842,25 @@ An app that binds anything a preview cannot isolate yet is refused with the
 list: Hyperdrive, service bindings, queues, workflows, Vectorize, Analytics
 Engine, the `analytics` (Analytics SQL) binding, which reads the account's datasets, `send_email`, which would send mail through production's sender, containers, Artifacts, `lunora.config` services, a Durable Object on
 another Worker's `script_name`, a singular `route`, an R2 bucket with a
-jurisdiction, or any binding kind the CLI does not know. A `secrets.required`
+jurisdiction, a binding that exists only inside an `env.<name>` block (a preview is planned from the top-level config, which would lack it), or any binding kind the CLI does not know. A `secrets.required`
 entry has to be passed with `--secret`; the preview refuses before creating
 anything otherwise. Copying any of these would point the preview
 at production's resource.
+
+A preview name that needed cleaning (`foo_bar`, `Foo-Bar`) gets a short hash
+of the original appended, so it never shares a Worker, record or resources with
+`foo-bar`; a name already in the alphabet, such as a pull request number, is
+used as it is. A production `LUNORA_ORIGIN_URL` var is replaced by the
+preview's own URL (the scheduler dispatches to it); `--var` still overrides. The
+URL the preview is recorded and migrated under is built from its Worker name
+and your workers.dev subdomain, never read from wrangler's output. The
+`lunora-preview-locks` database is only used when it carries a marker table
+the preview commands write when they make it; a database of that name that
+did not come from them is refused and never written to. A hold is renewed while
+a run works, an interrupt (Ctrl-C, a cancelled CI job) puts the config back and
+removes the secrets file before the process exits, and `delete` empties a
+bucket of any size, refusing (and keeping the bucket on record) an object whose
+key has a `.` or `..` segment, since that cannot be addressed without leaving the bucket.
 
 It needs `CLOUDFLARE_API_TOKEN` with Workers Scripts, D1, Workers KV Storage
 and Workers R2 Storage edit permissions, plus `CLOUDFLARE_ACCOUNT_ID` (or

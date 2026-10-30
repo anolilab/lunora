@@ -8,6 +8,8 @@
  * resources, and any other key stops the preview: copying an unknown binding is how a preview would write to
  * production.
  */
+import { createHash } from "node:crypto";
+
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 
 import boundedName from "../../util/bounded-name";
@@ -133,6 +135,9 @@ const refusalFor = (key: string, value: unknown): string | undefined => {
     return `"${key}": a preview cannot isolate this binding yet, and copying it would point the preview at production's resource`;
 };
 
+/** The var the scheduler dispatches its jobs to: the Worker's own public URL. */
+const ORIGIN_VAR = "LUNORA_ORIGIN_URL";
+
 /** The plain-text var every preview Worker carries: `<production>/<slug>`. */
 const PREVIEW_MARKER_VAR = "LUNORA_PREVIEW";
 
@@ -140,13 +145,20 @@ const previewMarker = (names: Pick<PreviewPlan, "production" | "slug">): string 
 
 const NON_SLUG_CHARACTERS = /[^a-z0-9]+/u;
 
-/** The preview's name in Cloudflare's alphabet: lowercase letters, digits and single dashes. */
-const previewSlug = (name: string): string =>
-    name
+/**
+ * The preview's name in Cloudflare's alphabet: lowercase letters, digits and single dashes. `foo_bar`, `Foo-Bar` and
+ * `foo-bar` would all clean to `foo-bar` and so address one preview's Worker, record and resources; a name that
+ * needed cleaning is closed with a short hash of the original, so each distinct name keeps a preview of its own.
+ */
+const previewSlug = (name: string): string => {
+    const clean = name
         .toLowerCase()
         .split(NON_SLUG_CHARACTERS)
         .filter((part) => part !== "")
         .join("-");
+
+    return clean === "" || clean === name ? clean : `${clean}-${createHash("sha256").update(name).digest("hex").slice(0, 6)}`;
+};
 
 /** The preview Worker's name: its own Durable Object namespace, derived from the production Worker's name at the time. */
 const previewWorkerName = (production: string, slug: string): string => boundedName(`${production}-preview-${slug}`, NAME_LIMIT);
@@ -211,6 +223,22 @@ const planPreview = (config: PreviewConfig, name: string): { error: string; plan
 
         return refusal === undefined ? [] : [refusal];
     });
+    // A preview is planned from the top-level config. Bindings declared only inside an `env.<name>` (an app that deploys
+    // with `--env production`) would be missing from it, leaving a working-looking preview with no database or storage.
+    for (const [envName, block] of Object.entries(config.env ?? {})) {
+        if (isPreviewBlock(config, envName, block)) {
+            continue;
+        }
+
+        for (const [key, value] of Object.entries(block as Record<string, unknown>)) {
+            const binds = key in ISOLATED_KEYS || key === "durable_objects" || refusalFor(key, value) !== undefined;
+
+            if (binds && isPresent(value) && !isPresent((config as Record<string, unknown>)[key])) {
+                refusals.push(`"env.${envName}.${key}": declared only in this environment, and a preview is planned from the top-level config, which has none`);
+            }
+        }
+    }
+
     const jurisdictional = entriesOf(config.r2_buckets).find((entry) => entry.jurisdiction !== undefined);
 
     if (jurisdictional !== undefined) {
@@ -269,7 +297,13 @@ const isolatedEntry = (kind: PreviewResourceKind, entry: Entry, plan: PreviewPla
  * The `env.<preview>` block. `routes: []` overrides production's inheritable routes and custom domains, empty
  * `triggers` keep production's crons from firing once per open preview, and `workers_dev` gives the preview its URL; `name` is set so wrangler's `<name>-<env>` default never applies.
  */
-const previewEnvironmentBlock = (config: PreviewConfig, plan: PreviewPlan, ids: ResourceIds, overrides: Readonly<Record<string, string>> = {}): Entry => {
+const previewEnvironmentBlock = (
+    config: PreviewConfig,
+    plan: PreviewPlan,
+    ids: ResourceIds,
+    overrides: Readonly<Record<string, string>> = {},
+    origin?: string,
+): Entry => {
     const source = config as Record<string, unknown>;
     const block: Entry = { name: plan.worker, routes: [], triggers: { crons: [] }, workers_dev: true };
     const marker = { [PREVIEW_MARKER_VAR]: previewMarker(plan) };
@@ -283,7 +317,14 @@ const previewEnvironmentBlock = (config: PreviewConfig, plan: PreviewPlan, ids: 
     // `--var` overrides production values a preview must not keep (an auth base URL, a CORS origin). The marker
     // goes last and is deployed with the Worker, so `delete` can tell a Worker this command made from one that
     // merely has its name.
-    block.vars = { ...(isPresent(config.vars) ? config.vars : {}), ...overrides, ...marker };
+    const inherited: Record<string, unknown> = isPresent(config.vars) ? { ...config.vars } : {};
+
+    // The scheduler dispatches to this var: production's value would make the preview's jobs call production's Worker.
+    if (ORIGIN_VAR in inherited) {
+        inherited[ORIGIN_VAR] = origin ?? plan.worker;
+    }
+
+    block.vars = { ...inherited, ...overrides, ...marker };
 
     if (isPresent(config.durable_objects)) {
         block.durable_objects = config.durable_objects;

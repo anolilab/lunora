@@ -134,16 +134,21 @@ ${requirement}
 # commit the lockfile before pushing, or the first CI run fails.
 #
 # Set these repository secrets (Settings → Secrets and variables → Actions):
-#   CLOUDFLARE_API_TOKEN   — an API token with Workers Scripts, D1, Workers KV
-#                            Storage and Workers R2 Storage: Edit (previews make
-#                            their own D1, KV and R2)
+#   CLOUDFLARE_API_TOKEN   — the production deploy's token (Workers Scripts: Edit).
+#                            Only the production deploy step receives it.
+#   CLOUDFLARE_PREVIEW_API_TOKEN — a separate token for previews: Workers Scripts,
+#                            D1, Workers KV Storage and Workers R2 Storage: Edit
+#                            (previews make their own D1, KV and R2), limited to
+#                            one account. Only the \`lunora preview\` steps receive
+#                            it, never the install or checkout steps, which run
+#                            a pull request's own dependency scripts.
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
 #   LUNORA_ADMIN_TOKEN     — the production worker's admin token
 #   LUNORA_PREVIEW_SECRET_SEED — optional: any long random string; previews then
 #                            keep their minted secrets across pushes. The preview
 #                            job builds this repository's own pull requests with
-#                            CLOUDFLARE_API_TOKEN already in its environment, and
+#                            CLOUDFLARE_PREVIEW_API_TOKEN in its environment, and
 #                            that token can redeploy any preview with any secrets,
 #                            so the seed adds no access. Never run previews for
 #                            untrusted pull requests; forks get no secrets here.
@@ -151,10 +156,6 @@ ${requirement}
 # Previews are recorded under "lunora.appId" in package.json, which the first
 # local \`lunora preview deploy\` writes. Commit it: the jobs below find a
 # project's previews by it, so it survives a rename of the Worker.
-env:
-  CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-  CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
 jobs:
   # Production deploy on push to the default branch.
   deploy:
@@ -172,6 +173,8 @@ ${githubSetupSteps(pm)}
       # migration or --allow-schema-drift. A custom domain on a declared route works.
       - run: ${execLine(manager, ["deploy", "--migrate-url", `"\${{ secrets.LUNORA_DEPLOY_URL }}"`])}
         env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           LUNORA_ADMIN_TOKEN: \${{ secrets.LUNORA_ADMIN_TOKEN }}
 
   # Every pull request from this repository gets an isolated preview: its own
@@ -187,6 +190,8 @@ ${githubSetupSteps(pm)}
 ${githubSetupSteps(pm)}
       - run: ${execLine(manager, ["preview", "deploy", `\${{ github.event.pull_request.number }}`])}
         env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           LUNORA_PREVIEW_SECRET_SEED: \${{ secrets.LUNORA_PREVIEW_SECRET_SEED }}
 
   # Closing or merging the pull request deletes the preview Worker and every
@@ -203,6 +208,9 @@ ${githubSetupSteps(pm)}
 ${githubSetupSteps(pm, `\${{ github.event.pull_request.base.ref }}`)}
       # Exit 5 is "no record": the pull request never got a preview (refused, or opened before this workflow).
       - run: ${execLine(manager, ["preview", "delete", `\${{ github.event.pull_request.number }}`])} || [ "$?" -eq ${String(EXIT_CODE.NOT_FOUND)} ]
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   # A fork's or Dependabot's pull request gets no secrets, so it runs the
   # deploy pipeline, bundle included, and publishes nothing.
@@ -228,6 +236,10 @@ const GITLAB_PREVIEW_GROUP = "lunora-preview-$CI_MERGE_REQUEST_IID";
 const buildGitlabContent = (manager: PackageManager): string => {
     const pm = PM_CI_PROFILES[manager];
     const beforeScript = [...pm.gitlabProvisionScript, pm.installCmd].map((line) => `    - ${line}`).join("\n");
+
+    const provision = pm.gitlabProvisionScript.map((line) => `    - ${line}`).join("\n");
+    const provisionOnly = provision === "" ? " []" : `\n${provision}`;
+    const deleteBefore = [provision, `    - ${pm.installCmd} --ignore-scripts`].filter((part) => part !== "").join("\n");
 
     return `stages:
   - deploy
@@ -306,8 +318,28 @@ deploy:
 # with "delete source branch"), someone stops it under Operate > Environments,
 # or it auto-stops. A closed merge request that keeps its branch is cleaned up
 # by the auto-stop, or by stopping the environment by hand.
+#
+# The install runs the merge request's own dependency scripts, so it is a job of
+# its own with no environment: the preview/* variables are scoped to jobs that
+# declare one, so this job never receives the preview token. The preview job
+# reuses its node_modules and holds the token only for the preview command.
+preview_install:
+  extends: .lunora_base
+  stage: .pre
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
+  script:
+    - echo "dependencies installed without credentials"
+  artifacts:
+    paths:
+      - node_modules/
+    expire_in: 1 hour
+
 preview:
   extends: .lunora_base
+  needs:
+    - preview_install
+  before_script:${provisionOnly}
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
   resource_group: ${GITLAB_PREVIEW_GROUP}
@@ -318,9 +350,13 @@ preview:
   script:
     - ${execLine(manager, ["preview", "deploy", '"$CI_MERGE_REQUEST_IID"'])}
 
-# Deletes the preview Worker and every resource recorded for it.
+# Deletes the preview Worker and every resource recorded for it. It installs in the
+# job that holds the preview token, so dependency scripts are switched off: deleting
+# needs none of them.
 preview_delete:
   extends: .lunora_base
+  before_script:
+${deleteBefore}
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
       when: manual

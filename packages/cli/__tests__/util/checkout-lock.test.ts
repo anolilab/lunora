@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import acquireCheckoutLock from "../../src/util/checkout-lock";
+import { acquireCheckoutLock } from "../../src/util/checkout-lock";
 
 /** Beyond any real pid range, so `process.kill(pid, 0)` reports no such process. */
 const DEAD_PID = 2_147_483_646;
@@ -21,6 +21,12 @@ describe("acquireCheckoutLock", () => {
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("exports by name only, as the repository's export rule requires", () => {
+        expect.assertions(1);
+
+        expect(readFileSync(join(import.meta.dirname, "..", "..", "src", "util", "checkout-lock.ts"), "utf8")).not.toMatch(/^export default /mu);
     });
 
     it("takes the lock whole, refuses a second taker while it is held, and lets go on release", () => {

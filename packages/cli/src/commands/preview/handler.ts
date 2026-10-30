@@ -16,7 +16,7 @@ import { generateSecretValue } from "@lunora/config";
 import { applyModify, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { cloudflareRestRequest } from "../../../../../shared/cloudflare-rest";
-import acquireCheckoutLock from "../../util/checkout-lock";
+import { acquireCheckoutLock } from "../../util/checkout-lock";
 import type { CloudflareEnvironment } from "../../util/cloudflare-credentials";
 import { resolveCloudflareCredentials } from "../../util/cloudflare-credentials";
 import type { CommandHandler } from "../../util/command";
@@ -27,6 +27,7 @@ import type { HealthFetch } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import type { Spawner } from "../../util/spawn";
+import guardCleanup from "../../util/termination-guard";
 import snapshotPreviewConfig from "../../util/wrangler-snapshot";
 import type { StreamingFetchLike } from "../data-transfer/shared";
 import { provisionBindings, runDeployCommand } from "../deploy/handler";
@@ -52,6 +53,7 @@ import {
     deleteResource,
     deleteWorker,
     findResource,
+    keepLease,
     listRecords,
     lockDatabase,
     readRecord,
@@ -491,8 +493,18 @@ const reportPlan = (logger: Logger, plan: PreviewPlan, block: Record<string, unk
 const heldMessage = (slug: string, until: string): string =>
     `another run is deploying or deleting preview "${slug}" (its hold lapses at ${until}); wait for it. A run that crashed lets go by itself`;
 
+/** The run finished but its hold was taken by another meanwhile: whatever it did is not to be trusted to have been alone. */
+const holdLost = (logger: Logger, slug: string, result: PreviewCommandResult): PreviewCommandResult => {
+    const error = `the hold on preview "${slug}" was lost while this run worked, so another run may have changed it too; check it with \`lunora preview list\` and run \`lunora preview delete ${slug}\` if it looks wrong`;
+
+    logger.error(error);
+
+    return { ...result, code: result.code === EXIT_CODE.SUCCESS ? EXIT_CODE.FAILURE : result.code, error };
+};
+
 /** What a deploy has settled before it creates anything: the secrets, the workers.dev subdomain, the registry and its hold on this preview. */
 interface ShipPrerequisites {
+    appId: string;
     namespace: string;
     secrets: { adminToken: string; values: Record<string, string> };
     subdomain: string;
@@ -506,13 +518,9 @@ const shipHeld = async (
     request: Request,
     prerequisites: ShipPrerequisites,
 ): Promise<PreviewCommandResult> => {
-    const { appId, config, cwd, wranglerPath } = context;
+    const { config, cwd, wranglerPath } = context;
     const { logger } = options;
-    const { namespace, secrets, subdomain } = prerequisites;
-
-    if (appId === undefined) {
-        return fail(logger, "the project has no id to key the preview record by");
-    }
+    const { appId, namespace, secrets, subdomain } = prerequisites;
 
     let record: PreviewRecord;
     let ids: ResourceIds;
@@ -560,9 +568,12 @@ const shipHeld = async (
 
     const text = readFileSync(wranglerPath, "utf8");
 
-    writeFileSync(wranglerPath, applyModify(text, ["env", plan.environment], previewEnvironmentBlock(config, plan, ids, variables)), "utf8");
+    writeFileSync(wranglerPath, applyModify(text, ["env", plan.environment], previewEnvironmentBlock(config, plan, ids, variables, url)), "utf8");
 
     const secretsFile = writeSecretsFile(secrets.values);
+    const disarmSecrets = guardCleanup(() => {
+        rmSync(secretsFile.directory, { force: true, recursive: true });
+    });
 
     try {
         const deployed = await runDeployCommand({
@@ -587,7 +598,9 @@ const shipHeld = async (
             target: "cloudflare",
         });
 
-        record.url = deployed.deployment?.url ?? url;
+        // The URL built from the Worker's name and the account's subdomain, not one parsed out of wrangler's output: the
+        // seed carries the preview's admin token, which must only go where the migrations went.
+        record.url = url;
         record.updatedAt = new Date().toISOString();
         await writeRecord(request, namespace, record);
 
@@ -598,6 +611,7 @@ const shipHeld = async (
         return fail(logger, `preview "${plan.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
     } finally {
         rmSync(secretsFile.directory, { force: true, recursive: true });
+        disarmSecrets();
     }
 
     if (options.seed === true) {
@@ -656,13 +670,6 @@ const shipPreview = async (
     let token: string;
 
     try {
-        // A Worker with the preview's name that this command did not deploy is someone else's: never deploy over it.
-        const existingWorker = await workerMarker(request, plan.worker, PREVIEW_MARKER_VAR);
-
-        if (existingWorker.exists && existingWorker.marker !== previewMarker(plan)) {
-            return fail(logger, `a Worker named "${plan.worker}" already exists and was not deployed as preview "${plan.slug}"; refusing to deploy over it`);
-        }
-
         subdomain = await workersSubdomain(request);
         namespace = (await registryNamespace(request, true)) ?? "";
 
@@ -679,9 +686,17 @@ const shipPreview = async (
         return fail(logger, `preview "${plan.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
     }
 
+    const hold = { lost: false };
+    const stop = keepLease(request, database, appId, plan.slug, token, () => {
+        hold.lost = true;
+    });
+
     try {
-        return await shipHeld(context, plan, variables, options, request, { namespace, secrets, subdomain });
+        const result = await shipHeld(context, plan, variables, options, request, { appId, namespace, secrets, subdomain });
+
+        return hold.lost ? holdLost(logger, plan.slug, result) : result;
     } finally {
+        stop();
         await releaseLease(request, database, appId, plan.slug, token);
     }
 };
@@ -755,6 +770,16 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
     // Codegen writes a first schema baseline when there is none; the branch's schema must not become production's.
     const baselinePath = join(cwd, "lunora", SCHEMA_SNAPSHOT_FILENAME);
     const hadBaseline = existsSync(baselinePath);
+    const putBack = (): void => {
+        restore();
+        lock.release();
+
+        if (!hadBaseline) {
+            rmSync(baselinePath, { force: true });
+        }
+    };
+    // A killed process runs no `finally`: an interrupt must also leave the config as it found it and let go of the lock.
+    const disarm = guardCleanup(putBack);
 
     try {
         // Bindings do not inherit into an environment: reconcile the top level first, so the env block copies
@@ -789,7 +814,7 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
             // Placeholder ids: a dry run makes no API call, so it shows the block's shape, not the account's ids.
             const ids = new Map(plan.resources.map((resource) => [resourceKey(resource.kind, resource.binding), `<${resource.name}>`]));
 
-            reportPlan(logger, plan, previewEnvironmentBlock(config, plan, ids, variables));
+            reportPlan(logger, plan, previewEnvironmentBlock(config, plan, ids, variables, `https://${plan.worker}.<your-subdomain>.workers.dev`));
             logger.info(
                 `  secrets: every one Lunora can mint, fresh${(options.secrets ?? []).length > 0 ? `; from the environment: ${(options.secrets ?? []).join(", ")}` : ""}`,
             );
@@ -805,12 +830,8 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
 
         return await shipPreview({ ...context, config, appId: identified.appId }, plan, variables, options, access.request);
     } finally {
-        restore();
-        lock.release();
-
-        if (!hadBaseline) {
-            rmSync(baselinePath, { force: true });
-        }
+        putBack();
+        disarm();
     }
 };
 
@@ -1043,9 +1064,17 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
         return fail(logger, `preview "${names.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
     }
 
+    const hold = { lost: false };
+    const stop = keepLease(request, database, context.appId, names.slug, token, () => {
+        hold.lost = true;
+    });
+
     try {
-        return await deleteRecorded(context, options, { names, namespace, request });
+        const result = await deleteRecorded(context, options, { names, namespace, request });
+
+        return hold.lost ? holdLost(logger, names.slug, result) : result;
     } finally {
+        stop();
         await releaseLease(request, database, context.appId, names.slug, token);
     }
 };

@@ -129,9 +129,13 @@ secrets, so it runs `lunora deploy --dry-run` instead. On GitLab, the preview is
 environment whose stop job deletes it when the environment stops: the source
 branch is deleted (merging with "delete source branch"), someone stops it under
 Operate > Environments, or after two weeks. A closed merge request that keeps
-its branch waits for the two weeks or a manual stop. Set `CLOUDFLARE_API_TOKEN` (with D1, KV and R2 edit
-rights, since previews make their own) and `CLOUDFLARE_ACCOUNT_ID` as the
-provider's secrets. On GitLab, production's variables are Masked and Protected with
+its branch waits for the two weeks or a manual stop. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` for the
+production deploy, and on GitHub a separate `CLOUDFLARE_PREVIEW_API_TOKEN` (with
+D1, KV and R2 edit rights, since previews make their own) for the preview jobs.
+The workflow gives each token only to the step that uses it, never to the
+install or checkout steps, which run a pull request's own dependency scripts;
+on GitLab the install is a job of its own with no environment, so it never
+receives the preview token. On GitLab, production's variables are Masked and Protected with
 Environment scope `production`, which merge-request pipelines never receive, so
 set a separate `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` for previews,
 Masked but not Protected, with Environment scope `preview/*`; only the preview
