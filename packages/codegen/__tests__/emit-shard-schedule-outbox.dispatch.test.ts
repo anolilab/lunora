@@ -849,7 +849,7 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
 
         harness.setReachable(false);
 
-        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("SchedulerDO unreachable");
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow("2 of 2 deferred jobs failed");
 
         await harness.drop("dup-id");
         harness.setReachable(true);
