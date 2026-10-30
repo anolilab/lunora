@@ -10,6 +10,32 @@ describe("@lunora/wire", () => {
         expect(decodeWire(JSON.parse(text))).toStrictEqual(value);
     });
 
+    it("counts nesting depth exactly the same through arrays and plain objects", () => {
+        expect.assertions(8);
+
+        const nest = (levels: number, wrap: (inner: unknown) => unknown): unknown => {
+            let value: unknown = 1;
+
+            for (let index = 0; index < levels; index += 1) {
+                value = wrap(value);
+            }
+
+            return value;
+        };
+
+        for (const wrap of [
+            (inner: unknown) => [inner],
+            (inner: unknown) => {
+                return { inner };
+            },
+        ]) {
+            expect(() => encodeWire(nest(64, wrap))).not.toThrow();
+            expect(() => encodeWire(nest(65, wrap))).toThrow(RangeError);
+            expect(() => decodeWire(nest(64, wrap))).not.toThrow();
+            expect(() => decodeWire(nest(65, wrap))).toThrow(RangeError);
+        }
+    });
+
     it("builds a key independent of object key order", () => {
         expect(stableWireKey({ a: 1n, b: 2 })).toBe(stableWireKey({ b: 2, a: 1n }));
     });
@@ -29,6 +55,35 @@ describe("stableStringify arrays", () => {
 
         expect(stableStringify(indexed)).toBe("[1,2,3]");
         expect(stableStringify([1, 2, 3])).toBe(stableStringify(indexed));
+    });
+
+    it("visits only the indices that existed when serialisation began", () => {
+        expect.assertions(2);
+
+        const growing: unknown[] = [1];
+        let reads = 0;
+
+        Object.defineProperty(growing, 0, {
+            get() {
+                reads += 1;
+                growing.push(reads);
+
+                return 1;
+            },
+        });
+
+        expect(stableStringify(growing)).toBe("[1]");
+        expect(reads).toBe(1);
+    });
+
+    it("truncates a fractional proxied length and refuses an unbounded one", () => {
+        expect.assertions(2);
+
+        const withLength = (length: number): unknown[] =>
+            new Proxy([1, 2, 3], { get: (target, key, receiver) => (key === "length" ? length : (Reflect.get(target, key, receiver) as unknown)) });
+
+        expect(stableStringify(withLength(2.5))).toBe("[1,2]");
+        expect(() => stableStringify(withLength(Number.POSITIVE_INFINITY))).toThrow(RangeError);
     });
 
     it("visits sparse holes as null and keeps a sparse array distinct from an empty one", () => {

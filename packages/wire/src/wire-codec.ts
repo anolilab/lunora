@@ -367,8 +367,9 @@ const encodeBuiltin = (value: object, next: Recurse): unknown => {
     return ArrayBuffer.isView(value) ? encodeView(value) : undefined;
 };
 
-const encodeArray = (value: ReadonlyArray<unknown>, next: Recurse): unknown[] => {
-    const encoded = value.map((item) => next(item));
+const encodeArray = (value: ReadonlyArray<unknown>, depth: number): unknown[] => {
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with encodeWire
+    const encoded = value.map((item) => encodeWire(item, depth));
 
     // Escape a user array that would otherwise be mistaken for a tagged value
     // (its first element is literally the sentinel string). Wrap it as an
@@ -376,7 +377,7 @@ const encodeArray = (value: ReadonlyArray<unknown>, next: Recurse): unknown[] =>
     return encoded.length > 0 && encoded[0] === TAG ? [TAG, "arr", encoded] : encoded;
 };
 
-const encodePlainObject = (source: Record<string, unknown>, next: Recurse): Record<string, unknown> => {
+const encodePlainObject = (source: Record<string, unknown>, depth: number): Record<string, unknown> => {
     const result: Record<string, unknown> = {};
 
     for (const key of Object.keys(source)) {
@@ -385,7 +386,8 @@ const encodePlainObject = (source: Record<string, unknown>, next: Recurse): Reco
         // Drop `undefined` fields (matches `JSON.stringify`, keeps pure-JSON
         // objects byte-identical).
         if (field !== undefined) {
-            setField(result, key, next(field));
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with encodeWire
+            setField(result, key, encodeWire(field, depth));
         }
     }
 
@@ -427,32 +429,31 @@ const encodeWire = (value: unknown, depth = 0): unknown => {
         return value;
     }
 
-    const next: Recurse = (item) => encodeWire(item, depth + 1);
-    const builtin = encodeBuiltin(value, next);
+    // Arrays and plain objects are nearly every node of a real payload, so they are
+    // tested before the builtin `instanceof` chain, which can never match them.
+    if (Array.isArray(value)) {
+        return encodeArray(value as unknown[], depth + 1);
+    }
+
+    if (isPlainObject(value)) {
+        return encodePlainObject(value, depth + 1);
+    }
+
+    const builtin = encodeBuiltin(value, (item) => encodeWire(item, depth + 1));
 
     if (builtin !== undefined) {
         return builtin;
     }
 
-    if (Array.isArray(value)) {
-        return encodeArray(value as unknown[], next);
-    }
-
     // Fail loud on any remaining non-plain object (`RegExp`, `Headers`, a class
-    // instance, …). These have no own enumerable string keys, so the plain-object
-    // branch below would silently encode them to `{}` — corruption a caller can't
-    // detect. Only plain objects (`Object.prototype` or a null prototype) fall
-    // through. A thrown TypeError surfaces the unsupported value at the send site.
-    if (!isPlainObject(value)) {
-        const name = (value as { constructor?: { name?: string } }).constructor?.name ?? "value";
+    // instance, …). These have no own enumerable string keys, so encoding them as a
+    // record would silently yield `{}` — corruption a caller can't detect. A thrown
+    // TypeError surfaces the unsupported value at the send site.
+    const name = (value as { constructor?: { name?: string } }).constructor?.name ?? "value";
 
-        throw new TypeError(
-            `wire-codec: cannot encode a ${name} over the Lunora wire — only plain objects, arrays, and the supported built-ins (Date, Error, URL, Map, Set, ArrayBuffer/typed arrays, bigint) round-trip`,
-        );
-    }
-
-    // Plain object — recurse over own enumerable string keys.
-    return encodePlainObject(value, next);
+    throw new TypeError(
+        `wire-codec: cannot encode a ${name} over the Lunora wire — only plain objects, arrays, and the supported built-ins (Date, Error, URL, Map, Set, ArrayBuffer/typed arrays, bigint) round-trip`,
+    );
 };
 
 const decodeBigint = (frame: ReadonlyArray<unknown>): bigint => {
@@ -691,7 +692,7 @@ const decodeTagged = (frame: ReadonlyArray<unknown>, next: Recurse): unknown => 
     }
 };
 
-const decodeObject = (source: Record<string, unknown>, next: Recurse): Record<string, unknown> => {
+const decodeObject = (source: Record<string, unknown>, depth: number): Record<string, unknown> => {
     const result: Record<string, unknown> = {};
 
     for (const key of Object.keys(source)) {
@@ -700,7 +701,8 @@ const decodeObject = (source: Record<string, unknown>, next: Recurse): Record<st
         // (and its prototype chain). `setField` defines it as a plain own data
         // property instead so the value round-trips faithfully without any
         // pollution (Cap'n Web #190).
-        setField(result, key, next(source[key]));
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with decodeWire
+        setField(result, key, decodeWire(source[key], depth));
     }
 
     return result;
@@ -716,15 +718,15 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
         return value;
     }
 
-    const next: Recurse = (item) => decodeWire(item, depth + 1);
-
+    // The recursion closure is built only for tagged frames: plain arrays and
+    // objects are nearly every node, and a closure per node is measurable.
     if (Array.isArray(value)) {
         const frame: unknown[] = value;
 
-        return frame[0] === TAG ? decodeTagged(frame, next) : frame.map((item) => next(item));
+        return frame[0] === TAG ? decodeTagged(frame, (item) => decodeWire(item, depth + 1)) : frame.map((item) => decodeWire(item, depth + 1));
     }
 
-    return decodeObject(value as Record<string, unknown>, next);
+    return decodeObject(value as Record<string, unknown>, depth + 1);
 };
 
 /**
