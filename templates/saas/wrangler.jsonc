@@ -18,5 +18,5 @@
     // failure loud and local to the deploy. Put the dev value in `.dev.vars`,
     // which wins over this under `wrangler dev`.
     "vars": { "APP_BASE_URL": "" },
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
 }

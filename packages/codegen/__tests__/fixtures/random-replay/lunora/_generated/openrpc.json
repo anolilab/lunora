@@ -112,6 +112,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "draws:composed",
@@ -248,6 +255,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "draws:twice",

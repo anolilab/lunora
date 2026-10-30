@@ -23,5 +23,5 @@
         ],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "ShardRegistryDO"] }],
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
 }
