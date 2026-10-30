@@ -180,6 +180,9 @@ class ActionShard extends ShardDO {
     /** The call `jobs:leaky` starts and never awaits. */
     public leaked: Promise<string> | undefined;
 
+    /** Lines an interleaved dispatch's sink received. */
+    public readonly otherSinkEvents: { eventName?: string }[] = [];
+
     /** The shared per-request user field; the dispatch starts as `alice`. */
     public currentUser = "alice";
 
@@ -195,6 +198,11 @@ class ActionShard extends ShardDO {
 
         // What an `await`-interleaved dispatch does to the shared field before this one finishes.
         this.currentUser = "someone-else";
+        (this as unknown as { lastTelemetrySink: unknown }).lastTelemetrySink = {
+            onLog: (event: { eventName?: string }) => {
+                this.otherSinkEvents.push(event);
+            },
+        };
         finish();
 
         return { ok: true };
@@ -264,6 +272,18 @@ describe("shardDO.watchActionWork", () => {
         await rpc(shard, "jobs:leaky");
 
         expect(events.filter((event) => event.eventName === "lunora.action.unawaited_work").map((event) => event.userId)).toStrictEqual(["alice"]);
+    });
+
+    it("sends the warning to the sink the action ran under, not an interleaved dispatch's", async () => {
+        expect.assertions(2);
+
+        const events: { eventName?: string }[] = [];
+        const shard = createShard(events);
+
+        await rpc(shard, "jobs:leaky");
+
+        expect(events.filter((event) => event.eventName === "lunora.action.unawaited_work")).toHaveLength(1);
+        expect(shard.otherSinkEvents).toStrictEqual([]);
     });
 
     it("stays quiet when the action awaited its work", async () => {

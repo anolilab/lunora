@@ -7584,18 +7584,18 @@ abstract class ShardDO {
 
     /**
      * A fresh budget for one alarm-driven work item — one external-source
-     * table's tick, or one TTL sweep pass.
+     * table's tick.
      *
      * Alarm work runs with no client waiting and no `/rpc` dispatch in flight,
      * so `transactionHeadroom()`'s per-dispatch tracker is `undefined` there —
-     * leaving external-source ingest and TTL sweeps completely unmetered, the
-     * exact isolate-exhaustion class the meter exists to bound. Handed to the
+     * leaving external-source ingest completely unmetered, the exact
+     * isolate-exhaustion class the meter exists to bound. Handed to the
      * writer BY VALUE, the same pattern as `subscriptionHeadroom()` and for the
      * same reason: an ambient instance-field flag would race a concurrently
      * in-flight `/rpc` dispatch, or a sibling alarm work item, clearing or
-     * substituting the wrong tracker mid-flight.
+     * substituting the wrong tracker mid-flight. A TTL sweep builds its own
+     * tracker instead, without the near-limit warning (see `pollTtlSweeps`).
      */
-
     protected alarmHeadroom(): TransactionHeadroomTracker {
         return this.mintHeadroom("alarm", { trace: undefined, userId: undefined });
     }
@@ -7913,6 +7913,8 @@ abstract class ShardDO {
         // Pinned now: `finish` runs after the handler's awaits, when the shared fields
         // may already belong to an interleaved dispatch.
         const pinned = { trace: this.currentRequestTrace, userId: this.getCurrentUserId() };
+        // `buildCtx` has just registered this dispatch's sink; read later, the field may hold another's.
+        const { lastTelemetrySink: sink } = this;
 
         return () => {
             const pending = finish();
@@ -7924,7 +7926,7 @@ abstract class ShardDO {
                     [],
                     `action returned while ${pending.join(", ")} was still running; await it, or it may be cancelled once the response is sent`,
                     { pending },
-                    this.lastTelemetrySink,
+                    sink,
                     "lunora.action.unawaited_work",
                     undefined,
                     undefined,

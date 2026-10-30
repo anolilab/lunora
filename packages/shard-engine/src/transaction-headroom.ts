@@ -28,7 +28,10 @@ import { estimateBytes } from "./estimate-bytes";
 
 /** Ceilings for one transaction. Every field is a hard stop, not a target. */
 interface TransactionLimits {
-    /** Maximum encoded document bytes a single transaction may read. */
+    /**
+     * Maximum stored-document size a single transaction may read, in UTF-16 code units (`String.length`), the
+     * unit `estimateBytes` charges writes in. That tracks what an isolate holds for the strings it loaded.
+     */
     maxReadBytes: number;
     /** Maximum documents a single transaction may read. */
     maxReadRows: number;
@@ -136,8 +139,8 @@ class TransactionHeadroomTracker {
     }
 
     /**
-     * Charge `bytes` of encoded documents against the read-byte ceiling. Sized
-     * by the stored JSON's length — the same unit {@link estimateBytes} charges
+     * Charge `bytes` of stored documents against the read-byte ceiling. Sized
+     * by the stored JSON's UTF-16 length — the same unit {@link estimateBytes} charges
      * writes in — so a read costs no second serialization.
      */
     public recordReadBytes(bytes: number): void {
