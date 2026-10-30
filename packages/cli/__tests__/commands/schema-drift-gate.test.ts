@@ -126,6 +126,9 @@ describe("schema-drift gate", () => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-drift-gate-"));
         cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
         writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+        // A *.workers.dev target is only trusted for row reads when the project is linked to it.
+        mkdirSync(join(workdir, ".lunora"), { recursive: true });
+        writeFileSync(join(workdir, ".lunora", "project.json"), JSON.stringify({ workerUrl: TARGET.migrateUrl }), "utf8");
     });
 
     afterEach(() => {
@@ -360,6 +363,8 @@ describe("schema-drift gate", () => {
         ])("takes no stored-row evidence from %s, and stays blocked", async (_label, url, why) => {
             expect.assertions(3);
 
+            rmSync(join(workdir, ".lunora"), { force: true, recursive: true });
+
             await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
             introduceBreakingDrift();
 
@@ -403,6 +408,8 @@ describe("schema-drift gate", () => {
 
         it("reads the stored rows from the link for this --env when no --migrate-url is given, and treats an empty one as unset", async () => {
             expect.assertions(3);
+
+            rmSync(join(workdir, ".lunora"), { force: true, recursive: true });
 
             await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
             introduceBreakingDrift();

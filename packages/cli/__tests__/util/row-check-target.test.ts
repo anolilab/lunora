@@ -87,4 +87,27 @@ describe(rowCheckTargetRefusal, () => {
 
         expect(rowCheckTargetRefusal(cwd, undefined, "https://api.acme.com")).toBeUndefined();
     });
+
+    it("refuses a *.workers.dev target no link ties to this account, naming how to link, and one for another Worker", () => {
+        expect.assertions(2);
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://app.other-account.workers.dev")).toContain("lunora link --url");
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://other.acme.workers.dev")).toContain('ships the Worker "app"');
+    });
+
+    it("accepts a *.workers.dev target the link names", () => {
+        expect.assertions(1);
+
+        link("https://app.acme.workers.dev");
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://app.acme.workers.dev")).toBeUndefined();
+    });
+
+    it("refuses a *.workers.dev target on another account than the one the link records", () => {
+        expect.assertions(1);
+
+        link("https://app.acme.workers.dev");
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://app.other-account.workers.dev")).toContain("linked to https://app.acme.workers.dev");
+    });
 });

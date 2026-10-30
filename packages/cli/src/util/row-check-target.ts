@@ -187,7 +187,13 @@ const wranglerRefusal = (cwd: string, environment: string | undefined, host: str
     if (host.endsWith(".workers.dev")) {
         const worker = deployedWorkerName(wrangler, environment);
 
-        return worker === undefined || host.split(".")[0] === worker ? undefined : `${refused}: this deploy ships the Worker "${worker}"${scope}`;
+        if (worker !== undefined && host.split(".")[0] !== worker) {
+            return `${refused}: this deploy ships the Worker "${worker}"${scope}`;
+        }
+
+        // The Worker name is only the first label; the account subdomain after it cannot be read from the config, so a
+        // same-named Worker in another account would pass. Only a link recorded for this deploy ties the host to the account.
+        return `${refused}: no link ties this *.workers.dev host to your account${scope}; run \`lunora link --url https://${host}${environment === undefined ? "" : ` --env ${environment}`}\` once the Worker is deployed, then deploy again (or confirm the drift yourself with --allow-schema-drift)`;
     }
 
     const other = otherEnvironmentRoutingTo(wrangler, environment, host);
