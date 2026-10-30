@@ -33,7 +33,10 @@ import type {
 } from "../../../shared/ai-chat";
 import { generateChat } from "../../../shared/ai-chat";
 import { MAX_GROUNDED_COLUMNS } from "../../../shared/ai-prompt";
+import { RELAY_NAME_INFIX } from "../../../shared/relay-name";
+import { REPLICA_NAME_INFIX } from "../../../shared/replica-name";
 import { SSE_HEADERS, sseFrame } from "../../../shared/sse";
+import { LunoraError } from "./errors";
 
 /**
  * Reserved RPC path the studio's chat panel invokes via `useAdminQuery`. Shares
@@ -301,6 +304,13 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
          */
         const named = args["shardKey"];
         const shardKey = typeof named === "string" && named !== "" ? named : deps.defaultShardKey();
+
+        // This op is served ahead of the worker's shard gate, so it applies the gate's one key rule itself:
+        // `::relay::` / `::replica::` are reserved for names the runtime mints, and a tool read sent to one would
+        // reach a Durable Object that believes it is another shard's relay or replica. Admin or not.
+        if (shardKey.includes(RELAY_NAME_INFIX) || shardKey.includes(REPLICA_NAME_INFIX)) {
+            throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+        }
 
         const chatArgs: ChatArgs = {
             /*

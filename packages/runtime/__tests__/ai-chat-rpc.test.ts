@@ -756,6 +756,35 @@ describe("createWorker — aiChat admin RPC", () => {
         expect(names).toContain("channel:demo");
     });
 
+    it.each(["channel::relay::0", "channel::replica::r1"])("refuses a reserved internal shard key %s, as every other dispatch path does", async (key) => {
+        expect.assertions(3);
+
+        const names: string[] = [];
+        const shard: ShardNamespaceLike = {
+            get: () => {
+                return { fetch: async () => Response.json({ result: {} }, { status: 200 }) };
+            },
+            idFromName: (name) => {
+                names.push(name);
+
+                return { __name: name };
+            },
+        };
+        // Only the runtime mints `::relay::` / `::replica::` names; a tool read sent there would reach a Durable
+        // Object that believes it is another shard's relay or replica.
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(['```tool\n{"name":"describeTables"}\n```', "Done."]),
+            shardDO: shard,
+        });
+        const response = await worker.fetch(rpc({ prompt: "what tables?", shardKey: key }), {}, fakeContext);
+        const body: { error: { code: string } } = await response.json();
+
+        expect(response.status).toBe(403);
+        expect(body.error.code).toBe("FORBIDDEN_SHARD");
+        expect(names).not.toContain(key);
+    });
+
     it("routes a tool call to the shard named on the envelope when the args name none", async () => {
         expect.hasAssertions();
 
