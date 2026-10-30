@@ -1246,7 +1246,7 @@ interface ImportError {
 
 ```ts
 interface ImportRow extends ExportRow {
-    op?: "delete";
+    op?: string;
 }
 ```
 
