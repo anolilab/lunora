@@ -6679,7 +6679,7 @@ abstract class ShardDO {
      * TTL, so an idle TTL table does not wake the shard. A write that adds an
      * expiring row re-arms through {@link ShardDO.armTtlSweepAfterWrite}.
      *
-     * One {@link ShardDO.alarmHeadroom} tracker covers the WHOLE sweep pass (every
+     * One tracker (built like {@link ShardDO.alarmHeadroom}, minus its warning) covers the WHOLE sweep pass (every
      * spec, every batch) — not per-row or per-spec — because the ceiling exists to
      * bound one alarm tick's total isolate cost, not any single table's. A
      * `TRANSACTION_LIMIT_EXCEEDED` mid-batch is "batch full", not a genuine
@@ -6699,7 +6699,8 @@ abstract class ShardDO {
 
         const sql = this.sql as SqlExec;
         const now = Date.now();
-        const headroom = this.alarmHeadroom();
+        // No near-limit callback: a sweep runs until the meter fills by design, so "the transaction will fail" would be false.
+        const headroom = new TransactionHeadroomTracker(this.transactionLimits());
 
         for (const spec of specs) {
             let batches = 0;
