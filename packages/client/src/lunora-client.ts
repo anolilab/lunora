@@ -8862,7 +8862,7 @@ class LunoraClient {
             })
             .catch(() => "refused" as const)
             .then((outcome) => {
-                // A newer token, or a socket that has since been replaced, is already handled by whatever replaced it.
+                // A newer token (for a request that presented one), or a socket that has since been replaced, is already handled by whatever replaced it.
                 if (conn.reauthAttempt !== attempt) {
                     return undefined;
                 }
@@ -8871,7 +8871,13 @@ class LunoraClient {
                 conn.reauthPending = false;
 
                 // `retired` covers a socket another socket's claims change just re-seeded everything for.
-                if (this.closed || this.authToken !== heldToken || conn.connectionId !== connectionId || conn.socket !== socket || conn.retired === true) {
+                if (
+                    this.closed ||
+                    (bearer !== null && this.authToken !== heldToken) ||
+                    conn.connectionId !== connectionId ||
+                    conn.socket !== socket ||
+                    conn.retired === true
+                ) {
                     return undefined;
                 }
 

@@ -301,6 +301,41 @@ describe("socket identity revalidation", () => {
         client.close();
     });
 
+    it("keeps re-authing a cookie socket whose request was in flight when the client's bearer was refreshed", async () => {
+        expect.assertions(2);
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const answers: ((response: Response) => void)[] = [];
+        const fetchMock = vi.fn<typeof fetch>(async (input) =>
+            (input as string).includes("/_lunora/ws/reauth")
+                ? new Promise<Response>((resolve) => {
+                      answers.push(resolve);
+                  })
+                : jsonResponse({ result: { ok: true } }),
+        );
+        // No `authTokenOnUpgrade`: the socket's credential is the cookie, whatever bearer the client holds.
+        const client = new LunoraClient({ fetch: fetchMock, heartbeatIntervalMs: 0, url: "http://app.test", WebSocket });
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        sockets[0]?.receive({ connectionId: "conn-1", revalidateMs: 60_000, subject: "user-1", type: "identity" });
+        await settle();
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect(answers).toHaveLength(1);
+
+        client.setAuthToken("token-later", "user-1");
+        await settle();
+        answers[0]?.(jsonResponse({ ok: true }));
+        await settle();
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect(answers).toHaveLength(2);
+
+        client.close();
+    });
+
     it("presents the cookie session alone when the socket has no bearer", async () => {
         expect.assertions(2);
 
