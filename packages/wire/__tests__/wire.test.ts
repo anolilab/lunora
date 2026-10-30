@@ -229,3 +229,74 @@ describe(parseWire, () => {
         expect(() => parseWire(JSON.stringify({ deep: nest(80), tag: WIRE_TAG }))).toThrow(RangeError);
     });
 });
+
+describe("one prototype read per node", () => {
+    // A Proxy whose getPrototypeOf trap counts its calls and answers from a script.
+    const scripted = (target: object, answers: ReadonlyArray<object | null>, extra: ProxyHandler<object> = {}) => {
+        const reads = { count: 0 };
+        const proxy = new Proxy(target, {
+            ...extra,
+            getPrototypeOf() {
+                const answer = answers[Math.min(reads.count, answers.length - 1)] ?? null;
+
+                reads.count += 1;
+
+                return answer;
+            },
+        });
+
+        return { proxy, reads };
+    };
+
+    it("reads the prototype of a date-like proxy once in each entry point", () => {
+        expect.assertions(3);
+
+        for (const run of [(value: unknown) => encodeWire(value), (value: unknown) => needsWireEncoding(value), (value: unknown) => stableStringify(value)]) {
+            const { proxy, reads } = scripted(new Date(0), [Date.prototype, Object.prototype]);
+
+            try {
+                run(proxy);
+            } catch {
+                // rejected loudly or classified; only the read count matters here
+            }
+
+            // needsWireEncoding may answer from `toJSON` before reading at all; never twice.
+            expect(reads.count).toBeLessThanOrEqual(1);
+        }
+    });
+
+    it("rejects a proxy that impersonates a built-in through its traps", () => {
+        expect.assertions(4);
+
+        const fakeDate = new Proxy(new Date(5), {
+            get: (target, key) => (key === "getTime" ? () => 5 : (Reflect.get(target, key) as unknown)),
+            getPrototypeOf: () => Date.prototype,
+        });
+        const fakeMap = new Proxy(new Map([[1, 2]]), {
+            get: (target, key) => (key === "entries" ? () => [[1, 2]][Symbol.iterator]() : (Reflect.get(target, key) as unknown)),
+            getPrototypeOf: () => Map.prototype,
+        });
+        const fakeSet = new Proxy(new Set([1]), {
+            getPrototypeOf: () => Set.prototype,
+            get: (target, key) => (key === Symbol.iterator ? () => [1][Symbol.iterator]() : (Reflect.get(target, key) as unknown)),
+        });
+        const fakeBytes = new Proxy(new Uint8Array([1]), { getPrototypeOf: () => Uint8Array.prototype });
+
+        for (const fake of [fakeDate, fakeMap, fakeSet, fakeBytes]) {
+            expect(() => encodeWire(fake)).toThrow(TypeError);
+        }
+    });
+
+    it("still round-trips real built-ins", () => {
+        const value = {
+            big: 2n ** 70n,
+            buffer: new Uint8Array([1, 2, 3]).buffer,
+            date: new Date(1_700_000_000_000),
+            map: new Map([["a", 1n]]),
+            set: new Set([1, 2]),
+            view: new Float32Array([1.5]),
+        };
+
+        expect(parseWire(JSON.stringify(encodeWire(value)))).toStrictEqual(value);
+    });
+});

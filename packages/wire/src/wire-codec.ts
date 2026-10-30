@@ -55,6 +55,8 @@
  */
 
 import { fromBase64, toBase64 } from "../../../shared/base64";
+import type { NodeKind } from "../../../shared/classify-node";
+import { classifyNode } from "../../../shared/classify-node";
 import { isPlainObject } from "../../../shared/is-plain-object";
 
 /**
@@ -215,22 +217,24 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
         return true;
     }
 
-    if (Array.isArray(value)) {
+    const nodeKind = classifyNode(value as object);
+
+    if (nodeKind === "array") {
         // An array whose first element IS the sentinel gets wrapped as an
         // `"arr"` payload. Only a string equal to the sentinel encodes to it, so
         // testing the raw element is the same test `encodeWire` makes on the
         // encoded one.
-        if (value.length > 0 && value[0] === TAG) {
+        if ((value as unknown[]).length > 0 && (value as unknown[])[0] === TAG) {
             return true;
         }
 
         // `undefined` in an array POSITION is tagged, where `JSON.stringify`
         // would write `null` — the one place the two disagree on a value both
         // can represent.
-        return arrayElementsNeedEncoding(value, (item) => needsWireEncoding(item, depth + 1));
+        return arrayElementsNeedEncoding(value as unknown[], (item) => needsWireEncoding(item, depth + 1));
     }
 
-    if (!isPlainObject(value)) {
+    if (nodeKind !== "plain") {
         // Date, Map, Set, URL, bytes, Error — and class instances, which
         // `encodeWire` refuses outright.
         return true;
@@ -240,15 +244,17 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
     // encoding path. Both forms stringify the same today, but the handling is
     // deliberate enough that routing it through the real encoder is the safer
     // reading of "not provably identity".
-    if (Object.hasOwn(value, UNSAFE_KEY)) {
+    if (Object.hasOwn(value as object, UNSAFE_KEY)) {
         return true;
     }
 
     // Read through the descriptor: a getter would run here and again when the
     // caller stringifies the original, so an accessor is never identity and the
     // encoder reads it once. Both sides drop an `undefined` field.
-    return Object.keys(value).some((key) => {
-        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    const record = value as Record<string, unknown>;
+
+    return Object.keys(record).some((key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(record, key);
 
         return descriptor === undefined || !("value" in descriptor) || (descriptor.value !== undefined && needsWireEncoding(descriptor.value, depth + 1));
     });
@@ -332,39 +338,40 @@ const encodeView = (view: ArrayBufferView): unknown[] => {
     return ctorName === "Uint8Array" ? [TAG, "bytes", toBase64(bytes)] : [TAG, "bytes", toBase64(bytes), ctorName];
 };
 
-/** The tagged form of a supported built-in, or `undefined` when `value` is not one. */
-const encodeBuiltin = (value: object, next: Recurse): unknown => {
-    if (value instanceof Date) {
-        // Epoch-ms (matches `v.date()`/`v.timestamp()`'s own wire form). An invalid
-        // Date's `getTime()` is `NaN`, which raw JSON coerces to `null` (→ epoch 0);
-        // route the epoch through the codec's own number handling so `NaN` survives
-        // as a `["nan"]` tag and `decodeWire` rebuilds an invalid Date exactly.
-        return [TAG, "date", next(value.getTime())];
+/** The tagged form of a supported built-in, or `undefined` when `kind` names none. */
+const encodeBuiltin = (value: object, kind: NodeKind, next: Recurse): unknown => {
+    switch (kind) {
+        case "builtin-array-buffer": {
+            return [TAG, "bytes", toBase64(new Uint8Array(value as ArrayBuffer)), "ArrayBuffer"];
+        }
+        case "builtin-date": {
+            // Epoch-ms (matches `v.date()`/`v.timestamp()`'s own wire form). An invalid
+            // Date's `getTime()` is `NaN`, which raw JSON coerces to `null` (→ epoch 0);
+            // route the epoch through the codec's own number handling so `NaN` survives
+            // as a `["nan"]` tag and `decodeWire` rebuilds an invalid Date exactly.
+            return [TAG, "date", next((value as Date).getTime())];
+        }
+        case "builtin-error": {
+            return encodeError(value as Error & Record<string, unknown>, next);
+        }
+        case "builtin-map": {
+            // Entries recurse (keys and values), so bigint/bytes/nested structures in a
+            // Map round-trip. `decodeWire` rebuilds a real `Map`.
+            return [TAG, "map", [...(value as Map<unknown, unknown>).entries()].map(([k, v]) => [next(k), next(v)])];
+        }
+        case "builtin-set": {
+            return [TAG, "set", [...(value as Set<unknown>)].map((item) => next(item))];
+        }
+        case "builtin-url": {
+            return [TAG, "url", (value as URL).href];
+        }
+        case "builtin-view": {
+            return encodeView(value as ArrayBufferView);
+        }
+        default: {
+            return undefined;
+        }
     }
-
-    if (value instanceof Error) {
-        return encodeError(value as Error & Record<string, unknown>, next);
-    }
-
-    if (value instanceof URL) {
-        return [TAG, "url", value.href];
-    }
-
-    if (value instanceof Map) {
-        // Entries recurse (keys and values), so bigint/bytes/nested structures in a
-        // Map round-trip. `decodeWire` rebuilds a real `Map`.
-        return [TAG, "map", [...(value as Map<unknown, unknown>).entries()].map(([k, v]) => [next(k), next(v)])];
-    }
-
-    if (value instanceof Set) {
-        return [TAG, "set", [...(value as Set<unknown>)].map((item) => next(item))];
-    }
-
-    if (value instanceof ArrayBuffer) {
-        return [TAG, "bytes", toBase64(new Uint8Array(value)), "ArrayBuffer"];
-    }
-
-    return ArrayBuffer.isView(value) ? encodeView(value) : undefined;
 };
 
 const encodeArray = (value: ReadonlyArray<unknown>, depth: number): unknown[] => {
@@ -429,17 +436,20 @@ const encodeWire = (value: unknown, depth = 0): unknown => {
         return value;
     }
 
-    // Arrays and plain objects are nearly every node of a real payload, so they are
-    // tested before the builtin `instanceof` chain, which can never match them.
-    if (Array.isArray(value)) {
+    // One classification per node (one prototype read): a Proxy can not be asked "plain?"
+    // and then "Date?" and answer differently. Arrays and plain objects are nearly every
+    // node of a real payload and return before any built-in brand check runs.
+    const kind = classifyNode(value);
+
+    if (kind === "array") {
         return encodeArray(value as unknown[], depth + 1);
     }
 
-    if (isPlainObject(value)) {
-        return encodePlainObject(value, depth + 1);
+    if (kind === "plain") {
+        return encodePlainObject(value as Record<string, unknown>, depth + 1);
     }
 
-    const builtin = encodeBuiltin(value, (item) => encodeWire(item, depth + 1));
+    const builtin = encodeBuiltin(value, kind, (item) => encodeWire(item, depth + 1));
 
     if (builtin !== undefined) {
         return builtin;

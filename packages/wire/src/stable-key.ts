@@ -55,6 +55,8 @@
  * does not skip `undefined` fields). The two are different contracts.
  */
 
+import { classifyNode } from "../../../shared/classify-node";
+
 const MAX_ARRAY_LENGTH = 2 ** 32 - 1;
 
 /**
@@ -97,24 +99,8 @@ const numberToken = (value: number): string | undefined => {
 };
 
 /** Encode an object that is not an array: plain objects only, sorted by UTF-16 code unit. */
-const stringifyRecord = (value: object, encode: (item: unknown) => string): string => {
-    // Reject non-plain objects (`Date`, `ArrayBuffer`, typed arrays, `Map`, `Set`,
-    // `RegExp`, class instances). They have no own enumerable string keys, so the
-    // record branch below would encode every one of them to `{}` — a SILENT
-    // cache-key collision where two distinct values share a key and are served
-    // each other's cached data. Fail loud at the call site instead. (Only plain
-    // objects — `Object.prototype` or a null prototype — and arrays are keyable.)
-    const proto = Object.getPrototypeOf(value) as object | null;
-
-    if (proto !== null && proto !== Object.prototype) {
-        const name = (value as { constructor?: { name?: string } }).constructor?.name ?? "value";
-
-        throw new TypeError(
-            `stableStringify: cannot use a ${name} in a stable JSON cache key — only plain objects, arrays, and JSON primitives are supported (wire-typed values key via stableWireKey)`,
-        );
-    }
-
-    const record = value as Record<string, unknown>;
+const stringifyRecord = (value: Record<string, unknown>, encode: (item: unknown) => string): string => {
+    const record = value;
     // No comparator, not `toSorted(compareKeys)`. The default comparator sorts
     // strings by UTF-16 code unit — byte-identical to the `a < b` comparator it
     // replaces (verified by fuzzing both over random key sets), and it is NOT
@@ -209,13 +195,15 @@ const stableStringify = (value: unknown): string => {
         return JSON.stringify(value);
     }
 
-    if (Array.isArray(value)) {
+    const kind = classifyNode(value);
+
+    if (kind === "array") {
         // Every index is read, holes included (they encode as `null` like `undefined`), and never
         // through the array's own iterator or `map`: a custom `Symbol.iterator` must not change the
         // key, and `map` would skip holes and make `[, 1]` collide with other shapes. A plain loop
         // avoids the intermediate array that `Array.from` + `join` would allocate.
         // The length is read once: an indexed getter that appends must not keep the loop running.
-        const length = arrayLength(value);
+        const length = arrayLength(value as unknown[]);
         let out = "[";
 
         for (let index = 0; index < length; index += 1) {
@@ -229,7 +217,20 @@ const stableStringify = (value: unknown): string => {
         return `${out}]`;
     }
 
-    return stringifyRecord(value, stableStringify);
+    if (kind !== "plain") {
+        // Reject non-plain objects (`Date`, `ArrayBuffer`, typed arrays, `Map`, `Set`,
+        // `RegExp`, class instances, Proxies). They have no own enumerable string keys, so the
+        // record branch would encode every one of them to `{}` — a SILENT cache-key collision
+        // where two distinct values share a key and are served each other's cached data. Fail
+        // loud at the call site instead. (Only plain objects and arrays are keyable.)
+        const name = (value as { constructor?: { name?: string } }).constructor?.name ?? "value";
+
+        throw new TypeError(
+            `stableStringify: cannot use a ${name} in a stable JSON cache key — only plain objects, arrays, and JSON primitives are supported (wire-typed values key via stableWireKey)`,
+        );
+    }
+
+    return stringifyRecord(value as Record<string, unknown>, stableStringify);
 };
 
 export default stableStringify;
