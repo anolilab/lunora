@@ -334,6 +334,38 @@ describe("lunora backup", () => {
         expect(importCalls).toHaveLength(0);
     });
 
+    it("restore --dry-run --format json carries the per-table plan in its result document", async () => {
+        expect.assertions(3);
+
+        const { logger } = capturingLogger();
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+        const importCalls: string[] = [];
+        const result = await runBackupCommand({
+            cwd: workDir,
+            dryRun: true,
+            fetchImpl: capturingImportFetch(importCalls, NDJSON),
+            format: "json",
+            logger,
+            mode: "upsert",
+            subcommand: "restore",
+            target: created.entry?.id,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(0);
+        expect(importCalls).toStrictEqual([]);
+        expect(result.data?.plan).toStrictEqual([{ add: 0, delete: 0, existing: 1, source: 1, table: "users", target: 1 }]);
+    });
+
     it("restore proceeds with --prod when --yes confirms", async () => {
         expect.assertions(2);
 
