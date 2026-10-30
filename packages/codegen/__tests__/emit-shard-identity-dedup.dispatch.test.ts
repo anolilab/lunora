@@ -410,6 +410,26 @@ describe("emitted shard — live runs shared across identities", () => {
         expect(sockets.map((ws) => (lastData(ws) as { ip: string }).ip)).toStrictEqual(addresses);
     });
 
+    it("keeps sharing a public query after a client calls it over /rpc with a replay key", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+        const response = await harness.shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "live:public" }),
+                headers: { "content-type": "application/json", "x-lunora-mutation-id": "replay-1", "x-lunora-userid": "user-A" },
+                method: "POST",
+            }),
+        );
+
+        expect(response.ok).toBe(true);
+
+        const { delta } = await subscribeAllThenWrite("live:public", 1, harness);
+
+        // The replay key only scopes ids and random draws; a handler that never reads them never read the caller.
+        expect(delta).toBe(1);
+    });
+
     it.each(["live:nested", "live:nestedUntracked"])("marks the outer path when %s composes a query that reads the caller", async (path) => {
         expect.assertions(2);
 

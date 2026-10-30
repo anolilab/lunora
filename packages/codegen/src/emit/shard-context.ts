@@ -291,8 +291,22 @@ ${notifyBuild}
             // A reactor run is driven by the writer's inline refresh, not replayed by the writer, so it must not
             // inherit the writer's key: every run would restart the same id and random sequence.
             const stableKey = options.replayKey !== false && options.identity === undefined && this.idempotencyNamespace() !== undefined ? this.getCurrentMutationId() : undefined;
-            // Both factories ignore the scope without a replay key, and most dispatches have none.
-            const stableScope = stableKey === undefined ? "" : JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", readUserId() ?? ""]);
+            // The scope reads the caller, so a factory is only built (and the read only made) on its first draw: a
+            // query that carries a replay key but never draws must not count as reading its caller. Both factories
+            // ignore the scope without a replay key, and most dispatches have none.
+            // The request-scoped parts are captured now: instance state may belong to another request by the first draw.
+            const scopeHead = stableKey === undefined ? [] : [this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? ""];
+            let scopeText: string | undefined;
+            const stableScope = (): string => (scopeText ??= JSON.stringify([...scopeHead, readUserId() ?? ""]));
+            const scoped = <T>(create: (scope: string) => () => T): (() => T) => {
+                if (stableKey === undefined) {
+                    return create("");
+                }
+
+                let made: (() => T) | undefined;
+
+                return () => (made ??= create(stableScope()))();
+            };
             // One sequence for every mutation this run composes: their ids share one counter (the copied \`newId\`), so their draws must too.
             // Created on the first composed mutation that gets a ctx of its own; most dispatches compose none.
             let composedRandom: (() => number) | undefined;
@@ -310,9 +324,9 @@ ${notifyBuild}
                 // A replay key only means something inside the caller's dedup namespace; without one the call is not
                 // deduplicated, so its ids stay random.
                 // \`ctx.random()\` shares the replay key and scope, so a replay reproduces both sequences.
-                newId: createStableIdFactory(stableKey, stableScope),
+                newId: scoped((scope) => createStableIdFactory(stableKey, scope)),
                 // Only a mutation is a replay the key reproduces; a query or action carrying the header draws Math.random.
-                random: createStableRandomFactory(contextKind === "mutation" ? stableKey : undefined, stableScope),
+                random: scoped((scope) => createStableRandomFactory(contextKind === "mutation" ? stableKey : undefined, scope)),
                 shardKey: this.currentShardKey(),
                 // Instrumented \`fetch\`: a CLIENT span per outbound call plus W3C
                 // \`traceparent\` propagation, so time spent in a downstream service
@@ -376,7 +390,7 @@ ${
                             const mutationDatabase = makeDatabaseContext(mutationScheduler);
                             // The composed mutation's ids come from the action's replay key and counter, so its draws do too; a
                             // fresh factory per call would repeat the same draws across sibling mutations.
-                            const mutationRandom = (composedRandom ??= createStableRandomFactory(stableKey, stableScope));
+                            const mutationRandom = (composedRandom ??= scoped((scope) => createStableRandomFactory(stableKey, scope)));
 
                             // Copied from an action's ctx, which carries the real \`fetch\`; a mutation
                             // refuses network I/O wherever it runs, so its \`fetch\` is overridden here.
@@ -451,7 +465,7 @@ ${actionOnlyFields.map((field) => `                    delete descriptors.${fiel
                         fetch: field(refuseFetch),
                         origin: field(undefined),
                         // A composed query is not a mutation replay, so it must not advance the mutation's random sequence.
-                        random: field(createStableRandomFactory(undefined, stableScope)),
+                        random: field(scoped((scope) => createStableRandomFactory(undefined, scope))),
                         scheduler: field(schedulerBase),
                         storage: field(makeStorage()),
                     }) as Record<string, unknown>;
