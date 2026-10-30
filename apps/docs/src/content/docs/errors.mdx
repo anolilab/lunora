@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 196 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 198 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -484,6 +484,10 @@ A response with no `body` stream that can still be read as text (React Native's 
 
 `502` — HTTP stream transport error
 
+### `IDENTITY_CHANGED`
+
+`409` — Socket identity changed
+
 ### `IDENTITY_MISMATCH`
 
 `409` — Session changed since the write was queued
@@ -799,6 +803,10 @@ Add a read policy with `.rls(...)`, or mark the table `.public()` if it is inten
 ### `SOCKET_TAG_BUDGET_EXCEEDED`
 
 `400` — Socket tag budget exceeded
+
+### `STALE_CREDENTIAL`
+
+`409` — Stale credential
 
 ### `STORAGE_CHECKSUM_MISMATCH`
 
