@@ -730,11 +730,31 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
 };
 
 /**
- * Parse a stored JSON blob back into a document: `JSON.parse`, then
- * {@link decodeWire}, then {@link isPlainObject}. Returns `undefined` for
- * anything that is not a document — unparseable text, a malformed tag
- * (`decodeWire` throws on an over-long bigint or past the nesting cap), or a
- * root that decodes to a non-plain object.
+ * `JSON.parse` then {@link decodeWire}, skipping the decode when `text` holds
+ * no {@link TAG}. `JSON.stringify` writes every tagged frame's tag verbatim,
+ * so its absence proves the parsed tree is already the value, and the full
+ * rebuild `decodeWire` does would only copy it. A string that merely contains
+ * the tag text takes the decode path, which leaves it alone.
+ *
+ * Text with a `\u` escape always takes the decode path, because JSON allows
+ * the tag to be spelled that way (`\u0024` for `$`) and the check would miss it.
+ *
+ * Keep `decodeWire(JSON.parse(text))` where a peer controls the text: the
+ * skipped path also skips {@link MAX_DEPTH}, so a tagless tree nested deeper
+ * than 64 levels parses instead of throwing.
+ */
+const parseWire = (text: string): unknown => {
+    const parsed: unknown = JSON.parse(text);
+
+    return text.includes(TAG) || text.includes(String.raw`\u`) ? decodeWire(parsed) : parsed;
+};
+
+/**
+ * Parse a stored JSON blob back into a document: {@link parseWire}, then
+ * {@link isPlainObject}. Returns `undefined` for anything that is not a document:
+ * unparseable text, a malformed tag (`decodeWire` throws on an over-long bigint,
+ * or past the nesting cap in tagged text), or a root that decodes to a non-plain
+ * object.
  *
  * Never throws, because its callers are read paths that must degrade rather
  * than fail: a display surface shows the row unexpanded, an editor falls back
@@ -744,7 +764,7 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
  */
 const decodeDocument = (text: string): Record<string, unknown> | undefined => {
     try {
-        const value = decodeWire(JSON.parse(text));
+        const value = parseWire(text);
 
         return isPlainObject(value) ? value : undefined;
     } catch {
@@ -778,4 +798,4 @@ const encodeArgsOrThrow = (label: string, path: string, args: unknown): unknown 
 };
 
 export { isPlainObject } from "../../../shared/is-plain-object";
-export { decodeDocument, decodeWire, encodeArgsOrThrow, encodeWire, needsWireEncoding, TAG as WIRE_TAG };
+export { decodeDocument, decodeWire, encodeArgsOrThrow, encodeWire, needsWireEncoding, parseWire, TAG as WIRE_TAG };
