@@ -613,9 +613,10 @@ describe("assistantPanel", () => {
     });
 
     it("re-sends the prior turns, so the exchange is a conversation", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const mock = chatMock("Sure.");
+        const chatCalls = () => mock.streamRpc.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat);
 
         render(renderPanel(mock));
         await openChat();
@@ -625,16 +626,34 @@ describe("assistantPanel", () => {
 
         ask("second question");
 
+        // The request leaves after the digest's lazy import resolves, so wait for it
+        // to exist before reading it.
         await waitFor(() => {
-            const chats = mock.streamRpc.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat);
+            expect(chatCalls().length).toBeGreaterThanOrEqual(2);
+        });
 
-            expect(chats).toHaveLength(2);
+        // The second call carries the first exchange; the server caps and
+        // fences it, but the client is what holds it.
+        const second = chatCalls()[1]?.[1] as { transcript: { text: string }[] };
 
-            // The second call carries the first exchange; the server caps and
-            // fences it, but the client is what holds it.
-            const second = chats[1]?.[1] as { transcript: { text: string }[] };
+        expect(second.transcript.map((turn) => turn.text)).toStrictEqual(["first question", "Sure."]);
+    });
 
-            expect(second.transcript.map((turn) => turn.text)).toStrictEqual(["first question", "Sure."]);
+    it("sends the documentation excerpts for the question, since the worker carries no digest", async () => {
+        expect.hasAssertions();
+
+        const mock = chatMock("Sure.");
+
+        render(renderPanel(mock));
+        await openChat();
+
+        ask("how do I add an index?");
+
+        await waitFor(() => {
+            const [, args] = mock.streamRpc.mock.calls.find((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat) ?? [];
+            const { knowledge } = (args ?? {}) as { knowledge?: string[] };
+
+            expect(knowledge?.some((excerpt) => excerpt.includes("https://lunora.sh/docs/concepts/indexes"))).toBe(true);
         });
     });
 

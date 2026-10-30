@@ -1,6 +1,5 @@
 /**
- * The Studio assistant's `loadKnowledge` tool — lookup over the documentation
- * digest in {@link file://./ai-knowledge-data.ts}.
+ * The Studio assistant's documentation lookup over the digest in {@link file://./ai-knowledge-data.ts}.
  *
  * **Why this exists.** Every other tool the assistant has reads the OPERATOR's
  * deployment: their schema, their logs, their advisories, their rows. None of
@@ -18,6 +17,10 @@
  * ships inside every deployed Worker. What the model gets is enough to know what
  * exists, what it is called, and which URL to cite — and the system prompt tells
  * it to say so rather than guess when the index does not name a thing.
+ *
+ * **Studio-side only.** The Studio imports this lazily and sends the excerpts for
+ * a question with the turn; a deployed Worker never imports it, because every byte
+ * here would otherwise ship in every app's bundle. Keep it out of `ai-chat.ts`.
  *
  * Like its neighbours this is deliberately **not** a package: consumers import it
  * by relative path and the bundler inlines it. Keep it zero-dependency.
@@ -106,7 +109,7 @@ const score = (topic: DocTopic, wanted: ReadonlyArray<string>): number => {
  * more than the ids do, and `fitToBudget` trims from the END, so the fatter shape
  * bought a contents page that stopped at the letter C.
  */
-export const searchKnowledge = (topic: unknown): { readonly entries: ReadonlyArray<KnowledgeEntry | string> } => {
+const searchKnowledge = (topic: unknown): { readonly entries: ReadonlyArray<KnowledgeEntry | string> } => {
     const wanted = terms(typeof topic === "string" ? topic : "");
 
     const ranked =
@@ -125,4 +128,21 @@ export const searchKnowledge = (topic: unknown): { readonly entries: ReadonlyArr
                   });
 
     return { entries: ranked.length === 0 ? DOC_TOPICS.map((candidate) => candidate.id) : ranked };
+};
+
+/**
+ * The excerpts a chat turn carries for `message`, one string per page — or one
+ * contents line when nothing matched. Rendered here so the worker, which only caps
+ * and fences them, needs no knowledge of the digest's shape.
+ */
+export const knowledgeExcerpts = (message: string): string[] => {
+    const { entries } = searchKnowledge(message);
+
+    return entries.every((entry) => typeof entry === "string")
+        ? [`Documentation pages under ${DOCS_ORIGIN}: ${entries.join(", ")}`]
+        : entries.map((entry) => {
+              const page = entry as KnowledgeEntry;
+
+              return `${page.title} (${page.url}): ${page.summary} Sections: ${page.headings.join(", ")}`;
+          });
 };

@@ -2,8 +2,9 @@ import { isLunoraError, toErrorBody } from "@lunora/errors";
 import type { HttpCacheLike } from "@lunora/platform";
 import { decodeWire, encodeArgsOrThrow, encodeWire } from "@lunora/wire";
 
-import type { AiOptInLevel, AiRunBinding } from "../../../shared/ai-chat";
-import { asOptInLevel } from "../../../shared/ai-chat";
+import type { AiRunBinding } from "../../../shared/ai-chat";
+import type { AiOptInLevel } from "../../../shared/ai-opt-in";
+import { asOptInLevel } from "../../../shared/ai-opt-in";
 import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";

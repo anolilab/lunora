@@ -12,13 +12,27 @@
  * the same argument `ai-prompt.ts` makes about its own existence.
  */
 import { classifyStatement } from "./sql-readonly";
-import { searchKnowledge } from "./ai-knowledge";
+import { asOptInLevel, OPT_IN_LADDER } from "./ai-opt-in";
+import type { AiOptInLevel } from "./ai-opt-in";
 import { fromBase64Url, signCanonical, verifyCanonical } from "./hmac-url";
-import { capped, degraded, groundingBlock, modelFor, PROMPT_CAP, runPrompt, STATEMENT_CAP, UNTRUSTED_BEGIN, UNTRUSTED_END } from "./ai-prompt";
+import {
+    capped,
+    degraded,
+    groundingBlock,
+    KNOWLEDGE_EXCERPT_CAP,
+    MAX_KNOWLEDGE_EXCERPTS,
+    modelFor,
+    PROMPT_CAP,
+    runPrompt,
+    STATEMENT_CAP,
+    UNTRUSTED_BEGIN,
+    UNTRUSTED_END,
+} from "./ai-prompt";
 import type { AiRunBinding, GenerateSqlDegraded, SchemaFact } from "./ai-prompt";
 
 // Re-exported so a chat consumer needs one import, not two.
 export type { AiRunBinding, GenerateSqlDegradedReason, SchemaFact } from "./ai-prompt";
+export type { AiOptInLevel } from "./ai-opt-in";
 
 /** Most transcript turns re-sent with a request. Older ones are dropped first. */
 const MAX_TRANSCRIPT_TURNS = 12;
@@ -36,41 +50,7 @@ export interface ChatTurn {
 }
 
 /** The read-only tools a chat turn may ask for. Nothing here has no existing admin op behind it. */
-export type ChatToolName = "describeTables" | "loadKnowledge" | "readAdvisors" | "readLogs" | "readPolicies" | "runSql";
-
-/**
- * The tools served by forwarding to an existing admin op.
- *
- * `loadKnowledge` is the exception and the reason this type exists: it answers
- * from a digest compiled into the bundle, so it reaches no shard, needs no op,
- * and works on a deployment that wired no forwarder at all. The worker's op table
- * is keyed by THIS rather than by {@link ChatToolName}, so a tool added without
- * an op is still a compile error there.
- */
-export type ForwardedToolName = Exclude<ChatToolName, "loadKnowledge">;
-
-/**
- * How much of the deployment the assistant may read.
- *
- * Set SERVER-SIDE (the worker reads it off `env`) and never accepted from the
- * caller, because a level the browser could choose is not a gate — it is a
- * suggestion. The studio displays the level it is given and can only ask for
- * less by not using a tool, never for more.
- *
- * The ladder is ordered, and {@link allowsTool} compares by index, so adding a
- * tier is a one-line data change rather than a new branch per tool.
- */
-export type AiOptInLevel = "disabled" | "schema" | "schema_and_log" | "schema_and_log_and_data";
-
-/**
- * The ladder, lowest first. Index order IS the comparison — see {@link allowsTool}.
- *
- * Exported because the Studio's Settings readout renders the whole ladder to say
- * where the deployment sits on it. It reads the ladder rather than restating it,
- * so a tier added here cannot leave the readout describing a ladder that no
- * longer exists.
- */
-const OPT_IN_LADDER: ReadonlyArray<AiOptInLevel> = ["disabled", "schema", "schema_and_log", "schema_and_log_and_data"];
+export type ChatToolName = "describeTables" | "readAdvisors" | "readLogs" | "readPolicies" | "runSql";
 
 /**
  * The tier each tool needs.
@@ -86,14 +66,6 @@ const OPT_IN_LADDER: ReadonlyArray<AiOptInLevel> = ["disabled", "schema", "schem
  */
 const TOOL_LEVEL: Readonly<Record<ChatToolName, AiOptInLevel>> = {
     describeTables: "schema",
-    /*
-     * Published documentation, and therefore nothing about this deployment at
-     * all: the same pages the operator can read at lunora.sh, compiled into the
-     * bundle. It sits at the LOWEST tier a tool can occupy, because `disabled`
-     * stops the turn before any tool is reached — a "docs only" rung below
-     * `schema` would gate nothing and would be a rung nobody could ever want.
-     */
-    loadKnowledge: "schema",
     // Findings ABOUT the schema, not data in it: an advisory names a table and a
     // rule, and carries no rows and no log lines. Same tier as reading the schema.
     readAdvisors: "schema",
@@ -116,7 +88,7 @@ const TOOL_LEVEL: Readonly<Record<ChatToolName, AiOptInLevel>> = {
  * `runSql`'s scope is chosen by the MODEL — an arbitrary statement over any table
  * — so the approval card shows a specific statement and "allow" means "allow
  * that". Every other tool's scope is fixed: `describeTables` and `readAdvisors`
- * return no row values at all, `loadKnowledge` returns documentation, and
+ * return no row values at all, and
  * `readLogs` returns the same recent buffer every time.
  *
  * `readLogs` is the close call, since a structured log field can carry whatever
@@ -133,7 +105,6 @@ const TOOL_LEVEL: Readonly<Record<ChatToolName, AiOptInLevel>> = {
  */
 const TOOL_APPROVAL: Readonly<Record<ChatToolName, boolean>> = {
     describeTables: false,
-    loadKnowledge: false,
     readAdvisors: false,
     readLogs: false,
     /*
@@ -159,37 +130,11 @@ const allowsTool = (level: AiOptInLevel, tool: ChatToolName): boolean => OPT_IN_
 /** The tools a level may use, in ladder order. Drives both the prompt and the refusal. */
 const toolsFor = (level: AiOptInLevel): ChatToolName[] => (Object.keys(TOOL_LEVEL) as ChatToolName[]).filter((tool) => allowsTool(level, tool));
 
-/**
- * What a deployment gets when it configures nothing.
- *
- * `schema` rather than the top tier, deliberately. The operator already holds an
- * admin bearer that can run any read statement themselves, so this gate is not
- * protecting them from their own database — it decides whether rows their END
- * USERS wrote are sent to an inference provider. That is a disclosure, and a
- * disclosure defaults to off; the refusal text names the level so an operator who
- * wants it knows exactly what to set.
- */
-const DEFAULT_AI_OPT_IN_LEVEL: AiOptInLevel = "schema";
-
-/**
- * Narrow a configured value to a level.
- *
- * Lives here because {@link OPT_IN_LADDER} is the only list of valid levels, and
- * a second one at the worker would be the copy that drifts. Anything
- * unrecognised — a typo in a wrangler var, an absent binding — takes
- * {@link DEFAULT_AI_OPT_IN_LEVEL} rather than the top tier, so a misconfiguration
- * fails closed.
- */
-const asOptInLevel = (raw: unknown): AiOptInLevel =>
-    typeof raw === "string" && (OPT_IN_LADDER as ReadonlyArray<string>).includes(raw) ? (raw as AiOptInLevel) : DEFAULT_AI_OPT_IN_LEVEL;
-
 /** One tool request the model made, after validation. */
 export interface ChatToolCall {
     readonly name: ChatToolName;
     /** The statement, for `runSql`. Already gate-checked when present. */
     readonly sql?: string;
-    /** What to look up, for `loadKnowledge`. */
-    readonly topic?: string;
 }
 
 /** The tool request an approval card is asking about, and the ticket that unlocks it. */
@@ -238,9 +183,6 @@ const APPROVAL_TTL_MS = 10 * 60 * 1000;
 
 /** Cap on a caller-supplied ticket. Bounds what reaches the base64url decoder. */
 const TICKET_CAP = 200;
-
-/** Cap on a caller-supplied `loadKnowledge` topic. */
-const TOPIC_CAP = 200;
 
 /**
  * The key approval tickets are signed with — random, per isolate, never sent
@@ -334,7 +276,7 @@ const verifiedApproval = async (value: unknown, shardKey: string): Promise<{ rea
 
 /** One validated request for a tool the worker forwards to an admin op. */
 export interface ForwardedToolCall {
-    readonly name: ForwardedToolName;
+    readonly name: ChatToolName;
     /** The statement, for `runSql`. Gate-checked, and operator-approved, before it gets here. */
     readonly sql?: string;
 }
@@ -344,9 +286,7 @@ export interface ForwardedToolCall {
  *
  * Injected, so the engine never learns how to reach a shard — the worker owns
  * that, the same way the `AI` binding is injected rather than imported. Takes a
- * {@link ForwardedToolCall} rather than any {@link ChatToolCall}: `loadKnowledge`
- * is answered inside the engine and must never reach a forwarder that has no op
- * for it.
+ * {@link ForwardedToolCall}: the validated call, narrowed to what a forwarder needs.
  */
 export type ChatToolRunner = (call: ForwardedToolCall) => Promise<unknown>;
 
@@ -371,6 +311,12 @@ export interface ChatArgs {
      * ticket is bound to it, so an approval given for one shard cannot run on another.
      */
     readonly shardKey: string;
+    /**
+     * Documentation excerpts the Studio selected for this question (it carries the
+     * digest; the worker does not). Caller-supplied, so capped and fenced as
+     * untrusted by {@link knowledgeBlock}.
+     */
+    readonly knowledge?: unknown;
     /** This turn's question. */
     readonly prompt?: unknown;
     /** Prior turns, client-held and re-sent. Untrusted in full — see below. */
@@ -664,14 +610,7 @@ const validateTool = (raw: string, level: AiOptInLevel): ChatToolCall | ToolRefu
 
     const { name, sql } = parsed as { name?: unknown; sql?: unknown };
 
-    if (
-        name !== "describeTables" &&
-        name !== "loadKnowledge" &&
-        name !== "readAdvisors" &&
-        name !== "readLogs" &&
-        name !== "readPolicies" &&
-        name !== "runSql"
-    ) {
+    if (name !== "describeTables" && name !== "readAdvisors" && name !== "readLogs" && name !== "readPolicies" && name !== "runSql") {
         return { refused: `there is no tool named ${typeof name === "string" ? capped(name, 40) : "(unnamed)"}` };
     }
 
@@ -684,12 +623,6 @@ const validateTool = (raw: string, level: AiOptInLevel): ChatToolCall | ToolRefu
      */
     if (!allowsTool(level, name)) {
         return { name, needs: TOOL_LEVEL[name], refused: `${name} needs the ${TOOL_LEVEL[name]} data-sharing level and this deployment is set to ${level}` };
-    }
-
-    if (name === "loadKnowledge") {
-        const topic = capped((parsed as { topic?: unknown }).topic, TOPIC_CAP);
-
-        return topic === "" ? { name, refused: "loadKnowledge needs a `topic` string" } : { name, topic };
     }
 
     if (name === "describeTables" || name === "readAdvisors" || name === "readLogs" || name === "readPolicies") {
@@ -791,7 +724,6 @@ const observation = (text: string): string => `${UNTRUSTED_BEGIN}\nTool result: 
 /** How each tool is offered to the model. One line per tool, so the prompt lists exactly what the level allows. */
 const TOOL_OFFER: Readonly<Record<ChatToolName, string>> = {
     describeTables: '{"name":"describeTables"} for the schema',
-    loadKnowledge: '{"name":"loadKnowledge","topic":"indexes"} for what the Lunora documentation says about a topic',
     readAdvisors: '{"name":"readAdvisors"} for the advisor\'s current findings about this app',
     readLogs: '{"name":"readLogs"} for recent log lines',
     readPolicies: '{"name":"readPolicies"} for the access rules (row-level-security policies and roles) this app already declares',
@@ -815,16 +747,14 @@ const chatSystemPrompt = (level: AiOptInLevel): string => {
         "Answer briefly. When a query would help, include ONE SQLite SELECT statement in a ```sql block — it is shown to the operator to insert, and is never executed by you. " +
         "It must be read-only: SELECT or WITH only, never INSERT, UPDATE, DELETE, DROP, ALTER, CREATE or PRAGMA. " +
         "Use ONLY the tables and columns listed as available; never invent names. " +
-        (allowsTool(level, "loadKnowledge")
-            ? "Lunora is the framework this app runs on; you do not know its API from memory. Never state a Lunora function, table helper, config key or CLI flag unless loadKnowledge showed it to you — when it did not, say you are not sure and cite the closest documentation URL it returned. "
-            : "") +
+        "Lunora is the framework this app runs on; you do not know its API from memory. Never state a Lunora function, table helper, config key or CLI flag unless the documentation excerpts in the question showed it to you — when they did not, say you are not sure and cite the closest documentation URL they list. " +
         /*
          * Access rules are the one thing this console can be asked about that has
          * no SQL form at all. Without this the model answered from memory, which
          * meant Postgres `CREATE POLICY` — confident, and wrong in a way an
          * operator could paste. Stated in the SYSTEM prompt rather than left to
-         * `loadKnowledge`, whose digest carries titles and headings and no code, so
-         * the "never state a Lunora API unless loadKnowledge showed it to you" rule
+         * the documentation excerpts, which carry titles and headings and no code, so
+         * the "never state a Lunora API unless the excerpts showed it to you" rule
          * above would otherwise (correctly) stop it from writing a policy at all.
          */
         (allowsTool(level, "readPolicies")
@@ -843,9 +773,25 @@ const chatSystemPrompt = (level: AiOptInLevel): string => {
     );
 };
 
+/**
+ * Render the caller-supplied documentation excerpts as a fenced block, or `""`.
+ *
+ * Untrusted like the transcript: the browser chose them, so a forged excerpt can
+ * only mislead the assistant its own operator is talking to, and it sits inside
+ * the fence the system prompt tells the model not to take instructions from.
+ */
+const knowledgeBlock = (value: unknown): string => {
+    const excerpts = (Array.isArray(value) ? value : [])
+        .map((entry) => capped(entry, KNOWLEDGE_EXCERPT_CAP))
+        .filter((entry) => entry !== "")
+        .slice(0, MAX_KNOWLEDGE_EXCERPTS);
+
+    return excerpts.length === 0 ? "" : `Lunora documentation excerpts for this question:\n${UNTRUSTED_BEGIN}\n${excerpts.join("\n")}\n${UNTRUSTED_END}\n`;
+};
+
 /** Render the fenced transcript + question. */
-const chatUserPrompt = (turns: ReadonlyArray<ChatTurn>, prompt: string, schema: ReadonlyArray<SchemaFact>): string => {
-    const parts = [groundingBlock(schema), "", UNTRUSTED_BEGIN];
+const chatUserPrompt = (turns: ReadonlyArray<ChatTurn>, prompt: string, schema: ReadonlyArray<SchemaFact>, knowledge: unknown): string => {
+    const parts = [groundingBlock(schema), "", `${knowledgeBlock(knowledge)}${UNTRUSTED_BEGIN}`];
 
     for (const turn of turns) {
         parts.push(`${turn.role === "user" ? "Developer" : "Assistant"}: ${turn.text}`);
@@ -924,7 +870,7 @@ const generateChat = async (
         emit?.({ call, type: "tool" });
     };
 
-    let user = chatUserPrompt(turns, prompt, schema);
+    let user = chatUserPrompt(turns, prompt, schema, rawArgs.knowledge);
 
     /*
      * One inference per round, plus one final round that must answer. Each round
@@ -1052,13 +998,9 @@ const generateChat = async (
             }
         }
 
-        /*
-         * `loadKnowledge` answers from the bundled digest, so it needs no runner
-         * and reaches no shard. Every other tool does — and a deployment that
-         * wired none is told so as a refusal rather than having its tool request
-         * silently read back as prose.
-         */
-        if (call.name !== "loadKnowledge" && runTool === undefined) {
+        // A deployment that wired no forwarder is told so as a refusal rather than
+        // having its tool request silently read back as prose.
+        if (runTool === undefined) {
             const refused = "no tools are available in this deployment";
 
             report({ name: call.name, refused });
@@ -1075,19 +1017,14 @@ const generateChat = async (
 
         report({ name: call.name, ...(call.sql === undefined ? {} : { sql: call.sql }) });
 
+        const forwarded: ForwardedToolCall = { name: call.name, ...(call.sql === undefined ? {} : { sql: call.sql }) };
         let result: string;
 
-        if (call.name === "loadKnowledge") {
-            result = fitToBudget(searchKnowledge(call.topic));
-        } else {
-            const forwarded: ForwardedToolCall = { name: call.name, ...(call.sql === undefined ? {} : { sql: call.sql }) };
-
-            try {
-                // eslint-disable-next-line no-await-in-loop -- see above
-                result = fitToBudget(await (runTool as ChatToolRunner)(forwarded));
-            } catch {
-                result = "the tool failed";
-            }
+        try {
+            // eslint-disable-next-line no-await-in-loop -- see above
+            result = fitToBudget(await runTool(forwarded));
+        } catch {
+            result = "the tool failed";
         }
 
         user = `${user}\n${observation(result)}`;

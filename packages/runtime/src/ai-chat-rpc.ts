@@ -26,9 +26,9 @@ import type {
     ChatArgs,
     ChatResult,
     ChatStreamEvent,
+    ChatToolName,
     ChatToolRunner,
     ForwardedToolCall,
-    ForwardedToolName,
     SchemaFact,
 } from "../../../shared/ai-chat";
 import { generateChat } from "../../../shared/ai-chat";
@@ -166,10 +166,8 @@ type ForwardToShard = (
  * The admin op behind each forwarded tool. A record, so a tool added without an
  * op is a compile error.
  *
- * Keyed by `ForwardedToolName`, which is `ChatToolName` minus `loadKnowledge` —
- * that one is answered from a digest inside the engine and has no op to name.
  */
-const TOOL_OPS: Readonly<Record<ForwardedToolName, string>> = {
+const TOOL_OPS: Readonly<Record<ChatToolName, string>> = {
     describeTables: "__lunora_admin__:describeTables",
     readAdvisors: "__lunora_admin__:getAdvisories",
     readLogs: "__lunora_admin__:getLogs",
@@ -312,6 +310,8 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
              * the transport.
              */
             approval: args["approval"],
+            // Excerpts the Studio chose (the digest lives there, not here); the engine caps and fences them.
+            knowledge: args["knowledge"],
             ...(typeof args["model"] === "string" ? { model: args["model"] } : {}),
             prompt: args["prompt"],
             shardKey,

@@ -524,7 +524,7 @@ const decodeAdminArgs = (rawArgs: Record<string, unknown>): Record<string, unkno
  * module it imports on cold start, and most shards never serve these RPCs.
  */
 const loadSqlAssistant = () => import("../../../shared/sql-assistant");
-const loadAiChat = () => import("../../../shared/ai-chat");
+const loadAiOptIn = () => import("../../../shared/ai-opt-in");
 
 /** The empty answer of {@link ShardDO.sensitiveArgNames}: a function with no `v.sensitive` argument. */
 const NO_SENSITIVE_ARGS: ReadonlySet<string> = new Set<string>();
@@ -12156,7 +12156,7 @@ abstract class ShardDO {
      * served here, narrowing `env` a second time.
      */
     private async aiBinding(): Promise<unknown> {
-        const { asOptInLevel } = await loadAiChat();
+        const { asOptInLevel } = await loadAiOptIn();
         const env = this.env as Record<string, unknown> | undefined;
 
         return asOptInLevel(env?.["LUNORA_AI_OPT_IN"]) === "disabled" ? undefined : env?.["AI"];

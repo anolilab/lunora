@@ -18,6 +18,7 @@ import type {
     SchemaFact,
 } from "../lib/admin";
 import { ADMIN_FUNCTIONS } from "../lib/admin";
+import loadKnowledgeExcerpts from "../lib/assistant-knowledge";
 import { adminRef, callOptions } from "../lib/internal";
 import { useAdminQuery } from "./use-admin-query";
 import useStudioClient from "./use-studio-client";
@@ -232,7 +233,7 @@ const useAssistantRpc = (shardKey: string): AssistantRpc => {
              */
             const result = (await client.streamRpc(
                 AI_CHAT,
-                { approval, prompt, schema, shardKey, transcript },
+                { approval, knowledge: await loadKnowledgeExcerpts(prompt), prompt, schema, shardKey, transcript },
                 {
                     onFrame: (frame: unknown) => {
                         onEvent?.(frame as ChatStreamEvent);

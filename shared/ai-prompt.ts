@@ -37,6 +37,15 @@ const COLUMN_NAME_CAP = 64;
 /** Cap a caller-supplied model-id override; no real Workers AI model id approaches this. */
 const MODEL_CAP = 120;
 
+/**
+ * Documentation excerpts a chat turn carries, and the length of each. The Studio
+ * selects them (it holds the digest, so no deployed Worker has to) and the worker
+ * re-applies both caps: the count and length bound the prompt whatever the browser sends.
+ * The length fits the contents line (every page slug) a question matching nothing gets.
+ */
+const MAX_KNOWLEDGE_EXCERPTS = 4;
+const KNOWLEDGE_EXCERPT_CAP = 2100;
+
 /** Most tables named in the grounding block, so a huge schema cannot crowd out the request. */
 const MAX_GROUNDED_TABLES = 40;
 
@@ -449,8 +458,10 @@ export {
     extractJson,
     groundingBlock,
     isAiBinding,
+    KNOWLEDGE_EXCERPT_CAP,
     MAX_ATTEMPTS,
     MAX_GROUNDED_COLUMNS,
+    MAX_KNOWLEDGE_EXCERPTS,
     modelFor,
     PROMPT_CAP,
     runPrompt,
