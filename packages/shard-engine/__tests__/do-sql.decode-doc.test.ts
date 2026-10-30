@@ -7,7 +7,7 @@ import { decodeDocJson, encodeDocJson } from "../src/do-sql";
 vi.mock(import("@lunora/wire"), async (importOriginal) => {
     const actual = await importOriginal();
 
-    return { ...actual, decodeWire: vi.fn(actual.decodeWire) };
+    return { ...actual, decodeWire: vi.fn<typeof actual.decodeWire>(actual.decodeWire) };
 });
 
 describe("decodeDocJson", () => {
