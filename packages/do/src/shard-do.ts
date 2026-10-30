@@ -10946,7 +10946,13 @@ abstract class ShardDO {
      */
     private async importAdminShard(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseImportShardArgs(args);
-        const result = await this.runShardImport({ dryRun: parsed.dryRun, onConflict: parsed.onConflict, rows: parsed.rows, startLine: parsed.startLine });
+        const result = await this.runShardImport({
+            deletes: parsed.deletes,
+            dryRun: parsed.dryRun,
+            onConflict: parsed.onConflict,
+            rows: parsed.rows,
+            startLine: parsed.startLine,
+        });
 
         // A dry run writes nothing, so there is no table to flush and no change to audit. The echo is how a client tells a shard that
         // honoured the flag from one built before it existed, which ignores the flag, writes the rows and answers the same body.

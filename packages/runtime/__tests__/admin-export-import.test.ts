@@ -1075,7 +1075,7 @@ describe("createWorker — admin import endpoint", () => {
         };
 
         it("routes a delete to the shard its doc names and carries the op to both planes", async () => {
-            expect.assertions(3);
+            expect.assertions(4);
 
             const { body, importGlobals } = await deleteImport(
                 [
@@ -1090,6 +1090,16 @@ describe("createWorker — admin import endpoint", () => {
             ]);
             expect(importGlobals).toHaveBeenCalledWith(expect.objectContaining({ rows: [{ doc: { _id: "g1" }, line: 2, op: "delete", table: "settings" }] }));
             expect(body).toMatchObject({ deleted: 1, errors: [] });
+            // The shard refuses delete rows unless the fan-out says the request opted in.
+            expect(orchestrateImport).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ deletes: true }));
+        });
+
+        it("does not tell the shards the request opted into deletes when it did not", async () => {
+            expect.assertions(1);
+
+            await deleteImport([{ doc: { _id: "u1", orgId: "acme" }, table: "users" }], {}, "");
+
+            expect(orchestrateImport).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ deletes: false }));
         });
 
         it("refuses the whole import (400) when global deletes meet an importer that cannot delete, before any shard is pruned", async () => {

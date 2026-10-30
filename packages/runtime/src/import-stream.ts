@@ -24,6 +24,9 @@ type ImportRowError = { code: string; line: number; message: string; table: stri
 
 type ParsedImportRow = { error: ImportRowError; ok: false } | { doc: Record<string, unknown>; ok: true; op?: "delete"; table: string };
 
+/** Whether the request opted into `op: "delete"` rows (`?deletes=true`). Read once for the parser and again for the shard plane. */
+const importWantsDeletes = (request: Request): boolean => new URL(request.url).searchParams.get("deletes") === "true";
+
 /**
  * Validate one NDJSON import line into a `{ table, doc }` row, or an
  * `ImportRowError` describing why the line was rejected. Pure — the caller
@@ -141,7 +144,7 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         throw new LunoraError("Import endpoint requires a request body", { code: "BAD_REQUEST", status: 400 });
     }
 
-    const deletes = new URL(request.url).searchParams.get("deletes") === "true";
+    const deletes = importWantsDeletes(request);
     const errors: ImportRowError[] = [];
     // Each global row carries its true physical source line so error attribution
     // survives interspersed shard rows / blank lines — a single `startLine` can
@@ -397,6 +400,7 @@ const streamingImport = async (
         // the live worker (a fail-open leak).
         const result = await coordinator.orchestrateImport(namespace, {
             batches: [...perShard.values()],
+            deletes: importWantsDeletes(request),
             dryRun,
             headers: forwardedHeaders,
             onConflict,

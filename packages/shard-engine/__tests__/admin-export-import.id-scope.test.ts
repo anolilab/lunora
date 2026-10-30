@@ -72,7 +72,7 @@ describe("shard admin import — `_id` conflict probe", () => {
         await writer.insert("notes", { _id: "n2", title: "kept" }, { allowExplicitId: true });
 
         const prune = async (): Promise<Awaited<ReturnType<typeof importShardRows>>> =>
-            importShardRows(writer, schema, { rows: [{ doc: { _id: "n1", title: "stale" }, op: "delete", table: "notes" }] });
+            importShardRows(writer, schema, { deletes: true, rows: [{ doc: { _id: "n1", title: "stale" }, op: "delete", table: "notes" }] });
 
         await expect(prune()).resolves.toStrictEqual({ conflicts: 0, deleted: 1, errors: [], inserted: {}, replaced: 0 });
         await expect(writer.get("notes", "n1")).resolves.toBeNull();
@@ -87,7 +87,7 @@ describe("shard admin import — `_id` conflict probe", () => {
 
         await writer.insert("notes", { _id: "shared-1", title: "not a task" }, { allowExplicitId: true });
 
-        const result = await importShardRows(writer, schema, { rows: [{ doc: { _id: "shared-1" }, op: "delete", table: "tasks" }] });
+        const result = await importShardRows(writer, schema, { deletes: true, rows: [{ doc: { _id: "shared-1" }, op: "delete", table: "tasks" }] });
 
         expect(result.errors).toStrictEqual([
             { code: "ID_COLLISION", line: 1, message: '_id "shared-1" belongs to table "notes", not "tasks"', table: "tasks" },
@@ -116,7 +116,7 @@ describe("shard admin import — `_id` conflict probe", () => {
         await writer.insert("notes", { _id: "n1", title: "stale" }, { allowExplicitId: true });
         await writer.insert("tasks", { _id: "t1", label: "kept", noteId: "n1" }, { allowExplicitId: true });
 
-        const result = await importShardRows(writer, related, { rows: [{ doc: { _id: "n1" }, op: "delete", table: "notes" }] });
+        const result = await importShardRows(writer, related, { deletes: true, rows: [{ doc: { _id: "n1" }, op: "delete", table: "notes" }] });
 
         expect(result).toMatchObject({ deleted: 1, errors: [] });
         await expect(writer.get("notes", "n1")).resolves.toBeNull();
@@ -140,6 +140,27 @@ describe("shard admin import — `_id` conflict probe", () => {
         await expect(writer.get("notes", "n2")).resolves.toBeNull();
     });
 
+    it("keeps a stored row when a delete row reaches the shard RPC without the deletes opt-in, checked or not", async () => {
+        expect.assertions(5);
+
+        const writer = writerFor(harness);
+
+        await writer.insert("notes", { _id: "n1", title: "stored" }, { allowExplicitId: true });
+
+        const rows = [{ doc: { _id: "n1" }, op: "delete", table: "notes" }];
+        const expected = [{ code: "BAD_ROW", line: 1, message: 'a row with `op: "delete"` needs `deletes: true` on the import', table: "notes" }];
+
+        const written = await importShardRows(writer, schema, parseImportShardArgs({ rows }));
+        const checked = await importShardRows(writer, schema, parseImportShardArgs({ dryRun: true, rows }));
+
+        expect(written).toMatchObject({ deleted: 0, errors: expected });
+        expect(checked.errors).toStrictEqual(expected);
+        await expect(writer.get("notes", "n1")).resolves.toMatchObject({ title: "stored" });
+
+        await expect(importShardRows(writer, schema, parseImportShardArgs({ deletes: true, rows }))).resolves.toMatchObject({ deleted: 1, errors: [] });
+        await expect(writer.get("notes", "n1")).resolves.toBeNull();
+    });
+
     it("reports a delete whose ownership probe fails as an error, never as an absent row", async () => {
         expect.assertions(2);
 
@@ -153,7 +174,7 @@ describe("shard admin import — `_id` conflict probe", () => {
                 throw new Error("storage unavailable");
             },
         };
-        const result = await importShardRows(writer, schema, { rows: [{ doc: { _id: "n1" }, op: "delete", table: "notes" }] });
+        const result = await importShardRows(writer, schema, { deletes: true, rows: [{ doc: { _id: "n1" }, op: "delete", table: "notes" }] });
 
         expect(result.errors).toHaveLength(1);
         await expect(base.get("notes", "n1")).resolves.toMatchObject({ title: "stored" });

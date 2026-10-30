@@ -1054,6 +1054,7 @@ interface ImportFanOutRequest {
         shardKey: string;
         startLine?: number;
     }>;
+    deletes?: boolean;
     dryRun?: boolean;
     headers?: Record<string, string>;
     onConflict?: "replace" | "skip";

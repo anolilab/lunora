@@ -552,6 +552,8 @@ interface ImportFanOutRequest {
      * starting-line-number for error attribution is carried in `startLine`.
      */
     batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; op?: "delete"; table: string }>; shardKey: string; startLine?: number }>;
+    /** Let rows tagged `op: "delete"` remove stored rows. Off unless set: the shard refuses those rows. */
+    deletes?: boolean;
     /** Check the rows and return their shape errors without writing. Off unless set: a write is the default. */
     dryRun?: boolean;
     headers?: Record<string, string>;
@@ -1969,6 +1971,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                 }
 
                 return importOnShard(batch.shardKey, {
+                    deletes: request.deletes === true,
                     dryRun: request.dryRun === true,
                     onConflict: request.onConflict ?? "skip",
                     rows: [...batch.rows],

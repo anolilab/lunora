@@ -1254,6 +1254,7 @@ interface ImportRow extends ExportRow {
 
 ```ts
 interface ImportShardAdminArgs {
+    deletes: boolean;
     dryRun: boolean;
     onConflict: ImportConflictMode;
     rows: ReadonlyArray<ImportRow>;
@@ -1265,6 +1266,7 @@ interface ImportShardAdminArgs {
 
 ```ts
 interface ImportShardArgs {
+    deletes?: boolean;
     dryRun?: boolean;
     onConflict?: ImportConflictMode;
     rows: ReadonlyArray<ImportRow>;

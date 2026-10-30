@@ -91,6 +91,8 @@ interface RunShardExportArgs {
 
 /** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface RunShardImportArgs {
+    /** Honour rows tagged `op: "delete"`. See `ImportShardArgs.deletes` in `@lunora/shard-engine`. */
+    deletes?: boolean;
     /** Check the rows and report their shape errors, writing nothing. See `ImportShardArgs.dryRun` in `@lunora/shard-engine`. */
     dryRun?: boolean;
     /** What a row whose `_id` already exists does. See `ImportConflictMode` in `@lunora/shard-engine`. */

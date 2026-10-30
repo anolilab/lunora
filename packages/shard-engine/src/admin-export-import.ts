@@ -70,6 +70,12 @@ interface ImportRow extends ExportRow {
 
 interface ImportShardArgs {
     /**
+     * Honour rows tagged `op: "delete"`. Off unless set: a row that asks for a delete without it is a BAD_ROW and the stored row
+     * stays, so a caller that has not opted in (a change-feed dump fed to an import, say) never removes data by accident.
+     */
+    deletes?: boolean;
+
+    /**
      * Check every row and report what the import would reject, writing nothing.
      *
      * Only the shape is checked here: the envelope, undeclared fields and each
@@ -476,13 +482,25 @@ const importOneRow = async (
 };
 
 /** A row whose `op` is set to anything but `"delete"` is refused, never read as an insert. */
-const opError = (row: ImportRow, line: number): ImportError | undefined =>
-    row.op === undefined || row.op === "delete"
+const opError = (row: ImportRow, line: number, deletes: boolean): ImportError | undefined => {
+    if (row.op === "delete") {
+        return deletes ? undefined : { code: "BAD_ROW", line, message: 'a row with `op: "delete"` needs `deletes: true` on the import', table: row.table };
+    }
+
+    return row.op === undefined
         ? undefined
         : { code: "BAD_ROW", line, message: `row \`op\` must be "delete" when set, got ${JSON.stringify(row.op)}`, table: row.table };
+};
 
-const applyRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row: ImportRow, line: number, onConflict: ImportConflictMode): Promise<RowOutcome> => {
-    const refused = opError(row, line);
+const applyRow = async (
+    writer: DatabaseWriterLike,
+    schema: SchemaLike,
+    row: ImportRow,
+    line: number,
+    onConflict: ImportConflictMode,
+    deletes: boolean,
+): Promise<RowOutcome> => {
+    const refused = opError(row, line, deletes);
 
     if (refused !== undefined) {
         return { error: refused, kind: "error" };
@@ -506,7 +524,8 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
         // nothing else, so the caller can refuse a file before the first real
         // chunk lands.
         if (args.dryRun === true) {
-            const shapeError = opError(row, line) ?? (row.op === "delete" ? deleteRowError(schema, row, line) : rowShapeError(schema, row, line));
+            const shapeError =
+                opError(row, line, args.deletes === true) ?? (row.op === "delete" ? deleteRowError(schema, row, line) : rowShapeError(schema, row, line));
 
             if (shapeError !== undefined) {
                 errors.push(shapeError);
@@ -516,7 +535,7 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
         }
 
         // eslint-disable-next-line no-await-in-loop -- rows apply in stream order through one SQLite handle; line-number attribution depends on the sequence
-        const outcome = await applyRow(writer, schema, row, line, args.onConflict ?? "skip");
+        const outcome = await applyRow(writer, schema, row, line, args.onConflict ?? "skip", args.deletes === true);
 
         switch (outcome.kind) {
             case "absent": {
@@ -559,6 +578,7 @@ interface ExportShardAdminArgs {
 
 /** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface ImportShardAdminArgs {
+    deletes: boolean;
     dryRun: boolean;
     onConflict: ImportConflictMode;
     rows: ReadonlyArray<ImportRow>;
@@ -611,7 +631,13 @@ const parseImportShardArgs = (args: Record<string, unknown>): ImportShardAdminAr
     const startLine = typeof args["startLine"] === "number" ? args["startLine"] : undefined;
 
     // Off unless asked for: a caller that never heard of a dry run keeps writing, as it always has.
-    return { dryRun: args["dryRun"] === true, onConflict: args["onConflict"] === "replace" ? "replace" : "skip", rows, startLine };
+    return {
+        deletes: args["deletes"] === true,
+        dryRun: args["dryRun"] === true,
+        onConflict: args["onConflict"] === "replace" ? "replace" : "skip",
+        rows,
+        startLine,
+    };
 };
 
 export { exportShardRows, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow };
