@@ -215,6 +215,69 @@ describe("sql store retention sweep (real node:sqlite)", () => {
         expect(keys()).toHaveLength(1);
     });
 
+    it("keeps a key with a lone surrogate apart from its U+FFFD look-alike", async () => {
+        // UTF-8 TEXT would store the lone surrogate as U+FFFD, so the two keys would share one budget.
+        expect.assertions(2);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        await store.set("ip:a\uD800", { ts: 1, value: 1 });
+        await store.set("ip:a\uFFFD", { ts: 2, value: 9 });
+
+        expect(store.get("ip:a\uD800")).toStrictEqual({ ts: 1, value: 1 });
+        expect(store.get("ip:a\uFFFD")).toStrictEqual({ ts: 2, value: 9 });
+    });
+
+    it("round-trips a key that starts with the escape marker", async () => {
+        expect.assertions(2);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        await store.set("\uFFFFx", { ts: 1, value: 3 });
+
+        expect(store.get("\uFFFFx")).toStrictEqual({ ts: 1, value: 3 });
+        expect(store.get(`\uFFFF${JSON.stringify("\uFFFFx")}`)).toBeUndefined();
+    });
+
+    it("lets its owner sweep a key that had to be escaped", async () => {
+        expect.assertions(2);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        await store.set("mine:\uD800", { ts: 1, value: 1 });
+        await store.set("theirs:\uD800", { ts: 1, value: 1 });
+        await store.sweep?.(500, 32, (k) => k.startsWith("mine:"));
+
+        expect(store.get("mine:\uD800")).toBeUndefined();
+        expect(store.get("theirs:\uD800")).toStrictEqual({ ts: 1, value: 1 });
+    });
+
+    it("sweeps a marker-prefixed row written before keys were escaped", async () => {
+        expect.assertions(2);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        await store.set("warm", { ts: 1000, value: 1 });
+        // A row from before escaping: its stored text starts with the marker but is not JSON.
+        harness.sql.exec(`INSERT INTO "_lunora_rate_limits" (k, value, ts, prev) VALUES (?, 1, 1, NULL)`, "\uFFFFlegacy");
+
+        const owned: string[] = [];
+
+        await store.sweep?.(500, 32, (k) => {
+            owned.push(k);
+
+            return true;
+        });
+
+        expect(owned).toStrictEqual(["\uFFFFlegacy"]);
+        expect(
+            harness.sql
+                .exec<{ k: string }>(`SELECT k FROM "_lunora_rate_limits"`)
+                .toArray()
+                .map((row) => row.k),
+        ).toStrictEqual(["warm"]);
+    });
+
     it("deletes only owned rows, in one DELETE however many expired", async () => {
         expect.assertions(2);
 

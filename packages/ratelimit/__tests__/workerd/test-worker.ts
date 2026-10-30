@@ -245,6 +245,26 @@ class RateLimitDO extends DurableObject<Env> {
         return result?.n ?? 0;
     }
 
+    /** A direct store write, bypassing the limiter's key encoding, so a test can hand the store any key. */
+    public async storeSet(kind: StoreKind, key: string, ts: number, value: number): Promise<void> {
+        if (kind === "d1") {
+            await this.#ensureSchema();
+        }
+
+        await this.#store(kind).set(key, { ts, value });
+    }
+
+    /** A direct store read; the counterpart of {@link storeSet}. */
+    public async storeGet(kind: StoreKind, key: string): Promise<{ ts: number; value: number } | undefined> {
+        if (kind === "d1") {
+            await this.#ensureSchema();
+        }
+
+        const state = await this.#store(kind).get(key);
+
+        return state === undefined ? undefined : { ts: state.ts, value: state.value };
+    }
+
     /** One `limit("login", { key })` on the `sql` store at a chosen clock, so a test can age rows past the horizon. */
     public async sqlConsumeAt(key: string, now: number): Promise<RateLimitStatus> {
         return new RateLimiter({ config: CONFIG, now: () => now, store: this.#store("sql") }).limit("login", { key });
