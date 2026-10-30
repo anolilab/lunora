@@ -1,5 +1,5 @@
 import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { useEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -38,6 +38,8 @@ const evaluate = ({ cursor, endCursor, numItems }: PaginationOpts): unknown => {
 };
 
 const subs: { callback: (value: unknown) => void; opts: PaginationOpts }[] = [];
+/** Each subscription's first delivery: the milestone a page waits on instead of polling the DOM. */
+const deliveries: Promise<void>[] = [];
 
 const client = {
     expectsPush: () => true,
@@ -54,9 +56,14 @@ const client = {
         const sub = { callback, opts: (args as { paginationOpts: PaginationOpts }).paginationOpts };
 
         subs.push(sub);
-        queueMicrotask(() => {
-            callback(evaluate(sub.opts));
-        });
+        deliveries.push(
+            new Promise<void>((resolve) => {
+                queueMicrotask(() => {
+                    callback(evaluate(sub.opts));
+                    resolve();
+                });
+            }),
+        );
 
         return () => {
             subs.splice(subs.indexOf(sub), 1);
@@ -91,9 +98,11 @@ describe("usePaginatedCore — render cost", () => {
 
         for (let page = 1; page <= PAGE_COUNT; page += 1) {
             // eslint-disable-next-line no-await-in-loop -- each page must land before the next loadMore reads its cursor
-            await waitFor(() => {
-                expect(screen.getByTestId("results").textContent).toBe(ITEMS.slice(0, page * NUM_ITEMS).join(","));
+            await act(async () => {
+                await Promise.all(deliveries.splice(0));
             });
+
+            expect(screen.getByTestId("results").textContent).toBe(ITEMS.slice(0, page * NUM_ITEMS).join(","));
 
             if (page < PAGE_COUNT) {
                 act(() => {
