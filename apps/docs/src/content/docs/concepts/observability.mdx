@@ -757,6 +757,11 @@ Observability is billed from 2026-12-01 (Free caps ingestion at 0.5 GB/day; Paid
 includes 50 GB per billing cycle, then $0.25/GB), so `lunora doctor` reports an
 `observability-full-sampling` info finding while either rate is still 1.
 
+Lunora also writes `redact_query_string: true` by default. Workers Logs and traces keep the
+request URL as received, and auth links carry their token in the query
+(`?token=`), so without it every emailed token is stored. A block that keeps
+query strings gets an `observability-query-unredacted` warning from `lunora doctor`.
+
 ### Traces are kept or dropped whole
 
 The decision is **deterministic per trace**, derived from the trace id rather

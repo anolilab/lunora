@@ -31,7 +31,7 @@ const CLOUDFLARE_TOOLS: ReadonlyArray<CloudflareTool> = [
     {
         name: "deployments",
         summary: "deployment history; roll back or promote Worker versions",
-        usage: "list | inspect <version-id> | rollback [version-id] | promote <version-id>",
+        usage: "list | status | inspect <version-id> | rollback [version-id] | promote <version-id>",
     },
     {
         name: "profile",
@@ -69,9 +69,14 @@ const cloudflareCommand: Command = {
         ["lunora cloudflare containers list --format json", "List container instances as JSON (also `info`, `images list`)"],
         ["lunora cloudflare containers images delete transcoder:v1", "Delete an image to free registry storage"],
         ["lunora cloudflare deployments list", "Show the 10 most recent deployments"],
+        ["lunora cloudflare deployments status", "Show the live version and how traffic is split across versions"],
         ["lunora cloudflare deployments inspect <version-id>", "View a specific Worker version"],
         ["lunora cloudflare deployments rollback --yes", "Roll back to the previous version"],
         ["lunora cloudflare deployments promote <version-id> --yes", "Send 100% of traffic to a version"],
+        [
+            "lunora cloudflare deployments promote <version-id> --percent 10 --from <live-version-id> --confirm-shared-state --yes",
+            "Send 10% of traffic to a version and keep 90% on the live one",
+        ],
         ["lunora cloudflare profile", "Capture a 10s CPU profile of the latest version into ./<worker>-cpu-<time>.pprof.gz"],
         ["lunora cloudflare profile --type heap --duration-ms 30000 --out heap.pprof.gz", "Capture a 30s heap (allocation) profile"],
         ["lunora cloudflare profile --namespace-id <id> --actor-id <64-hex>", "Profile one Durable Object instance"],
@@ -122,8 +127,23 @@ const cloudflareCommand: Command = {
         { description: "profile: Durable Object instance id, 64 hex characters (with --namespace-id)", name: "actor-id", type: String },
         { description: "deployments rollback / promote: reason recorded with the change", name: "message", type: String },
         {
+            description: "deployments promote: share of traffic for the version, a whole number from 1 to 100 (default 100)",
+            name: "percent",
+            type: String,
+        },
+        {
+            description: "deployments promote --percent below 100: the live version that keeps the remaining traffic (checked against `deployments status`)",
+            name: "from",
+            type: String,
+        },
+        {
+            description: "deployments promote --percent below 100: confirm the two versions can share one Durable Object schema and migrations (required)",
+            name: "confirm-shared-state",
+            type: Boolean,
+        },
+        {
             ...OUTPUT_FORMAT_OPTION,
-            description: "Output format: pretty (default) or json (containers: list | info | images list; deployments: list only)",
+            description: "Output format: pretty (default) or json (containers: list | info | images list; deployments: list and status)",
         },
         TARGET_OPTION,
     ],
@@ -135,17 +155,20 @@ export { CLOUDFLARE_TOOLS, cloudflareCommand };
 export type CloudflareOptions = CreateOptions<{
     "actor-id": string | undefined;
     "allow-floor": boolean | undefined;
+    "confirm-shared-state": boolean | undefined;
     "dry-run": boolean | undefined;
     "duration-ms": string | undefined;
     email: string[] | undefined;
     env: string | undefined;
     format: string | undefined;
+    from: string | undefined;
     id: string | undefined;
     logs: boolean | undefined;
     message: string | undefined;
     multiplier: string | undefined;
     "namespace-id": string | undefined;
     out: string | undefined;
+    percent: string | undefined;
     push: boolean | undefined;
     "replace-recipients": boolean | undefined;
     tag: string | undefined;

@@ -245,6 +245,26 @@ class RateLimitDO extends DurableObject<Env> {
         return result?.n ?? 0;
     }
 
+    /** A direct store write, bypassing the limiter's key encoding, so a test can hand the store any key. */
+    public async storeSet(kind: StoreKind, key: string, ts: number, value: number): Promise<void> {
+        if (kind === "d1") {
+            await this.#ensureSchema();
+        }
+
+        await this.#store(kind).set(key, { ts, value });
+    }
+
+    /** A direct store read; the counterpart of {@link storeSet}. */
+    public async storeGet(kind: StoreKind, key: string): Promise<{ ts: number; value: number } | undefined> {
+        if (kind === "d1") {
+            await this.#ensureSchema();
+        }
+
+        const state = await this.#store(kind).get(key);
+
+        return state === undefined ? undefined : { ts: state.ts, value: state.value };
+    }
+
     /** One `limit("login", { key })` on the `sql` store at a chosen clock, so a test can age rows past the horizon. */
     public async sqlConsumeAt(key: string, now: number): Promise<RateLimitStatus> {
         return new RateLimiter({ config: CONFIG, now: () => now, store: this.#store("sql") }).limit("login", { key });
@@ -257,14 +277,10 @@ class RateLimitDO extends DurableObject<Env> {
         return row?.n ?? 0;
     }
 
-    /** The planner's detail lines for the sweep's DELETE, as the store runs it. */
+    /** The planner's detail lines for the sweep's candidate SELECT, as the store runs it. */
     public sqlSweepPlan(): string[] {
         return this.ctx.storage.sql
-            .exec<{ detail: string }>(
-                `EXPLAIN QUERY PLAN DELETE FROM "_lunora_rate_limits" WHERE k IN (SELECT k FROM "_lunora_rate_limits" WHERE ts <= ? AND value >= 0 ORDER BY ts LIMIT ?)`,
-                0,
-                1,
-            )
+            .exec<{ detail: string }>(`EXPLAIN QUERY PLAN SELECT k FROM "_lunora_rate_limits" WHERE ts <= ? AND value >= 0 ORDER BY ts LIMIT ?`, 0, 1)
             .toArray()
             .map((row) => row.detail);
     }

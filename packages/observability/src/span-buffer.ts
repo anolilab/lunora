@@ -95,6 +95,12 @@ export class SpanBuffer {
 
     private readonly capacity: number;
 
+    /**
+     * Buffered span count per trace, so {@link SpanBuffer.hasTrace} — run on
+     * every dispatch, usually a miss against a full ring — is a lookup, not a scan.
+     */
+    private readonly traceCounts = new Map<string, number>();
+
     /** How many spans the ring has evicted since it was last cleared. */
     private droppedCount = 0;
 
@@ -120,6 +126,7 @@ export class SpanBuffer {
     /** Drop every buffered span, including the eviction count. */
     public clear(): void {
         this.buffer.length = 0;
+        this.traceCounts.clear();
         this.droppedCount = 0;
     }
 
@@ -128,21 +135,32 @@ export class SpanBuffer {
         return [...this.buffer];
     }
 
-    /**
-     * Whether any buffered span belongs to `traceId`. A membership test rather
-     * than `entries().some(...)` so the per-dispatch check that decides whether
-     * to record a root span doesn't copy the whole ring on every request.
-     */
+    /** Whether any buffered span belongs to `traceId`, as it was when pushed. */
     public hasTrace(traceId: string): boolean {
-        return this.buffer.some((span) => span.traceId === traceId);
+        return this.traceCounts.has(traceId);
     }
 
-    /** Append a span, evicting the oldest when at capacity. */
+    /**
+     * Append a span, evicting the oldest when at capacity. A frozen shallow copy
+     * is stored, never the caller's object (which is shared with the sink and
+     * stays writable), so the span and its `traceCounts` entry cannot diverge.
+     */
     public push(span: SpanEvent): void {
-        this.buffer.push(span);
+        const stored = Object.freeze({ ...span });
+
+        this.buffer.push(stored);
+        this.traceCounts.set(stored.traceId, (this.traceCounts.get(stored.traceId) ?? 0) + 1);
 
         if (this.buffer.length > this.capacity) {
-            this.buffer.shift();
+            const evicted = this.buffer.shift() as SpanEvent;
+            const remaining = (this.traceCounts.get(evicted.traceId) ?? 1) - 1;
+
+            if (remaining === 0) {
+                this.traceCounts.delete(evicted.traceId);
+            } else {
+                this.traceCounts.set(evicted.traceId, remaining);
+            }
+
             this.droppedCount += 1;
         }
     }

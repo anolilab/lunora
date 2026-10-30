@@ -299,7 +299,7 @@ const checkD1Placeholder = (cwd: string, logger: Logger, command: PreDeployComma
     const message =
         target === "celld"
             ? `${blocked}, which celld would use as the database's identity. Set database_id to the database celld should use, then ${command} again.`
-            : `${blocked}. Run \`wrangler d1 create <name>\` to create the database, then replace the placeholder in wrangler.jsonc with the real id before deploying.`;
+            : `${blocked}. Run \`lunora doctor --fix\` to create the database and write its id into wrangler.jsonc, or run \`wrangler d1 create <name>\` and paste the id in yourself.`;
 
     logger.error(message);
 

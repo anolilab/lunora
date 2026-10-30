@@ -62,7 +62,7 @@
 import { isLunoraError } from "@lunora/errors";
 import type { Id } from "@lunora/values";
 import { v } from "@lunora/values";
-import { decodeWire, encodeWire, stableWireKey } from "@lunora/wire";
+import { encodeWire, parseWire, stableWireKey } from "@lunora/wire";
 
 import { initLunora } from "./builder/index";
 import type { Component, SchemaExtension } from "./plugin";
@@ -365,7 +365,7 @@ const defineActionCache = (options: DefineActionCacheOptions = {}): ActionCacheC
             // round-trips: a bare `undefined` does not serialize to a string at
             // all and could not be stored, while `{}` decodes back to the same
             // absent `v`.
-            return (decodeWire(JSON.parse(existing["value"] as string)) as { v: T }).v;
+            return (parseWire(existing["value"] as string) as { v: T }).v;
         }
 
         const value = await compute();

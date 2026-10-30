@@ -1,3 +1,34 @@
+## @lunora/server [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.254...@lunora/server@1.0.0-alpha.255) (2026-10-30)
+
+### Performance Improvements
+
+* **wire:** skip decodeWire on tagless json text ([#1384](https://github.com/anolilab/lunora/issues/1384)) ([ec9dd3d](https://github.com/anolilab/lunora/commit/ec9dd3de697df597b24cbea981ea25a1a2c8fcea))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.159
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.174
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+* **@lunora/observability:** upgraded to 1.0.0-alpha.187
+
+## @lunora/server [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.252...@lunora/server@1.0.0-alpha.253) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.172
+* **@lunora/observability:** upgraded to 1.0.0-alpha.185
+
+## @lunora/server [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.251...@lunora/server@1.0.0-alpha.252) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.157
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.171
+* **@lunora/observability:** upgraded to 1.0.0-alpha.184
+
 ## @lunora/server [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.250...@lunora/server@1.0.0-alpha.251) (2026-10-29)
 
 ### Features

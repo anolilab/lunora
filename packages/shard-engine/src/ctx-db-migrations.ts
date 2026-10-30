@@ -137,7 +137,7 @@ const assertNoDuplicatesUnder = (sql: SqlExec, indexName: string, tableName: str
 
     if (duplicates.toArray().length > 0) {
         throw new BlockedUniqueIndexError(
-            "INTERNAL",
+            "UNIQUE_INDEX_DUPLICATES",
             `unique index "${indexName}" on "${tableName}" ${situation}: existing rows are duplicates under it. De-duplicate the table with a data migration first; the previous index is left in place.`,
         );
     }

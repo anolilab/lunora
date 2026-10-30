@@ -252,6 +252,32 @@ describe("discoverFunctions", () => {
             expect(result[0]?.returnType).toBe('null | { _id: Id<"cursors">; note?: string }');
         });
 
+        it("prints a union member that renders the same text once", () => {
+            expect.assertions(1);
+
+            // Two distinct local aliases with one shape are two union members to the
+            // checker, but both expand to the same text. The join must not print it twice.
+            writeFunction(
+                "statuses.ts",
+                `
+            import { query } from "@lunora/server";
+
+            type Accepted = { ok: true };
+            type Settled = { ok: true };
+
+            export const get = query({
+                args: {},
+                handler: (): Promise<Accepted | Settled> => Promise.resolve({ ok: true }),
+            });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+
+            expect(result[0]?.returnType).toBe("{ ok: true }");
+        });
+
         it("expands an EXPORTED local type too — `_generated` never imports the handler's own module", () => {
             expect.assertions(1);
 

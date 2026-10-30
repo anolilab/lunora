@@ -1,3 +1,39 @@
+## @lunora/do [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.265...@lunora/do@1.0.0-alpha.266) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.188
+
+## @lunora/do [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.264...@lunora/do@1.0.0-alpha.265) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.187
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.174
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+
+## @lunora/do [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.262...@lunora/do@1.0.0-alpha.263) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.185
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.172
+
+## @lunora/do [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.261...@lunora/do@1.0.0-alpha.262) (2026-10-29)
+
+### Bug Fixes
+
+* **do:** recheck ttl expiry before the sweep deletes a row ([#1425](https://github.com/anolilab/lunora/issues/1425)) ([0ed8388](https://github.com/anolilab/lunora/commit/0ed83882be6199e67a506406ab1294e229bc3347))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.184
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.171
+
 ## @lunora/do [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.260...@lunora/do@1.0.0-alpha.261) (2026-10-29)
 
 

@@ -7,6 +7,7 @@ import { createCloudflareTransport } from "./cloudflare-transport";
 import { toQueuedPayload } from "./queue";
 import renderEmail from "./render";
 import createResendTransport from "./resend-transport";
+import { MailSendError } from "./send-error";
 import type { LunoraMailOptions, Mailer, MailTransport, SendOptions, SendPayload } from "./types";
 
 /**
@@ -33,10 +34,13 @@ const buildDefaultTransport = (options: LunoraMailOptions): MailTransport => {
         return {
             send: () =>
                 Promise.reject(
-                    new LunoraError(
-                        "INTERNAL",
-                        "@lunora/mail: no transport configured — this mailer can only queue(); pass `transport`, `cloudflareSend` (a SEND_EMAIL binding) or `apiKey` (Resend) to send()",
-                    ),
+                    new MailSendError({
+                        message:
+                            "@lunora/mail: no transport configured — this mailer can only queue(); pass `transport`, `cloudflareSend` (a SEND_EMAIL binding) or `apiKey` (Resend) to send()",
+                        // A missing binding is a deploy fault, not this message's: a consumer that acked would drop
+                        // every queued mail until the fix, so it retries and dead-letters instead.
+                        retryable: true,
+                    }),
                 ),
         };
     }
@@ -128,7 +132,14 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
     const send = async (options_: SendOptions): Promise<{ id: string }> => {
         const payload = await buildPayload(options_);
 
-        return transport.send(payload);
+        try {
+            return await transport.send(payload);
+        } catch (error) {
+            // A custom transport that throws something unclassified is treated as
+            // transient. The message is generic so a provider's raw text never
+            // reaches the caller; the original error stays on `cause`.
+            throw error instanceof MailSendError ? error : new MailSendError({ cause: error, retryable: true });
+        }
     };
 
     const queue = async (options_: SendOptions): Promise<{ queued: true }> => {
