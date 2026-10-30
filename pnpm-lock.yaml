@@ -4616,8 +4616,8 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.4
+        version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: catalog:cloudflare
@@ -5091,8 +5091,8 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.4
+        version: link:../wire
       '@visulima/cron-parser':
         specifier: catalog:tooling
         version: 2.0.0
@@ -5936,8 +5936,8 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.4
+        version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: catalog:cloudflare
@@ -9043,10 +9043,6 @@ packages:
   '@lingui/message-utils@6.9.0':
     resolution: {integrity: sha512-LaFvx9Vc/lx4EPbbDaiDtyumDM4aAglRA3yvFQsJkhs1UWrCgDaaUBWhkXKYcmVe9gb7qeGYCqmGWOL84N9xDw==}
     engines: {node: '>=22.19.0'}
-
-  '@lunora/wire@1.0.0-alpha.3':
-    resolution: {integrity: sha512-+mp8antjRQaJ3RHVM0HaV1HNByHep+OJREzSR4O+GZQTUewY20ILf+P2F8WSo3Gk2tUL/PngZhqm21MvUSJZsw==}
-    engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
@@ -29992,8 +29988,6 @@ snapshots:
       '@messageformat/date-skeleton': 1.1.0
       '@messageformat/parser': 5.1.1
       js-sha256: 0.10.1
-
-  '@lunora/wire@1.0.0-alpha.3': {}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true
