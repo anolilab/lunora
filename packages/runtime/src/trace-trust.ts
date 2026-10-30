@@ -40,8 +40,8 @@
  * The custom form receives only the `Request`, deliberately: handing user code the
  * Worker `env` would put every secret binding behind a telemetry callback, the
  * same boundary `LogSinkContext` was just narrowed to avoid. A predicate that
- * needs to compare against a binding should close over it — build the worker per
- * request from an options factory, the pattern `createLunoraHandler` already uses.
+ * needs to compare against a binding should close over it — build the worker from
+ * an `(env) => options` factory, as `createLunoraHandler` and `withFrameworkWorker` accept.
  */
 
 /**

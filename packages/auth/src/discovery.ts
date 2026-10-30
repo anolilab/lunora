@@ -157,8 +157,8 @@ const pathsByDeclaration = new WeakMap<object, ReadonlyArray<string>>();
 
 /**
  * Derive {@link authDiscoveryPaths} for an `.auth()` declaration, memoised on the
- * declaration object. A framework-hosted worker rebuilds its options on every
- * request, and calling `options(env)` each time would rebuild every plugin.
+ * declaration object. A generated worker builds its options again for every new
+ * `env` object, and calling `options(env)` each time would rebuild every plugin.
  */
 const authDiscoveryPathsFor = <Env>(declaration: { options: (env: Env) => LunoraAuthOptions }, env: Env): ReadonlyArray<string> => {
     let paths = pathsByDeclaration.get(declaration);

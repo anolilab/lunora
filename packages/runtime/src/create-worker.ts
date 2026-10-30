@@ -6417,6 +6417,32 @@ const hostTriggers = (host: FrameworkHostHandler): Partial<FrameworkTriggers> =>
 };
 
 /**
+ * Build a worker once per `env` object and reuse it. Composing one costs more
+ * than dispatching a request through it, and a fresh worker starts with every
+ * per-isolate cache and memo empty. Workers hands the same `env` to every
+ * invocation in an isolate, so the build runs once there; a non-object `env`
+ * cannot key the cache and is built per call.
+ */
+const workerPerEnv = (make: (env: unknown) => LunoraWorker): ((env: unknown) => LunoraWorker) => {
+    const built = new WeakMap<object, LunoraWorker>();
+
+    return (env) => {
+        if (env === null || typeof env !== "object") {
+            return make(env);
+        }
+
+        let worker = built.get(env);
+
+        if (worker === undefined) {
+            worker = make(env);
+            built.set(env, worker);
+        }
+
+        return worker;
+    };
+};
+
+/**
  * Compose a meta-framework's Cloudflare Worker handler with Lunora's realtime
  * plane into one `{ fetch, scheduled }` Worker — the **single, shared** class-B
  * (own-CF-adapter, hook-injection) composer behind `@lunora/astro`'s
@@ -6429,8 +6455,8 @@ const hostTriggers = (host: FrameworkHostHandler): Partial<FrameworkTriggers> =>
  *
  * Owns the three behaviors the adapters otherwise each re-implemented (and
  * diverged on): (1) the host may be a bare `fetch` fn or a `{ fetch }` object;
- * (2) options may be a fixed object or an `(env) => options` factory, rebuilt per
- * request so per-request bindings wire in; (3) **trigger preservation** — a
+ * (2) options may be a fixed object or an `(env) => options` factory, called once
+ * per `env` object so its bindings wire in; (3) **trigger preservation** — a
  * dispatch Lunora does not own goes to the framework host rather than being
  * silently dropped. `scheduled` is Lunora's only when it configures a cron
  * surface; `queue` only when the app declares a push consumer; `email` never.
@@ -6479,14 +6505,13 @@ const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: Framework
         return build(optionsInput);
     }
 
-    // Factory form: options depend on per-request `env`, so (re)build per call.
-    const optionsFactory = optionsInput;
+    const workerFor = workerPerEnv((env) => build(optionsInput(env)));
 
     return {
-        fetch: (request, env, context) => build(optionsFactory(env)).fetch(request, env, context),
-        queue: (batch, env, context) => build(optionsFactory(env)).queue?.(batch, env, context) ?? Promise.resolve(),
-        scheduled: (controller, env, context) => build(optionsFactory(env)).scheduled(controller, env, context),
-        serverQuery: (request, env, reference, args, options) => build(optionsFactory(env)).serverQuery(request, env, reference, args, options),
+        fetch: (request, env, context) => workerFor(env).fetch(request, env, context),
+        queue: (batch, env, context) => workerFor(env).queue?.(batch, env, context) ?? Promise.resolve(),
+        scheduled: (controller, env, context) => workerFor(env).scheduled(controller, env, context),
+        serverQuery: (request, env, reference, args, options) => workerFor(env).serverQuery(request, env, reference, args, options),
         // `email` is the only trigger declared conditionally, and the asymmetry
         // with `queue` above is deliberate: Lunora always exports a `queue`
         // (`createWorker`'s consumer, a no-op when the app declares no push
@@ -6497,8 +6522,7 @@ const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: Framework
         ...(hostEmail === undefined
             ? {}
             : {
-                  email: (message: unknown, env: unknown, context: ExecutionContextLike) =>
-                      build(optionsFactory(env)).email?.(message, env, context) ?? Promise.resolve(),
+                  email: (message: unknown, env: unknown, context: ExecutionContextLike) => workerFor(env).email?.(message, env, context) ?? Promise.resolve(),
               }),
     };
 };
@@ -6563,14 +6587,16 @@ const resolveLunoraOptions = (options: LunoraHandlerOptions, env: unknown): Fram
  *
  * `shardDO` defaults to `env.SHARD`; pass `options` (or an `(env) => options`
  * factory) to add `auth`, `crons`, a `security` posture, or a custom namespace.
- * A new worker is composed per request because the options (and the `SHARD`
- * binding they default from) are only known once `env` arrives.
+ * The worker is composed on the first request for each `env` object, because the
+ * options (and the `SHARD` binding they default from) are only known once `env`
+ * arrives, and reused for every later request carrying that `env`.
  * @param options Partial worker options (default `shardDO: env.SHARD`), or an `(env) => options` factory.
  */
-const createLunoraHandler =
-    (options: LunoraHandlerOptions = {}): ((request: Request, env: unknown, context?: ExecutionContextLike) => Promise<Response>) =>
-    (request, env, context) =>
-        createWorker(resolveLunoraOptions(options, env)).fetch(request, env, context ?? NOOP_EXECUTION_CONTEXT);
+const createLunoraHandler = (options: LunoraHandlerOptions = {}): ((request: Request, env: unknown, context?: ExecutionContextLike) => Promise<Response>) => {
+    const workerFor = workerPerEnv((env) => createWorker(resolveLunoraOptions(options, env)));
+
+    return (request, env, context) => workerFor(env).fetch(request, env, context ?? NOOP_EXECUTION_CONTEXT);
+};
 
 /** Re-exported helper so callers can roundtrip envelopes in tests. */
 const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
