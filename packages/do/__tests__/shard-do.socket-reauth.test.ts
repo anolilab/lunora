@@ -154,6 +154,8 @@ describe("socket re-authentication", () => {
         const { shard, ws } = open();
 
         await reauth(shard, { claims: { role: "member" }, expiresAt: NOW + 2 * HOUR, userId: "user-1" });
+        // Stands for the re-auths a live client keeps making every half window, so only the credential's expiry is under test.
+        Object.assign(ws.attachment ?? {}, { revalidateAt: NOW + 2 * HOUR });
         vi.setSystemTime(NOW + HOUR + 1);
         await shard.write();
 
@@ -412,6 +414,66 @@ describe("socket identity revalidation", () => {
 
         expect(accepted[0]).toMatch(/^r2\.[\da-f-]{36}$/u);
         expect(accepted[1]).toMatch(/^[\da-f-]{36}$/u);
+    });
+
+    it("sends no resume when the window passes while the resuming subscription's query is still running", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = openTenantSocket();
+
+        vi.spyOn(shard as unknown as { evaluateResume: () => unknown }, "evaluateResume").mockReturnValue({ cursor: 3, epoch: undefined, resumable: true });
+        shard.duringQuery = () => {
+            vi.setSystemTime(NOW + WINDOW);
+        };
+        await shard.webSocketMessage(
+            ws as unknown as WebSocket,
+            JSON.stringify({ id: "sub-2", query: { args: {}, functionPath: "messages:list", sinceSeq: 3 }, type: "subscribe" }),
+        );
+
+        expect(ws.sent.some((frame) => frame.includes('"type":"resume"'))).toBe(false);
+        expect(ws.closes[0]).toBe(4005);
+    });
+
+    it("refuses a re-auth that arrives after the socket's window, closing the socket instead of reviving it", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = openTenantSocket();
+
+        vi.setSystemTime(NOW + WINDOW + 1);
+
+        const response = await reauth(shard, { claims: { orgId: "org-a", role: "member" }, expiresAt: NOW + HOUR, userId: "user-1" });
+
+        expect(response.status).not.toBe(200);
+        expect(ws.closes[0]).toBe(4005);
+    });
+
+    it("closes a pre-window socket whose new deadline cannot be stored, instead of granting it a window on every check", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const shard = new ReauthShard(createState(), {});
+        const ws = createFakeWebSocket();
+
+        shard.register(ws, { connectionId: "conn-1", expiresAt: NOW + HOUR, subs: { "sub-1": { args: {}, functionPath: "messages:list" } }, userId: "user-1" });
+
+        const store = ws.serializeAttachment.bind(ws);
+
+        ws.serializeAttachment = (value) => {
+            if ((value as SocketAttachment).revalidateAt !== undefined) {
+                throw new RangeError("attachment too large");
+            }
+
+            store(value);
+        };
+        await shard.write();
+
+        expect(dataFrames(ws)).toStrictEqual([]);
+        expect(ws.closes[0]).toBe(4005);
     });
 
     it("gives a socket accepted before the window existed one window, then closes it", async () => {

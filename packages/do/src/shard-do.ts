@@ -14351,6 +14351,11 @@ abstract class ShardDO {
         // pre-run cursor.
         const epoch = isAdmin ? undefined : (resume?.epoch ?? readEpoch);
 
+        // The authorization and the query above yield; a socket whose window passed meanwhile gets neither a resume nor rows.
+        if (this.dropIfLapsed(ws)) {
+            return;
+        }
+
         if (resume?.resumable) {
             // Never reached under delivery authorization: `resume` is forced to
             // `undefined` above, so a guarded socket always takes the permit-checked
@@ -16968,6 +16973,11 @@ abstract class ShardDO {
         const attachment = this.readAttachment(ws);
         const { identity, identityExpiry } = call;
 
+        // A socket already past its window is closed, not revived: a late re-auth must not keep what its lapse ended.
+        if (this.dropIfLapsed(ws, attachment)) {
+            return jsonResponse({ error: { code: "IDENTITY_STALE", message: "the socket's revalidation window passed; reconnect" } }, 409);
+        }
+
         if (call.callerId === "") {
             return jsonResponse({ error: { code: "UNAUTHENTICATED", message: "an anonymous socket has no credential to refresh" } }, 401);
         }
@@ -17299,7 +17309,10 @@ abstract class ShardDO {
             try {
                 this.writeAttachment(ws, attachment);
             } catch {
-                /* an unwritable attachment is retried on the next read */
+                // A deadline that cannot be stored would be granted afresh on every check: fail closed instead.
+                this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
+
+                return true;
             }
         }
 
