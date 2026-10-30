@@ -324,6 +324,27 @@ NXDOMAIN) is refused instead of treated as public.
 `route`. The real `@cloudflare/playwright` exports satisfy the new shapes
 unchanged.
 
+### `@lunora/cli`: exports end with a row-count marker
+
+Every export now ends with a last line, `{"end":true,"rows":N}`, and
+`lunora import` (and `lunora backup restore`, which imports) refuses an NDJSON
+file that has no marker, whose count differs from the rows it holds, or that
+continues after it. A file or response cut on a row boundary is still valid
+NDJSON, so the marker is what proves it is whole.
+
+**Migration:** exports and backups written before this change have no marker and
+are refused, with a message saying so. After you have checked a file is complete
+(compare its row count with the backup's manifest, or with the source), append
+the marker with the exact number of rows before it:
+
+```bash
+rows=$(grep -c . backup.ndjson)
+printf '{"end":true,"rows":%s}\n' "$rows" >> backup.ndjson
+```
+
+Hand-written NDJSON needs the same line. Imports from Convex, Supabase and
+Firestore, and `--table` imports of bare documents, are unaffected.
+
 ## Recommended (non-breaking) follow-ups
 
 - **Enforce ephemeral WS admin tokens.** The worker can now reject the raw

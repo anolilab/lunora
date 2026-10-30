@@ -46,7 +46,7 @@ export const createExportEndTracker = (): {
     return {
         problem: () => {
             if (declared === undefined) {
-                return "the export has no end marker, so it may have been cut short";
+                return 'the export has no end marker: it was written before exports carried an end marker, or it was cut short. If you have checked that the file is complete, append {"end":true,"rows":N} as its last line, N being its exact row count';
             }
 
             return declared === rows ? undefined : `the export's end marker declares ${String(declared)} row(s) but ${String(rows)} were read`;

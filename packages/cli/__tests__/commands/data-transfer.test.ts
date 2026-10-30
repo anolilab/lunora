@@ -380,6 +380,24 @@ describe("lunora data-transfer", () => {
             expect(writes).toStrictEqual([]);
         });
 
+        it("tells the operator a file without an end marker predates it, and how to make it importable", async () => {
+            expect.assertions(3);
+
+            const file = join(workDir, "old-backup.ndjson");
+
+            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n`, "utf8");
+
+            const errors: string[] = [];
+            const logger: Logger = { error: (message: string) => errors.push(message), info: () => {}, success: () => {}, warn: () => {} };
+            const fetchImpl: StreamingFetchLike = async () => checkResponse();
+            const result = await runImportCommand({ fetchImpl, file, logger, token: "t", url: "http://localhost:8787" });
+            const message = `${result.error ?? ""}\n${errors.join("\n")}`;
+
+            expect(result.code).not.toBe(0);
+            expect(message).toContain("written before exports carried an end marker");
+            expect(message).toContain('{"end":true,"rows":N}');
+        });
+
         it("pOSTs batches and aggregates the inserted counts", async () => {
             expect.assertions(4);
 
