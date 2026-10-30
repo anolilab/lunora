@@ -1657,6 +1657,9 @@ const cancelScheduleOutboxJob = async (scheduler: SchedulerLike | undefined, id:
     await cancel.call(scheduler, id);
 };
 
+/** How many dropped ids {@link ShardDO.scheduleOutboxDropped} remembers. */
+const SCHEDULE_OUTBOX_DROPPED_CAP = 1024;
+
 const retriesForever = (envelope: ScheduleOutboxEnvelope): boolean => {
     const retry = envelope.options?.["retry"];
 
@@ -3260,6 +3263,14 @@ abstract class ShardDO {
      * not hand the entry over again while that is awaiting.
      */
     private readonly scheduleOutboxDropping = new Set<string>();
+
+    /**
+     * Ids an operator dropped whose buffered post-commit call may not have started yet. A missing
+     * row alone cannot say "dropped": two calls of one mutation that share an explicit id share one
+     * row, and the first hand-off releases it. Cleared by a new `record` of the id, and capped so a
+     * shard that is dropped from for months does not grow it.
+     */
+    private readonly scheduleOutboxDropped = new Set<string>();
 
     /**
      * Epoch millis before which registration is not retried, set when one
@@ -6900,6 +6911,8 @@ abstract class ShardDO {
                 await this.runScheduleOutboxHandOff(id, run);
             },
             record: (id, envelope): void => {
+                // New custody for the id supersedes an earlier drop of it.
+                this.scheduleOutboxDropped.delete(id);
                 recordScheduleOutbox(this.sql as SqlExec, id, JSON.stringify(envelope), Date.now());
             },
             wake: (): void => {
@@ -12148,6 +12161,7 @@ abstract class ShardDO {
 
             if (awaiting === undefined || awaiting.size === 0) {
                 dropScheduleOutbox(sql, id);
+                this.markScheduleOutboxDropped(id);
             } else {
                 this.parkLiveScheduleOutboxEntry(sql, id);
             }
@@ -15862,7 +15876,14 @@ abstract class ShardDO {
         // An operator may have dropped the entry (or the retry loop parked it) while an earlier
         // hand-off in the same drain was still awaiting: the call must not start then. Checked
         // synchronously with the registration below, the same ordering a drop uses.
-        if (this.scheduleOutboxDropping.has(id) || readDueScheduleOutboxEntry(sql, id, Number.MAX_SAFE_INTEGER) === undefined) {
+        if (this.scheduleOutboxDropping.has(id) || this.scheduleOutboxDropped.has(id)) {
+            return;
+        }
+
+        // A parked row is one the retry loop gave up on or a failed drop stopped. An ABSENT row is
+        // not a drop: a sibling call with the same explicit id may already have released it, and that
+        // call must still reach the scheduler, which answers it as a duplicate.
+        if (hasScheduleOutboxEntry(sql, id) && readDueScheduleOutboxEntry(sql, id, Number.MAX_SAFE_INTEGER) === undefined) {
             return;
         }
 
@@ -15896,6 +15917,16 @@ abstract class ShardDO {
             // is left behind is re-offered by the retry loop and refused as a duplicate.
         } finally {
             this.releaseScheduleOutboxAttempt(id, awaiting, attempt);
+        }
+    }
+
+    private markScheduleOutboxDropped(id: string): void {
+        this.scheduleOutboxDropped.add(id);
+
+        const oldest = this.scheduleOutboxDropped.values().next();
+
+        if (this.scheduleOutboxDropped.size > SCHEDULE_OUTBOX_DROPPED_CAP && !oldest.done) {
+            this.scheduleOutboxDropped.delete(oldest.value);
         }
     }
 

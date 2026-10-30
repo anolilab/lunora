@@ -383,6 +383,13 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
             return { ok: true };
         });
 
+        register("outbox:sameId", "mutation", async (ctx) => {
+            await ctx.scheduler.runAfter(0, { __lunoraRef: "outbox:charge" }, { orderId: "a" }, { id: "dup-id" });
+            await ctx.scheduler.runAfter(0, { __lunoraRef: "outbox:charge" }, { orderId: "b" }, { id: "dup-id" });
+
+            return { ok: true };
+        });
+
         register("outbox:countNotes", "query", async (ctx) => {
             const rows = await ctx.db.query("notes").collect();
 
@@ -822,6 +829,35 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.scheduled.map((job) => job.id)).toStrictEqual([first]);
         expect(harness.received).toHaveLength(1);
         expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("sends both calls of a mutation that reuses an explicit job id, leaving the duplicate to the scheduler", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).resolves.toMatchObject({ ok: true });
+
+        // The first hand-off released the shared custody row; the second is not a dropped entry and must still be offered.
+        expect(harness.received.map((options) => options?.id)).toStrictEqual(["dup-id", "dup-id"]);
+    });
+
+    it("offers a job again when its id is scheduled anew after an earlier entry with that id was dropped", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).rejects.toThrow();
+
+        await harness.drop("dup-id");
+        harness.setReachable(true);
+        harness.received.length = 0;
+
+        await expect(harness.shard.handleRpc("outbox:sameId", {})).resolves.toMatchObject({ ok: true });
+
+        expect(harness.received).toHaveLength(2);
     });
 
     it("does not hand a dropped entry to the scheduler when it was already queued in the same batch", async () => {
