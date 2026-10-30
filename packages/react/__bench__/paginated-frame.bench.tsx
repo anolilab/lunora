@@ -66,7 +66,7 @@ const client = {
     },
 } as unknown as LunoraClient;
 
-const feed: { current: { loaded: number; loadMore: (numberItems: number) => void } | null } = { current: null };
+const feed: { current: { readonly commits: number; loaded: number; loadMore: (numberItems: number) => void } | null } = { current: null };
 const root = createRoot(document.createElement("div"));
 
 await act(async () => {
