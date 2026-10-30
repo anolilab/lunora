@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 198 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 202 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -92,6 +92,10 @@ Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 ### `ADMIN_TOKEN_NOT_CONFIGURED`
 
 `400` — Admin token not configured
+
+### `AI_CHAT_FAILED`
+
+`500` — Assistant turn failed
 
 ### `AI_UNKNOWN_IMAGE_MODEL`
 
@@ -492,6 +496,10 @@ A response with no `body` stream that can still be read as text (React Native's 
 
 `502` — HTTP stream transport error
 
+### `IDENTITY_CHANGED`
+
+`409` — Socket identity changed
+
 ### `IDENTITY_MISMATCH`
 
 `409` — Session changed since the write was queued
@@ -812,6 +820,10 @@ Add a read policy with `.rls(...)`, or mark the table `.public()` if it is inten
 
 `400` — Socket tag budget exceeded
 
+### `STALE_CREDENTIAL`
+
+`409` — Stale credential
+
 ### `STORAGE_CHECKSUM_MISMATCH`
 
 `400` — Storage checksum mismatch
@@ -931,6 +943,14 @@ The ceilings are deliberately conservative — they exist to stop one request ta
 ### `UNAUTHORIZED`
 
 `401` — Unauthorized
+
+### `UNIQUE_INDEX_DUPLICATES`
+
+`503` — Unique index blocked by duplicate rows
+
+The index was not built, so requests to its store are refused until it is.
+
+Make one row keep each key. For a shard table, write a `defineMigration` in `lunora/migrations.ts` that deletes or merges the duplicates, deploy it, then run `lunora migrate up <id>` with that migration's id; the `lunora-migration-helper` skill covers the pattern. A `.global()` table lives in your SQL database, not a shard, so `defineMigration` does not reach it: delete or merge the duplicate rows directly in the database. Either way the index build is retried on its own, so no second deploy is needed.
 
 ### `UNKNOWN_ADMIN_OP`
 
