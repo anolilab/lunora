@@ -135,7 +135,15 @@ provider's secrets. On GitLab, production's variables are Masked and Protected w
 Environment scope `production`, which merge-request pipelines never receive, so
 set a separate `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` for previews,
 Masked but not Protected, with Environment scope `preview/*`; only the preview
-jobs get them, and never reuse the production token. The preview token can redeploy any preview with any secrets, and the
+jobs get them, and never reuse the production token. Create the preview token
+in Cloudflare under My Profile > API Tokens > Create Custom Token, with only the
+Account permissions Workers Scripts, D1, Workers KV Storage and Workers R2
+Storage (Edit), and Account Resources limited to the one account; add no Zone or
+User permission. The residual risk is plain: the variable is not Protected, so
+anyone who can push a branch to the repository can read it, and Cloudflare cannot
+limit a token to resources named `preview-*`, so it can edit or delete every
+Worker, D1 database, KV namespace and R2 bucket on that account. If production
+shares the account, give previews an account of their own. The preview token can redeploy any preview with any secrets, and the
 preview job holds it (and the optional `LUNORA_PREVIEW_SECRET_SEED` that keeps
 minted secrets stable), so the job runs only for pull requests from the same
 repository and the seed adds no access beyond the token. Do not run previews

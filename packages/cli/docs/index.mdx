@@ -843,7 +843,14 @@ at production's resource.
 
 It needs `CLOUDFLARE_API_TOKEN` with Workers Scripts, D1, Workers KV Storage
 and Workers R2 Storage edit permissions, plus `CLOUDFLARE_ACCOUNT_ID` (or
-`account_id`), and a registered workers.dev subdomain. It works on Cloudflare
+`account_id`), and a registered workers.dev subdomain. For CI, create a custom
+token (My Profile > API Tokens > Create Custom Token) with only those four
+Account permissions and Account Resources limited to the one account, never the
+production token. Cloudflare cannot limit a token to the preview-named
+resources, so on GitLab, where the token is Masked but not Protected and so
+readable by anyone who can push a branch, that person can edit or delete every
+Worker, D1 database, KV namespace and R2 bucket on the account. If production
+shares the account, give previews an account of their own. It works on Cloudflare
 only. celld has no Wrangler environments, so deploy a separate config with its
 own `CELLD_BUCKET` instead. The Node target has no deploy.
 

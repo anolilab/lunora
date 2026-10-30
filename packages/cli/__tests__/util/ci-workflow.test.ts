@@ -177,6 +177,17 @@ const ORIGINAL_PNPM_GITLAB = `stages:
 #   CLOUDFLARE_API_TOKEN   — a separate token: Workers Scripts, D1, Workers KV
 #                            Storage and Workers R2 Storage: Edit (previews make
 #                            their own D1, KV and R2). Never the production token.
+#                            Create it in Cloudflare (My Profile > API Tokens >
+#                            Create Custom Token) with only those four Account
+#                            permissions, "Account Resources" limited to this one
+#                            account (and no Zone, User or other permission).
+#                            Residual risk: the variable is not Protected, so
+#                            anyone who can push a branch here can read it and
+#                            can then edit or delete every Worker, D1 database,
+#                            KV namespace and R2 bucket on that account, not just
+#                            previews: the token cannot be narrowed to the
+#                            preview-named resources. Use a dedicated account for
+#                            previews if production shares this one.
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_PREVIEW_SECRET_SEED — optional: any long random string; previews then
 #                            keep their minted secrets across pushes. The preview
