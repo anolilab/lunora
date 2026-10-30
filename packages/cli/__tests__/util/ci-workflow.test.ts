@@ -98,11 +98,17 @@ const ORIGINAL_PNPM_GITLAB = `stages:
 # (below) requires it — run \`pnpm install\` locally and commit the lockfile
 # before pushing, or the first pipeline fails.
 #
-# Set these as masked CI/CD variables (Settings → CI/CD → Variables):
+# Set these as CI/CD variables (Settings → CI/CD → Variables), each Masked AND
+# Protected, with Environment scope "production":
 #   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
 #   LUNORA_ADMIN_TOKEN     — the production worker's admin token
+# Protected variables reach only pipelines on protected branches and tags, so a
+# merge-request pipeline from a feature branch, which runs the project's own
+# code, gets none of them. Keep your default branch protected (it is by default).
+# The "production" scope reaches only jobs that declare environment: production,
+# which is the deploy job alone; the check job below uses none of these.
 .lunora_base:
   image: node:22
   stage: deploy
@@ -113,6 +119,8 @@ const ORIGINAL_PNPM_GITLAB = `stages:
 # Production deploy on the default branch.
 deploy:
   extends: .lunora_base
+  environment:
+    name: production
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   script:
@@ -214,6 +222,27 @@ describe("ci-workflow", () => {
 
         expect(github).toContain("commit your pnpm-lock.yaml");
         expect(gitlab).toContain("commit your pnpm-lock.yaml");
+    });
+
+    it("gitlab keeps production secrets out of merge-request pipelines: protected, production-scoped, deploy job only", () => {
+        expect.assertions(9);
+
+        writeCiWorkflow(workdir, "gitlab", "pnpm");
+
+        const yaml = readFileSync(join(workdir, ".gitlab-ci.yml"), "utf8");
+        const deploy = yaml.slice(yaml.indexOf("\ndeploy:"), yaml.indexOf("\ncheck:"));
+        const check = yaml.slice(yaml.indexOf("\ncheck:"));
+
+        expect(yaml).toContain("Masked AND");
+        expect(yaml).toContain("Protected");
+        expect(yaml).toContain('Environment scope "production"');
+        expect(deploy).toContain("environment:\n    name: production");
+        expect(deploy).toContain("$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH");
+        expect(check).not.toContain("environment:");
+
+        for (const name of ["LUNORA_ADMIN_TOKEN", "LUNORA_DEPLOY_URL", "CLOUDFLARE_API_TOKEN"]) {
+            expect(check).not.toContain(name);
+        }
     });
 
     it("both providers check every pull/merge request with `lunora deploy --dry-run`, never a version upload", () => {

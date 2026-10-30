@@ -174,7 +174,7 @@ ${githubSetupSteps(pm)}
     /* eslint-enable no-secrets/no-secrets */
 };
 
-// GitLab injects masked CI/CD variables into the job environment, so wrangler
+// GitLab injects Masked, Protected, production-scoped CI/CD variables into the job environment, so wrangler
 // picks up CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID automatically — no
 // per-step reference needed. ($CI_* are GitLab predefined vars, not JS.)
 const buildGitlabContent = (manager: PackageManager): string => {
@@ -188,11 +188,17 @@ const buildGitlabContent = (manager: PackageManager): string => {
 # (below) requires it — run \`${manager} install\` locally and commit the lockfile
 # before pushing, or the first pipeline fails.
 #
-# Set these as masked CI/CD variables (Settings → CI/CD → Variables):
+# Set these as CI/CD variables (Settings → CI/CD → Variables), each Masked AND
+# Protected, with Environment scope "production":
 #   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
 #   LUNORA_ADMIN_TOKEN     — the production worker's admin token
+# Protected variables reach only pipelines on protected branches and tags, so a
+# merge-request pipeline from a feature branch, which runs the project's own
+# code, gets none of them. Keep your default branch protected (it is by default).
+# The "production" scope reaches only jobs that declare environment: production,
+# which is the deploy job alone; the check job below uses none of these.
 .lunora_base:
   image: ${pm.gitlabImage}
   stage: deploy
@@ -202,6 +208,8 @@ ${beforeScript}
 # Production deploy on the default branch.
 deploy:
   extends: .lunora_base
+  environment:
+    name: production
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   script:
@@ -239,7 +247,7 @@ const WORKFLOWS: Record<CiProvider, CiWorkflowSpec> = {
     },
     gitlab: {
         file: ".gitlab-ci.yml",
-        secretsHint: "masked CI/CD variables (Settings → CI/CD → Variables)",
+        secretsHint: "CI/CD variables, Masked and Protected, scoped to the production environment (Settings → CI/CD → Variables)",
     },
 };
 
