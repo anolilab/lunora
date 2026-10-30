@@ -231,7 +231,8 @@ const backfillSearchIndexPage = async (
 ): Promise<boolean> => {
     const companion = companionFor(tableName, index);
     const profile = companionProfile(index, dialect);
-    const pass = planBackfillPass(await readSearchBackfillState(exec, dialect, companion), profile);
+    const recorded = await readSearchBackfillState(exec, dialect, companion);
+    const pass = planBackfillPass(recorded, profile);
 
     if (pass.finished) {
         return true;
@@ -284,7 +285,12 @@ const backfillSearchIndexPage = async (
 
     // A page whose ids are all unusable keeps the resume point, rather than
     // sending the next pass back to the top of the table.
-    await writeSearchBackfillState(exec, dialect, companion, lastId ?? pass.cursor, done, profile);
+    // Conditional on the progress this page started from (a wipe's reset having just set the new profile): a late
+    // write from a pass the deadline abandoned finds it moved on and changes nothing.
+    await writeSearchBackfillState(exec, dialect, companion, lastId ?? pass.cursor, done, profile, {
+        cursor: pass.cursor,
+        profile: pass.wipe ? profile : recorded.profile,
+    });
 
     return done;
 };
