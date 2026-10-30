@@ -56,11 +56,6 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
     }
 
     public override async run(event: Readonly<WorkflowEvent<Params>>, step: WorkflowStep): Promise<Output> {
-        if (typeof this.#definition === "function") {
-            this.#definition = await this.#definition();
-        }
-
-        const definition = this.#definition;
         const nativeStep = step as unknown as WorkflowStepLike;
 
         // When this instance was spawned as a `ctx.parallel` branch, the parent
@@ -81,7 +76,14 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
         let output: Output;
 
         try {
-            output = await definition.handler(context);
+            // Resolved inside the `try` so a lazy loader that rejects (import, module evaluation,
+            // `compileAgentWorkflow`) reaches the branch-parent signal below instead of leaving
+            // a `ctx.parallel` parent waiting out its `waitForEvent` timeout.
+            if (typeof this.#definition === "function") {
+                this.#definition = await this.#definition();
+            }
+
+            output = await this.#definition.handler(context);
         } catch (error: unknown) {
             // A branch child: tell the parent it failed (best-effort durable send)
             // before the instance itself errors, so the parent fails fast instead

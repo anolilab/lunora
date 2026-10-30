@@ -72,6 +72,31 @@ describe("@lunora/workflow (workerd)", () => {
         }
     });
 
+    it("signals a branch parent when a lazy definition fails to load", async () => {
+        expect.hasAssertions();
+
+        const parent = await introspectWorkflowInstance(env.WORKFLOW_BRANCH_PARENT, "branch-parent-1");
+        const child = await introspectWorkflowInstance(env.WORKFLOW_LAZY_FAIL, "branch-child-1");
+
+        try {
+            await env.WORKFLOW_BRANCH_PARENT.create({ id: "branch-parent-1", params: {} });
+            await env.WORKFLOW_LAZY_FAIL.create({
+                id: "branch-child-1",
+                params: {
+                    [BRANCH_MARKER_KEY]: { eventType: "lunora:branch:fail", index: 0, parentClassName: "BranchParentWorkflow", parentId: "branch-parent-1" },
+                },
+            });
+
+            await parent.waitForStatus("complete");
+
+            // The parent got the child's failure instead of waiting out its `waitForEvent` timeout.
+            await expect(parent.getOutput()).resolves.toMatchObject({ error: { message: "lazy module failed to evaluate" }, status: "error" });
+        } finally {
+            await parent.dispose();
+            await child.dispose();
+        }
+    });
+
     it("resolves a workflow declared in wrangler exports through ctx.exports, keyed by class", async () => {
         expect.hasAssertions();
 
