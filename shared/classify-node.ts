@@ -57,6 +57,11 @@ const setSize = getter(Set.prototype, "size");
 const bufferByteLength = getter(ArrayBuffer.prototype, "byteLength");
 // `URL` is absent from some embedded runtimes; its brand is then simply never matched.
 const urlHref = typeof URL === "function" ? getter(URL.prototype, "href") : undefined;
+// A native `href` getter throws unless its receiver has a URL's internal slot. A script polyfill's does not (React
+// Native's returns `this.toString()`, which succeeds on any object), so there the getter proves nothing on its own
+// and the value must also descend from the global's prototype.
+const urlPrototype: object | undefined = typeof URL === "function" ? (URL.prototype as object) : undefined;
+const urlHrefIsNative = urlHref !== undefined && Function.prototype.toString.call(urlHref).includes("[native code]");
 // The static is looked up the same way, on the constructor chain, so a subclass's own `isError` is never the test.
 const nativeErrorCheck = deepest(Error, "isError", "value") as ((value: unknown) => boolean) | undefined;
 const errorPrototype = Error.prototype;
@@ -133,10 +138,6 @@ export const classifyNode = (value: object): NodeKind => {
         return "builtin-date";
     }
 
-    if (urlHref !== undefined && brand(() => Reflect.apply(urlHref, value, []))) {
-        return "builtin-url";
-    }
-
     if (brand(() => Reflect.apply(mapSize, value, []))) {
         return "builtin-map";
     }
@@ -153,7 +154,21 @@ export const classifyNode = (value: object): NodeKind => {
         return "builtin-view";
     }
 
-    // Last on purpose: every brand above is an internal slot no object can fake, while the Error test may fall back
+    // After the slot brands on purpose: they are internal slots no object can fake, while the Error test may fall back
     // to a shim or to ancestry. Testing it first would let a permissive `isError` claim a real Map or Date.
-    return isError(value, proto) ? "builtin-error" : "other";
+    if (isError(value, proto)) {
+        return "builtin-error";
+    }
+
+    // Last: on a runtime whose URL is a script polyfill this is the weakest test, so nothing it could wrongly claim
+    // may still be untested after it.
+    if (
+        urlHref !== undefined &&
+        (urlHrefIsNative || (urlPrototype !== undefined && proto !== null && (proto === urlPrototype || urlPrototype.isPrototypeOf(proto)))) &&
+        brand(() => Reflect.apply(urlHref, value, []))
+    ) {
+        return "builtin-url";
+    }
+
+    return "other";
 };

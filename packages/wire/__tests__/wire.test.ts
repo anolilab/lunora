@@ -301,6 +301,58 @@ describe("one prototype read per node", () => {
     });
 });
 
+describe("url classification under a script polyfill", () => {
+    it("keeps Maps and Errors intact when the global URL's href just stringifies its receiver", async () => {
+        expect.assertions(3);
+
+        const NativeUrl = URL;
+        const expectedMap = encodeWire(new Map([["a", 1]]));
+        const expectedError = encodeWire(new Error("boom"));
+        // Shaped like React Native's URL: a script class (no internal slot) whose `href` is `this.toString()`, so
+        // calling the getter on any object succeeds. Delegating to a real URL keeps the module loader working.
+        const url = new WeakMap<object, URL>();
+        const PolyfillUrl = function PolyfillUrl(this: object, ...arguments_: ConstructorParameters<typeof URL>): void {
+            url.set(this, new NativeUrl(...arguments_));
+        } as unknown as typeof URL;
+
+        Object.defineProperties(PolyfillUrl.prototype, {
+            href: {
+                get(this: object): string {
+                    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- the polyfill behaviour under test: stringify any receiver
+                    return String(this);
+                },
+            },
+            toString: {
+                value(this: object): string {
+                    return url.get(this)?.toString() ?? Object.prototype.toString.call(this);
+                },
+            },
+        });
+
+        for (const key of ["hash", "host", "hostname", "origin", "pathname", "port", "protocol", "search", "searchParams"]) {
+            Object.defineProperty(PolyfillUrl.prototype, key, {
+                get(this: object): unknown {
+                    return Reflect.get(url.get(this) ?? {}, key);
+                },
+            });
+        }
+
+        vi.stubGlobal("URL", PolyfillUrl);
+        vi.resetModules();
+
+        try {
+            const fresh = await import("../src");
+
+            expect(fresh.encodeWire(new Map([["a", 1]]))).toStrictEqual(expectedMap);
+            expect(fresh.encodeWire(new Error("boom"))).toStrictEqual(expectedError);
+            expect(fresh.encodeWire(new PolyfillUrl("https://a.test/x"))).toStrictEqual(["$lunora.wire$", "url", "https://a.test/x"]);
+        } finally {
+            vi.unstubAllGlobals();
+            vi.resetModules();
+        }
+    });
+});
+
 describe("error classification without a slot check", () => {
     it("keeps a real Map a Map when only Error ancestry is there to test", async () => {
         expect.assertions(1);
