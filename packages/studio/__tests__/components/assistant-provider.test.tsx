@@ -245,6 +245,23 @@ describe("assistantProvider", () => {
         expect(result.current.activeId).not.toBe(active);
     });
 
+    it("closes the dock when the last conversation is deleted", () => {
+        expect.assertions(2);
+
+        const { result } = render();
+
+        act(() => {
+            result.current.openAssistant();
+        });
+
+        act(() => {
+            result.current.deleteChat(result.current.activeId as string);
+        });
+
+        expect(result.current.sessions).toHaveLength(0);
+        expect(result.current.open).toBe(false);
+    });
+
     it("clears a pending ask only by its own id", () => {
         expect.assertions(2);
 

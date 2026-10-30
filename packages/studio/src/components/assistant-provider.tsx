@@ -329,6 +329,9 @@ export const AssistantProvider = ({ children }: { readonly children: ReactNode }
                         // `undefined`: deleting the active one should land the operator on
                         // another conversation, not on an empty panel they have to reopen.
                         activeId: current.activeId === id ? sessions.at(-1)?.id : current.activeId,
+                        // The panel renders nothing without an active session, so an open dock
+                        // over zero sessions would be blank with no new-chat control.
+                        open: sessions.length === 0 ? false : current.open,
                         sessions,
                     };
                 });
