@@ -1,3 +1,14 @@
+## @lunora/replica [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.227...@lunora/replica@1.0.0-alpha.228) (2026-10-30)
+
+### Performance Improvements
+
+* ratelimit sweep, replica log reads and appends, span lookup ([#1377](https://github.com/anolilab/lunora/issues/1377)) ([f5078b5](https://github.com/anolilab/lunora/commit/f5078b52200981ad49eb1a8bfb226bef81367ad3))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.253
+
 ## @lunora/replica [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.226...@lunora/replica@1.0.0-alpha.227) (2026-10-29)
 
 

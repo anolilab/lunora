@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.171...@lunora/shard-engine@1.0.0-alpha.172) (2026-10-30)
+
+### Performance Improvements
+
+* one-statement ratelimit sql sweep, skip untagged row decode ([#1381](https://github.com/anolilab/lunora/issues/1381)) ([2ab980c](https://github.com/anolilab/lunora/commit/2ab980c714e04381ad75db134db44a22d0de518c))
+
 ## @lunora/shard-engine [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.170...@lunora/shard-engine@1.0.0-alpha.171) (2026-10-29)
 
 ### Bug Fixes

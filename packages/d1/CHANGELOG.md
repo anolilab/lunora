@@ -1,3 +1,16 @@
+## @lunora/d1 [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.219...@lunora/d1@1.0.0-alpha.220) (2026-10-30)
+
+### Performance Improvements
+
+* **sql-store:** batch import id probes, one catalog read per studio page ([#1386](https://github.com/anolilab/lunora/issues/1386)) ([2984272](https://github.com/anolilab/lunora/commit/2984272957df66c2a6b4ef67195b69839daef751))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.172
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.221
+* **@lunora/do:** upgraded to 1.0.0-alpha.263
+
 ## @lunora/d1 [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.218...@lunora/d1@1.0.0-alpha.219) (2026-10-29)
 
 

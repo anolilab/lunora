@@ -1,3 +1,17 @@
+## @lunora/ratelimit [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.182...@lunora/ratelimit@1.0.0-alpha.183) (2026-10-30)
+
+### Performance Improvements
+
+* one-statement ratelimit sql sweep, skip untagged row decode ([#1381](https://github.com/anolilab/lunora/issues/1381)) ([2ab980c](https://github.com/anolilab/lunora/commit/2ab980c714e04381ad75db134db44a22d0de518c))
+* ratelimit sweep, replica log reads and appends, span lookup ([#1377](https://github.com/anolilab/lunora/issues/1377)) ([f5078b5](https://github.com/anolilab/lunora/commit/f5078b52200981ad49eb1a8bfb226bef81367ad3))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.220
+* **@lunora/server:** upgraded to 1.0.0-alpha.253
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.172
+
 ## @lunora/ratelimit [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.181...@lunora/ratelimit@1.0.0-alpha.182) (2026-10-29)
 
 
