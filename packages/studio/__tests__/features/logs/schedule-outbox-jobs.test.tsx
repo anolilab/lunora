@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ScheduleOutboxJobs } from "../../../src/features/logs/schedule-outbox-jobs";
@@ -207,7 +207,7 @@ describe("scheduleOutboxJobs", () => {
     it("keeps the empty state for the first page, and a way back on a later empty one", async () => {
         expect.assertions(3);
 
-        const laterPage = Promise.withResolvers<{ entries: ScheduleOutboxEntry[] }>();
+        const laterPage = Promise.withResolvers<{ entries: ScheduleOutboxEntry[]; nextCursor: string }>();
         const mock = createMockClient({
             query: (_reference, args): unknown =>
                 (args as { cursor?: string }).cursor === undefined ? { entries: [entry()], nextCursor: "1700000000000:job-1" } : laterPage.promise,
@@ -220,15 +220,14 @@ describe("scheduleOutboxJobs", () => {
         );
 
         fireEvent.click(await screen.findByTestId("outbox-next-page"));
-        // Answer the later page and let it render before the empty state is judged.
-        await act(async () => {
-            laterPage.resolve({ entries: [] });
-            await laterPage.promise;
-            // A macrotask turn: the hook hands the answer to state across several promise hops.
-            await new Promise<void>((resolve) => {
-                setTimeout(resolve, 0);
-            });
+        // The loading state has no pager; the answer brings its own, which is the milestone to wait for.
+        await vi.waitFor(() => {
+            if (screen.queryByTestId("outbox-next-page") !== null) {
+                throw new Error("still showing the first page's pager");
+            }
         });
+        laterPage.resolve({ entries: [], nextCursor: "later" });
+        await screen.findByTestId("outbox-next-page");
 
         expect(screen.queryByTestId("outbox-empty")).toBeNull();
         expect(screen.getByTestId("outbox-first-page")).toBeDefined();
