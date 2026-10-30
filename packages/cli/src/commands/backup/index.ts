@@ -31,7 +31,7 @@ const backupCommand: Command = {
         { description: "restore: verify the snapshot's checksum before importing anything", name: "verify", type: Boolean },
         {
             description:
-                "restore: how rows the target already holds are treated — require-empty (default: refuse unless the snapshot's tables are empty) | append | upsert | replace (make each table match the snapshot)",
+                "restore: how rows the target already holds are treated — require-empty (default: refuse unless the snapshot's tables are empty) | append | upsert | replace (make each table match the snapshot; STOP all writes to the target first, or a row updated meanwhile is deleted)",
             name: "mode",
             type: String,
         },

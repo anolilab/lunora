@@ -45,7 +45,7 @@ const importCommand: Command = {
         { description: "Verify row parity + dangling-storage after import (non-zero exit on mismatch)", name: "verify", type: Boolean },
         {
             description:
-                "How rows the target already holds are treated: append (insert, skip existing _ids) | upsert (overwrite existing _ids) | replace (upsert, then delete the rows of the file's tables the file lacks) | require-empty (refuse unless those tables are empty) (default append)",
+                "How rows the target already holds are treated: append (insert, skip existing _ids) | upsert (overwrite existing _ids) | replace (upsert, then delete the rows of the file's tables the file lacks; STOP all writes to the target first, or a row updated meanwhile is deleted) | require-empty (refuse unless those tables are empty) (default append)",
             name: "mode",
             type: String,
         },

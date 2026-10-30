@@ -1370,6 +1370,19 @@ lunora import ./backup.ndjson --mode upsert  # overwrite rows whose _id already 
 lunora import ./backup.ndjson --mode replace --dry-run   # what a full replace would add, overwrite, delete
 ```
 
+An export file is one `{ table, doc }` row per line, then a last line, the end
+marker `{"end":true,"rows":N}`, whose `N` is the number of rows before it. A
+file or response cut on a row boundary is still valid NDJSON that reads as a
+smaller export, so the marker is what proves it is whole: `lunora export` fails
+(and keeps no file) when the response has no marker or a different count, and
+`lunora import` of an NDJSON file refuses one with no marker, a count that does
+not match the rows it read, or anything after the marker, before it writes a
+row. Files written before the marker existed, and hand-written NDJSON, must end
+with a marker line to import. The `/_lunora/admin/import` endpoint itself takes
+bare rows, and applies the same check when a body does carry a marker. The
+marker is not a row and is never imported. Backup snapshots, `lunora seed`
+output and Studio's shard export end with it too.
+
 `--mode` says what happens to rows the target already holds:
 
 | Mode                                       | A row whose `_id` is stored                                                 | A stored row the file lacks |
@@ -1407,8 +1420,12 @@ was written, never fewer rows than before. Re-running the same command
 converges: the write overwrites what already landed, and the deletes run once
 it is clean. A reader between the two passes sees both old and new rows. The
 plan is a read taken before the write, so `require-empty` and `replace` assume
-nothing else writes those tables meanwhile: stop writes to the target for the
-duration of a restore. The
+nothing else writes those tables meanwhile: **stop all writes to the target for
+the duration of a `replace` import.** The delete step removes the stored row
+that currently holds each planned `_id`, not the version the plan read, so a row
+a client updates between the plan and the delete is deleted with its newer
+contents, and nothing detects it. Stop the app's writers (or take it offline)
+before you run a `replace`, and start them again once it reports clean. The
 worker has to support each mode; an older one is detected before any row is
 sent.
 
