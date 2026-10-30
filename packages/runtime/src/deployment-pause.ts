@@ -198,27 +198,12 @@ const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause
 };
 
 /**
- * Hold a paused queue batch: every message goes back with a delay, which costs
- * it one delivery attempt — so a pause longer than the consumer's
- * `max_retries` × this delay dead-letters what it held. Long enough that the
- * default three retries ride out a quarter hour, short enough that a resume
- * drains within minutes.
+ * How long a paused queue message is held before it is delivered again. The
+ * consumer re-enqueues each message as a fresh copy for this long (see
+ * `@lunora/queue`), so a pause costs no delivery attempts however long it lasts.
+ * Short enough that a resume drains within minutes.
  */
-// ponytail: re-enqueueing with a fresh budget (the `@lunora/queue` requeue envelope) is the upgrade if pauses outlast that.
 const PAUSED_QUEUE_RETRY_SECONDS = 300;
 
-/** Retry every message of `batch` for later, when the batch exposes `retryAll`. Answers whether it did. */
-const holdQueueBatch = (batch: unknown): boolean => {
-    const retryAll = (batch as { retryAll?: unknown } | null)?.retryAll;
-
-    if (typeof retryAll !== "function") {
-        return false;
-    }
-
-    (retryAll as (options: { delaySeconds: number }) => void).call(batch, { delaySeconds: PAUSED_QUEUE_RETRY_SECONDS });
-
-    return true;
-};
-
 export type { DeploymentPause, DeploymentPauseState };
-export { createDeploymentPause, holdQueueBatch, PAUSE_CACHE_MS, PAUSE_PATH, PAUSED_QUEUE_RETRY_SECONDS };
+export { createDeploymentPause, PAUSE_CACHE_MS, PAUSE_PATH, PAUSED_QUEUE_RETRY_SECONDS };

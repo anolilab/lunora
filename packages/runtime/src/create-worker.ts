@@ -45,7 +45,7 @@ import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit, withBodyLimit } from "./body-readers";
 import { beginCronRun, endCronRun } from "./cron-runs";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
-import { createDeploymentPause, holdQueueBatch, PAUSE_PATH } from "./deployment-pause";
+import { createDeploymentPause, PAUSE_PATH, PAUSED_QUEUE_RETRY_SECONDS } from "./deployment-pause";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
 import { prepareExportRows } from "./export-stream";
@@ -632,6 +632,9 @@ type QueueForwardHandler = (
  * is a child of the trigger span instead of an unrelated root trace.
  */
 interface TriggerTrace {
+    /** Set while the deployment is paused: the consumer holds each message back this many seconds instead of running it. */
+    holdSeconds?: number;
+
     /** W3C `traceparent` naming the trigger's SERVER span. */
     traceparent: string;
 }
@@ -6367,13 +6370,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             }
         },
         async queue(batch, env, context) {
-            // Paused: hand the whole batch back for later rather than run it. See
-            // `holdQueueBatch` for what a long pause costs the held messages.
+            // Paused: the consumer holds each message back instead of running it
+            // (`holdSeconds`), re-enqueued with a fresh budget so no pause length can
+            // dead-letter work that never ran.
             const pause = await deploymentPause.read();
-
-            if (pause.paused && holdQueueBatch(batch)) {
-                return;
-            }
 
             // Forward to the codegen-built push-consumer handler (which routes by
             // `batch.queue` via `@lunora/queue`). A no-op when the app declares no
@@ -6391,7 +6391,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                               publish: (topic, payload, publishOptions) => publishLiveToShard(QUEUE_LIVE_ORIGIN, topic, payload, publishOptions, "trusted"),
                           };
 
-                await options.queue?.(batch, env, context, { traceparent }, live, options.queueFetchImpl);
+                await options.queue?.(
+                    batch,
+                    env,
+                    context,
+                    pause.paused ? { holdSeconds: PAUSED_QUEUE_RETRY_SECONDS, traceparent } : { traceparent },
+                    live,
+                    options.queueFetchImpl,
+                );
             });
         },
         async scheduled(controller, env, context) {

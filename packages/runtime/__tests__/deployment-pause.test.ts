@@ -248,23 +248,23 @@ describe("createWorker — deployment pause", () => {
         expect(refused.status).toBe(503);
     });
 
-    it("hands a queue batch back for later instead of running it while paused", async () => {
+    it("tells the queue consumer to hold its batch while paused, and to run it once resumed", async () => {
         expect.hasAssertions();
 
-        const queue = vi.fn<() => Promise<void>>(async () => undefined);
-        const retryAll = vi.fn<(options: { delaySeconds: number }) => void>();
+        const queue = vi.fn<(batch: unknown, env: unknown, context: unknown, trigger: { holdSeconds?: number }) => Promise<void>>(async () => undefined);
         const worker = createWorker({ adminToken: ADMIN_TOKEN, queue, schedulerDO: pausableScheduler().namespace, shardDO: countingShard().namespace });
 
         await worker.fetch(setPaused(true), {}, fakeContext);
-        await worker.queue?.({ messages: [], queue: "jobs", retryAll }, {}, fakeContext);
-
-        expect(queue).not.toHaveBeenCalled();
-        expect(retryAll).toHaveBeenCalledWith({ delaySeconds: PAUSED_QUEUE_RETRY_SECONDS });
-
-        await worker.fetch(setPaused(false), {}, fakeContext);
-        await worker.queue?.({ messages: [], queue: "jobs", retryAll }, {}, fakeContext);
+        await worker.queue?.({ messages: [], queue: "jobs" }, {}, fakeContext);
 
         expect(queue).toHaveBeenCalledTimes(1);
+        expect(queue.mock.calls[0]?.[3].holdSeconds).toBe(PAUSED_QUEUE_RETRY_SECONDS);
+
+        await worker.fetch(setPaused(false), {}, fakeContext);
+        await worker.queue?.({ messages: [], queue: "jobs" }, {}, fakeContext);
+
+        expect(queue).toHaveBeenCalledTimes(2);
+        expect(queue.mock.calls[1]?.[3].holdSeconds).toBeUndefined();
     });
 
     it("hands a forwarded tenant queue batch back for retry while paused", async () => {

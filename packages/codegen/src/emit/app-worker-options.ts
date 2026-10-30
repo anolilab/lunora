@@ -541,6 +541,9 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
               })`,
               `                        : undefined,`,
               `                    env: queueEnv as Record<string, unknown>,`,
+              // Set only while the deployment is paused: the consumer re-enqueues each
+              // message instead of running it.
+              `                    holdSeconds: trigger.holdSeconds,`,
               // The consumer's `ctx.run` joins the queue invocation's trace instead
               // of minting a fresh one per dispatched function.
               `                    traceparent: trigger.traceparent,`,
