@@ -111,7 +111,10 @@ interface InProcessRuntime {
      */
     runInTransaction: <R>(body: () => Promise<R> | R) => Promise<R>;
 
-    /** Run `body` as one top-level dispatch with a full resource budget. Wrap every query/action entry. */
+    /**
+     * Run `body` as one top-level dispatch with a full resource budget. Wrap every query/action entry.
+     * Replaces `resetHeadroom()`: call `runWithBudget(() => run())` where you called `resetHeadroom(); run()`.
+     */
     runWithBudget: <R>(body: () => R) => R;
 }
 

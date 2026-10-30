@@ -74,8 +74,11 @@ host. Crossing one fails the call with `TRANSACTION_LIMIT_EXCEEDED`; reaching
 A stream keeps one budget for its life: documents read are capped over the
 whole stream, bytes read per yielded frame.
 
-Reads of `.global()` tables are not counted: they come back from D1 or
-Hyperdrive through the global writer's own paged reads, not the shard's SQLite.
+Documents read from `.global()` tables count against the bytes-read limit,
+sized by their serialized JSON (in UTF-16 code units, like every other read)
+and counted once per transaction. They come back from D1 or Hyperdrive through
+the global writer's own reads, so rank pages, aggregates and `related` over a
+global table are not counted.
 
 Raise them by overriding `transactionLimits()` on the generated shard class.
 
