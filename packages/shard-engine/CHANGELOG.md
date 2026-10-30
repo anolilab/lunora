@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.174...@lunora/shard-engine@1.0.0-alpha.175) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** require the errors release that defines the duplicate-rows code ([#1429](https://github.com/anolilab/lunora/issues/1429)) ([fe5d405](https://github.com/anolilab/lunora/commit/fe5d40505851942c8734f094ec904b075b96f6d8))
+
 ## @lunora/shard-engine [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.173...@lunora/shard-engine@1.0.0-alpha.174) (2026-10-30)
 
 

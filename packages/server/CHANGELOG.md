@@ -1,3 +1,15 @@
+## @lunora/server [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.255...@lunora/server@1.0.0-alpha.256) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** require the errors release that defines the duplicate-rows code ([#1429](https://github.com/anolilab/lunora/issues/1429)) ([fe5d405](https://github.com/anolilab/lunora/commit/fe5d40505851942c8734f094ec904b075b96f6d8))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.175
+* **@lunora/observability:** upgraded to 1.0.0-alpha.189
+
 ## @lunora/server [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.254...@lunora/server@1.0.0-alpha.255) (2026-10-30)
 
 ### Performance Improvements

@@ -1,3 +1,20 @@
+## lunorash [1.0.0-alpha.455](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.454...lunorash@1.0.0-alpha.455) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** require the errors release that defines the duplicate-rows code ([#1429](https://github.com/anolilab/lunora/issues/1429)) ([fe5d405](https://github.com/anolilab/lunora/commit/fe5d40505851942c8734f094ec904b075b96f6d8))
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.457
+* **@lunora/client:** upgraded to 1.0.0-alpha.269
+* **@lunora/do:** upgraded to 1.0.0-alpha.267
+* **@lunora/observability:** upgraded to 1.0.0-alpha.189
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.186
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.259
+* **@lunora/server:** upgraded to 1.0.0-alpha.256
+
 ## lunorash [1.0.0-alpha.454](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.453...lunorash@1.0.0-alpha.454) (2026-10-30)
 
 
