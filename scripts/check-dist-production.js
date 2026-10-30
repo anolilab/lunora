@@ -38,8 +38,10 @@ import { execFileSync } from "node:child_process";
 
 import { init, parse } from "es-module-lexer";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import stripKnownBundledJsxDev from "../packages/studio/scripts/known-bundled-jsx-dev.mjs";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const packagesDir = join(rootDir, "packages");
@@ -60,6 +62,17 @@ const DEV_MARKERS = [
     },
     { marker: "__DEV__", why: "development guard left in the bundle — a production build eliminates the branch" },
 ];
+
+/**
+ * A BUNDLED application artifact, as opposed to published library output.
+ *
+ * `packages/studio/dist/standalone/` is an esbuild bundle that inlines every
+ * dependency, so third-party code lands in it. Its one known `jsxDEV` block (from
+ * `hast-util-to-jsx-runtime`) is removed by `stripKnownBundledJsxDev` before the
+ * markers run; any other `jsxDEV` text in a bundle still fails. The bundle's React
+ * mode is decided upstream by `packages/studio/scripts/build-standalone.mjs`.
+ */
+const isBundledArtifact = (file) => file.includes(`${sep}dist${sep}standalone${sep}`);
 
 /** Extensions that are executed by a consumer (declarations can't crash at runtime). */
 const isRuntimeFile = (name) => /\.(?:mjs|cjs|js)$/.test(name) && !name.endsWith(".d.ts");
@@ -125,7 +138,8 @@ for (const name of packageDirs) {
     for (const file of walk(distDir)) {
         checkedFiles += 1;
 
-        const source = readFileSync(file, "utf8");
+        const raw = readFileSync(file, "utf8");
+        const source = isBundledArtifact(file) ? stripKnownBundledJsxDev(raw) : raw;
 
         for (const { marker, why } of DEV_MARKERS) {
             if (source.includes(marker)) {

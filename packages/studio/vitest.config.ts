@@ -48,12 +48,15 @@ const unitTestFiles = [
     "__tests__/features/storage/storage-entries.test.ts",
     "__tests__/i18n/compile-cache.test.ts",
     "__tests__/lib/admin-functions.test.ts",
+    "__tests__/lib/assistant-knowledge.test.ts",
     "__tests__/lib/data-view-params.test.ts",
     "__tests__/lib/internal.test.ts",
     "__tests__/lib/mask-preview-heuristic.test.ts",
     "__tests__/lib/operation-log.test.ts",
+    "__tests__/lib/recording-client.test.ts",
     "__tests__/lib/rest-dispatch.test.ts",
     "__tests__/lib/seed-data.test.ts",
+    "__tests__/lib/sql-blocks.test.ts",
     "__tests__/lib/ws-token-provider.test.ts",
 ];
 

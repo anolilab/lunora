@@ -38,7 +38,7 @@ import { connectionKey, decodeServerFrame, flushPendingStreams, isLiveStatus, se
 import { TabCoordinator } from "./cross-tab";
 import { resolveDataPayload, UNMERGEABLE_DELTA } from "./delta-merge";
 import { isAuthReplayFailure, TransportError } from "./errors";
-import { httpStream } from "./http-stream";
+import { httpStream, pumpSseBody } from "./http-stream";
 import Listeners from "./listeners";
 import type { OptimisticUpdate } from "./local-store";
 import { createLocalStore } from "./local-store";
@@ -572,6 +572,58 @@ const refusesAsNotQueued = (onlineOnly: boolean | undefined, networkDown: boolea
  * @internal
  */
 const RESOLVED_PROMISE = Promise.resolve();
+
+/**
+ * Pump a `streamRpc` body to its terminal frame. The pump runs off its own controller, tied here to the caller's
+ * signal: one read can carry several frames, so a cancel can land between frames already buffered, and nothing
+ * after it may be delivered. An aborted call rejects with the signal's reason rather than resolving.
+ */
+const pumpStreamRpcBody = async (
+    body: ReadableStream<Uint8Array>,
+    signal: AbortSignal | undefined,
+    onFrame: ((frame: unknown) => void) | undefined,
+): Promise<{ failure: Error | undefined; terminal: string | undefined }> => {
+    let terminal: string | undefined;
+    let failure: Error | undefined;
+    const pumpAbort = new AbortController();
+    const forwardAbort = (): void => {
+        pumpAbort.abort(signal?.reason);
+    };
+
+    signal?.addEventListener("abort", forwardAbort, { once: true });
+
+    try {
+        // No resume state to track on a one-shot call, so the pump's observers are empty.
+        await pumpSseBody(
+            body,
+            {
+                complete: (data: string) => {
+                    if (signal?.aborted !== true) {
+                        terminal = data;
+                    }
+                },
+                fail: (error: Error) => {
+                    failure = error;
+                },
+                push: (frame: unknown) => {
+                    if (signal?.aborted !== true) {
+                        onFrame?.(frame);
+                    }
+                },
+            },
+            {},
+            pumpAbort,
+        );
+    } finally {
+        signal?.removeEventListener("abort", forwardAbort);
+    }
+
+    if (signal?.aborted === true) {
+        throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted.", "AbortError");
+    }
+
+    return { failure, terminal };
+};
 
 /**
  * Lunora browser/edge client. Talks RPC over HTTP and real-time deltas over
@@ -3599,6 +3651,108 @@ class LunoraClient {
             maxBuffer: options.maxBuffer,
             signal: options.signal,
         });
+    }
+
+    /**
+     * Call a worker-served RPC that answers **Server-Sent Events** instead of one
+     * JSON body, reporting each frame as it arrives and resolving with the result
+     * the terminal frame carries.
+     *
+     * The request is the ordinary `/_lunora/rpc` envelope — same path, same
+     * headers, same admin bearer — so authorization, the reserved-op interception
+     * and the operation tape are unchanged; only the RESPONSE is framed
+     * differently. The only op that answers this way today is the Studio's
+     * assistant turn (`__lunora_admin__:aiChat`), which is served at the worker
+     * rather than a shard precisely so a multi-turn exchange cannot occupy a
+     * Durable Object's single-threaded admin dispatch. {@link LunoraClient.stream}
+     * cannot serve it for exactly that reason: it rides the subscription socket
+     * and is answered by the DO.
+     *
+     * **A frame is narration; the resolved value is the answer.** `onFrame`
+     * receives every intermediate `data:` frame verbatim, and a caller that
+     * ignores them all is still correct. That asymmetry is deliberate: it is what
+     * lets a consumer treat an interrupted stream as having produced nothing. A
+     * body that ends without its terminal frame REJECTS
+     * (`HTTP_STREAM_INTERRUPTED`) rather than resolving with whatever arrived, so
+     * a half-finished call can never be mistaken for a finished one.
+     *
+     * A non-2xx response is surfaced as the coded error its JSON envelope
+     * describes, exactly as {@link LunoraClient.query} would — an admin refusal
+     * reads the same on both.
+     * @experimental Ships for the assistant turn; the shape may change if a second op needs it.
+     */
+    public async streamRpc(
+        function_: FunctionReference,
+        args: Record<string, unknown> = {},
+        options: { onFrame?: (frame: unknown) => void; shardKey?: string; signal?: AbortSignal } = {},
+    ): Promise<unknown> {
+        if (this.closed) {
+            throw new LunoraError("CLIENT_CLOSED", "LunoraClient is closed");
+        }
+
+        if (!this.fetchImpl) {
+            throw new LunoraError("INTERNAL", "LunoraClient: no `fetch` implementation available");
+        }
+
+        const functionPath = function_.__lunoraRef;
+        const response = await this.fetchImpl(joinUrl(this.url, RPC_PATH), {
+            body: JSON.stringify({ args: encodeCallArgs(args, `args for '${functionPath}'`), functionPath, shardKey: options.shardKey }),
+            // `accept` states what this reader can parse. Nothing negotiates on it
+            // — the op answers one way — but a proxy or a future second reader
+            // should not have to guess.
+            headers: { accept: "text/event-stream", ...this.rpcRequestHeaders({}, options.shardKey) },
+            method: "POST",
+            ...(options.signal ? { signal: options.signal } : {}),
+        });
+
+        if (!response.ok) {
+            const body: unknown = await response.json().catch(() => undefined);
+            const envelope = body as { error?: { code?: string; message?: string } } | undefined;
+
+            if (envelope?.error) {
+                throw reconstructError(envelope.error);
+            }
+
+            const statusText = response.statusText ? ` ${response.statusText}` : "";
+
+            throw new LunoraError("INTERNAL", `LunoraClient: request failed (status ${response.status.toString()}${statusText})`);
+        }
+
+        if (!response.body) {
+            throw new LunoraError("HTTP_STREAM_NO_BODY", "LunoraClient: streaming response has no body");
+        }
+
+        const { failure, terminal } = await pumpStreamRpcBody(response.body, options.signal, options.onFrame);
+
+        if (failure !== undefined) {
+            throw failure;
+        }
+
+        // `pumpSseBody` reports a bare EOF as `false` rather than throwing, so no
+        // terminal frame reaching this point means the body ended early.
+        if (terminal === undefined) {
+            throw new LunoraError("HTTP_STREAM_INTERRUPTED", "LunoraClient: stream ended without a complete frame");
+        }
+
+        let parsed: unknown;
+
+        try {
+            parsed = JSON.parse(terminal);
+        } catch {
+            throw new LunoraError("HTTP_STREAM_BAD_CHUNK", "LunoraClient: streaming result is not valid JSON");
+        }
+
+        // Fail closed: a terminal frame that is not an envelope carrying a `result`
+        // (`{}`, `null`, a bare string) is a malformed or truncated answer, not a
+        // success whose value happens to be `undefined`. `{ result: null }` is a
+        // real answer and passes.
+        if (typeof parsed !== "object" || parsed === null || !("result" in parsed)) {
+            throw new LunoraError("HTTP_STREAM_INTERRUPTED", "LunoraClient: stream ended without a result");
+        }
+
+        // The same envelope every other worker-served op answers with, so the
+        // wire codec's bigint/bytes sentinels survive a streamed result too.
+        return decodeWire(parsed.result);
     }
 
     public close(): void {

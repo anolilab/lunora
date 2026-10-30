@@ -4443,6 +4443,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `AiRunBinding` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AirbyteMessage` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
