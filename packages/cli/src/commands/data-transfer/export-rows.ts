@@ -106,7 +106,11 @@ const forEachExportedRow = async (target: ExportTarget, tables: ReadonlyArray<st
             }
         }
 
-        deliver(buffer);
+        // The runtime ends every row with a newline, so text left at the end is a row the response was cut off inside,
+        // however well it happens to parse.
+        if (buffer.trim().length > 0) {
+            throw new LunoraError("INTERNAL", `reading the deployment's rows failed: the export ended inside line ${String(lineNumber + 1)}`);
+        }
     } finally {
         reader.releaseLock();
     }
