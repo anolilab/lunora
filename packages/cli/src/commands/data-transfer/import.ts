@@ -1010,7 +1010,7 @@ const planAndConfirm = async (
     let plan: ImportPlan;
 
     try {
-        plan = await planImport({ baseUrl: request.baseUrl, fetchImpl: request.fetchImpl, token: request.token }, sourceIndex, mode);
+        plan = await planImport({ baseUrl: request.baseUrl, fetchImpl: request.fetchImpl, token: request.token }, sourceIndex, mode, options.dryRun !== true);
     } catch (error: unknown) {
         return stop(1, `import: ${options.file} was not written: ${failureMessage(error)}`);
     }
@@ -1108,6 +1108,12 @@ const pruneRefusal = async (plan: ImportPlan | undefined, mode: ImportMode, targ
         await batcher.flush();
     } catch (error: unknown) {
         return failureMessage(error);
+    }
+
+    // A shard the check could not reach has not said it would accept its deletes: proceeding would write the file and prune
+    // only the reachable shards.
+    if (batcher.totals.failed.length > 0) {
+        return `${String(batcher.totals.failed.length)} shard(s) could not be reached to check the deletes`;
     }
 
     const [first] = batcher.totals.errors;

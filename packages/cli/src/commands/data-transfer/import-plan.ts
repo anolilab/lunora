@@ -7,6 +7,8 @@
  * probes nothing. So the plan reads the target's rows for the tables the file
  * names and compares `_id`s here.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { Logger } from "../../util/logger";
 import type { ExportedRow, ExportTarget } from "./export-rows";
 import { forEachExportedRow } from "./export-rows";
@@ -38,11 +40,20 @@ const parseImportMode = (raw: string | undefined, fallback: ImportMode): ImportM
 const overwrites = (mode: ImportMode): boolean => mode === "upsert" || mode === "replace";
 
 /** The source file's rows per table, and the `_id`s they carry. */
-type SourceIndex = Map<string, { duplicates: number; ids: Set<string>; rows: number }>;
+type SourceIndex = Map<string, { duplicates: number; ids: Set<string>; rows: number; unkeyed: number }>;
 
 /** Record one wire row (`{"table":…,"doc":…}`) the import will send. */
 const recordSourceRow = (index: SourceIndex, wireRow: string): void => {
-    const { doc, table } = JSON.parse(wireRow) as { doc?: { _id?: unknown }; table?: unknown };
+    // The line was built by the row transformer, but a malformed one must not take the plan down with a bare SyntaxError.
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(wireRow);
+    } catch {
+        return;
+    }
+
+    const { doc, table } = (typeof parsed === "object" && parsed !== null ? parsed : {}) as { doc?: { _id?: unknown }; table?: unknown };
 
     if (typeof table !== "string") {
         return;
@@ -51,7 +62,7 @@ const recordSourceRow = (index: SourceIndex, wireRow: string): void => {
     let entry = index.get(table);
 
     if (entry === undefined) {
-        entry = { duplicates: 0, ids: new Set(), rows: 0 };
+        entry = { duplicates: 0, ids: new Set(), rows: 0, unkeyed: 0 };
         index.set(table, entry);
     }
 
@@ -64,6 +75,8 @@ const recordSourceRow = (index: SourceIndex, wireRow: string): void => {
         }
 
         entry.ids.add(doc._id);
+    } else {
+        entry.unkeyed += 1;
     }
 };
 
@@ -87,8 +100,21 @@ interface ImportPlan {
 }
 
 /** Read the target's rows for the file's tables and compare them with the file. */
-const planImport = async (target: ExportTarget, index: SourceIndex, mode: ImportMode): Promise<ImportPlan> => {
+const planImport = async (target: ExportTarget, index: SourceIndex, mode: ImportMode, keepDeletions = true): Promise<ImportPlan> => {
     const tables = new Map<string, TablePlan>();
+
+    // A row with no `_id` is written under a fresh one, so a replace could never match it to what a previous run stored: the
+    // prune would delete the earlier copy and the write would recreate it under a different id, on every run.
+    if (mode === "replace") {
+        const unkeyed = [...index].find(([, entry]) => entry.unkeyed > 0);
+
+        if (unkeyed !== undefined) {
+            throw new LunoraError(
+                "INTERNAL",
+                `--mode replace needs every row to carry an _id: ${String(unkeyed[1].unkeyed)} row(s) of ${unkeyed[0]} have none`,
+            );
+        }
+    }
 
     for (const [table, entry] of index) {
         tables.set(table, { add: entry.rows - entry.duplicates, delete: 0, existing: entry.duplicates, source: entry.rows, table, target: 0 });
@@ -113,7 +139,10 @@ const planImport = async (target: ExportTarget, index: SourceIndex, mode: Import
             plan.add -= 1;
         } else if (mode === "replace") {
             plan.delete += 1;
-            deletions.push(row);
+
+            if (keepDeletions) {
+                deletions.push(row);
+            }
         }
 
         return undefined;
@@ -141,7 +170,7 @@ const reportPlan = (logger: Logger, plan: ImportPlan, mode: ImportMode): void =>
 
 /** Whether the plan overwrites or deletes a stored row, which is what a confirmation guards. */
 const planDestroysRows = (plan: ImportPlan, mode: ImportMode): boolean =>
-    overwrites(mode) && plan.tables.some((table) => table.existing > 0 || table.delete > 0);
+    overwrites(mode) && plan.tables.some((table) => (table.existing > 0 && table.target > 0) || table.delete > 0);
 
 export type { ImportMode, ImportPlan, SourceIndex, TablePlan };
 export { IMPORT_MODES, overwrites, parseImportMode, planDestroysRows, planImport, recordSourceRow, reportPlan };

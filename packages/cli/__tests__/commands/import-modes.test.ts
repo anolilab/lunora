@@ -37,6 +37,8 @@ const fakeWorker = (
         refuse?: ReadonlyArray<string>;
         /** Tables whose delete rows fail the whole request, as a `.global()` importer without delete support does. */
         undeletable?: ReadonlyArray<string>;
+        /** Shards the delete check cannot reach, as the endpoint reports them in `failed`. */
+        unreachableOnDeleteCheck?: boolean;
         vanish?: ReadonlyArray<string>;
     } = {},
 ) => {
@@ -110,6 +112,10 @@ const fakeWorker = (
         }
 
         result.received = rows.length;
+
+        if (dryRun && options.unreachableOnDeleteCheck === true && rows.some((raw) => (JSON.parse(raw) as { op?: string }).op === "delete")) {
+            return json({ ...result, dryRun: true, failed: [{ message: "shard did not answer", shardKey: "s2" }], onConflict: "replace" });
+        }
 
         if (!dryRun) {
             rows.forEach((raw, index) => {
@@ -311,6 +317,25 @@ describe("lunora import --mode", () => {
 
         expect(result.code).toBe(1);
         expect(result.error).toMatch(/would refuse the deletes/u);
+        expect(worker.writes).toStrictEqual([]);
+    });
+
+    it("replace writes nothing when the delete check could not reach every shard", async () => {
+        expect.assertions(3);
+
+        const worker = fakeWorker({ users: [{ _id: "u1" }, { _id: "u2" }] }, { unreachableOnDeleteCheck: true });
+
+        const result = await runImportCommand({
+            fetchImpl: worker.fetchImpl,
+            file: writeFile(SNAPSHOT),
+            logger: capture().logger,
+            mode: "replace",
+            token: "t",
+            yes: true,
+        });
+
+        expect(result.code).toBe(1);
+        expect(result.error).toMatch(/could not be reached/u);
         expect(worker.writes).toStrictEqual([]);
     });
 
