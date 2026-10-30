@@ -110,4 +110,35 @@ describe(rowCheckTargetRefusal, () => {
 
         expect(rowCheckTargetRefusal(cwd, undefined, "https://app.other-account.workers.dev")).toContain("linked to https://app.acme.workers.dev");
     });
+
+    it("tells two path-scoped routes on one host apart", () => {
+        expect.assertions(3);
+
+        wrangler({
+            env: { staging: { routes: ["example.com/staging/*"] } },
+            name: "app",
+            routes: ["example.com/prod/*"],
+        });
+
+        expect(rowCheckTargetRefusal(cwd, "staging", "https://example.com/prod")).toContain("wrangler routes it to production");
+        expect(rowCheckTargetRefusal(cwd, "staging", "https://example.com/staging")).toBeUndefined();
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://example.com/staging/api")).toContain("wrangler routes it to --env staging");
+    });
+
+    it("does not let a link recorded for an earlier Worker name or another env's route vouch for the current target", () => {
+        expect.assertions(3);
+
+        link("https://old-name.acme.workers.dev");
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://old-name.acme.workers.dev")).toContain('this deploy ships the Worker "app"');
+
+        wrangler({ env: { staging: { routes: ["staging.acme.com/*"] } }, name: "app", routes: ["api.acme.com/*"] });
+        link("https://staging.acme.com");
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://staging.acme.com")).toContain("wrangler routes it to --env staging");
+
+        link("https://api.acme.com");
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://api.acme.com")).toBeUndefined();
+    });
 });

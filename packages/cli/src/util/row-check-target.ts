@@ -109,20 +109,51 @@ const deployedWorkerName = (parsed: WranglerNames | undefined, environment: stri
     return name === undefined ? undefined : `${name}-${environment}`;
 };
 
-/** The host part of every `route` / `routes` pattern one config block declares (`example.com/*` → `example.com`). */
+/**
+ * A route pattern as `host` plus the path prefix it is scoped to (`example.com/*` → `example.com`, `example.com/prod/*` →
+ * `example.com/prod/`). Two environments can share a host and differ only by path, so the path is part of the route.
+ */
+/** `text` without any run of `char` at its end. */
+const trimEnd = (text: string, char: string): string => {
+    let end = text.length;
+
+    while (end > 0 && text[end - 1] === char) {
+        end -= 1;
+    }
+
+    return text.slice(0, end);
+};
+
+const routeKey = (pattern: string): string => {
+    const bare = pattern.replace(URL_SCHEME, "");
+    const slash = bare.indexOf("/");
+    const host = (slash === -1 ? bare : bare.slice(0, slash)).toLowerCase();
+    const path = slash === -1 ? "" : trimEnd(bare.slice(slash), "*");
+
+    return path === "/" ? host : `${host}${path}`;
+};
+
+/** The route key of every `route` / `routes` pattern one config block declares. */
 const routeHosts = (block: WranglerTarget | undefined): string[] => {
     const entries: unknown[] = [block?.route, ...(Array.isArray(block?.routes) ? (block.routes as unknown[]) : [])];
 
     return entries.flatMap((entry) => {
         const pattern = typeof entry === "string" ? entry : (entry as { pattern?: unknown } | undefined)?.pattern;
 
-        return typeof pattern === "string" && pattern !== "" ? [(pattern.replace(URL_SCHEME, "").split("/", 1)[0] ?? "").toLowerCase()] : [];
+        return typeof pattern === "string" && pattern !== "" ? [routeKey(pattern)] : [];
     });
 };
 
 /** Whether `host` falls under a route host, where a leading `*` matches any prefix as Cloudflare's route patterns do. */
-const matchesRouteHost = (host: string, routeHost: string): boolean =>
-    routeHost.startsWith("*") ? host.endsWith(routeHost.slice(1)) || `.${host}` === routeHost.slice(1) : host === routeHost;
+const matchesRouteHost = (host: string, urlPath: string, route: string): boolean => {
+    const slash = route.indexOf("/");
+    const routeHost = slash === -1 ? route : route.slice(0, slash);
+    const routePath = slash === -1 ? "" : route.slice(slash);
+    const hostMatches = routeHost.startsWith("*") ? host.endsWith(routeHost.slice(1)) || `.${host}` === routeHost.slice(1) : host === routeHost;
+
+    // A route scoped to a path covers a URL under that path only; `/prod/*` covers `/prod` and `/prod/api`, not `/production`.
+    return hostMatches && (routePath === "" || `${trimEnd(urlPath, "/")}/`.startsWith(routePath));
+};
 
 /**
  * The route hosts `environment` deploys to. Routes are inheritable in Wrangler, so an env block
@@ -141,12 +172,15 @@ const ownRouteHosts = (parsed: WranglerNames | undefined, environment: string | 
 };
 
 /** The other environment (`--env` name, or `production` for the top level) that declares a route `host` matches. */
-const otherEnvironmentRoutingTo = (parsed: WranglerNames | undefined, environment: string | undefined, host: string): string | undefined => {
+const otherEnvironmentRoutingTo = (parsed: WranglerNames | undefined, environment: string | undefined, host: string, urlPath: string): string | undefined => {
     const blocks: [string, WranglerTarget | undefined][] = [["production", parsed], ...Object.entries(parsed?.env ?? {})];
     const own = new Set(ownRouteHosts(parsed, environment));
 
     for (const [label, block] of blocks) {
-        if (label !== (environment ?? "production") && routeHosts(block).some((routeHost) => !own.has(routeHost) && matchesRouteHost(host, routeHost))) {
+        if (
+            label !== (environment ?? "production") &&
+            routeHosts(block).some((routeHost) => !own.has(routeHost) && matchesRouteHost(host, urlPath, routeHost))
+        ) {
             return label;
         }
     }
@@ -181,7 +215,7 @@ const linkRefusal = (cwd: string, environment: string | undefined, parsed: URL, 
 };
 
 /** Why the wrangler config rules `host` out: a `*.workers.dev` name it does not deploy, or a custom domain another env routes to or this env does not. */
-const wranglerRefusal = (cwd: string, environment: string | undefined, host: string, refused: string, scope: string): string | undefined => {
+const wranglerRefusal = (cwd: string, environment: string | undefined, host: string, urlPath: string, refused: string, scope: string): string | undefined => {
     const wrangler = readWranglerNames(cwd);
 
     if (host.endsWith(".workers.dev")) {
@@ -196,7 +230,7 @@ const wranglerRefusal = (cwd: string, environment: string | undefined, host: str
         return `${refused}: no link ties this *.workers.dev host to your account${scope}; run \`lunora link --url https://${host}${environment === undefined ? "" : ` --env ${environment}`}\` once the Worker is deployed, then deploy again (or confirm the drift yourself with --allow-schema-drift)`;
     }
 
-    const other = otherEnvironmentRoutingTo(wrangler, environment, host);
+    const other = otherEnvironmentRoutingTo(wrangler, environment, host, urlPath);
 
     if (other !== undefined) {
         return `${refused}: wrangler routes it to ${other === "production" ? "production" : `--env ${other}`}, not this deploy${scope}`;
@@ -204,7 +238,7 @@ const wranglerRefusal = (cwd: string, environment: string | undefined, host: str
 
     const own = ownRouteHosts(wrangler, environment);
 
-    if (own.some((routeHost) => matchesRouteHost(host, routeHost))) {
+    if (own.some((route) => matchesRouteHost(host, urlPath, route))) {
         return undefined;
     }
 
@@ -214,6 +248,30 @@ const wranglerRefusal = (cwd: string, environment: string | undefined, host: str
     }
 
     return `${refused}: this deploy${scope} routes to ${own.length === 0 ? "no declared route" : own.join(", ")}, not ${host}`;
+};
+
+/** Why the config rules out a URL the project link vouches for: another Worker's name, or a route that belongs to another env. */
+const staleLinkRefusal = (cwd: string, environment: string | undefined, parsed: URL, refused: string, scope: string): string | undefined => {
+    const wrangler = readWranglerNames(cwd);
+    const host = parsed.hostname.toLowerCase();
+
+    if (host.endsWith(".workers.dev")) {
+        const worker = deployedWorkerName(wrangler, environment);
+
+        return worker === undefined || host.split(".")[0] === worker
+            ? undefined
+            : `${refused}: this deploy ships the Worker "${worker}", not the one the link names${scope}`;
+    }
+
+    const other = otherEnvironmentRoutingTo(wrangler, environment, host, parsed.pathname);
+
+    if (other === undefined) {
+        return undefined;
+    }
+
+    const label = other === "production" ? "production" : `--env ${other}`;
+
+    return `${refused}: wrangler routes it to ${label}, not this deploy${scope}`;
 };
 
 /**
@@ -242,11 +300,13 @@ const rowCheckTargetRefusal = (cwd: string, environment: string | undefined, url
 
     const fromLink = linkRefusal(cwd, environment, parsed, refused, scope);
 
-    if (fromLink !== undefined) {
-        return fromLink ?? undefined;
+    if (fromLink === undefined) {
+        return wranglerRefusal(cwd, environment, parsed.hostname.toLowerCase(), parsed.pathname, refused, scope);
     }
 
-    return wranglerRefusal(cwd, environment, parsed.hostname.toLowerCase(), refused, scope);
+    // A link names the URL a deploy once published. Since then the Worker may have been renamed or the env's routes moved, so a
+    // link that matches is still held against what Wrangler deploys now.
+    return fromLink ?? staleLinkRefusal(cwd, environment, parsed, refused, scope);
 };
 
 export default rowCheckTargetRefusal;
