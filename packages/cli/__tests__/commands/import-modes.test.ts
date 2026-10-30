@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { exportEndLine } from "../../../../shared/export-end";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { runImportCommand } from "../../src/commands/data-transfer";
 import { EXIT_CODE } from "../../src/util/exit-code";
@@ -83,7 +84,13 @@ const fakeWorker = (
             const { tables } = JSON.parse(body) as { tables: string[] };
             const lines = tables.flatMap((table) => [...(stored.get(table)?.values() ?? [])].map((doc) => `${JSON.stringify({ doc, table })}\n`));
 
-            return { body: stream(lines.join("")), json: async () => undefined, ok: true, status: 200, text: async () => "" };
+            return {
+                body: stream(`${lines.join("")}${exportEndLine(lines.length)}`),
+                json: async () => undefined,
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
         }
 
         const dryRun = searchParams.get("dryRun") === "true";
@@ -158,10 +165,14 @@ const capture = (): { lines: string[]; logger: Logger } => {
 
 let workDir: string;
 
+/** The rows as an export file: one per line, then the end marker that says how many there are. */
+const render = (rows: ReadonlyArray<{ doc: Doc; table: string }>): string =>
+    `${rows.map((row) => `${JSON.stringify(row)}\n`).join("")}${exportEndLine(rows.length)}`;
+
 const writeFile = (rows: ReadonlyArray<{ doc: Doc; table: string }>): string => {
     const file = join(workDir, "snapshot.ndjson");
 
-    writeFileSync(file, rows.map((row) => JSON.stringify(row)).join("\n"), "utf8");
+    writeFileSync(file, render(rows), "utf8");
 
     return file;
 };
@@ -253,7 +264,7 @@ describe("lunora import --mode", () => {
             { users: [{ _id: "u1" }, { _id: "u2", name: "stored" }] },
             {
                 onExport: () => {
-                    writeFileSync(file, `${readFileSync(file, "utf8")}\n${JSON.stringify({ doc: { _id: "u2", name: "added" }, table: "users" })}`, "utf8");
+                    writeFileSync(file, render([...SNAPSHOT, { doc: { _id: "u2", name: "added" }, table: "users" }]), "utf8");
                 },
             },
         );

@@ -9,6 +9,7 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 
+import { createExportEndTracker } from "../../../../../shared/export-end";
 import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { adminFetch, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { Refusal } from "../../util/exit-code";
@@ -783,13 +784,37 @@ const runImportPass = async (
         transferredPaths: storage.transferredPaths,
         unresolvedPaths,
     });
+    // A plain NDJSON file is a Lunora export, which ends with a marker carrying its row count; one cut on a row boundary
+    // still parses, so the file is only complete when the marker is there and agrees. Other sources have no such marker.
+    const ended = source.kind === "ndjson" && options.table === undefined ? createExportEndTracker() : undefined;
+    const markedToRow =
+        ended === undefined
+            ? toRow
+            : (line: string, lineNumber: number): string | undefined => {
+                  if (line.trim().length > 0) {
+                      let parsed: unknown;
+
+                      try {
+                          parsed = JSON.parse(line);
+                      } catch {
+                          // The row transform reports a malformed line with its number.
+                          return toRow(line, lineNumber);
+                      }
+
+                      if (!ended.read(parsed)) {
+                          return undefined;
+                      }
+                  }
+
+                  return toRow(line, lineNumber);
+              };
     // Both passes index what they send: the check pass so the plan can match the file's `_id`s against the target's without a
     // third read, the write pass so the prune never deletes a row it just wrote.
     const indexedToRow =
         sourceIndex === undefined
-            ? toRow
+            ? markedToRow
             : (line: string, lineNumber: number): string | undefined => {
-                  const row = toRow(line, lineNumber);
+                  const row = markedToRow(line, lineNumber);
 
                   if (row !== undefined) {
                       recordSourceRow(sourceIndex, row);
@@ -799,7 +824,9 @@ const runImportPass = async (
               };
     // Every source is a `for await`-able of text, so one drain loop drives all of
     // them and the POST size stays bounded by `batchSize`.
-    const streamFailure = await drainIntoBatcher(stream, indexedToRow, batcher, options.logger);
+    const drained = await drainIntoBatcher(stream, indexedToRow, batcher, options.logger);
+    const incomplete = drained === undefined ? ended?.problem() : undefined;
+    const streamFailure = incomplete === undefined ? drained : new Error(`${options.file}: ${incomplete}`);
 
     return { batcher, remapReport, sourceRows, streamFailure, unresolvedPaths };
 };

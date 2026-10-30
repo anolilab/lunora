@@ -3,6 +3,7 @@ import { decodeWire, encodeWire } from "@lunora/wire";
 import type { ChangeEvent, ReactElement } from "react";
 import { useState } from "react";
 
+import { createExportEndTracker, exportEndLine } from "../../../../../shared/export-end";
 import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
@@ -42,27 +43,19 @@ type Translate = ReturnType<typeof useT>;
  * `v.bytes()` column as an `ArrayBuffer` (which flattens to `{}` — the export
  * "succeeds" and the bytes are gone). The wire codec is identity for pure JSON,
  * so an ordinary table's NDJSON is byte-identical to before, and
- * {@link parseNdjsonLine} decodes symmetrically so the round trip restores types.
+ * {@link rowFromJson} decodes symmetrically so the round trip restores types.
  */
 const toNdjson = (rows: ExportRow[]): string => rows.map((row) => JSON.stringify(encodeWire(row))).join("\n");
 
 /**
- * Parse one NDJSON line into an export row, or `undefined` for a blank line.
- * Throws on a line that is not a valid `{table, doc}` object so the operator
- * gets a precise failure instead of a partial import.
+ * An export row from one parsed NDJSON line. Throws on a line that is not a valid `{table, doc}` object so the operator gets a precise
+ * failure instead of a partial import.
  *
- * The line is `decodeWire`d — the inverse of {@link toNdjson} — so a bigint /
- * bytes cell is a native value again before `client.query` re-encodes it for the
- * wire. Decoding is identity for pure JSON, so hand-written NDJSON still imports.
+ * The line is `decodeWire`d, the inverse of {@link toNdjson}, so a bigint / bytes cell is a native value again before `client.query`
+ * re-encodes it for the wire. Decoding is identity for pure JSON.
  */
-const parseNdjsonLine = (rawLine: string, lineNumber: number): ExportRow | undefined => {
-    const line = rawLine.trim();
-
-    if (line === "") {
-        return undefined;
-    }
-
-    const parsed = decodeWire(JSON.parse(line));
+const rowFromJson = (json: unknown, lineNumber: number): ExportRow => {
+    const parsed = decodeWire(json);
 
     if (typeof parsed !== "object" || parsed === null) {
         throw new LunoraError("INTERNAL", `line ${lineNumber.toString()}: expected a { table, doc } object`);
@@ -143,12 +136,30 @@ interface ImportEntry {
 type ImportSource = () => AsyncIterable<ImportEntry> | Iterable<ImportEntry>;
 
 const ndjsonEntries = async function* (file: Blob): AsyncGenerator<ImportEntry> {
-    for await (const { line, lineNumber } of fileLines(file)) {
-        const row = parseNdjsonLine(line, lineNumber);
+    // An export ends with a marker carrying its row count. A file cut on a row boundary still parses as a smaller export, so the file
+    // is only complete when the marker is there and agrees; the check pass reads the whole file first, so nothing is written otherwise.
+    const end = createExportEndTracker();
 
-        if (row !== undefined) {
-            yield { line: lineNumber, row };
+    for await (const { line, lineNumber } of fileLines(file)) {
+        const trimmed = line.trim();
+
+        if (trimmed === "") {
+            continue;
         }
+
+        const json: unknown = JSON.parse(trimmed);
+
+        if (!end.read(json)) {
+            continue;
+        }
+
+        yield { line: lineNumber, row: rowFromJson(json, lineNumber) };
+    }
+
+    const problem = end.problem();
+
+    if (problem !== undefined) {
+        throw new LunoraError("INTERNAL", problem);
     }
 };
 
@@ -715,6 +726,9 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                     preview.push(...text.split("\n").slice(0, PREVIEW_LINES - preview.length));
                 }
             }
+
+            // The marker is what lets an import tell this file from one cut short.
+            blob = new Blob([blob, exportEndLine(count)], { type: NDJSON_MIME });
 
             recordShard(exportedShardKey);
             setExported({ blob, count, preview: preview.join("\n"), shardKey: exportedShardKey });

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { exportEndLine } from "../../../../shared/export-end";
 import { runBuildCommand } from "../../src/commands/build/handler";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer/shared";
 import { runDeployCommand } from "../../src/commands/deploy/handler";
@@ -95,10 +96,8 @@ const deployedWorker = (rows: ReadonlyArray<{ doc: Record<string, unknown>; tabl
         }
 
         const { tables } = JSON.parse(String(init?.body)) as { tables: string[] };
-        const text = rows
-            .filter((row) => tables.includes(row.table))
-            .map((row) => `${JSON.stringify(row)}\n`)
-            .join("");
+        const served = rows.filter((row) => tables.includes(row.table));
+        const text = `${served.map((row) => `${JSON.stringify(row)}\n`).join("")}${exportEndLine(served.length)}`;
 
         reads.push(tables);
 

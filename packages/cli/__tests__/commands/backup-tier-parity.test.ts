@@ -20,6 +20,7 @@ import { backupObjectKey, createWorker } from "@lunora/runtime";
 import { decodeWire, encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { exportEndLine } from "../../../../shared/export-end";
 import { runBackupCommand } from "../../src/commands/backup/handler";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import type { Logger } from "../../src/util/logger";
@@ -38,7 +39,7 @@ const DOCUMENTS = [
 /** Wire-encoded export rows — what a shard's admin `exportShard` actually returns. */
 const EXPORT_ROWS = DOCUMENTS.map((document_) => encodeWire({ doc: document_, table: "users" }) as { doc: Record<string, unknown>; table: string });
 
-const NDJSON = `${EXPORT_ROWS.map((row) => JSON.stringify(row)).join("\n")}\n`;
+const NDJSON = `${EXPORT_ROWS.map((row) => JSON.stringify(row)).join("\n")}\n${exportEndLine(EXPORT_ROWS.length)}`;
 
 const capturingLogger = (): { logger: Logger; logs: string[] } => {
     const logs: string[] = [];

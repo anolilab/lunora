@@ -136,7 +136,7 @@ const BACKUP_CRON = "0 3 * * *";
 
 describe("createWorker — scheduled backup", () => {
     it("writes an NDJSON snapshot + manifest sidecar when the backup cron fires", async () => {
-        expect.assertions(6);
+        expect.assertions(7);
 
         const store = memoryBackupStore();
         const worker = createWorker({
@@ -161,8 +161,9 @@ describe("createWorker — scheduled backup", () => {
         const ndjson = store.objects.get(ndjsonKey) ?? "";
         const lines = ndjson.trim().split("\n");
 
-        expect(lines).toHaveLength(2);
+        expect(lines).toHaveLength(3);
         expect(JSON.parse(lines[0] ?? "")).toStrictEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
+        expect(JSON.parse(lines[2] ?? "")).toStrictEqual({ end: true, rows: 2 });
 
         const manifest = JSON.parse(store.objects.get(manifestKey) ?? "") as BackupManifest;
 

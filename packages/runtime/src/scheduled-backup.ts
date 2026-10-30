@@ -8,6 +8,7 @@
  * `./backup-layout`, shared with `lunora backup create --bucket`, because the
  * two write into the same bucket on purpose.
  */
+import { exportEndLine } from "../../../shared/export-end";
 import type { BackupManifestEntry } from "./backup-layout";
 import { BACKUP_KEY_PREFIX, backupManifestKey, backupObjectKey, backupObjectKeyOfManifest, isBackupManifestKey, normalizeBackupPrefix } from "./backup-layout";
 import type { BackupStore, ScheduledControllerLike, WorkerOptions } from "./create-worker";
@@ -390,6 +391,12 @@ const runScheduledBackup = async (
     // skipping, precisely so a snapshot missing a shard's rows never gets a
     // manifest vouching for it.
     await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow, shardDO);
+
+    // The snapshot is an export file that `lunora backup restore` imports, which refuses one without its end marker.
+    const endMarker = NDJSON_ENCODER.encode(exportEndLine(rows));
+
+    bytes += endMarker.byteLength;
+    chunks.push(endMarker);
 
     const prefix = normalizeBackupPrefix(options.backupPrefix ?? BACKUP_KEY_PREFIX);
     const id = new Date(controller.scheduledTime).toISOString();

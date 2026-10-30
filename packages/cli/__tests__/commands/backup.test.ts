@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { exportEndLine } from "../../../../shared/export-end";
 import { runBackupCommand } from "../../src/commands/backup/handler";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import type { FetchLike } from "../../src/commands/run/handler";
@@ -42,11 +43,11 @@ const exportFetch =
         return { body: stringStream(ndjson), json: async () => undefined, ok: true, status: 200, text: async () => "" };
     };
 
-const NDJSON = `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n`;
+const NDJSON = `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${exportEndLine(1)}`;
 const FIXED_NOW = (): Date => new Date("2026-06-03T12:00:00.000Z");
 
 const capturingImportFetch =
-    (calls: string[], stored = ""): StreamingFetchLike =>
+    (calls: string[], stored = exportEndLine(0)): StreamingFetchLike =>
     async (url) => {
         // The restore reads the target's rows for the snapshot's tables before it writes; `stored` is what the target holds.
         if (url.endsWith("/_lunora/admin/export")) {
@@ -136,12 +137,12 @@ describe("lunora backup", () => {
         expect(readFileSync(join(directory, "manifest.json"), "utf8")).toBe(
             `[
   {
-    "bytes": 37,
+    "bytes": 59,
     "createdAt": "2026-06-03T12:00:00.000Z",
     "file": "lunora-backup-2026-06-03T12-00-00-000Z.ndjson",
     "id": "2026-06-03T12:00:00.000Z",
     "rows": 1,
-    "sha256": "84528e00c324faff7e650ef1fb502f3afef91ae32a542c2130ae415c242e1708",
+    "sha256": "29a300e1eaa2af3fcb2dfecd2fe33fac057d19ce8801cc0e2585535bcc29b4aa",
     "tables": "users"
   }
 ]
@@ -216,7 +217,7 @@ describe("lunora backup", () => {
         const importCalls: string[] = [];
         const result = await runBackupCommand({
             cwd: workDir,
-            fetchImpl: capturingImportFetch(importCalls, `${JSON.stringify({ doc: { _id: "live-1" }, table: "users" })}\n`),
+            fetchImpl: capturingImportFetch(importCalls, `${JSON.stringify({ doc: { _id: "live-1" }, table: "users" })}\n${exportEndLine(1)}`),
             logger,
             subcommand: "restore",
             target: created.entry?.id,

@@ -8,6 +8,7 @@
  * by `WorkerOptions`, so it imports only that type (erased at build) from
  * `create-worker` — no runtime values cross the edge.
  */
+import { exportEndRows } from "../../../shared/export-end";
 import { MAX_BODY_BYTES } from "./body-readers";
 import type { ShardingInfo, WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
@@ -22,7 +23,8 @@ interface AdminBatch {
 
 type ImportRowError = { code: string; line: number; message: string; table: string };
 
-type ParsedImportRow = { error: ImportRowError; ok: false } | { doc: Record<string, unknown>; ok: true; op?: "delete"; table: string };
+type ParsedImportRow =
+    { end: number; ok: "end" } | { error: ImportRowError; ok: false } | { doc: Record<string, unknown>; ok: true; op?: "delete"; table: string };
 
 /** Whether the request opted into `op: "delete"` rows (`?deletes=true`). Read once for the parser and again for the shard plane. */
 const importWantsDeletes = (request: Request): boolean => new URL(request.url).searchParams.get("deletes") === "true";
@@ -44,6 +46,13 @@ const parseImportRow = (trimmed: string, lineNumber: number, deletes: boolean): 
 
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         return { error: { code: "BAD_ROW", line: lineNumber, message: "row must be a JSON object", table: "" }, ok: false };
+    }
+
+    // An export's terminal frame is not a row; the caller checks its count against the rows read.
+    const end = exportEndRows(parsed);
+
+    if (end !== undefined) {
+        return { end, ok: "end" };
     }
 
     const candidate = parsed as { doc?: unknown; op?: unknown; table?: unknown };
@@ -134,6 +143,23 @@ interface BucketedImport {
 }
 
 /**
+ * Refuse a body whose terminal frame disagrees with what was read. Called before the caller fans anything out, so a body cut short (or
+ * padded) after its frame writes nothing. A body with no frame is a plain row stream and is taken as sent.
+ */
+const assertEndMarker = (declaredRows: number | undefined, trailingAfterEnd: boolean, received: number): void => {
+    if (declaredRows === undefined || (!trailingAfterEnd && declaredRows === received)) {
+        return;
+    }
+
+    throw new LunoraError(
+        trailingAfterEnd
+            ? "the import body continues after its end marker, so nothing was imported"
+            : `the import body's end marker declares ${String(declaredRows)} row(s) but ${String(received)} were read, so nothing was imported`,
+        { code: "BAD_REQUEST", status: 400 },
+    );
+};
+
+/**
  * Drain the inbound NDJSON body line-by-line (enforcing the byte budget as
  * bytes arrive), validating + bucketing each row into the per-shard batches,
  * the global-rows list, or the per-row error list. Pure routing — the caller
@@ -152,6 +178,8 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
     const globalRows: { doc: Record<string, unknown>; line: number; op?: "delete"; table: string }[] = [];
     const perShard = new Map<string, AdminBatch>();
     let received = 0;
+    // The row count the body's terminal frame declares, when it carries one. A plain row stream has none and is taken as sent.
+    const end: { declaredRows: number | undefined; trailingAfterEnd: boolean } = { declaredRows: undefined, trailingAfterEnd: false };
     // Physical 1-based source line index. Incremented for EVERY line handled,
     // including blank ones, so `error.line` / `startLine` always point at the
     // user's actual source line. Counting only non-blank lines (the old bug)
@@ -179,7 +207,19 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
 
         received += 1;
 
+        // Nothing may follow a frame: a second export appended to the first would otherwise import as one.
+        if (end.declaredRows !== undefined) {
+            end.trailingAfterEnd = true;
+        }
+
         const row = parseImportRow(trimmed, physicalLine, deletes);
+
+        if (row.ok === "end") {
+            received -= 1;
+            end.declaredRows = row.end;
+
+            return;
+        }
 
         if (!row.ok) {
             errors.push(row.error);
@@ -253,6 +293,8 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
     if (buffer.length > 0) {
         handleLine(buffer);
     }
+
+    assertEndMarker(end.declaredRows, end.trailingAfterEnd, received);
 
     return { errors, globalRows, perShard, received };
 };

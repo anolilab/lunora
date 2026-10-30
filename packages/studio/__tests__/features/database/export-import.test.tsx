@@ -2,6 +2,7 @@ import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { exportEndLine } from "../../../../../shared/export-end";
 import { ExportImportPanel } from "../../../src/features/database/export-import";
 import type { ColumnMeta, ExportRow } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
@@ -75,9 +76,18 @@ const renderPanel = (mock: MockClientHooks) => (
     </LunoraProvider>
 );
 
+/** `text` as an export file: its rows, then the end marker an import requires. A text that already ends with one is left alone. */
+const withEnd = (text: string): string => {
+    if (text.includes('"end":true')) {
+        return text;
+    }
+
+    return `${text}\n${exportEndLine(text.split("\n").filter((line) => line.trim() !== "").length)}`;
+};
+
 /** Pick `text` as the import file, then confirm the import. */
-const importText = (text: string): void => {
-    fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([text], "shard.ndjson")] } });
+const importText = (text: string, marked = true): void => {
+    fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([marked ? withEnd(text) : text], "shard.ndjson")] } });
     fireEvent.click(screen.getByTestId("ei-import"));
     fireEvent.click(screen.getByTestId("ei-import-confirm"));
 };
@@ -200,7 +210,7 @@ describe("exportImportPanel", () => {
     });
 
     it("pages the export one table per call into a single Blob", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const mock = createClient({
             messages: EXPORT_ROWS,
@@ -222,7 +232,11 @@ describe("exportImportPanel", () => {
 
         const text = (await blobs[0]?.text()) ?? "";
 
-        expect(text.trim().split("\n")).toHaveLength(4);
+        // Four rows, then the end marker an import requires.
+        const lines = text.trim().split("\n");
+
+        expect(lines).toHaveLength(5);
+        expect(JSON.parse(lines[4] ?? "")).toStrictEqual({ end: true, rows: 4 });
     });
 
     it("rejects malformed NDJSON before calling the server", async () => {
@@ -238,6 +252,31 @@ describe("exportImportPanel", () => {
 
         expect(error.textContent).toContain("Invalid NDJSON");
         expect(callsTo(mock, ADMIN_FUNCTIONS.importShard)).toHaveLength(0);
+    });
+
+    it.each([
+        [
+            "no end marker (cut on a row boundary)",
+            '{"table":"messages","doc":{"__id__":"m1","text":"a"}}\n{"table":"messages","doc":{"__id__":"m2","text":"b"}}\n',
+        ],
+        ["an end marker that counts a different number of rows", `{"table":"messages","doc":{"__id__":"m1","text":"a"}}\n${exportEndLine(2)}`],
+        [
+            "a row after the end marker",
+            `{"table":"messages","doc":{"__id__":"m1","text":"a"}}\n${exportEndLine(1)}{"table":"messages","doc":{"__id__":"m2","text":"b"}}\n`,
+        ],
+    ])("refuses a file with %s, and writes nothing", async (_label, text) => {
+        expect.assertions(2);
+
+        const mock = createClient();
+
+        render(renderPanel(mock));
+
+        importText(text, false);
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toMatch(/end marker/u);
+        expect(importCalls(mock).filter((call) => call.dryRun !== true)).toHaveLength(0);
     });
 
     it("imports an NDJSON file and summarises the result", async () => {
@@ -622,7 +661,7 @@ describe("exportImportPanel", () => {
 
         render(renderPanel(mock));
 
-        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new ChangingFile([text], "shard.ndjson")] } });
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new ChangingFile([withEnd(text)], "shard.ndjson")] } });
         fireEvent.click(screen.getByTestId("ei-import"));
         fireEvent.click(screen.getByTestId("ei-import-confirm"));
 

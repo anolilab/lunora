@@ -14,6 +14,7 @@
  * values from `create-worker`, only the shared `./body-readers` + `./connector-cdc`
  * and the coordinator / connector-format types.
  */
+import { exportEndLine } from "../../../shared/export-end";
 import { readJsonBodyWithLimit, readLooseJsonBody } from "./body-readers";
 import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage, shardCdcPageSize } from "./connector-cdc";
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
@@ -168,10 +169,15 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         const stream = new ReadableStream<Uint8Array>({
             async pull(controller) {
                 try {
+                    let count = 0;
+
                     for await (const row of rows) {
+                        count += 1;
                         controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
                     }
 
+                    // Only a stream that read every row reaches here; an errored one never gets its end marker.
+                    controller.enqueue(NDJSON_ENCODER.encode(exportEndLine(count)));
                     controller.close();
                 } catch (error: unknown) {
                     controller.error(error);

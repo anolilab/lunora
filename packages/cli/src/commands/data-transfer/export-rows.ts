@@ -5,6 +5,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { createExportEndTracker } from "../../../../../shared/export-end";
 import type { StreamingFetchLike } from "./shared";
 import { EXPORT_ENDPOINT_PATH } from "./shared";
 
@@ -50,6 +51,7 @@ const forEachExportedRow = async (target: ExportTarget, tables: ReadonlyArray<st
     const decoder = new TextDecoder();
     let buffer = "";
     let lineNumber = 0;
+    const end = createExportEndTracker();
 
     // A line that is not a `{ table, doc }` row is a corrupt read, never a row to skip: a caller deciding
     // what to delete or whether data conforms must not act on a partial picture.
@@ -67,6 +69,15 @@ const forEachExportedRow = async (target: ExportTarget, tables: ReadonlyArray<st
             parsed = JSON.parse(line) as { doc?: unknown; table?: unknown } | null;
         } catch {
             throw new LunoraError("INTERNAL", corrupt);
+        }
+
+        // The terminal frame is not a row. A row after it, or a second frame, is a corrupt read like any other.
+        try {
+            if (!end.read(parsed)) {
+                return true;
+            }
+        } catch {
+            throw new LunoraError("INTERNAL", `reading the deployment's rows failed: export line ${String(lineNumber)} follows the export's end marker`);
         }
 
         if (parsed === null || typeof parsed.table !== "string" || parsed.doc === null || typeof parsed.doc !== "object") {
@@ -110,6 +121,13 @@ const forEachExportedRow = async (target: ExportTarget, tables: ReadonlyArray<st
         // however well it happens to parse.
         if (buffer.trim().length > 0) {
             throw new LunoraError("INTERNAL", `reading the deployment's rows failed: the export ended inside line ${String(lineNumber + 1)}`);
+        }
+
+        // A stream that ends cleanly on a row boundary parses as a smaller export; only the end marker's count says otherwise.
+        const problem = end.problem();
+
+        if (problem !== undefined) {
+            throw new LunoraError("INTERNAL", `reading the deployment's rows failed: ${problem}`);
         }
     } finally {
         reader.releaseLock();

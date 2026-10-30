@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { exportEndLine } from "../../../../shared/export-end";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { runExportCommand, runImportCommand } from "../../src/commands/data-transfer";
 import { EXIT_CODE } from "../../src/util/exit-code";
@@ -68,7 +69,7 @@ describe("lunora data-transfer", () => {
     /** A worker that answers one NDJSON row carrying something worth not disclosing. */
     const oneRowFetch = (): StreamingFetchLike => async (): ReturnType<StreamingFetchLike> => {
         return {
-            body: stringStream(`${JSON.stringify({ doc: { _id: "u1", ssn: "000-00-0000" }, table: "users" })}\n`),
+            body: stringStream(`${JSON.stringify({ doc: { _id: "u1", ssn: "000-00-0000" }, table: "users" })}\n${exportEndLine(1)}`),
             json: async () => undefined,
             ok: true,
             status: 200,
@@ -99,7 +100,7 @@ describe("lunora data-transfer", () => {
             expect.assertions(5);
 
             const calls: { body: unknown; headers?: Record<string, string>; url: string }[] = [];
-            const ndjson = `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${JSON.stringify({ doc: { _id: "u2" }, table: "users" })}\n`;
+            const ndjson = `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${JSON.stringify({ doc: { _id: "u2" }, table: "users" })}\n${exportEndLine(2)}`;
 
             const fetchImpl: StreamingFetchLike = async (url, init) => {
                 calls.push({ body: init?.body ? JSON.parse(bodyText(init.body)) : undefined, headers: init?.headers, url });
@@ -130,6 +131,23 @@ describe("lunora data-transfer", () => {
             expect(readFileSync(outPath, "utf8")).toBe(ndjson);
         });
 
+        it.each([
+            ["no end marker (cut on a row boundary)", `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n`],
+            ["an end marker that counts a different number of rows", `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${exportEndLine(2)}`],
+        ])("refuses a response with %s and keeps no file", async (_label, body) => {
+            expect.assertions(2);
+
+            const outPath = join(workDir, "dump.ndjson");
+            const fetchImpl: StreamingFetchLike = async () => {
+                return { body: stringStream(body), json: async () => undefined, ok: true, status: 200, text: async () => "" };
+            };
+
+            await expect(runExportCommand({ fetchImpl, logger: silentLogger(), out: outPath, token: "t", url: "http://localhost:8787" })).rejects.toThrow(
+                /end marker/u,
+            );
+            expect(readdirSync(workDir)).toStrictEqual([]);
+        });
+
         it("forwards --tables to the request body", async () => {
             expect.assertions(1);
 
@@ -139,7 +157,7 @@ describe("lunora data-transfer", () => {
                 calls.push({ body: init?.body ? (JSON.parse(bodyText(init.body)) as { tables?: unknown }) : {} });
 
                 return {
-                    body: stringStream(""),
+                    body: stringStream(exportEndLine(0)),
                     json: async () => undefined,
                     ok: true,
                     status: 200,
@@ -291,7 +309,7 @@ describe("lunora data-transfer", () => {
 
             const file = join(workDir, "remote.ndjson");
 
-            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n`, "utf8");
+            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${exportEndLine(1)}`, "utf8");
 
             const errors: string[] = [];
             const calls: string[] = [];
@@ -322,6 +340,46 @@ describe("lunora data-transfer", () => {
             expect(errors.join("\n")).toContain("--yes");
         });
 
+        it.each([
+            ["no end marker (cut on a row boundary)", [JSON.stringify({ doc: { _id: "u1" }, table: "users" })]],
+            ["an end marker that counts a different number of rows", [JSON.stringify({ doc: { _id: "u1" }, table: "users" }), exportEndLine(2).trim()]],
+            [
+                "a row after the end marker",
+                [JSON.stringify({ doc: { _id: "u1" }, table: "users" }), exportEndLine(1).trim(), JSON.stringify({ doc: { _id: "u2" }, table: "users" })],
+            ],
+        ])("refuses a file with %s before writing any row", async (_label, lines) => {
+            expect.assertions(3);
+
+            const file = join(workDir, "cut.ndjson");
+
+            writeFileSync(file, `${lines.join("\n")}\n`, "utf8");
+
+            const writes: string[] = [];
+            const fetchImpl: StreamingFetchLike = async (url) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
+                writes.push(url);
+
+                return {
+                    body: null,
+                    json: async () => {
+                        return { conflicts: 0, errors: [], inserted: { users: 1 } };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            };
+
+            const result = await runImportCommand({ fetchImpl, file, logger: silentLogger(), token: "t", url: "http://localhost:8787" });
+
+            expect(result.code).not.toBe(0);
+            expect(result.inserted).toBe(0);
+            expect(writes).toStrictEqual([]);
+        });
+
         it("pOSTs batches and aggregates the inserted counts", async () => {
             expect.assertions(4);
 
@@ -333,6 +391,7 @@ describe("lunora data-transfer", () => {
                     JSON.stringify({ doc: { _id: "u1" }, table: "users" }),
                     JSON.stringify({ doc: { _id: "u2" }, table: "users" }),
                     JSON.stringify({ doc: { _id: "u3" }, table: "users" }),
+                    exportEndLine(3).trim(),
                 ].join("\n"),
                 "utf8",
             );
@@ -540,7 +599,7 @@ describe("lunora data-transfer", () => {
 
             const file = join(workDir, "in.ndjson");
 
-            writeFileSync(file, JSON.stringify({ doc: { _id: "u1" }, table: "users" }), "utf8");
+            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${exportEndLine(1)}`, "utf8");
 
             const calls: string[] = [];
             const fetchImpl: StreamingFetchLike = async (url) => {
@@ -575,7 +634,7 @@ describe("lunora data-transfer", () => {
 
             const file = join(workDir, "in.ndjson");
 
-            writeFileSync(file, JSON.stringify({ doc: { _id: "u1" }, table: "users" }), "utf8");
+            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${exportEndLine(1)}`, "utf8");
 
             const calls: string[] = [];
             const fetchImpl: StreamingFetchLike = async (url) => {
@@ -615,7 +674,7 @@ describe("lunora data-transfer", () => {
 
             const file = join(workDir, "in.ndjson");
 
-            writeFileSync(file, JSON.stringify({ doc: { _id: "u1" }, table: "users" }), "utf8");
+            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${exportEndLine(1)}`, "utf8");
 
             const fetchImpl: StreamingFetchLike = async () => {
                 return {

@@ -2,6 +2,7 @@ import type { DriftChange, TableIR, ValidatorIR } from "@lunora/codegen";
 import { encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
+import { exportEndLine } from "../../../../shared/export-end";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer/shared";
 import { checkStoredRows } from "../../src/util/stored-row-check";
 
@@ -25,7 +26,7 @@ const change = (tableName: string, field: string, type: DriftChange["type"] = "c
 const exporting =
     (rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>): StreamingFetchLike =>
     async () => {
-        const text = rows.map((row) => `${JSON.stringify(row)}\n`).join("");
+        const text = `${rows.map((row) => `${JSON.stringify(row)}\n`).join("")}${exportEndLine(rows.length)}`;
 
         return {
             body: new ReadableStream<Uint8Array>({
@@ -38,6 +39,23 @@ const exporting =
             ok: true,
             status: 200,
             text: async () => text,
+        };
+    };
+
+const respondingWith =
+    (body: string): StreamingFetchLike =>
+    async () => {
+        return {
+            body: new ReadableStream<Uint8Array>({
+                start(controller) {
+                    controller.enqueue(new TextEncoder().encode(body));
+                    controller.close();
+                },
+            }),
+            json: async () => undefined,
+            ok: true,
+            status: 200,
+            text: async () => body,
         };
     };
 
@@ -199,20 +217,24 @@ describe(checkStoredRows, () => {
 
         const users = table("users", { name: { kind: "number" } });
         const body = JSON.stringify({ doc: { _id: "u1", name: 1 }, table: "users" });
-        const fetchImpl: StreamingFetchLike = async () => {
-            return {
-                body: new ReadableStream<Uint8Array>({
-                    start(controller) {
-                        controller.enqueue(new TextEncoder().encode(body));
-                        controller.close();
-                    },
-                }),
-                json: async () => undefined,
-                ok: true,
-                status: 200,
-                text: async () => body,
-            };
-        };
+        const fetchImpl = respondingWith(body);
+
+        await expect(
+            checkStoredRows({ changes: [change("users", "name")], tables: [users], target: { baseUrl: "https://app.example", fetchImpl, token: "t" } }),
+        ).resolves.toMatchObject({ kind: "inconclusive" });
+    });
+
+    it.each([
+        ["no end marker (cut on a row boundary)", (row: string) => `${row}\n`],
+        ["an end marker that counts more rows than were read", (row: string) => `${row}\n${exportEndLine(2)}`],
+        ["an end marker that counts fewer rows than were read", (row: string) => `${row}\n${row}\n${exportEndLine(1)}`],
+        ["a row after the end marker", (row: string) => `${row}\n${exportEndLine(1)}${row}\n`],
+    ])("treats an export with %s as incomplete, never as conforming", async (_label, build) => {
+        expect.assertions(1);
+
+        const users = table("users", { name: { kind: "number" } });
+        const body = build(JSON.stringify({ doc: { _id: "u1", name: 1 }, table: "users" }));
+        const fetchImpl = respondingWith(body);
 
         await expect(
             checkStoredRows({ changes: [change("users", "name")], tables: [users], target: { baseUrl: "https://app.example", fetchImpl, token: "t" } }),
