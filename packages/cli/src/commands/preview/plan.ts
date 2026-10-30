@@ -148,6 +148,9 @@ const previewSlug = (name: string): string =>
         .filter((part) => part !== "")
         .join("-");
 
+/** The preview Worker's name: its own Durable Object namespace, derived from the production Worker's name at the time. */
+const previewWorkerName = (production: string, slug: string): string => boundedName(`${production}-preview-${slug}`, NAME_LIMIT);
+
 type PreviewNames = Pick<PreviewPlan, "environment" | "production" | "slug" | "worker">;
 
 /** The names a preview of `config` called `name` gets, or why it cannot be named. Delete derives them too, so they never depend on the bindings. */
@@ -164,7 +167,7 @@ const previewNames = (config: PreviewConfig, name: string): { error: string; nam
     }
 
     return {
-        names: { environment: boundedName(`preview-${slug}`, NAME_LIMIT), production, slug, worker: boundedName(`${production}-preview-${slug}`, NAME_LIMIT) },
+        names: { environment: boundedName(`preview-${slug}`, NAME_LIMIT), production, slug, worker: previewWorkerName(production, slug) },
     };
 };
 
@@ -331,4 +334,14 @@ const productionCollisions = (config: PreviewConfig, candidates: ReadonlyArray<s
 };
 
 export type { PlannedResource, PreviewConfig, PreviewPlan, PreviewResourceKind, ResourceIds };
-export { planPreview, PREVIEW_MARKER_VAR, previewEnvironmentBlock, previewMarker, previewNames, previewResourceName, productionCollisions, resourceKey };
+export {
+    planPreview,
+    PREVIEW_MARKER_VAR,
+    previewEnvironmentBlock,
+    previewMarker,
+    previewNames,
+    previewResourceName,
+    previewWorkerName,
+    productionCollisions,
+    resourceKey,
+};

@@ -2199,6 +2199,17 @@ interface LocalHyperdrive {
 }
 ```
 
+### `Manifest` (interface)
+
+```ts
+interface Manifest {
+    lunora: Record<string, unknown> | undefined;
+    lunoraIsForeign: boolean;
+    path: string;
+    text: string;
+}
+```
+
 ### `ManifestConfigShape` (interface)
 
 ```ts
@@ -2991,6 +3002,12 @@ const mergeWranglerEnvironment: (wrangler: WranglerConfig, environment: string |
 const planRemoteBindings: (parsed: RemoteWranglerShape) => RemoteBindingPlan[];
 ```
 
+### `readManifest` (const)
+
+```ts
+const readManifest: (projectRoot: string) => Manifest | undefined;
+```
+
 ### `readWranglerJsonc` (const)
 
 ```ts
@@ -3028,6 +3045,12 @@ const reconcileWranglerCrons: (projectRoot: string, cronTriggers: ReadonlyArray<
 
 ```ts
 const reconcileWranglerExtras: (projectRoot: string, cronTriggers: ReadonlyArray<string>, logger: ReconcileLogger) => void;
+```
+
+### `recordManifestKey` (const)
+
+```ts
+const recordManifestKey: (manifest: Manifest, key: string, value: unknown) => void;
 ```
 
 ### `resolveObservabilitySampling` (const)

@@ -43,7 +43,16 @@ on:
 #   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
 #   LUNORA_ADMIN_TOKEN     — the production worker's admin token
 #   LUNORA_PREVIEW_SECRET_SEED — optional: any long random string; previews then
-#                            keep their minted secrets across pushes
+#                            keep their minted secrets across pushes. The preview
+#                            job builds this repository's own pull requests with
+#                            CLOUDFLARE_API_TOKEN already in its environment, and
+#                            that token can redeploy any preview with any secrets,
+#                            so the seed adds no access. Never run previews for
+#                            untrusted pull requests; forks get no secrets here.
+#
+# Previews are recorded under "lunora.appId" in package.json, which the first
+# local \`lunora preview deploy\` writes. Commit it: the jobs below find a
+# project's previews by it, so it survives a rename of the Worker.
 env:
   CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
   CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -155,7 +164,16 @@ const ORIGINAL_PNPM_GITLAB = `stages:
 #   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
 #   LUNORA_ADMIN_TOKEN     — the production worker's admin token
 #   LUNORA_PREVIEW_SECRET_SEED — optional: any long random string; previews then
-#                            keep their minted secrets across pushes
+#                            keep their minted secrets across pushes. The preview
+#                            job builds this repository's own pull requests with
+#                            CLOUDFLARE_API_TOKEN already in its environment, and
+#                            that token can redeploy any preview with any secrets,
+#                            so the seed adds no access. Never run previews for
+#                            untrusted pull requests; forks get no secrets here.
+#
+# Previews are recorded under "lunora.appId" in package.json, which the first
+# local \`lunora preview deploy\` writes. Commit it: the jobs below find a
+# project's previews by it, so it survives a rename of the Worker.
 .lunora_base:
   image: node:22
   stage: deploy
@@ -181,7 +199,7 @@ deploy:
 preview:
   extends: .lunora_base
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_APP_ID == $CI_APP_ID
   resource_group: lunora-preview-$CI_MERGE_REQUEST_IID
   environment:
     name: preview/$CI_MERGE_REQUEST_IID
@@ -194,7 +212,7 @@ preview:
 preview_delete:
   extends: .lunora_base
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_APP_ID == $CI_APP_ID
       when: manual
   allow_failure: true
   resource_group: lunora-preview-$CI_MERGE_REQUEST_IID
@@ -209,7 +227,7 @@ preview_delete:
 check:
   extends: .lunora_base
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_APP_ID != $CI_APP_ID
   script:
     - pnpm exec lunora deploy --dry-run
 `;
@@ -324,9 +342,9 @@ describe("ci-workflow", () => {
         // Dependabot's pull requests get no Actions secrets either: the dry-run check, not a preview.
         expect(github.slice(github.indexOf("  check:"))).toContain("|| github.event.pull_request.user.login == 'dependabot[bot]')");
         // A fork's merge request has no CI/CD variables: it gets the dry-run check, not a preview.
-        expect(gitlab).toContain('"merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID\n  resource_group');
+        expect(gitlab).toContain('"merge_request_event" && $CI_MERGE_REQUEST_SOURCE_APP_ID == $CI_APP_ID\n  resource_group');
         expect(gitlab.slice(gitlab.indexOf("\ncheck:"))).toContain(
-            "$CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID\n  script:\n    - pnpm exec lunora deploy --dry-run",
+            "$CI_MERGE_REQUEST_SOURCE_APP_ID != $CI_APP_ID\n  script:\n    - pnpm exec lunora deploy --dry-run",
         );
     });
 

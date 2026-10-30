@@ -36,6 +36,11 @@ const PRODUCTION_IDENTITIES = [
     "staging-d1-uuid",
 ];
 
+/** The `lunora.appId` the fixture project commits; preview records are keyed by it. */
+const APP_ID = "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
+
+const APP_MANIFEST = `{\n    "name": "lunora-app",\n    "dependencies": { "@lunora/d1": "*", "@lunora/storage": "*" },\n    "lunora": { "appId": "${APP_ID}" }\n}\n`;
+
 const PRODUCTION_WRANGLER = `{
     "name": "lunora-app",
     "main": "src/index.ts",
@@ -463,6 +468,7 @@ describe("lunora preview", () => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-cli-preview-"));
         cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
         writeFileSync(join(workdir, "wrangler.jsonc"), PRODUCTION_WRANGLER, "utf8");
+        writeFileSync(join(workdir, "package.json"), APP_MANIFEST, "utf8");
     });
 
     afterEach(() => {
@@ -610,6 +616,9 @@ describe("lunora preview", () => {
         });
     });
 
+    const registryValues = (account: ReturnType<typeof fakeAccount>): Map<string, string> =>
+        account.kvValues.get([...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "") ?? new Map<string, string>();
+
     const deployWith = async (account: ReturnType<typeof fakeAccount>, spawner: Spawner): Promise<Awaited<ReturnType<typeof runPreviewCommand>>> =>
         runPreviewCommand({
             adminFetch: adminRecorder().fetch,
@@ -706,7 +715,7 @@ describe("lunora preview", () => {
             });
 
             const registry = [...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "";
-            const record = JSON.parse(account.kvValues.get(registry)?.get("lunora-app/42") ?? "{}") as { resources: { kind: string; name: string }[] };
+            const record = JSON.parse(account.kvValues.get(registry)?.get(`${APP_ID}/42`) ?? "{}") as { resources: { kind: string; name: string }[] };
 
             expect(record.resources.map((resource) => `${resource.kind}:${resource.name}`).toSorted((left, right) => left.localeCompare(right))).toStrictEqual([
                 "d1:lunora-app-preview-42-db",
@@ -997,16 +1006,16 @@ describe("lunora preview", () => {
             await deploy();
 
             const registry = [...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "";
-            const current = account.kvValues.get(registry)?.get("lunora-app/42") ?? "";
+            const current = account.kvValues.get(registry)?.get(`${APP_ID}/42`) ?? "";
             const parsed = JSON.parse(current) as { resources: { kind: string }[] };
 
             // One read is served a copy written before the R2 bucket was recorded.
-            account.staleReads.set("lunora-app/42", JSON.stringify({ ...parsed, resources: parsed.resources.filter((resource) => resource.kind !== "r2") }));
+            account.staleReads.set(`${APP_ID}/42`, JSON.stringify({ ...parsed, resources: parsed.resources.filter((resource) => resource.kind !== "r2") }));
 
             const result = await deploy();
 
             expect(result.error).toMatch(/r2 "lunora-app-preview-42-files" already exist\(s\) but no preview record read/u);
-            expect(account.kvValues.get(registry)?.get("lunora-app/42")).toBe(current);
+            expect(account.kvValues.get(registry)?.get(`${APP_ID}/42`)).toBe(current);
             expect(deploys).toHaveLength(1);
         });
 
@@ -1053,7 +1062,7 @@ describe("lunora preview", () => {
             });
 
             expect(result.code).toBe(0);
-            expect(account.kvValues.get("kv-registry")?.has("lunora-app/42")).toBe(true);
+            expect(account.kvValues.get("kv-registry")?.has(`${APP_ID}/42`)).toBe(true);
         });
 
         it("--dry-run shows the plan without calling Cloudflare or deploying", async () => {
@@ -1078,6 +1087,51 @@ describe("lunora preview", () => {
             expect(account.calls).toHaveLength(0);
             expect(deploys).toHaveLength(0);
             expect(infos.join("\n")).toContain('d1 "lunora-app-preview-42-db" for DB');
+        });
+
+        it("mints a app id into package.json on a local deploy, and a CI run refuses to", async () => {
+            expect.assertions(5);
+
+            const account = fakeAccount();
+            const { spawner } = wranglerAt(workdir, account.workers);
+            const manifest = (): { lunora?: { appId?: string } } =>
+                JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { lunora?: { appId?: string } };
+            const bare = JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, name: "x" });
+
+            writeFileSync(join(workdir, "package.json"), bare, "utf8");
+
+            const ci = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: { ...CREDENTIALS, CI: "true" },
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect(ci.error).toMatch(/a CI run cannot mint one/u);
+            expect(manifest().lunora).toBeUndefined();
+            expect(account.calls).toHaveLength(0);
+
+            const local = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            const id = manifest().lunora?.appId ?? "";
+
+            expect(local.code).toBe(0);
+            expect(registryValues(account).has(`${id}/42`)).toBe(true);
         });
 
         it("--dry-run names the vars it would set but never prints their values", async () => {
@@ -1162,13 +1216,13 @@ describe("lunora preview", () => {
             const { deploys, spawner } = wranglerAt(workdir, account.workers);
 
             account.kv.set("kv-foreign", "lunora-preview-registry");
-            account.kvValues.set("kv-foreign", new Map([["lunora-app/42", "someone else's data"]]));
+            account.kvValues.set("kv-foreign", new Map([[`${APP_ID}/42`, "someone else's data"]]));
 
             const result = await deployWith(account, spawner);
 
             expect(result.code).not.toBe(0);
-            expect(result.error).toMatch(/reading the preview record "lunora-app\/42"/u);
-            expect(account.kvValues.get("kv-foreign")?.get("lunora-app/42")).toBe("someone else's data");
+            expect(result.error).toMatch(/reading the preview record/u);
+            expect(account.kvValues.get("kv-foreign")?.get(`${APP_ID}/42`)).toBe("someone else's data");
             expect(deploys).toHaveLength(0);
         });
 
@@ -1251,6 +1305,177 @@ describe("lunora preview", () => {
             return account;
         };
 
+        const run = async (
+            account: ReturnType<typeof fakeAccount>,
+            subcommand: "delete" | "deploy" | "list",
+            extra: { environment?: Record<string, string>; spawner?: Spawner } = {},
+        ): Promise<{ result: Awaited<ReturnType<typeof runPreviewCommand>>; warns: string[] }> => {
+            const { logger, warns } = silentLogger();
+            const result = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: extra.environment ?? CREDENTIALS,
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger,
+                name: "42",
+                subcommand,
+                ...(extra.spawner === undefined ? {} : { spawner: extra.spawner }),
+            });
+
+            return { result, warns };
+        };
+
+        const setAppId = (id: string | undefined): void => {
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" },
+                    ...(id === undefined ? {} : { lunora: { appId: id } }),
+                    name: "x",
+                }),
+                "utf8",
+            );
+        };
+
+        it("still finds and tears down a preview after the Worker was renamed", async () => {
+            expect.assertions(6);
+
+            const account = await deployed();
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), PRODUCTION_WRANGLER.replace('"name": "lunora-app",', '"name": "lunora-renamed",'), "utf8");
+
+            const listed = await run(account, "list");
+
+            expect(listed.result.data?.previews?.map((preview) => preview.name)).toStrictEqual(["42"]);
+
+            const { result } = await run(account, "delete");
+
+            expect(result.code).toBe(0);
+            expect(account.workers.has("lunora-app-preview-42")).toBe(false);
+            expect(account.d1.size + account.kv.size - 1 + account.r2.size).toBe(0);
+            expect(registryValues(account).size).toBe(0);
+
+            const again = await run(account, "delete");
+
+            expect(again.result.code).toBe(EXIT_CODE.NOT_FOUND);
+        });
+
+        it("keeps two apps with the same Worker name in one account apart", async () => {
+            expect.assertions(8);
+
+            const account = await deployed();
+            const other = "0a1b2c3d-1111-4222-8333-444455556666";
+
+            setAppId(other);
+
+            const foreign = await run(account, "list");
+
+            expect(foreign.result.data?.previews).toHaveLength(0);
+
+            const removal = await run(account, "delete");
+
+            expect(removal.result.code).toBe(EXIT_CODE.NOT_FOUND);
+            expect(account.workers.has("lunora-app-preview-42")).toBe(true);
+
+            // The other app's deploy meets a Worker and resources it has no record of: it takes none of them.
+            const { spawner } = wranglerAt(workdir, account.workers);
+            const deploy = await run(account, "deploy", { spawner });
+
+            expect(deploy.result.error).toMatch(/no preview record says this preview deployed it/u);
+            expect(registryValues(account).has(`${other}/42`)).toBe(false);
+
+            setAppId(APP_ID);
+
+            const own = await run(account, "list");
+            const removed = await run(account, "delete");
+
+            expect(own.result.data?.previews).toHaveLength(1);
+            expect(removed.result.code).toBe(0);
+            expect(account.workers.has("lunora-app-preview-42")).toBe(false);
+        });
+
+        describe("a preview recorded before projects had an id", () => {
+            const toLegacy = (account: ReturnType<typeof fakeAccount>): void => {
+                const values = registryValues(account);
+                const record = JSON.parse(values.get(`${APP_ID}/42`) ?? "{}") as Record<string, unknown>;
+
+                delete record.appId;
+                values.delete(`${APP_ID}/42`);
+                values.set("lunora-app/42", JSON.stringify(record));
+            };
+
+            it("is re-keyed under the id on delete, reported, and torn down", async () => {
+                expect.assertions(5);
+
+                const account = await deployed();
+
+                toLegacy(account);
+
+                const { result, warns } = await run(account, "delete");
+
+                expect(result.code).toBe(0);
+                expect(warns.join("\n")).toMatch(/recorded under the Worker name "lunora-app"; it is now recorded under project/u);
+                expect(registryValues(account).size).toBe(0);
+                expect(account.workers.has("lunora-app-preview-42")).toBe(false);
+                expect(account.r2.size).toBe(0);
+            });
+
+            it("is listed with a note, and re-keyed by the next deploy", async () => {
+                expect.assertions(4);
+
+                const account = await deployed();
+
+                toLegacy(account);
+
+                const listed = await run(account, "list");
+
+                expect(listed.result.data?.previews?.map((preview) => preview.name)).toStrictEqual(["42"]);
+                expect(listed.warns.join("\n")).toMatch(/1 preview\(s\) are recorded under the Worker name/u);
+
+                const { spawner } = wranglerAt(workdir, account.workers);
+                const redeploy = await run(account, "deploy", { spawner });
+
+                expect(redeploy.result.code).toBe(0);
+                expect([...registryValues(account).keys()]).toStrictEqual([`${APP_ID}/42`]);
+            });
+
+            it("is refused with an instruction, deleting nothing, when the project has no id yet", async () => {
+                expect.assertions(4);
+
+                const account = await deployed();
+
+                toLegacy(account);
+                setAppId(undefined);
+
+                const { result } = await run(account, "delete");
+
+                expect(result.code).not.toBe(0);
+                expect(result.error).toMatch(/Add a app id to package\.json/u);
+                expect(account.workers.has("lunora-app-preview-42")).toBe(true);
+                expect(registryValues(account).has("lunora-app/42")).toBe(true);
+            });
+
+            it("is refused when the old-key record is not the one this CLI would have written", async () => {
+                expect.assertions(3);
+
+                const account = await deployed();
+
+                toLegacy(account);
+
+                const values = registryValues(account);
+                const record = JSON.parse(values.get("lunora-app/42") ?? "{}") as Record<string, unknown>;
+
+                values.set("lunora-app/42", JSON.stringify({ ...record, resources: [], worker: "billing-prod" }));
+
+                const { result } = await run(account, "delete");
+
+                expect(result.error).toMatch(/is not the one this CLI wrote for that Worker and preview/u);
+                expect(account.workers.has("lunora-app-preview-42")).toBe(true);
+                expect(registryValues(account).has("lunora-app/42")).toBe(true);
+            });
+        });
+
         it("deletes the Worker and every recorded resource, then the record; list no longer shows it", async () => {
             expect.assertions(6);
 
@@ -1289,10 +1514,10 @@ describe("lunora preview", () => {
             const account = await deployed();
             const registry = [...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "";
             const values = account.kvValues.get(registry);
-            const record = JSON.parse(values?.get("lunora-app/42") ?? "{}") as { resources: { id: string; kind: string }[] };
+            const record = JSON.parse(values?.get(`${APP_ID}/42`) ?? "{}") as { resources: { id: string; kind: string }[] };
 
             record.resources = record.resources.map((resource) => (resource.kind === "d1" ? { ...resource, id: "prod-d1-uuid" } : resource));
-            values?.set("lunora-app/42", JSON.stringify(record));
+            values?.set(`${APP_ID}/42`, JSON.stringify(record));
             account.calls.length = 0;
 
             const result = await runPreviewCommand({
@@ -1338,8 +1563,8 @@ describe("lunora preview", () => {
             const values = account.kvValues.get(registry);
 
             return {
-                set: (record) => values?.set("lunora-app/42", JSON.stringify(record)),
-                value: JSON.parse(values?.get("lunora-app/42") ?? "{}") as Record<string, unknown> & { resources: Record<string, string>[] },
+                set: (record) => values?.set(`${APP_ID}/42`, JSON.stringify(record)),
+                value: JSON.parse(values?.get(`${APP_ID}/42`) ?? "{}") as Record<string, unknown> & { resources: Record<string, string>[] },
             };
         };
 
@@ -1383,7 +1608,7 @@ describe("lunora preview", () => {
             record.set({ ...record.value, name: "7" });
             // The Worker is already gone, so its marker cannot catch the mismatch.
             account.workers.clear();
-            account.kvValues.get([...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "")?.set("lunora-app/7", "{}");
+            account.kvValues.get([...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "")?.set(`${APP_ID}/7`, "{}");
             account.calls.length = 0;
 
             const result = await deleteIt(account);
@@ -1450,7 +1675,7 @@ describe("lunora preview", () => {
 
             // One read is served a copy written before the R2 bucket was added to the record.
             account.staleReads.set(
-                "lunora-app/42",
+                `${APP_ID}/42`,
                 JSON.stringify({ ...record.value, resources: record.value.resources.filter((resource) => resource.kind !== "r2") }),
             );
 
@@ -1487,14 +1712,14 @@ describe("lunora preview", () => {
             const account = await deployed();
             const registry = [...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "";
 
-            account.kvValues.get(registry)?.set("lunora-app/hand-edited", JSON.stringify({ version: 1 }));
+            account.kvValues.get(registry)?.set(`${APP_ID}/hand-edited`, JSON.stringify({ version: 1 }));
 
             const { logger, warns } = silentLogger();
             const listed = await runPreviewCommand({ cwd: workdir, environment: CREDENTIALS, fetch: account.fetch, logger, subcommand: "list" });
 
             expect(listed.code).toBe(0);
             expect(listed.data?.previews?.map((preview) => preview.name)).toStrictEqual(["42"]);
-            expect(warns.join("\n")).toContain('"lunora-app/hand-edited" is not a preview record');
+            expect(warns.join("\n")).toContain(`"${APP_ID}/hand-edited" is not a preview record`);
         });
 
         it("lists every recorded preview across pages of the registry's keys", async () => {
@@ -1503,11 +1728,11 @@ describe("lunora preview", () => {
             const account = await deployed();
             const registry = [...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "";
             const values = account.kvValues.get(registry);
-            const template = JSON.parse(values?.get("lunora-app/42") ?? "{}") as Record<string, unknown>;
+            const template = JSON.parse(values?.get(`${APP_ID}/42`) ?? "{}") as Record<string, unknown>;
 
             // Records written straight into the registry: deploying each one would only make the test slow.
             for (const name of ["1", "2", "3", "4"]) {
-                values?.set(`lunora-app/${name}`, JSON.stringify({ ...template, name, resources: [], worker: `lunora-app-preview-${name}` }));
+                values?.set(`${APP_ID}/${name}`, JSON.stringify({ ...template, name, resources: [], worker: `lunora-app-preview-${name}` }));
             }
 
             const paged = fakeAccount({ keysPageSize: 2 });

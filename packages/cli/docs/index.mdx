@@ -797,10 +797,24 @@ random string and the values are derived from it, the preview Worker and the
 key instead, so they stay the same across deploys. A provider key is copied
 only when you name it with `--secret KEY`, and the value is read from the
 environment variable of the same name. Production's values are never read.
+The scaffolded GitHub job passes the seed to the step that builds a pull
+request's code. That job already holds `CLOUDFLARE_API_TOKEN`, which can
+redeploy any preview with any secrets, and it runs only for pull requests from
+the same repository (never forks), so the seed gives that code no access it
+lacks. Do not run previews for untrusted pull requests: anyone whose code runs
+in the job controls the account's previews.
 
 What a preview owns is recorded in the account, in a KV namespace called
 `lunora-preview-registry`, one record per preview, written as soon as each
-resource exists. That way a fresh CI runner can delete it. `delete <name>`
+resource exists. That way a fresh CI runner can delete it. A record is keyed by
+the project's id, `lunora.appId` in `package.json`, not by the Worker's
+name: the first local `deploy` writes the id (commit it), a CI run refuses to
+mint one because its checkout is discarded, and two apps that share a Worker
+name never see each other's previews. Renaming the Worker leaves existing
+previews findable, and `delete` removes them under the name they were made
+with. A preview recorded under the Worker name, from before projects had an id,
+is re-keyed the next time you `deploy` or `delete` it (`list` shows it with a
+note); without an id in `package.json` that is refused with the line to add. `delete <name>`
 deletes the preview Worker (with its Durable Objects) and then each recorded
 resource. It refuses a preview with no record, a record whose Worker is not the
 derived preview name, a record that names any id or name production's config

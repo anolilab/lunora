@@ -94,6 +94,9 @@ lunora preview list
 lunora preview delete 123             # Worker + every resource on its record
 ```
 
+- Records are keyed by `lunora.appId` in `package.json` (the first local
+  deploy writes it; commit it, CI cannot mint one), so a Worker rename does not
+  lose a preview. Old Worker-name keys are re-keyed on the next deploy/delete.
 - Resources are named `<worker>-preview-<name>-<binding>` and recorded in the
   account's `lunora-preview-registry` KV namespace; `delete` only removes what a
   record lists, and refuses anything production's config names.

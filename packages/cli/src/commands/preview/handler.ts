@@ -6,7 +6,7 @@
  * written into `wrangler.jsonc` for the run and restored afterwards. What it owns is kept in an account-side
  * record (see `./registry`), which is all `delete` acts on.
  */
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,9 +32,19 @@ import type { StreamingFetchLike } from "../data-transfer/shared";
 import { provisionBindings, runDeployCommand } from "../deploy/handler";
 import { resolveRequiredSecretKeys } from "../deploy/secrets";
 import { runSeedCommand } from "../seed/handler";
+import { mintAppId, readAppId } from "./app-id";
 import type { PreviewOptions } from "./index";
 import type { PlannedResource, PreviewConfig, PreviewPlan, ResourceIds } from "./plan";
-import { planPreview, PREVIEW_MARKER_VAR, previewEnvironmentBlock, previewMarker, previewNames, productionCollisions, resourceKey } from "./plan";
+import {
+    planPreview,
+    PREVIEW_MARKER_VAR,
+    previewEnvironmentBlock,
+    previewMarker,
+    previewNames,
+    previewWorkerName,
+    productionCollisions,
+    resourceKey,
+} from "./plan";
 import type { PreviewRecord, Request } from "./registry";
 import {
     createResource,
@@ -126,6 +136,8 @@ const summarize = (record: PreviewRecord): PreviewSummary => {
 };
 
 interface PreviewContext {
+    /** `lunora.appId` from `package.json`; `undefined` until one is minted. */
+    appId: string | undefined;
     config: PreviewConfig;
     cwd: string;
     wranglerPath: string;
@@ -151,7 +163,7 @@ const loadContext = (options: PreviewCommandOptions): { context: PreviewContext;
         return { error: "lunora preview needs a readable wrangler.jsonc (or wrangler.json) in the project root" };
     }
 
-    return { context: { config, cwd, wranglerPath } };
+    return { context: { config, cwd, appId: readAppId(cwd), wranglerPath } };
 };
 
 /** The REST caller for the account, or why there is none. Every preview call needs it: the record lives in the account. */
@@ -315,6 +327,52 @@ const unrecordedResources = async (request: Request, planned: ReadonlyArray<Plan
     return found.flat().map((resource) => `${resource.kind} "${resource.name}"`);
 };
 
+/**
+ * The record for preview `slug`: under the project's id, or, for a preview made before app ids existed, under
+ * `<production Worker>/<slug>`, in which case it is re-keyed under the id (written first, then the old key removed).
+ * The old-key record must be the one this CLI would have written for that Worker and slug, else it is refused.
+ */
+const recordFor = async (
+    request: Request,
+    namespace: string,
+    appId: string | undefined,
+    production: string,
+    slug: string,
+    logger: Logger,
+): Promise<PreviewRecord | undefined> => {
+    if (appId !== undefined) {
+        const current = await readRecord(request, namespace, recordKey(appId, slug));
+
+        if (current !== undefined) {
+            return current;
+        }
+    }
+
+    const legacy = await readRecord(request, namespace, recordKey(production, slug));
+
+    if (legacy === undefined) {
+        return undefined;
+    }
+
+    if (legacy.appId !== undefined || legacy.production !== production || legacy.name !== slug || legacy.worker !== previewWorkerName(production, slug)) {
+        throw new Error(`the record at "${recordKey(production, slug)}" is not the one this CLI wrote for that Worker and preview; refusing to act on it`);
+    }
+
+    if (appId === undefined) {
+        throw new Error(
+            `preview "${slug}" is recorded under the Worker name, from before projects had an id. Add a app id to package.json (\`"lunora": { "appId": "${randomUUID()}" }\`), commit it, and run this again: it re-keys the record`,
+        );
+    }
+
+    const rekeyed: PreviewRecord = { ...legacy, appId };
+
+    await writeRecord(request, namespace, rekeyed);
+    await deleteRecord(request, namespace, legacy);
+    logger.warn(`preview "${slug}" was recorded under the Worker name "${production}"; it is now recorded under project ${appId}`);
+
+    return rekeyed;
+};
+
 /** Why a deploy must not take the record it read (and the Worker and resources under the preview's names). */
 const recordRefusal = async (
     request: Request,
@@ -333,7 +391,7 @@ const recordRefusal = async (
     if (existing !== undefined && existing.worker !== plan.worker) {
         return {
             code: EXIT_CODE.USAGE,
-            error: `the record for preview "${plan.slug}" names Worker "${existing.worker}", not "${plan.worker}"; refusing to deploy over it`,
+            error: `the record for preview "${plan.slug}" names Worker "${existing.worker}", not "${plan.worker}" (the app was renamed since it was deployed); run \`lunora preview delete ${plan.slug}\` first, then deploy it again`,
         };
     }
 
@@ -385,8 +443,13 @@ const shipPreview = async (
     options: PreviewCommandOptions,
     request: Request,
 ): Promise<PreviewCommandResult> => {
-    const { config, cwd, wranglerPath } = context;
+    const { config, cwd, appId, wranglerPath } = context;
     const { logger } = options;
+
+    if (appId === undefined) {
+        return fail(logger, "the project has no id to key the preview record by");
+    }
+
     const secrets = await previewSecrets(cwd, config, plan.worker, options);
 
     if (secrets.error !== undefined) {
@@ -413,7 +476,7 @@ const shipPreview = async (
         namespace = (await registryNamespace(request, true)) ?? "";
 
         const now = new Date().toISOString();
-        const existing = await readRecord(request, namespace, recordKey(plan.production, plan.slug));
+        const existing = await recordFor(request, namespace, appId, plan.production, plan.slug, logger);
 
         const refusal = await recordRefusal(request, plan, existing, existingWorker.exists);
 
@@ -426,6 +489,7 @@ const shipPreview = async (
             environment: plan.environment,
             name: plan.slug,
             production: plan.production,
+            appId,
             resources: [],
             updatedAt: now,
             version: 1,
@@ -508,6 +572,45 @@ const shipPreview = async (
     return { code: EXIT_CODE.SUCCESS, data: { preview: summarize(record) } };
 };
 
+/**
+ * The app id a deploy keys its record by: the committed one, or a fresh one written to `package.json` for the
+ * user to commit. A CI runner never mints: its checkout is thrown away, so every run would key a new record and
+ * nothing could find the preview again to delete it. A dry run writes nothing.
+ */
+const resolveAppId = (
+    context: PreviewContext,
+    options: PreviewCommandOptions,
+): { appId?: never; error: string } | { appId: string | undefined; error?: never } => {
+    if (context.appId !== undefined) {
+        return { appId: context.appId };
+    }
+
+    const environment = options.environment ?? process.env;
+    const unusable = `package.json has a "lunora.appId" that is not a UUID, or no \`lunora\` object this CLI can add one to`;
+
+    if (options.dryRun === true) {
+        options.logger.info("  app id: none yet; the first deploy writes one to package.json for you to commit");
+
+        return { appId: undefined };
+    }
+
+    if (environment["CI"] !== undefined && environment["CI"] !== "" && environment["CI"] !== "false") {
+        return {
+            error: `package.json has no "lunora.appId", and a CI run cannot mint one (its checkout is discarded, so the preview could never be found again to delete). Commit \`"lunora": { "appId": "${randomUUID()}" }\` to package.json`,
+        };
+    }
+
+    const minted = mintAppId(context.cwd);
+
+    if (minted === undefined) {
+        return { error: unusable };
+    }
+
+    options.logger.warn(`wrote a app id to package.json ("lunora.appId"); commit it so CI finds this project's previews`);
+
+    return { appId: minted };
+};
+
 const deployPreview = async (context: PreviewContext, options: PreviewCommandOptions, name: string): Promise<PreviewCommandResult> => {
     const { cwd } = context;
     const { logger } = options;
@@ -522,6 +625,15 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
 
     if (lock.error !== undefined) {
         return fail(logger, lock.error);
+    }
+
+    // Minted before the config snapshot below, which would otherwise restore package.json without it.
+    const identified = resolveAppId(context, options);
+
+    if (identified.error !== undefined) {
+        lock.release();
+
+        return fail(logger, identified.error);
     }
 
     // The preview's env block, and whatever reconcile adds to the top level, exist only for this run.
@@ -577,7 +689,7 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
             return fail(logger, access.error, EXIT_CODE.AUTH);
         }
 
-        return await shipPreview({ ...context, config }, plan, variables, options, access.request);
+        return await shipPreview({ ...context, config, appId: identified.appId }, plan, variables, options, access.request);
     } finally {
         restore();
         lock.release();
@@ -683,7 +795,7 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
 
     try {
         namespace = await registryNamespace(request, false);
-        record = namespace === undefined ? undefined : await readRecord(request, namespace, recordKey(names.production, names.slug));
+        record = namespace === undefined ? undefined : await recordFor(request, namespace, context.appId, names.production, names.slug, logger);
     } catch (error) {
         return fail(logger, `preview "${names.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
     }
@@ -695,11 +807,17 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
     // The record is account data anyone with the token can edit: it is trusted only for what a preview could own.
     const collisions = productionCollisions(config, [record.worker, ...record.resources.flatMap((resource) => [resource.id, resource.name])]);
 
-    // `name` and `production` form the key the record is later deleted under, so both must be the ones read.
-    if (record.worker !== names.worker || record.production !== names.production || record.name !== names.slug || collisions.length > 0) {
+    // The id and `name` form the key the record is later deleted under, so both must be the ones read. The Worker
+    // is the one `record.production` named at deploy time, which is not the current name once the app was renamed.
+    if (
+        record.worker !== previewWorkerName(record.production, record.name) ||
+        record.appId !== context.appId ||
+        record.name !== names.slug ||
+        collisions.length > 0
+    ) {
         return fail(
             logger,
-            `the record for preview "${names.slug}" names ${collisions.length > 0 ? `production's ${collisions.join(", ")}` : `Worker "${record.worker}", not "${names.worker}"`}; refusing to delete anything`,
+            `the record for preview "${names.slug}" names ${collisions.length > 0 ? `production's ${collisions.join(", ")}` : `Worker "${record.worker}", which is not the Worker of this preview`}; refusing to delete anything`,
         );
     }
 
@@ -731,7 +849,7 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
         return { code: EXIT_CODE.SUCCESS, data: { plan: summarize(record) } };
     }
 
-    return removePreview(request, namespace, record, planPreview(config, name).plan, logger);
+    return removePreview(request, namespace, record, planPreview({ ...config, name: record.production }, name).plan, logger);
 };
 
 const listPreviews = async (context: PreviewContext, options: PreviewCommandOptions): Promise<PreviewCommandResult> => {
@@ -748,11 +866,20 @@ const listPreviews = async (context: PreviewContext, options: PreviewCommandOpti
 
     try {
         const namespace = await registryNamespace(access.request, false);
-        const listed = namespace === undefined ? { records: [], unreadable: [] } : await listRecords(access.request, namespace, production);
+        const none = { records: [], unreadable: [] };
+        const listed = namespace === undefined || context.appId === undefined ? none : await listRecords(access.request, namespace, context.appId);
+        // Previews made before projects had an id sit under the Worker name; `deploy` or `delete` of each re-keys it.
+        const legacy = namespace === undefined ? none : await listRecords(access.request, namespace, production);
 
-        records = listed.records;
+        records = [...listed.records, ...legacy.records];
 
-        for (const key of listed.unreadable) {
+        if (legacy.records.length > 0) {
+            logger.warn(
+                `${String(legacy.records.length)} preview(s) are recorded under the Worker name, from before projects had an id: ${legacy.records.map((record) => record.name).join(", ")}. ${context.appId === undefined ? "Add a app id to package.json, then run" : "Run"} \`lunora preview delete <name>\` (or deploy it again) to re-key each`,
+            );
+        }
+
+        for (const key of [...listed.unreadable, ...legacy.unreadable]) {
             logger.warn(`the registry key "${key}" is not a preview record this CLI wrote; it is not listed, and \`delete\` will refuse it`);
         }
     } catch (error) {

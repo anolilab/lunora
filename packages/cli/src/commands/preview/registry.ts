@@ -28,6 +28,8 @@ interface RecordedResource {
 }
 
 interface PreviewRecord {
+    /** The project the preview belongs to; its records are keyed by it. Absent on a record from before app ids. */
+    appId?: string;
     createdAt: string;
     environment: string;
     /** The preview's slug. */
@@ -133,7 +135,8 @@ const registryNamespace = async (request: Request, create: boolean): Promise<str
     }
 };
 
-const recordKey = (production: string, slug: string): string => `${production}/${slug}`;
+/** `owner` is the app id, or for a record from before app ids the production Worker name. */
+const recordKey = (owner: string, slug: string): string => `${owner}/${slug}`;
 
 const valuePath = (namespace: string, key: string): string => `/storage/kv/namespaces/${encodeURIComponent(namespace)}/values/${encodeURIComponent(key)}`;
 
@@ -166,6 +169,7 @@ const isRecord = (value: unknown): value is PreviewRecord => {
         candidate.version === 1 &&
         typeof candidate.worker === "string" &&
         typeof candidate.production === "string" &&
+        (candidate.appId === undefined || typeof candidate.appId === "string") &&
         Array.isArray(candidate.resources) &&
         candidate.resources.every((resource) => isRecordedResource(candidate.worker as string, resource))
     );
@@ -191,27 +195,30 @@ const readRecord = async (request: Request, namespace: string, key: string): Pro
 
 const writeRecord = async (request: Request, namespace: string, record: PreviewRecord): Promise<void> => {
     expectOk(
-        await request(valuePath(namespace, recordKey(record.production, record.name)), { body: JSON.stringify(record), method: "PUT" }),
+        await request(valuePath(namespace, recordKey(record.appId ?? record.production, record.name)), { body: JSON.stringify(record), method: "PUT" }),
         "writing the preview record",
     );
 };
 
 const deleteRecord = async (request: Request, namespace: string, record: PreviewRecord): Promise<void> => {
-    expectOk(await request(valuePath(namespace, recordKey(record.production, record.name)), { method: "DELETE" }), "removing the preview record");
+    expectOk(
+        await request(valuePath(namespace, recordKey(record.appId ?? record.production, record.name)), { method: "DELETE" }),
+        "removing the preview record",
+    );
 };
 
 /**
- * Every recorded preview of `production`, and the keys whose value is not a record this CLI wrote (listed, not
+ * Every recorded preview keyed by `owner`, and the keys whose value is not a record this CLI wrote (listed, not
  * fatal: one bad key must not hide the rest). The keys listing is cursor-paged; a partial list is refused.
  */
-const listRecords = async (request: Request, namespace: string, production: string): Promise<{ records: PreviewRecord[]; unreadable: string[] }> => {
-    const prefix = `${production}/`;
+const listRecords = async (request: Request, namespace: string, owner: string): Promise<{ records: PreviewRecord[]; unreadable: string[] }> => {
+    const prefix = `${owner}/`;
     const names: string[] = [];
     let cursor = "";
 
     for (let page = 1; ; page += 1) {
         if (page > MAX_PAGES) {
-            throw new Error(`the preview records of "${production}" span more than ${String(MAX_PAGES)} pages`);
+            throw new Error(`the preview records of "${owner}" span more than ${String(MAX_PAGES)} pages`);
         }
 
         const query = `prefix=${encodeURIComponent(prefix)}${cursor === "" ? "" : `&cursor=${encodeURIComponent(cursor)}`}`;

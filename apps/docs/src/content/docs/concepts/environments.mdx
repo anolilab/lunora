@@ -106,7 +106,10 @@ point at the preview, such as an auth base URL, with `--var KEY=VALUE`.
 
 What a preview owns is recorded in the account (a `lunora-preview-registry` KV
 namespace), so the job that deletes it does not need the runner that deployed
-it. `delete` acts only on that record, and refuses a record that names anything
+it. The record is keyed by the project's id (`lunora.appId` in
+`package.json`, written by the first local deploy: commit it), so renaming the
+Worker does not lose a preview and two apps sharing a Worker name never see each
+other's. `delete` acts only on that record, and refuses a record that names anything
 production's config uses. An app binding something a preview cannot isolate
 yet (Hyperdrive, service bindings, queues, workflows, Vectorize, …) is refused
 with the list. See [`lunora preview`](/docs/packages/cli#lunora-preview) for
@@ -126,7 +129,11 @@ secrets, so it runs `lunora deploy --dry-run` instead. On GitLab, the preview is
 environment whose stop job deletes it when the merge request is merged or
 closed, or after two weeks. Set `CLOUDFLARE_API_TOKEN` (with D1, KV and R2 edit
 rights, since previews make their own) and `CLOUDFLARE_ACCOUNT_ID` as the
-provider's secrets. After the first deploy, also set `LUNORA_DEPLOY_URL` (the
+provider's secrets. That token can redeploy any preview with any secrets, and the
+preview job holds it (and the optional `LUNORA_PREVIEW_SECRET_SEED` that keeps
+minted secrets stable), so the job runs only for pull requests from the same
+repository and the seed adds no access beyond the token. Do not run previews
+for untrusted pull requests. After the first deploy, also set `LUNORA_DEPLOY_URL` (the
 production worker's URL) and `LUNORA_ADMIN_TOKEN`: the production job passes
 them to the drift gate, which then
 [checks the stored rows](/docs/concepts/migrations#when-the-stored-rows-already-fit)
