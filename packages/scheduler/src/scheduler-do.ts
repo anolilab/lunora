@@ -97,6 +97,11 @@ const POOL_QUEUE_PREFIX = "pq:";
 // class lists that prefix.
 const DONE_PREFIX = "done:";
 const DONE_INDEX_PREFIX = "dt:";
+// `repair:<id>` is left when a dispatched job's outcome could not be written: it
+// holds the `succeeded` row that failed to land. The orphan walk writes the row
+// back and drops the job's leftover rows, so a lost write costs neither the
+// history entry nor a second run.
+const REPAIR_PREFIX = "repair:";
 // `cl:<hex name>` is a cron job's in-flight lease, `cr:<hex name>:<inverted
 // startedAt>:<runId>` one recorded fire, newest first per job. Names are
 // hex-encoded like pool names, so job `a` never lists job `a:b`'s rows.
@@ -1307,10 +1312,18 @@ class SchedulerDO {
         }
 
         if (ok) {
+            const completedAt = Date.now();
+
             try {
-                await this.writeTerminal(record, "succeeded");
+                await this.writeTerminal(record, "succeeded", completedAt);
             } catch {
                 // History only: the job ran, and nothing here may make it re-fire.
+                // Leave the row for the next instance's orphan walk to restore, and
+                // keep that walk from re-indexing the job's leftover header.
+                this.dirty = true;
+                await this.state.storage
+                    .put<TerminalRecord>(`${REPAIR_PREFIX}${record.id}`, { ...record, completedAt, state: "succeeded" })
+                    .catch(() => undefined);
             }
 
             // The job was kicked (2xx). It must never re-fire, so the time-index
@@ -1918,7 +1931,7 @@ class SchedulerDO {
         // OLD job's outcome. Its `dt:` entry is left for the sweep, which checks
         // the row it points at before deleting it.
         if (body.id !== undefined) {
-            await this.state.storage.delete(`${DONE_PREFIX}${id}`);
+            await this.state.storage.delete([`${DONE_PREFIX}${id}`, `${REPAIR_PREFIX}${id}`]);
         }
 
         const record: ScheduleRecord = {
@@ -2670,6 +2683,20 @@ class SchedulerDO {
         this.recovered = true;
     }
 
+    /**
+     * Write back the outcome a failed write lost, then drop the marker and any
+     * header the job left behind. Skipped when a newer outcome already exists
+     * (the id was reused and finished again); the marker goes either way.
+     */
+    private async restoreOutcome(row: TerminalRecord): Promise<void> {
+        if ((await this.state.storage.get(`${DONE_PREFIX}${row.id}`)) === undefined) {
+            await this.writeTerminal(row, "succeeded", row.completedAt);
+        }
+
+        // Record first, drop second: a failure keeps the marker for the next walk.
+        await this.state.storage.delete([`${REPAIR_PREFIX}${row.id}`, ...SchedulerDO.pendingKeys(row), `${RETRY_PREFIX}${row.id}`]);
+    }
+
     /** The full orphan walk — see {@link reindexOrphanedRecords}. */
     private async reindexWalk(): Promise<void> {
         const indexed = new Set<string>();
@@ -2683,6 +2710,13 @@ class SchedulerDO {
 
         await this.forEachPage<string>(POOL_QUEUE_PREFIX, (_recordId, key) => {
             queueRows.add(key);
+        });
+
+        // Jobs that ran but whose outcome write failed: restored below (and their leftover header dropped, so they are not run again).
+        const ran = new Map<string, TerminalRecord>();
+
+        await this.forEachPage<TerminalRecord>(REPAIR_PREFIX, (row) => {
+            ran.set(row.id, row);
         });
 
         const headerIds = new Set<string>();
@@ -2719,6 +2753,11 @@ class SchedulerDO {
         for (let start = 0; start < missingQueueRows.length; start += MAX_STORAGE_BATCH) {
             // eslint-disable-next-line no-await-in-loop -- bounded batches of local Durable Object storage writes
             await this.state.storage.put(Object.fromEntries(missingQueueRows.slice(start, start + MAX_STORAGE_BATCH)));
+        }
+
+        for (const row of ran.values()) {
+            // eslint-disable-next-line no-await-in-loop -- one row per lost outcome write; each restore-then-drop pair stays ordered
+            await this.restoreOutcome(row);
         }
 
         for (const record of orphans) {

@@ -40,6 +40,17 @@ class AlwaysFailing extends SchedulerDO {
     }
 }
 
+/** Succeeds every dispatch, counting them. */
+class AlwaysSucceeding extends SchedulerDO {
+    public dispatched = 0;
+
+    protected override async dispatch(): Promise<boolean> {
+        this.dispatched += 1;
+
+        return true;
+    }
+}
+
 describe("schedulerDO job lifecycle", () => {
     afterEach(() => {
         vi.restoreAllMocks();
@@ -186,6 +197,88 @@ describe("schedulerDO job lifecycle", () => {
         await scheduler.fetch(post("/dead/retry", { id: "doomed" }));
 
         await expect(getJob(scheduler, "doomed")).resolves.toMatchObject({ state: "pending" });
+    });
+
+    it("restores the history row of a job whose outcome write failed, without running it again", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const state = createFakeState();
+        const first = new AlwaysSucceeding(state, env);
+        const put = state.storage.put.bind(state.storage);
+
+        await first.fetch(post("/schedule", { args: {}, functionPath: "jobs.run", id: "ran", scheduledFor: Date.now() }));
+
+        // The outcome write fails; everything else (the marker included) lands.
+        vi.spyOn(state.storage, "put").mockImplementation(async (entries: unknown, ...rest: unknown[]) => {
+            if (typeof entries === "object" && entries !== null && Object.keys(entries).some((key) => key.startsWith("done:"))) {
+                throw new Error("storage unavailable");
+            }
+
+            return (put as (...arguments_: unknown[]) => Promise<void>)(entries, ...rest);
+        });
+        await first.alarm();
+        vi.restoreAllMocks();
+        pinClock(1_700_000_000_000);
+
+        expect(first.dispatched).toBe(1);
+        await expect(getJob(first, "ran")).resolves.toBeUndefined();
+
+        // The instance is evicted; its successor walks the store.
+        setNow(1_700_000_005_000);
+
+        const second = new AlwaysSucceeding(state, env);
+
+        await second.alarm();
+
+        // Never run again, and the outcome is back with its original time.
+        expect(second.dispatched).toBe(0);
+        await expect(getJob(second, "ran")).resolves.toMatchObject({ completedAt: 1_700_000_000_000, state: "succeeded" });
+        await expect(history(second)).resolves.toMatchObject({ records: [{ id: "ran", state: "succeeded" }] });
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("repair:"))).toStrictEqual([]);
+    });
+
+    it("restores the outcome instead of re-running a job whose header also outlived its failed outcome write", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const state = createFakeState();
+        const first = new AlwaysSucceeding(state, env);
+        const put = state.storage.put.bind(state.storage);
+        const remove = state.storage.delete.bind(state.storage);
+
+        await first.fetch(post("/schedule", { args: {}, functionPath: "jobs.run", id: "ran", scheduledFor: Date.now() }));
+        vi.spyOn(state.storage, "put").mockImplementation(async (entries: unknown, ...rest: unknown[]) => {
+            if (typeof entries === "object" && entries !== null && Object.keys(entries).some((key) => key.startsWith("done:"))) {
+                throw new Error("storage unavailable");
+            }
+
+            return (put as (...arguments_: unknown[]) => Promise<void>)(entries, ...rest);
+        });
+        vi.spyOn(state.storage, "delete").mockImplementation(async (keys: string | string[]) => {
+            if ([keys].flat().includes("id:ran")) {
+                throw new Error("storage unavailable");
+            }
+
+            return remove(keys);
+        });
+        await first.alarm();
+        vi.restoreAllMocks();
+        pinClock(1_700_000_000_000);
+
+        // The header is still there, unindexed: exactly what the walk re-arms.
+        expect(state.storageMap.has("id:ran")).toBe(true);
+
+        setNow(1_700_000_005_000);
+
+        const second = new AlwaysSucceeding(state, env);
+
+        await second.alarm();
+
+        expect(second.dispatched).toBe(0);
+        expect(state.storageMap.has("id:ran")).toBe(false);
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("t:"))).toStrictEqual([]);
+        await expect(getJob(second, "ran")).resolves.toMatchObject({ completedAt: 1_700_000_000_000, state: "succeeded" });
     });
 
     it("answers cancelled when the job was removed even if writing its outcome fails", async () => {
