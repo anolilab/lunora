@@ -97,6 +97,48 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlLike, query: string, ...p
 };
 
 /**
+ * Leads an escaped key; no key stored as-is starts with it. U+FFFF is a noncharacter that SQLite TEXT keeps intact
+ * (a NUL would end the string).
+ */
+const ESCAPED_KEY = "\uFFFF";
+
+/**
+ * The text a durable store keeps for `storageKey`. SQLite stores TEXT as UTF-8, and `TextEncoder` encodes the
+ * same way, so a lone UTF-16 surrogate is written as U+FFFD: `"a\uD800"` and `"a\uFFFD"` would share one row, and
+ * one caller's key could spend another's budget. A well-formed key is kept verbatim (the common case, no cost); any
+ * other key, and any key that starts with {@link ESCAPED_KEY}, is stored as that marker plus its JSON text, which
+ * escapes lone surrogates as ASCII. The mapping is one-to-one, so no two keys meet in a row.
+ */
+const encodeStorageKey = (storageKey: string): string =>
+    storageKey.isWellFormed() && !storageKey.startsWith(ESCAPED_KEY) ? storageKey : `${ESCAPED_KEY}${JSON.stringify(storageKey)}`;
+
+/** The caller's key for a stored key; the inverse of {@link encodeStorageKey}. */
+const decodeStorageKey = (stored: string): string => (stored.startsWith(ESCAPED_KEY) ? (JSON.parse(stored.slice(ESCAPED_KEY.length)) as string) : stored);
+
+/**
+ * A durable store whose keys round-trip exactly: every key is encoded on the way in, and a sweep's ownership test
+ * sees the caller's key, not its stored form, so a limiter still recognises its own escaped keys.
+ */
+const withLosslessKeys = (store: RateLimitStore): RateLimitStore => {
+    const wrapped: RateLimitStore = {
+        delete: (storageKey) => store.delete(encodeStorageKey(storageKey)),
+        get: (storageKey) => store.get(encodeStorageKey(storageKey)),
+        set: (storageKey, value) => store.set(encodeStorageKey(storageKey), value),
+    };
+    const { setIf, sweep } = store;
+
+    if (setIf) {
+        wrapped.setIf = (storageKey, value, prior) => setIf(encodeStorageKey(storageKey), value, prior);
+    }
+
+    if (sweep) {
+        wrapped.sweep = (olderThanTs, limit, owns) => sweep(olderThanTs, limit, owns === undefined ? undefined : (stored) => owns(decodeStorageKey(stored)));
+    }
+
+    return wrapped;
+};
+
+/**
  * SQLite-backed store for durable, per-DO rate-limit state. Persists each
  * `(name, key)` pair as one row so limits survive hibernation and eviction.
  *
@@ -116,7 +158,7 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlLike, query: string, ...p
  * configured rate. Two isolates sharing one SQLite file (not a Durable Object
  * case) are not covered; serialize those yourself.
  */
-const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
+const createRawSqlStore = (options: SqlStoreOptions): RateLimitStore => {
     const { sql } = options;
     const table = options.table ?? "_lunora_rate_limits";
 
@@ -170,6 +212,9 @@ const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
         },
     };
 };
+
+/** Sql store, with keys stored losslessly; see {@link encodeStorageKey}. */
+const createSqlStore = (options: SqlStoreOptions): RateLimitStore => withLosslessKeys(createRawSqlStore(options));
 
 /**
  * The READ slice — everything the store needs to answer `RateLimiter.getValue`
@@ -311,7 +356,7 @@ const isConflict = (error: unknown): boolean => (error as { code?: unknown } | n
  * failure value from the mutation instead of throwing. A `.global()` table's
  * row lives in D1, outside the DO transaction, so there the unit stays spent.
  */
-const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
+const createRawDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     const { db } = options;
     const table = options.table ?? "rateLimits";
     const keyField = options.keyField ?? "key";
@@ -475,6 +520,9 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
         },
     };
 };
+
+/** Database store, with keys stored losslessly; see {@link encodeStorageKey}. */
+const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => withLosslessKeys(createRawDatabaseStore(options));
 
 /**
  * Read-only counterpart to {@link createDatabaseStore}, for a query context.
