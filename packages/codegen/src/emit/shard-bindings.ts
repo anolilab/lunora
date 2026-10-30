@@ -243,24 +243,27 @@ const emitFlagsOverrides = (
 const LUNORA_FLAG_KEYS = ${renderJsonData(flagKeys, `ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }>`)};
 `;
 
+    // eslint-disable-next-line no-secrets/no-secrets -- emitted source text, not a credential
+    const mapFlagKeys = "LUNORA_FLAG_KEYS.map(async";
     const evaluateOverride = `
         protected override async evaluateFlags(context?: Record<string, unknown>): Promise<FlagsResult> {${clientBuild("undefined")}
             const evalContext = context as import("${flagsSpecifier}").EvaluationContext | undefined;
-            const evaluations: FlagsResult["flags"] = [];
+            // Concurrent, not sequential: against a remote provider every read is a round
+            // trip, and the request-scoped bind in createFlags is shared by all of them.
+            const evaluations: FlagsResult["flags"] = await Promise.all(
+                ${mapFlagKeys} (entry) => {
+                    const details =
+                        entry.type === "boolean"
+                            ? await flags.details.boolean(entry.key, false, evalContext)
+                            : entry.type === "number"
+                              ? await flags.details.number(entry.key, 0, evalContext)
+                              : entry.type === "string"
+                                ? await flags.details.string(entry.key, "", evalContext)
+                                : await flags.details.object(entry.key, {}, evalContext);
 
-            for (const entry of LUNORA_FLAG_KEYS) {
-                // eslint-disable-next-line no-await-in-loop -- flags evaluate sequentially; each shares the single memoized provider client
-                const details =
-                    entry.type === "boolean"
-                        ? await flags.details.boolean(entry.key, false, evalContext)
-                        : entry.type === "number"
-                          ? await flags.details.number(entry.key, 0, evalContext)
-                          : entry.type === "string"
-                            ? await flags.details.string(entry.key, "", evalContext)
-                            : await flags.details.object(entry.key, {}, evalContext);
-
-                evaluations.push({ errorCode: details.errorCode, key: entry.key, reason: details.reason, type: entry.type, value: details.value, variant: details.variant });
-            }
+                    return { errorCode: details.errorCode, key: entry.key, reason: details.reason, type: entry.type, value: details.value, variant: details.variant };
+                }),
+            );
 
             return { configured: true, flags: evaluations };
         }
