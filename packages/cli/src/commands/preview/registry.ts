@@ -27,6 +27,13 @@ interface RecordedResource {
     id: string;
     kind: PreviewResourceKind;
     name: string;
+
+    /**
+     * Set while the resource is being made: the record names it before the create call, so a resource can never exist
+     * unrecorded. `id` is empty for a D1 database or KV namespace until the create is confirmed; whoever finds the flag
+     * looks the resource up by its name, and a name that finds nothing means the create never happened.
+     */
+    pending?: true;
 }
 
 interface PreviewRecord {
@@ -142,76 +149,6 @@ const recordKey = (owner: string, slug: string): string => `${owner}/${slug}`;
 
 const valuePath = (namespace: string, key: string): string => `/storage/kv/namespaces/${encodeURIComponent(namespace)}/values/${encodeURIComponent(key)}`;
 
-/**
- * One run at a time per preview, across checkouts and machines: a lease record beside the preview's own. KV cannot
- * compare-and-set, so this is take, read back, and see whether the token is still ours; a run that crashes lets go
- * by KV expiry. It keeps a deploy's last record write from landing after a delete removed the preview.
- */
-const LEASE_SECONDS = 1800;
-
-const leaseKey = (appId: string, slug: string): string => `lock/${appId}/${slug}`;
-
-interface Lease {
-    at?: unknown;
-    token?: unknown;
-}
-
-const readLease = async (request: Request, path: string): Promise<Lease | undefined> => {
-    const outcome = await request(path);
-
-    if (!outcome.ok && outcome.status === 404) {
-        return undefined;
-    }
-
-    try {
-        return expectOk(outcome, "reading the preview hold");
-    } catch {
-        // A value that is not a lease is not held by anyone.
-        return undefined;
-    }
-};
-
-/** `{ token }` when this run now holds the preview, else `{ held }` with when the run that does took it. */
-const takeLease = async (
-    request: Request,
-    namespace: string,
-    appId: string,
-    slug: string,
-): Promise<{ held?: never; token: string } | { held: string; token?: never }> => {
-    const path = valuePath(namespace, leaseKey(appId, slug));
-    const current = await readLease(request, path);
-
-    if (typeof current?.at === "string" && Date.now() - Date.parse(current.at) < LEASE_SECONDS * 1000) {
-        return { held: current.at };
-    }
-
-    const token = randomUUID();
-
-    expectOk(
-        await request(`${path}?expiration_ttl=${String(LEASE_SECONDS)}`, { body: JSON.stringify({ at: new Date().toISOString(), token }), method: "PUT" }),
-        "taking the preview hold",
-    );
-
-    const back = await readLease(request, path);
-
-    return back?.token === token ? { token } : { held: typeof back?.at === "string" ? back.at : "just now" };
-};
-
-/** Let go of the preview if this run still holds it; a hold that cannot be released lapses by itself. */
-const releaseLease = async (request: Request, namespace: string, appId: string, slug: string, token: string): Promise<void> => {
-    const path = valuePath(namespace, leaseKey(appId, slug));
-
-    try {
-        const held = await readLease(request, path);
-
-        if (held?.token === token) {
-            await request(path, { method: "DELETE" });
-        }
-    } catch {
-        // KV expiry clears it.
-    }
-};
-
 const RESOURCE_KINDS: ReadonlySet<unknown> = new Set<PreviewResourceKind>(["d1", "kv", "r2"]);
 
 /**
@@ -227,6 +164,7 @@ const isRecordedResource = (worker: string, value: unknown): value is RecordedRe
         RESOURCE_KINDS.has(candidate.kind) &&
         typeof candidate.binding === "string" &&
         typeof candidate.id === "string" &&
+        (candidate.pending === undefined || (candidate.pending as unknown) === true) &&
         candidate.name === previewResourceName(worker, candidate.binding) &&
         (candidate.kind !== "r2" || candidate.id === candidate.name)
     );
@@ -377,6 +315,118 @@ const createResource = async (request: Request, kind: PreviewResourceKind, name:
     return uuid;
 };
 
+/**
+ * One run at a time per preview, across checkouts and machines. The hold is a row in a small D1 database the
+ * preview tooling owns: D1 is one SQLite behind the account, so an INSERT that succeeds is the only way in, and a
+ * stale row is taken over by an UPDATE that names the stale owner, which exactly one taker can satisfy. KV could
+ * not do this: two locations can each read "no hold" and write their own. Any failure that is not a definite
+ * "the row exists" is a refusal, never a free hold.
+ */
+const LOCK_DATABASE = "lunora-preview-locks";
+const LOCK_SECONDS = 1800;
+const UNIQUE_CONFLICT = /UNIQUE constraint failed|SQLITE_CONSTRAINT/iu;
+
+const CREATE_LOCKS =
+    "CREATE TABLE IF NOT EXISTS lunora_preview_locks (app_id TEXT NOT NULL, name TEXT NOT NULL, owner_token TEXT NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY (app_id, name))";
+const INSERT_LOCK = "INSERT INTO lunora_preview_locks (app_id, name, owner_token, expires_at) VALUES (?, ?, ?, unixepoch() + ?)";
+const SELECT_LOCK = "SELECT owner_token, expires_at, unixepoch() AS now FROM lunora_preview_locks WHERE app_id = ? AND name = ?";
+const TAKE_OVER_LOCK =
+    "UPDATE lunora_preview_locks SET owner_token = ?, expires_at = unixepoch() + ? WHERE app_id = ? AND name = ? AND owner_token = ? AND expires_at <= unixepoch()";
+const DELETE_LOCK = "DELETE FROM lunora_preview_locks WHERE app_id = ? AND name = ? AND owner_token = ?";
+
+interface QueryResult {
+    changes: number;
+    rows: Record<string, unknown>[];
+}
+
+/** One statement against the lock database. `undefined` is a definite UNIQUE conflict; every other failure throws. */
+const lockQuery = async (request: Request, database: string, sql: string, params: ReadonlyArray<number | string>): Promise<QueryResult | undefined> => {
+    const outcome = await request(`/d1/database/${encodeURIComponent(database)}/query`, { body: JSON.stringify({ params, sql }), method: "POST" });
+
+    if (!outcome.ok && UNIQUE_CONFLICT.test(outcome.text)) {
+        return undefined;
+    }
+
+    const first = (expectOk(outcome, "using the preview lock database").result as { meta?: { changes?: unknown }; results?: unknown }[] | undefined)?.[0];
+
+    return {
+        changes: typeof first?.meta?.changes === "number" ? first.meta.changes : 0,
+        rows: Array.isArray(first?.results) ? (first.results as Record<string, unknown>[]) : [],
+    };
+};
+
+/** The lock database's id, made on first use. Nothing else is ever stored in it. */
+const lockDatabase = async (request: Request): Promise<string> => {
+    let id = await findResource(request, "d1", LOCK_DATABASE);
+
+    if (id === undefined) {
+        try {
+            id = await createResource(request, "d1", LOCK_DATABASE);
+        } catch (error) {
+            // Two first runs can race the create; both must use the database the winner made.
+            id = await findResource(request, "d1", LOCK_DATABASE);
+
+            if (id === undefined) {
+                throw error;
+            }
+        }
+    }
+
+    await lockQuery(request, id, CREATE_LOCKS, []);
+
+    return id;
+};
+
+/** `{ token }` when this run now holds the preview, else `{ held }` with when the hold lapses. */
+const takeLease = async (
+    request: Request,
+    database: string,
+    appId: string,
+    slug: string,
+): Promise<{ held?: never; token: string } | { held: string; token?: never }> => {
+    const token = randomUUID();
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        // eslint-disable-next-line no-await-in-loop -- the second round only runs when the row vanished between the two statements
+        if ((await lockQuery(request, database, INSERT_LOCK, [appId, slug, token, LOCK_SECONDS])) !== undefined) {
+            return { token };
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- see above
+        const selected = await lockQuery(request, database, SELECT_LOCK, [appId, slug]);
+        const row = selected?.rows[0];
+
+        if (row === undefined) {
+            continue;
+        }
+
+        const expires = Number(row.expires_at);
+
+        const stale = Number.isFinite(expires) && expires <= Number(row.now);
+
+        if (typeof row.owner_token !== "string" || !stale) {
+            return { held: new Date(expires * 1000).toISOString() };
+        }
+
+        // Stale: only the taker whose UPDATE still finds the stale owner's row wins it.
+        // eslint-disable-next-line no-await-in-loop -- see above
+        const taken = await lockQuery(request, database, TAKE_OVER_LOCK, [token, LOCK_SECONDS, appId, slug, row.owner_token]);
+
+        return taken?.changes === 1 ? { token } : { held: "just now" };
+    }
+
+    return { held: "just now" };
+};
+
+/** Let go of the preview if this run still holds it; a hold that cannot be released lapses by itself. */
+const releaseLease = async (request: Request, database: string, appId: string, slug: string, token: string): Promise<void> => {
+    try {
+        await lockQuery(request, database, DELETE_LOCK, [appId, slug, token]);
+    } catch {
+        // The row lapses on its own.
+    }
+};
+
 const RESOURCE_PATHS: Record<PreviewResourceKind, (id: string) => string> = {
     d1: (id) => `/d1/database/${encodeURIComponent(id)}`,
     kv: (id) => `/storage/kv/namespaces/${encodeURIComponent(id)}`,
@@ -388,6 +438,11 @@ const RESOURCE_PATHS: Record<PreviewResourceKind, (id: string) => string> = {
  * `changed` (the id now names something else, so the record was edited or is stale and must not be acted on).
  */
 const recordedResourceState = async (request: Request, resource: RecordedResource): Promise<"changed" | "missing" | "present"> => {
+    // Named before it was made: there is no id to check yet, and `resolvePending` finds it by name.
+    if (resource.pending === true) {
+        return "present";
+    }
+
     const outcome = await request(RESOURCE_PATHS[resource.kind](resource.id));
 
     if (!outcome.ok && outcome.status === 404) {
@@ -398,6 +453,13 @@ const recordedResourceState = async (request: Request, resource: RecordedResourc
     const name = { d1: found.name, kv: found.title, r2: found.name }[resource.kind];
 
     return name === resource.name ? "present" : "changed";
+};
+
+/** The resource a pending entry stands for, with its id, or `undefined` when the create never happened. */
+const resolvePending = async (request: Request, resource: RecordedResource): Promise<RecordedResource | undefined> => {
+    const id = await findResource(request, resource.kind, resource.name);
+
+    return id === undefined ? undefined : { ...resource, id, pending: undefined };
 };
 
 const objectPath = (bucket: string, key: string): string =>
@@ -501,11 +563,13 @@ export {
     deleteWorker,
     findResource,
     listRecords,
+    lockDatabase,
     readRecord,
     recordedResourceState,
     recordKey,
     registryNamespace,
     releaseLease,
+    resolvePending,
     takeLease,
     workerMarker,
     workersSubdomain,

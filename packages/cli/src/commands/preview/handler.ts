@@ -45,7 +45,7 @@ import {
     productionCollisions,
     resourceKey,
 } from "./plan";
-import type { PreviewRecord, Request } from "./registry";
+import type { PreviewRecord, RecordedResource, Request } from "./registry";
 import {
     createResource,
     deleteRecord,
@@ -53,11 +53,13 @@ import {
     deleteWorker,
     findResource,
     listRecords,
+    lockDatabase,
     readRecord,
     recordedResourceState,
     recordKey,
     registryNamespace,
     releaseLease,
+    resolvePending,
     takeLease,
     workerMarker,
     workersSubdomain,
@@ -268,35 +270,47 @@ const previewSecrets = async (
     return { adminToken: values[ADMIN_TOKEN_KEY] ?? "", missing, values };
 };
 
+/** The id of the resource a pending entry stands for once it exists: found by name, or `undefined` when its create never happened. */
+const confirmPending = async (request: Request, namespace: string, record: PreviewRecord, entry: RecordedResource): Promise<boolean> => {
+    const made = await resolvePending(request, entry);
+
+    if (made === undefined) {
+        return false;
+    }
+
+    // eslint-disable-next-line no-param-reassign -- the entry is the live copy of the record's resource, kept in step with what is written
+    entry.id = made.id;
+    // eslint-disable-next-line no-param-reassign -- see above
+    delete entry.pending;
+    await writeRecord(request, namespace, record);
+
+    return true;
+};
+
+/** A resource the record already lists: its id, once checked that the id still names that resource. */
+const reuseRecorded = async (request: Request, plan: PreviewPlan, recorded: RecordedResource, logger: Logger): Promise<string> => {
+    const state = await recordedResourceState(request, recorded);
+
+    // A recorded id that no longer names the recorded resource is never bound: it may be anyone's now.
+    if (state !== "present") {
+        throw new Error(
+            `the record lists ${recorded.kind} "${recorded.name}" (${recorded.id}), which is ${state === "missing" ? "gone" : "now a different resource"}; run \`lunora preview delete ${plan.slug}\`, then deploy again`,
+        );
+    }
+
+    logger.info(`reusing preview ${recorded.kind} "${recorded.name}" for ${recorded.binding}`);
+
+    return recorded.id;
+};
+
 /**
- * Give every planned resource its id: the recorded one, or a new resource, recorded the moment it exists.
- * A resource that already exists under a preview name but is not on record is never adopted: nothing shows
- * it is the preview's, and deleting the preview later would delete it.
+ * Make one planned resource and return its id. The record names it before the create call and confirms it after,
+ * so a resource can never exist unrecorded: if the confirming write fails, delete finds it by the claim.
  */
-const ensureResources = async (request: Request, namespace: string, plan: PreviewPlan, record: PreviewRecord, logger: Logger): Promise<ResourceIds> => {
-    const ids = new Map<string, string>();
+const createClaimed = async (request: Request, namespace: string, record: PreviewRecord, planned: PlannedResource, logger: Logger): Promise<string> => {
+    let claim = record.resources.find((resource) => resource.kind === planned.kind && resource.binding === planned.binding);
 
-    for (const planned of plan.resources) {
-        const recorded = record.resources.find((resource) => resource.kind === planned.kind && resource.binding === planned.binding);
-
-        if (recorded !== undefined) {
-            // eslint-disable-next-line no-await-in-loop -- see below
-            const state = await recordedResourceState(request, recorded);
-
-            // A recorded id that no longer names the recorded resource is never bound: it may be anyone's now.
-            if (state !== "present") {
-                throw new Error(
-                    `the record lists ${planned.kind} "${recorded.name}" (${recorded.id}), which is ${state === "missing" ? "gone" : "now a different resource"}; run \`lunora preview delete ${plan.slug}\`, then deploy again`,
-                );
-            }
-
-            ids.set(resourceKey(planned.kind, planned.binding), recorded.id);
-            logger.info(`reusing preview ${planned.kind} "${recorded.name}" for ${planned.binding}`);
-
-            continue;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- one resource at a time, each recorded before the next is made
+    if (claim === undefined) {
         const existing = await findResource(request, planned.kind, planned.name);
 
         if (existing !== undefined) {
@@ -305,14 +319,45 @@ const ensureResources = async (request: Request, namespace: string, plan: Previe
             );
         }
 
-        // eslint-disable-next-line no-await-in-loop -- see above
-        const id = await createResource(request, planned.kind, planned.name);
-
-        record.resources.push({ binding: planned.binding, id, kind: planned.kind, name: planned.name });
-        // eslint-disable-next-line no-await-in-loop -- recorded before anything else can fail, so delete can find it
+        claim = { binding: planned.binding, id: planned.kind === "r2" ? planned.name : "", kind: planned.kind, name: planned.name, pending: true };
+        record.resources.push(claim);
         await writeRecord(request, namespace, record);
-        ids.set(resourceKey(planned.kind, planned.binding), id);
-        logger.success(`created preview ${planned.kind} "${planned.name}" for ${planned.binding}`);
+    }
+
+    claim.id = await createResource(request, planned.kind, planned.name);
+    delete claim.pending;
+    await writeRecord(request, namespace, record);
+    logger.success(`created preview ${planned.kind} "${planned.name}" for ${planned.binding}`);
+
+    return claim.id;
+};
+
+/**
+ * Give every planned resource its id: the recorded one, or a new resource claimed in the record before it is made.
+ * A resource that already exists under a preview name but is not on record is never adopted: nothing shows
+ * it is the preview's, and deleting the preview later would delete it.
+ */
+const ensureOne = async (
+    request: Request,
+    namespace: string,
+    plan: PreviewPlan,
+    record: PreviewRecord,
+    planned: PlannedResource,
+    logger: Logger,
+): Promise<string> => {
+    const recorded = record.resources.find((resource) => resource.kind === planned.kind && resource.binding === planned.binding);
+    // A claim whose create happened is confirmed now; one whose create did not is made below.
+    const made = recorded?.pending === true ? await confirmPending(request, namespace, record, recorded) : recorded !== undefined;
+
+    return recorded !== undefined && made ? reuseRecorded(request, plan, recorded, logger) : createClaimed(request, namespace, record, planned, logger);
+};
+
+const ensureResources = async (request: Request, namespace: string, plan: PreviewPlan, record: PreviewRecord, logger: Logger): Promise<ResourceIds> => {
+    const ids = new Map<string, string>();
+
+    for (const planned of plan.resources) {
+        // eslint-disable-next-line no-await-in-loop -- one resource at a time, each claimed in the record before it is made
+        ids.set(resourceKey(planned.kind, planned.binding), await ensureOne(request, namespace, plan, record, planned, logger));
     }
 
     return ids;
@@ -443,8 +488,8 @@ const reportPlan = (logger: Logger, plan: PreviewPlan, block: Record<string, unk
     logger.info(`  env.${plan.environment}: ${JSON.stringify(shown)}`);
 };
 
-const heldMessage = (slug: string, since: string): string =>
-    `another run is deploying or deleting preview "${slug}" (since ${since}); wait for it. If it crashed, its hold lapses by itself after 30 minutes`;
+const heldMessage = (slug: string, until: string): string =>
+    `another run is deploying or deleting preview "${slug}" (its hold lapses at ${until}); wait for it. A run that crashed lets go by itself`;
 
 /** What a deploy has settled before it creates anything: the secrets, the workers.dev subdomain, the registry and its hold on this preview. */
 interface ShipPrerequisites {
@@ -607,6 +652,7 @@ const shipPreview = async (
 
     let namespace: string;
     let subdomain: string;
+    let database: string;
     let token: string;
 
     try {
@@ -620,7 +666,9 @@ const shipPreview = async (
         subdomain = await workersSubdomain(request);
         namespace = (await registryNamespace(request, true)) ?? "";
 
-        const lease = await takeLease(request, namespace, appId, plan.slug);
+        database = await lockDatabase(request);
+
+        const lease = await takeLease(request, database, appId, plan.slug);
 
         if (lease.held !== undefined) {
             return fail(logger, heldMessage(plan.slug, lease.held));
@@ -634,7 +682,7 @@ const shipPreview = async (
     try {
         return await shipHeld(context, plan, variables, options, request, { namespace, secrets, subdomain });
     } finally {
-        await releaseLease(request, namespace, appId, plan.slug, token);
+        await releaseLease(request, database, appId, plan.slug, token);
     }
 };
 
@@ -766,6 +814,25 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
     }
 };
 
+/** Delete one recorded resource, looking up the id of one the record only claimed. False when it could not be deleted. */
+const removeRecorded = async (request: Request, claimed: RecordedResource, logger: Logger): Promise<boolean> => {
+    try {
+        // A claim whose create never happened names nothing in the account: there is nothing to remove.
+        const resource = claimed.pending === true ? await resolvePending(request, claimed) : claimed;
+
+        if (resource !== undefined) {
+            await deleteResource(request, resource);
+            logger.success(`deleted ${resource.kind} "${resource.name}"`);
+        }
+
+        return true;
+    } catch (error) {
+        logger.error(`deleting ${claimed.kind} "${claimed.name}" failed (${reason(error)}); it stays on record for the next \`lunora preview delete\``);
+
+        return false;
+    }
+};
+
 /**
  * Delete the Worker, then each recorded resource; what could not be deleted stays on record for the next run,
  * and the record goes once nothing is left.
@@ -796,14 +863,10 @@ const removePreview = async (
 
     const remaining = [];
 
-    for (const resource of record.resources) {
-        try {
-            // eslint-disable-next-line no-await-in-loop -- one at a time keeps the log in record order
-            await deleteResource(request, resource);
-            logger.success(`deleted ${resource.kind} "${resource.name}"`);
-        } catch (error) {
-            logger.error(`deleting ${resource.kind} "${resource.name}" failed (${reason(error)}); it stays on record for the next \`lunora preview delete\``);
-            remaining.push(resource);
+    for (const claimed of record.resources) {
+        // eslint-disable-next-line no-await-in-loop -- one at a time keeps the log in record order
+        if (!(await removeRecorded(request, claimed, logger))) {
+            remaining.push(claimed);
         }
     }
 
@@ -963,10 +1026,13 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
         return deleteRecorded(context, options, { names, namespace, request });
     }
 
+    let database: string;
     let token: string;
 
     try {
-        const lease = await takeLease(request, namespace, context.appId, names.slug);
+        database = await lockDatabase(request);
+
+        const lease = await takeLease(request, database, context.appId, names.slug);
 
         if (lease.held !== undefined) {
             return fail(logger, heldMessage(names.slug, lease.held));
@@ -980,7 +1046,7 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
     try {
         return await deleteRecorded(context, options, { names, namespace, request });
     } finally {
-        await releaseLease(request, namespace, context.appId, names.slug, token);
+        await releaseLease(request, database, context.appId, names.slug, token);
     }
 };
 

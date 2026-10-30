@@ -8,11 +8,13 @@ import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { cloudflareRestRequest } from "../../../../shared/cloudflare-rest";
 import { runCli } from "../../src/cli";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer/shared";
 import { runPreviewCommand } from "../../src/commands/preview/handler";
 import type { PreviewConfig, PreviewPlan } from "../../src/commands/preview/plan";
 import { planPreview, previewEnvironmentBlock, previewNames, productionCollisions, resourceKey } from "../../src/commands/preview/plan";
+import { lockDatabase, releaseLease, takeLease } from "../../src/commands/preview/registry";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import type { Spawner } from "../../src/util/spawn";
@@ -90,6 +92,7 @@ const KV_VALUE_PATH = /^\/storage\/kv\/namespaces\/([^/]+)\/values\/(.+)$/u;
 const KV_KEYS_PATH = /^\/storage\/kv\/namespaces\/([^/]+)\/keys$/u;
 const KV_NAMESPACE_PATH = /^\/storage\/kv\/namespaces\/([^/]+)$/u;
 const D1_PATH = /^\/d1\/database\/([^/]+)$/u;
+const D1_QUERY_PATH = /^\/d1\/database\/([^/]+)\/query$/u;
 const R2_PATH = /^\/r2\/buckets\/([^/]+)$/u;
 const R2_OBJECTS_PATH = /^\/r2\/buckets\/([^/]+)\/objects$/u;
 const R2_OBJECT_PATH = /^\/r2\/buckets\/([^/]+)\/objects\/(.+)$/u;
@@ -110,6 +113,8 @@ const fakeAccount = (
     fetch: typeof globalThis.fetch;
     kv: Map<string, string>;
     kvValues: Map<string, Map<string, string>>;
+    /** The rows of the preview lock table, by `app_id/name`, and its clock in seconds. */
+    locks: Map<string, { expires: number; owner: string }>;
     r2: Set<string>;
     r2Objects: Map<string, Set<string>>;
     staleReads: Map<string, string>;
@@ -122,6 +127,7 @@ const fakeAccount = (
     const r2Objects = new Map<string, Set<string>>();
     let hiddenKvListings = options.hiddenKvListings ?? 0;
     const staleReads = new Map<string, string>();
+    const locks = new Map<string, { expires: number; owner: string }>();
     const workers = new Map<string, string | undefined>();
     const calls: { method: string; path: string }[] = [];
     let sequence = 0;
@@ -129,6 +135,73 @@ const fakeAccount = (
         sequence += 1;
 
         return `${prefix}-${String(sequence)}`;
+    };
+
+    // One statement of the lock table, applied whole before the next request is seen, as D1 (one SQLite) does.
+    const lockStatement = (body: string): Response => {
+        const { params, sql } = JSON.parse(body) as { params: (number | string)[]; sql: string };
+        const now = Math.floor(Date.now() / 1000);
+        const reply = (results: unknown[], changes: number): Response => envelope([{ meta: { changes }, results, success: true }]);
+
+        if (sql.startsWith("CREATE TABLE IF NOT EXISTS lunora_preview_locks")) {
+            return reply([], 0);
+        }
+
+        if (sql.startsWith("INSERT INTO lunora_preview_locks")) {
+            const [app, name, owner, ttl] = params as [string, string, string, number];
+
+            if (locks.has(`${app}/${name}`)) {
+                return json(
+                    {
+                        errors: [
+                            {
+                                code: 7500,
+                                message: "D1_ERROR: UNIQUE constraint failed: lunora_preview_locks.app_id, lunora_preview_locks.name: SQLITE_CONSTRAINT",
+                            },
+                        ],
+                        success: false,
+                    },
+                    400,
+                );
+            }
+
+            locks.set(`${app}/${name}`, { expires: now + ttl, owner });
+
+            return reply([], 1);
+        }
+
+        if (sql.startsWith("SELECT owner_token")) {
+            const row = locks.get(`${String(params[0])}/${String(params[1])}`);
+
+            return reply(row === undefined ? [] : [{ expires_at: row.expires, now, owner_token: row.owner }], 0);
+        }
+
+        if (sql.startsWith("UPDATE lunora_preview_locks")) {
+            const [owner, ttl, app, name, stale] = params as [string, number, string, string, string];
+            const row = locks.get(`${app}/${name}`);
+
+            if (row?.owner !== stale || row.expires > now) {
+                return reply([], 0);
+            }
+
+            locks.set(`${app}/${name}`, { expires: now + ttl, owner });
+
+            return reply([], 1);
+        }
+
+        if (sql.startsWith("DELETE FROM lunora_preview_locks")) {
+            const [app, name, owner] = params as [string, string, string];
+
+            if (locks.get(`${app}/${name}`)?.owner === owner) {
+                locks.delete(`${app}/${name}`);
+
+                return reply([], 1);
+            }
+
+            return reply([], 0);
+        }
+
+        return json({ errors: [{ code: 7500, message: `unexpected statement: ${sql}` }], success: false }, 400);
     };
 
     const kvKeysRoute = (path: string, search: URLSearchParams): Response | undefined => {
@@ -260,6 +333,12 @@ const fakeAccount = (
             );
         }
 
+        const query = D1_QUERY_PATH.exec(path);
+
+        if (query !== null && method === "POST") {
+            return lockStatement(body ?? "{}");
+        }
+
         const database = D1_PATH.exec(path);
 
         if (database !== null) {
@@ -382,7 +461,7 @@ const fakeAccount = (
         return handle(method, path, url.searchParams, typeof init?.body === "string" ? init.body : undefined);
     }) as typeof globalThis.fetch;
 
-    return { calls, d1, fetch, kv, kvValues, r2, r2Objects, staleReads, workers };
+    return { calls, d1, fetch, kv, kvValues, locks, r2, r2Objects, staleReads, workers };
 };
 
 const PREVIEW_DEPLOY_OUTPUT = `Uploaded lunora-app-preview-42 (2.21 sec)
@@ -621,9 +700,12 @@ describe("lunora preview", () => {
 
     /** The account-changing calls of these methods, not counting the hold a run takes on its preview and lets go of. */
     const changes = (account: ReturnType<typeof fakeAccount>, ...methods: string[]): { method: string; path: string }[] =>
-        account.calls.filter((call) => methods.includes(call.method) && !call.path.includes("lock%2F"));
+        account.calls.filter((call) => methods.includes(call.method) && !call.path.endsWith("/query"));
 
-    const leaseKeys = (account: ReturnType<typeof fakeAccount>): string[] => [...registryValues(account).keys()].filter((key) => key.startsWith("lock/"));
+    const leaseKeys = (account: ReturnType<typeof fakeAccount>): string[] => [...account.locks.keys()];
+
+    /** Every D1 database but the one the lock table lives in. */
+    const previewDatabases = (account: ReturnType<typeof fakeAccount>): string[] => [...account.d1.keys()].filter((name) => name !== "lunora-preview-locks");
 
     const deployWith = async (account: ReturnType<typeof fakeAccount>, spawner: Spawner): Promise<Awaited<ReturnType<typeof runPreviewCommand>>> =>
         runPreviewCommand({
@@ -742,7 +824,8 @@ describe("lunora preview", () => {
                 subcommand: "deploy",
             });
 
-            expect(account.calls.filter((call) => call.method === "POST")).toHaveLength(4);
+            // The lock database and the registry namespace, then the preview's own D1, KV and R2.
+            expect(changes(account, "POST")).toHaveLength(5);
         });
 
         it("copies a secret only when the user opts in with --secret", async () => {
@@ -839,7 +922,8 @@ describe("lunora preview", () => {
             });
 
             expect(result.error).toMatch(/exists but no preview record says this preview deployed it/u);
-            expect(changes(account, "POST", "PUT")).toHaveLength(1);
+            // Only the shared lock database and the registry: no resource of the preview's own.
+            expect(changes(account, "POST", "PUT")).toHaveLength(2);
             expect(deploys).toHaveLength(0);
         });
 
@@ -1246,6 +1330,124 @@ describe("lunora preview", () => {
             expect(deploys).toHaveLength(0);
         });
 
+        /** A second copy of the project, as another checkout or machine would have. */
+        const otherCheckout = (): string => {
+            const directory = mkdtempSync(join(tmpdir(), "lunora-cli-preview-other-"));
+
+            cpSync(workdir, directory, { recursive: true });
+
+            return directory;
+        };
+
+        const deployFrom = async (directory: string, account: ReturnType<typeof fakeAccount>): Promise<Awaited<ReturnType<typeof runPreviewCommand>>> =>
+            runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: directory,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner: wranglerAt(directory, account.workers).spawner,
+                subcommand: "deploy",
+            });
+
+        const raced = async (account: ReturnType<typeof fakeAccount>): Promise<{ held: number; won: number }> => {
+            const other = otherCheckout();
+
+            try {
+                const results = await Promise.all([deployFrom(workdir, account), deployFrom(other, account)]);
+
+                return {
+                    held: results.filter((result) => /another run is deploying or deleting/u.test(result.error ?? "")).length,
+                    won: results.filter((result) => result.code === 0).length,
+                };
+            } finally {
+                rmSync(other, { force: true, recursive: true });
+            }
+        };
+
+        it("lets exactly one of two runs on different machines take the hold", async () => {
+            expect.assertions(2);
+
+            const outcome = await raced(fakeAccount());
+
+            expect(outcome.won).toBe(1);
+            expect(outcome.held).toBe(1);
+        });
+
+        it("lets exactly one of two runs take over a stale hold", async () => {
+            expect.assertions(3);
+
+            const account = fakeAccount();
+
+            account.locks.set(`${APP_ID}/42`, { expires: 1, owner: "crashed" });
+
+            const outcome = await raced(account);
+
+            expect(outcome.won).toBe(1);
+            expect(outcome.held).toBe(1);
+            expect(leaseKeys(account)).toStrictEqual([]);
+        });
+
+        it("lets a run that does not own the hold neither release nor steal it", async () => {
+            expect.assertions(3);
+
+            const account = fakeAccount();
+            const request = async (path: string, init?: RequestInit): ReturnType<typeof cloudflareRestRequest> =>
+                cloudflareRestRequest({ accountId: "acct", apiToken: "token", fetch: account.fetch, init: init ?? {}, path });
+            const database = await lockDatabase(request);
+            const mine = await takeLease(request, database, APP_ID, "42");
+
+            await releaseLease(request, database, APP_ID, "42", "not-the-owner");
+
+            expect(account.locks.get(`${APP_ID}/42`)?.owner).toBe(mine.token);
+
+            const contender = await takeLease(request, database, APP_ID, "42");
+
+            expect(contender.held).toBeDefined();
+
+            await releaseLease(request, database, APP_ID, "42", mine.token ?? "");
+
+            expect(leaseKeys(account)).toStrictEqual([]);
+        });
+
+        it.each([
+            ["taking the hold fails", (sql: string) => sql.startsWith("INSERT")],
+            ["reading a held row fails", (sql: string) => sql.startsWith("SELECT")],
+            ["taking over a stale row fails", (sql: string) => sql.startsWith("UPDATE")],
+        ])("refuses, and creates nothing, when %s with anything but a definite conflict", async (_label, failing) => {
+            expect.assertions(4);
+
+            const account = fakeAccount();
+            const { deploys, spawner } = wranglerAt(workdir, account.workers);
+
+            account.locks.set(`${APP_ID}/42`, { expires: 1, owner: "crashed" });
+
+            const broken = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                const { sql } = (input as string).endsWith("/query") ? (JSON.parse(init?.body as string) as { sql: string }) : { sql: "" };
+
+                return failing(sql) ? new Response("{}", { status: 403 }) : account.fetch(input, init);
+            }) as typeof globalThis.fetch;
+
+            const result = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: broken,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect(result.code).not.toBe(0);
+            expect(deploys).toHaveLength(0);
+            expect(previewDatabases(account)).toStrictEqual([]);
+            expect(account.locks.get(`${APP_ID}/42`)?.owner).toBe("crashed");
+        });
+
         it("refuses to deploy while another run holds the preview, and releases the hold when done", async () => {
             expect.assertions(5);
 
@@ -1257,14 +1459,14 @@ describe("lunora preview", () => {
             // Done: nothing is held, so a second deploy goes through.
             expect(leaseKeys(account)).toStrictEqual([]);
 
-            registryValues(account).set(`lock/${APP_ID}/42`, JSON.stringify({ at: new Date().toISOString(), token: "someone-else" }));
+            account.locks.set(`${APP_ID}/42`, { expires: Math.floor(Date.now() / 1000) + 600, owner: "someone-else" });
 
             const blocked = await deployWith(account, spawner);
 
             expect(blocked.error).toMatch(/another run is deploying or deleting preview "42"/u);
-            expect(registryValues(account).get(`lock/${APP_ID}/42`)).toContain("someone-else");
+            expect(account.locks.get(`${APP_ID}/42`)?.owner).toBe("someone-else");
 
-            registryValues(account).delete(`lock/${APP_ID}/42`);
+            account.locks.delete(`${APP_ID}/42`);
 
             const again = await deployWith(account, spawner);
 
@@ -1398,7 +1600,7 @@ describe("lunora preview", () => {
 
             expect(result.code).toBe(0);
             expect(account.workers.has("lunora-app-preview-42")).toBe(false);
-            expect(account.d1.size + account.kv.size - 1 + account.r2.size).toBe(0);
+            expect(previewDatabases(account).length + account.kv.size - 1 + account.r2.size).toBe(0);
             expect(registryValues(account).size).toBe(0);
 
             const again = await run(account, "delete");
@@ -1442,12 +1644,55 @@ describe("lunora preview", () => {
             expect(account.workers.has("lunora-app-preview-42")).toBe(false);
         });
 
+        it("removes a resource whose create succeeded but whose confirming record write failed, because the record named it first", async () => {
+            expect.assertions(6);
+
+            const account = fakeAccount();
+            const { deploys, spawner } = wranglerAt(workdir, account.workers);
+            let writes = 0;
+            const flaky = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                if (init?.method === "PUT" && (input as string).includes(encodeURIComponent(`${APP_ID}/42`))) {
+                    writes += 1;
+
+                    // 1: the empty record, 2: the claim on the first resource, 3: its confirmation.
+                    if (writes === 3) {
+                        return new Response("{}", { status: 403 });
+                    }
+                }
+
+                return account.fetch(input, init);
+            }) as typeof globalThis.fetch;
+
+            const failed = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: flaky,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect(failed.code).not.toBe(0);
+            expect(deploys).toHaveLength(0);
+            // Created in the account, but the record only has the claim.
+            expect(previewDatabases(account).length + account.r2.size + account.kv.size - 1).toBeGreaterThan(0);
+
+            const { result } = await run(account, "delete");
+
+            expect(result.code).toBe(0);
+            expect(previewDatabases(account).length + account.r2.size + account.kv.size - 1).toBe(0);
+            expect(registryValues(account).has(`${APP_ID}/42`)).toBe(false);
+        });
+
         it("refuses to delete while another run holds the preview, deleting nothing", async () => {
             expect.assertions(3);
 
             const account = await deployed();
 
-            registryValues(account).set(`lock/${APP_ID}/42`, JSON.stringify({ at: new Date().toISOString(), token: "someone-else" }));
+            account.locks.set(`${APP_ID}/42`, { expires: Math.floor(Date.now() / 1000) + 600, owner: "someone-else" });
 
             const { result } = await run(account, "delete");
 
@@ -1461,7 +1706,7 @@ describe("lunora preview", () => {
 
             const account = await deployed();
 
-            registryValues(account).set(`lock/${APP_ID}/42`, JSON.stringify({ at: "2020-01-01T00:00:00.000Z", token: "crashed" }));
+            account.locks.set(`${APP_ID}/42`, { expires: 1, owner: "crashed" });
 
             const { result } = await run(account, "delete");
 
@@ -1603,7 +1848,7 @@ describe("lunora preview", () => {
 
             expect(result.code).toBe(0);
             expect(account.workers.size).toBe(0);
-            expect(account.d1.size).toBe(0);
+            expect(previewDatabases(account)).toStrictEqual([]);
             expect(account.r2.size).toBe(0);
             // Only the registry namespace is left.
             expect([...account.kv.values()]).toStrictEqual(["lunora-preview-registry"]);

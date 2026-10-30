@@ -807,9 +807,15 @@ in the job controls the account's previews.
 What a preview owns is recorded in the account, in a KV namespace called
 `lunora-preview-registry`, one record per preview, written as soon as each
 resource exists. That way a fresh CI runner can delete it. A `deploy` and a
-`delete` of one preview never overlap, wherever they run: each takes a hold
-(`lock/<app id>/<name>` in the same namespace, lapsing after 30 minutes if the
-run crashes) and the other refuses while it is held. `delete` also refuses to
+`delete` of one preview never overlap, wherever they run: each takes a hold,
+a row in a small D1 database called `lunora-preview-locks` that the preview
+commands create on first use and use for nothing else. The row is inserted
+atomically (a second taker gets a constraint error), a hold older than 30
+minutes is taken over by an update that only one taker can win, and a run lets
+go by deleting its own row. Any other failure while taking the hold refuses the
+run. The record names each resource before it is created and confirms it after,
+so a resource whose confirming write failed is still found and removed by
+`delete`. `delete` also refuses to
 report "no record" while the preview's Worker or a resource under its names is
 still in the account (a record this location has not seen yet, or an app id that
 differs from the one that deployed it), and exits `1` instead. A record is keyed by
