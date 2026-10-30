@@ -52,7 +52,7 @@ type ReceivedOptions = Record<string, unknown> | undefined;
  * the rollback under test actually needs — a state without it falls through to a
  * bare call and every assertion below would pass for the wrong reason.
  */
-const createState = (): { run: (query: string, ...parameters: unknown[]) => unknown; state: unknown } => {
+const createState = (alarms: number[]): { run: (query: string, ...parameters: unknown[]) => unknown; state: unknown } => {
     const database = new DatabaseSync(":memory:");
     const run = (query: string, ...parameters: unknown[]): unknown => {
         const rows = database.prepare(query).all(...(parameters as never[])) as unknown[];
@@ -67,6 +67,9 @@ const createState = (): { run: (query: string, ...parameters: unknown[]) => unkn
             getWebSockets: () => [],
             id: { name: "shard-a" },
             storage: {
+                setAlarm: async (at: number | Date): Promise<void> => {
+                    alarms.push(Number(at));
+                },
                 sql: { exec: run },
                 transaction: async <R>(closure: () => Promise<R>): Promise<R> => {
                     run("BEGIN");
@@ -89,6 +92,14 @@ const createState = (): { run: (query: string, ...parameters: unknown[]) => unkn
 };
 
 interface Harness {
+    /** Instants the shard armed its alarm for. */
+    alarms: number[];
+    /** Ids the scheduler was asked to cancel. */
+    cancelled: string[];
+    /** Operator drop of an outbox entry. */
+    drop: (id: string) => Promise<Response>;
+    /** Make `cancel` throw `error` (or work again, with `undefined`). */
+    failCancel: (error: Error | undefined) => void;
     /** Make the scheduler throw `error` on every call until reset with `setReachable(true)`. */
     failWith: (error: Error) => void;
     /** Hold the next scheduler call: `entered` settles once it is waiting, `release` lets it finish. */
@@ -111,6 +122,7 @@ interface Harness {
     setReachable: (reachable: boolean) => void;
     shard: {
         cached: (mutationId: string) => { value: unknown } | undefined;
+        drop: (id: string) => Promise<Response>;
         handleRpc: (path: string, args: Record<string, unknown>) => Promise<unknown>;
         requeue: (id: string) => Promise<Response>;
         underMutationId: (id: string) => void;
@@ -120,7 +132,10 @@ interface Harness {
 const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => {
     const scheduled: AcceptedJob[] = [];
     const received: ReceivedOptions[] = [];
+    const alarms: number[] = [];
+    const cancelled: string[] = [];
     let failure: Error | undefined;
+    let cancelFailure: Error | undefined;
     let held: { entered: () => void; released: Promise<undefined> } | undefined;
 
     const accept = async (target: unknown, args: unknown, options?: { id?: string }): Promise<string> => {
@@ -150,8 +165,14 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
             (configuration.scheduler ?? true)
                 ? () => {
                       return {
-                          cancel: async (): Promise<{ cancelled: boolean }> => {
-                              return { cancelled: false };
+                          cancel: async (id: string): Promise<{ cancelled: boolean }> => {
+                              if (cancelFailure !== undefined) {
+                                  throw cancelFailure;
+                              }
+
+                              cancelled.push(id);
+
+                              return { cancelled: scheduled.some((job) => job.id === id) };
                           },
                           runAfter: async (_delayMs: number, target: unknown, args: unknown, options?: { id?: string }): Promise<string> =>
                               accept(target, args, options),
@@ -162,7 +183,7 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
                 : undefined,
     });
 
-    const { run, state } = createState();
+    const { run, state } = createState(alarms);
 
     /**
      * The protected surface this suite has to reach. `underMutationId` stands in
@@ -173,6 +194,12 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
     class Probe extends (ShardClass as unknown as new (state: unknown, env: unknown) => Record<string, unknown>) {
         public cached(mutationId: string): { value: unknown } | undefined {
             return (this as unknown as { readIdempotentResult: (id: string) => { value: unknown } | undefined }).readIdempotentResult(mutationId);
+        }
+
+        public drop(id: string): Promise<Response> {
+            return Promise.resolve(
+                (this as unknown as { handleDropOutboxEntry: (args: Record<string, unknown>) => Response | Promise<Response> }).handleDropOutboxEntry({ id }),
+            );
         }
 
         public requeue(id: string): Promise<Response> {
@@ -191,6 +218,12 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
     const shard = new Probe(state, {}) as unknown as Harness["shard"] & { retry: () => Promise<number | undefined> };
 
     return {
+        alarms,
+        cancelled,
+        drop: (id: string) => shard.drop(id),
+        failCancel: (error: Error | undefined) => {
+            cancelFailure = error;
+        },
         failWith: (error: Error) => {
             failure = error;
         },
@@ -395,6 +428,167 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.logs("scheduler:outbox")).toStrictEqual([]);
     });
 
+    it("does not let a stale attempt overwrite the reset of a newer one", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const older = harness.hold();
+
+        harness.makeDue();
+
+        const olderAttempt = harness.retry();
+
+        await older.entered;
+        await harness.shard.requeue(id);
+
+        const newer = harness.hold();
+
+        harness.makeDue();
+
+        const newerAttempt = harness.retry();
+
+        await newer.entered;
+        older.release();
+        await olderAttempt;
+
+        // The older attempt failed after the operator's reset and while a newer attempt was awaiting: it must write nothing.
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 0, id }]);
+
+        newer.release();
+        await newerAttempt;
+    });
+
+    it("cancels at the scheduler when an entry is dropped, in case it already holds the job", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        await harness.drop(id);
+
+        expect(harness.outbox()).toStrictEqual([]);
+        expect(harness.cancelled).toStrictEqual([id]);
+    });
+
+    it("stops handing an entry over when the scheduler cannot be asked to cancel it", async () => {
+        expect.assertions(5);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+        harness.failCancel(new Error("SchedulerDO unreachable"));
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        // The scheduler is down, so the cancel cannot be confirmed: the drop reports that, and the entry must not run anyway.
+        await expect(harness.drop(id)).rejects.toThrow("SchedulerDO unreachable");
+        expect(harness.outbox()).toStrictEqual([{ attempts: 0, dead: 1, id }]);
+
+        harness.setReachable(true);
+        harness.makeDue();
+        await harness.retry();
+
+        expect(harness.scheduled).toStrictEqual([]);
+
+        // Once the scheduler answers, the same drop completes.
+        harness.failCancel(undefined);
+        await harness.drop(id);
+
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("cancels the job when an entry is dropped while its hand-off is still awaiting the scheduler", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const { entered, release } = harness.hold();
+
+        harness.setReachable(true);
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await entered;
+        await harness.drop(id);
+        release();
+        await attempt;
+
+        // The scheduler accepted the call the drop raced: the drop has to take it back out.
+        expect(harness.scheduled.map((job) => job.id)).toContain(id);
+        expect(harness.cancelled.at(-1)).toBe(id);
+    });
+
+    it("does not hand a dropped entry to the scheduler when it was already queued in the same batch", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const [first, second] = harness.outbox().map((entry) => entry.id);
+        const { entered, release } = harness.hold();
+
+        harness.setReachable(true);
+        harness.makeDue();
+
+        const attempt = harness.retry();
+
+        await entered;
+        // The batch snapshot already holds `second`; the operator drops it while `first` awaits.
+        await harness.drop(second ?? "");
+        release();
+        await attempt;
+
+        expect(harness.scheduled.map((job) => job.id)).toStrictEqual([first]);
+    });
+
+    it("arms the alarm for a Retry now even when the in-memory alarm time is stale, and before auditing", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        // An earlier alarm the instance believes is pending, which a failed init may never have delivered.
+        Object.assign(harness.shard, {
+            globalPollArmedAt: 1,
+            recordAudit: () => {
+                throw new Error("audit store unavailable");
+            },
+        });
+        harness.alarms.length = 0;
+
+        await expect(harness.shard.requeue(id)).rejects.toThrow("audit store unavailable");
+
+        expect(harness.alarms.length).toBeGreaterThan(0);
+    });
+
     it("parks an entry the scheduler never accepts, rather than retrying it forever", async () => {
         expect.assertions(4);
 
@@ -495,7 +689,7 @@ describe("emitted shard — the schedule-rate budget on the real dispatch", () =
             },
         });
 
-        const { state } = createState();
+        const { state } = createState([]);
 
         shard = new (ShardClass as unknown as new (state: unknown, env: unknown) => typeof shard)(state, {});
     });

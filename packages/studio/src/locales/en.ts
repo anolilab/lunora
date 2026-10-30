@@ -576,6 +576,7 @@ const MESSAGE_IDS = [
     "Jobs whose mutation committed but that the scheduler has not accepted yet wait here.",
     "First page",
     "Next page",
+    "That job is no longer in the outbox.",
     "No workpools.",
     "pool",
     "Pools",

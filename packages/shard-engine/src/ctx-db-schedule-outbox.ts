@@ -158,6 +158,13 @@ const migrateScheduleOutbox = (sql: SqlExec): void => {
         sql,
         dsql`CREATE INDEX IF NOT EXISTS ${dsql.identifier(`${SCHEDULE_OUTBOX_TABLE}_due`)} ON ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)} (dead, next_attempt_at)`,
     );
+
+    // The admin list pages on (created_at, id), a key that never changes for a row, so a
+    // page seeks here instead of scanning and sorting a table that retry.forever grows.
+    runDrizzle(
+        sql,
+        dsql`CREATE INDEX IF NOT EXISTS ${dsql.identifier(`${SCHEDULE_OUTBOX_TABLE}_age`)} ON ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)} (created_at, id)`,
+    );
 };
 
 /**
@@ -202,6 +209,22 @@ const readDueScheduleOutbox = (sql: SqlExec, nowMs: number, limit: number): Sche
     return rows.map((row) => {
         return { attempts: row.attempts, envelopeJson: row.envelope_json, id: row.id, nextAttemptAt: row.next_attempt_at };
     });
+};
+
+/**
+ * One entry as it stands NOW, if it is still live and due at `nowMs`. A tick reads
+ * its batch up front and then awaits the scheduler once per row, so a row it has
+ * not reached yet may have been dropped, requeued or parked by an operator since;
+ * the attempt re-reads the row it is about to replay instead of trusting the snapshot.
+ */
+const readDueScheduleOutboxEntry = (sql: SqlExec, id: string, nowMs: number): ScheduleOutboxRow | undefined => {
+    const row = runDrizzle<{ attempts: number; envelope_json: string; id: string; next_attempt_at: number }>(
+        sql,
+        dsql`SELECT id, envelope_json, attempts, next_attempt_at FROM ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)}
+            WHERE id = ${id} AND dead = 0 AND next_attempt_at <= ${nowMs}`,
+    ).toArray()[0];
+
+    return row === undefined ? undefined : { attempts: row.attempts, envelopeJson: row.envelope_json, id: row.id, nextAttemptAt: row.next_attempt_at };
 };
 
 /** Record a failed attempt and push the entry out to `nextAttemptAt`. */
@@ -271,63 +294,71 @@ const describeTarget = (target: unknown): string | undefined => {
     return typeof target["className"] === "string" ? target["className"] : undefined;
 };
 
-const toEntry = (row: {
+/** One list row: the columns plus the three envelope fields {@link toEntry} needs, extracted in SQL. */
+interface ScheduleOutboxListRow {
     attempts: number;
     created_at: number;
     dead: number;
-    envelope_json: string;
+    forever: number;
     id: string;
     next_attempt_at: number;
-}): ScheduleOutboxEntry => {
-    let envelope: Record<string, unknown> | undefined;
+    target: string | number | null;
+    target_type: string | null;
+    when_ts: number | null;
+}
 
-    try {
-        const parsed: unknown = JSON.parse(row.envelope_json);
+const toEntry = (row: ScheduleOutboxListRow): ScheduleOutboxEntry => {
+    let target: unknown;
 
-        envelope = isPlainObject(parsed) ? parsed : undefined;
-    } catch {
-        // An unreadable envelope is still an entry the operator has to be able to see and drop.
-        envelope = undefined;
+    if (row.target_type === "text") {
+        target = row.target;
+    } else if (row.target_type === "object" && typeof row.target === "string") {
+        try {
+            target = JSON.parse(row.target);
+        } catch {
+            target = undefined;
+        }
     }
-
-    const options = envelope?.["options"];
-    const retry = isPlainObject(options) ? options["retry"] : undefined;
-    const when = envelope?.["when"];
 
     return {
         attempts: row.attempts,
         createdAt: row.created_at,
-        forever: isPlainObject(retry) && retry["forever"] === true,
+        forever: row.forever === 1,
         id: row.id,
         nextAttemptAt: row.next_attempt_at,
         parked: row.dead === 1,
-        target: describeTarget(envelope?.["target"]),
-        when: typeof when === "number" ? when : undefined,
+        target: describeTarget(target),
+        when: typeof row.when_ts === "number" ? row.when_ts : undefined,
     };
 };
 
-/** `<dead>:<created_at>:<id>`. The id is the remainder, since a caller-supplied job id may contain `:`. */
-const SCHEDULE_OUTBOX_CURSOR = /^([01]):(\d+(?:\.\d+)?):(.+)$/su;
+/** `<created_at>:<id>`. The id is the remainder, since a caller-supplied job id may contain `:`. */
+const SCHEDULE_OUTBOX_CURSOR = /^(\d+(?:\.\d+)?):(.+)$/su;
 
 /** Where a page of {@link readScheduleOutbox} ended. */
-const toScheduleOutboxCursor = (entry: ScheduleOutboxEntry): string => `${entry.parked ? "1" : "0"}:${String(entry.createdAt)}:${entry.id}`;
+const toScheduleOutboxCursor = (entry: ScheduleOutboxEntry): string => `${String(entry.createdAt)}:${entry.id}`;
 
 /** `undefined` for a cursor this module did not issue. */
-const parseScheduleOutboxCursor = (cursor: string): { createdAt: number; dead: number; id: string } | undefined => {
+const parseScheduleOutboxCursor = (cursor: string): { createdAt: number; id: string } | undefined => {
     const match = SCHEDULE_OUTBOX_CURSOR.exec(cursor);
 
     if (match === null) {
         return undefined;
     }
 
-    return { createdAt: Number(match[2]), dead: Number(match[1]), id: match[3] as string };
+    return { createdAt: Number(match[1]), id: match[2] as string };
 };
 
 /**
- * One page of entries, live first and then parked, each oldest first: what an
- * operator needs to find a job that was promised and has not reached the
- * scheduler. Keyset-paged on that order, so parked entries stay reachable behind
- * any number of live ones and a page does not shift as the retry loop deletes rows.
+ * One page of entries, oldest first, live and parked alike. Keyset-paged on
+ * `(created_at, id)`, which a row keeps for its whole life: parking, requeueing or
+ * deleting an entry between two page reads can neither hide a row nor repeat one,
+ * and every parked entry stays reachable behind any number of live ones.
+ *
+ * The envelope is never read whole: `target`, `when` and `retry.forever` are
+ * extracted in SQL, so a page does not hold every stored `args` blob in memory.
+ * An unreadable envelope still yields an entry, since the operator has to be
+ * able to see and drop it.
  */
 const readScheduleOutbox = (sql: SqlExec, limit: number, cursor?: string): { entries: ScheduleOutboxEntry[]; nextCursor: string | undefined } => {
     const after = cursor === undefined ? undefined : parseScheduleOutboxCursor(cursor);
@@ -336,15 +367,19 @@ const readScheduleOutbox = (sql: SqlExec, limit: number, cursor?: string): { ent
         throw new LunoraError("BAD_REQUEST", `getScheduleOutbox: malformed cursor ${JSON.stringify(cursor)}`);
     }
 
-    const where =
-        after === undefined
-            ? dsql``
-            : dsql`WHERE dead > ${after.dead} OR (dead = ${after.dead} AND (created_at > ${after.createdAt} OR (created_at = ${after.createdAt} AND id > ${after.id})))`;
+    const where = after === undefined ? dsql`` : dsql`WHERE (created_at, id) > (${after.createdAt}, ${after.id})`;
     // One row past the page says whether another page exists without a COUNT.
-    const rows = runDrizzle<{ attempts: number; created_at: number; dead: number; envelope_json: string; id: string; next_attempt_at: number }>(
+    // NULL for malformed JSON, and every JSON function maps NULL to NULL instead of raising.
+    const env = dsql`(CASE WHEN json_valid(envelope_json) THEN envelope_json END)`;
+    const rows = runDrizzle<ScheduleOutboxListRow>(
         sql,
-        dsql`SELECT id, envelope_json, attempts, next_attempt_at, created_at, dead FROM ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)}
-            ${where} ORDER BY dead ASC, created_at ASC, id ASC LIMIT ${limit + 1}`,
+        dsql`SELECT id, attempts, next_attempt_at, created_at, dead,
+            CASE WHEN json_type(${env}) = 'object' THEN json_type(${env}, '$.target') END AS target_type,
+            CASE WHEN json_type(${env}) = 'object' AND json_type(${env}, '$.target') IN ('text', 'object') THEN json_extract(${env}, '$.target') END AS target,
+            CASE WHEN json_type(${env}) = 'object' AND json_type(${env}, '$.when') IN ('integer', 'real') THEN json_extract(${env}, '$.when') END AS when_ts,
+            CASE WHEN json_type(${env}) = 'object' AND json_type(${env}, '$.options.retry.forever') = 'true' THEN 1 ELSE 0 END AS forever
+            FROM ${dsql.identifier(SCHEDULE_OUTBOX_TABLE)}
+            ${where} ORDER BY created_at ASC, id ASC LIMIT ${limit + 1}`,
     ).toArray();
     const entries = rows.slice(0, limit).map((row) => toEntry(row));
     const last = entries.at(-1);
@@ -388,10 +423,12 @@ export {
     deferScheduleOutbox,
     dropScheduleOutbox,
     forgetScheduleOutbox,
+    hasScheduleOutboxEntry,
     migrateScheduleOutbox,
     parkScheduleOutbox,
     probeScheduleOutbox,
     readDueScheduleOutbox,
+    readDueScheduleOutboxEntry,
     readScheduleOutbox,
     recordScheduleOutbox,
     requeueScheduleOutbox,

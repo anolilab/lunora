@@ -40,15 +40,23 @@ export const ScheduleOutboxJobs = ({ initialShardKey }: ScheduleOutboxJobsProps 
     const t = useT();
     const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
 
-    // A cursor belongs to the shard it was read from; switching shards starts over on page one.
+    // A cursor belongs to the shard it was read from. Adjusting state during render drops the
+    // stored one the moment the shard changes, so returning to a shard opens on page one.
     const [page, setPage] = useState<{ cursor: string | undefined; shardKey: string }>({ cursor: undefined, shardKey: queryShardKey });
+
+    if (page.shardKey !== queryShardKey) {
+        setPage({ cursor: undefined, shardKey: queryShardKey });
+    }
+
     const cursor = page.shardKey === queryShardKey ? page.cursor : undefined;
+    // While the debounce settles the input names a shard the rows on screen do not belong to.
+    const settling = shardKey.trim() !== queryShardKey;
 
     const { data, error, poll, refetch } = useAdminQuery<ScheduleOutboxResult>(ADMIN_FUNCTIONS.getScheduleOutbox, cursor === undefined ? {} : { cursor }, {
         shardKey: queryShardKey,
     });
-    const entries = data?.entries;
-    const nextCursor = data?.nextCursor;
+    const entries = settling ? undefined : data?.entries;
+    const nextCursor = settling ? undefined : data?.nextCursor;
 
     const [actionError, setActionError] = useState<string | undefined>(undefined);
     const shownError = error ?? actionError;
@@ -59,7 +67,13 @@ export const ScheduleOutboxJobs = ({ initialShardKey }: ScheduleOutboxJobsProps 
         setActionError(undefined);
 
         try {
-            await client.query(reference, { id }, callOptions(queryShardKey));
+            const reply = (await client.query(reference, { id }, callOptions(queryShardKey))) as { retried?: boolean };
+
+            // A drop of an entry that is already gone is what was asked for; a retry is not.
+            if (reply.retried === false) {
+                setActionError(t("That job is no longer in the outbox."));
+            }
+
             refetch();
         } catch (error_) {
             setActionError(errorMessage(error_));
@@ -76,7 +90,7 @@ export const ScheduleOutboxJobs = ({ initialShardKey }: ScheduleOutboxJobsProps 
                 </p>
             )}
 
-            {entries?.length === 0 && (
+            {entries?.length === 0 && cursor === undefined && (
                 <EmptyState
                     description={t("Jobs whose mutation committed but that the scheduler has not accepted yet wait here.")}
                     icon={

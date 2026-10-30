@@ -4428,6 +4428,12 @@ const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, re
 const handleReplicaControl: (host: ReplicaOwnerHost, request: Request) => Promise<Response>;
 ```
 
+### `hasScheduleOutboxEntry` (const)
+
+```ts
+const hasScheduleOutboxEntry: (sql: SqlExec, id: string) => boolean;
+```
+
 ### `hasTrigger` (const)
 
 ```ts
@@ -4994,6 +5000,12 @@ const readDeployInfo: (rawEnv: unknown) => DeployInfo;
 
 ```ts
 const readDueScheduleOutbox: (sql: SqlExec, nowMs: number, limit: number) => ScheduleOutboxRow[];
+```
+
+### `readDueScheduleOutboxEntry` (const)
+
+```ts
+const readDueScheduleOutboxEntry: (sql: SqlExec, id: string, nowMs: number) => ScheduleOutboxRow | undefined;
 ```
 
 ### `readExternalSourceBaseline` (const)

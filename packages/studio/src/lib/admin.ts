@@ -772,7 +772,7 @@ export interface ScheduleOutboxEntry {
     when: number | undefined;
 }
 
-/** Result of `getScheduleOutbox` — one page, live entries first, then parked, each oldest first. */
+/** Result of `getScheduleOutbox` — one page, oldest first, live and parked alike. */
 export interface ScheduleOutboxResult {
     entries: ScheduleOutboxEntry[];
     /** Pass back as `cursor` for the next page; absent on the last one. */

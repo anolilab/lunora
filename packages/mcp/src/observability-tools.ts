@@ -193,7 +193,7 @@ const SCHEDULE_OUTBOX_OUTPUT_SCHEMA: ToolInputSchema = {
     properties: {
         entries: {
             description:
-                "Deferred schedules the scheduler has not accepted, live first then parked: { id, target, attempts, parked, forever, nextAttemptAt, createdAt, when }.",
+                "Deferred schedules the scheduler has not accepted, oldest first, live and parked alike: { id, target, attempts, parked, forever, nextAttemptAt, createdAt, when }.",
             type: "array",
         },
         nextCursor: { description: "Pass back as `cursor` to read the next page. Absent on the last page.", type: "string" },

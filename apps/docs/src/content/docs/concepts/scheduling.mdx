@@ -130,7 +130,12 @@ scheduler, retrying or parked. **Retry now** puts an entry back on the ladder
 from its first rung, which is how a parked job gets a second chance once the
 cause is fixed. **Drop** removes it for good, which is the only way to cancel a
 job the scheduler has not accepted: `ctx.scheduler.cancel(id)` reaches only
-jobs the `SchedulerDO` holds. Both are admin RPCs (`__lunora_admin__:retryOutboxEntry`
+jobs the `SchedulerDO` holds. A drop also asks the scheduler to cancel the id,
+because the hand-off may have landed without the shard learning of it; if a
+hand-off is in flight when you drop, the job is cancelled as soon as it lands.
+If the scheduler cannot be reached to confirm the cancel, the entry is parked so it is
+never handed over, and the drop reports the error; drop it again once the scheduler answers.
+Entries are listed oldest first, parked or not. Both are admin RPCs (`__lunora_admin__:retryOutboxEntry`
 and `dropOutboxEntry`), are recorded in the audit log, and act on one
 shard at a time. The MCP server's `lunora_get_schedule_outbox` tool reads the
 same list.

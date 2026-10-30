@@ -1391,6 +1391,31 @@ describe("shardDO admin introspection", () => {
             expect(response.ok).toBe(false);
         });
 
+        it("admin-gates the outbox read, retry and drop (403 without the bearer)", async () => {
+            expect.assertions(4);
+
+            seed();
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            for (const [name, args] of [
+                [ADMIN_FUNCTIONS.getScheduleOutbox, {}],
+                [ADMIN_FUNCTIONS.retryOutboxEntry, { id: "job-parked" }],
+                [ADMIN_FUNCTIONS.dropOutboxEntry, { id: "job-live" }],
+            ] as const) {
+                // eslint-disable-next-line no-await-in-loop -- three independent refusals, order is irrelevant
+                const response = await shard.fetch(tokenAdminRequest(name, args));
+
+                expect(response.status).toBe(403);
+            }
+
+            // Nothing was dropped or requeued by the refused calls.
+            await expect(readOutbox(shard)).resolves.toMatchObject([
+                { id: "job-live", parked: false },
+                { attempts: 8, id: "job-parked", parked: true },
+            ]);
+        });
+
         it("refuses a drop without an id", async () => {
             expect.assertions(1);
 
