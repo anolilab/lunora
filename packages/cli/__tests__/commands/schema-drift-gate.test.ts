@@ -654,6 +654,30 @@ describe("schema-drift gate", () => {
             expect(followUp.code).toBe(0);
         });
 
+        it("never lets conforming rows clear a decision that also holds a change rows cannot decide, unless --update-schema-baseline is passed", async () => {
+            expect.assertions(3);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            const baselineBefore = readFileSync(join(workdir, SNAPSHOT_FILE), "utf8");
+
+            introduceBreakingDrift();
+            dropIndex();
+
+            const { errors, logger } = silentLogger();
+            const result = await runDeployCommand({
+                ...TARGET,
+                cwd: workdir,
+                fetchImpl: deployedWorker([{ doc: { _id: "u1", name: 7 }, table: "users" }]).fetchImpl,
+                logger,
+                spawner: createRecordingSpawner().spawner,
+            });
+
+            expect(result.schemaDrift?.blocked).toBe(true);
+            expect(errors.join("\n")).toContain("by_channel");
+            expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).toBe(baselineBefore);
+        });
+
         it("verify surfaces breaking drift as an error without writing the baseline", async () => {
             expect.assertions(2);
 

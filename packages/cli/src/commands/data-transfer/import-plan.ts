@@ -42,6 +42,10 @@ const overwrites = (mode: ImportMode): boolean => mode === "upsert" || mode === 
 /** The source file's rows per table, and the `_id`s they carry. */
 type SourceIndex = Map<string, { duplicates: number; ids: Set<string>; rows: number; unkeyed: number }>;
 
+/** `value` as a plain object, or `undefined` for anything else (including an array). */
+const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+
 /** Record one wire row (`{"table":…,"doc":…}`) the import will send. */
 const recordSourceRow = (index: SourceIndex, wireRow: string): void => {
     // The line was built by the row transformer, but a malformed one must not take the plan down with a bare SyntaxError.
@@ -53,7 +57,9 @@ const recordSourceRow = (index: SourceIndex, wireRow: string): void => {
         return;
     }
 
-    const { doc, table } = (typeof parsed === "object" && parsed !== null ? parsed : {}) as { doc?: { _id?: unknown }; table?: unknown };
+    const envelope = asRecord(parsed);
+    const table = envelope?.["table"];
+    const id = asRecord(envelope?.["doc"])?.["_id"];
 
     if (typeof table !== "string") {
         return;
@@ -68,13 +74,13 @@ const recordSourceRow = (index: SourceIndex, wireRow: string): void => {
 
     entry.rows += 1;
 
-    if (typeof doc?._id === "string") {
+    if (typeof id === "string") {
         // A later copy of an `_id` the file already carried overwrites the first (or is a conflict under `append`); it adds nothing.
-        if (entry.ids.has(doc._id)) {
+        if (entry.ids.has(id)) {
             entry.duplicates += 1;
         }
 
-        entry.ids.add(doc._id);
+        entry.ids.add(id);
     } else {
         entry.unkeyed += 1;
     }
