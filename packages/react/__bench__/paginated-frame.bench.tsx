@@ -77,7 +77,16 @@ await act(async () => {
     );
 });
 
+// Bounded by the page count: a feed that stops advancing fails the setup loudly instead of hanging the bench run.
+let passes = 0;
+
 while ((feed.current?.loaded ?? 0) < ITEMS.length) {
+    if (passes >= PAGE_COUNT) {
+        throw new Error(`Feed stalled at ${String(feed.current?.loaded ?? 0)} of ${String(ITEMS.length)} rows.`);
+    }
+
+    passes += 1;
+
     // eslint-disable-next-line no-await-in-loop -- each page must land before the next loadMore reads its cursor
     await act(async () => {
         feed.current?.loadMore(NUM_ITEMS);
