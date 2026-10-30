@@ -145,8 +145,8 @@ interface DefinePresenceOptions {
 
     /**
      * Upper bound on SESSION ROWS `listPresent` reads per call — one row per
-     * `(roomId, sessionId)`, so one per open tab, NOT one per person. The read
-     * is newest-first over the `(roomId, lastSeen)` index, so the rows kept are
+     * `(tenantId, roomId, sessionId)`, so one per open tab, NOT one per person. The read
+     * is newest-first over the `(tenantId, roomId, lastSeen)` index, so the rows kept are
      * always the freshest heartbeats and a room with more sessions than this
      * has its stalest ones truncated.
      *
@@ -363,7 +363,7 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
         const cutoff = Date.now() - ttlMs;
         const tenantId = tenantOf(await context.auth.getIdentity());
 
-        // Bounded newest-first read over the `(roomId, lastSeen)` index: cost
+        // Bounded newest-first read over the `(tenantId, roomId, lastSeen)` index: cost
         // scales with `maxSessions`, not with however many rows the room has
         // ever accumulated — this query re-runs for every subscriber on every
         // heartbeat, so an unbounded `.collect()` here is the hot path. The cap
