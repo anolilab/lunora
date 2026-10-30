@@ -594,6 +594,7 @@ interface ImportError {
 ```ts
 interface ImportShardResult {
     conflicts: number;
+    deleted?: number;
     errors: ImportError[];
     inserted: Record<string, number>;
     replaced?: number;
@@ -1695,7 +1696,19 @@ const MESSAGE_IDS: readonly [
     "Couldn't read the columns of {table}: {message}",
     "Import stopped after {rows} rows: {message}. The counts below cover completed chunks only. The chunk from line {line} may have written rows: check the table for rows from line {line} onward before importing again, or delete the written rows first and then import the whole file.",
     "Import stopped after {rows} rows: {message}. The counts below cover those rows. Rows from line {line} onward were not sent: do not import the whole file again, import from that line onward, or delete the written rows first and then import the whole file.",
-    "Inserted {inserted}, replaced {replaced}, {conflicts} conflicts, {errors} errors.",
+    "Inserted {inserted}, replaced {replaced}, deleted {deleted}, {conflicts} conflicts, {errors} errors.",
+    "Import mode",
+    "Append: rows whose _id already exists are left unchanged and counted as conflicts",
+    "Replace: overwrite, then delete this shard's rows of the file's tables that the file lacks",
+    "Require empty: refuse unless the file's tables hold no rows in this shard",
+    "Show plan",
+    "Import plan",
+    "Import (overwrites rows and may delete rows)?",
+    "This shard cannot delete rows. Nothing was sent. Update the app and import again.",
+    "Nothing was sent: --mode require-empty needs the file's tables to hold no rows, and {table} already holds {count}.",
+    "Nothing was written, because some deletes would be refused. Fix the rows listed below and import again.",
+    "Deleting {count} stored rows the file lacks…",
+    "Stopped while deleting the rows the file lacks. Every file row is written; import again to finish the deletes.",
     "Overwrite rows whose _id already exists (otherwise they are left unchanged and counted as conflicts)",
     "This shard cannot overwrite existing rows. Nothing was sent. Update the app and import again.",
     "Interactive OpenAPI reference and copy-paste snippets for your functions.",
