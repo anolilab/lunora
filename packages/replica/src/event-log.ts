@@ -172,6 +172,32 @@ export class EventLog {
         return this.#entries.slice(this.#headOffset);
     }
 
+    /**
+     * Index in `#entries` of the first live entry with `seq >= seq`, or `-1`.
+     * A binary search: every entry takes the next `#nextSeq`, so the backing
+     * array is sorted by `seq`, and a tail read on a long log must not cost
+     * the whole log.
+     */
+    #firstAtOrAfter(seq: number): number {
+        const entries = this.#entries;
+        let low = this.#headOffset;
+        let high = entries.length;
+
+        while (low < high) {
+            const middle = Math.floor((low + high) / 2);
+
+            if ((entries[middle] as EventLogEntry).seq < seq) {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+
+        // Re-checked rather than trusted: a `NaN` target fails every comparison
+        // and would otherwise land on the first entry.
+        return low < entries.length && (entries[low] as EventLogEntry).seq >= seq ? low : -1;
+    }
+
     // ── Mutators ──────────────────────────────────────────────────────
 
     /**
@@ -317,8 +343,28 @@ export class EventLog {
      * Runs `#enforceCap()` after restoring so a snapshot captured under a
      * different (or no) `maxEntries` can never leave this log over its
      * configured capacity.
+     * @throws RangeError when `snapshot.entries` is not in strictly ascending
+     * `seq` order, or `snapshot.nextSeq` is not above the last entry's `seq`;
+     * the tail reads binary-search over a log whose appends stay ascending.
      */
     public load(snapshot: EventLogSnapshot): void {
+        // `<=` is false for NaN, so a non-integer seq is rejected up front rather than by the order check.
+        for (const [index, entry] of snapshot.entries.entries()) {
+            if (!Number.isSafeInteger(entry.seq)) {
+                throw new RangeError("EventLog snapshot entry seq must be a safe integer");
+            }
+
+            if (index > 0 && entry.seq <= (snapshot.entries[index - 1] as EventLogEntry).seq) {
+                throw new RangeError("EventLog snapshot entries must be in strictly ascending seq order");
+            }
+        }
+
+        const last = snapshot.entries.at(-1);
+
+        if (!Number.isSafeInteger(snapshot.nextSeq) || (last !== undefined && snapshot.nextSeq <= last.seq)) {
+            throw new RangeError("EventLog snapshot nextSeq must be above the last entry seq");
+        }
+
         this.#entries = [...snapshot.entries];
         this.#headOffset = 0;
         this.#nextSeq = snapshot.nextSeq;
@@ -333,15 +379,13 @@ export class EventLog {
      * Useful for catch-up: "give me everything since my last watermark".
      */
     public getSince(sinceSeq: number): ReadonlyArray<EventLogEntry> {
-        const live = this.#liveEntries();
-
         if (sinceSeq <= 0) {
-            return live;
+            return this.#liveEntries();
         }
 
-        const first = live.findIndex((entry) => entry.seq >= sinceSeq);
+        const first = this.#firstAtOrAfter(sinceSeq);
 
-        return first === -1 ? [] : live.slice(first);
+        return first === -1 ? [] : this.#entries.slice(first);
     }
 
     /**
@@ -359,14 +403,10 @@ export class EventLog {
             throw new RangeError("limit must be a positive safe integer");
         }
 
-        // Locate the first live entry at/after `fromSeq` by scanning the backing
-        // array from `#headOffset` — never materialize the whole retained log
-        // (an uncapped log would make each page O(total history)); copy only the
-        // requested page. The `index >= #headOffset` guard skips already-evicted
-        // entries still awaiting compaction.
+        // Never materialize the whole retained log (an uncapped log would make
+        // each page O(total history)); copy only the requested page.
         const entries = this.#entries;
-        const start = this.#headOffset;
-        const first = entries.findIndex((entry, index) => index >= start && entry.seq >= fromSeq);
+        const first = this.#firstAtOrAfter(fromSeq);
 
         if (first === -1) {
             return { entries: [], hasMore: false };
@@ -446,10 +486,9 @@ export class EventLog {
             throw new RangeError("floorSeq must be a non-negative safe integer");
         }
 
-        const live = this.#liveEntries();
-        const cutoff = live.findIndex((entry) => entry.seq >= floorSeq);
+        const cutoff = this.#firstAtOrAfter(floorSeq);
 
-        this.#entries = cutoff === -1 ? [] : live.slice(cutoff);
+        this.#entries = cutoff === -1 ? [] : this.#entries.slice(cutoff);
         this.#headOffset = 0;
     }
 

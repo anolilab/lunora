@@ -20,6 +20,21 @@ describe("memory store", () => {
 
         expect(store.get("k")).toBeUndefined();
     });
+
+    it("sweeps an expired entry written behind a NaN timestamp", async () => {
+        expect.assertions(2);
+
+        const store = createMemoryStore();
+
+        await store.set("a", { ts: 100, value: 1 });
+        await store.set("nan", { ts: Number.NaN, value: 1 });
+        await store.set("old", { ts: 0, value: 1 });
+
+        await store.sweep?.(50, 32);
+
+        expect(store.get("old")).toBeUndefined();
+        expect(store.get("a")).toBeDefined();
+    });
 });
 
 describe("sql store (real node:sqlite)", () => {

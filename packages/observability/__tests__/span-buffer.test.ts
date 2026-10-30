@@ -52,6 +52,35 @@ describe("spanBuffer", () => {
         expect(buffer.dropped).toBe(0);
     });
 
+    it("answers hasTrace for exactly the traces still buffered", () => {
+        expect.assertions(5);
+
+        const buffer = new SpanBuffer(3);
+
+        // The fourth push evicts a1: trace `a` still has a2 buffered.
+        for (const [spanId, traceId] of [
+            ["a1", "a"],
+            ["a2", "a"],
+            ["b1", "b"],
+            ["c1", "c"],
+        ] as const) {
+            buffer.push(span({ spanId, traceId }));
+        }
+
+        expect(buffer.hasTrace("a")).toBe(true);
+
+        // Evicts a2, the last of trace `a`.
+        buffer.push(span({ spanId: "c2", traceId: "c" }));
+
+        expect(buffer.hasTrace("a")).toBe(false);
+        expect(buffer.hasTrace("b")).toBe(true);
+        expect(buffer.hasTrace("c")).toBe(true);
+
+        buffer.clear();
+
+        expect(buffer.hasTrace("c")).toBe(false);
+    });
+
     it("empties on clear", () => {
         expect.assertions(2);
 
@@ -64,6 +93,21 @@ describe("spanBuffer", () => {
         buffer.clear();
 
         expect(buffer.size).toBe(0);
+    });
+
+    it("keeps trace membership consistent when a retained span is edited", () => {
+        expect.assertions(3);
+
+        const buffer = new SpanBuffer(1);
+        const first = span({ spanId: "a", traceId: "t1" });
+
+        buffer.push(first);
+        first.traceId = "t2";
+        buffer.push(span({ spanId: "b", traceId: "t3" }));
+
+        expect(buffer.hasTrace("t1")).toBe(false);
+        expect(buffer.hasTrace("t2")).toBe(false);
+        expect(buffer.hasTrace("t3")).toBe(true);
     });
 });
 
