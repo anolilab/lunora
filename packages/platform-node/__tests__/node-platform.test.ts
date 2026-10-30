@@ -258,6 +258,35 @@ describe("createNodePlatform", () => {
             expect(new URL(request.url).pathname).toBe("/rpc");
         });
 
+        it("gives every cron tick its own idempotency key so the shard runs each one", async () => {
+            expect.assertions(2);
+
+            const keys: (null | string)[] = [];
+            let secondTick!: () => void;
+            const reached = new Promise<void>((resolve) => {
+                secondTick = resolve;
+            });
+
+            using platform = createNodePlatform({
+                dispatch: { adminToken: "token" },
+                onFetch: (request) => {
+                    keys.push(request.headers.get("x-lunora-mutation-id"));
+
+                    if (keys.length === 2) {
+                        secondTick();
+                    }
+
+                    return new Response("{}");
+                },
+            });
+
+            await platform.scheduler.cron?.("* * * * * *", "jobs:tick");
+            await reached;
+
+            expect(keys).toHaveLength(2);
+            expect(new Set(keys).size).toBe(2);
+        });
+
         it("leaves delivery to an embedder's onDispatch and does not also dispatch the job", async () => {
             expect.assertions(2);
 

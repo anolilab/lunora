@@ -621,7 +621,8 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                 try {
                     await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, {
                         attempts: 0,
-                        id: row.key,
+                        // Per tick: a shard dedups replays on this id, so a constant one would run only the first tick of each day.
+                        id: `${row.key}:${String(nextAt)}`,
                         scheduledFor: nextAt,
                     });
                 } catch {
