@@ -76,7 +76,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # When a schema change tightens a table, the drift gate reads that table's
       # stored rows from this worker and lets the change ship if every row fits.
-      # Unset (a first deploy), the gate blocks as before.
+      # Unset (a first deploy), the gate blocks as before. A *.workers.dev URL is
+      # only trusted when the project is linked and .lunora/ is not committed, so
+      # CI has no link: there the gate stays blocked, and a tightening needs a
+      # migration or --allow-schema-drift. A custom domain on a declared route works.
       - run: pnpm exec lunora deploy --migrate-url "\${{ secrets.LUNORA_DEPLOY_URL }}"
         env:
           LUNORA_ADMIN_TOKEN: \${{ secrets.LUNORA_ADMIN_TOKEN }}
@@ -156,20 +159,33 @@ const ORIGINAL_PNPM_GITLAB = `stages:
 # (below) requires it — run \`pnpm install\` locally and commit the lockfile
 # before pushing, or the first pipeline fails.
 #
-# Set these as masked CI/CD variables (Settings → CI/CD → Variables):
-#   CLOUDFLARE_API_TOKEN   — an API token with Workers Scripts, D1, Workers KV
-#                            Storage and Workers R2 Storage: Edit (previews make
-#                            their own D1, KV and R2)
+# Set these as CI/CD variables (Settings → CI/CD → Variables), each Masked AND
+# Protected, with Environment scope "production":
+#   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
 #   LUNORA_ADMIN_TOKEN     — the production worker's admin token
+# Protected variables reach only pipelines on protected branches and tags, so a
+# merge-request pipeline from a feature branch, which runs the project's own
+# code, gets none of them. Keep your default branch protected (it is by default).
+# The "production" scope reaches only jobs that declare environment: production,
+# which is the deploy job alone; the check job below uses none of these.
+#
+# Previews run in merge-request pipelines, so they need credentials of their own.
+# Set these two again, Masked but NOT Protected, with Environment scope "preview/*"
+# (only jobs that declare a preview/* environment get them):
+#   CLOUDFLARE_API_TOKEN   — a separate token: Workers Scripts, D1, Workers KV
+#                            Storage and Workers R2 Storage: Edit (previews make
+#                            their own D1, KV and R2). Never the production token.
+#   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_PREVIEW_SECRET_SEED — optional: any long random string; previews then
 #                            keep their minted secrets across pushes. The preview
-#                            job builds this repository's own pull requests with
-#                            CLOUDFLARE_API_TOKEN already in its environment, and
-#                            that token can redeploy any preview with any secrets,
-#                            so the seed adds no access. Never run previews for
-#                            untrusted pull requests; forks get no secrets here.
+#                            jobs run only for merge requests from this project
+#                            (never forks) and already hold the preview token, which
+#                            can redeploy any preview with any secrets, so the seed
+#                            adds no access. Anyone who can push a branch here can
+#                            run code with it: never run previews for untrusted
+#                            merge requests.
 #
 # Previews are recorded under "lunora.appId" in package.json, which the first
 # local \`lunora preview deploy\` writes. Commit it: the jobs below find a
@@ -184,12 +200,17 @@ const ORIGINAL_PNPM_GITLAB = `stages:
 # Production deploy on the default branch.
 deploy:
   extends: .lunora_base
+  environment:
+    name: production
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   script:
     # When a schema change tightens a table, the drift gate reads that table's
     # stored rows from this worker and lets the change ship if every row fits.
-    # Unset (a first deploy), the gate blocks as before.
+    # Unset (a first deploy), the gate blocks as before. A *.workers.dev URL is
+    # only trusted when the project is linked and .lunora/ is not committed, so
+    # CI has no link: there the gate stays blocked, and a tightening needs a
+    # migration or --allow-schema-drift. A custom domain on a declared route works.
     - pnpm exec lunora deploy --migrate-url "$LUNORA_DEPLOY_URL"
 
 # Every merge request from this project gets an isolated preview: its own
@@ -323,6 +344,31 @@ describe("ci-workflow", () => {
 
         expect(github).toContain("commit your pnpm-lock.yaml");
         expect(gitlab).toContain("commit your pnpm-lock.yaml");
+    });
+
+    it("gitlab keeps production secrets out of merge-request pipelines: protected, production-scoped, deploy job only", () => {
+        expect.assertions(12);
+
+        writeCiWorkflow(workdir, "gitlab", "pnpm");
+
+        const yaml = readFileSync(join(workdir, ".gitlab-ci.yml"), "utf8");
+        const deploy = yaml.slice(yaml.indexOf("\ndeploy:"), yaml.indexOf("\n# Every merge request"));
+        const check = yaml.slice(yaml.indexOf("\ncheck:"));
+
+        expect(yaml).toContain("Masked AND");
+        expect(yaml).toContain("Protected");
+        expect(yaml).toContain('Environment scope "production"');
+        expect(deploy).toContain("environment:\n    name: production");
+        expect(deploy).toContain("$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH");
+        expect(check).not.toContain("environment:");
+        // Previews run in merge-request pipelines, so they take separate credentials scoped to the preview environments.
+        expect(yaml).toContain('Environment scope "preview/*"');
+        expect(yaml).toContain("name: preview/$CI_MERGE_REQUEST_IID");
+        expect(deploy).not.toContain("preview");
+
+        for (const name of ["LUNORA_ADMIN_TOKEN", "LUNORA_DEPLOY_URL", "CLOUDFLARE_API_TOKEN"]) {
+            expect(check).not.toContain(name);
+        }
     });
 
     it("both providers deploy an isolated preview per pull/merge request and delete it when it closes, never a version upload", () => {

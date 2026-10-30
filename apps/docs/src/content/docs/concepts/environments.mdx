@@ -131,7 +131,11 @@ branch is deleted (merging with "delete source branch"), someone stops it under
 Operate > Environments, or after two weeks. A closed merge request that keeps
 its branch waits for the two weeks or a manual stop. Set `CLOUDFLARE_API_TOKEN` (with D1, KV and R2 edit
 rights, since previews make their own) and `CLOUDFLARE_ACCOUNT_ID` as the
-provider's secrets. That token can redeploy any preview with any secrets, and the
+provider's secrets. On GitLab, production's variables are Masked and Protected with
+Environment scope `production`, which merge-request pipelines never receive, so
+set a separate `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` for previews,
+Masked but not Protected, with Environment scope `preview/*`; only the preview
+jobs get them, and never reuse the production token. The preview token can redeploy any preview with any secrets, and the
 preview job holds it (and the optional `LUNORA_PREVIEW_SECRET_SEED` that keeps
 minted secrets stable), so the job runs only for pull requests from the same
 repository and the seed adds no access beyond the token. Do not run previews

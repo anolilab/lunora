@@ -166,7 +166,10 @@ jobs:
 ${githubSetupSteps(pm)}
       # When a schema change tightens a table, the drift gate reads that table's
       # stored rows from this worker and lets the change ship if every row fits.
-      # Unset (a first deploy), the gate blocks as before.
+      # Unset (a first deploy), the gate blocks as before. A *.workers.dev URL is
+      # only trusted when the project is linked and .lunora/ is not committed, so
+      # CI has no link: there the gate stays blocked, and a tightening needs a
+      # migration or --allow-schema-drift. A custom domain on a declared route works.
       - run: ${execLine(manager, ["deploy", "--migrate-url", `"\${{ secrets.LUNORA_DEPLOY_URL }}"`])}
         env:
           LUNORA_ADMIN_TOKEN: \${{ secrets.LUNORA_ADMIN_TOKEN }}
@@ -219,7 +222,7 @@ ${githubSetupSteps(pm)}
 // eslint-disable-next-line no-secrets/no-secrets -- a GitLab predefined-variable reference, not a credential
 const GITLAB_PREVIEW_GROUP = "lunora-preview-$CI_MERGE_REQUEST_IID";
 
-// GitLab injects masked CI/CD variables into the job environment, so wrangler
+// GitLab injects Masked, Protected, production-scoped CI/CD variables into the job environment, so wrangler
 // picks up CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID automatically — no
 // per-step reference needed. ($CI_* are GitLab predefined vars, not JS.)
 const buildGitlabContent = (manager: PackageManager): string => {
@@ -233,20 +236,33 @@ const buildGitlabContent = (manager: PackageManager): string => {
 # (below) requires it — run \`${manager} install\` locally and commit the lockfile
 # before pushing, or the first pipeline fails.
 #
-# Set these as masked CI/CD variables (Settings → CI/CD → Variables):
-#   CLOUDFLARE_API_TOKEN   — an API token with Workers Scripts, D1, Workers KV
-#                            Storage and Workers R2 Storage: Edit (previews make
-#                            their own D1, KV and R2)
+# Set these as CI/CD variables (Settings → CI/CD → Variables), each Masked AND
+# Protected, with Environment scope "production":
+#   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_DEPLOY_URL      — the production worker's URL (after the first deploy)
 #   LUNORA_ADMIN_TOKEN     — the production worker's admin token
+# Protected variables reach only pipelines on protected branches and tags, so a
+# merge-request pipeline from a feature branch, which runs the project's own
+# code, gets none of them. Keep your default branch protected (it is by default).
+# The "production" scope reaches only jobs that declare environment: production,
+# which is the deploy job alone; the check job below uses none of these.
+#
+# Previews run in merge-request pipelines, so they need credentials of their own.
+# Set these two again, Masked but NOT Protected, with Environment scope "preview/*"
+# (only jobs that declare a preview/* environment get them):
+#   CLOUDFLARE_API_TOKEN   — a separate token: Workers Scripts, D1, Workers KV
+#                            Storage and Workers R2 Storage: Edit (previews make
+#                            their own D1, KV and R2). Never the production token.
+#   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
 #   LUNORA_PREVIEW_SECRET_SEED — optional: any long random string; previews then
 #                            keep their minted secrets across pushes. The preview
-#                            job builds this repository's own pull requests with
-#                            CLOUDFLARE_API_TOKEN already in its environment, and
-#                            that token can redeploy any preview with any secrets,
-#                            so the seed adds no access. Never run previews for
-#                            untrusted pull requests; forks get no secrets here.
+#                            jobs run only for merge requests from this project
+#                            (never forks) and already hold the preview token, which
+#                            can redeploy any preview with any secrets, so the seed
+#                            adds no access. Anyone who can push a branch here can
+#                            run code with it: never run previews for untrusted
+#                            merge requests.
 #
 # Previews are recorded under "lunora.appId" in package.json, which the first
 # local \`lunora preview deploy\` writes. Commit it: the jobs below find a
@@ -260,12 +276,17 @@ ${beforeScript}
 # Production deploy on the default branch.
 deploy:
   extends: .lunora_base
+  environment:
+    name: production
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   script:
     # When a schema change tightens a table, the drift gate reads that table's
     # stored rows from this worker and lets the change ship if every row fits.
-    # Unset (a first deploy), the gate blocks as before.
+    # Unset (a first deploy), the gate blocks as before. A *.workers.dev URL is
+    # only trusted when the project is linked and .lunora/ is not committed, so
+    # CI has no link: there the gate stays blocked, and a tightening needs a
+    # migration or --allow-schema-drift. A custom domain on a declared route works.
     - ${execLine(manager, ["deploy", "--migrate-url", '"$LUNORA_DEPLOY_URL"'])}
 
 # Every merge request from this project gets an isolated preview: its own
@@ -325,7 +346,7 @@ const WORKFLOWS: Record<CiProvider, CiWorkflowSpec> = {
     },
     gitlab: {
         file: ".gitlab-ci.yml",
-        secretsHint: "masked CI/CD variables (Settings → CI/CD → Variables)",
+        secretsHint: "CI/CD variables, Masked and Protected, scoped to the production environment (Settings → CI/CD → Variables)",
     },
 };
 

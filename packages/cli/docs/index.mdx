@@ -221,7 +221,7 @@ Additional flags:
 
 - `--add <list>`: add features non-interactively after scaffolding — a comma-separated list of the values in the [`lunora add` table](#lunora-add), each applied with its shipped defaults. Bypasses the interactive picker and its sub-prompts.
 - `--dry-run`: walk every step (prompts and output included) without writing files, installing, or running git.
-- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch, a [`lunora preview deploy <number>`](#lunora-preview) on every pull / merge request, and a `lunora preview delete <number>` once it is closed or merged (a fork's or Dependabot's pull request, and a fork's merge request, gets a `lunora deploy --dry-run` check instead, since it receives no secrets). Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables, and after the first deploy `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN`, which let the production deploy's drift gate read the stored rows.
+- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch, a [`lunora preview deploy <number>`](#lunora-preview) on every pull / merge request, and a `lunora preview delete <number>` once it is closed or merged (a fork's or Dependabot's pull request, and a fork's merge request, gets a `lunora deploy --dry-run` check instead, since it receives no secrets). Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables (on GitLab mark every production one, `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN` included, Masked **and Protected** with Environment scope `production`: protected variables reach only protected branches and tags, so a merge-request pipeline, which runs your project's code, gets none of them, and only the `deploy` job declares `environment: production`). On GitLab, previews need their own `CLOUDFLARE_API_TOKEN` (Workers Scripts, D1, KV and R2 edit; never the production token) and `CLOUDFLARE_ACCOUNT_ID`, Masked but not Protected, with Environment scope `preview/*`, which only the preview jobs receive. After the first deploy set `LUNORA_DEPLOY_URL` and `LUNORA_ADMIN_TOKEN`, which let the production deploy's drift gate read the stored rows. That read only happens for a custom domain on a declared route: a `*.workers.dev` URL needs a project link, and `.lunora/` is not committed, so on `*.workers.dev` a tightening in CI still needs a migration or `--allow-schema-drift`.
 
 ### `lunora add`
 
@@ -1463,6 +1463,19 @@ lunora import ./backup.ndjson --mode upsert  # overwrite rows whose _id already 
 lunora import ./backup.ndjson --mode replace --dry-run   # what a full replace would add, overwrite, delete
 ```
 
+An export file is one `{ table, doc }` row per line, then a last line, the end
+marker `{"end":true,"rows":N}`, whose `N` is the number of rows before it. A
+file or response cut on a row boundary is still valid NDJSON that reads as a
+smaller export, so the marker is what proves it is whole: `lunora export` fails
+(and keeps no file) when the response has no marker or a different count, and
+`lunora import` of an NDJSON file refuses one with no marker, a count that does
+not match the rows it read, or anything after the marker, before it writes a
+row. Files written before the marker existed, and hand-written NDJSON, must end
+with a marker line to import. The `/_lunora/admin/import` endpoint itself takes
+bare rows, and applies the same check when a body does carry a marker. The
+marker is not a row and is never imported. Backup snapshots, `lunora seed`
+output and Studio's shard export end with it too.
+
 `--mode` says what happens to rows the target already holds:
 
 | Mode                                       | A row whose `_id` is stored                                                 | A stored row the file lacks |
@@ -1500,8 +1513,12 @@ was written, never fewer rows than before. Re-running the same command
 converges: the write overwrites what already landed, and the deletes run once
 it is clean. A reader between the two passes sees both old and new rows. The
 plan is a read taken before the write, so `require-empty` and `replace` assume
-nothing else writes those tables meanwhile: stop writes to the target for the
-duration of a restore. The
+nothing else writes those tables meanwhile: **stop all writes to the target for
+the duration of a `replace` import.** The delete step removes the stored row
+that currently holds each planned `_id`, not the version the plan read, so a row
+a client updates between the plan and the delete is deleted with its newer
+contents, and nothing detects it. Stop the app's writers (or take it offline)
+before you run a `replace`, and start them again once it reports clean. The
 worker has to support each mode; an older one is detected before any row is
 sent.
 
