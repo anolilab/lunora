@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { afterBaseRowCommitted, isPostCommitError } from "../src/post-commit-error";
+import { afterBaseRowCommitted, takePostCommitError } from "../src/post-commit-error";
 
-describe(isPostCommitError, () => {
+describe(takePostCommitError, () => {
     it("keeps every row that committed when overlapping writes throw one shared error", async () => {
         expect.assertions(3);
 
@@ -26,8 +26,21 @@ describe(isPostCommitError, () => {
 
         const firstError = await first;
 
-        expect(isPostCommitError(second, "notes", "b")).toBe(true);
-        expect(isPostCommitError(firstError, "notes", "a")).toBe(true);
-        expect(isPostCommitError(firstError, "notes", "c")).toBe(false);
+        expect(takePostCommitError(second, "notes", "b")).toBe(true);
+        expect(takePostCommitError(firstError, "notes", "a")).toBe(true);
+        expect(takePostCommitError(firstError, "notes", "c")).toBe(false);
+    });
+
+    it("answers once per mark, so a reused error does not vouch for a later write of the same row", async () => {
+        expect.assertions(2);
+
+        const shared = new Error("trigger failed");
+        const first = await afterBaseRowCommitted("notes", "x", async () => {
+            throw shared;
+        }).catch((error: unknown) => error);
+
+        expect(takePostCommitError(first, "notes", "x")).toBe(true);
+        // The same object thrown later by a write of "x" that failed BEFORE its row committed carries no new mark.
+        expect(takePostCommitError(shared, "notes", "x")).toBe(false);
     });
 });

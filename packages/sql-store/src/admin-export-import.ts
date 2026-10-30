@@ -16,7 +16,7 @@ import { sql } from "drizzle-orm";
 
 import { runSqlGlobalTableMigrations } from "./ctx-db-global-provisioning";
 import type { SqlDialect } from "./dialect";
-import { isPostCommitError } from "./post-commit-error";
+import { takePostCommitError } from "./post-commit-error";
 import type { SqlCtxExec as SqlContextExec } from "./sql-exec";
 import { decodeGlobalRow, MAX_BOUND_PARAMETERS, queryAll, readRowsPage } from "./sql-exec";
 
@@ -480,7 +480,7 @@ const writeRow = async (
         // A failure after the base row committed leaves it stored: the caller must not read a unique violation from
         // a trigger's or companion's own write as the row's `_id` being taken, nor write the row a second time.
         const committedId = existingId ?? (typeof document["_id"] === "string" ? document["_id"] : undefined);
-        const committed = committedId !== undefined && isPostCommitError(error, table, committedId);
+        const committed = committedId !== undefined && takePostCommitError(error, table, committedId);
 
         return { committed, error: { code: body.code, line, message: body.message, table }, kind: "error" };
     }

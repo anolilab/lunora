@@ -36,11 +36,17 @@ const afterBaseRowCommitted = async <T>(table: string, id: string, work: () => P
     }
 };
 
-/** Whether `error` came out of the post-commit tail of a write to this `id` in `table`. */
-const isPostCommitError = (error: unknown, table: string, id: string): boolean => {
+/**
+ * Whether `error` came out of the post-commit tail of a write to this `id` in `table`, consuming the mark.
+ *
+ * A trigger may throw one shared error object from many writes, so a mark left in place would vouch for a later
+ * write of the same row that failed BEFORE its row committed. Reading it once, right after the write that raised
+ * it, means a mark only ever answers for that write.
+ */
+const takePostCommitError = (error: unknown, table: string, id: string): boolean => {
     const rows = typeof error === "object" && error !== null ? committed.get(error) : undefined;
 
-    return rows?.has(rowKey(table, id)) === true;
+    return rows?.delete(rowKey(table, id)) === true;
 };
 
-export { afterBaseRowCommitted, isPostCommitError };
+export { afterBaseRowCommitted, takePostCommitError };
