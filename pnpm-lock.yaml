@@ -609,6 +609,9 @@ catalogs:
     fake-indexeddb:
       specifier: 6.2.5
       version: 6.2.5
+    fast-check:
+      specifier: 4.10.2
+      version: 4.10.2
     vitest:
       specifier: 4.1.11
       version: 4.1.11
@@ -2837,7 +2840,7 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@types/node':
         specifier: catalog:types
@@ -2879,7 +2882,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       ai:
         specifier: catalog:ai
@@ -2925,7 +2928,7 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -3026,7 +3029,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@visulima/disposable-email-domains':
         specifier: catalog:email
@@ -3397,7 +3400,7 @@ importers:
         specifier: workspace:*
         version: link:../testing
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@types/node':
         specifier: catalog:types
@@ -3436,7 +3439,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -3704,7 +3707,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
     devDependencies:
       '@cloudflare/containers':
@@ -3775,7 +3778,7 @@ importers:
         specifier: workspace:*
         version: link:../search-core
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@types/node':
         specifier: catalog:types
@@ -3894,7 +3897,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -3997,7 +4000,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@openfeature/server-sdk':
         specifier: catalog:flags
@@ -4260,7 +4263,7 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@modelcontextprotocol/sdk':
         specifier: catalog:mcp
@@ -4383,7 +4386,7 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@visulima/redact':
         specifier: catalog:redact
@@ -4724,7 +4727,7 @@ importers:
         specifier: workspace:*
         version: link:../server
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       fflate:
         specifier: catalog:privacy
@@ -4758,7 +4761,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
@@ -4840,6 +4843,9 @@ importers:
       fallow:
         specifier: catalog:lint
         version: 3.34.0
+      fast-check:
+        specifier: catalog:test
+        version: 4.10.2
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -4862,7 +4868,7 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -4990,7 +4996,7 @@ importers:
   packages/replica:
     dependencies:
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@sqlite.org/sqlite-wasm':
         specifier: '*'
@@ -5115,7 +5121,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
@@ -5233,7 +5239,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@visulima/cron-parser':
         specifier: catalog:tooling
@@ -5362,7 +5368,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -5426,7 +5432,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -5487,7 +5493,7 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -5545,7 +5551,7 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -5676,7 +5682,7 @@ importers:
         specifier: workspace:*
         version: link:../react
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@tanstack/react-query':
         specifier: catalog:frontend
@@ -5806,7 +5812,7 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -5870,7 +5876,7 @@ importers:
         specifier: workspace:*
         version: link:../server
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@playwright/test':
         specifier: ^1.61.1
@@ -6014,7 +6020,7 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -6050,12 +6056,15 @@ importers:
 
   packages/wire:
     devDependencies:
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(supports-color@10.2.2)(tinybench@6.1.4)(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))(vitest@4.1.11)
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
       '@visulima/packem':
         specifier: catalog:build
-        version: 4.0.2(1dd7044527b8d97bb3f7a9233d2950f4)
+        version: 4.0.2(4dbbfc66df7ffc321095ccbc0a4fc125)
       esbuild:
         specifier: catalog:build
         version: 0.28.2
@@ -6064,7 +6073,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   packages/workflow:
     dependencies:
@@ -6075,7 +6084,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.5
         version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
@@ -19601,6 +19610,10 @@ packages:
     engines: {node: '>=22'}
     hasBin: true
 
+  fast-check@4.10.2:
+    resolution: {integrity: sha512-iK2f+YrcmoeGqk6fA0ea2bptcu/itMIm4NfEozq6N25+aG6h7s5HZbB/k1aV7b5w5sFLMCbbtRUsTVR+BgC3xw==}
+    engines: {node: '>=12.17.0'}
+
   fast-deep-equal@3.1.3:
     resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
 
@@ -23389,6 +23402,9 @@ packages:
   punycode@2.3.1:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
     engines: {node: '>=6'}
+
+  pure-rand@8.4.2:
+    resolution: {integrity: sha512-vvuOGgcuPJAirlHvuQw1TrOiw7ptaIXXmIbNuiNOY6lNGJJH49PQ1Kj4nd783nPdQhQdicgOjVI2yI/9BD6/Ng==}
 
   pvtsutils@1.3.6:
     resolution: {integrity: sha512-PLgQXQ6H2FWCaeRak8vvk1GW462lMxB5s3Jm673N82zI4vqtVUPuZdffdZbPDFRoU8kAhItWFtPCWiPpp4/EDg==}
@@ -42868,6 +42884,10 @@ snapshots:
       '@fallow-cli/win32-x64-msvc': 3.34.0
       fallow-type-aware: 3.34.0
 
+  fast-check@4.10.2:
+    dependencies:
+      pure-rand: 8.4.2
+
   fast-deep-equal@3.1.3: {}
 
   fast-equals@5.4.0: {}
@@ -47501,6 +47521,8 @@ snapshots:
       once: 1.4.0
 
   punycode@2.3.1: {}
+
+  pure-rand@8.4.2: {}
 
   pvtsutils@1.3.6:
     dependencies:

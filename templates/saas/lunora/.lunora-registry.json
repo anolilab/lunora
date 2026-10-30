@@ -12,7 +12,7 @@
         },
         "saas": {
             "files": {
-                "lunora/identity.ts": "f673b9c94648a12f88e90789cd92d68cd237678b2b5ec777597db363eceae06b",
+                "lunora/identity.ts": "edc458c3bbbbfb369a3ec5f0aa422bf8aed1bb9089221617b5ef767541f5d8e8",
                 "lunora/saas/index.ts": "eb786532165ef9670b9f5381d523751c5a15ce1e16043d7b42140d30f0b33098"
             }
         },
@@ -53,7 +53,7 @@
         },
         "presence": {
             "files": {
-                "lunora/presence/index.ts": "2f9ca3edd77e16a2d85b11c06d1a45bdc42af48fb72d47f04beeed1dfc54a4dd"
+                "lunora/presence/index.ts": "d6a3863d5dbaa439750c04b4a1b2061f98d0a88a8c119e619ec60042beab7692"
             }
         }
     },

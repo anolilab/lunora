@@ -1322,13 +1322,18 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.invalidateCompanionMemo();
             this.migrated = this.blockedUniqueIndexes.length === 0;
             this.migrationRetryAt = now + BLOCKED_MIGRATION_RETRY_MS;
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                // Once per retry window: the wire message only reaches the caller, and operators need it in the log.
+                console.error(`[lunora] unique index blocked by duplicate rows: ${this.blockedUniqueIndexes.join("; ")}`);
+            }
         }
 
         private ensureServable(): void {
             this.ensureMigrated();
 
             if (this.blockedUniqueIndexes.length > 0) {
-                throw new LunoraError("INTERNAL", this.blockedUniqueIndexes.join("; "));
+                throw new LunoraError("UNIQUE_INDEX_DUPLICATES", this.blockedUniqueIndexes.join("; "));
             }
         }
 

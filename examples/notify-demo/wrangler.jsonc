@@ -11,5 +11,5 @@
     // `d1SubscriptionStore(env.DB)` persists Web Push / FCM device subscriptions
     // (the subscription table is created lazily, so no migration is needed for it).
     "d1_databases": [{ "binding": "DB", "database_name": "notify-demo", "database_id": "00000000-0000-0000-0000-000000000000" }],
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
 }

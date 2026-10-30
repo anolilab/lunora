@@ -14,7 +14,7 @@
         { "binding": "DB", "database_name": "lunora-auth-playground", "database_id": "<replace-with-d1-create-id>" },
     ],
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
     // Secrets are NOT declared here — `vars` ship in the deployed config and are
     // visible in the dashboard. `AUTH_SECRET` lives in `.dev.vars` for local dev
     // (see `.dev.vars.example`, auto-loaded by `wrangler dev` / the Vite plugin)

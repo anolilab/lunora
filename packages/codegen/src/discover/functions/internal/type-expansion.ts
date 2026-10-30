@@ -178,7 +178,9 @@ const expandUnionType = (type: Type, node: Node, handlerFilePath: string, depth:
         parts.push(rendered);
     }
 
-    return parts.join(" | ");
+    // Distinct checker members can render to one text (two local aliases of the
+    // same shape), and `X | X` is just noise in the generated type.
+    return [...new Set(parts)].join(" | ");
 };
 
 /**

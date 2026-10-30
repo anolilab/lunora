@@ -7,9 +7,8 @@
  * drifting) per provider. Each transport supplies only its provider instance
  * and its recipient policy.
  */
-import { LunoraError } from "@lunora/errors";
-
 import { toAddress, toAddressList } from "./address";
+import { MailSendError } from "./send-error";
 import type { SendPayload } from "./types";
 
 /** `@visulima/email` models an address as `{ email, name? }`. */
@@ -64,13 +63,56 @@ const reasonOf = (rawError: unknown): string => {
     return JSON.stringify(rawError) ?? "send failed";
 };
 
+/** A provider error code that is an HTTP status, as `@visulima/email` writes it (`"429"`). */
+const THREE_DIGIT_STATUS = /^\d{3}$/;
+
+/** The HTTP status a provider error's `code` carries, as a number: the number itself, or a three-digit string. */
+const httpStatusOf = (code: unknown): number | undefined => {
+    if (typeof code === "number") {
+        return code;
+    }
+
+    return typeof code === "string" && THREE_DIGIT_STATUS.test(code) ? Number(code) : undefined;
+};
+
+/**
+ * Whether a provider's failed send is worth repeating. `@visulima/email` puts an
+ * HTTP status on the error as a numeric `code`, so 408, 429 and 5xx are
+ * transient and any other 1xx-5xx status is a refusal. A send is dropped only on
+ * that explicit permanent status; anything the provider did not classify (a plain
+ * `Error`, a network failure, a non-`Error` result) is retried, because a wrong
+ * retry only dead-letters the message and a wrong drop loses it.
+ */
+const isRetryableProviderError = (rawError: unknown): boolean => {
+    if (!(rawError instanceof Error)) {
+        return true;
+    }
+
+    // `@visulima/email` wraps a callback's failure as a `cause`, so the status can sit one or more levels down.
+    let status: number | undefined;
+
+    for (let current: unknown = rawError, depth = 0; current instanceof Error && depth < 5; current = current.cause, depth += 1) {
+        status = httpStatusOf("code" in current ? current.code : undefined);
+
+        if (status !== undefined) {
+            break;
+        }
+    }
+
+    if (status !== undefined && status >= 100 && status <= 599) {
+        return status === 408 || status === 429 || status >= 500;
+    }
+
+    return true;
+};
+
 /** Resolve the validated recipient list + its first entry, throwing when empty. */
 const requireRecipients = (to: SendPayload["to"]): { first: ProviderAddress; list: ProviderAddress[] } => {
     const list = toAddressList(to);
     const [first] = list ?? [];
 
     if (!list || first === undefined) {
-        throw new LunoraError("INTERNAL", "@lunora/mail: at least one recipient is required");
+        throw new MailSendError({ message: "@lunora/mail: at least one recipient is required", retryable: false });
     }
 
     return { first, list };
@@ -97,15 +139,20 @@ const toProviderEmail = (payload: SendPayload, defaultFrom: string, to: Provider
  * and throw a stable, generic error; on success, return the message id.
  */
 const interpretSendResult = (result: ProviderSendResult): { id: string } => {
+    if (result.success && !result.data) {
+        // The provider accepted the send, so a redelivery would email the recipient twice.
+        throw new MailSendError({ message: "@lunora/mail: provider accepted the send but returned no message id", retryable: false });
+    }
+
     if (!result.success || !result.data) {
         // eslint-disable-next-line no-console -- intentional server-side log of the redacted provider error before throwing a generic message
         console.error(`@lunora/mail: send failed: ${reasonOf(result.error)}`);
 
-        throw new LunoraError("INTERNAL", "@lunora/mail: send failed");
+        throw new MailSendError({ cause: result.error, retryable: isRetryableProviderError(result.error) });
     }
 
     return { id: result.data.messageId };
 };
 
-export { interpretSendResult, requireRecipients, toProviderEmail };
+export { interpretSendResult, isRetryableProviderError, requireRecipients, toProviderEmail };
 export type { ProviderSendResult };

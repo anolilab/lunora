@@ -751,16 +751,16 @@ describe("presence heartbeat", () => {
         const table = database.rows("presence_present");
 
         table.push(
-            { _id: "p1", lastSeen: NOW - TTL - 1, roomId: "lobby", sessionId: "closed-tab" },
-            { _id: "p2", lastSeen: NOW - 1000, roomId: "lobby", sessionId: "open-tab" },
-            { _id: "p3", lastSeen: NOW - TTL - 1, roomId: "other-room", sessionId: "closed-tab" },
+            { _id: "p1", lastSeen: NOW - TTL - 1, roomId: "lobby", sessionId: "closed-tab", tenantId: "" },
+            { _id: "p2", lastSeen: NOW - 1000, roomId: "lobby", sessionId: "open-tab", tenantId: "" },
+            { _id: "p3", lastSeen: NOW - TTL - 1, roomId: "other-room", sessionId: "closed-tab", tenantId: "" },
         );
     });
 
     const call = async (sessionId: string) =>
         heartbeat({
             args: { roomId: "lobby", sessionId },
-            ctx: { auth: { userId: undefined }, db: database.db, ip: undefined, now: NOW },
+            ctx: { auth: { getIdentity: async () => null, userId: undefined }, db: database.db, ip: undefined, now: NOW },
         });
 
     it("reclaims the room's expired rows when a new session joins, and no other room's", async () => {
@@ -782,7 +782,7 @@ describe("presence heartbeat", () => {
         const table = database.rows("presence_present");
 
         for (let index = 0; index < 120; index += 1) {
-            table.push({ _id: `bulk-${String(index)}`, lastSeen: NOW - TTL - 1, roomId: "lobby", sessionId: `gone-${String(index)}` });
+            table.push({ _id: `bulk-${String(index)}`, lastSeen: NOW - TTL - 1, roomId: "lobby", sessionId: `gone-${String(index)}`, tenantId: "" });
         }
 
         await call("new-tab");
@@ -800,7 +800,7 @@ describe("presence heartbeat", () => {
         const beat = async (data?: Row) =>
             heartbeat({
                 args: { roomId: "lobby", sessionId: "open-tab", ...(data === undefined ? {} : { data }) },
-                ctx: { auth: { userId: undefined }, db: database.db, ip: undefined, now: NOW },
+                ctx: { auth: { getIdentity: async () => null, userId: undefined }, db: database.db, ip: undefined, now: NOW },
             });
         const row = () => database.rows("presence_present").find((entry) => entry["sessionId"] === "open-tab");
 
