@@ -508,6 +508,8 @@ The imported row carries an `_id` that is already held by a DIFFERENT table in t
 
 This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it.
 
+Only shard tables raise it. A `.global()` table names its table on every by-id call, so the same id in two global tables is two separate rows and the import accepts it.
+
 ### `INDEX_FIELD_NESTED_PATH`
 
 `500` — Index field is a nested path

@@ -8,6 +8,7 @@
  */
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 
+import { importGlobalRows } from "../../src/admin-export-import";
 import type { D1DatabaseLike } from "../../src/d1-client";
 import { D1Client } from "../../src/d1-client";
 import type { D1Exec } from "../../src/d1-ctx-db";
@@ -235,10 +236,57 @@ const clientIdCollision = async (database: D1Database): Promise<{ codes: (null |
 };
 
 /** POST routes that take only the database and answer with JSON. */
+
+/**
+ * Import rows with explicit `_id`s into a `.global()` table three times: a fresh insert, a skip-mode pass that
+ * repeats an id beside a new one and an idless row, and a replace-mode pass. The ownership probe is a batched
+ * `SELECT ... WHERE id IN (...)` on the row's own table, so real D1 settles that its quoting and binding find the
+ * held ids.
+ */
+const importExplicitIds = async (database: D1Database): Promise<Record<string, unknown>> => {
+    await database.prepare(`DROP TABLE IF EXISTS imp`).run();
+
+    const schema: SchemaLike = { tables: { imp: { indexes: [], shape: { body: col("string") }, shardMode: { kind: "global" } } } };
+    const real = d1CtxExec(database);
+    let refusedInserts = 0;
+    // A held id the probe found never reaches D1 as an INSERT; one it missed is refused there and rechecked.
+    // Provisioning has refusals of its own (an index or column that already exists), so only INSERTs count.
+    const counted = async <T>(query: string, run: () => Promise<T>): Promise<T> => {
+        try {
+            return await run();
+        } catch (error) {
+            if (/^\s*insert\b/iu.test(query)) {
+                refusedInserts += 1;
+            }
+
+            throw error;
+        }
+    };
+    const exec: D1Exec = {
+        all: async (query, parameters) => await counted(query, async () => await real.all(query, parameters)),
+        run: async (query, parameters) => await counted(query, async () => await real.run(query, parameters)),
+    };
+    const db = createD1CtxDb({ exec, idGenerator: () => crypto.randomUUID(), schema });
+    const fresh = await importGlobalRows(db, schema, { exec, rows: [{ doc: { _id: "a", body: "one" }, table: "imp" }] });
+    const skip = await importGlobalRows(db, schema, {
+        exec,
+        rows: [
+            { doc: { _id: "a", body: "two" }, table: "imp" },
+            { doc: { _id: "b", body: "bee" }, table: "imp" },
+            { doc: { body: "auto" }, table: "imp" },
+        ],
+    });
+    const replace = await importGlobalRows(db, schema, { exec, onConflict: "replace", rows: [{ doc: { _id: "a", body: "three" }, table: "imp" }] });
+    const stored = await database.prepare(`SELECT "body" FROM "imp" ORDER BY "body"`).all<{ body: string }>();
+
+    return { bodies: stored.results.map((row) => row.body), fresh, refusedInserts, replace, skip };
+};
+
 const DATABASE_ROUTES: Record<string, ((database: D1Database) => Promise<unknown>) | undefined> = {
     "/cdc-retention": cdcRetention,
     "/cdc-rewind": cdcRewind,
     "/client-id-collision": clientIdCollision,
+    "/import-explicit-ids": importExplicitIds,
     "/patch-if-race": async (database) => patchIfRace(database, 20),
     "/unique-over-duplicates": uniqueOverDuplicates,
 };

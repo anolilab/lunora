@@ -16,6 +16,7 @@ import { sql } from "drizzle-orm";
 
 import { runSqlGlobalTableMigrations } from "./ctx-db-global-provisioning";
 import type { SqlDialect } from "./dialect";
+import { takePostCommitError } from "./post-commit-error";
 import type { SqlCtxExec as SqlContextExec } from "./sql-exec";
 import { decodeGlobalRow, MAX_BOUND_PARAMETERS, queryAll, readRowsPage } from "./sql-exec";
 
@@ -282,12 +283,9 @@ interface ImportGlobalArgs {
     dryRun?: boolean;
 
     /**
-     * Optional direct exec handle to the same database the writer targets.
-     * When supplied, the conflict pre-probe issues a single
-     * `SELECT 1 FROM <table> WHERE id = ? LIMIT 1` against the row's declared
-     * table instead of falling back to an unscoped id probe, which scans every
-     * global table looking for the id. Strongly recommended for large schemas
-     * — the writer-fallback is O(N tables) per row.
+     * Optional direct exec handle to the same database the writer targets. When supplied, the conflict probe
+     * is a batched `SELECT id ... WHERE id IN (...)` per table (or, for a schema with triggers, one
+     * `SELECT 1 ... WHERE id = ?` per row) instead of a writer `get` per row.
      */
     exec?: SqlContextExec;
 
@@ -304,125 +302,70 @@ interface ImportGlobalArgs {
 }
 
 /**
- * The `.global()` table that already holds `explicitId`, or `undefined` when the
- * id is free. `table` itself comes first, so a conflict in the row's own table
- * wins over a collision. Any other name is a cross-table collision: an id-only
- * `get`/`patch`/`delete` resolves by probing every global table, so a second
- * table holding the same id would make that resolution ambiguous.
+ * Whether `table` itself holds `id`. Only the row's own table is asked: the writer pins every by-id call to its
+ * table, so the same `_id` in another global table is not a hazard.
  *
- * With an exec handle the tables are asked in one `UNION ALL` round trip, not
- * one each. A probe error propagates: read as "absent", it would let the insert
- * land an id another table holds. The importer provisions every global table
- * before the first probe, so a table that was never written is not an error.
+ * Without an exec handle the writer's own `get` answers; with one, a single indexed `SELECT 1`. A probe error
+ * propagates: read as "absent", it would let the insert overwrite or duplicate a row that is there. The importer
+ * provisions every global table before the first probe, so a table that was never written is not an error.
  */
-const explicitIdOwner = async (
-    writer: DatabaseWriterLike,
-    schema: SchemaLike,
-    dialect: SqlDialect,
-    exec: ImportGlobalArgs["exec"],
-    table: string,
-    explicitId: string,
-): Promise<string | undefined> => {
-    const others = Object.keys(schema.tables).filter((name) => name !== table && schema.tables[name]?.shardMode?.kind === "global");
-    const candidates = [table, ...others];
-
-    for (let start = 0; start < candidates.length; start += MAX_BOUND_PARAMETERS) {
-        const chunk = candidates.slice(start, start + MAX_BOUND_PARAMETERS);
-
-        if (!exec) {
-            for (const candidate of chunk) {
-                // eslint-disable-next-line no-await-in-loop -- probed in order so the row's own table answers first, and the scan stops at the first owner
-                if ((await writer.get(candidate, explicitId)) !== null) {
-                    return candidate;
-                }
-            }
-
-            continue;
-        }
-
-        const selects = chunk.map(
-            (candidate, index) => sql`SELECT ${sql.raw(String(index))} AS slot FROM ${sql.identifier(candidate)} WHERE ${sql.identifier("id")} = ${explicitId}`,
-        );
-        // eslint-disable-next-line no-await-in-loop -- chunks are asked in order so the row's own table answers first
-        const hits = await queryAll(exec, dialect, sql`${sql.join(selects, sql` UNION ALL `)} ORDER BY slot LIMIT 1`);
-        const slot = hits[0]?.["slot"];
-
-        if (slot !== undefined) {
-            return chunk[Number(slot)];
-        }
+const tableHolds = async (writer: DatabaseWriterLike, dialect: SqlDialect, exec: ImportGlobalArgs["exec"], table: string, id: string): Promise<boolean> => {
+    if (!exec) {
+        return (await writer.get(table, id)) !== null;
     }
 
-    return undefined;
-};
+    const hits = await queryAll(exec, dialect, sql`SELECT 1 FROM ${sql.identifier(table)} WHERE ${sql.identifier("id")} = ${id} LIMIT 1`);
 
-/** The row error for an `_id` another global table already holds. */
-const collisionError = (owner: string, explicitId: string, line: number, table: string): ImportError => {
-    return { code: "ID_COLLISION", line, message: `_id "${explicitId}" already belongs to table "${owner}"`, table };
+    return hits.length > 0;
 };
 
 /**
- * `explicitId` when the row's own table already holds it (a conflict, or the
- * row a replace overwrites), `undefined` when it is free, or the row error when
- * another table holds it or the probe failed.
+ * `explicitId` when the row's own table holds it (a conflict, or the row a replace overwrites), `undefined` when
+ * it is free, or the row error when the probe failed.
  */
-const ownIdOrError = async (
+const probeOwnTable = async (
     writer: DatabaseWriterLike,
-    schema: SchemaLike,
     dialect: SqlDialect,
     exec: ImportGlobalArgs["exec"],
     table: string,
     explicitId: string,
     line: number,
 ): Promise<{ error: ImportError } | { existingId: string | undefined }> => {
-    let owner: string | undefined;
-
     try {
-        owner = await explicitIdOwner(writer, schema, dialect, exec, table, explicitId);
+        return { existingId: (await tableHolds(writer, dialect, exec, table, explicitId)) ? explicitId : undefined };
     } catch (error: unknown) {
         const { body } = toErrorBody(error, { fallbackCode: "PROBE_FAILED" });
 
         return { error: { code: body.code, line, message: body.message, table } };
     }
-
-    if (owner !== undefined && owner !== table) {
-        return { error: collisionError(owner, explicitId, line, table) };
-    }
-
-    return { existingId: owner === table ? explicitId : undefined };
 };
 
-const recordOwner = (found: { owners: Map<string, Set<string>> }, id: string, table: string): void => {
-    const holders = found.owners.get(id) ?? new Set<string>();
+/** What the batched probe learned: the ids each table holds, or the error that stopped it. */
+type HeldIds = { failure: { code: string; message: string } } | { held: Map<string, Set<string>> };
 
-    holders.add(table);
-    found.owners.set(id, holders);
+const recordHeld = (found: { held: Map<string, Set<string>> }, table: string, id: string): void => {
+    const ids = found.held.get(table) ?? new Set<string>();
+
+    ids.add(id);
+    found.held.set(table, ids);
 };
-
-/** What the batched ownership probe learned: which tables hold each id, or the error that stopped it. */
-type IdOwners = { failure: { code: string; message: string } } | { owners: Map<string, Set<string>> };
 
 /**
- * Ask every `.global()` table which of `ids` it holds, in as few statements as
- * the parameter ceiling allows. A statement is a `UNION ALL` of per-table
- * branches `SELECT <slot>, id FROM <table> WHERE id IN (...)` and binds at most
- * {@link MAX_BOUND_PARAMETERS} ids across all its branches (D1's per-statement
- * limit), so the cost is about `ids x tables / 100` round trips rather than one
- * per row. The slot is the table's index, inlined because it is not a parameter.
+ * Ask each table which of its own rows' ids it already holds, in as few statements as the parameter ceiling
+ * allows. A statement is a `UNION ALL` of per-table branches `SELECT <slot>, id FROM <table> WHERE id IN (...)`
+ * and binds at most {@link MAX_BOUND_PARAMETERS} ids across all its branches (D1's per-statement limit), so the
+ * cost is about `ids / 100` round trips rather than one per row. The slot is the table's index, inlined because
+ * it is not a parameter.
  *
- * Every table is asked, not just each row's own: an id-only `get`/`patch`/`delete`
- * resolves by probing all of them, so a collision across tables matters.
+ * Fails closed: if any statement throws, nothing is known and the whole result is the failure. Reading
+ * "unknown" as "free" would let an insert land on an id that is taken.
  *
- * Fails closed: if any statement throws, no ownership is known and the whole
- * result is the failure. Reading "unknown" as "free" would let an insert land an
- * id another table holds.
- *
- * Not atomic with the inserts that follow. A write by someone else between this
- * probe and a row's insert can still create a cross-table duplicate; the per-row
- * probe this replaces has the same race in a narrower window. A failed explicit-id
- * insert is re-probed to report a conflict rather than an insert failure.
+ * A snapshot: it is only valid while nothing but this import writes. A write that runs user code (a trigger)
+ * can create or delete rows in these tables mid-import, so {@link hasGlobalTriggers} schemas probe per row.
  */
-const probeIdOwners = async (exec: SqlContextExec, dialect: SqlDialect, tables: ReadonlyArray<string>, ids: ReadonlyArray<string>): Promise<IdOwners> => {
-    const owners = new Map<string, Set<string>>();
+const probeHeldIds = async (exec: SqlContextExec, dialect: SqlDialect, idsByTable: ReadonlyMap<string, ReadonlySet<string>>): Promise<HeldIds> => {
+    const tables = [...idsByTable.keys()];
+    const held = new Map<string, Set<string>>();
     let branches: SQL[] = [];
     let budget = MAX_BOUND_PARAMETERS;
 
@@ -434,7 +377,7 @@ const probeIdOwners = async (exec: SqlContextExec, dialect: SqlDialect, tables: 
         const hits = await queryAll(exec, dialect, sql.join(branches, sql` UNION ALL `));
 
         for (const hit of hits) {
-            recordOwner({ owners }, String(hit["id"]), tables[Number(hit["slot"])] as string);
+            recordHeld({ held }, tables[Number(hit["slot"])] as string, String(hit["id"]));
         }
 
         branches = [];
@@ -443,6 +386,8 @@ const probeIdOwners = async (exec: SqlContextExec, dialect: SqlDialect, tables: 
 
     try {
         for (const [slot, table] of tables.entries()) {
+            const ids = [...(idsByTable.get(table) as ReadonlySet<string>)];
+
             for (let start = 0; start < ids.length;) {
                 const taken = ids.slice(start, start + budget);
 
@@ -469,35 +414,27 @@ const probeIdOwners = async (exec: SqlContextExec, dialect: SqlDialect, tables: 
         return { failure: { code: body.code, message: body.message } };
     }
 
-    return { owners };
+    return { held };
 };
 
-/** `ownIdOrError` answered from the batched probe: the first other table in schema order that holds the id is the collision. */
-const batchedOwnership = (
-    found: IdOwners,
-    tables: ReadonlyArray<string>,
-    table: string,
-    explicitId: string,
-    line: number,
-): { error: ImportError } | { existingId: string | undefined } => {
+/** The batched probe answered for one row. */
+const heldOwnership = (found: HeldIds, table: string, explicitId: string, line: number): { error: ImportError } | { existingId: string | undefined } => {
     if ("failure" in found) {
         return { error: { ...found.failure, line, table } };
     }
 
-    const holders = found.owners.get(explicitId);
-
-    // The row's own table answers first, as in `explicitIdOwner`: a duplicate across tables is a conflict (or the replace target), not a collision.
-    if (holders?.has(table) === true) {
-        return { existingId: explicitId };
-    }
-
-    const other = tables.find((name) => holders?.has(name) === true);
-
-    return other === undefined ? { existingId: undefined } : { error: collisionError(other, explicitId, line, table) };
+    return { existingId: found.held.get(table)?.has(explicitId) === true ? explicitId : undefined };
 };
 
+/**
+ * Whether any `.global()` table runs user code on a write. A trigger can create or delete rows in a table
+ * mid-import, which stales a snapshot taken before the first row.
+ */
+const hasGlobalTriggers = (schema: SchemaLike): boolean =>
+    selectGlobalTables(schema).some((table) => Object.keys(schema.tables[table]?.triggerMap ?? {}).length > 0);
+
 type RowOutcome =
-    | { error: ImportError; kind: "error" }
+    | { committed: boolean; error: ImportError; kind: "error" }
     | { inserted: string; kind: "inserted" }
     | { kind: "checked" }
     | { kind: "conflict" }
@@ -517,6 +454,7 @@ const writeRow = async (
     document: Record<string, unknown>,
     existingId: string | undefined,
     line: number,
+    onConflict: ImportGlobalArgs["onConflict"],
 ): Promise<RowOutcome> => {
     try {
         if (existingId !== undefined) {
@@ -540,7 +478,23 @@ const writeRow = async (
         // import response.
         const { body } = toErrorBody(error, { fallbackCode: existingId === undefined ? "INSERT_FAILED" : "REPLACE_FAILED" });
 
-        return { error: { code: body.code, line, message: body.message, table }, kind: "error" };
+        // A failure after the base row committed leaves it stored: the caller must not read a unique violation from
+        // a trigger's or companion's own write as the row's `_id` being taken, nor write the row a second time.
+        const committedId = existingId ?? (typeof document["_id"] === "string" ? document["_id"] : undefined);
+        const committed = committedId !== undefined && takePostCommitError(error, table, committedId);
+
+        // Say what is known: the base row committed, and the work after it did not finish. Not that the row is still
+        // there (its own trigger may have deleted it before throwing), and advice that matches the conflict mode: a
+        // skip-mode re-import skips a row that still exists, so the failed work is redone only under "replace".
+        const advice =
+            onConflict === "replace"
+                ? 're-importing it with onConflict "replace" redoes that work'
+                : 'a re-import skips it while it exists; use onConflict "replace" to redo that work';
+        const message = committed
+            ? `${body.message} (row "${committedId}" committed before this failure, so its triggers or companion writes may not have completed; ${advice})`
+            : body.message;
+
+        return { committed, error: { code: body.code, line, message, table }, kind: "error" };
     }
 };
 
@@ -563,7 +517,7 @@ const prepareRow = (schema: SchemaLike, dryRun: boolean, row: ExportRow, line: n
     // from a legitimately shard-local one. The shard-engine twin reports
     // `BAD_ROW` for the identical input.
     if (typeof table !== "string" || table.length === 0) {
-        return { kind: "settled", outcome: { error: { code: "BAD_ROW", line, message: "row is missing `table`", table }, kind: "error" } };
+        return { kind: "settled", outcome: { committed: false, error: { code: "BAD_ROW", line, message: "row is missing `table`", table }, kind: "error" } };
     }
 
     // Only process globals here; shard-local rows are someone else's
@@ -576,7 +530,10 @@ const prepareRow = (schema: SchemaLike, dryRun: boolean, row: ExportRow, line: n
     // an import payload can carry a missing/malformed `doc` off the wire.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guard on untrusted parsed NDJSON, not on the declared type
     if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
-        return { kind: "settled", outcome: { error: { code: "BAD_ROW", line, message: "row is missing or malformed `doc`", table }, kind: "error" } };
+        return {
+            kind: "settled",
+            outcome: { committed: false, error: { code: "BAD_ROW", line, message: "row is missing or malformed `doc`", table }, kind: "error" },
+        };
     }
 
     // Mirror `encodeExportDocument` on the way back in: a snapshot line carries a
@@ -592,7 +549,11 @@ const prepareRow = (schema: SchemaLike, dryRun: boolean, row: ExportRow, line: n
     } catch (error: unknown) {
         return {
             kind: "settled",
-            outcome: { error: { code: "BAD_ROW", line, message: error instanceof Error ? error.message : String(error), table }, kind: "error" },
+            outcome: {
+                committed: false,
+                error: { code: "BAD_ROW", line, message: error instanceof Error ? error.message : String(error), table },
+                kind: "error",
+            },
         };
     }
 
@@ -602,7 +563,7 @@ const prepareRow = (schema: SchemaLike, dryRun: boolean, row: ExportRow, line: n
     const failure = validateRow(schema, table, decoded);
 
     if (failure !== undefined) {
-        return { kind: "settled", outcome: { error: { code: "VALIDATION_ERROR", line, message: failure, table }, kind: "error" } };
+        return { kind: "settled", outcome: { committed: false, error: { code: "VALIDATION_ERROR", line, message: failure, table }, kind: "error" } };
     }
 
     // A dry run stops at the shape: the conflict probe and the insert are what it must not do.
@@ -614,65 +575,65 @@ const prepareRow = (schema: SchemaLike, dryRun: boolean, row: ExportRow, line: n
 };
 
 /**
- * Re-ask who holds the id after an explicit-id insert failed: an earlier row's
- * trigger, or a concurrent writer, may have created it since the batched probe,
- * and that is a conflict, not an insert failure. A probe that throws or finds
- * nothing leaves the original insert error standing. Records what it finds so a
- * later row repeating the id sees it too.
+ * How a row learns whether its own table already holds its `_id`: from the batched snapshot, or by asking the
+ * table right before the write.
  */
-const recheckOwner = async (
+interface OwnershipSource {
+    /** The batched snapshot; absent when each row is probed immediately before its write. */
+    snapshot?: HeldIds;
+}
+
+/**
+ * Re-ask the row's own table after an explicit-id insert failed with a unique violation: a concurrent writer may
+ * have created the id since it was last probed, and that is a conflict, not an insert failure. A probe that throws
+ * or finds nothing leaves the original insert error standing (the violation was on another unique index).
+ */
+const recheckOwnTable = async (
     writer: DatabaseWriterLike,
-    schema: SchemaLike,
     dialect: SqlDialect,
-    exec: SqlContextExec,
-    found: { owners: Map<string, Set<string>> },
+    exec: ImportGlobalArgs["exec"],
+    source: OwnershipSource,
     row: ReadyRow & { explicitId: string },
     onConflict: ImportGlobalArgs["onConflict"],
 ): Promise<RowOutcome | undefined> => {
     const { decoded, explicitId, line, table } = row;
-    let owner: string | undefined;
 
     try {
-        owner = await explicitIdOwner(writer, schema, dialect, exec, table, explicitId);
+        if (!(await tableHolds(writer, dialect, exec, table, explicitId))) {
+            return undefined;
+        }
     } catch {
         return undefined;
     }
 
-    if (owner === undefined) {
-        return undefined;
+    if (source.snapshot !== undefined && "held" in source.snapshot) {
+        recordHeld(source.snapshot, table, explicitId);
     }
 
-    recordOwner(found, explicitId, owner);
-
-    if (owner !== table) {
-        return { error: collisionError(owner, explicitId, line, table), kind: "error" };
-    }
-
-    // The row appeared in its own table after the batched probe: under replace it is the row to overwrite, as the per-row probe would have found it.
-    return onConflict === "replace" ? writeRow(writer, table, decoded, explicitId, line) : { kind: "conflict" };
+    // The row appeared in its own table after it was probed: under replace it is the row to overwrite.
+    return onConflict === "replace" ? writeRow(writer, table, decoded, explicitId, line, onConflict) : { kind: "conflict" };
 };
 
 /** Resolve one prepared import row to a single outcome, isolating the per-row branching from the accumulation loop. */
 const importOneRow = async (
     writer: DatabaseWriterLike,
-    schema: SchemaLike,
     dialect: SqlDialect,
     args: ImportGlobalArgs,
     row: ReadyRow,
-    found: IdOwners | undefined,
+    source: OwnershipSource,
 ): Promise<RowOutcome> => {
     const { decoded, explicitId, line, table } = row;
     let ownership: { error: ImportError } | { existingId: string | undefined } = { existingId: undefined };
 
     if (explicitId !== undefined) {
         ownership =
-            found === undefined
-                ? await ownIdOrError(writer, schema, dialect, args.exec, table, explicitId, line)
-                : batchedOwnership(found, selectGlobalTables(schema), table, explicitId, line);
+            source.snapshot === undefined
+                ? await probeOwnTable(writer, dialect, args.exec, table, explicitId, line)
+                : heldOwnership(source.snapshot, table, explicitId, line);
     }
 
     if ("error" in ownership) {
-        return { error: ownership.error, kind: "error" };
+        return { committed: false, error: ownership.error, kind: "error" };
     }
 
     const { existingId } = ownership;
@@ -681,40 +642,60 @@ const importOneRow = async (
         return { kind: "conflict" };
     }
 
-    const outcome = await writeRow(writer, table, decoded, existingId, line);
+    const outcome = await writeRow(writer, table, decoded, existingId, line, args.onConflict);
 
-    if (found === undefined || "failure" in found || args.exec === undefined || explicitId === undefined) {
+    if (explicitId === undefined) {
         return outcome;
     }
 
-    if (outcome.kind === "inserted" || outcome.kind === "replaced") {
-        // The probe predates this write: record it so a later row repeating the id, in this table or another, is seen.
-        recordOwner(found, explicitId, table);
-    } else if (outcome.kind === "error" && outcome.error.code === "CONFLICT" && existingId === undefined) {
-        // Only a unique-index breach can mean the id was taken since the probe. Any other failure (a trigger or companion
-        // write after the base row landed) keeps its own error: the recheck would find the row this very insert stored.
-        return (await recheckOwner(writer, schema, dialect, args.exec, found, { ...row, explicitId }, args.onConflict)) ?? outcome;
+    const { snapshot } = source;
+
+    if (
+        snapshot !== undefined &&
+        "held" in snapshot &&
+        (outcome.kind === "inserted" || outcome.kind === "replaced" || (outcome.kind === "error" && outcome.committed))
+    ) {
+        // The snapshot predates this write: record it so a later row repeating the id is seen, including when only the
+        // row's trigger or companion write failed after the row itself was stored.
+        recordHeld(snapshot, table, explicitId);
+    }
+
+    if (outcome.kind === "error" && !outcome.committed && outcome.error.code === "CONFLICT" && existingId === undefined) {
+        // A unique violation of the row's own write (nothing committed) can mean the id was taken since it was probed.
+        return (await recheckOwnTable(writer, dialect, args.exec, source, { ...row, explicitId }, args.onConflict)) ?? outcome;
     }
 
     return outcome;
 };
 
 /**
- * The batched owner lookup for every explicit id in `prepared`. Provisioning
- * runs only when there is something to probe, and its failure is a probe
- * failure: the rows error out rather than the whole import rejecting.
+ * Prepare the ownership probe for every explicit id in `prepared`: provision the tables, then, when `batched`,
+ * snapshot which ids each row's own table holds. Without `batched` (a schema with triggers) the rows are probed one
+ * at a time right before their write, so only provisioning happens here and a snapshot is not returned.
+ *
+ * Provisioning runs only when there is something to probe, and its failure is a probe failure: the rows error out
+ * rather than the whole import rejecting.
  */
-const probeBatch = async (exec: SqlContextExec, schema: SchemaLike, dialect: SqlDialect, prepared: ReadonlyArray<PreparedRow>): Promise<IdOwners> => {
-    const ids = new Set<string>();
+const probeBatch = async (
+    exec: SqlContextExec,
+    schema: SchemaLike,
+    dialect: SqlDialect,
+    prepared: ReadonlyArray<PreparedRow>,
+    batched: boolean,
+): Promise<HeldIds | undefined> => {
+    const idsByTable = new Map<string, Set<string>>();
 
     for (const entry of prepared) {
         if (entry.kind === "ready" && entry.explicitId !== undefined) {
+            const ids = idsByTable.get(entry.table) ?? new Set<string>();
+
             ids.add(entry.explicitId);
+            idsByTable.set(entry.table, ids);
         }
     }
 
-    if (ids.size === 0) {
-        return { owners: new Map() };
+    if (idsByTable.size === 0) {
+        return batched ? { held: new Map() } : undefined;
     }
 
     try {
@@ -725,7 +706,7 @@ const probeBatch = async (exec: SqlContextExec, schema: SchemaLike, dialect: Sql
         return { failure: { code: body.code, message: body.message } };
     }
 
-    return probeIdOwners(exec, dialect, selectGlobalTables(schema), [...ids]);
+    return batched ? probeHeldIds(exec, dialect, idsByTable) : undefined;
 };
 
 /**
@@ -735,9 +716,9 @@ const probeBatch = async (exec: SqlContextExec, schema: SchemaLike, dialect: Sql
  * conflict instead of bubbled as a UNIQUE error. Schema-failed rows surface in
  * `errors`; the rest land.
  *
- * With an `exec` handle the probe is batched ({@link probeIdOwners}) once for
- * the whole call, not per row; a live write between that probe and a row's
- * insert can still create a cross-table duplicate.
+ * Only a row's own table is probed. With an `exec` handle and no triggers the probe is batched
+ * ({@link probeHeldIds}) once for the whole call; a schema with triggers probes each row right before its write,
+ * because a trigger can create or delete rows in the table mid-import.
  */
 const importSqlGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLike, dialect: SqlDialect, args: ImportGlobalArgs): Promise<ImportResult> => {
     const errors: ImportError[] = [];
@@ -754,16 +735,17 @@ const importSqlGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLik
         // rows (shard-local rows filtered out upstream) violate.
         return prepareRow(schema, args.dryRun === true, row, row.line ?? line);
     });
-    let found: IdOwners | undefined;
+    const source: OwnershipSource = {};
 
-    // The ownership probe reads every global table, so each must exist first. A dry run touches no table.
+    // The probe reads the rows' tables, so each must exist first. A dry run touches no table. A schema whose writes
+    // can run user code is probed per row instead of from a snapshot (see `probeHeldIds`).
     if (args.exec && args.dryRun !== true) {
-        found = await probeBatch(args.exec, schema, dialect, prepared);
+        source.snapshot = await probeBatch(args.exec, schema, dialect, prepared, !hasGlobalTriggers(schema));
     }
 
     for (const entry of prepared) {
         // eslint-disable-next-line no-await-in-loop -- imports apply row-by-row in input order so per-line error/conflict reporting and the shared writer stay deterministic.
-        const outcome = entry.kind === "settled" ? entry.outcome : await importOneRow(writer, schema, dialect, args, entry, found);
+        const outcome = entry.kind === "settled" ? entry.outcome : await importOneRow(writer, dialect, args, entry, source);
 
         switch (outcome.kind) {
             case "conflict": {

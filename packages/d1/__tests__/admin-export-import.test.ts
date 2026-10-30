@@ -363,10 +363,10 @@ describe("d1 admin export/import globals", () => {
             expect(result.errors.map((error) => error.line)).toStrictEqual([5, 6]);
         });
 
-        it("refuses an _id another global table holds, probing tables the import has not written yet", async () => {
+        it("imports the same _id into a second global table, provisioning tables the import has not written yet", async () => {
             expect.assertions(2);
 
-            // Neither table exists yet: the import provisions both before it asks them who owns an id.
+            // Neither table exists yet: the import provisions both before it asks the row's own table whether it holds the id.
             const fresh = createD1Exec();
             const twoTables: SchemaLike = {
                 tables: {
@@ -381,7 +381,7 @@ describe("d1 admin export/import globals", () => {
                 const second = await importGlobalRows(freshWriter, twoTables, { exec: fresh.exec, rows: [{ doc: { _id: "n1", label: "b" }, table: "flags" }] });
 
                 expect(first).toMatchObject({ errors: [], inserted: { notes: 1 } });
-                expect(second).toMatchObject({ errors: [{ code: "ID_COLLISION", line: 1, table: "flags" }], inserted: {} });
+                expect(second).toMatchObject({ conflicts: 0, errors: [], inserted: { flags: 1 } });
             } finally {
                 fresh.close();
             }

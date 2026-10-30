@@ -133,12 +133,12 @@ const conflictCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
     await expect(writer.get("extras", "x1")).resolves.toMatchObject({ label: "target" });
 };
 
-const crossTableIdCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
+const sameIdOtherTableCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
     const writer = writerFor(target);
 
     await writer.insert("assets", asset("x1", 1), { allowExplicitId: true });
 
-    // An id-only read probes every global table, so a second table holding `x1` would make it ambiguous.
+    // Every by-id call is pinned to its table, so the same `_id` in a second global table is not ambiguous.
     const result = await importHyperdriveGlobalRows({
         cdc: false,
         engine: target.engine,
@@ -148,13 +148,9 @@ const crossTableIdCase = (target: AdminPlaneTarget) => async (): Promise<void> =
         schema,
     });
 
-    expect(result).toStrictEqual({
-        conflicts: 0,
-        errors: [{ code: "ID_COLLISION", line: 1, message: '_id "x1" already belongs to table "assets"', table: "extras" }],
-        inserted: {},
-        replaced: 0,
-    });
-    await expect(writer.get("extras", "x1")).resolves.toBeNull();
+    expect(result).toStrictEqual({ conflicts: 0, errors: [], inserted: { extras: 1 }, replaced: 0 });
+    await expect(writer.get("extras", "x1")).resolves.toMatchObject({ label: "elsewhere" });
+    await expect(writer.get("assets", "x1")).resolves.toMatchObject({ _id: "x1" });
 };
 
 const replaceCase = (target: AdminPlaneTarget) => async (): Promise<void> => {
@@ -385,7 +381,7 @@ const adminPlaneCases = (target: AdminPlaneTarget): [string, () => Promise<void>
     ["exports then re-imports rows intact (bigint, bytes, unset optional)", roundTripCase(target)],
     ["dry-run import checks shapes and writes nothing, not even the table", dryRunCase(target)],
     ["reports an existing _id as a conflict and leaves the stored row unchanged", conflictCase(target)],
-    ["refuses an _id another global table already holds, even under replace", crossTableIdCase(target)],
+    ["imports an _id another global table already holds into the row's own table, even under replace", sameIdOtherTableCase(target)],
     ['overwrites an existing _id under onConflict: "replace", keeping the snapshot _creationTime and recording CDC', replaceCase(target)],
     ["exports a never-written table as empty instead of failing", neverWrittenCase(target)],
     ["exports only the allowlisted tables", allowlistCase(target)],
