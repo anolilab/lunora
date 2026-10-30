@@ -42,6 +42,19 @@ interface RewindResult {
 const post = async <T>(path: string): Promise<T> => await SELF.fetch(`https://test${path}`, { method: "POST" }).then(async (r) => await r.json<T>());
 
 describe("global store (workerd)", () => {
+    it("imports explicit ids through the batched ownership probe: insert, skip a held id, replace it", async () => {
+        expect.assertions(5);
+
+        const result = await post<Record<string, number | Record<string, unknown> | string[]>>("/import-explicit-ids");
+
+        expect(result["fresh"]).toMatchObject({ conflicts: 0, errors: [], inserted: { imp: 1 }, replaced: 0 });
+        expect(result["skip"]).toMatchObject({ conflicts: 1, errors: [], inserted: { imp: 2 }, replaced: 0 });
+        expect(result["replace"]).toMatchObject({ conflicts: 0, errors: [], replaced: 1 });
+        expect(result["bodies"]).toStrictEqual(["auto", "bee", "three"]);
+        // The probe saw every held id, so no insert was attempted and refused.
+        expect(result["refusedInserts"]).toBe(0);
+    });
+
     it("refuses a `.unique()` column over existing duplicates with a diagnostic, not a bare engine error", async () => {
         expect.assertions(3);
 
