@@ -95,6 +95,18 @@ while ((feed.current?.loaded ?? 0) < ITEMS.length) {
 
 const head = subs.find((sub) => sub.opts.cursor === null)!;
 
+// The frame being timed is a head-page push through to a committed render. Prove once that it commits, so a
+// regression that stops the push from rendering fails the bench instead of timing a frame that does nothing.
+const commitsBefore = feed.current?.commits ?? 0;
+
+act(() => {
+    head.callback(evaluate(head.opts));
+});
+
+if ((feed.current?.commits ?? 0) === commitsBefore) {
+    throw new Error("A head-page push did not commit a Feed render, so the bench would time nothing.");
+}
+
 describe("usePaginatedQuery: one frame on a 20-page feed", () => {
     bench("head-page frame", () => {
         act(() => {
