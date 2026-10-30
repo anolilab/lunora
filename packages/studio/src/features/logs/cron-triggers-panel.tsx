@@ -12,8 +12,8 @@ import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
-import CronScheduleAssistant from "./cron-schedule-assistant";
 import { CronLastRun, CronRunHistory } from "./cron-run-history";
+import CronScheduleAssistant from "./cron-schedule-assistant";
 
 interface CronTriggersPanelProps {
     /**
