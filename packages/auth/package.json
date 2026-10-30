@@ -136,7 +136,7 @@
         "@better-auth/scim": "catalog:auth",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/values": "1.0.0-alpha.85",
-        "@lunora/wire": "1.0.0-alpha.4",
+        "@lunora/wire": "1.0.0-alpha.5",
         "@visulima/disposable-email-domains": "catalog:email",
         "@visulima/email-verifier": "catalog:email",
         "@visulima/free-email-domains": "catalog:email",
