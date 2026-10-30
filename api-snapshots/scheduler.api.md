@@ -232,6 +232,7 @@ interface LunoraSchedulerOptions {
     instanceName?: string;
     jurisdiction?: DurableObjectJurisdiction;
     namespace: DurableObjectNamespaceLike;
+    primaryInstanceName?: string;
 }
 ```
 

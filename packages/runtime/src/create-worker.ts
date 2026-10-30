@@ -3595,6 +3595,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             return requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken());
         },
+        instanceStub: (name) => (schedulerDO === undefined ? undefined : resolveShard(schedulerDO, name)),
         stub: cronRunStub,
     });
 

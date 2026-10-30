@@ -537,7 +537,7 @@ const MESSAGE_IDS = [
     "Pause deployment?",
     "Resume deployment?",
     "Deployment paused",
-    "Function calls get 503, scheduled jobs are held, cron ticks are skipped and queue batches are retried later.",
+    "Function calls get 503, scheduled jobs are held on every scheduler instance, cron ticks are skipped and queue messages are held until you resume.",
     "Reason (optional)",
     "Deployment running",
     "started",

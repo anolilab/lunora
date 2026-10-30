@@ -72,7 +72,9 @@ export const DeploymentPauseBanner = (): ReactElement | null => {
             {state.pausedAt !== undefined && <span className="text-muted-foreground tabular-nums">{formatTimestamp(state.pausedAt, "")}</span>}
             {state.reason !== undefined && <span data-testid="deployment-paused-reason">{state.reason}</span>}
             <span className="text-muted-foreground">
-                {t("Function calls get 503, scheduled jobs are held, cron ticks are skipped and queue batches are retried later.")}
+                {t(
+                    "Function calls get 503, scheduled jobs are held on every scheduler instance, cron ticks are skipped and queue messages are held until you resume.",
+                )}
             </span>
             {error !== undefined && <span className="text-destructive">{error}</span>}
             <span className="ml-auto">

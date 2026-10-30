@@ -105,6 +105,10 @@ const REPAIR_PREFIX = "repair:";
 // `cl:<hex name>` is a cron job's in-flight lease, `cr:<hex name>:<inverted
 // startedAt>:<runId>` one recorded fire, newest first per job. Names are
 // hex-encoded like pool names, so job `a` never lists job `a:b`'s rows.
+// `inst:<hex name>` registers a named scheduler instance with the one that holds the
+// pause flag, so a pause can reach every instance. Hex like the pool names: a name
+// may contain `:`, and `inst:a` must not list `inst:a:b`.
+const INSTANCE_PREFIX = "inst:";
 const CRON_LEASE_PREFIX = "cl:";
 const CRON_RUN_PREFIX = "cr:";
 // Runs kept per cron job.
@@ -692,6 +696,9 @@ class SchedulerDO {
             case "GET /history": {
                 return this.handleHistory(url);
             }
+            case "GET /instances": {
+                return this.handleListInstances();
+            }
             case "GET /list": {
                 return this.handleList(url);
             }
@@ -724,6 +731,9 @@ class SchedulerDO {
             }
             case "POST /dead/retry": {
                 return this.handleDeadRetry(request);
+            }
+            case "POST /instances/register": {
+                return this.handleRegisterInstance(request);
             }
             case "POST /pause": {
                 return this.handleSetPause(request);
@@ -2326,6 +2336,36 @@ class SchedulerDO {
         const state = await this.pauseState();
 
         return state.paused;
+    }
+
+    /**
+     * `POST /instances/register { name }` — record a named scheduler instance, on
+     * the instance that holds the pause flag, and answer the pause state it was
+     * recorded under. The write and the read sit in one handler, so a pause
+     * either lands first (and the new instance is told) or after (and its
+     * fan-out lists the new instance). Idempotent.
+     */
+    private async handleRegisterInstance(request: Request): Promise<Response> {
+        const name = SchedulerDO.cronName(await request.json().catch(() => undefined));
+
+        if (name === undefined) {
+            return SchedulerDO.error(400, "INVALID_INPUT", "name is required");
+        }
+
+        await this.state.storage.put(`${INSTANCE_PREFIX}${encodePoolName(name)}`, name);
+
+        return SchedulerDO.json(await this.pauseState());
+    }
+
+    /** `GET /instances` — every registered instance name, for the pause fan-out. */
+    private async handleListInstances(): Promise<Response> {
+        const instances: string[] = [];
+
+        await this.forEachPage<string>(INSTANCE_PREFIX, (name) => {
+            instances.push(name);
+        });
+
+        return SchedulerDO.json({ instances });
     }
 
     /**

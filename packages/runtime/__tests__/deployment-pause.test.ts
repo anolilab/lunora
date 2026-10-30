@@ -46,6 +46,10 @@ const pausableScheduler = (): { namespace: ShardNamespaceLike; reads: () => numb
             get: () => {
                 return {
                     fetch: async (request: Request) => {
+                        if (new URL(request.url).pathname === "/instances") {
+                            return Response.json({ instances: [] });
+                        }
+
                         if (request.method === "GET") {
                             reads += 1;
 
@@ -65,6 +69,79 @@ const pausableScheduler = (): { namespace: ShardNamespaceLike; reads: () => numb
             },
         },
         reads: () => reads,
+    };
+};
+
+/**
+ * The SchedulerDO contract the pause fan-out uses, one in-memory instance per name: `/pause`,
+ * `/instances` and `/instances/register`. `failing` names instances whose `POST /pause` answers 500.
+ */
+const instancedScheduler = (): {
+    failing: Set<string>;
+    namespace: ShardNamespaceLike;
+    paused: (name: string) => boolean;
+    register: (name: string) => Promise<void>;
+} => {
+    const states = new Map<string, Record<string, unknown>>();
+    const registered = new Set<string>();
+    const failing = new Set<string>();
+    const namespace: ShardNamespaceLike = {
+        get: (id) => {
+            const name = (id as { __name: string }).__name;
+
+            return {
+                fetch: async (request: Request) => {
+                    const { pathname } = new URL(request.url);
+
+                    if (pathname === "/instances") {
+                        return Response.json({ instances: [...registered] });
+                    }
+
+                    if (pathname === "/instances/register") {
+                        const body: { name: string } = await request.json();
+
+                        registered.add(body.name);
+
+                        return Response.json(states.get(name) ?? { paused: false });
+                    }
+
+                    if (request.method === "GET") {
+                        return Response.json(states.get(name) ?? { paused: false });
+                    }
+
+                    if (failing.has(name)) {
+                        return new Response("storage unavailable", { status: 500 });
+                    }
+
+                    const body: { paused: boolean; reason?: string } = await request.json();
+                    const state = body.paused
+                        ? { paused: true, pausedAt: 1, ...(body.reason === undefined ? {} : { reason: body.reason }) }
+                        : { paused: false };
+
+                    states.set(name, state);
+
+                    return Response.json(state);
+                },
+            };
+        },
+        idFromName: (name) => {
+            return { __name: name };
+        },
+    };
+
+    return {
+        failing,
+        namespace,
+        paused: (name) => states.get(name)?.paused === true,
+        register: async (name) => {
+            await namespace.get(namespace.idFromName("default")).fetch(
+                new Request("https://scheduler.internal/instances/register", {
+                    body: JSON.stringify({ name }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+        },
     };
 };
 
@@ -301,6 +378,104 @@ describe("createWorker — deployment pause", () => {
             now.mockRestore();
             vi.useRealTimers();
         }
+    });
+
+    describe("every named scheduler instance", () => {
+        const workerOver = (scheduler: ReturnType<typeof instancedScheduler>) =>
+            createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: scheduler.namespace, shardDO: countingShard().namespace });
+
+        it("holds jobs on every registered instance while paused, and releases them all on resume", async () => {
+            expect.hasAssertions();
+
+            const scheduler = instancedScheduler();
+            const worker = workerOver(scheduler);
+
+            await scheduler.register("tenant-a");
+            await scheduler.register("tenant-b");
+
+            await worker.fetch(setPaused(true, "incident 42"), {}, fakeContext);
+
+            expect(["default", "tenant-a", "tenant-b"].map((name) => scheduler.paused(name))).toStrictEqual([true, true, true]);
+
+            const resumed = await worker.fetch(setPaused(false), {}, fakeContext);
+
+            expect(resumed.status).toBe(200);
+            expect(["default", "tenant-a", "tenant-b"].map((name) => scheduler.paused(name))).toStrictEqual([false, false, false]);
+        });
+
+        it("reports the instances a pause could not reach, and converges when it is retried", async () => {
+            expect.hasAssertions();
+
+            const scheduler = instancedScheduler();
+            const worker = workerOver(scheduler);
+
+            await scheduler.register("tenant-a");
+            await scheduler.register("tenant-b");
+            scheduler.failing.add("tenant-b");
+
+            const partial = await worker.fetch(setPaused(true), {}, fakeContext);
+
+            expect(partial.status).toBe(502);
+
+            const body: { error: { code: string; message: string } } = await partial.json();
+
+            expect(body.error.code).toBe("PAUSE_INSTANCES_FAILED");
+            expect(body.error.message).toContain("tenant-b");
+            expect(body.error.message).not.toContain("tenant-a");
+            expect([scheduler.paused("default"), scheduler.paused("tenant-a"), scheduler.paused("tenant-b")]).toStrictEqual([true, true, false]);
+
+            scheduler.failing.delete("tenant-b");
+
+            const retried = await worker.fetch(setPaused(true), {}, fakeContext);
+
+            expect(retried.status).toBe(200);
+            expect(scheduler.paused("tenant-b")).toBe(true);
+        });
+
+        it("reports the instances a resume could not reach, and converges when it is retried", async () => {
+            expect.hasAssertions();
+
+            const scheduler = instancedScheduler();
+            const worker = workerOver(scheduler);
+
+            await scheduler.register("tenant-a");
+            await worker.fetch(setPaused(true), {}, fakeContext);
+            scheduler.failing.add("tenant-a");
+
+            const partial = await worker.fetch(setPaused(false), {}, fakeContext);
+
+            expect(partial.status).toBe(502);
+            await expect(partial.json()).resolves.toMatchObject({ error: { code: "PAUSE_INSTANCES_FAILED" } });
+            expect([scheduler.paused("default"), scheduler.paused("tenant-a")]).toStrictEqual([false, true]);
+
+            scheduler.failing.delete("tenant-a");
+
+            const retried = await worker.fetch(setPaused(false), {}, fakeContext);
+
+            expect(retried.status).toBe(200);
+            expect(scheduler.paused("tenant-a")).toBe(false);
+        });
+
+        it("reports a failure to list the instances, rather than pausing only the default one", async () => {
+            expect.hasAssertions();
+
+            const namespace: ShardNamespaceLike = {
+                get: () => {
+                    return {
+                        fetch: async (request: Request) =>
+                            new URL(request.url).pathname === "/instances" ? new Response("down", { status: 500 }) : Response.json({ paused: true }),
+                    };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            };
+            const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: countingShard().namespace });
+            const response = await worker.fetch(setPaused(true), {}, fakeContext);
+
+            expect(response.status).toBe(502);
+            await expect(response.json()).resolves.toMatchObject({ error: { code: "PAUSE_INSTANCES_FAILED" } });
+        });
     });
 
     it("tells the queue consumer to hold its batch while paused, and to run it once resumed", async () => {

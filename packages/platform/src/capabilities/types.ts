@@ -343,8 +343,9 @@ export interface PlatformCapabilities {
          * The operator's incident switch (`lunora pause` / `resume`, Studio, `POST
          * /_lunora/admin/pause`): function calls answer `503 DEPLOYMENT_PAUSED`,
          * scheduled jobs are held in place, cron ticks are skipped and recorded,
-         * queue batches are retried later. The flag is durable in the
-         * `SchedulerDO`, so a host rates it by whether it runs one. Advisory by
+         * queue messages are held. The flag is durable in the `SchedulerDO`, and
+         * so is the registry of named scheduler instances a pause fans out to, so a
+         * host rates it by whether it runs one (no separate host contract carries it). Advisory by
          * nature: an app never declares it, so there is nothing for codegen to gate.
          */
         deploymentPause?: Capability;

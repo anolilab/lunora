@@ -360,6 +360,14 @@ export interface LunoraSchedulerOptions {
      * caller-supplied dispatch target would be an SSRF vector.
      */
     namespace: DurableObjectNamespaceLike;
+
+    /**
+     * The instance that holds the deployment's pause flag and the registry of
+     * named instances: the worker's `schedulerInstanceName`. Default `default`.
+     * A named instance registers there the first time it is addressed, so a
+     * pause reaches it and an instance created during a pause starts paused.
+     */
+    primaryInstanceName?: string;
 }
 
 /** Per-enqueue options for a {@link Workpool}. Extends {@link RunOptions} minus the implicit `pool` (the pool sets that). */

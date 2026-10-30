@@ -333,6 +333,7 @@ export const ERROR_CATALOG = {
     },
     KV_NOT_CONFIGURED: { status: 400, title: "KV introspector not configured" },
     MIGRATION_ID_REQUIRED: { status: 400, title: "Migration id required" },
+    PAUSE_INSTANCES_FAILED: { status: 502, title: "Pause did not reach every scheduler instance" },
     PAUSE_NOT_CONFIGURED: { status: 400, title: "Deployment pause not configured" },
     PITR_UNAVAILABLE: { status: 409, title: "Point-in-time recovery unavailable" },
     SCHEDULER_NOT_CONFIGURED: { status: 400, title: "Scheduler not configured" },

@@ -389,6 +389,10 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Migration id required";
     };
+    readonly PAUSE_INSTANCES_FAILED: {
+        readonly status: 502;
+        readonly title: "Pause did not reach every scheduler instance";
+    };
     readonly PAUSE_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Deployment pause not configured";

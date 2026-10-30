@@ -10,8 +10,7 @@
  *
  * **Where it does not reach:** a realtime socket opened before the pause lives
  * in its shard and never passes through the worker again, so it keeps serving
- * subscriptions until it reconnects (writes go over HTTP and are refused); jobs
- * on a separately named scheduler instance read their own instance's flag; HTTP
+ * subscriptions until it reconnects (writes go over HTTP and are refused); HTTP
  * actions and SSR behind `httpRouter`, and custom `routes` handlers, are not gated; the built-in scheduled
  * backup keeps running (it executes no app code).
  *
@@ -55,6 +54,8 @@ interface DeploymentPauseState {
 interface DeploymentPauseOptions {
     /** Admin-gate a request; throws when unauthorized. */
     assertAdmin: (request: Request) => void;
+    /** The named scheduler instance, or `undefined` when the worker has none. */
+    instanceStub?: (name: string) => ResolvedShard | undefined;
     /** Whether a request carries an admin credential (bearer, `adminGate` grant, or Studio's WS ticket), which a pause never refuses. */
     isAdmin: (request: Request) => boolean | Promise<boolean>;
     /** The clock the cache window is measured on. */
@@ -73,6 +74,55 @@ interface DeploymentPause {
     /** The `503` a non-admin function call gets while paused, or `undefined`. */
     refusal: (request: Request) => Promise<Response | undefined>;
 }
+
+/** Instances written to at once, so a deployment with many tenants does not open them all together. */
+const FAN_OUT_BATCH = 10;
+
+/**
+ * Apply a pause or resume to every named scheduler instance registered with the
+ * primary one. Answers the names it could not reach; listing them failing is
+ * reported as a failure of its own, never as an empty list. Idempotent, so
+ * repeating the call converges.
+ */
+const fanOut = async (primary: ResolvedShard, instanceStub: (name: string) => ResolvedShard | undefined, init: RequestInit): Promise<string[]> => {
+    let names: string[];
+
+    try {
+        const response = await primary.fetch(new Request("https://scheduler.internal/instances"));
+
+        if (!response.ok) {
+            throw new Error(`answered ${String(response.status)}`);
+        }
+
+        const listed: { instances?: string[] } = await response.json();
+
+        names = listed.instances ?? [];
+    } catch (error) {
+        return [`(the instance list: ${error instanceof Error ? error.message : String(error)})`];
+    }
+
+    const failed: string[] = [];
+
+    for (let start = 0; start < names.length; start += FAN_OUT_BATCH) {
+        // eslint-disable-next-line no-await-in-loop -- bounded batches: the next starts when this one is done
+        await Promise.all(
+            names.slice(start, start + FAN_OUT_BATCH).map(async (name) => {
+                try {
+                    const stub = instanceStub(name);
+                    const response = await stub?.fetch(new Request("https://scheduler.internal/pause", init));
+
+                    if (!response?.ok) {
+                        failed.push(name);
+                    }
+                } catch {
+                    failed.push(name);
+                }
+            }),
+        );
+    }
+
+    return failed.toSorted((left, right) => left.localeCompare(right));
+};
 
 /** `promise`, or what `onDeadline` answers once {@link PAUSE_READ_DEADLINE_MS} passes first. */
 const withDeadline = async (promise: Promise<DeploymentPauseState>, onDeadline: () => DeploymentPauseState): Promise<DeploymentPauseState> => {
@@ -228,11 +278,23 @@ const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause
             throw new LunoraError("Deployment pause requires a boolean `paused`", { code: "BAD_REQUEST", status: 400 });
         }
 
-        const state = await fetchState(stub, {
+        const init: RequestInit = {
             body: JSON.stringify({ paused: body.paused, ...(typeof body.reason === "string" ? { reason: body.reason } : {}) }),
             headers: { "content-type": "application/json" },
             method: "POST",
-        });
+        };
+        // The primary first, for pause and resume alike: an instance that registers
+        // after it sees the new state from the registration itself, and one that
+        // registered before it is in the list read next.
+        const state = await fetchState(stub, init);
+        const failed = options.instanceStub === undefined ? [] : await fanOut(stub, options.instanceStub, init);
+
+        if (failed.length > 0) {
+            throw new LunoraError(
+                `the deployment ${body.paused ? "paused" : "resumed"} on its main scheduler instance but not on: ${failed.join(", ")}. Run the same command again to reach them`,
+                { code: "PAUSE_INSTANCES_FAILED", status: 502 },
+            );
+        }
 
         return Response.json({ ...state, supported: true });
     };

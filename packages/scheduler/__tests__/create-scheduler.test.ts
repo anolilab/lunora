@@ -123,9 +123,12 @@ describe("createScheduler", () => {
 
         await scheduler.runAfter(0, fnRef, { userId: "u-1" }, { maxConcurrency: 4, pool: "billing" });
 
-        expect(calls[0]?.body["instanceName"]).toBe("tenant-a");
-        expect(calls[0]?.body["pool"]).toBe("billing");
-        expect(calls[0]?.body["maxConcurrency"]).toBe(4);
+        // The first call registers the instance with the default one.
+        const schedule = calls.find((call) => call.url.endsWith("/schedule"));
+
+        expect(schedule?.body["instanceName"]).toBe("tenant-a");
+        expect(schedule?.body["pool"]).toBe("billing");
+        expect(schedule?.body["maxConcurrency"]).toBe(4);
     });
 
     it("runAt() omits maxConcurrency for an unpooled job", async () => {

@@ -1502,7 +1502,13 @@ A pause reaches every isolate within five seconds. The flag lives in the
 deployment's `SchedulerDO` instance, which every app with a scheduler or a cron
 has. An app without one gets `400 PAUSE_NOT_CONFIGURED`. Jobs scheduled through
 a separately named scheduler instance (a tenant scheduler, a workpool with its
-own `instanceName`) are not held. HTTP actions and SSR pages behind `httpRouter`,
+own `instanceName`) are held too: each named instance registers with the main one
+the first time it is used, `pause` and `resume` reach every registered instance,
+and an instance first used during a pause starts paused. If some instance cannot
+be reached the command fails with `PAUSE_INSTANCES_FAILED` and names them; the
+main instance has already changed, and running the same command again reaches the
+rest. A custom `schedulerInstanceName` must also be passed to `createScheduler` and
+`createWorkpool` as `primaryInstanceName`. HTTP actions and SSR pages behind `httpRouter`,
 and custom `routes` handlers, keep serving.
 
 ### `lunora workflow`

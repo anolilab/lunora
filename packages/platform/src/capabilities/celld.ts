@@ -182,7 +182,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         deploymentPause: {
             level: "emulated",
-            note: "The same SchedulerDO-held flag as on Cloudflare, on cell storage and alarms: jobs are held by the alarm, the worker's router, cron and queue checks are unchanged. A queue batch held while paused spends a delivery attempt per retry",
+            note: "The same SchedulerDO-held flag as on Cloudflare, on cell storage and alarms: jobs are held by the alarm, the worker's router, cron and queue checks are unchanged. A queue message held while paused is re-sent as a delayed copy with a fresh attempt budget, and the registry of named scheduler instances a pause fans out to lives in the same SchedulerDO storage, so no extra host contract is needed",
         },
         scheduler: {
             level: "emulated",
