@@ -236,7 +236,7 @@ describe("d1 admin export/import globals", () => {
         });
 
         it("answers a delete row in a dry run without touching the stored row, and counts nothing deleted", async () => {
-            expect.assertions(3);
+            expect.assertions(5);
 
             const fresh = createD1Exec();
 
@@ -254,9 +254,11 @@ describe("d1 admin export/import globals", () => {
             await expect(importGlobalRows(noteWriter, notes, { dryRun: true, rows })).resolves.toMatchObject({ deleted: 0, errors: [] });
             await expect(noteWriter.get("notes", "n1")).resolves.toMatchObject({ title: "stored" });
 
-            // A re-run after the row is gone removes nothing and reports no error.
-            await importGlobalRows(noteWriter, notes, { rows });
+            // The real run removes the row and says so.
+            await expect(importGlobalRows(noteWriter, notes, { rows })).resolves.toMatchObject({ deleted: 1, errors: [] });
+            await expect(noteWriter.get("notes", "n1")).resolves.toBeNull();
 
+            // A re-run after the row is gone removes nothing and reports no error.
             await expect(importGlobalRows(noteWriter, notes, { rows })).resolves.toMatchObject({ deleted: 0, errors: [] });
 
             fresh.close();
