@@ -66,13 +66,18 @@ const client = {
     },
 } as unknown as LunoraClient;
 
-const feed: { current: { readonly commits: number; loaded: number; loadMore: (numberItems: number) => void } | null } = { current: null };
+const feed: { current: { loaded: number; loadMore: (numberItems: number) => void } | null } = { current: null };
+let commits = 0;
+
+const countCommit = (): void => {
+    commits += 1;
+};
 const root = createRoot(document.createElement("div"));
 
 await act(async () => {
     root.render(
         <LunoraProvider client={client}>
-            <Feed handleRef={feed} numItems={NUM_ITEMS} />
+            <Feed handleRef={feed} numItems={NUM_ITEMS} onCommit={countCommit} />
         </LunoraProvider>,
     );
 });
@@ -97,13 +102,13 @@ const head = subs.find((sub) => sub.opts.cursor === null)!;
 
 // The frame being timed is a head-page push through to a committed render. Prove once that it commits, so a
 // regression that stops the push from rendering fails the bench instead of timing a frame that does nothing.
-const commitsBefore = feed.current?.commits ?? 0;
+const commitsBefore = commits;
 
 act(() => {
     head.callback(evaluate(head.opts));
 });
 
-if ((feed.current?.commits ?? 0) === commitsBefore) {
+if (commits === commitsBefore) {
     throw new Error("A head-page push did not commit a Feed render, so the bench would time nothing.");
 }
 
