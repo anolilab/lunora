@@ -1035,6 +1035,20 @@ type OptionalizeShape<M> = {
 type ObjectShape = Record<string, Validator>;
 type ObjectShapeType<S extends ObjectShape> = OptionalizeShape<{ [K in keyof S]: Infer<S[K]> }>;
 
+/** The keys of `input` absent from `declared`, in input order — allocated on the first miss only, so a clean result just scans. */
+const undeclaredKeysOf = (input: Record<string, unknown>, declared: ReadonlySet<string>): string[] | undefined => {
+    let undeclared: string[] | undefined;
+
+    for (const key of Object.keys(input)) {
+        if (!declared.has(key)) {
+            undeclared ??= [];
+            undeclared.push(key);
+        }
+    }
+
+    return undeclared;
+};
+
 const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean): ObjectColumnValidator<ObjectShapeType<S>> => {
     // Precompute the key list, per-key internal validator, and the optional flag
     // once at construction time — the shape is fixed, so the per-parse hot path
@@ -1063,6 +1077,10 @@ const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean
     // marked child has parsed, so `context.redact` cannot tell it that a secret sits
     // in this shape.
     const sensitiveShape = Object.values(shape).some((child) => containsSensitive(child));
+    // `.output()` runs the undeclared-key check on every result, so the lookup set
+    // and the error's `expected` text are built once here rather than per parse.
+    const declaredKeys = new Set(entries.map(({ key }) => key));
+    const declaredExpected = `only the declared keys (${entries.map(({ key }) => key).join(", ")})`;
 
     const validator = asColumn(
         createValidator<ObjectShapeType<S>>(
@@ -1081,10 +1099,9 @@ const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean
                 // missing from every response. `.strip()` is the opt-out for a
                 // shape that is narrowing on purpose.
                 if (context.rejectUnknownKeys === true && stripUnknown !== true) {
-                    const declared = new Set(entries.map(({ key }) => key));
-                    const undeclared = Object.keys(input).filter((key) => !declared.has(key));
+                    const undeclared = undeclaredKeysOf(input, declaredKeys);
 
-                    if (undeclared.length > 0) {
+                    if (undeclared !== undefined) {
                         // Under `sensitive`, or beside a sensitive field, the undeclared key names
                         // are withheld too: they are caller-chosen text that can carry the secret.
                         const listed = context.redact === true || sensitiveShape ? "[redacted]" : undeclared.join(", ");
@@ -1093,7 +1110,7 @@ const objectValidator = <S extends ObjectShape>(shape: S, stripUnknown?: boolean
                             `object has ${String(undeclared.length)} undeclared key(s): ${listed}. ` +
                                 `Add them to the validator, or call .strip() on it to drop them on purpose.`,
                             {
-                                expected: `only the declared keys (${entries.map(({ key }) => key).join(", ")})`,
+                                expected: declaredExpected,
                                 path: [...path],
                                 received: listed,
                             },
@@ -1288,12 +1305,29 @@ const failUnion = (
     return fail(containerContext(context, sensitiveMembers), `union of ${String(memberInternals.length)} member(s)${detail}`, value, { redactValue });
 };
 
+/** Stands in for "this member has no cheap pre-check" in {@link literalShortcutOf}. */
+const NO_SHORTCUT: unique symbol = Symbol("lunora.noShortcut");
+
+/**
+ * The single value a `v.literal` union member can accept, so the trial pass can
+ * skip a certain miss with one comparison instead of a throw. `.check()` and
+ * `sensitive` keep the kind and only narrow what it accepts, so a mismatch still
+ * proves a miss; `.nullable()` widens it to `null` as well and gets no shortcut.
+ */
+const literalShortcutOf = (member: InternalValidator<unknown>): unknown => {
+    const meta = member._meta;
+
+    return member.kind === "literal" && (meta?.column as ColumnMeta | undefined)?.notNull !== false ? meta?.value : NO_SHORTCUT;
+};
+
 const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValidator<Infer<Vs[number]>, Infer<Vs[number]>> => {
     if (members.length === 0) {
         throw new LunoraError("INTERNAL", "v.union requires at least one member");
     }
 
     const memberInternals = members.map((member) => toInternal(member));
+    const shortcuts = memberInternals.map((member) => literalShortcutOf(member));
+    const memberCount = memberInternals.length;
     const sensitiveMembers = members.some((member) => containsSensitive(member));
 
     return asColumn(
@@ -1313,9 +1347,17 @@ const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValid
                 context.probe = true;
 
                 try {
-                    for (const member of memberInternals) {
+                    for (let index = 0; index < memberCount; index += 1) {
+                        const shortcut = shortcuts[index];
+
+                        // A literal member that cannot match would only throw PROBE_MISS;
+                        // `failUnion` still runs every member, so diagnostics are unchanged.
+                        if (shortcut !== NO_SHORTCUT && value !== shortcut) {
+                            continue;
+                        }
+
                         try {
-                            return member._parse(value, context) as Infer<Vs[number]>;
+                            return (memberInternals[index] as InternalValidator<unknown>)._parse(value, context) as Infer<Vs[number]>;
                         } catch (error: unknown) {
                             if (!(error instanceof ValidationError)) {
                                 throw error;

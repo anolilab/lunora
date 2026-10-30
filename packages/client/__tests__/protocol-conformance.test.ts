@@ -479,6 +479,8 @@ interface WsFixtures {
     clientFrames: Record<string, unknown>;
     /** Merge cases, only for a client that announced the `pageDelta` capability. */
     pageDeltaFrames: WsServerCase[];
+    /** A bracketed refresh, only for a client that announced the `refreshBatch` capability. */
+    refreshBatchFrames: { expect: { deliveredBeforeEnd: number; valuesWire: unknown[] }; frames: Record<string, unknown>[] };
     serverFrames: WsServerCase[];
     shape: {
         expectedRows: Record<string, unknown>[];
@@ -570,6 +572,28 @@ describe("ws-frames fixtures", () => {
 
         expect(values).toHaveLength(2);
         expect(encodeWire(values[1])).toStrictEqual(testCase.expect.valueWire);
+    });
+
+    // Separate from `serverFrames` for the same reason as `pageDeltaFrames`: only an SDK that announced the capability holds the bracket.
+    it("holds a refresh batch until batchEnd and delivers each subscription once", () => {
+        expect.hasAssertions();
+
+        const client = makeWsClient();
+        const values: unknown[] = [];
+        const { expect: expected, frames } = ws.refreshBatchFrames;
+
+        client.subscribe(fnRef("messages:list"), { channel: "general" }, (value) => values.push(value));
+        latestSocket().open();
+
+        for (const frame of frames.slice(0, -1)) {
+            latestSocket().receive(frame);
+        }
+
+        expect(values).toHaveLength(expected.deliveredBeforeEnd);
+
+        latestSocket().receive(frames.at(-1) ?? {});
+
+        expect(values.map((value) => encodeWire(value))).toStrictEqual(expected.valuesWire);
     });
 
     const errorFrames = ws.serverFrames.filter((testCase) => testCase.expect.kind === "error");

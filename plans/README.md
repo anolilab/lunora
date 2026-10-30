@@ -54,6 +54,7 @@ When a plan ships: delete its file and remove its row here in the same change.
 | [133](./133-live-cdc-and-do-consumes-do.md)            | Live CDC ingest + DO-consumes-DO shape                                 | P3, demand-gated                                                                       |
 | [169](./169-collab-crdt.md)                            | `@lunora/collab` (CRDT / collaborative editing)                        | demand-gated                                                                           |
 | [453](./453-embedded-runtime.md)                       | In-process runtime as an embedded (browser / device) target            | phase 1 shipped; rest demand-gated                                                     |
+| [454](./454-saas-kit.md)                               | Ship a Lunora SaaS Kit (`templates/saas`) composed from the registry   | P2; composition plan                                                                   |
 
 ## Shipped
 

@@ -1,3 +1,109 @@
+## @lunora/runtime [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.257...@lunora/runtime@1.0.0-alpha.258) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.188
+* **@lunora/do:** upgraded to 1.0.0-alpha.266
+
+## @lunora/runtime [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.256...@lunora/runtime@1.0.0-alpha.257) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.187
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+* **@lunora/do:** upgraded to 1.0.0-alpha.265
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.174
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.101
+
+## @lunora/runtime [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.254...@lunora/runtime@1.0.0-alpha.255) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.185
+* **@lunora/do:** upgraded to 1.0.0-alpha.263
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.172
+
+## @lunora/runtime [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.253...@lunora/runtime@1.0.0-alpha.254) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.184
+* **@lunora/do:** upgraded to 1.0.0-alpha.262
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.171
+
+## @lunora/runtime [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.252...@lunora/runtime@1.0.0-alpha.253) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.141
+* **@lunora/observability:** upgraded to 1.0.0-alpha.183
+* **@lunora/platform:** upgraded to 1.0.0-alpha.76
+* **@lunora/do:** upgraded to 1.0.0-alpha.261
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.170
+
+## @lunora/runtime [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.251...@lunora/runtime@1.0.0-alpha.252) (2026-10-29)
+
+### Features
+
+* **do,client,runtime:** batch a write's frames and re-auth open sockets ([#1396](https://github.com/anolilab/lunora/issues/1396)) ([dd260ba](https://github.com/anolilab/lunora/commit/dd260baa8cfa1aba3c86ef98206d156f1e49976b))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.182
+* **@lunora/do:** upgraded to 1.0.0-alpha.260
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.169
+
+## @lunora/runtime [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.250...@lunora/runtime@1.0.0-alpha.251) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.181
+* **@lunora/do:** upgraded to 1.0.0-alpha.259
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.168
+
+## @lunora/runtime [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.249...@lunora/runtime@1.0.0-alpha.250) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.180
+* **@lunora/do:** upgraded to 1.0.0-alpha.258
+
+## @lunora/runtime [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.248...@lunora/runtime@1.0.0-alpha.249) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.257
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.99
+
+## @lunora/runtime [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.247...@lunora/runtime@1.0.0-alpha.248) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** `runMigrateToHyperdriveCommand` is now `runMigrateBackendCommand`
+and requires a `direction`.
+* **hyperdrive:** ImportShardResult and the global ImportResult gain a required
+`replaced` count; `streamingImport` takes an `onConflict` argument.
+
+### Features
+
+* **hyperdrive:** wire the admin global plane, add replace imports and migrate hyperdrive-to-d1 ([#1360](https://github.com/anolilab/lunora/issues/1360)) ([f25b400](https://github.com/anolilab/lunora/commit/f25b400a13fbf76d19e5e587f4d20f00242a7ece)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.179
+* **@lunora/do:** upgraded to 1.0.0-alpha.256
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+
 ## @lunora/runtime [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.246...@lunora/runtime@1.0.0-alpha.247) (2026-10-28)
 
 

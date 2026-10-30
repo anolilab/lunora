@@ -1,3 +1,33 @@
+## @lunora/scheduler [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.158...@lunora/scheduler@1.0.0-alpha.159) (2026-10-30)
+
+### Performance Improvements
+
+* **wire:** skip decodeWire on tagless json text ([#1384](https://github.com/anolilab/lunora/issues/1384)) ([ec9dd3d](https://github.com/anolilab/lunora/commit/ec9dd3de697df597b24cbea981ea25a1a2c8fcea))
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+
+## @lunora/scheduler [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.156...@lunora/scheduler@1.0.0-alpha.157) (2026-10-29)
+
+### Bug Fixes
+
+* **registry:** scope presence rooms to the caller's tenant ([#1419](https://github.com/anolilab/lunora/issues/1419)) ([cb3a4f5](https://github.com/anolilab/lunora/commit/cb3a4f567aa9c06956a136d1d03968065dd574e2))
+
+## @lunora/scheduler [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.155...@lunora/scheduler@1.0.0-alpha.156) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.76
+
+## @lunora/scheduler [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.154...@lunora/scheduler@1.0.0-alpha.155) (2026-10-28)
+
+### Performance Improvements
+
+* single-pass email render, cached scheduler hmac key, linear notify grouping ([#1382](https://github.com/anolilab/lunora/issues/1382)) ([7ac5bb2](https://github.com/anolilab/lunora/commit/7ac5bb2bb9e839ed4da1c2667031c880531cc02e))
+
 ## @lunora/scheduler [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.153...@lunora/scheduler@1.0.0-alpha.154) (2026-10-28)
 
 ### Miscellaneous Chores

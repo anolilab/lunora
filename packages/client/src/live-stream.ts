@@ -118,7 +118,7 @@ const wrapCallback = <Args extends unknown[]>(callback: ((...args: Args) => void
 /** A single leading space after an SSE field colon. */
 const LEADING_SPACE = /^ /u;
 
-/** Bound on one control POST, so a stalled request cannot hold the stream. Same bound as `sendLiveControl`. */
+/** Bound on one control POST, so a stalled request cannot hold the stream. Same bound as `sendControl`. */
 const LIVE_STREAM_CONTROL_TIMEOUT_MS = 10_000;
 
 /**

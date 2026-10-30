@@ -106,6 +106,7 @@
         "architecture",
         "non-goals",
         "limits",
+        "startup-cpu-limit",
         "versioning",
         "---Lunora Cloud---",
         "cloud/monitoring",

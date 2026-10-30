@@ -1,5 +1,5 @@
 /**
- * `lunora migrate <subcommand>` — the cerebro adapter and the five subcommand
+ * `lunora migrate <subcommand>` — the cerebro adapter and the subcommand
  * shells it routes to.
  *
  * Split from `./handler`, which holds the migration operations themselves and is
@@ -13,16 +13,17 @@ import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { CommandResult } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
-import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand, runMigrateToHyperdriveCommand } from "./handler";
+import type { MigrateBackendDirection } from "./handler";
+import { runMigrateBackendCommand, runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand } from "./handler";
 import type { MigrateOptions } from "./index";
 
 /**
- * The `--format json` payload, discriminated by `subcommand`: the five verbs
- * answer five different questions. There is no `ok` — the envelope's `code` is
+ * The `--format json` payload, discriminated by `subcommand`: the verbs
+ * answer different questions. There is no `ok` — the envelope's `code` is
  * the verdict.
  */
 type MigrateCommandData =
-    | { bytes: number; exported: number; imported: number; subcommand: "d1-to-hyperdrive" }
+    | { bytes: number; exported: number; imported: number; replaced: number; subcommand: MigrateBackendDirection }
     | { empty: boolean; migrationFile?: string; subcommand: "generate" }
     | { file?: string; name: string; subcommand: "create" }
     | { id: string; result: unknown; subcommand: "down" | "status" | "up" };
@@ -49,16 +50,18 @@ const dispatchGenerate = (context: MigrateDispatchContext): CommandResult<Migrat
     };
 };
 
-/** `migrate d1-to-hyperdrive`: copy `.global()` data between two deployments. */
-const dispatchToHyperdrive = async (context: MigrateDispatchContext): Promise<CommandResult<MigrateCommandData>> => {
+/** `migrate d1-to-hyperdrive | hyperdrive-to-d1`: copy `.global()` data between two deployments. */
+const dispatchBackend = async (context: MigrateDispatchContext, direction: MigrateBackendDirection): Promise<CommandResult<MigrateCommandData>> => {
     const { logger, options } = context;
-    const result = await runMigrateToHyperdriveCommand({
+    const result = await runMigrateBackendCommand({
         batchSize: options.batchSize,
+        direction,
         fromToken: options.fromToken ?? options.token,
         fromUrl: options.fromUrl ?? options.url,
         logger,
         out: options.out,
         prod: options.prod === true,
+        replace: options.replace === true,
         tables: options.tables,
         toToken: options.toToken ?? options.token,
         toUrl: options.toUrl ?? options.url,
@@ -67,7 +70,7 @@ const dispatchToHyperdrive = async (context: MigrateDispatchContext): Promise<Co
 
     return {
         code: result.code,
-        data: { bytes: result.bytes, exported: result.exported, imported: result.imported, subcommand: "d1-to-hyperdrive" },
+        data: { bytes: result.bytes, exported: result.exported, imported: result.imported, replaced: result.replaced, subcommand: direction },
         ...(result.error === undefined ? {} : { error: result.error }),
     };
 };
@@ -125,7 +128,7 @@ const dispatchData = async (context: MigrateDispatchContext, subcommand: "down" 
  * `lunora migrate <subcommand>` handler (lazy-loaded via the command's `loader`).
  *
  * The document is assembled here rather than inside each `run*` function: the
- * subcommands are five different operations sharing one command name, and each
+ * subcommands are different operations sharing one command name, and each
  * already returns the structured result its payload is built from.
  */
 const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions, MigrateCommandData>(async ({ argument, cwd, logger, options }) => {
@@ -136,8 +139,9 @@ const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions, Mi
         case "create": {
             return await dispatchCreate(context);
         }
-        case "d1-to-hyperdrive": {
-            return await dispatchToHyperdrive(context);
+        case "d1-to-hyperdrive":
+        case "hyperdrive-to-d1": {
+            return await dispatchBackend(context, sub);
         }
         case "down":
         case "status":
@@ -148,7 +152,7 @@ const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions, Mi
             return dispatchGenerate(context);
         }
         default: {
-            const message = `unknown migrate subcommand: "${sub ?? ""}" — expected generate | create | up | down | status`;
+            const message = `unknown migrate subcommand: "${sub ?? ""}" — expected generate | create | up | down | status | d1-to-hyperdrive | hyperdrive-to-d1`;
 
             context.logger.error(message);
 

@@ -25,6 +25,7 @@ import { isDuplicateInstanceError } from "@lunora/workflow";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { fnv1a64Hex } from "../../../shared/fnv1a";
+import { importHmacKey } from "../../../shared/hmac-key";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import type { AgentChannelRun, AgentDefinition, AgentInboundChannelKind, AgentWorkflowBindingLike, InboundChannelEvent } from "./types";
 
@@ -57,9 +58,8 @@ const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
 /** Constant-time HMAC-SHA256 verify (`crypto.subtle.verify` compares internally). */
 const verifyHmacSha256 = async (secret: string, message: string, signatureHex: string): Promise<boolean> => {
     try {
-        const key = await crypto.subtle.importKey("raw", utf8(secret), { hash: "SHA-256", name: "HMAC" }, false, ["verify"]);
-
-        return await crypto.subtle.verify("HMAC", key, hexToBytes(signatureHex), utf8(message));
+        // The channel secret is static and verified on every inbound request, so the key comes from the per-secret cache.
+        return await crypto.subtle.verify("HMAC", await importHmacKey(secret), hexToBytes(signatureHex), utf8(message));
     } catch {
         return false;
     }

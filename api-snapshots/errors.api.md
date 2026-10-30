@@ -145,6 +145,10 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Migration drift";
     };
+    readonly UNIQUE_INDEX_DUPLICATES: {
+        readonly status: 503;
+        readonly title: "Unique index blocked by duplicate rows";
+    };
     readonly UNKNOWN_TABLE: {
         readonly status: 404;
         readonly title: "Unknown table";
@@ -614,6 +618,14 @@ const ERROR_CATALOG: {
     readonly DISPATCH_IN_PROGRESS: {
         readonly status: 409;
         readonly title: "Dispatch already in progress";
+    };
+    readonly STALE_CREDENTIAL: {
+        readonly status: 409;
+        readonly title: "Stale credential";
+    };
+    readonly IDENTITY_CHANGED: {
+        readonly status: 409;
+        readonly title: "Socket identity changed";
     };
     readonly FORBIDDEN_FANOUT: {
         readonly status: 403;

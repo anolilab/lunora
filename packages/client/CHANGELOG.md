@@ -1,3 +1,173 @@
+## @lunora/client [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.267...@lunora/client@1.0.0-alpha.268) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.266
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.258
+
+## @lunora/client [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.266...@lunora/client@1.0.0-alpha.267) (2026-10-30)
+
+### Performance Improvements
+
+* **wire:** skip decodeWire on tagless json text ([#1384](https://github.com/anolilab/lunora/issues/1384)) ([ec9dd3d](https://github.com/anolilab/lunora/commit/ec9dd3de697df597b24cbea981ea25a1a2c8fcea))
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+* **@lunora/do:** upgraded to 1.0.0-alpha.265
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.257
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.174
+
+## @lunora/client [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.264...@lunora/client@1.0.0-alpha.265) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.263
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.255
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.172
+
+## @lunora/client [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.263...@lunora/client@1.0.0-alpha.264) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.262
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.254
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.171
+
+## @lunora/client [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.262...@lunora/client@1.0.0-alpha.263) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.261
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.253
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.170
+
+## @lunora/client [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.261...@lunora/client@1.0.0-alpha.262) (2026-10-29)
+
+### Features
+
+* **do,client,runtime:** batch a write's frames and re-auth open sockets ([#1396](https://github.com/anolilab/lunora/issues/1396)) ([dd260ba](https://github.com/anolilab/lunora/commit/dd260baa8cfa1aba3c86ef98206d156f1e49976b))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.260
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.252
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.169
+
+## @lunora/client [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.260...@lunora/client@1.0.0-alpha.261) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.259
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.251
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.168
+
+## @lunora/client [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.259...@lunora/client@1.0.0-alpha.260) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.258
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.250
+
+## @lunora/client [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.258...@lunora/client@1.0.0-alpha.259) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.257
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.249
+
+## @lunora/client [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.257...@lunora/client@1.0.0-alpha.258) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **errors:** `new LunoraError(code)` no longer copies the catalog
+`hint` onto `error.hint`; call `resolveHint(error)` (as toErrorBody and
+renderLunoraError do). ErrorCatalogEntry drops `hint` and `docsUrl` (no
+entry set a docsUrl). Hint text lives in the new `ERROR_HINTS` /
+`getCatalogHint` exports.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(errors): move the nested-index-path hint into ERROR_HINTS
+
+INDEX_FIELD_NESTED_PATH landed on alpha with its hint on the catalog entry,
+where resolveHint and the docs generator no longer look, so the hint dropped
+out of errors.mdx. A catalog-integrity test now rejects any hint left on a
+catalog entry.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* chore(errors): update the API snapshot for the moved nested-path hint
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): keep hints on the errors the client raises itself
+
+Moving hints out of the catalog meant `new LunoraError(code)` no longer set
+`error.hint`, so OFFLINE_NOT_QUEUED and HTTP_STREAM_NO_BODY, which the browser
+client builds without a server envelope, reached apps with no hint. Their text
+moves to a small client-hints module that the client attaches when it raises
+them and ERROR_HINTS reuses, so the bundle gains two strings, not the table.
+
+hints.ts also drops its file-level eslint-disable: its exports are now
+gathered at the end of the module, which satisfies import/exports-last.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): keep hints.ts loadable by the docs generator
+
+The docs generator imports hints.ts straight from source under Node's type
+stripping, which cannot resolve an extensionless relative import, so the
+client-hints import broke it. hints.ts keeps its own copy of the two
+client-raised hints again, and a catalog-integrity test holds the copies equal.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): carry hints on streaming and subscription error frames
+
+Error hints now live in ERROR_HINTS rather than on the catalog entry, so
+a frame built from toErrorBody has to forward the resolved hint itself.
+The SSE error frame, the WS stream error frame, subscription errors and
+shape seed failures now include `hint` next to `why` when the error is
+not redacted; a redacted body carries neither. The client rebuilds the
+hint onto the LunoraError / SubscriptionError it raises from a frame
+without importing the hints table.
+
+SubscriptionError gains an optional `hint`. The protocol doc lists the
+new frame fields. The errors README/docs examples import resolveHint,
+and the docs generator docblock describes the catalog/hints split.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(do): send the resolved hint when a refresh ends a subscription
+
+The terminal refresh branch (a result that grew past the cap, or a guarded
+persist failure) sent only `why`, while the neighbouring subscription error
+paths send the full toErrorBody details, hint included.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Performance Improvements
+
+* **errors:** keep catalog hints out of browser bundles ([#1366](https://github.com/anolilab/lunora/issues/1366)) ([7d1953f](https://github.com/anolilab/lunora/commit/7d1953f35ae8c04fd471913fa48467ce928fb493))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.256
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.248
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+
 ## @lunora/client [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.256...@lunora/client@1.0.0-alpha.257) (2026-10-27)
 
 ### ⚠ BREAKING CHANGES

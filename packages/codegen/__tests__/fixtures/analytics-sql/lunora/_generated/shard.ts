@@ -976,13 +976,18 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.invalidateCompanionMemo();
             this.migrated = this.blockedUniqueIndexes.length === 0;
             this.migrationRetryAt = now + BLOCKED_MIGRATION_RETRY_MS;
+
+            if (this.blockedUniqueIndexes.length > 0) {
+                // Once per retry window: the wire message only reaches the caller, and operators need it in the log.
+                console.error(`[lunora] unique index blocked by duplicate rows: ${this.blockedUniqueIndexes.join("; ")}`);
+            }
         }
 
         private ensureServable(): void {
             this.ensureMigrated();
 
             if (this.blockedUniqueIndexes.length > 0) {
-                throw new LunoraError("INTERNAL", this.blockedUniqueIndexes.join("; "));
+                throw new LunoraError("UNIQUE_INDEX_DUPLICATES", this.blockedUniqueIndexes.join("; "));
             }
         }
 
@@ -1225,6 +1230,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 newId: createStableIdFactory(stableKey, stableScope),
                 // Only a mutation is a replay the key reproduces; a query or action carrying the header draws Math.random.
                 random: createStableRandomFactory(contextKind === "mutation" ? stableKey : undefined, stableScope),
+                shardKey: this.currentShardKey(),
                 // Instrumented `fetch`: a CLIENT span per outbound call plus W3C
                 // `traceparent` propagation, so time spent in a downstream service
                 // is visible and its spans join this trace. Degrades to the bare

@@ -459,6 +459,10 @@ Bundle size still affects cold-start time, so if yours is growing:
 - **Look at what is actually heavy.** `lunora analyze` bundles the Worker and
   prints the largest modules, which is usually enough to name the culprit.
 
+Size is not the only upload check. A Worker whose global scope takes more than
+1 s of CPU to evaluate is rejected with error 10021 however small it is; see
+[Worker startup CPU limit](/docs/startup-cpu-limit).
+
 ## Streaming logs
 
 Tail a deployed Worker's live logs with:

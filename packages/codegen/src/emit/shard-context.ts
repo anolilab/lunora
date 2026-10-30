@@ -281,6 +281,7 @@ ${notifyBuild}
                 newId: createStableIdFactory(stableKey, stableScope),
                 // Only a mutation is a replay the key reproduces; a query or action carrying the header draws Math.random.
                 random: createStableRandomFactory(contextKind === "mutation" ? stableKey : undefined, stableScope),
+                shardKey: this.currentShardKey(),
                 // Instrumented \`fetch\`: a CLIENT span per outbound call plus W3C
                 // \`traceparent\` propagation, so time spent in a downstream service
                 // is visible and its spans join this trace. Degrades to the bare

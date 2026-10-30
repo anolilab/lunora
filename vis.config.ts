@@ -21,8 +21,11 @@ export default defineConfig({
     affectedIgnore: ["api-snapshots/**", "marketing/**", "plans/**", "*.md"],
     namedInputs: {
         default: ["sharedGlobals", "{projectRoot}/**/*", "!{projectRoot}/**/*.md"],
-        production: ["default", "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)"],
-        testing: ["default", "{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)"],
+        production: ["default", "workspaceSources", "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)"],
+        testing: ["default", "workspaceSources", "{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)"],
+        // Hashed, not affected-scoped: CI restores the task cache between runs, so a
+        // change here must invalidate builds and tests that inline or import it.
+        workspaceSources: ["{workspaceRoot}/shared/**/*", "{workspaceRoot}/protocol/**/*", "{workspaceRoot}/registry/**/*", "{workspaceRoot}/tools/**/*"],
         public: [
             "default",
             "{workspaceRoot}/dist",
@@ -31,24 +34,11 @@ export default defineConfig({
             "!{workspaceRoot}/.storybook/**/*",
             "!{workspaceRoot}/**/*.stories.@(js|jsx|ts|tsx|mdx)",
         ],
-        // Do NOT add `shared/`, `protocol/`, `registry/`, `tools/` or `.vis/` here.
-        // None of them sits in a project root, so `default` never matches them, and
-        // they don't need to: a changed path outside every project root already
-        // marks EVERY project affected (measured: one committed one-line edit to any
-        // of them, `--no-uncommitted` as in CI, selects all projects). That is the
-        // right answer for them: `shared/` is inlined into package dists, and the
-        // others feed codegen, registry items or the toolchain. Listing them here
-        // would only widen `sharedGlobals`, whose job is to be the narrow set that
-        // invalidates the world. For unowned paths that should select NOTHING, use
-        // `affectedIgnore` above instead.
-        //
-        // The one case that selects nothing without it is a tracked but UNCOMMITTED
-        // edit to such a path: `--uncommitted` (on locally, off in CI) drops
-        // non-project paths deliberately, so an untracked scratch file cannot
-        // invalidate everything. `pnpm run test:affected` over a dirty `shared/`
-        // therefore prints "No files changed. Nothing to run." and exits 0, a
-        // local-only artefact, not a hole in CI, which diffs committed refs. Commit
-        // first, or pass `--base origin/alpha`, before concluding a gate is missing.
+        // Keep `shared/`, `protocol/`, `registry/` and `tools/` out of `sharedGlobals`:
+        // they sit outside every project root, so a change already marks every project
+        // affected. They are hashed through `workspaceSources` instead. A dirty but
+        // uncommitted edit there selects nothing locally (`--uncommitted` drops
+        // non-project paths); commit or pass `--base origin/alpha` first.
         sharedGlobals: ["{workspaceRoot}/.nvmrc", "{workspaceRoot}/package.json", "{workspaceRoot}/tsconfig.json", "{workspaceRoot}/tsconfig.base.json"],
     },
     tasks: {

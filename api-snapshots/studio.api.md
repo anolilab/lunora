@@ -593,6 +593,7 @@ interface ImportShardResult {
     conflicts: number;
     errors: ImportError[];
     inserted: Record<string, number>;
+    replaced?: number;
 }
 ```
 
@@ -1629,7 +1630,9 @@ const MESSAGE_IDS: readonly [
     "Couldn't read the columns of {table}: {message}",
     "Import stopped after {rows} rows: {message}. The counts below cover completed chunks only. The chunk from line {line} may have written rows: check the table for rows from line {line} onward before importing again, or delete the written rows first and then import the whole file.",
     "Import stopped after {rows} rows: {message}. The counts below cover those rows. Rows from line {line} onward were not sent: do not import the whole file again, import from that line onward, or delete the written rows first and then import the whole file.",
-    "Inserted {inserted}, {conflicts} conflicts, {errors} errors.",
+    "Inserted {inserted}, replaced {replaced}, {conflicts} conflicts, {errors} errors.",
+    "Overwrite rows whose _id already exists (otherwise they are left unchanged and counted as conflicts)",
+    "This shard cannot overwrite existing rows. Nothing was sent. Update the app and import again.",
     "Interactive OpenAPI reference and copy-paste snippets for your functions.",
     "Invalid JSON args: {message}",
     "Invalid JSON: {message}",

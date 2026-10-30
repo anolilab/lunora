@@ -223,12 +223,18 @@ describe("errorHint", () => {
     });
 
     it("drops non-string entries from an array hint rather than rendering 'undefined'", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         expect(errorHint({ hint: ["keep", 1, null, undefined, { a: 1 }, "me"] })).toBe("keep\nme");
-        // An array with nothing usable joins to the empty string, not undefined —
-        // callers render it as "no hint text" either way.
-        expect(errorHint({ hint: [1, 2] })).toBe("");
+        // An array with nothing usable is no hint, so the catalog gets its say.
+        expect(errorHint({ hint: [1, 2] })).toBeUndefined();
+        expect(errorHint({ code: "CONFLICT", hint: [] })).not.toBe("");
+    });
+
+    it("matches a thrown string against the catalog's message solutions", () => {
+        expect.assertions(1);
+
+        expect(errorHint("SQLITE_TOOBIG: string or blob too big")).toContain("2 MB");
     });
 
     it("returns undefined when the error carries no usable hint", () => {
@@ -238,6 +244,21 @@ describe("errorHint", () => {
         expect(errorHint(new Error("boom"))).toBeUndefined();
         expect(errorHint("a string error")).toBeUndefined();
         expect(errorHint({ hint: 42 })).toBeUndefined();
+    });
+
+    it("falls back to the catalog hint for the error's code when the error carries none", () => {
+        expect.assertions(2);
+
+        // `DELIVERY_FENCED` has an authored catalog hint; a client-side error that only
+        // carries the code must still show it, as the CLI renderer does.
+        expect(errorHint({ code: "DELIVERY_FENCED" })).toContain("Retry with the same transport key");
+        expect(errorHint({ code: "NOT_FOUND" })).toBeUndefined();
+    });
+
+    it("keeps an explicit hint ahead of the catalog's", () => {
+        expect.assertions(1);
+
+        expect(errorHint({ code: "DELIVERY_FENCED", hint: "Use the other key." })).toBe("Use the other key.");
     });
 });
 

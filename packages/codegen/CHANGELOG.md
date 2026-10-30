@@ -1,3 +1,412 @@
+## @lunora/codegen [1.0.0-alpha.376](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.375...@lunora/codegen@1.0.0-alpha.376) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.274
+* **@lunora/agent:** upgraded to 1.0.0-alpha.265
+* **@lunora/container:** upgraded to 1.0.0-alpha.100
+* **@lunora/queue:** upgraded to 1.0.0-alpha.134
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.159
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.101
+* **@lunora/client:** upgraded to 1.0.0-alpha.267
+* **@lunora/do:** upgraded to 1.0.0-alpha.265
+* **@lunora/payment:** upgraded to 1.0.0-alpha.257
+* **@lunora/server:** upgraded to 1.0.0-alpha.255
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.174
+
+## @lunora/codegen [1.0.0-alpha.374](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.373...@lunora/codegen@1.0.0-alpha.374) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.272
+* **@lunora/agent:** upgraded to 1.0.0-alpha.263
+* **@lunora/client:** upgraded to 1.0.0-alpha.265
+* **@lunora/do:** upgraded to 1.0.0-alpha.263
+* **@lunora/payment:** upgraded to 1.0.0-alpha.255
+* **@lunora/server:** upgraded to 1.0.0-alpha.253
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.172
+
+## @lunora/codegen [1.0.0-alpha.373](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.372...@lunora/codegen@1.0.0-alpha.373) (2026-10-29)
+
+### Bug Fixes
+
+* **registry:** scope presence rooms to the caller's tenant ([#1419](https://github.com/anolilab/lunora/issues/1419)) ([cb3a4f5](https://github.com/anolilab/lunora/commit/cb3a4f567aa9c06956a136d1d03968065dd574e2))
+
+### Documentation
+
+* add a page for the 1 s startup CPU limit (error 10021) ([#1411](https://github.com/anolilab/lunora/issues/1411)) ([6729aeb](https://github.com/anolilab/lunora/commit/6729aeb05bf94aefcdead0f1b6eb55e043876336))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.271
+* **@lunora/agent:** upgraded to 1.0.0-alpha.262
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.157
+* **@lunora/client:** upgraded to 1.0.0-alpha.264
+* **@lunora/do:** upgraded to 1.0.0-alpha.262
+* **@lunora/payment:** upgraded to 1.0.0-alpha.254
+* **@lunora/server:** upgraded to 1.0.0-alpha.252
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.171
+
+## @lunora/codegen [1.0.0-alpha.372](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.371...@lunora/codegen@1.0.0-alpha.372) (2026-10-29)
+
+### Bug Fixes
+
+* **auth:** keep the session and identity in step with org membership ([#1417](https://github.com/anolilab/lunora/issues/1417)) ([d8dc0a5](https://github.com/anolilab/lunora/commit/d8dc0a57ebfb2c5dfa74271614e0109063984e60))
+
+### Performance Improvements
+
+* **codegen:** share parsed lib files across test projects ([#1403](https://github.com/anolilab/lunora/issues/1403)) ([d37bfbd](https://github.com/anolilab/lunora/commit/d37bfbddabb92242f9e75f354200ff949ccc2ead))
+
+## @lunora/codegen [1.0.0-alpha.371](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.370...@lunora/codegen@1.0.0-alpha.371) (2026-10-29)
+
+### Features
+
+* **saas-ui,templates:** add the composed SaaS kit ([#761](https://github.com/anolilab/lunora/issues/761)) ([35f662d](https://github.com/anolilab/lunora/commit/35f662d24e5992e606a86f989f55bda210dfdd11))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.270
+* **@lunora/agent:** upgraded to 1.0.0-alpha.261
+* **@lunora/platform:** upgraded to 1.0.0-alpha.76
+* **@lunora/queue:** upgraded to 1.0.0-alpha.132
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.156
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.141
+* **@lunora/client:** upgraded to 1.0.0-alpha.263
+* **@lunora/do:** upgraded to 1.0.0-alpha.261
+* **@lunora/payment:** upgraded to 1.0.0-alpha.252
+* **@lunora/server:** upgraded to 1.0.0-alpha.251
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.170
+
+## @lunora/codegen [1.0.0-alpha.370](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.369...@lunora/codegen@1.0.0-alpha.370) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.269
+* **@lunora/agent:** upgraded to 1.0.0-alpha.260
+* **@lunora/client:** upgraded to 1.0.0-alpha.262
+* **@lunora/do:** upgraded to 1.0.0-alpha.260
+* **@lunora/payment:** upgraded to 1.0.0-alpha.251
+* **@lunora/server:** upgraded to 1.0.0-alpha.250
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.169
+
+## @lunora/codegen [1.0.0-alpha.369](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.368...@lunora/codegen@1.0.0-alpha.369) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.268
+* **@lunora/agent:** upgraded to 1.0.0-alpha.259
+* **@lunora/client:** upgraded to 1.0.0-alpha.261
+* **@lunora/do:** upgraded to 1.0.0-alpha.259
+* **@lunora/payment:** upgraded to 1.0.0-alpha.250
+* **@lunora/server:** upgraded to 1.0.0-alpha.249
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.168
+
+## @lunora/codegen [1.0.0-alpha.368](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.367...@lunora/codegen@1.0.0-alpha.368) (2026-10-29)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** Mysql2Like now requires query(text, params) instead of
+execute(text, params). A real mysql2/promise connection or pool has both,
+so only hand-written doubles need renaming.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind pgvector id lists and metadata as json text
+
+createPgVectorIndex broke on postgres.js, the driver its docs show. With
+fetch_types: false (Hyperdrive's recommended setting) postgres.js knows no
+array types, so the id array bound to ANY($1::text[]) went over as the
+malformed literal "a,b,c" and getByIds/deleteByIds threw. And because
+postgres.js types each parameter from the server's Describe, a bare
+$n::jsonb parameter had the already-serialised metadata JSON-encoded a
+second time: metadata was stored as a string and filters never matched.
+
+Id lists now bind as one JSON text parameter expanded with
+jsonb_array_elements_text, and every JSON parameter is cast ::text::jsonb.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind mysql2 array and object params as one value
+
+mysql2's query() interpolates values client-side and expands an array
+into a comma list and a plain object into `key = value` pairs, so since
+the switch from execute() such a param changed the statement's shape
+instead of binding one value. execute()'s binary protocol sent them as
+JSON text. fromMysql2 and buildMysqlExec now normalise every param: an
+array or object becomes its JSON text, an ArrayBuffer becomes bytes,
+scalars, dates and byte views pass through, and undefined throws, as it
+did under execute(), instead of silently binding NULL.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* perf(hyperdrive): run postgres.js statements as prepared statements
+
+fromPostgresJs called client.unsafe(text, params), and unsafe defaults to
+prepare: false. Cloudflare warns against that under Hyperdrive: its
+transaction pooling does not reliably support unnamed statements (queries
+can hang or fail), and each one pays a Parse/Describe round trip before
+Bind/Execute. The adapter now passes { prepare: true }; a client built
+with prepare: false still wins.
+
+Prepared reads are cacheable by Hyperdrive, which is safe for .global()
+only because its config now has caching disabled (the deploy and docs
+change that requires it). The docs, skills, registry item and the config
+remediation build postgres.js with Cloudflare's recommended
+{ fetch_types: false, max: 5 }, with the caveat that array params then
+need binding as JSON text, and the .global() snippets go through
+fromPostgresJs instead of calling sql.unsafe directly.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(hyperdrive): state that mysql needs backslash escapes enabled
+
+Since MySQL statements go over as text, mysql2 escapes string values
+client-side and writes a quote as \'. On a server whose sql_mode includes
+NO_BACKSLASH_ESCAPES that sequence ends the literal, so a stored string
+could break out of it. The mode is off in MySQL's default sql_mode; the
+docs, the global setup skill and the adapter JSDoc now mark it
+unsupported.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(hyperdrive): rename Mysql2Execute to Mysql2Client
+
+The mysql2 adapters call query() now, so the execute-based name no longer
+describes the type. The snapshot also picks up the multi-line formatting of
+PostgresJsLike.unsafe's options.
+* **hyperdrive:** the exported `Mysql2Execute` type from `@lunora/hyperdrive/global`
+is now `Mysql2Client`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(codegen): pass postgres.js options in hyperdrive examples
+
+The generated hyperdriveGlobal JSDoc and the ctx.sql missing-binding diagnostic
+now show postgres(cs, { fetch_types: false, max: 5 }), matching the docs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): quote mysql strings so no sql_mode can end the literal
+
+mysql2's query() escapes a quote as \', which closes the literal when the server's
+sql_mode has NO_BACKSLASH_ESCAPES and lets a bound string inject SQL. Strings (and
+the JSON text of arrays and objects) are now rendered by toMysqlParams with ''
+for a quote and \\ for a backslash, which keeps every value inside its literal
+under any mode. A hex _utf8mb4 literal was rejected: it takes the charset's
+default collation and comparing it with a plain literal fails.
+
+That mode stays unsupported because backslashes come back doubled under it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(cli): warn when a bound hyperdrive config still caches queries
+
+An app with .global({ backend: "hyperdrive" }) tables needs query caching off, but
+deploy only turned it off on configs it created or reused by name. A binding whose
+id was set by hand or by an earlier deploy kept caching on silently. With API
+credentials present, deploy now reads each such config and warns with the
+`wrangler hyperdrive update <id> --caching-disabled` command. It never changes a
+config the user picked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): keep the hyperdrive caching check from blocking a deploy
+
+The cache-status GET for an already-bound config is advisory, but a network
+failure or timeout rejected out of provisionHyperdrive and aborted the deploy.
+It now logs the same "could not check" warning and carries on.
+
+A schema that exists but can't be read used to leave caching on. Since it may
+declare .global({ backend: "hyperdrive" }) tables, configs are now set up with
+caching off and the parse error is logged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(hyperdrive): note how mysql2 reads ? and ?? in query text
+
+mysql2's client-side formatter skips a ? inside a quoted string or comment, but
+reads ?? as an identifier placeholder. A real-MySQL test pins the literal case.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind a mysql string to ?? as its identifier again
+
+mysql2's ?? escaper reads String(value) and never toSqlString, so the quoted-
+literal wrapper toMysqlParams returns for strings came out as `[object Object]`.
+The wrapper now also has toString returning the raw text.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* test(hyperdrive): pin multi-command postgres.js statements without params
+
+postgres.js sends a statement with no params over the simple protocol even with
+prepare: true, so semicolon-separated commands keep working.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(sql-store): cast search token rows ::text::json on postgres
+
+postgres.js types a bare $n::json parameter from the server and JSON-encodes the
+already-serialised token rows again, so json_to_recordset got a scalar and every
+search-indexed .global() write through fromPostgresJs failed. A postgres.js wire
+test inserts and searches such a table.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): skip the hyperdrive caching check on a dry run
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+### Bug Fixes
+
+* **hyperdrive:** safe caching, mysql text protocol, prepared postgres.js ([#1394](https://github.com/anolilab/lunora/issues/1394)) ([ad59bcf](https://github.com/anolilab/lunora/commit/ad59bcf85763e3ee9853c101fa377d00b9d0c63f))
+
+## @lunora/codegen [1.0.0-alpha.367](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.366...@lunora/codegen@1.0.0-alpha.367) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.267
+* **@lunora/agent:** upgraded to 1.0.0-alpha.258
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.155
+* **@lunora/client:** upgraded to 1.0.0-alpha.260
+* **@lunora/do:** upgraded to 1.0.0-alpha.258
+* **@lunora/payment:** upgraded to 1.0.0-alpha.249
+* **@lunora/server:** upgraded to 1.0.0-alpha.248
+
+## @lunora/codegen [1.0.0-alpha.366](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.365...@lunora/codegen@1.0.0-alpha.366) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.266
+* **@lunora/agent:** upgraded to 1.0.0-alpha.257
+* **@lunora/values:** upgraded to 1.0.0-alpha.85
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.99
+* **@lunora/client:** upgraded to 1.0.0-alpha.259
+* **@lunora/do:** upgraded to 1.0.0-alpha.257
+* **@lunora/payment:** upgraded to 1.0.0-alpha.248
+* **@lunora/server:** upgraded to 1.0.0-alpha.247
+
+## @lunora/codegen [1.0.0-alpha.365](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.364...@lunora/codegen@1.0.0-alpha.365) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** `runMigrateToHyperdriveCommand` is now `runMigrateBackendCommand`
+and requires a `direction`.
+* **hyperdrive:** ImportShardResult and the global ImportResult gain a required
+`replaced` count; `streamingImport` takes an `onConflict` argument.
+* **do:** codegen rejects an exported defineWorkflowEvent anywhere in lunora/ whose type
+is not a string literal (WORKFLOW_EVENT_NOT_LITERAL) or that shares its type with another export
+(WORKFLOW_EVENT_DUPLICATE).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): keep a failed status refresh apart from a failed event send
+
+Discovery of workflow events now also reads definitions called through a namespace import of
+@lunora/workflow and definitions followed by a non-null assertion. In the Send event form, a
+failed instance refresh after a delivered event is reported as such instead of as a send
+failure, so the operator is not nudged into sending the event twice. readInstance no longer
+uses a catch-less try.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(cli): add workflow create and send-event commands
+
+`lunora workflow create <exportName>` starts an instance (`--id`, `--params`) and
+`lunora workflow send-event <exportName> <instanceId> <eventType>` delivers an event
+(`--payload`). Both decode their arguments and dispatch the same admin ops the Studio
+Workflows panel calls through the `lunora run` RPC path, so target resolution, the admin
+bearer and HTTP-status exit codes are shared and the worker stays the only validator.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(do): correct the send-event parser comment on payload validation
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* chore(cli): update api snapshot for the workflow command
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(workflows): unwrap CLI json output, trim create ids, keep send result on audit failure
+
+- lunora workflow --format json returned the admin RPC { result } envelope, so the instance id
+  sat at data.result.id; it is now data.id.
+- createWorkflowInstance trims an explicit id like getWorkflowInstanceStatus and
+  sendWorkflowEvent do, so the id a create returns is the one later lookups address.
+- sendWorkflowEvent logs a failed audit write instead of turning an already delivered event
+  into an error response that invites a duplicate send.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(studio): reset the send-event busy flag in one finally
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(studio): clear the send-event busy flag with promise finally
+
+React Compiler cannot lower a try statement without a catch clause, so the
+try/finally left the send form without automatic memoization. The send and
+refresh now run in their own function, and the caller clears the flag with
+.finally(), as the export/import panel already does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): reset the send-event form when the selected workflow changes
+
+The form kept its instance id across workflow selections, so an id typed for
+one workflow could send the event to a same-id instance of the next one. The
+form is now keyed by the selected workflow, which starts it fresh.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): send workflow events through the studio admin client
+
+Alpha moved Studio's admin calls from useLunora to useStudioClient and
+dropped the useLunora import from the workflows panel, so the send-event
+form threw a ReferenceError after rebasing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **do:** send events to workflow instances from admin ([#1359](https://github.com/anolilab/lunora/issues/1359)) ([d833e43](https://github.com/anolilab/lunora/commit/d833e43bbb5fe3e97e71b86d7c4c8c488d82ce4f)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+* **hyperdrive:** wire the admin global plane, add replace imports and migrate hyperdrive-to-d1 ([#1360](https://github.com/anolilab/lunora/issues/1360)) ([f25b400](https://github.com/anolilab/lunora/commit/f25b400a13fbf76d19e5e587f4d20f00242a7ece)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.265
+* **@lunora/agent:** upgraded to 1.0.0-alpha.256
+* **@lunora/client:** upgraded to 1.0.0-alpha.258
+* **@lunora/do:** upgraded to 1.0.0-alpha.256
+* **@lunora/payment:** upgraded to 1.0.0-alpha.247
+* **@lunora/server:** upgraded to 1.0.0-alpha.246
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+
 ## @lunora/codegen [1.0.0-alpha.364](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.363...@lunora/codegen@1.0.0-alpha.364) (2026-10-27)
 
 ### ⚠ BREAKING CHANGES

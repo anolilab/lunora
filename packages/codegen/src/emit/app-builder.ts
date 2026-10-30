@@ -47,7 +47,7 @@ interface GlobalDeclaration<Env> {
 interface HyperdriveGlobalDeclaration<Env> {
     /** The Hyperdrive engine — selects the Postgres or MySQL dialect. */
     engine: HyperdriveEngine;
-    /** Build the \`SqlExec\` from \`env\` — e.g. \`buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString)))\`. Cache the driver on the DO instance; rebuild lazily after hibernation. */
+    /** Build the \`SqlExec\` from \`env\` — e.g. \`buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 })))\`. Called per request, by the shard and by the stateless worker's admin plane, so return an exec on a connection opened for that call: never cache a driver or socket at module scope, since Workers refuse I/O across requests. */
     exec: (env: Env) => SqlExec;
     /** The worker origin used to fan reverse cross-backend relations across shards. Without it, such a relation throws a clear error. */
     origin?: Selector<Env, string>;

@@ -344,6 +344,7 @@ interface ImportCommandOptions {
     from?: ImportSourceName;
     logger: Logger;
     prod?: boolean;
+    replace?: boolean;
     scan?: boolean;
     storageDir?: string;
     table?: string;
@@ -361,6 +362,7 @@ interface ImportCommandOptions {
 interface ImportCommandResult extends CommandResult<ImportCommandData> {
     body: ImportSummary | undefined;
     inserted: number;
+    replaced?: number;
 }
 ```
 
@@ -658,7 +660,7 @@ interface TableSnapshot {
 ### `Template` (type)
 
 ```ts
-type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "rspack-react" | "solid-v2" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-react-rspack" | "tanstack-start-solid" | "vinext" | "vinext-pages";
+type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "rspack-react" | "saas" | "solid-v2" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-react-rspack" | "tanstack-start-solid" | "vinext" | "vinext-pages";
 ```
 
 ### `UnsupportedEntry` (interface)
@@ -1186,6 +1188,7 @@ interface ImportSummary {
     failed?: ImportShardFailure[];
     inserted: Record<string, number>;
     received: number;
+    replaced: number;
     storage?: {
         ambiguous: StorageRemapReport["ambiguous"];
         ambiguousTotal: number;

@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SchemaLike } from "../src/ctx-db";
@@ -66,6 +67,23 @@ describe("runShardMigrations — adding a UNIQUE index over existing rows", () =
         expect(() => {
             runShardMigrations(harness.sql, withUniqueColumn);
         }).toThrow(/duplicate/iu);
+    });
+
+    it("reports the refusal under its own code, so the wire keeps the remedy instead of redacting it as INTERNAL", async () => {
+        expect.assertions(2);
+
+        await seedDuplicates();
+
+        let thrown: unknown;
+
+        try {
+            runShardMigrations(harness.sql, withUniqueIndex);
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect(thrown).toBeInstanceOf(LunoraError);
+        expect((thrown as LunoraError).code).toBe("UNIQUE_INDEX_DUPLICATES");
     });
 
     it("still creates the index when the column list is duplicate-free", async () => {

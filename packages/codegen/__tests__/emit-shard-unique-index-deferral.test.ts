@@ -40,7 +40,7 @@ describe("emitShard — blocked unique index", () => {
     it("refuses user dispatch while an index is outstanding", () => {
         expect.assertions(2);
 
-        expect(methodBody("private ensureServable()")).toContain('throw new LunoraError("INTERNAL", this.blockedUniqueIndexes.join("; "))');
+        expect(methodBody("private ensureServable()")).toContain('throw new LunoraError("UNIQUE_INDEX_DUPLICATES", this.blockedUniqueIndexes.join("; "))');
         expect(methodBody("public override async handleRpc(")).toContain("this.ensureServable();");
     });
 
@@ -94,8 +94,11 @@ const compileShard = () => {
                 }
             }
             class LunoraError extends Error {
-                public constructor(_code: string, message: string) {
+                public readonly code: string;
+
+                public constructor(code: string, message: string) {
                     super(message);
+                    this.code = code;
                 }
             }
             // eslint-disable-next-line sonarjs/code-eval -- runs the emitter's own output in a sandbox of stubs
@@ -106,6 +109,7 @@ const compileShard = () => {
                 Base,
                 buildReprojectionMigration: () => {},
                 config: {},
+                console,
                 LUNORA_MIGRATIONS: { dedupe: {} },
                 LunoraError,
                 runDataMigration: async () => {
@@ -136,6 +140,22 @@ describe("emitShard — blocked unique index retry", () => {
         vi.useRealTimers();
     });
 
+    it("refuses user dispatch under the duplicate-rows code, which the wire does not redact", () => {
+        expect.assertions(1);
+
+        const { build } = compileShard();
+        const shard = build(() => ["unique index users_email blocked by duplicates"]);
+        let thrown: unknown;
+
+        try {
+            shard.ensureServable();
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect(thrown).toMatchObject({ code: "UNIQUE_INDEX_DUPLICATES" });
+    });
+
     it("does not rescan on every refused call, only once per retry interval", () => {
         expect.assertions(8);
 
@@ -158,6 +178,32 @@ describe("emitShard — blocked unique index retry", () => {
             shard.ensureServable();
         }).toThrow("blocked by duplicates");
         expect(scan).toHaveBeenCalledTimes(2);
+    });
+
+    it("logs a blocked index once per retry window, not on every refused call", () => {
+        expect.assertions(9);
+
+        const { build, retryMs } = compileShard();
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const shard = build(() => ["unique index users_email blocked by duplicates"]);
+
+        for (let call = 0; call < 5; call += 1) {
+            expect(() => {
+                shard.ensureServable();
+            }).toThrow("blocked by duplicates");
+        }
+
+        expect(logged).toHaveBeenCalledTimes(1);
+
+        vi.advanceTimersByTime(retryMs + 1);
+
+        expect(() => {
+            shard.ensureServable();
+        }).toThrow("blocked by duplicates");
+        expect(logged).toHaveBeenCalledTimes(2);
+        expect(logged).toHaveBeenLastCalledWith(expect.stringContaining("users_email"));
+
+        logged.mockRestore();
     });
 
     it("stops migrating once nothing is blocked", () => {

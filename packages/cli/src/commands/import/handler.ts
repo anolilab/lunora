@@ -40,6 +40,7 @@ const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions, Impo
         from: options.from as ImportSourceName | undefined,
         logger,
         prod: options.prod === true,
+        replace: options.replace === true,
         scan: options.scan === true,
         storageDir: options.storageDir,
         table: options.table,

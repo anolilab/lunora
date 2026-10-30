@@ -1,3 +1,70 @@
+## @lunora/observability [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.187...@lunora/observability@1.0.0-alpha.188) (2026-10-30)
+
+### Bug Fixes
+
+* **observability:** buffer a frozen copy of each span ([#1426](https://github.com/anolilab/lunora/issues/1426)) ([24631f4](https://github.com/anolilab/lunora/commit/24631f401c17aa6527fedcdec64cf8eaa675053c))
+
+## @lunora/observability [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.186...@lunora/observability@1.0.0-alpha.187) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.174
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+
+## @lunora/observability [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.184...@lunora/observability@1.0.0-alpha.185) (2026-10-30)
+
+### Performance Improvements
+
+* ratelimit sweep, replica log reads and appends, span lookup ([#1377](https://github.com/anolilab/lunora/issues/1377)) ([f5078b5](https://github.com/anolilab/lunora/commit/f5078b52200981ad49eb1a8bfb226bef81367ad3))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.172
+
+## @lunora/observability [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.183...@lunora/observability@1.0.0-alpha.184) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.171
+
+## @lunora/observability [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.182...@lunora/observability@1.0.0-alpha.183) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.170
+
+## @lunora/observability [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.181...@lunora/observability@1.0.0-alpha.182) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.169
+
+## @lunora/observability [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.180...@lunora/observability@1.0.0-alpha.181) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.168
+
+## @lunora/observability [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.179...@lunora/observability@1.0.0-alpha.180) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/fingerprint:** upgraded to 1.0.0-alpha.10
+
+## @lunora/observability [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.178...@lunora/observability@1.0.0-alpha.179) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+
 ## @lunora/observability [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.177...@lunora/observability@1.0.0-alpha.178) (2026-10-28)
 
 

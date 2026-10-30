@@ -6,8 +6,8 @@ builders, one Durable Object per app by default, opt-in sharding
 (`.shardBy(key)`) and global replication (`.global()`), types inferred end to
 end from server to client.
 
-The repo is a pnpm monorepo of 59 packages — 56 published (`@lunora/*` plus the
-unscoped `lunorash` umbrella), 3 internal — orchestrated by `@visulima/vis`.
+The repo is a pnpm monorepo of 60 packages — 56 published (`@lunora/*` plus the
+unscoped `lunorash` umbrella), 4 internal — orchestrated by `@visulima/vis`.
 
 **Research the codebase before editing. Never change code you haven't read.**
 
@@ -21,6 +21,7 @@ open one only when the task calls for it.
 | decide **which package owns a change**, or cross a package boundary | `.agents/docs/packages.md` |
 | scaffold a package/query/table, or touch git hooks or release       | `.agents/docs/workflow.md` |
 | work on the documentation & marketing site                          | `apps/docs/AGENTS.md`      |
+| which gate a change needs, or how to property-test stateful code    | `.agents/docs/testing.md`  |
 | know what is planned or in flight                                   | `plans/README.md`          |
 | write or regenerate a non-JS SDK                                    | `sdks/README.md`           |
 
@@ -104,6 +105,8 @@ Everything compiles with `"moduleResolution": "bundler"`. Write relative imports
 **Never mix a default export with named exports in the same file.** More than one export ⇒ named only. A `default` is allowed only as a file's _sole_ export.
 
 When a third-party API insists on a default (e.g. `@visulima/cerebro`'s `loader: () => import("./handler")`), adapt at the call site — `.then((m) => ({ default: m.execute }))` — rather than adding a `default` alongside named exports.
+
+The one exception is a **Worker entry module** — the file `wrangler.jsonc`'s `main` points at (e.g. `lunora/server.ts`). Cloudflare requires the request handler as its default export and each Durable Object class as a named export, which wrangler binds by `class_name` and the migrations name. Nothing at a call site can adapt that, so `export const ShardDO = app.ShardDO; export default app;` is correct there and nowhere else.
 
 ### Platform parity — state the mapping when you add a feature
 

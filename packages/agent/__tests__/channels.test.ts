@@ -1,5 +1,5 @@
 /* eslint-disable n/no-unsupported-features/node-builtins -- Web Crypto (crypto.subtle) is a Workers/Node-23+ global; the test runs on Node 24 */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchAgentChannel, verifyDiscord, verifyGithub, verifySlack } from "../src/channels";
 
@@ -55,6 +55,38 @@ describe(verifyGithub, () => {
         await expect(verifyGithub({ body: `${body} `, secret, signature })).resolves.toBe(false);
         await expect(verifyGithub({ body, secret, signature: "sha256=deadbeef" })).resolves.toBe(false);
         await expect(verifyGithub({ body, secret, signature: undefined })).resolves.toBe(false);
+    });
+});
+
+// The key cache is module-level and outlives each test, so every test uses its own secret.
+describe("hmac channel key cache", () => {
+    const body = '{"action":"opened"}';
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("imports the key once per secret across requests", async () => {
+        expect.assertions(2);
+
+        const secret = "channel-cache-once";
+        const signature = `sha256=${await hmacHex(secret, body)}`;
+        const importKey = vi.spyOn(crypto.subtle, "importKey");
+        const results = await Promise.all(Array.from({ length: 5 }, async () => verifyGithub({ body, secret, signature })));
+
+        expect(importKey).toHaveBeenCalledTimes(1);
+        expect(results.every(Boolean)).toBe(true);
+    });
+
+    it("imports a new key for a new secret and rejects a signature made under the old one", async () => {
+        expect.assertions(3);
+
+        const signature = `sha256=${await hmacHex("channel-rotate-old", body)}`;
+        const importKey = vi.spyOn(crypto.subtle, "importKey");
+
+        await expect(verifyGithub({ body, secret: "channel-rotate-new", signature })).resolves.toBe(false);
+        await expect(verifyGithub({ body, secret: "channel-rotate-old", signature })).resolves.toBe(true);
+        expect(importKey).toHaveBeenCalledTimes(2);
     });
 });
 

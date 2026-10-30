@@ -1,5 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
 import { render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { describe, expect, it } from "vitest";
 
 import type { CreateStreamResult } from "../src/create-stream";
@@ -78,6 +79,56 @@ describe(createStream, () => {
         expect(fake.streamCalls).toHaveLength(0);
         expect(latest?.status()).toBe("idle");
         expect(latest?.chunks()).toStrictEqual([]);
+    });
+
+    it("keeps the stream open when the args accessor re-emits equal content", async () => {
+        const fake = createFakeClient();
+        // `Math.min(limit, 10)` clamps 15 and 20 to the same 10: the accessor
+        // re-runs and builds a fresh object, but the args it produces are unchanged.
+        const [limit, setLimit] = createSignal(15);
+        let latest: CreateStreamResult<unknown> | undefined;
+
+        render(
+            () => {
+                latest = createStream(makeStreamRef(TICK_REF), () => {
+                    return { limit: Math.min(limit(), 10) };
+                });
+
+                return <pre>{latest.status()}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        fake.pushStream(TICK_REF, { limit: 10 }, { tick: 1 });
+        await fake.flush();
+
+        setLimit(20);
+
+        expect(fake.streamCalls).toHaveLength(1);
+        expect(fake.streamCalls[0]?.onCancel).not.toHaveBeenCalled();
+        expect(latest?.chunks()).toStrictEqual([{ tick: 1 }]);
+    });
+
+    it("restarts the stream when the args content changes", () => {
+        const fake = createFakeClient();
+        const [since, setSince] = createSignal(0);
+
+        render(
+            () => {
+                const result = createStream(makeStreamRef(TICK_REF), () => {
+                    return { since: since() };
+                });
+
+                return <pre>{result.status()}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        setSince(5);
+
+        expect(fake.streamCalls).toHaveLength(2);
+        expect(fake.streamCalls[0]?.onCancel).toHaveBeenCalledWith();
+        expect(fake.streamCalls[1]?.args).toStrictEqual({ since: 5 });
     });
 
     it("cancels the in-flight iterator when the tree unmounts", () => {

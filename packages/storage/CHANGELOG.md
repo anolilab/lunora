@@ -1,3 +1,24 @@
+## @lunora/storage [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.160...@lunora/storage@1.0.0-alpha.161) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.76
+
+## @lunora/storage [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.159...@lunora/storage@1.0.0-alpha.160) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **storage,search-core:** countSearchTokens takes (document, index) instead of
+(text, analyzer).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+### Performance Improvements
+
+* **storage,search-core:** signing key reuse, parallel chunk reads, linear dedup ([#1376](https://github.com/anolilab/lunora/issues/1376)) ([ececf5e](https://github.com/anolilab/lunora/commit/ececf5e579b8e142c88033c0dd3d86ea522a5376))
+
 ## @lunora/storage [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.158...@lunora/storage@1.0.0-alpha.159) (2026-10-28)
 
 

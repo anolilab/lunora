@@ -1,3 +1,139 @@
+## @lunora/angular [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.250...@lunora/angular@1.0.0-alpha.251) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.268
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.185
+
+## @lunora/angular [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.249...@lunora/angular@1.0.0-alpha.250) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** pin every wire dependent to the workspace version ([#1432](https://github.com/anolilab/lunora/issues/1432)) ([07eaf13](https://github.com/anolilab/lunora/commit/07eaf13f4f4e65319cbcf9089d5def29f431ead3))
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.184
+
+## @lunora/angular [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.248...@lunora/angular@1.0.0-alpha.249) (2026-10-30)
+
+### ⚠ BREAKING CHANGES
+
+* **vue,solid,svelte,angular:** `data.value` / `chunks.value` are now the raw pushed values,
+not reactive proxies; mutating them in place no longer triggers updates.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs: describe the page key cache without its history
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(solid): skip stream args tracking during SSR
+
+The args memo evaluates eagerly on the server, so an accessor that reads
+browser globals threw during server rendering, where the previous
+effect-only tracking never called it. Stay idle until the client runs.
+
+Also make the pagination frame-key tests wait on the observable page and
+subscription state instead of an always-passing empty callback.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* style(svelte): format the paginated frame keys test
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(vue): open a stream with the args its key came from
+
+`useStream` read `args` once for the watch key and again for the stream request.
+A getter that returns new content on each read could open a stream the key
+does not describe, so a later tick with an unchanged key left the wrong stream
+open. The args are now resolved once, in the watch source.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(solid): open streams with the args their key came from
+
+trackedArgsEffect read the args accessor once for the content key and
+again for apply, so an accessor that is not a pure function of its
+signals could open a subscription with args the key never described.
+Capture the value in the memo and hand that to apply.
+
+Also make the paginated frame-key tests fail when the first-page
+subscription lookup misses instead of silently skipping every frame.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Performance Improvements
+
+* **vue,solid,svelte,angular:** stable stream args, cached page keys, shallow payloads ([#1385](https://github.com/anolilab/lunora/issues/1385)) ([cc0ad69](https://github.com/anolilab/lunora/commit/cc0ad6946d4675a7e99d517c972c138b8d6f3368))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.265
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.183
+
+## @lunora/angular [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.247...@lunora/angular@1.0.0-alpha.248) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.264
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.182
+
+## @lunora/angular [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.246...@lunora/angular@1.0.0-alpha.247) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.263
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.181
+
+## @lunora/angular [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.245...@lunora/angular@1.0.0-alpha.246) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.262
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.180
+
+## @lunora/angular [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.244...@lunora/angular@1.0.0-alpha.245) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.261
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.179
+
+## @lunora/angular [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.243...@lunora/angular@1.0.0-alpha.244) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.260
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.178
+
+## @lunora/angular [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.242...@lunora/angular@1.0.0-alpha.243) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.259
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.177
+
+## @lunora/angular [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.241...@lunora/angular@1.0.0-alpha.242) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.258
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.176
+
 ## @lunora/angular [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.240...@lunora/angular@1.0.0-alpha.241) (2026-10-27)
 
 ### Miscellaneous Chores

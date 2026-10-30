@@ -7,6 +7,7 @@ import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
+import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { useAdminQuery, useInvalidateAdmin } from "../../hooks/use-admin-query";
 import useStudioClient from "../../hooks/use-studio-client";
@@ -460,8 +461,9 @@ const sendImport = async (
     onProgress: (text: string) => void,
     file: File,
     csvTable: null | string,
+    onConflict: "replace" | "skip",
 ): Promise<{ failure: ImportFailure | undefined; total: ImportShardResult }> => {
-    const total: ImportShardResult = { conflicts: 0, errors: [], inserted: {} };
+    const total: ImportShardResult = { conflicts: 0, errors: [], inserted: {}, replaced: 0 };
     let prepared: { rows: number; source: ImportSource };
 
     // A CSV cell is coerced to its column's kind, so the kinds must be read first. Without them the file cannot be checked, and it is
@@ -504,7 +506,7 @@ const sendImport = async (
         // A shard built before dry runs ignores the flag and writes every row it is sent, and the check would learn that only after the
         // rows are in. So the first request carries no row, which no shard version can write, and only a shard that honours the flag
         // echoes `dryRun: true` in its answer.
-        const probe = (await client.query(IMPORT_SHARD, { dryRun: true, rows: [], startLine: 1 }, callOptions(shardKey))) as DryRunAnswer;
+        const probe = (await client.query(IMPORT_SHARD, { dryRun: true, onConflict, rows: [], startLine: 1 }, callOptions(shardKey))) as DryRunAnswer;
 
         if (probe.dryRun !== true) {
             return {
@@ -518,8 +520,17 @@ const sendImport = async (
             };
         }
 
+        // A shard built before replace imports ignores the mode and would report every existing row as a conflict; one that has it
+        // always answers with a `replaced` count, even for no rows.
+        if (onConflict === "replace" && typeof probe.replaced !== "number") {
+            return {
+                failure: { message: t("This shard cannot overwrite existing rows. Nothing was sent. Update the app and import again."), rows: 0 },
+                total,
+            };
+        }
+
         await forEachRowChunk(source(), async (rows, startLine) => {
-            const result = (await client.query(IMPORT_SHARD, { dryRun: true, rows, startLine }, callOptions(shardKey))) as ImportShardResult;
+            const result = (await client.query(IMPORT_SHARD, { dryRun: true, onConflict, rows, startLine }, callOptions(shardKey))) as ImportShardResult;
 
             check.errors.push(...result.errors);
         });
@@ -552,10 +563,11 @@ const sendImport = async (
 
         pending.startLine = startLine;
 
-        const result = (await client.query(IMPORT_SHARD, { dryRun: false, rows, startLine }, callOptions(shardKey))) as ImportShardResult;
+        const result = (await client.query(IMPORT_SHARD, { dryRun: false, onConflict, rows, startLine }, callOptions(shardKey))) as ImportShardResult;
 
         pending.startLine = undefined;
         total.conflicts += result.conflicts;
+        total.replaced = (total.replaced ?? 0) + (result.replaced ?? 0);
         total.errors.push(...result.errors);
 
         for (const [table, count] of Object.entries(result.inserted)) {
@@ -569,7 +581,8 @@ const sendImport = async (
         // caller's catch, which keeps the structured errors above for display. Rows the shard accepted are already written, so the
         // message names how many and where a re-import has to resume; a whole-file re-import would write them twice.
         if (result.errors.length > 0) {
-            const written = insertedRowCount(total.inserted);
+            // An overwritten row has landed too, so it counts as written.
+            const written = insertedRowCount(total.inserted) + (total.replaced ?? 0);
 
             stop.refused = true;
 
@@ -604,6 +617,37 @@ const sendImport = async (
     }
 };
 
+/** The summed outcome of an import: row counts, then each refused row with its line. */
+const ImportResultSummary = ({ result }: { readonly result: ImportShardResult }): ReactElement => {
+    const t = useT();
+
+    return (
+        <div className="flex flex-col gap-2" data-testid="ei-import-result">
+            <p className="text-sm text-muted-foreground">
+                {t("Inserted {inserted}, replaced {replaced}, {conflicts} conflicts, {errors} errors.", {
+                    conflicts: result.conflicts,
+                    errors: result.errors.length,
+                    inserted: insertedRowCount(result.inserted),
+                    replaced: result.replaced ?? 0,
+                })}
+            </p>
+            {result.errors.length > 0 && (
+                <ul className="flex flex-col gap-1" data-testid="ei-import-errors">
+                    {result.errors.map((rowError) => (
+                        <li className="text-xs text-destructive" key={`${rowError.table}-${rowError.line.toString()}`}>
+                            {t("line {line} ({table}): {message}", {
+                                line: rowError.line,
+                                message: rowError.message,
+                                table: rowError.table,
+                            })}
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
+};
+
 /**
  * Snapshot and restore a single shard's data as NDJSON.
  *
@@ -634,6 +678,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
     const [importResult, setImportResult] = useState<ImportShardResult | null>(null);
     const [progress, setProgress] = useState<null | string>(null);
     const [exported, setExported] = useState<ExportedShard | null>(null);
+    const [replace, setReplace] = useState<boolean>(false);
 
     const csvFile = importFile !== null && isCsvFile(importFile);
     const csvTarget = csvPick !== null && csvPick.shardKey === shardKey ? csvPick.table : "";
@@ -684,7 +729,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         setImportResult(null);
         setExported(null);
 
-        const { failure, total } = await sendImport(client, t, shardKey, setProgress, file, csvTable);
+        const { failure, total } = await sendImport(client, t, shardKey, setProgress, file, csvTable, replace ? "replace" : "skip");
 
         if (failure === undefined) {
             recordShard(shardKey);
@@ -732,8 +777,6 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         invalidateAdmin(ADMIN_FUNCTIONS.listTables);
     };
 
-    const insertedTotal = importResult === null ? 0 : insertedRowCount(importResult.inserted);
-
     // The busy flag clears on every settle, rejection included, so a failed run never leaves the panel stuck.
     const runExport = (): void => {
         fireAndForget(
@@ -768,6 +811,10 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
     const onCsvTableChange = (table: string): void => {
         setCsvPick({ shardKey, table });
+    };
+
+    const onReplaceChange = (event: ChangeEvent<HTMLInputElement>): void => {
+        setReplace(event.target.checked);
     };
 
     return (
@@ -823,6 +870,18 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
                     {csvFile && <CsvTablePicker onChange={onCsvTableChange} shardKey={shardKey} value={csvTarget} />}
 
+                    <Label className="flex items-center gap-2 text-xs font-normal text-muted-foreground" htmlFor="ei-replace">
+                        <input
+                            checked={replace}
+                            className="size-4 accent-primary"
+                            data-testid="ei-replace"
+                            id="ei-replace"
+                            onChange={onReplaceChange}
+                            type="checkbox"
+                        />
+                        {t("Overwrite rows whose _id already exists (otherwise they are left unchanged and counted as conflicts)")}
+                    </Label>
+
                     <div className="flex flex-wrap items-center gap-2">
                         <ConfirmButton confirmLabel={t("Import (writes rows)?")} disabled={busy || !importReady} onConfirm={runImport} testId="ei-import">
                             {t("Import")}
@@ -835,30 +894,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                         </p>
                     )}
 
-                    {importResult !== null && (
-                        <div className="flex flex-col gap-2" data-testid="ei-import-result">
-                            <p className="text-sm text-muted-foreground">
-                                {t("Inserted {inserted}, {conflicts} conflicts, {errors} errors.", {
-                                    conflicts: importResult.conflicts,
-                                    errors: importResult.errors.length,
-                                    inserted: insertedTotal,
-                                })}
-                            </p>
-                            {importResult.errors.length > 0 && (
-                                <ul className="flex flex-col gap-1" data-testid="ei-import-errors">
-                                    {importResult.errors.map((rowError) => (
-                                        <li className="text-xs text-destructive" key={`${rowError.table}-${rowError.line.toString()}`}>
-                                            {t("line {line} ({table}): {message}", {
-                                                line: rowError.line,
-                                                message: rowError.message,
-                                                table: rowError.table,
-                                            })}
-                                        </li>
-                                    ))}
-                                </ul>
-                            )}
-                        </div>
-                    )}
+                    {importResult !== null && <ImportResultSummary result={importResult} />}
                 </CardContent>
             </Card>
 

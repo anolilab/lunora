@@ -1,3 +1,30 @@
+## @lunora/ai [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.155...@lunora/ai@1.0.0-alpha.156) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+
+## @lunora/ai [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.153...@lunora/ai@1.0.0-alpha.154) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.4
+
+## @lunora/ai [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.152...@lunora/ai@1.0.0-alpha.153) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.76
+
+## @lunora/ai [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.151...@lunora/ai@1.0.0-alpha.152) (2026-10-28)
+
+### Performance Improvements
+
+* **agent,ai:** convert tool schemas once, cheaper rag scoring, lexical stack fix ([#1387](https://github.com/anolilab/lunora/issues/1387)) ([38a050d](https://github.com/anolilab/lunora/commit/38a050d1a82c9482c77e9ac884b30157cedca880))
+
 ## @lunora/ai [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.150...@lunora/ai@1.0.0-alpha.151) (2026-10-28)
 
 

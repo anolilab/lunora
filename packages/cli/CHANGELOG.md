@@ -1,3 +1,933 @@
+## @lunora/cli [1.0.0-alpha.456](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.455...@lunora/cli@1.0.0-alpha.456) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.431
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.277
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.258
+
+## @lunora/cli [1.0.0-alpha.455](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.454...@lunora/cli@1.0.0-alpha.455) (2026-10-30)
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** a custom transport's error now reaches the caller as
+MailSendError with the generic message "@lunora/mail: send failed", and
+the original error is on `cause`. Code that matched the raw error text
+must read `cause` instead. Consumers that keep the old queue recipe still
+work, but they retry every failure, refusals included.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* feat(mail): tell retryable send failures from refusals
+
+A failed send now throws MailSendError with `retryable` set. The
+provider's own classification decides it: 408, 429 and 5xx are retryable,
+other statuses are refusals, a validation refusal with no status or cause
+is a refusal, and a network or timeout failure is retryable. A transport
+that throws something unclassified is treated as retryable. The queue
+recipe acks and logs refusals and retries the rest, so a refused message
+no longer fills the dead-letter queue.
+* **cli:** a custom transport's error now reaches the caller as
+MailSendError with the generic message "@lunora/mail: send failed", and
+the original error is on `cause`. Code that matched the raw error text
+must read `cause` instead. Consumers that keep the old queue recipe still
+work, but they retry every failure, refusals included.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* docs(cli): describe what doctor --fix changes
+
+doctor was documented as read-only, with no mention of --fix. --fix creates
+placeholder D1 databases and mints missing .dev.vars secrets, so say that
+and show --dry-run.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(studio): fall back to the catalog hint when an error has none
+
+Studio read only the hint an error carried itself, so a client-side error
+with a known code showed no fix. Resolve the catalog hint by code and
+message, as the CLI renderer does. An explicit hint still wins.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(studio): fall back to the catalog hint when an error has none
+
+Studio read only the hint an error carried itself, so a client-side error
+with a known code showed no fix. Resolve the catalog hint by code and
+message, as the CLI renderer does. An explicit hint still wins.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(shard-engine): report duplicate-row unique index refusals under their own code
+
+The refusal was thrown as INTERNAL, which the wire redacts, so the message
+naming the duplicate rows and the remedy never reached the caller. It now has
+its own code, UNIQUE_INDEX_DUPLICATES, whose hint points at defineMigration.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(cli): fill env-scoped D1 placeholders in doctor --fix
+
+deploy --env reads each env block's d1_databases, but doctor --fix only read
+the top level, so a placeholder in an env block was reported and never filled.
+The placeholder path now covers every env block.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* test(cli): pin the doctor --fix pointer in the placeholder refusal
+
+The refusal now names lunora doctor --fix. Assert it, so the pointer
+cannot be dropped without a failing test.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(vite): show the catalog hint for coded errors in the overlay
+
+The overlay matched errors on their message alone, so a coded error whose
+message matched no solution table entry showed nothing, even when the
+catalog has a hint for its code. Fall back to that hint.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(cli): check user-owned Cloudflare tokens at the user endpoint
+
+Most tokens are created on a user profile, and the account endpoint does not
+verify them. Check the user endpoint first and fall back to the account
+endpoint on 401. Report a token as rejected only when both refuse it.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(codegen): refuse user dispatch under the duplicate-rows code
+
+The shard refused user dispatch with an INTERNAL error, which the wire
+redacts, so the cause and its remedy never reached the caller. Refuse under
+UNIQUE_INDEX_DUPLICATES instead. The hint now says to deploy the migration,
+then run migrate up, since the shard retries the build on its own.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* Revert "fix(vite): show the catalog hint for coded errors in the overlay"
+
+This reverts commit eb36e66d885306e810e8c0af72c0487d26829501.
+
+* fix(cli): report env-scoped D1 placeholders in doctor
+
+doctor --fix fills placeholders in env blocks, but doctor only read the top
+level, so the finding that sends users to --fix never showed for those
+blocks. Report each env block's placeholders, naming the block. A user-endpoint
+403 now falls back to the account endpoint, as a 401 does.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(cli): run wrangler for env-scoped D1 placeholders with their environment
+
+`doctor --fix` looked up and created a placeholder's database without its
+env block, so wrangler used the top-level account. An env that overrides
+account_id could then receive an id from the wrong account. Pass the
+environment through CLOUDFLARE_ENV for every wrangler call on that
+placeholder.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(cli): verify the token from its reported status, and warn on traces
+
+The redaction warning checked only request logs, but traces keep the request
+URL too, so an explicit block with traces on and no redact_query_string is
+now flagged as well.
+
+The token check rejects on a status the token reports, not on the HTTP code
+alone. A 200 without a readable status is inconclusive and stays unchecked.
+An account is also refused on 403 as well as 401, and an account configured
+only in an env block is checked when the top level names none.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(mail): classify a numeric HTTP status code as a refusal or a retry
+
+The retry classifier read a status only when the provider wrote it as a
+three-digit string. A numeric 422 fell through to the retry default, so a
+permanent refusal was redelivered until it reached the dead-letter queue.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(studio): match a thrown string against the catalog hints
+
+errorHint returned nothing for a string before it reached the catalog, so a
+thrown message that matches a solution showed no hint in the error alert.
+A string is now matched by its text.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(errors): give the duplicate-rows hint the migration id it needs
+
+`lunora migrate up` requires an id and refuses to run without one, so the
+hint for a blocked unique index named a command that could not succeed. It
+now names the id.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(codegen): list UNIQUE_INDEX_DUPLICATES among the RPC error codes
+
+Generated shards now throw UNIQUE_INDEX_DUPLICATES on user calls, but the
+OpenAPI and OpenRPC error lists did not name it, so typed clients and
+validators built from them got a code outside their contract. The goldens
+and the committed example outputs are regenerated. The OpenRPC numeric error
+codes after it shift by one.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* style: clear the cognitive-complexity and mock-type lint failures
+
+Extract the celld/standard placeholder test in the doctor D1 check into
+a local predicate, and type the throwing transport mock in the mail
+send-error test.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+# Conflicts:
+#	packages/cli/src/commands/doctor/handler.ts
+
+* chore(examples): regenerate clerk-auth and workos-auth lunora output
+
+Bring the committed _generated files in line with the current codegen.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(mail): do not retry a send the provider already accepted
+
+A success result with no message id was classified retryable, so a queue
+redelivery would email the recipient twice. Throw a non-retryable error.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: keep openrpc error numbers stable and tighten error hints
+
+- codegen: append UNIQUE_INDEX_DUPLICATES to the error list so the OpenRPC numbers
+  already published for UNPROCESSABLE and VALIDATION_ERROR do not shift; regenerate
+  fixtures and example specs
+- doctor: name the signal (request logs, traces) that keeps query strings and
+  tolerate a null observability block
+- mail: read the HTTP status through the error cause chain so a wrapped 403 refusal
+  is not retried
+- studio: an empty or non-string hint array falls back to the catalog hint
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(cli): export the doctor token check by name
+
+The module exported its options type by name and the check as a default; a
+file with more than one export uses named exports only.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): scope celld doctor D1 checks to top-level bindings
+
+celld rejects --env and projects only the top-level wrangler config, so
+doctor and doctor --fix no longer flag or rewrite D1 placeholders in env
+blocks for a celld project. Other targets still traverse env blocks.
+
+Also document that observability-query-unredacted covers traces as well
+as request logs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): check the doctor token against every configured account
+
+An account-owned token answers only at its own account, but doctor verified
+it against the top-level account (or the first env block's) alone, so a token
+for another account the config deploys to was reported as rejected. It is now
+checked against each configured account: one active answer passes, and only a
+refusal from every account is a rejection. CLOUDFLARE_ACCOUNT_ID still
+overrides them all.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(errors): regenerate the error reference after rebasing onto alpha
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): move the duplicate-rows hint into the hints table
+
+Hints left the catalog, which now carries status and title only. The
+`UNIQUE_INDEX_DUPLICATES` fix text sat on its catalog entry, where nothing reads
+it any more, so the error reference lost it. It now lives in `ERROR_HINTS` with
+the other server-side hints, and the reference is regenerated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* chore(errors): update the api snapshot for the moved hint
+
+`ERROR_CATALOG` no longer types a `hint` on `UNIQUE_INDEX_DUPLICATES`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(mail): retry sends on a mailer with no transport
+
+A queue consumer whose env lacks its send binding builds a producer-only
+mailer, and its `send()` rejected as a refusal. The documented consumer recipe
+acks a refusal, so every queued mail was dropped until the binding was fixed.
+That failure is a deploy fault, not the message's, so it is now retryable and
+the messages dead-letter instead.
+
+`lunora doctor` also stops warning about query strings for a signal that
+samples no requests, and the two-endpoint token comment sits on the function it
+describes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): honour a failed verify envelope and celld d1 ids in doctor
+
+A token verify answer carrying `result.status: "active"` inside a
+`success: false` envelope was read as an active token. A failed envelope now
+reports no status, so the check stays inconclusive.
+
+On a celld project the D1 placeholder finding told the user to create a
+Cloudflare database. celld takes `database_id` as the database's identity, so
+the fix now says to set the id celld should use, as the deploy refusal does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(mail): ack malformed queue messages in the consumer example
+
+The example read `message.body.idempotencyKey` before its per-message error
+handling, so a null body, or one without a key, threw out of the loop and
+retried the whole batch. It now acks and logs such a message first.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): answer a blocked unique index with 503
+
+`UNIQUE_INDEX_DUPLICATES` answered 409. The live-stream client reconnects and
+re-subscribes only on a 5xx and treats any other 4xx as a final refusal, so a
+subscription opened while duplicate rows block a UNIQUE index was dropped for
+good, though the shard rebuilds the index on its own once the rows are repaired.
+
+The refusal lifts by itself, which is what 503 means, so the code now answers
+503 and the existing reconnect path picks the subscription back up. The message
+is still sent unredacted: redaction follows the catalog's `internal` flag, not
+the status.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(sql-store): name duplicate rows that block a unique index
+
+The shard engine refuses a `.unique()` index over duplicate rows with
+`UNIQUE_INDEX_DUPLICATES`, but the global store's twin still threw a redacted
+`INTERNAL` 500 with no hint, so the same condition read differently by
+backend. It now throws the same code, and the hint no longer says "shard".
+
+`lunora doctor` also trims configured account ids before probing an
+account-owned token, as the credential resolver does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): keep doctor fixes off real d1 ids and past bad env blocks
+
+`isD1PlaceholderId` matched any id containing "replace", so `doctor --fix`
+could overwrite a real database id such as `replacement-orders`. It now uses
+the same stand-in test as the celld check. Doctor also reads an env block's
+`d1_databases` only when it is an array, so a malformed value no longer throws
+out of the whole run.
+
+The mail queue-consumer examples log a malformed message without its body,
+which can still carry recipients and content.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): read a null env block safely in doctor observability checks
+
+A wrangler `env` entry set to null threw a TypeError out of `lunora doctor`
+before the token, D1 and artifact checks ran. Both observability checks now
+read the block optionally, as the D1 and token checks already do.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(mail): retry every send failure not proven permanent
+
+A failed send is now dropped only when it carries an explicit permanent HTTP status (any status
+except 408, 429 and 5xx). A plain Error with no code or cause, a non-Error provider result and a
+custom-transport throw are retried until the dead-letter queue, instead of being treated as a
+validation refusal.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): verify promote --from is live before splitting traffic
+
+A partial promote now reads `wrangler deployments status --json` first and refuses when --from is
+not one of the live versions, or when the live deployment cannot be read. A full promote is
+unchanged.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(codegen): log a blocked unique index once per retry window
+
+The generated shard recorded indexes blocked by duplicate rows silently, so an operator saw nothing
+in the server log while every request was refused. A migration attempt that leaves indexes blocked
+now logs them with console.error, at most once per retry window. The wire message is unchanged.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(deps): require the newest @lunora/errors in server and shard-engine
+
+Both packages throw the UNIQUE_INDEX_DUPLICATES code, so the minimum moves to the newest published
+@lunora/errors instead of a release that predates it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): keep checking accounts after one token probe fails
+
+A network failure verifying the token against one configured account threw out
+of the account loop, so doctor reported the token unchecked even when a later
+account would have verified it. A failed probe now counts as that account being
+inconclusive, and the remaining accounts are still asked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* test(d1): expect the duplicate-rows code from the global store
+
+The global store now refuses a `.unique()` index over duplicate rows with
+`UNIQUE_INDEX_DUPLICATES`, so its workerd test expects that code.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): make the duplicate-rows hint cover global tables
+
+The UNIQUE_INDEX_DUPLICATES hint only described the shard path
+(defineMigration + migrate up), but the SQL store raises the same code
+for `.global()` tables, which a shard migration never reaches. The hint
+now says to fix those rows directly in the database.
+
+Also raise the @lunora/errors floor in sql-store to alpha.75, the first
+release whose catalog knows the code, and add a workerd test that the
+global store refuses a unique index over duplicate rows on D1.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* ci: retrigger the lint and test workflows
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(errors): regenerate the error reference after rebasing onto alpha
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(sql-store): log a unique index blocked by duplicate rows
+
+The global store refuses a `.unique()` index over duplicate rows with
+`UNIQUE_INDEX_DUPLICATES`, which is not redacted, so no transport edge logs it,
+and every request re-runs the check until the rows are repaired. Operators had
+no server-side signal that the store was refusing traffic. It now logs each
+blocked index once per isolate, like the shard's blocked-index log.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(templates): redact request query strings in the remaining auth configs
+
+The saas template and the clerk-auth and workos-auth examples declare their own
+`observability` block, which the new `redact_query_string` default does not
+touch, so they kept logging full request URLs, auth-link tokens and OAuth
+callback codes included. Each now sets `redact_query_string: true`.
+
+The CLI docs also list `status` alongside `list` for `deployments --format json`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* perf(cli): verify an account-owned token against all accounts at once
+
+`lunora doctor` asked each configured account in turn, each with its own
+five-second timeout, so unreachable accounts held up every later check by
+about five seconds each. The accounts are now asked concurrently, so they cost
+one timeout in total; any active answer still passes, an inconclusive one still
+makes the check unchecked, and only refusals from every account reject the token.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **cli:** make doctor and shard refusals point at the fix ([#1373](https://github.com/anolilab/lunora/issues/1373)) ([58946a2](https://github.com/anolilab/lunora/commit/58946a2bc283ceecfcec67b19396810bc5b71a3f))
+* **deps:** pin every wire dependent to the workspace version ([#1432](https://github.com/anolilab/lunora/issues/1432)) ([07eaf13](https://github.com/anolilab/lunora/commit/07eaf13f4f4e65319cbcf9089d5def29f431ead3))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.430
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.276
+* **@lunora/seed:** upgraded to 1.0.0-alpha.270
+* **@lunora/testing:** upgraded to 1.0.0-alpha.319
+
+## @lunora/cli [1.0.0-alpha.454](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.453...@lunora/cli@1.0.0-alpha.454) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.272
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.374
+* **@lunora/config:** upgraded to 1.0.0-alpha.429
+* **@lunora/d1:** upgraded to 1.0.0-alpha.220
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.275
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.255
+* **@lunora/seed:** upgraded to 1.0.0-alpha.269
+* **@lunora/testing:** upgraded to 1.0.0-alpha.318
+
+## @lunora/cli [1.0.0-alpha.453](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.452...@lunora/cli@1.0.0-alpha.453) (2026-10-29)
+
+### Bug Fixes
+
+* **registry:** scope presence rooms to the caller's tenant ([#1419](https://github.com/anolilab/lunora/issues/1419)) ([cb3a4f5](https://github.com/anolilab/lunora/commit/cb3a4f567aa9c06956a136d1d03968065dd574e2))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.271
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.373
+* **@lunora/config:** upgraded to 1.0.0-alpha.428
+* **@lunora/d1:** upgraded to 1.0.0-alpha.219
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.274
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.254
+* **@lunora/seed:** upgraded to 1.0.0-alpha.268
+* **@lunora/testing:** upgraded to 1.0.0-alpha.317
+
+## @lunora/cli [1.0.0-alpha.452](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.451...@lunora/cli@1.0.0-alpha.452) (2026-10-29)
+
+### Features
+
+* **saas-ui,templates:** add the admin users and subscriptions views to the kit ([#1418](https://github.com/anolilab/lunora/issues/1418)) ([3159b3d](https://github.com/anolilab/lunora/commit/3159b3d6854c4997cdfe2c5f25f20cfaf428ae74))
+
+## @lunora/cli [1.0.0-alpha.451](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.450...@lunora/cli@1.0.0-alpha.451) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.372
+* **@lunora/config:** upgraded to 1.0.0-alpha.427
+
+## @lunora/cli [1.0.0-alpha.450](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.449...@lunora/cli@1.0.0-alpha.450) (2026-10-29)
+
+### Features
+
+* **saas-ui,templates:** add the composed SaaS kit ([#761](https://github.com/anolilab/lunora/issues/761)) ([35f662d](https://github.com/anolilab/lunora/commit/35f662d24e5992e606a86f989f55bda210dfdd11))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.270
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.141
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.371
+* **@lunora/config:** upgraded to 1.0.0-alpha.426
+* **@lunora/d1:** upgraded to 1.0.0-alpha.218
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.273
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.253
+* **@lunora/seed:** upgraded to 1.0.0-alpha.267
+* **@lunora/testing:** upgraded to 1.0.0-alpha.316
+
+## @lunora/cli [1.0.0-alpha.449](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.448...@lunora/cli@1.0.0-alpha.449) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.269
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.370
+* **@lunora/config:** upgraded to 1.0.0-alpha.425
+* **@lunora/d1:** upgraded to 1.0.0-alpha.217
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.272
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.252
+* **@lunora/seed:** upgraded to 1.0.0-alpha.266
+* **@lunora/testing:** upgraded to 1.0.0-alpha.315
+
+## @lunora/cli [1.0.0-alpha.448](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.447...@lunora/cli@1.0.0-alpha.448) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.268
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.369
+* **@lunora/config:** upgraded to 1.0.0-alpha.424
+* **@lunora/d1:** upgraded to 1.0.0-alpha.216
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.271
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.251
+* **@lunora/seed:** upgraded to 1.0.0-alpha.265
+* **@lunora/testing:** upgraded to 1.0.0-alpha.314
+
+## @lunora/cli [1.0.0-alpha.447](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.446...@lunora/cli@1.0.0-alpha.447) (2026-10-29)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** Mysql2Like now requires query(text, params) instead of
+execute(text, params). A real mysql2/promise connection or pool has both,
+so only hand-written doubles need renaming.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind pgvector id lists and metadata as json text
+
+createPgVectorIndex broke on postgres.js, the driver its docs show. With
+fetch_types: false (Hyperdrive's recommended setting) postgres.js knows no
+array types, so the id array bound to ANY($1::text[]) went over as the
+malformed literal "a,b,c" and getByIds/deleteByIds threw. And because
+postgres.js types each parameter from the server's Describe, a bare
+$n::jsonb parameter had the already-serialised metadata JSON-encoded a
+second time: metadata was stored as a string and filters never matched.
+
+Id lists now bind as one JSON text parameter expanded with
+jsonb_array_elements_text, and every JSON parameter is cast ::text::jsonb.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind mysql2 array and object params as one value
+
+mysql2's query() interpolates values client-side and expands an array
+into a comma list and a plain object into `key = value` pairs, so since
+the switch from execute() such a param changed the statement's shape
+instead of binding one value. execute()'s binary protocol sent them as
+JSON text. fromMysql2 and buildMysqlExec now normalise every param: an
+array or object becomes its JSON text, an ArrayBuffer becomes bytes,
+scalars, dates and byte views pass through, and undefined throws, as it
+did under execute(), instead of silently binding NULL.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* perf(hyperdrive): run postgres.js statements as prepared statements
+
+fromPostgresJs called client.unsafe(text, params), and unsafe defaults to
+prepare: false. Cloudflare warns against that under Hyperdrive: its
+transaction pooling does not reliably support unnamed statements (queries
+can hang or fail), and each one pays a Parse/Describe round trip before
+Bind/Execute. The adapter now passes { prepare: true }; a client built
+with prepare: false still wins.
+
+Prepared reads are cacheable by Hyperdrive, which is safe for .global()
+only because its config now has caching disabled (the deploy and docs
+change that requires it). The docs, skills, registry item and the config
+remediation build postgres.js with Cloudflare's recommended
+{ fetch_types: false, max: 5 }, with the caveat that array params then
+need binding as JSON text, and the .global() snippets go through
+fromPostgresJs instead of calling sql.unsafe directly.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(hyperdrive): state that mysql needs backslash escapes enabled
+
+Since MySQL statements go over as text, mysql2 escapes string values
+client-side and writes a quote as \'. On a server whose sql_mode includes
+NO_BACKSLASH_ESCAPES that sequence ends the literal, so a stored string
+could break out of it. The mode is off in MySQL's default sql_mode; the
+docs, the global setup skill and the adapter JSDoc now mark it
+unsupported.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(hyperdrive): rename Mysql2Execute to Mysql2Client
+
+The mysql2 adapters call query() now, so the execute-based name no longer
+describes the type. The snapshot also picks up the multi-line formatting of
+PostgresJsLike.unsafe's options.
+* **hyperdrive:** the exported `Mysql2Execute` type from `@lunora/hyperdrive/global`
+is now `Mysql2Client`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(codegen): pass postgres.js options in hyperdrive examples
+
+The generated hyperdriveGlobal JSDoc and the ctx.sql missing-binding diagnostic
+now show postgres(cs, { fetch_types: false, max: 5 }), matching the docs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): quote mysql strings so no sql_mode can end the literal
+
+mysql2's query() escapes a quote as \', which closes the literal when the server's
+sql_mode has NO_BACKSLASH_ESCAPES and lets a bound string inject SQL. Strings (and
+the JSON text of arrays and objects) are now rendered by toMysqlParams with ''
+for a quote and \\ for a backslash, which keeps every value inside its literal
+under any mode. A hex _utf8mb4 literal was rejected: it takes the charset's
+default collation and comparing it with a plain literal fails.
+
+That mode stays unsupported because backslashes come back doubled under it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(cli): warn when a bound hyperdrive config still caches queries
+
+An app with .global({ backend: "hyperdrive" }) tables needs query caching off, but
+deploy only turned it off on configs it created or reused by name. A binding whose
+id was set by hand or by an earlier deploy kept caching on silently. With API
+credentials present, deploy now reads each such config and warns with the
+`wrangler hyperdrive update <id> --caching-disabled` command. It never changes a
+config the user picked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): keep the hyperdrive caching check from blocking a deploy
+
+The cache-status GET for an already-bound config is advisory, but a network
+failure or timeout rejected out of provisionHyperdrive and aborted the deploy.
+It now logs the same "could not check" warning and carries on.
+
+A schema that exists but can't be read used to leave caching on. Since it may
+declare .global({ backend: "hyperdrive" }) tables, configs are now set up with
+caching off and the parse error is logged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(hyperdrive): note how mysql2 reads ? and ?? in query text
+
+mysql2's client-side formatter skips a ? inside a quoted string or comment, but
+reads ?? as an identifier placeholder. A real-MySQL test pins the literal case.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind a mysql string to ?? as its identifier again
+
+mysql2's ?? escaper reads String(value) and never toSqlString, so the quoted-
+literal wrapper toMysqlParams returns for strings came out as `[object Object]`.
+The wrapper now also has toString returning the raw text.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* test(hyperdrive): pin multi-command postgres.js statements without params
+
+postgres.js sends a statement with no params over the simple protocol even with
+prepare: true, so semicolon-separated commands keep working.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(sql-store): cast search token rows ::text::json on postgres
+
+postgres.js types a bare $n::json parameter from the server and JSON-encodes the
+already-serialised token rows again, so json_to_recordset got a scalar and every
+search-indexed .global() write through fromPostgresJs failed. A postgres.js wire
+test inserts and searches such a table.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): skip the hyperdrive caching check on a dry run
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+### Bug Fixes
+
+* **hyperdrive:** safe caching, mysql text protocol, prepared postgres.js ([#1394](https://github.com/anolilab/lunora/issues/1394)) ([ad59bcf](https://github.com/anolilab/lunora/commit/ad59bcf85763e3ee9853c101fa377d00b9d0c63f))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.368
+* **@lunora/config:** upgraded to 1.0.0-alpha.423
+* **@lunora/d1:** upgraded to 1.0.0-alpha.215
+
+## @lunora/cli [1.0.0-alpha.446](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.445...@lunora/cli@1.0.0-alpha.446) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.267
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.367
+* **@lunora/config:** upgraded to 1.0.0-alpha.422
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.270
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.250
+* **@lunora/seed:** upgraded to 1.0.0-alpha.264
+* **@lunora/testing:** upgraded to 1.0.0-alpha.313
+
+## @lunora/cli [1.0.0-alpha.445](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.444...@lunora/cli@1.0.0-alpha.445) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.266
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.366
+* **@lunora/config:** upgraded to 1.0.0-alpha.421
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.269
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.249
+* **@lunora/seed:** upgraded to 1.0.0-alpha.263
+* **@lunora/testing:** upgraded to 1.0.0-alpha.312
+
+## @lunora/cli [1.0.0-alpha.444](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.443...@lunora/cli@1.0.0-alpha.444) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** `runMigrateToHyperdriveCommand` is now `runMigrateBackendCommand`
+and requires a `direction`.
+* **hyperdrive:** ImportShardResult and the global ImportResult gain a required
+`replaced` count; `streamingImport` takes an `onConflict` argument.
+* **errors:** `new LunoraError(code)` no longer copies the catalog
+`hint` onto `error.hint`; call `resolveHint(error)` (as toErrorBody and
+renderLunoraError do). ErrorCatalogEntry drops `hint` and `docsUrl` (no
+entry set a docsUrl). Hint text lives in the new `ERROR_HINTS` /
+`getCatalogHint` exports.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(errors): move the nested-index-path hint into ERROR_HINTS
+
+INDEX_FIELD_NESTED_PATH landed on alpha with its hint on the catalog entry,
+where resolveHint and the docs generator no longer look, so the hint dropped
+out of errors.mdx. A catalog-integrity test now rejects any hint left on a
+catalog entry.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* chore(errors): update the API snapshot for the moved nested-path hint
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): keep hints on the errors the client raises itself
+
+Moving hints out of the catalog meant `new LunoraError(code)` no longer set
+`error.hint`, so OFFLINE_NOT_QUEUED and HTTP_STREAM_NO_BODY, which the browser
+client builds without a server envelope, reached apps with no hint. Their text
+moves to a small client-hints module that the client attaches when it raises
+them and ERROR_HINTS reuses, so the bundle gains two strings, not the table.
+
+hints.ts also drops its file-level eslint-disable: its exports are now
+gathered at the end of the module, which satisfies import/exports-last.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): keep hints.ts loadable by the docs generator
+
+The docs generator imports hints.ts straight from source under Node's type
+stripping, which cannot resolve an extensionless relative import, so the
+client-hints import broke it. hints.ts keeps its own copy of the two
+client-raised hints again, and a catalog-integrity test holds the copies equal.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): carry hints on streaming and subscription error frames
+
+Error hints now live in ERROR_HINTS rather than on the catalog entry, so
+a frame built from toErrorBody has to forward the resolved hint itself.
+The SSE error frame, the WS stream error frame, subscription errors and
+shape seed failures now include `hint` next to `why` when the error is
+not redacted; a redacted body carries neither. The client rebuilds the
+hint onto the LunoraError / SubscriptionError it raises from a frame
+without importing the hints table.
+
+SubscriptionError gains an optional `hint`. The protocol doc lists the
+new frame fields. The errors README/docs examples import resolveHint,
+and the docs generator docblock describes the catalog/hints split.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(do): send the resolved hint when a refresh ends a subscription
+
+The terminal refresh branch (a result that grew past the cap, or a guarded
+persist failure) sent only `why`, while the neighbouring subscription error
+paths send the full toErrorBody details, hint included.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+* **do:** codegen rejects an exported defineWorkflowEvent anywhere in lunora/ whose type
+is not a string literal (WORKFLOW_EVENT_NOT_LITERAL) or that shares its type with another export
+(WORKFLOW_EVENT_DUPLICATE).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): keep a failed status refresh apart from a failed event send
+
+Discovery of workflow events now also reads definitions called through a namespace import of
+@lunora/workflow and definitions followed by a non-null assertion. In the Send event form, a
+failed instance refresh after a delivered event is reported as such instead of as a send
+failure, so the operator is not nudged into sending the event twice. readInstance no longer
+uses a catch-less try.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(cli): add workflow create and send-event commands
+
+`lunora workflow create <exportName>` starts an instance (`--id`, `--params`) and
+`lunora workflow send-event <exportName> <instanceId> <eventType>` delivers an event
+(`--payload`). Both decode their arguments and dispatch the same admin ops the Studio
+Workflows panel calls through the `lunora run` RPC path, so target resolution, the admin
+bearer and HTTP-status exit codes are shared and the worker stays the only validator.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(do): correct the send-event parser comment on payload validation
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* chore(cli): update api snapshot for the workflow command
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(workflows): unwrap CLI json output, trim create ids, keep send result on audit failure
+
+- lunora workflow --format json returned the admin RPC { result } envelope, so the instance id
+  sat at data.result.id; it is now data.id.
+- createWorkflowInstance trims an explicit id like getWorkflowInstanceStatus and
+  sendWorkflowEvent do, so the id a create returns is the one later lookups address.
+- sendWorkflowEvent logs a failed audit write instead of turning an already delivered event
+  into an error response that invites a duplicate send.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(studio): reset the send-event busy flag in one finally
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(studio): clear the send-event busy flag with promise finally
+
+React Compiler cannot lower a try statement without a catch clause, so the
+try/finally left the send form without automatic memoization. The send and
+refresh now run in their own function, and the caller clears the flag with
+.finally(), as the export/import panel already does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): reset the send-event form when the selected workflow changes
+
+The form kept its instance id across workflow selections, so an id typed for
+one workflow could send the event to a same-id instance of the next one. The
+form is now keyed by the selected workflow, which starts it fresh.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): send workflow events through the studio admin client
+
+Alpha moved Studio's admin calls from useLunora to useStudioClient and
+dropped the useLunora import from the workflows panel, so the send-event
+form threw a ReferenceError after rebasing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **do:** send events to workflow instances from admin ([#1359](https://github.com/anolilab/lunora/issues/1359)) ([d833e43](https://github.com/anolilab/lunora/commit/d833e43bbb5fe3e97e71b86d7c4c8c488d82ce4f)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+* **hyperdrive:** wire the admin global plane, add replace imports and migrate hyperdrive-to-d1 ([#1360](https://github.com/anolilab/lunora/issues/1360)) ([f25b400](https://github.com/anolilab/lunora/commit/f25b400a13fbf76d19e5e587f4d20f00242a7ece)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+
+### Performance Improvements
+
+* **errors:** keep catalog hints out of browser bundles ([#1366](https://github.com/anolilab/lunora/issues/1366)) ([7d1953f](https://github.com/anolilab/lunora/commit/7d1953f35ae8c04fd471913fa48467ce928fb493))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.265
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.365
+* **@lunora/config:** upgraded to 1.0.0-alpha.420
+* **@lunora/d1:** upgraded to 1.0.0-alpha.214
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.268
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.248
+* **@lunora/seed:** upgraded to 1.0.0-alpha.262
+* **@lunora/testing:** upgraded to 1.0.0-alpha.311
+
 ## @lunora/cli [1.0.0-alpha.443](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.442...@lunora/cli@1.0.0-alpha.443) (2026-10-27)
 
 ### Miscellaneous Chores

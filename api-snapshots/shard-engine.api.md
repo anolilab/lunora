@@ -1222,6 +1222,12 @@ interface IdempotentRecord {
 }
 ```
 
+### `ImportConflictMode` (type)
+
+```ts
+type ImportConflictMode = "replace" | "skip";
+```
+
 ### `ImportError` (interface)
 
 ```ts
@@ -1238,6 +1244,7 @@ interface ImportError {
 ```ts
 interface ImportShardAdminArgs {
     dryRun: boolean;
+    onConflict: ImportConflictMode;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -1248,6 +1255,7 @@ interface ImportShardAdminArgs {
 ```ts
 interface ImportShardArgs {
     dryRun?: boolean;
+    onConflict?: ImportConflictMode;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -1260,6 +1268,7 @@ interface ImportShardResult {
     conflicts: number;
     errors: ImportError[];
     inserted: Record<string, number>;
+    replaced: number;
 }
 ```
 
@@ -1352,6 +1361,7 @@ interface LiveSocketControlCall {
     action: unknown;
     callerId: string;
     connectionId: string;
+    identity?: Record<string, unknown>;
     identityExpiry?: number;
     key: string;
     seq?: number;
@@ -2066,7 +2076,7 @@ interface ReactorsResult {
 
 ```ts
 interface ReadFootprint {
-    onRead: (table: string, idOrScan?: string) => void;
+    onRead: (table: string, idOrScan?: string, exact?: boolean) => void;
     onReadRange: (range: KeyRange) => void;
     ranges: () => Map<string, KeyRange[]> | undefined;
     tables: Set<string>;
@@ -2076,7 +2086,7 @@ interface ReadFootprint {
 ### `ReadHook` (type)
 
 ```ts
-type ReadHook = (table: string, idOrScan?: string) => void;
+type ReadHook = (table: string, idOrScan?: string, exact?: boolean) => void;
 ```
 
 ### `ReadTablePageOptions` (interface)
@@ -2969,6 +2979,7 @@ interface SocketAttachment {
     liveGrants?: Record<string, string>;
     pageDeltas?: boolean;
     pendingSince?: number;
+    refreshBatch?: boolean;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     socketFunction?: string;
     socketPath?: string;
@@ -4467,6 +4478,12 @@ const isSoftDeleted: (row: Record<string, unknown>, column: string) => boolean;
 
 ```ts
 const isSourceDue: (refresh: SourceRefresh | undefined, lastPolledMs: number | undefined, nowMs: number) => boolean;
+```
+
+### `isTtlExpired` (const)
+
+```ts
+const isTtlExpired: (sql: SqlExec, spec: TtlSweepSpec, id: string, now: number) => boolean;
 ```
 
 ### `isVacuousFilterClause` (const)

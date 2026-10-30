@@ -87,7 +87,7 @@ lunora migrate <generate|create|up|down|status> [name|id] [--format json]
 lunora env <list|get|set|unset|push|diff|doctor> [--format json]
 lunora export [--out <file>] [--tables <t1,t2>] [--url <u>] [--token <tok>]
               [--format json]           #   json needs --out <file>
-lunora import <file> [--table <name>] [--batch-size n] [--format json]
+lunora import <file> [--table <name>] [--batch-size n] [--replace] [--format json]
 lunora backup <create|list|restore|pitr> [--dir <d>] [--bucket <b>] [--at <iso>]
             [--format json]
 lunora seed [--table <t>] [--count n]   # deterministic fake data from schema.ts
@@ -144,12 +144,12 @@ Commands with the flag: `add`, `advisor`, `analyze`, `backup`, `build`,
 Three carry a documented restriction, because the payload already owns stdout or
 the underlying tool has no JSON rendering: `export --format json` requires
 `--out <file>` (with `--out -` the NDJSON stream is stdout); `cloudflare
-deployments --format json` applies to `list` only; `cloudflare containers
+deployments --format json` applies to `list` and `status` only; `cloudflare containers
 --format json` applies to `list`, `info` and `images list`. Each refuses with a usage error rather than
 emitting a fabricated document.
 
 Where the flag is forwarded to a tool that writes the document itself —
-`cloudflare deployments list`, the `cloudflare containers` read subcommands, and
+`cloudflare deployments list` and `status`, the `cloudflare containers` read subcommands, and
 `logs` (a stream, not a result) — stdout carries **that** tool's output and no envelope is added, since
 a second document on the same stream would make neither parseable.
 
@@ -170,26 +170,27 @@ the fetch is reproducible and tamper-evident; if the SHA can't be resolved
 (offline / rate-limited) it falls back to the ref itself with a one-line
 UNPINNED warning. Pass `-t` / `--template` to choose the starting point:
 
-| Value                         | Description                                                                          |
-| ----------------------------- | ------------------------------------------------------------------------------------ |
-| `react`                       | React SPA — official create-vite base + the Lunora layer (the default)               |
-| `vue`                         | Vue SPA — create-vite base + Lunora                                                  |
-| `solid`                       | Solid SPA — create-vite base + Lunora                                                |
-| `solid-v2`                    | Solid 2.0 SPA — the Solid 2 line (`@solidjs/web`, vite-plugin-solid 3)               |
-| `svelte`                      | Svelte SPA — create-vite base + Lunora                                               |
-| `rspack-react`                | React SPA on Rsbuild — the Worker runs under wrangler dev behind the dev server      |
-| `next`                        | Next.js (App Router) — OpenNext on Cloudflare + a standalone Lunora worker           |
-| `tanstack-start-react`        | TanStack Start (React) — SSR with live-loader routes                                 |
-| `tanstack-start-react-rspack` | TanStack Start (React) on Rsbuild — SSR composed into the Lunora worker              |
-| `tanstack-start-solid`        | TanStack Start (Solid)                                                               |
-| `vinext`                      | Next.js App Router on Vite (vinext) — composed into the Lunora worker (experimental) |
-| `vinext-pages`                | Next.js Pages Router on Vite (vinext) — composed into one worker (experimental)      |
-| `astro`                       | Astro (islands) — single-worker, Lunora composed into the adapter worker             |
-| `analog`                      | AnalogJS (Angular) — single-worker, Lunora mounted in Nitro                          |
-| `nuxt`                        | Nuxt (Vue) — single-worker, Lunora mounted in Nitro                                  |
-| `sveltekit`                   | SvelteKit — single-worker, Lunora composed into the adapter worker                   |
-| `expo`                        | React Native (Expo) — an iOS/Android/web app + a Lunora worker backend               |
-| `standalone`                  | Worker only — no frontend                                                            |
+| Value                         | Description                                                                             |
+| ----------------------------- | --------------------------------------------------------------------------------------- |
+| `react`                       | React SPA — official create-vite base + the Lunora layer (the default)                  |
+| `vue`                         | Vue SPA — create-vite base + Lunora                                                     |
+| `solid`                       | Solid SPA — create-vite base + Lunora                                                   |
+| `solid-v2`                    | Solid 2.0 SPA — the Solid 2 line (`@solidjs/web`, vite-plugin-solid 3)                  |
+| `svelte`                      | Svelte SPA — create-vite base + Lunora                                                  |
+| `rspack-react`                | React SPA on Rsbuild — the Worker runs under wrangler dev behind the dev server         |
+| `next`                        | Next.js (App Router) — OpenNext on Cloudflare + a standalone Lunora worker              |
+| `tanstack-start-react`        | TanStack Start (React) — SSR with live-loader routes                                    |
+| `tanstack-start-react-rspack` | TanStack Start (React) on Rsbuild — SSR composed into the Lunora worker                 |
+| `saas`                        | SaaS kit — multi-tenant app on TanStack Start: organizations, projects, activity, admin |
+| `tanstack-start-solid`        | TanStack Start (Solid)                                                                  |
+| `vinext`                      | Next.js App Router on Vite (vinext) — composed into the Lunora worker (experimental)    |
+| `vinext-pages`                | Next.js Pages Router on Vite (vinext) — composed into one worker (experimental)         |
+| `astro`                       | Astro (islands) — single-worker, Lunora composed into the adapter worker                |
+| `analog`                      | AnalogJS (Angular) — single-worker, Lunora mounted in Nitro                             |
+| `nuxt`                        | Nuxt (Vue) — single-worker, Lunora mounted in Nitro                                     |
+| `sveltekit`                   | SvelteKit — single-worker, Lunora composed into the adapter worker                      |
+| `expo`                        | React Native (Expo) — an iOS/Android/web app + a Lunora worker backend                  |
+| `standalone`                  | Worker only — no frontend                                                               |
 
 The create-vite frameworks (`react`, `vue`, `solid`, `svelte`, plus
 `vanilla` via `--vite`) scaffold through the **overlay** engine (the official
@@ -346,10 +347,12 @@ A read-only preflight over the current project. It reports pass / warn / fail fo
 ```bash
 lunora doctor
 lunora doctor --format json    # machine-readable; one JSON document on stdout
+lunora doctor --fix           # create placeholder D1 databases and mint missing .dev.vars secrets
 ```
 
-It writes nothing and exits non-zero when any hard check fails, so it works as a
-CI gate. See [Debugging](/docs/concepts/debugging) for how to act on each finding.
+Without `--fix` it writes nothing. With `--fix` it writes only the two things named
+above, and `--fix --dry-run` shows them first. It exits non-zero when any hard check
+fails, so it works as a CI gate. See [Debugging](/docs/concepts/debugging) for how to act on each finding.
 
 #### Machine-readable output
 
@@ -400,6 +403,9 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | `cf-config-present`                | warn  | A Cloudflare CLI `cloudflare.config.*` is in the project root (Lunora never updates it).                                  |
 | `cimd-fetch-not-strictly-public`   | warn  | `@lunora/auth/cimd/workers` is imported without the `global_fetch_strictly_public` flag.                                  |
 | `cli-shadowed`                     | warn  | The running `lunora` is not the project's own install.                                                                    |
+| `cloudflare-token-ok`              | pass  | The Cloudflare API token is active for the account.                                                                       |
+| `cloudflare-token-rejected`        | fail  | The Cloudflare API token is rejected or not active, so deploys with it fail.                                              |
+| `cloudflare-token-unchecked`       | info  | No token / account id, or the API could not verify the token, so it was not checked.                                      |
 | `cpu-limit-missing`                | info  | No `limits.cpu_ms` caps a runaway handler's CPU burn.                                                                     |
 | `d1-placeholder-id`                | fail  | A D1 binding still carries a scaffold `database_id`.                                                                      |
 | `declared-export-missing`          | fail  | A declared container / workflow / agent is not exported by the worker entry.                                              |
@@ -412,6 +418,7 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | `do-class-budget-unchecked`        | info  | No `CLOUDFLARE_API_TOKEN` / account id, or the API refused, so the class count was not read.                              |
 | `email-destination-placeholder`    | warn  | A `send_email` binding has a placeholder `destination_address`.                                                           |
 | `observability-full-sampling`      | info  | Logs or traces sample every request; Workers Observability is billed from 2026-12-01.                                     |
+| `observability-query-unredacted`   | warn  | Request logs or traces keep query strings, which carry auth-link tokens. Set `redact_query_string`.                       |
 | `paid-product-bound`               | info  | A metered product (Workers AI, Browser Rendering, Images) is bound; only an account budget alert caps it.                 |
 | `paid-product-unknown`             | info  | Argo Smart Routing and Log Explorer enablement is a dashboard setting, which lunora cannot read.                          |
 | `r2-lifecycle-unset`               | info  | An R2 bucket may lack an abort-incomplete-multipart lifecycle rule.                                                       |
@@ -975,12 +982,17 @@ Inspect deployment history and move traffic between Worker versions (wraps
 
 ```bash
 lunora cloudflare deployments list                       # 10 most recent deployments
+lunora cloudflare deployments status                     # live version and its traffic split
 lunora cloudflare deployments inspect <version-id>       # view a specific Worker version
 lunora cloudflare deployments rollback --yes             # roll back to the previous version
 lunora cloudflare deployments promote <version-id> --yes # send 100% of traffic to a version
+lunora cloudflare deployments promote <version-id> --percent 10 --from <live-version-id> --confirm-shared-state --yes
+# send 10% to a version and keep 90% on the live one (partial rollout; both versions share one Durable Object database)
 ```
 
-`rollback` and `promote` change live traffic, so they require `--yes`.
+`rollback` and `promote` change live traffic, so they require `--yes`. A partial
+promote first reads `deployments status` and refuses when `--from` is not one of
+the live versions, or when the live deployment cannot be read.
 
 #### `lunora cloudflare profile`
 
@@ -1114,6 +1126,20 @@ nothing, so the command refuses. `--from-token` / `--to-token` each fall back to
 intermediate NDJSON dump — without it the dump is staged in a private `0700`
 temp directory and discarded. Sharded tables are untouched: they live in
 per-Durable-Object SQLite, not in D1.
+
+`lunora migrate hyperdrive-to-d1` is the rollback. It takes the same flags with
+the Hyperdrive deployment as `--from-url` and the D1 one as `--to-url`. The
+export/import does not care about direction, because the target's `.global()`
+backend decides where the rows land.
+
+The import is insert-only by default: a row whose `_id` already exists in the
+target is reported as a conflict and left unchanged. On a rollback after
+cutover, that means rows missing from D1 come back but edits made on Hyperdrive
+to rows D1 still holds do not. Pass `--replace` to overwrite those rows with the
+source's values (it keeps their `_id` and takes the source's `_creationTime`),
+or keep the dump with `--out` and reconcile by hand. `--replace` writes like any
+import, so a remote target still needs `--yes`. Neither mode deletes anything: a
+row removed from the source since cutover is still in the target afterwards.
 
 ### `lunora run`
 
@@ -1340,7 +1366,14 @@ lunora export --tables messages,channels --url https://my-worker.workers.dev --t
 
 lunora import ./backup.ndjson
 lunora import ./users.ndjson --table users   # wrap bare docs as {table,doc} envelopes
+lunora import ./backup.ndjson --replace      # overwrite rows whose _id already exists
 ```
+
+`import` inserts. A row whose `_id` is already in the target is a conflict: it
+is counted and left as it is. `--replace` overwrites it instead, on `.global()`
+and sharded tables alike, and the summary counts it under `replaced`. An `_id`
+held by a different table is still refused. The worker has to support the mode;
+an older one is detected before any row is sent.
 
 ### `lunora backup`
 
@@ -1350,6 +1383,7 @@ Managed snapshot backups and native point-in-time recovery (PITR):
 lunora backup create                   # snapshot the running shard
 lunora backup list                     # list available snapshots
 lunora backup restore <id>             # restore a snapshot
+lunora backup restore <id> --replace   # …overwriting rows whose _id already exists
 lunora backup retention                # what a prune would delete
 lunora backup prune                    # delete it — the only command that removes a backup
 lunora backup pitr --at 2024-06-01T12:00:00Z   # read PITR bookmark

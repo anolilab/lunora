@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createMysqlGlobalCtxDb, createPostgresGlobalCtxDb } from "../src/global";
 import { mysqlDialect, postgresDialect } from "../src/global-dialect";
-import type { Mysql2Execute } from "../src/global-exec";
+import type { Mysql2Client } from "../src/global-exec";
 import { buildMysqlExec } from "../src/global-exec";
 import type { PgliteHarness } from "./_helpers/pglite-exec";
 import createPgliteHarness from "./_helpers/pglite-exec";
@@ -66,7 +66,7 @@ describe("createPostgresGlobalCtxDb", () => {
 });
 
 /** A never-connected `mysql2/promise` double that records what it is asked to run. */
-const recordingConnection = (): { calls: string[]; connection: Mysql2Execute } => {
+const recordingConnection = (): { calls: string[]; connection: Mysql2Client } => {
     const calls: string[] = [];
 
     return {
@@ -74,7 +74,7 @@ const recordingConnection = (): { calls: string[]; connection: Mysql2Execute } =
         connection: {
             // `CLIENT_FOUND_ROWS`; without it `buildMysqlExec` throws before recording anything.
             config: { clientFlags: 0x00_00_00_02 },
-            execute: async (sql: string) => {
+            query: async (sql: string) => {
                 calls.push(sql);
 
                 return /^\s*select/i.test(sql)

@@ -2225,7 +2225,7 @@ const CAPABILITY_ROWS: readonly [
         readonly shardBinding: {
             readonly clientType: "SqlClient";
             readonly instrument: "instrumentSql";
-            readonly missingMessage: "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))`.";
+            readonly missingMessage: "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))`.";
             readonly stubMethods: readonly [
                 "query"
             ];

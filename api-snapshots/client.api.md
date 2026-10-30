@@ -1107,7 +1107,7 @@ interface SchedulerStatus {
 ### `ServerMessage` (type)
 
 ```ts
-type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerIdentityMessage | ServerLiveMessage | ServerPokeEndMessage | ServerPokePartMessage | ServerPokeStartMessage | ServerResumeMessage | ServerSettledMessage | ServerWhisperMessage | ServerWhisperSubscribedMessage;
+type ServerMessage = ServerAckMessage | ServerBatchMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerIdentityMessage | ServerLiveMessage | ServerPokeEndMessage | ServerPokePartMessage | ServerPokeStartMessage | ServerResumeMessage | ServerSettledMessage | ServerWhisperMessage | ServerWhisperSubscribedMessage;
 ```
 
 ### `ServerPokeEndMessage` (interface)
@@ -2711,6 +2711,14 @@ type PersistenceOperation = "append" | "clear" | "load" | "remove" | "replace";
 interface ServerAckMessage {
     id: string;
     type: "ack";
+}
+```
+
+### `ServerBatchMessage` (interface)
+
+```ts
+interface ServerBatchMessage {
+    type: "batchEnd" | "batchStart";
 }
 ```
 

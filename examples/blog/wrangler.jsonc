@@ -11,7 +11,7 @@
         ],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
     "d1_databases": [
         {
             "binding": "DB",

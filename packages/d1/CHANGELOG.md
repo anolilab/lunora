@@ -1,3 +1,90 @@
+## @lunora/d1 [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.221...@lunora/d1@1.0.0-alpha.222) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.174
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.223
+* **@lunora/do:** upgraded to 1.0.0-alpha.265
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+
+## @lunora/d1 [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.219...@lunora/d1@1.0.0-alpha.220) (2026-10-30)
+
+### Performance Improvements
+
+* **sql-store:** batch import id probes, one catalog read per studio page ([#1386](https://github.com/anolilab/lunora/issues/1386)) ([2984272](https://github.com/anolilab/lunora/commit/2984272957df66c2a6b4ef67195b69839daef751))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.172
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.221
+* **@lunora/do:** upgraded to 1.0.0-alpha.263
+
+## @lunora/d1 [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.218...@lunora/d1@1.0.0-alpha.219) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.171
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.220
+* **@lunora/do:** upgraded to 1.0.0-alpha.262
+
+## @lunora/d1 [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.217...@lunora/d1@1.0.0-alpha.218) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.76
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.170
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.219
+* **@lunora/do:** upgraded to 1.0.0-alpha.261
+
+## @lunora/d1 [1.0.0-alpha.217](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.216...@lunora/d1@1.0.0-alpha.217) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.169
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.218
+* **@lunora/do:** upgraded to 1.0.0-alpha.260
+
+## @lunora/d1 [1.0.0-alpha.216](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.215...@lunora/d1@1.0.0-alpha.216) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.168
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.217
+* **@lunora/do:** upgraded to 1.0.0-alpha.259
+
+## @lunora/d1 [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.214...@lunora/d1@1.0.0-alpha.215) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.216
+
+## @lunora/d1 [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.213...@lunora/d1@1.0.0-alpha.214) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** `runMigrateToHyperdriveCommand` is now `runMigrateBackendCommand`
+and requires a `direction`.
+* **hyperdrive:** ImportShardResult and the global ImportResult gain a required
+`replaced` count; `streamingImport` takes an `onConflict` argument.
+
+### Features
+
+* **hyperdrive:** wire the admin global plane, add replace imports and migrate hyperdrive-to-d1 ([#1360](https://github.com/anolilab/lunora/issues/1360)) ([f25b400](https://github.com/anolilab/lunora/commit/f25b400a13fbf76d19e5e587f4d20f00242a7ece)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.215
+* **@lunora/do:** upgraded to 1.0.0-alpha.256
+
 ## @lunora/d1 [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.212...@lunora/d1@1.0.0-alpha.213) (2026-10-27)
 
 ### Performance Improvements

@@ -1,3 +1,59 @@
+## @lunora/shard-engine [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.173...@lunora/shard-engine@1.0.0-alpha.174) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+
+## @lunora/shard-engine [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.171...@lunora/shard-engine@1.0.0-alpha.172) (2026-10-30)
+
+### Performance Improvements
+
+* one-statement ratelimit sql sweep, skip untagged row decode ([#1381](https://github.com/anolilab/lunora/issues/1381)) ([2ab980c](https://github.com/anolilab/lunora/commit/2ab980c714e04381ad75db134db44a22d0de518c))
+
+## @lunora/shard-engine [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.170...@lunora/shard-engine@1.0.0-alpha.171) (2026-10-29)
+
+### Bug Fixes
+
+* **do:** recheck ttl expiry before the sweep deletes a row ([#1425](https://github.com/anolilab/lunora/issues/1425)) ([0ed8388](https://github.com/anolilab/lunora/commit/0ed83882be6199e67a506406ab1294e229bc3347))
+
+## @lunora/shard-engine [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.169...@lunora/shard-engine@1.0.0-alpha.170) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.76
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.141
+
+## @lunora/shard-engine [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.168...@lunora/shard-engine@1.0.0-alpha.169) (2026-10-29)
+
+### Features
+
+* **do,client,runtime:** batch a write's frames and re-auth open sockets ([#1396](https://github.com/anolilab/lunora/issues/1396)) ([dd260ba](https://github.com/anolilab/lunora/commit/dd260baa8cfa1aba3c86ef98206d156f1e49976b))
+
+## @lunora/shard-engine [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.167...@lunora/shard-engine@1.0.0-alpha.168) (2026-10-29)
+
+### Performance Improvements
+
+* **shard-engine,do:** narrow by-id reads and share identical seeds ([#1393](https://github.com/anolilab/lunora/issues/1393)) ([9cec499](https://github.com/anolilab/lunora/commit/9cec499342aa0e6954dd9ffd2f8b12cb57069e71))
+
+## @lunora/shard-engine [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.166...@lunora/shard-engine@1.0.0-alpha.167) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** `runMigrateToHyperdriveCommand` is now `runMigrateBackendCommand`
+and requires a `direction`.
+* **hyperdrive:** ImportShardResult and the global ImportResult gain a required
+`replaced` count; `streamingImport` takes an `onConflict` argument.
+
+### Features
+
+* **hyperdrive:** wire the admin global plane, add replace imports and migrate hyperdrive-to-d1 ([#1360](https://github.com/anolilab/lunora/issues/1360)) ([f25b400](https://github.com/anolilab/lunora/commit/f25b400a13fbf76d19e5e587f4d20f00242a7ece)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+
+### Performance Improvements
+
+* cache hmac keys per secret on per-message paths ([#1383](https://github.com/anolilab/lunora/issues/1383)) ([4b259f8](https://github.com/anolilab/lunora/commit/4b259f8583960cf26066423f64ee10e5e0de7c85))
+
 ## @lunora/shard-engine [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.165...@lunora/shard-engine@1.0.0-alpha.166) (2026-10-28)
 
 ### ⚠ BREAKING CHANGES

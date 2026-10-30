@@ -1,3 +1,86 @@
+## @lunora/react [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.278...@lunora/react@1.0.0-alpha.279) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.268
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.185
+
+## @lunora/react [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.277...@lunora/react@1.0.0-alpha.278) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** pin every wire dependent to the workspace version ([#1432](https://github.com/anolilab/lunora/issues/1432)) ([07eaf13](https://github.com/anolilab/lunora/commit/07eaf13f4f4e65319cbcf9089d5def29f431ead3))
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.184
+
+## @lunora/react [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.276...@lunora/react@1.0.0-alpha.277) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.265
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.183
+
+## @lunora/react [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.275...@lunora/react@1.0.0-alpha.276) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.264
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.182
+
+## @lunora/react [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.274...@lunora/react@1.0.0-alpha.275) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.263
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.181
+
+## @lunora/react [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.273...@lunora/react@1.0.0-alpha.274) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.262
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.180
+
+## @lunora/react [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.272...@lunora/react@1.0.0-alpha.273) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.261
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.179
+
+## @lunora/react [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.271...@lunora/react@1.0.0-alpha.272) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.260
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.178
+
+## @lunora/react [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.270...@lunora/react@1.0.0-alpha.271) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.259
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.177
+
+## @lunora/react [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.269...@lunora/react@1.0.0-alpha.270) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.258
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.176
+
 ## @lunora/react [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.268...@lunora/react@1.0.0-alpha.269) (2026-10-27)
 
 ### ⚠ BREAKING CHANGES

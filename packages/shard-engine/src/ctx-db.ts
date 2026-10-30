@@ -95,7 +95,7 @@ import { encodePartitionKey, RANK_TIEBREAK, rankPivotConditionSql, rankTableName
 import type { ReactiveCache } from "./reactive-cache";
 import { UNVOUCHABLE_DEP } from "./read-footprint";
 import type { IndexKeyEntry, KeyRange } from "./read-write-set";
-import { buildIndexRange, indexKeysForRow } from "./read-write-set";
+import { buildIndexRange, idIndexKey, indexKeysForRow, withUnknownIndexKeys } from "./read-write-set";
 import type { KeysetStage, RowFilter } from "./reader-keyset";
 import { compileOrderByText, doWhereTextStrategy, paginateStage, scanKeyset, selectPageSql } from "./reader-keyset";
 import { isPushableWhere, whereOfFilter } from "./reader-where-filter";
@@ -2144,17 +2144,27 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * — the same conservative behaviour as before ranges existed.
      */
     const rowIndexKeys = (tableName: string, ...images: (Record<string, unknown> | undefined)[]): IndexKeyEntry[] | undefined => {
-        const indexes = schema.tables[tableName]?.indexes;
-
-        if (!indexes || indexes.length === 0) {
-            return undefined;
-        }
-
+        const indexes = schema.tables[tableName]?.indexes ?? [];
         const entries: IndexKeyEntry[] = [];
+        let keyedId: string | undefined;
 
         for (const image of images) {
             if (image) {
-                entries.push(...indexKeysForRow(indexes, image, serializeSqlValue));
+                // The implicit id index, so a subscription that only `get`s rows
+                // re-runs for writes to those rows and no others. An image
+                // without `_id` yields no id key, which reads as "touched".
+                // Before and after images share their id, and a repeat would
+                // spend the gate's per-table key budget twice.
+                if (typeof image["_id"] === "string" && image["_id"] !== keyedId) {
+                    keyedId = image["_id"];
+                    entries.push(idIndexKey(keyedId));
+                }
+
+                // An index this image has no key on (a missing optional field, an
+                // unencodable value) is marked unknown rather than left out: the
+                // batch gate folds rows together, so another row's key on that
+                // index would otherwise stand in for this one's.
+                entries.push(...withUnknownIndexKeys(indexes, indexKeysForRow(indexes, image, serializeSqlValue)));
             }
         }
 
@@ -2266,13 +2276,24 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * miscounted as a single row; the fluent reader meters its own terminals
      * instead (see `meterRows` in `buildReader`).
      */
-    const onRead: ReadHook = (table, idOrScan) => {
+    const onRead: ReadHook = (table, idOrScan, exact) => {
         if (idOrScan !== undefined && idOrScan !== SCAN_DEP && !meterExempt) {
             headroom?.recordRead(1);
         }
 
         reportMemoryRead(table);
-        reportRead(table, idOrScan);
+        reportRead(table, idOrScan, exact);
+    };
+
+    /**
+     * A by-id read, keyed on the stored `_id` rather than the caller's argument:
+     * the write side keys on the image's `_id`, and the two must be the same
+     * string to meet. A row without one stays an unflagged (whole-table) read.
+     */
+    const reportPointRead = (located: { row: Record<string, unknown>; tableName: string }, id: string): void => {
+        const rowId = located.row["_id"];
+
+        onRead(located.tableName, typeof rowId === "string" ? rowId : id, typeof rowId === "string");
     };
     const onIndexUse = options.onIndexUse ?? (() => undefined);
     const reportWrite = options.onWrite ?? (() => undefined);
@@ -3661,11 +3682,16 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     return global.get(table, id);
                 }
 
+                // The miss is a result too: an insert under this id must re-run
+                // the query. Not a metered read — no row was materialised.
+                reportMemoryRead(table);
+                reportRead(table, id, true);
+
                 // eslint-disable-next-line unicorn/no-null -- DatabaseWriterLike.get is `Promise<Record | null>`: null is the documented "no such row" result
                 return null;
             }
 
-            onRead(located.tableName, id);
+            reportPointRead(located, id);
 
             return located.row;
         },
@@ -3694,11 +3720,18 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
+                // As in `get`, the miss is a result: an insert under this id into
+                // any table the probe covered must re-run the query.
+                for (const tableName of nonGlobalTableNames(expectedTable)) {
+                    reportMemoryRead(tableName);
+                    reportRead(tableName, id, true);
+                }
+
                 // eslint-disable-next-line unicorn/no-null -- the server seam contract returns `null` (not undefined) for an absent row
                 return null;
             }
 
-            onRead(located.tableName, id);
+            reportPointRead(located, id);
 
             return { row: located.row, tableName: located.tableName };
         },

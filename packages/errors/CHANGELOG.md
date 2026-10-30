@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.75...@lunora/errors@1.0.0-alpha.76) (2026-10-29)
+
+### Features
+
+* **do,client,runtime:** batch a write's frames and re-auth open sockets ([#1396](https://github.com/anolilab/lunora/issues/1396)) ([dd260ba](https://github.com/anolilab/lunora/commit/dd260baa8cfa1aba3c86ef98206d156f1e49976b))
+
 ## @lunora/errors [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.74...@lunora/errors@1.0.0-alpha.75) (2026-10-28)
 
 ### ⚠ BREAKING CHANGES

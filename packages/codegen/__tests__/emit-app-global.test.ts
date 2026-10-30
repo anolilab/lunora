@@ -11,12 +11,14 @@ import baseOptions from "./emit-app-options";
 // emits them the same way it already emits `runShardExport`/`runShardImport`.
 describe("emitApp — admin bulk-import wiring (.global())", () => {
     it("wires options.importGlobals when the app has a .global() table", () => {
-        expect.assertions(3);
+        expect.assertions(5);
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
         expect(output).toContain("options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);");
         expect(output).toContain("options.importGlobalsSupportsDryRun = true;");
+        expect(output).toContain("options.importGlobalsSupportsReplace = true;");
+        expect(output).toContain('onConflict: request.onConflict ?? "skip",');
         expect(output).toContain("const buildGlobalImporter =");
     });
 
@@ -173,14 +175,15 @@ describe("emitApp — admin export/sync/apply wiring (.global())", () => {
         expect(output).toContain("return request.changes.length;");
     });
 
-    it("omits the export/sync/apply wiring for a Hyperdrive-backed global app (D1-only wiring)", () => {
-        expect.assertions(3);
+    it("wires a Hyperdrive-backed global app through the Hyperdrive helpers, not the D1 builders", () => {
+        expect.assertions(4);
 
         const output = emitApp({ ...baseOptions, hasHyperdriveGlobal: true });
 
-        expect(output).not.toContain("exportGlobals");
-        expect(output).not.toContain("syncGlobals");
-        expect(output).not.toContain("applyGlobals");
+        expect(output).toContain("exportHyperdriveGlobalRows(");
+        expect(output).not.toContain("buildGlobalExporter");
+        expect(output).not.toContain("buildGlobalCdcSync");
+        expect(output).not.toContain("buildGlobalCdcApplier");
     });
 });
 

@@ -360,7 +360,13 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
         const byError = new Map<string | null, string[]>();
 
         for (const { error, id } of failed) {
-            byError.set(error ?? null, [...(byError.get(error ?? null) ?? []), id]);
+            const group = byError.get(error ?? null);
+
+            if (group === undefined) {
+                byError.set(error ?? null, [id]);
+            } else {
+                group.push(id);
+            }
         }
 
         for (const [error, ids] of byError) {

@@ -517,6 +517,7 @@ interface PortalInput {
 
 ```ts
 interface ProviderCapabilities {
+    readonly checkoutExpiry?: boolean;
     readonly merchantOfRecord: boolean;
     readonly portal: boolean;
     readonly usageMetering: boolean;
@@ -1269,6 +1270,7 @@ public API and is gated as one. Listed once per package, sorted by name.
 interface CheckoutRequest {
     readonly cancelUrl?: string;
     readonly email?: string;
+    readonly expiresAt?: number;
     readonly idempotencyKey?: string;
     readonly metadata?: Record<string, string>;
     readonly mode: "payment" | "subscription";

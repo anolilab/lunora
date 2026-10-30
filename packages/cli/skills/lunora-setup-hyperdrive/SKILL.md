@@ -57,6 +57,10 @@ its `id` into `wrangler.jsonc`. The connection string is never written or logged
 To manage the config yourself, run `wrangler hyperdrive create my-db --connection-string=...`
 and put the `id` in the binding. Validation fails without a `binding`.
 
+Hyperdrive caches read results (up to 60 s plus 15 s stale by default) and a write does not
+invalidate them. For reads that must see your own writes, add a second config created with
+`--caching-disabled` and bind it under another name.
+
 ## Step 3: Regenerate types
 
 ```bash
@@ -81,7 +85,7 @@ import { defineApp } from "../lunora/_generated/app.js";
 
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
-    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)))
+    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 })))
     .build();
 
 export const ShardDO = app.ShardDO;
@@ -148,7 +152,7 @@ messages: defineTable({ body: v.string(), channelId: v.string() })
 
 ```ts
 // worker entry: one client per binding name
-.sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)))
+.sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 })))
 ```
 
 How `.source()` behaves:
@@ -170,6 +174,10 @@ How `.source()` behaves:
    (Lunora then creates the config) or the real `id` is pasted in. An empty `id` is not
    provisioned: wrangler rejects it, so remove the entry and let Lunora add it again.
 4. **Wrong placeholders.** Use `$1` for `postgres`/`pg` and `?` for `mysql2`.
-5. **Unscoped `.source()` under `.shardBy()`.** Without `tenantBy`, every tenant's
+5. **Array or JSON params on postgres.js with `fetch_types: false`.** A JS array bound to
+   `= ANY($1)` fails as a malformed array literal: bind `JSON.stringify(list)` to
+   `IN (SELECT jsonb_array_elements_text($1::text::jsonb))`. Cast JSON params `$1::text::jsonb`,
+   since a bare `$1::jsonb` gets your string JSON-encoded twice.
+6. **Unscoped `.source()` under `.shardBy()`.** Without `tenantBy`, every tenant's
    rows are copied into each shard. `defineSchema` throws, and the
    `external_source_unscoped` lint fails the build.

@@ -1,6 +1,6 @@
 ---
 name: lunora-migration-helper
-description: Plans and runs Lunora schema and data migrations with the widen → migrate → narrow pattern. Covers online data migrations (`defineMigration` in `lunora/migrations.ts`, `lunora migrate create | up | down | status`), what the pre-deploy schema-drift gate treats as breaking and how a migration covers it, `.global()` table DDL on D1 (`lunora migrate generate`) and Hyperdrive, moving a dataset with `lunora migrate d1-to-hyperdrive`, and re-keying a `.shardBy()` table. Use when the user wants to make a field required, rename or drop a field or table, change a field's type, add a unique index to a populated table, backfill data, switch a table between root / `.shardBy()` / `.global()`, or when `lunora deploy` reports "schema drift gate blocked".
+description: Plans and runs Lunora schema and data migrations with the widen → migrate → narrow pattern. Covers online data migrations (`defineMigration` in `lunora/migrations.ts`, `lunora migrate create | up | down | status`), what the pre-deploy schema-drift gate treats as breaking and how a migration covers it, `.global()` table DDL on D1 (`lunora migrate generate`) and Hyperdrive, moving a dataset with `lunora migrate d1-to-hyperdrive` (and back with `hyperdrive-to-d1`), and re-keying a `.shardBy()` table. Use when the user wants to make a field required, rename or drop a field or table, change a field's type, add a unique index to a populated table, backfill data, switch a table between root / `.shardBy()` / `.global()`, or when `lunora deploy` reports "schema drift gate blocked".
 ---
 
 # Lunora Migration Helper
@@ -192,7 +192,13 @@ lunora migrate d1-to-hyperdrive --from-url https://old-worker --to-url https://n
 ```
 
 `--tables a,b` limits it to some tables, and `--out <path>` keeps the
-intermediate NDJSON dump. This moves the data to another backend; any
+intermediate NDJSON dump. `lunora migrate hyperdrive-to-d1` takes the same
+flags and moves the data back, for a rollback. Both are insert-only by default:
+a row whose `_id` already exists in the target is reported as a conflict and
+left unchanged, so a rollback restores missing rows, not later edits. Add
+`--replace` (with `--tables` naming the `.global()` tables; it is refused
+without one) to overwrite those rows with the source's values, or keep the dump
+with `--out` and reconcile by hand. This moves the data to another backend; any
 reshaping still follows widen → migrate → narrow.
 
 ## Common pitfalls

@@ -427,8 +427,10 @@ export interface LunoraClientOptions {
      * `@lunora/react-native` turns this on by default on native, where the bearer
      * also rides an `Authorization` header (the header wins).
      *
-     * A sign-in from signed-out then reconnects the shard sockets cold, and a
-     * refreshed bearer bounces them warm, so the server sees the current token.
+     * A sign-in from signed-out then reconnects the shard sockets cold. A
+     * refreshed bearer for the same user is handed to the open shard sockets in
+     * place (`POST /_lunora/ws/reauth`); one the server will not take bounces them
+     * warm, so the server sees the current token either way.
      * The default `false` keeps cookie-session sockets (and their live values)
      * alone.
      */
@@ -1092,8 +1094,18 @@ export interface ServerPokeEndMessage {
     type: "pokeEnd";
 }
 
+/**
+ * Brackets the frames one write sends to this socket (`batchStart` … `batchEnd`).
+ * Sent only to a client that announced `refreshBatch` on `connect`; the frames
+ * between the two are applied together and their listeners notified once.
+ */
+export interface ServerBatchMessage {
+    type: "batchEnd" | "batchStart";
+}
+
 export type ServerMessage =
     | ServerAckMessage
+    | ServerBatchMessage
     | ServerChunkMessage
     | ServerCompleteMessage
     | ServerDataMessage

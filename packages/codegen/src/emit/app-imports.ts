@@ -122,7 +122,7 @@ const buildImportLines = (options: ResolvedAppOptions): string[] => {
         ...(hasHyperdriveGlobal
             ? [
                   `import type { HyperdriveEngine } from "@lunora/hyperdrive/global";`,
-                  `import { createHyperdriveGlobalCtxDb } from "@lunora/hyperdrive/global";`,
+                  `import { applyHyperdriveGlobalCdc, createHyperdriveGlobalCtxDb, createHyperdriveGlobalIntrospector, exportHyperdriveGlobalRows, importHyperdriveGlobalRows, readHyperdriveGlobalCdc } from "@lunora/hyperdrive/global";`,
                   `import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";`,
               ]
             : []),

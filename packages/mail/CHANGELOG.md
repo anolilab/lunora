@@ -1,3 +1,9 @@
+## @lunora/mail [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.128...@lunora/mail@1.0.0-alpha.129) (2026-10-28)
+
+### Performance Improvements
+
+* single-pass email render, cached scheduler hmac key, linear notify grouping ([#1382](https://github.com/anolilab/lunora/issues/1382)) ([7ac5bb2](https://github.com/anolilab/lunora/commit/7ac5bb2bb9e839ed4da1c2667031c880531cc02e))
+
 ## @lunora/mail [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.127...@lunora/mail@1.0.0-alpha.128) (2026-10-28)
 
 

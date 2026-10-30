@@ -148,8 +148,10 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 // plane: the rows \`resolveTableSharding\` classifies as \`.global()\`
                 // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
-                // The importer above skips the write for a dry run.
+                // The importer above skips the write for a dry run, and
+                // overwrites an existing \`_id\` under \`onConflict: "replace"\`.
                 options.importGlobalsSupportsDryRun = true;
+                options.importGlobalsSupportsReplace = true;
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
                 // all, and every one of them fails SILENTLY when unset — export
@@ -162,6 +164,56 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 options.syncGlobals = buildGlobalCdcSync(database);
                 options.applyGlobals = buildGlobalCdcApplier(database, this.cdcEnabled);
             }
+        }`,
+          ]
+        : []),
+    // The Hyperdrive twin of the D1 admin plane above — same six options, same
+    // reason each one exists. \`declaration.exec(env)\` is called inside every
+    // request's closure, never hoisted: a Postgres/MySQL socket opened while
+    // serving one request cannot do I/O for another on Workers.
+    ...(options.hasHyperdriveGlobal
+        ? [
+              `        const hyperdriveDeclaration = this.hyperdriveGlobalDeclaration;
+
+        if (hyperdriveDeclaration) {
+            const engine = hyperdriveDeclaration.engine;
+            const hyperdriveSchema = schema as unknown as SqlCtxDbOptions["schema"];
+            const exec = (): SqlExec => hyperdriveDeclaration.exec(env);
+            const cdc = this.cdcEnabled;
+
+            options.globalIntrospector = {
+                facetColumn: (request) => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).facetColumn(request),
+                listTables: () => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).listTables(),
+                readTablePage: (request) => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).readTablePage(request),
+            };
+            options.importGlobals = (request) =>
+                importHyperdriveGlobalRows({
+                    cdc,
+                    dryRun: request.dryRun === true,
+                    engine,
+                    exec: exec(),
+                    onConflict: request.onConflict ?? "skip",
+                    rows: request.rows,
+                    schema: hyperdriveSchema,
+                    ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
+                });
+            options.importGlobalsSupportsDryRun = true;
+            options.importGlobalsSupportsReplace = true;
+            options.exportGlobals = (request) => exportHyperdriveGlobalRows({ engine, exec: exec(), schema: hyperdriveSchema, tables: request.tables });
+            options.syncGlobals = async (request) => {
+                const page = await readHyperdriveGlobalCdc(engine, exec(), request);
+
+                // \`as unknown as\`: \`CdcChange\` is an interface, which carries no implicit index signature.
+                return { changes: page.changes as unknown as ReadonlyArray<Record<string, unknown>>, cursor: page.cursor };
+            };
+            options.applyGlobals = (request) =>
+                applyHyperdriveGlobalCdc({
+                    cdc,
+                    changes: request.changes as unknown as Parameters<typeof applyHyperdriveGlobalCdc>[0]["changes"],
+                    engine,
+                    exec: exec(),
+                    schema: hyperdriveSchema,
+                });
         }`,
           ]
         : []),
@@ -244,7 +296,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
               `        // Captured before the branch so the narrowing survives — reading
         // \`this.authDeclaration.namespace\` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
-        const { authDiscoveryPathsFor, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest } = deferred.auth;
+        const { authDiscoveryPathsFor, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
@@ -303,39 +355,11 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                     return null;
                 }
 
-                const session = await auth.api.getSession({ headers: (request as Request).headers });
-
-                if (!session?.user?.id) {
-                    return null;
-                }
-
-                // \`role\` rides along so \`rls(policies, { roles })\` and \`auth.can(...)\`
-                // work on this wiring without a hand-written resolver. better-auth's
-                // \`admin()\` plugin owns that column (comma-joined for multiple roles)
-                // and only an administrator can write it; it is absent when the plugin
-                // is off, which reads as no roles.
-                //
-                // \`expiresAtMs\` is the socket credential expiry the runtime forwards
-                // as \`x-lunora-identity-exp\`. Without it the DO's expiry check never
-                // fires, so a signed-out, banned or lapsed user keeps streaming their
-                // RLS-scoped rows over an already-open WebSocket while every HTTP call
-                // is anonymous. better-auth hands back a \`Date\`; anything else means
-                // the adapter did not hydrate it, and omitting beats guessing.
-                const expiresAt = session.session.expiresAt;
-                // \`email\` and \`name\` are the claims \`ctx.auth.getIdentity()\` is
-                // documented to carry ("email, name, roles, custom claims"). Without
-                // them the documented \`me\` query — \`identity?.email\` — resolves
-                // \`undefined\` on the built-in wiring. Empty strings are dropped so an
-                // absent claim reads as absent rather than as "".
-                const user = session.user as { email?: unknown; name?: unknown; role?: unknown };
-
-                return {
-                    ...(typeof user.email === "string" && user.email.length > 0 ? { email: user.email } : {}),
-                    ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
-                    ...(typeof user.name === "string" && user.name.length > 0 ? { name: user.name } : {}),
-                    role: user.role,
-                    userId: session.user.id,
-                };
+                // \`resolveSessionIdentity\` is shared with the DO wiring, so both modes put
+                // the same claims (role, expiry, profile, and the active organization and
+                // team checked against membership) on the identity, and it is unit-tested
+                // where this template cannot be.
+                return resolveSessionIdentity(auth, (request as Request).headers);
             };
             const authInstance = getAuth();
 

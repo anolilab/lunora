@@ -1,3 +1,21 @@
+## @lunora/queue [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.133...@lunora/queue@1.0.0-alpha.134) (2026-10-30)
+
+### Performance Improvements
+
+* **wire:** skip decodeWire on tagless json text ([#1384](https://github.com/anolilab/lunora/issues/1384)) ([ec9dd3d](https://github.com/anolilab/lunora/commit/ec9dd3de697df597b24cbea981ea25a1a2c8fcea))
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+
+## @lunora/queue [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.131...@lunora/queue@1.0.0-alpha.132) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.76
+
 ## @lunora/queue [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.130...@lunora/queue@1.0.0-alpha.131) (2026-10-28)
 
 ### Miscellaneous Chores

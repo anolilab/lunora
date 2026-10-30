@@ -103,6 +103,16 @@ export const ERROR_CATALOG = {
         status: 409,
         title: "Migration drift",
     },
+
+    /**
+     * A UNIQUE index cannot be built because existing rows already share its key. The shard refuses user traffic until a later
+     * build succeeds. 503, not 409: the refusal lifts on its own once the rows are repaired, and clients retry or reconnect on a
+     * 5xx but treat a 4xx as final, so a live subscription refused with a 409 never came back.
+     */
+    UNIQUE_INDEX_DUPLICATES: {
+        status: 503,
+        title: "Unique index blocked by duplicate rows",
+    },
     UNKNOWN_TABLE: { status: 404, title: "Unknown table" },
     GLOBAL_TABLE_NOT_EDITABLE: { status: 400, title: "Global table is not editable" },
 
@@ -476,6 +486,10 @@ export const ERROR_CATALOG = {
         status: 409,
         title: "Dispatch already in progress",
     },
+    /** A socket re-auth carried a credential older than the one the socket already holds; the socket keeps its newer one. */
+    STALE_CREDENTIAL: { status: 409, title: "Stale credential" },
+    /** A socket re-auth resolved to different claims than the socket was opened with; the client must reconnect to change identity. */
+    IDENTITY_CHANGED: { status: 409, title: "Socket identity changed" },
     FORBIDDEN_FANOUT: { status: 403, title: "Fan-out forbidden" },
     GLOBAL_SEARCH_SCORES_UNSUPPORTED: { status: 400, title: "collectWithScores() is unsupported on a global table" },
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },

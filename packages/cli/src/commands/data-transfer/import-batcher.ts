@@ -47,6 +47,7 @@ interface AdminImportResponse {
     failed?: ImportShardFailure[];
     inserted?: Record<string, number>;
     received?: number;
+    replaced?: number;
     warnings?: string[];
 }
 
@@ -58,6 +59,8 @@ interface ImportTotals {
     failed: ImportShardFailure[];
     inserted: Record<string, number>;
     received: number;
+    /** Existing rows overwritten under `--replace`. */
+    replaced: number;
     warnings: string[];
 }
 
@@ -80,7 +83,7 @@ interface ImportBatcher {
 }
 
 const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
-    const totals: ImportTotals = { conflicts: 0, errors: [], failed: [], inserted: {}, received: 0, warnings: [] };
+    const totals: ImportTotals = { conflicts: 0, errors: [], failed: [], inserted: {}, received: 0, replaced: 0, warnings: [] };
     let batch: string[] = [];
     let batchBytes = 0;
 
@@ -94,6 +97,7 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
         totals.failed.push(...(json.failed ?? []));
         totals.conflicts += json.conflicts ?? 0;
         totals.received += json.received ?? 0;
+        totals.replaced += json.replaced ?? 0;
 
         // The endpoint's own diagnostics — e.g. "no `resolveTableSharding` is
         // configured, so every row was routed to the default shard". Dropping

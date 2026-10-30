@@ -194,6 +194,7 @@ import {
     handleReplicaControl,
     isDevEnvironment,
     isLossyBody,
+    isTtlExpired,
     listReactorStates,
     listTables,
     MAX_PAGE_SIZE,
@@ -304,9 +305,11 @@ import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/o
 import { buildTraceparent, LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { RAY_ID_HEADER } from "../../../shared/ray-id";
+import { BATCH_END_FRAME, BATCH_START_FRAME, REFRESH_BATCH_CAPABILITY } from "../../../shared/refresh-batch";
 import { parseRelayName } from "../../../shared/relay-name";
 import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
+import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { adminSocketBinding, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -1708,6 +1711,16 @@ const countLiveConnections = (
     return { callerConnections, ipConnections };
 };
 
+/** Claims a refreshed credential re-issues on every refresh; they say when it was minted and until when, not who it names. */
+const VOLATILE_CLAIMS = new Set(["exp", "expiresAtMs", "iat", "jti", "nbf"]);
+
+/** The claims a re-auth must leave unchanged, as one comparable key (`""` for none). */
+const credentialClaimsKey = (identity: Record<string, unknown> | undefined): string => {
+    const stable = Object.fromEntries(Object.entries(identity ?? {}).filter(([claim]) => !VOLATILE_CLAIMS.has(claim)));
+
+    return Object.keys(stable).length === 0 ? "" : stableWireKey(stable);
+};
+
 const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
     // A copy: the attachment is shared with the socket cache, and user code receives this object.
     return { identity: attachment.identity === undefined ? undefined : structuredClone(attachment.identity), ip: attachment.ip, userId: attachment.userId };
@@ -2751,6 +2764,12 @@ abstract class ShardDO {
     /** True while {@link ShardDO.drainSubscriptionRefreshes} is running; the single-waiter gate that coalesces concurrent flushes. */
     private refreshInFlight = false;
 
+    /**
+     * Sockets inside a bracketed refresh visit (see {@link ShardDO.inRefreshBatch}):
+     * `false` until the visit sends its first frame, which opens the bracket.
+     */
+    private readonly refreshBatches = new WeakMap<ShardSocketLike, boolean>();
+
     /** Subscription memos and the socket table index the write-flush fan-outs filter on. */
     private readonly socketIndex = new SocketTableIndex();
 
@@ -2783,6 +2802,9 @@ abstract class ShardDO {
      * In-memory only, like the memos it orders.
      */
     private writeGeneration = 0;
+
+    /** In-flight subscription seeds by stamp and run key; see {@link ShardDO.resolveSeedOutcome}. */
+    private readonly seedRuns = new Map<string, Promise<SubscriptionOutcome | null>>();
 
     /**
      * Per-socket poke baseline for shape subscriptions: maps each shape's
@@ -5036,7 +5058,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult> {
-        return Promise.resolve({ conflicts: 0, errors: [], inserted: {} });
+        return Promise.resolve({ conflicts: 0, errors: [], inserted: {}, replaced: 0 });
     }
 
     /**
@@ -5052,6 +5074,10 @@ abstract class ShardDO {
      * `this.transactionHeadroom()`, which mints a fresh per-call budget, while
      * {@link ShardDO.pollTtlSweeps} (an alarm work item draining many rows under
      * ONE ceiling) passes its own tracker explicitly.
+     *
+     * An override must reach the writer's row read without an `await`: the TTL
+     * sweep rechecks expiry synchronously just before calling this, and an
+     * interleaved write in between would let it delete a refreshed row.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardWrite(args: RunShardWriteArgs, _headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
@@ -6624,7 +6650,7 @@ abstract class ShardDO {
 
                 for (const id of page.ids) {
                     // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO (same reasoning as `runShardBulkRowOp`)
-                    const limitHit = await this.deleteExpiredTtlRow(spec.table, id, headroom, trace);
+                    const limitHit = await this.deleteExpiredTtlRow(spec, id, now, headroom, trace);
 
                     if (limitHit) {
                         return Date.now();
@@ -7266,7 +7292,8 @@ abstract class ShardDO {
      * collected even when the reactive cache is off, since the causal signal is
      * independent of caching.
      *
-     * It ALSO marks the table unnarrowable on the scope's `footprint`,
+     * It ALSO forwards the read to the scope's `footprint`, which marks the
+     * table unnarrowable unless the reader flagged a point read (`exact`),
      * mirroring `executeSubscription`'s wiring (which hands a single
      * `ReadFootprint`'s `onRead`/`onReadRange` pair straight to `buildCtx`).
      * `ctx-db.ts`'s reader calls this `onRead` and `onReadRange` mutually
@@ -7276,10 +7303,10 @@ abstract class ShardDO {
      * "read this table outside a range" signal {@link ReadFootprint.ranges}
      * needs to drop that table from the narrowed set.
      */
-    protected getCtxDbReadHook(scope?: QueryReadScope): (table: string, idOrScan?: string) => void {
-        return (table, idOrScan) => {
+    protected getCtxDbReadHook(scope?: QueryReadScope): (table: string, idOrScan?: string, exact?: boolean) => void {
+        return (table, idOrScan, exact) => {
             scope?.tracker.recordRead(table, idOrScan ?? SCAN_DEP);
-            scope?.footprint.onRead(table, idOrScan ?? SCAN_DEP);
+            scope?.footprint.onRead(table, idOrScan ?? SCAN_DEP, exact);
 
             // Attribute a scan ONLY on the explicit `SCAN_DEP` sentinel. A
             // predicated (indexed) `findMany` calls `onRead(table)` with no id
@@ -8211,6 +8238,7 @@ abstract class ShardDO {
             // it understands, so keeping them would store input with no reader.
             if (Array.isArray(envelope.caps)) {
                 attachment.pageDeltas = envelope.caps.includes(PAGE_DELTA_CAPABILITY);
+                attachment.refreshBatch = envelope.caps.includes(REFRESH_BATCH_CAPABILITY);
             }
 
             attachment.connected = true;
@@ -9323,7 +9351,49 @@ abstract class ShardDO {
                 return false;
             }
         }
+        // Opened lazily, so a visit that sends nothing costs the socket nothing.
+        if (this.refreshBatches.get(ws) === false) {
+            this.refreshBatches.set(ws, true);
+            trySendFrame(ws, BATCH_START_FRAME);
+        }
         return trySendFrame(ws, frame);
+    }
+
+    /**
+     * Run one socket's refresh visit inside a `batchStart`/`batchEnd` bracket, so a
+     * write that changes two of its subscriptions (a count and the list it counts)
+     * reaches the client as one atomic update instead of one render per frame.
+     *
+     * Brackets rather than one combined message: every frame keeps its own send
+     * verdict, which is what advances (or holds) that subscription's diff baseline,
+     * and no combined message can outgrow the platform's per-message cap.
+     *
+     * Only for a socket that announced {@link REFRESH_BATCH_CAPABILITY} and holds more
+     * than one subscription — a single frame is already atomic. A frame another path
+     * sends to the socket while the bracket is open (a seed) lands inside it, which
+     * the client applies with the rest. Passes never overlap (`refreshInFlight`), so
+     * one socket has at most one bracket open.
+     */
+    private async inRefreshBatch(ws: ShardSocketLike, visit: () => Promise<void>): Promise<void> {
+        const attachment = this.readAttachment(ws);
+
+        if (attachment.refreshBatch !== true || Object.keys(attachment.subs).length < 2) {
+            await visit();
+
+            return;
+        }
+
+        this.refreshBatches.set(ws, false);
+
+        try {
+            await visit();
+        } finally {
+            if (this.refreshBatches.get(ws) === true) {
+                trySendFrame(ws, BATCH_END_FRAME);
+            }
+
+            this.refreshBatches.delete(ws);
+        }
     }
 
     private async authorizeSubscription(
@@ -10828,7 +10898,7 @@ abstract class ShardDO {
      */
     private async importAdminShard(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseImportShardArgs(args);
-        const result = await this.runShardImport({ dryRun: parsed.dryRun, rows: parsed.rows, startLine: parsed.startLine });
+        const result = await this.runShardImport({ dryRun: parsed.dryRun, onConflict: parsed.onConflict, rows: parsed.rows, startLine: parsed.startLine });
 
         // A dry run writes nothing, so there is no table to flush and no change to audit. The echo is how a client tells a shard that
         // honoured the flag from one built before it existed, which ignores the flag, writes the rows and answers the same body.
@@ -10840,7 +10910,9 @@ abstract class ShardDO {
         // flush so live subscribers re-run.
         await this.flushChangedTables();
 
-        this.recordAudit("importShard", { detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted } });
+        this.recordAudit("importShard", {
+            detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted, replaced: result.replaced },
+        });
 
         return adminResponse(result);
     }
@@ -12899,11 +12971,7 @@ abstract class ShardDO {
         if (this.deliveryAuthorization) {
             return this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
         }
-        const key = this.isIdentityIndependent(functionPath)
-            ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
-              reactiveCacheKey(functionPath, args, null)
-            : // The key reads the identity, never keeps it, so the stored one serves without a copy.
-              reactiveCacheKey(functionPath, args, subscriptionIdentityKey(attachment));
+        const key = this.reactiveRunKey(functionPath, args, attachment);
         const cached = cache.get(key);
 
         if (cached !== undefined) {
@@ -12915,6 +12983,69 @@ abstract class ShardDO {
         cache.set(key, pending);
 
         return pending;
+    }
+
+    /** The key two reactive runs share under: see {@link isIdentityIndependent} for which identity fields it carries. */
+    private reactiveRunKey(functionPath: string, args: Record<string, unknown>, attachment: SocketAttachment): string {
+        return this.isIdentityIndependent(functionPath)
+            ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
+              reactiveCacheKey(functionPath, args, null)
+            : // The key reads the identity, never keeps it, so the stored one serves without a copy.
+              reactiveCacheKey(functionPath, args, subscriptionIdentityKey(attachment));
+    }
+
+    /**
+     * Single-flight for subscription seeds: identical seeds (same key as the
+     * refresh dedup) that start while one is in flight join it, so a reconnect
+     * storm runs each distinct query once instead of once per socket.
+     *
+     * `stamp` is the write generation AND the CDC cursor/epoch the seed read
+     * before running. A joiner stamps the shared result with its OWN cursor, so
+     * it may only join a run that started at the same one — otherwise a pre-write
+     * result could go out under a post-write cursor and a later reconnect would
+     * be told to `resume` on it. The generation alone is not enough: it is bumped
+     * in `flushChangedTables` after awaits, while the cursor has already moved.
+     *
+     * In flight only: an entry is dropped when its run settles. A finished result
+     * cannot be retained, because a query may read `.global()`, KV or vector data
+     * that changes without any local write to bump either stamp.
+     */
+    private resolveSeedOutcome(
+        functionPath: string,
+        args: Record<string, unknown>,
+        handedArgs: () => Record<string, unknown>,
+        isAdmin: boolean,
+        attachment: SocketAttachment,
+        stamp: string,
+    ): Promise<SubscriptionOutcome | null> {
+        if (this.deliveryAuthorization) {
+            return this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
+        }
+
+        // Keyed by stamp too rather than one map per stamp: admin seeds stamp no
+        // epoch, so interleaved admin and user seeds would keep evicting each other.
+        const key = `${stamp}\u0000${this.reactiveRunKey(functionPath, args, attachment)}`;
+        const inFlight = this.seedRuns.get(key);
+
+        if (inFlight !== undefined) {
+            return inFlight;
+        }
+
+        // Every caller, leader included, awaits the `finally` chain, so a rejection reaches each of them and none dangles.
+        const shared: Promise<SubscriptionOutcome | null> = this.resolveReactiveOutcome(
+            functionPath,
+            handedArgs(),
+            isAdmin,
+            socketIdentity(attachment),
+        ).finally(() => {
+            if (this.seedRuns.get(key) === shared) {
+                this.seedRuns.delete(key);
+            }
+        });
+
+        this.seedRuns.set(key, shared);
+
+        return shared;
     }
 
     /**
@@ -13946,7 +14077,7 @@ abstract class ShardDO {
         // Bounded fan-out (default 8 in flight): each worker drains its sockets
         // one at a time so the per-subscription `awaitWsDrain` gate above paces a
         // slow consumer. See {@link runSocketPool}.
-        await runSocketPool(sockets, refreshOne);
+        await runSocketPool(sockets, (ws) => this.inRefreshBatch(ws, () => refreshOne(ws)));
     }
 
     /**
@@ -14008,7 +14139,8 @@ abstract class ShardDO {
      * {@link ShardDO.seedSubscriptionGuarded}, which owns that failure.
      */
     private async seedSubscription(ws: ShardSocketLike, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
-        const seedArgs = structuredClone(query.args ?? {});
+        const storedArgs = query.args ?? {};
+        const seedArgs = cloneArgsOnFirstUse(storedArgs);
         // Seed under the socket's OWN verified identity (stamped on the attachment
         // at upgrade, unforgeable by the client) — read here and passed BY VALUE,
         // so even though a subscribe envelope can interleave with an in-flight RPC
@@ -14028,11 +14160,20 @@ abstract class ShardDO {
         const readCursor = this.currentCdcCursor();
         const readEpoch = isAdmin ? undefined : this.currentCdcEpoch();
         const generation = this.writeGeneration;
-        const permit = this.deliveryAuthorization ? await this.authorizeSubscription(ws, subId, socketIdentity(attachment), functionPath, seedArgs) : undefined;
+        const permit = this.deliveryAuthorization
+            ? await this.authorizeSubscription(ws, subId, socketIdentity(attachment), functionPath, seedArgs())
+            : undefined;
         if (this.deliveryAuthorization && permit === undefined) {
             return;
         }
-        const outcome = await this.resolveReactiveOutcome(functionPath, seedArgs, isAdmin, socketIdentity(attachment));
+        const outcome = await this.resolveSeedOutcome(
+            functionPath,
+            storedArgs,
+            seedArgs,
+            isAdmin,
+            attachment,
+            `${String(generation)}|${String(readCursor)}|${String(readEpoch)}`,
+        );
 
         if (!outcome) {
             return;
@@ -15392,10 +15533,29 @@ abstract class ShardDO {
      * letting it propagate — split out of {@link ShardDO.pollTtlSweeps} to keep
      * that method's own complexity down. Returns `true` when the limit was hit
      * (the caller must stop the sweep pass) and logs a `warn` recording it; `false`
-     * on an ordinary successful delete. Any OTHER thrown error still propagates —
-     * only the meter's own signal is contained here.
+     * on an ordinary successful delete, or on a row that is no longer expired.
+     * Any OTHER thrown error still propagates — only the meter's own signal is
+     * contained here.
      */
-    private async deleteExpiredTtlRow(table: string, id: string, headroom: TransactionHeadroomTracker, trace?: TraceRefLike): Promise<boolean> {
+    private async deleteExpiredTtlRow(
+        spec: TtlSweepSpec,
+        id: string,
+        now: number,
+        headroom: TransactionHeadroomTracker,
+        trace?: TraceRefLike,
+    ): Promise<boolean> {
+        const { table } = spec;
+
+        // The page was selected before the earlier rows' deletes were awaited, and
+        // a delete doing real I/O (a trigger, a `.global()` cascade) lets another
+        // request refresh a later row's TTL field. This recheck and the writer's
+        // own row read in `runShardWrite` run in one synchronous span — no `await`
+        // may sit between them — and the writer's delete CASes on that read, so a
+        // row seen expired here is the row that gets deleted.
+        if (!isTtlExpired(this.sql as SqlExec, spec, id, now)) {
+            return false;
+        }
+
         try {
             await this.runShardWrite({ id, op: "delete", table }, headroom);
 
@@ -16588,7 +16748,96 @@ abstract class ShardDO {
             return this.handleLivePublish(request);
         }
 
+        if (url.pathname === SOCKET_REAUTH_PATH && request.method === "POST") {
+            return this.handleSocketReauth(request);
+        }
+
         return undefined;
+    }
+
+    /**
+     * A refreshed credential for one of this shard's sockets, verified by the worker
+     * (the shard cannot run the app's identity resolver, so it never sees the token).
+     * Rides the live-control path so a socket held by a relay is reached through the
+     * owner the same way a live grant is.
+     */
+    private async handleSocketReauth(request: Request): Promise<Response> {
+        let body: { connectionId?: unknown } | null;
+
+        try {
+            body = await request.json();
+        } catch {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
+        }
+
+        if (typeof body?.connectionId !== "string" || body.connectionId.length === 0 || body.connectionId.length > MAX_LIVE_CONTROL_KEY_LENGTH) {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "connectionId is required" } }, 400);
+        }
+
+        const identity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
+        const identityExpiry = decodeIdentityExpiryHeader(request.headers.get("x-lunora-identity-exp"));
+
+        return this.handleLiveSocketControl({
+            action: "reauth",
+            callerId: decodeUserIdHeader(request.headers.get("x-lunora-userid")) ?? "",
+            connectionId: body.connectionId,
+            ...(identity === undefined ? {} : { identity }),
+            ...(identityExpiry === undefined ? {} : { identityExpiry }),
+            key: "",
+            subscriptionId: "",
+        });
+    }
+
+    /**
+     * Move a socket's credential expiry to the refreshed one, keeping its
+     * subscriptions and memos. Refused — and the socket left to lapse at its old
+     * expiry with 4001 — when the credential is anonymous, already expired, older
+     * than the one the socket holds (a replay), or carries different claims; the
+     * client then reconnects, and a changed identity re-seeds there as on any upgrade.
+     */
+    private reauthenticateSocket(ws: ShardSocketLike, call: LiveSocketControlCall): Response {
+        const attachment = this.readAttachment(ws);
+        const { identity, identityExpiry } = call;
+
+        if (call.callerId === "") {
+            return jsonResponse({ error: { code: "UNAUTHENTICATED", message: "an anonymous socket has no credential to refresh" } }, 401);
+        }
+
+        if (isIdentityExpired(identityExpiry)) {
+            return jsonResponse({ error: { code: "TOKEN_EXPIRED", message: "authentication token expired" } }, 401);
+        }
+
+        // A credential without an expiry (a cookie session, say) cannot lift the one the socket holds: the socket
+        // would outlive both its bearer and the session.
+        if (attachment.expiresAt !== undefined && (identityExpiry === undefined || identityExpiry < attachment.expiresAt)) {
+            return jsonResponse({ error: { code: "STALE_CREDENTIAL", message: "the socket already holds a later credential" } }, 409);
+        }
+
+        if (credentialClaimsKey(attachment.identity) !== credentialClaimsKey(identity)) {
+            return jsonResponse({ error: { code: "IDENTITY_CHANGED", message: "the credential's claims differ from the socket's; reconnect" } }, 409);
+        }
+
+        const next: SocketAttachment = { ...attachment };
+
+        if (identityExpiry === undefined) {
+            delete next.expiresAt;
+        } else {
+            next.expiresAt = identityExpiry;
+        }
+
+        if (identity === undefined) {
+            delete next.identity;
+        } else {
+            next.identity = identity;
+        }
+
+        try {
+            this.writeAttachment(ws, next);
+        } catch {
+            return jsonResponse({ error: { code: "SUBSCRIPTION_PERSIST_FAILED", message: "the socket attachment could not be updated; reconnect" } }, 409);
+        }
+
+        return jsonResponse({ ok: true });
     }
 
     private async routeNonRpc(url: URL, request: Request): Promise<Response | undefined> {
@@ -18198,6 +18447,11 @@ abstract class ShardDO {
         }
 
         const { action, connectionId, key, subscriptionId } = parsed;
+
+        // `reauth` reaches the socket path only from the worker's re-auth route, which forwards the verified claims.
+        if (action === "reauth") {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "action must be subscribe or unsubscribe" } }, 400);
+        }
         // Connection ids are random per DO instance, and the grant lands only in the map or socket
         // list of the DO that receives the call. The server routes connect and control to the same
         // shard (`shard` query param and `shardKey` body field both feed `fetchShard`). If a control
@@ -18277,6 +18531,10 @@ abstract class ShardDO {
         // Same owner rule as an SSE connection: another caller's socket is refused as absent.
         if (ws === undefined || (this.readAttachment(ws).userId ?? "") !== callerId) {
             return jsonResponse({ error: { code: "LIVE_CONNECTION_NOT_FOUND", message: "no such live connection" } }, 404);
+        }
+
+        if (action === "reauth") {
+            return this.reauthenticateSocket(ws, call);
         }
 
         const attachment = this.readAttachment(ws);

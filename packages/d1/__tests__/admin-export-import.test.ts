@@ -307,6 +307,25 @@ describe("d1 admin export/import globals", () => {
             });
         });
 
+        it("rejects a malformed _id or _creationTime instead of inserting the row under a new identity", async () => {
+            // Dropped and regenerated, a bad _id would restore the row as a different document and still report success.
+            expect.assertions(3);
+
+            const result = await importGlobalRows(writer, schema, {
+                rows: [
+                    { doc: { _id: 42, name: "ok", value: "x" }, table: "settings" },
+                    { doc: { _creationTime: "yesterday", _id: "s2", name: "ok2", value: "y" }, table: "settings" },
+                ],
+            });
+
+            expect(result.inserted).toEqual({});
+            expect(result.errors.map((error) => error.message)).toStrictEqual([
+                'field "_id": must be a non-empty string',
+                'field "_creationTime": must be a finite number',
+            ]);
+            expect(result.errors.every((error) => error.code === "VALIDATION_ERROR")).toBe(true);
+        });
+
         it("rejects a prototype-named field the table does not declare", async () => {
             expect.assertions(2);
 
@@ -344,6 +363,30 @@ describe("d1 admin export/import globals", () => {
             expect(result.errors.map((error) => error.line)).toStrictEqual([5, 6]);
         });
 
+        it("refuses an _id another global table holds, probing tables the import has not written yet", async () => {
+            expect.assertions(2);
+
+            // Neither table exists yet: the import provisions both before it asks them who owns an id.
+            const fresh = createD1Exec();
+            const twoTables: SchemaLike = {
+                tables: {
+                    flags: { indexes: [], shape: { label: col("string") }, shardMode: { kind: "global" } as never },
+                    notes: { indexes: [], shape: { label: col("string") }, shardMode: { kind: "global" } as never },
+                },
+            };
+
+            try {
+                const freshWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema: twoTables });
+                const first = await importGlobalRows(freshWriter, twoTables, { exec: fresh.exec, rows: [{ doc: { _id: "n1", label: "a" }, table: "notes" }] });
+                const second = await importGlobalRows(freshWriter, twoTables, { exec: fresh.exec, rows: [{ doc: { _id: "n1", label: "b" }, table: "flags" }] });
+
+                expect(first).toMatchObject({ errors: [], inserted: { notes: 1 } });
+                expect(second).toMatchObject({ errors: [{ code: "ID_COLLISION", line: 1, table: "flags" }], inserted: {} });
+            } finally {
+                fresh.close();
+            }
+        });
+
         it("counts _id collisions as conflicts and skips them", async () => {
             expect.assertions(3);
 
@@ -362,6 +405,29 @@ describe("d1 admin export/import globals", () => {
             const reloaded = await writer.get("settings", "s1");
 
             expect(reloaded).toMatchObject({ value: "dark" });
+        });
+
+        it('overwrites an existing _id under onConflict: "replace" (a rollback after the source changed)', async () => {
+            expect.assertions(3);
+
+            await writer.insert("settings", { _id: "s1", name: "theme", value: "copied" }, { allowExplicitId: true });
+
+            const result = await importGlobalRows(writer, schema, {
+                exec: harness.exec,
+                onConflict: "replace",
+                rows: [{ doc: { _creationTime: 42, _id: "s1", name: "theme", value: "changed on the source" }, table: "settings" }],
+            });
+
+            expect(result).toMatchObject({ conflicts: 0, errors: [], inserted: {}, replaced: 1 });
+            await expect(writer.get("settings", "s1")).resolves.toMatchObject({ _creationTime: 42, value: "changed on the source" });
+
+            // The default stays insert-only: the same row is a conflict, left as it is.
+            const again = await importGlobalRows(writer, schema, {
+                exec: harness.exec,
+                rows: [{ doc: { _id: "s1", name: "theme", value: "third" }, table: "settings" }],
+            });
+
+            expect(again).toMatchObject({ conflicts: 1, replaced: 0 });
         });
 
         it("roundtrip: a bigint / bytes row survives JSON egress and comes back real", async () => {

@@ -34,6 +34,7 @@ The adapter advertises its shape in `capabilities`:
 
 <TypeTable
     type={{
+        checkoutExpiry: { type: "false", description: "createCheckout refuses an expiresAt with PROVIDER_ERROR." },
         merchantOfRecord: { type: "false", description: "Autumn runs on your own Stripe — you own tax, invoicing, and remittance. Not a Merchant-of-Record." },
         portal: { type: "true", description: "Native hosted billing portal — createPortalSession opens Autumn's Stripe-backed portal." },
         usageMetering: { type: "true", description: "Metered/usage-based features via track — reportUsage forwards usage to Autumn." },

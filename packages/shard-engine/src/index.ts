@@ -13,6 +13,7 @@ export type {
     ExportRow,
     ExportShardAdminArgs,
     ExportShardArgs,
+    ImportConflictMode,
     ImportError,
     ImportShardAdminArgs,
     ImportShardArgs,
@@ -481,7 +482,7 @@ export { DEFAULT_TRANSACTION_LIMITS, TransactionHeadroomTracker } from "./transa
 export type { RunTriggersOptions } from "./triggers";
 export { hasTrigger, runTriggers } from "./triggers";
 export type { TtlSweepSpec } from "./ttl-sweep";
-export { nextTtlExpiry, selectExpiredIds } from "./ttl-sweep";
+export { isTtlExpired, nextTtlExpiry, selectExpiredIds } from "./ttl-sweep";
 export type {
     LifecycleDispatchInfo,
     LifecycleEvent,

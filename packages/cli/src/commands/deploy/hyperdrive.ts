@@ -9,11 +9,19 @@
  * re-deploy (or a second machine) never creates a duplicate. The connection
  * string stays in the environment: it is sent to Cloudflare and never logged,
  * written, or put on a command line.
+ *
+ * An app with `.global({ backend: "hyperdrive" })` tables gets its configs with
+ * Hyperdrive's query cache disabled. The cache is on by default and a write does
+ * not invalidate it, so the store's OCC re-reads, CDC polls and live-query
+ * re-runs would see rows up to `max_age + stale_while_revalidate` old. Which
+ * binding the user's `exec` reads is not knowable here, so every config the
+ * deploy creates or reuses is set that way.
  */
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+import { discoverSchemaInfo, resolveSchemaDirectory } from "@lunora/config";
 import { applyModify, findWranglerFile, HYPERDRIVE_PLACEHOLDER_ID, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { cloudflareRestRequest } from "../../../../../shared/cloudflare-rest";
@@ -44,6 +52,8 @@ interface ProvisionHyperdriveOptions {
     /** Check everything a real deploy would, make no API call or file change, and still stop on what it would stop on. */
     checkOnly?: boolean;
     cwd: string;
+    /** Create (or update) every config with Hyperdrive's query cache off. */
+    disableCaching?: boolean;
     dryRun?: boolean;
     /** Defaults to `process.env`. */
     environment?: CloudflareEnvironment & Record<string, string | undefined>;
@@ -246,7 +256,13 @@ const findConfig = async (request: Request, name: string): Promise<ListedConfig 
  * does is updated with the connection string's password, so a rotated password reaches the deployed
  * binding. Throws on an API failure or a mismatch.
  */
-const configId = async (request: Request, name: string, origin: Record<string, number | string>): Promise<{ id: string; reused: boolean }> => {
+const configId = async (
+    request: Request,
+    name: string,
+    origin: Record<string, number | string>,
+    disableCaching: boolean,
+): Promise<{ id: string; reused: boolean }> => {
+    const caching = disableCaching ? { caching: { disabled: true } } : {};
     const existing = await findConfig(request, name);
 
     if (typeof existing?.id === "string") {
@@ -260,7 +276,10 @@ const configId = async (request: Request, name: string, origin: Record<string, n
             );
         }
 
-        const updated = await request(`/hyperdrive/configs/${encodeURIComponent(existing.id)}`, { body: JSON.stringify({ origin }), method: "PATCH" });
+        const updated = await request(`/hyperdrive/configs/${encodeURIComponent(existing.id)}`, {
+            body: JSON.stringify({ origin, ...caching }),
+            method: "PATCH",
+        });
 
         if (!updated.ok) {
             throw new Error(`updating its credentials failed (${describeFailure(updated)})`);
@@ -269,7 +288,7 @@ const configId = async (request: Request, name: string, origin: Record<string, n
         return { id: existing.id, reused: true };
     }
 
-    const created = await request("/hyperdrive/configs", { body: JSON.stringify({ name, origin }), method: "POST" });
+    const created = await request("/hyperdrive/configs", { body: JSON.stringify({ name, origin, ...caching }), method: "POST" });
 
     if (!created.ok) {
         throw new Error(`creating it failed (${describeFailure(created)})`);
@@ -303,6 +322,7 @@ const blocker = (binding: string, origin: unknown, hasCredentials: boolean, supp
 interface BindingSetup {
     accountId: string;
     binding: string;
+    disableCaching: boolean;
     fetch?: typeof globalThis.fetch;
     index: number;
     logger: Logger;
@@ -328,6 +348,7 @@ const setUpBinding = async (setup: BindingSetup, text: string): Promise<{ id: st
             }),
         name,
         setup.origin,
+        setup.disableCaching,
     );
 
     setup.logger.success(`${reused ? "reusing" : "created"} Hyperdrive config "${name}" for ${setup.binding} → ${setup.wranglerPath}`);
@@ -481,11 +502,88 @@ const preflight = (
     return undefined;
 };
 
+/** Warn when the config `id` (bound as `binding`) still caches queries, or when that can't be read. */
+const warnIfCaching = async (request: Request, binding: string, id: string, logger: Logger): Promise<void> => {
+    let outcome: Awaited<ReturnType<Request>>;
+
+    try {
+        outcome = await request(`/hyperdrive/configs/${encodeURIComponent(id)}`);
+    } catch (error) {
+        // The check is advisory: a network failure or timeout must not stop the deploy.
+        logger.warn(
+            `could not check whether the "${binding}" Hyperdrive config has query caching off (${error instanceof Error ? error.message : String(error)}).`,
+        );
+
+        return;
+    }
+
+    if (!outcome.ok) {
+        logger.warn(`could not check whether the "${binding}" Hyperdrive config has query caching off (${describeFailure(outcome)}).`);
+
+        return;
+    }
+
+    const { caching } = (typeof outcome.body.result === "object" && outcome.body.result !== null ? outcome.body.result : {}) as {
+        caching?: { disabled?: unknown };
+    };
+
+    if (caching?.disabled !== true) {
+        logger.warn(
+            `the "${binding}" Hyperdrive config has query caching on, so .global() tables would read rows up to 75 s old. Run \`wrangler hyperdrive update ${id} --caching-disabled\`.`,
+        );
+    }
+};
+
+/**
+ * Warn about each binding that already has a real id but whose config still caches queries. Only a
+ * config this deploy creates or reuses gets caching turned off; one whose id was put in by hand, or
+ * created before, keeps it on. The check needs the deploy's API credentials and is skipped without
+ * them; it never changes the config, since the user chose that id.
+ */
+const warnCachingOn = async (
+    options: Pick<ProvisionHyperdriveOptions, "cwd" | "fetch" | "logger" | "wranglerEnvironment">,
+    environment: CloudflareEnvironment,
+): Promise<void> => {
+    const wranglerPath = findWranglerFile(options.cwd);
+    const parsed = wranglerPath === undefined ? undefined : readWranglerJsonc<HyperdriveWrangler>(wranglerPath).parsed;
+    const scope = options.wranglerEnvironment === undefined ? parsed : parsed?.env?.[options.wranglerEnvironment];
+    const { accountId, token } = resolveCloudflareCredentials(environment, scope?.account_id ?? parsed?.account_id);
+
+    if (accountId === undefined || token === undefined) {
+        return;
+    }
+
+    const request: Request = async (path, init) =>
+        cloudflareRestRequest({
+            accountId,
+            apiToken: token,
+            ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+            init: { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+            path,
+        });
+
+    for (const entry of Array.isArray(scope?.hyperdrive) ? (scope.hyperdrive as unknown[]) : []) {
+        const { binding, id } = (typeof entry === "object" && entry !== null ? entry : {}) as { binding?: unknown; id?: unknown };
+
+        if (typeof binding === "string" && typeof id === "string" && id !== HYPERDRIVE_PLACEHOLDER_ID) {
+            // eslint-disable-next-line no-await-in-loop -- one request at a time keeps the warnings in binding order
+            await warnIfCaching(request, binding, id, options.logger);
+        }
+    }
+};
+
 /**
  * Replace every placeholder Hyperdrive id in `wrangler.jsonc` with a real config's.
  * Returns the error that blocks the deploy, or `undefined` when nothing is left to do.
  */
 const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise<string | undefined> => {
+    const environment = options.environment ?? process.env;
+
+    // The "check" phase is followed by "create" in the same deploy; asking once is enough. A dry run calls no API.
+    if (options.disableCaching === true && options.checkOnly !== true && options.dryRun !== true) {
+        await warnCachingOn(options, environment);
+    }
+
     const scan = scanPlaceholders(options.cwd, options.wranglerEnvironment);
 
     if (scan === undefined) {
@@ -493,7 +591,6 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
     }
 
     const { entries, path, wranglerPath } = scan;
-    const environment = options.environment ?? process.env;
     const { accountId, token } = resolveCloudflareCredentials(environment, scan.accountId);
     const origins = entries.map(({ binding }) => {
         const value = environment[connectionStringVariable(binding)] ?? "";
@@ -523,7 +620,19 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
             // Written after each binding: a config that exists in the account is recorded at once.
             // eslint-disable-next-line no-await-in-loop -- one config at a time keeps the log in binding order
             const { id, text } = await setUpBinding(
-                { accountId, binding, fetch: options.fetch, index, logger: options.logger, origin, path, token, workerName: scan.workerName, wranglerPath },
+                {
+                    accountId,
+                    binding,
+                    disableCaching: options.disableCaching === true,
+                    fetch: options.fetch,
+                    index,
+                    logger: options.logger,
+                    origin,
+                    path,
+                    token,
+                    workerName: scan.workerName,
+                    wranglerPath,
+                },
                 readFileSync(wranglerPath, "utf8"),
             );
 
@@ -585,7 +694,7 @@ const blockTemporary = (cwd: string, options: Pick<DeployCommandOptions, "env" |
  */
 const provisionDeployHyperdrive = async (
     cwd: string,
-    options: Pick<DeployCommandOptions, "clientBuildEnvironment" | "dryRun" | "env" | "logger" | "temporary">,
+    options: Pick<DeployCommandOptions, "clientBuildEnvironment" | "discoveryCache" | "dryRun" | "env" | "logger" | "temporary">,
     command: PreDeployCommand,
     target: string,
     phase: "check" | "create" = "create",
@@ -607,10 +716,17 @@ const provisionDeployHyperdrive = async (
     // Only a client build this run gave the --env name as CLOUDFLARE_ENV has written a generated config for that environment. A build
     // that did not run leaves whatever an earlier build wrote, so `built` must not claim the deployed environment for it.
     const environment = options.clientBuildEnvironment === undefined ? undefined : { ...process.env, CLOUDFLARE_ENV: options.clientBuildEnvironment };
+    const schema = discoverSchemaInfo(cwd, resolveSchemaDirectory(cwd), options.discoveryCache);
+
+    // A schema that can't be read may still declare `.global({ backend: "hyperdrive" })` tables; caching off is the side that can't serve stale rows.
+    if (schema.error !== undefined) {
+        options.logger.warn(`could not read the schema (${schema.error}), so Hyperdrive configs are set up with query caching off.`);
+    }
 
     return provisionHyperdrive({
         checkOnly: phase === "check",
         cwd,
+        disableCaching: schema.error !== undefined || schema.info?.hasHyperdriveGlobalTable === true,
         dryRun: options.dryRun,
         environment,
         logger: options.logger,

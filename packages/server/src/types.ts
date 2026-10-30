@@ -2514,6 +2514,16 @@ interface QueryCtx {
     readonly runQuery: RunQuery;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
+
+    /**
+     * The shard this function is running on: the key the caller routed to, or
+     * `"__root__"` when it named none. Routing is the caller's choice, and
+     * `authorizeShard` decides only whether the caller may enter a shard, not
+     * which functions run there, so a function whose rows belong on one shard
+     * checks this against what it derives from the identity.
+     */
+    readonly shardKey: string;
+
     /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
     readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
@@ -2610,6 +2620,16 @@ interface MutationCtx {
     readonly scheduler: Scheduler;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
+
+    /**
+     * The shard this function is running on: the key the caller routed to, or
+     * `"__root__"` when it named none. Routing is the caller's choice, and
+     * `authorizeShard` decides only whether the caller may enter a shard, not
+     * which functions run there, so a function whose rows belong on one shard
+     * checks this against what it derives from the identity.
+     */
+    readonly shardKey: string;
+
     /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
     readonly span: LunoraWideEvent;
     readonly storage: MutationStorage;
@@ -2716,6 +2736,16 @@ interface ActionCtx {
     readonly scheduler: Scheduler;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
+
+    /**
+     * The shard this function is running on: the key the caller routed to, or
+     * `"__root__"` when it named none. Routing is the caller's choice, and
+     * `authorizeShard` decides only whether the caller may enter a shard, not
+     * which functions run there, so a function whose rows belong on one shard
+     * checks this against what it derives from the identity.
+     */
+    readonly shardKey: string;
+
     /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
     readonly span: LunoraWideEvent;
     readonly storage: Storage;

@@ -104,6 +104,12 @@ Prefer to manage it yourself? Run `wrangler hyperdrive create my-db --connection
 and put the `id` in the binding; Lunora then leaves it alone. Lunora validates the binding
 (it errors when `binding` is missing).
 
+Hyperdrive caches read results for up to a minute by default, and a write does not
+invalidate them, so a `ctx.sql` read can miss a row your own action just wrote. For reads
+that must be fresh, follow Cloudflare's advice and add a second config created with
+`--caching-disabled`, bound under another name. A `.global()` backend always needs caching
+off: see [below](#turn-hyperdrives-query-cache-off).
+
 ## The canonical recipe
 
 `ctx.sql` is **wired once, at the app level**, not inside a handler: the
@@ -122,7 +128,7 @@ import { defineApp } from "../../lunora/_generated/app";
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
     // Called once per shard construction, not per request.
-    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)))
+    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 })))
     .build();
 
 export const ShardDO = app.ShardDO;
@@ -132,7 +138,7 @@ Hand-composing the worker instead? The same thunk is `createShardDO({ sql })`:
 
 ```ts
 export const ShardDO = createShardDO({
-    sql: (env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)),
+    sql: (env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 })),
 });
 ```
 
@@ -165,6 +171,31 @@ determinism/realtime caveat.
 | `mysql2/promise`         | `fromMysql2`     | `?`          |
 
 The package never rewrites SQL; use your driver's native positional syntax.
+
+Build postgres.js with `{ fetch_types: false, max: 5 }`, Cloudflare's recommended
+Hyperdrive setup: `max` stays under the Workers limit on concurrent connections, and
+`fetch_types: false` saves a round trip on connect. `fromPostgresJs` runs every statement
+as a named prepared statement (`unsafe`'s own default is unnamed, which Hyperdrive's
+transaction pooling does not reliably support). Prepared reads are cacheable, so a
+`ctx.sql` read through postgres.js can be served from Hyperdrive's query cache like one
+through `pg`.
+
+`fetch_types: false` leaves postgres.js without array types, so a JS array bound to
+`= ANY($1)` goes over as a malformed literal. Bind a list as JSON text instead
+(`IN (SELECT jsonb_array_elements_text($1::text::jsonb))` with `JSON.stringify(list)`), or
+drop the option if you rely on array params. Cast a JSON parameter `$1::text::jsonb`, not
+bare `$1::jsonb`: postgres.js types the parameter from the server and would JSON-encode
+your already-serialised string a second time.
+
+`fromMysql2` (and `buildMysqlExec`) call mysql2's `query`, not `execute`: Hyperdrive does
+not support MySQL protocol-level prepared statements, so the `?` values are escaped
+client-side and the statement goes over as text. An array or object value binds as its
+JSON text (mysql2 alone would expand it into SQL), and an `undefined` value throws.
+Strings are quoted with a doubled `''` for a quote and `\\` for a backslash, so the server
+**must not** run with `NO_BACKSLASH_ESCAPES` in its `sql_mode` (MySQL's default doesn't
+include it): under that mode a backslash would be stored twice. A quote can't end the literal
+under either mode. A `?` inside a quoted string or a comment is left alone, but `??` is an
+identifier placeholder (the value is quoted with backticks). Create the mysql2 connection with `disableEval: true`, which Workers require.
 
 ### Telemetry
 
@@ -308,7 +339,7 @@ records `no sourceClient resolved for binding "…"` and the table stays empty.
 // worker.ts
 export default defineApp<Env>()
     .shard((env) => env.SHARD)
-    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)))
+    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 })))
     .build();
 ```
 
@@ -395,12 +426,13 @@ the driver on the DO instance and rebuild it lazily after hibernation.
 <Tabs items={["Postgres","MySQL"]}>
 
 ```ts tab="Postgres"
+import { fromPostgresJs } from "@lunora/hyperdrive";
 import { createPostgresGlobalCtxDb } from "@lunora/hyperdrive/global";
 import postgres from "postgres";
 
-const sql = postgres(env.HYPERDRIVE.connectionString);
+const sql = postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 });
 
-const globalDb = createPostgresGlobalCtxDb({ query: (text, params) => sql.unsafe(text, params) }, { schema });
+const globalDb = createPostgresGlobalCtxDb(fromPostgresJs(sql), { schema });
 ```
 
 ```ts tab="MySQL"
@@ -409,12 +441,41 @@ import mysql from "mysql2/promise";
 
 // CLIENT_FOUND_ROWS is REQUIRED — the affected-rows OCC guard must see matched
 // (not changed) rows, or an idempotent patch reports 0 and raises a false conflict.
-const pool = mysql.createPool({ uri: env.HYPERDRIVE.connectionString, flags: ["FOUND_ROWS"] });
+// `disableEval` is required for mysql2 on Workers.
+// The server's sql_mode must not include NO_BACKSLASH_ESCAPES (see "Drivers & placeholders").
+const pool = mysql.createPool({ uri: env.HYPERDRIVE.connectionString, disableEval: true, flags: ["FOUND_ROWS"] });
 
 const globalDb = createMysqlGlobalCtxDb(pool, { schema });
 ```
 
 </Tabs>
+
+### Turn Hyperdrive's query cache off
+
+The Hyperdrive config behind a `.global()` store **must have query caching
+disabled.** Hyperdrive caches read results by default (`max_age` 60 s plus 15 s
+of `stale_while_revalidate`), and a write does not invalidate that cache. The
+store's own reads would then lag its writes: an optimistic-concurrency re-read
+returns the old version, so the conditional write misses and every retry rereads
+the same cached row (spurious `ConflictError`s), and change-log polls and
+live-query re-runs serve rows up to 75 s old.
+
+`lunora deploy` creates (or updates) its configs with caching off when the
+schema has `.global({ backend: "hyperdrive" })` tables. For a binding whose id is
+already set, it doesn't change the config; with `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` in the environment it warns when caching is still on. A
+config you made yourself needs it set once:
+
+```bash
+wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host/db" --caching-disabled # gitleaks:allow -- placeholder
+# or, for an existing config:
+wrangler hyperdrive update <id> --caching-disabled
+```
+
+Local dev (`localConnectionString`, the embedded Postgres) has no cache, so it
+won't reproduce the problem. Node and celld have no Hyperdrive: their
+`.global()` store is SQLite (a local file on Node, a D1 binding on celld), so
+this does not apply there.
 
 ### Tables provisioned by an earlier version
 
@@ -506,7 +567,7 @@ let index: ReturnType<typeof createPgVectorIndex> | undefined;
 createShardDO({
     vectors: (env) => {
         index ??= createPgVectorIndex({
-            client: fromPostgresJs(postgres(createHyperdrive((env as Env).HYPERDRIVE).connectionString)),
+            client: fromPostgresJs(postgres(createHyperdrive((env as Env).HYPERDRIVE).connectionString, { fetch_types: false, max: 5 })),
             dimensions: 768,
             metric: "cosine",
             name: "posts_search",
@@ -597,14 +658,17 @@ than -500.
 
 From `@lunora/hyperdrive/global` (reactive `.global()` backend):
 
-| Export                                              | Purpose                                                                                                                           |
-| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `createPostgresGlobalCtxDb(client, options)`        | Build a reactive Postgres `.global()` writer (`globalDb`)                                                                         |
-| `createMysqlGlobalCtxDb(connection, options)`       | Build a reactive MySQL `.global()` writer (needs `FOUND_ROWS`)                                                                    |
-| `createHyperdriveGlobalCtxDb({ engine, exec, … })`  | General factory the two convenience constructors call                                                                             |
-| `buildPgExec(client)` / `buildMysqlExec(conn)`      | Wrap a driver as the store's `SqlExec`                                                                                            |
-| `postgresDialect` / `mysqlDialect`                  | The engine dialects                                                                                                               |
-| `createPgVectorIndex({ client, name, dimensions })` | A `pgvector`-backed index for `ctx.vectors` (no Vectorize binding); `name` is the SQL table identifier, not the `vectors` map key |
+| Export                                                      | Purpose                                                                                                                           |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `createPostgresGlobalCtxDb(client, options)`                | Build a reactive Postgres `.global()` writer (`globalDb`)                                                                         |
+| `createMysqlGlobalCtxDb(connection, options)`               | Build a reactive MySQL `.global()` writer (needs `FOUND_ROWS`)                                                                    |
+| `createHyperdriveGlobalCtxDb({ engine, exec, … })`          | General factory the two convenience constructors call                                                                             |
+| `buildPgExec(client)` / `buildMysqlExec(conn)`              | Wrap a driver as the store's `SqlExec`                                                                                            |
+| `postgresDialect` / `mysqlDialect`                          | The engine dialects                                                                                                               |
+| `createPgVectorIndex({ client, name, dimensions })`         | A `pgvector`-backed index for `ctx.vectors` (no Vectorize binding); `name` is the SQL table identifier, not the `vectors` map key |
+| `exportHyperdriveGlobalRows` / `importHyperdriveGlobalRows` | The admin export/import of `.global()` rows (`lunora export`/`import`, `migrate d1-to-hyperdrive` and back); codegen wires them   |
+| `createHyperdriveGlobalIntrospector(engine, exec, schema)`  | The Studio's global data browser over the Hyperdrive database; codegen wires it                                                   |
+| `readHyperdriveGlobalCdc` / `applyHyperdriveGlobalCdc`      | The global changelog read (admin CDC sync) and replay (point-in-time apply); codegen wires them                                   |
 
 ## See also
 
