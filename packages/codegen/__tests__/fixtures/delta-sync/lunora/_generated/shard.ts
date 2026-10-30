@@ -1646,8 +1646,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // deduplicated, so its ids stay random.
                 // `ctx.random()` shares the replay key and scope, so a replay reproduces both sequences.
                 newId: scoped((scope) => createStableIdFactory(stableKey, scope)),
-                // Only a mutation is a replay the key reproduces; a query or action carrying the header draws Math.random.
-                random: scoped((scope) => createStableRandomFactory(contextKind === "mutation" ? stableKey : undefined, scope)),
+                // Only a mutation is a replay the key reproduces; a query or action carrying the header draws Math.random,
+                // and never goes through `scoped`, whose first draw reads the caller.
+                random: contextKind === "mutation" ? scoped((scope) => createStableRandomFactory(stableKey, scope)) : createStableRandomFactory(undefined, ""),
                 shardKey: this.currentShardKey(),
                 // Instrumented `fetch`: a CLIENT span per outbound call plus W3C
                 // `traceparent` propagation, so time spent in a downstream service

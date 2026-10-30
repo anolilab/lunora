@@ -129,6 +129,15 @@ const registerAll = (): void => {
     );
 
     register(
+        "live:drawsRandom",
+        query.input({}).query(async ({ ctx }) => {
+            count("live:drawsRandom");
+
+            return { draw: (ctx as unknown as { random: () => number }).random() >= 0, values: await values(ctx) };
+        }),
+    );
+
+    register(
         "live:mine",
         query.input({}).query(async ({ ctx }) => {
             count("live:mine");
@@ -427,6 +436,26 @@ describe("emitted shard — live runs shared across identities", () => {
         const { delta } = await subscribeAllThenWrite("live:public", 1, harness);
 
         // The replay key only scopes ids and random draws; a handler that never reads them never read the caller.
+        expect(delta).toBe(1);
+    });
+
+    it("keeps sharing a query that draws random after a client calls it over /rpc with a replay key", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+        const response = await harness.shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "live:drawsRandom" }),
+                headers: { "content-type": "application/json", "x-lunora-mutation-id": "replay-1", "x-lunora-userid": "user-A" },
+                method: "POST",
+            }),
+        );
+
+        expect(response.ok).toBe(true);
+
+        const { delta } = await subscribeAllThenWrite("live:drawsRandom", 1, harness);
+
+        // A query's random sequence never uses the replay key, so drawing from it must not read the caller.
         expect(delta).toBe(1);
     });
 
