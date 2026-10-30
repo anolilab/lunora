@@ -129,8 +129,8 @@ describe("lazyAccessFacade", () => {
     it("reads the caller only when a field is read, then once", () => {
         expect.assertions(5);
 
-        const readIdentity = vi.fn(() => identity({ email: "ops@example.com", groups: ["ops"] }));
-        const readUserId = vi.fn(() => "user-1");
+        const readIdentity = vi.fn<() => Record<string, unknown>>(() => identity({ email: "ops@example.com", groups: ["ops"] }));
+        const readUserId = vi.fn<() => string>(() => "user-1");
         const facade = lazyAccessFacade(readIdentity, readUserId);
         const holder = { access: facade };
 
@@ -147,7 +147,7 @@ describe("lazyAccessFacade", () => {
         expect.assertions(1);
 
         const reads = (["authenticated", "claims", "commonName", "email", "groups", "userId"] as const).map((field) => {
-            const readIdentity = vi.fn((): Record<string, unknown> | undefined => undefined);
+            const readIdentity = vi.fn<() => Record<string, unknown> | undefined>(() => undefined);
 
             Reflect.get(
                 lazyAccessFacade(readIdentity, () => undefined),
@@ -163,7 +163,7 @@ describe("lazyAccessFacade", () => {
     it("reads the caller for hasGroup on its own", () => {
         expect.assertions(2);
 
-        const readIdentity = vi.fn(() => identity({ groups: ["ops"] }));
+        const readIdentity = vi.fn<() => Record<string, unknown>>(() => identity({ groups: ["ops"] }));
 
         expect(lazyAccessFacade(readIdentity, () => "user-1").hasGroup("ops")).toBe(true);
         expect(readIdentity).toHaveBeenCalledTimes(1);
