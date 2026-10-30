@@ -102,7 +102,7 @@
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/testing": "1.0.0-alpha.318",
-        "@lunora/wire": "1.0.0-alpha.4",
+        "@lunora/wire": "1.0.0-alpha.5",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/semver": "catalog:types",
