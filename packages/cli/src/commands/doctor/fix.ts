@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { DEFAULT_TARGET, readProjectTarget } from "@lunora/codegen";
 import {
     DEV_VARS_FILE,
     generateSecretValue,
@@ -38,8 +39,11 @@ const REPLACE_STAND_IN = /replace[-_\s]?(?:with|me)(?![a-z])/iu;
  */
 const isUnfinishedD1Id = (databaseId: string): boolean => isTemplateD1Id(databaseId) || REPLACE_STAND_IN.test(databaseId);
 
-/** A D1 `database_id` placeholder that still needs `wrangler d1 create` run. */
-const isD1PlaceholderId = (databaseId: string): boolean => isTemplateD1Id(databaseId) || databaseId.trim().toLowerCase().includes("replace");
+/**
+ * A D1 `database_id` placeholder that still needs `wrangler d1 create` run: the same stand-ins as
+ * {@link isUnfinishedD1Id}, so `--fix` never overwrites a real id that merely contains "replace".
+ */
+const isD1PlaceholderId = (databaseId: string): boolean => isUnfinishedD1Id(databaseId);
 
 const LINE_BREAK = /\r?\n/u;
 
@@ -49,8 +53,12 @@ interface WranglerRunnerResult {
     stdout: string;
 }
 
-/** Runs `wrangler <args>` in the project. Injected in tests so no Cloudflare call is made. */
-type WranglerRunner = (args: ReadonlyArray<string>, cwd: string) => Promise<WranglerRunnerResult>;
+/**
+ * Runs `wrangler <args>` in the project. Injected in tests so no Cloudflare call is made.
+ * `environment` is the `env` block the call is for: wrangler takes that block's account
+ * from `CLOUDFLARE_ENV`, so a database is looked up and created in the right account.
+ */
+type WranglerRunner = (args: ReadonlyArray<string>, cwd: string, environment?: string) => Promise<WranglerRunnerResult>;
 
 interface DoctorFixOptions {
     /** The wrangler config the D1 placeholders live in, as `findWranglerFile` returns it. */
@@ -72,16 +80,26 @@ interface DoctorFixResult {
 
 interface D1Placeholder {
     binding: string;
-    index: number;
+    /** The `env` block the placeholder sits in, or `undefined` at the top level. */
+    environment: string | undefined;
     name: string | undefined;
+    /** Where the `database_id` sits in the config: the top level, or an `env` block's own array. */
+    path: ReadonlyArray<string | number>;
 }
 
-const defaultRunner = async (args: ReadonlyArray<string>, cwd: string): Promise<WranglerRunnerResult> => {
+const defaultRunner = async (args: ReadonlyArray<string>, cwd: string, environment?: string): Promise<WranglerRunnerResult> => {
     // `wrangler` is a project dependency, so it runs through the project's package manager.
     const { args: execArgs, command } = toolchainExecArgs(detectPackageManager(cwd), { args, tool: "wrangler" });
 
     try {
-        const result = await defaultSpawner({ args: execArgs, captureStderr: true, captureStdoutSilently: true, command, cwd });
+        const result = await defaultSpawner({
+            args: execArgs,
+            captureStderr: true,
+            captureStdoutSilently: true,
+            command,
+            cwd,
+            ...(environment === undefined ? {} : { env: { CLOUDFLARE_ENV: environment } }),
+        });
 
         return { code: result.code, stderr: result.stderr ?? "", stdout: result.stdout ?? "" };
     } catch (error: unknown) {
@@ -94,8 +112,8 @@ const defaultRunner = async (args: ReadonlyArray<string>, cwd: string): Promise<
  * `undefined` when the list cannot be read, so a caller never creates a second
  * database because the first lookup failed.
  */
-const listD1Databases = async (runner: WranglerRunner, cwd: string): Promise<Map<string, string> | undefined> => {
-    const result = await runner(["d1", "list", "--json"], cwd);
+const listD1Databases = async (runner: WranglerRunner, cwd: string, environment: string | undefined): Promise<Map<string, string> | undefined> => {
+    const result = await runner(["d1", "list", "--json"], cwd, environment);
 
     if (result.code !== 0) {
         return undefined;
@@ -124,10 +142,9 @@ const listD1Databases = async (runner: WranglerRunner, cwd: string): Promise<Map
     return databases;
 };
 
-/** The `d1_databases` entries whose `database_id` is still a placeholder, by their index in the array. */
-const placeholdersIn = (text: string): D1Placeholder[] => {
-    const parsed = parseJsonc(text) as { d1_databases?: unknown } | undefined;
-    const databases = Array.isArray(parsed?.d1_databases) ? parsed.d1_databases : [];
+/** The placeholder entries of one `d1_databases` array, with the path that reaches it from the document root. */
+const placeholdersInScope = (databasesValue: unknown, prefix: ReadonlyArray<string>, environment: string | undefined): D1Placeholder[] => {
+    const databases = Array.isArray(databasesValue) ? databasesValue : [];
 
     return databases.flatMap((entry, index): D1Placeholder[] => {
         if (entry === null || typeof entry !== "object") {
@@ -144,11 +161,30 @@ const placeholdersIn = (text: string): D1Placeholder[] => {
         return [
             {
                 binding: typeof database.binding === "string" && database.binding !== "" ? database.binding : "<unnamed>",
-                index,
+                environment,
+                path: [...prefix, "d1_databases", index],
                 name: typeof database.database_name === "string" && database.database_name !== "" ? database.database_name : undefined,
             },
         ];
     });
+};
+
+/**
+ * The `d1_databases` entries whose `database_id` is still a placeholder, at the
+ * top level and in every `env` block: `deploy --env` reads those blocks, so a
+ * placeholder there blocks the deploy that `doctor --fix` must be able to clear.
+ * `topLevelOnly` (celld) skips the blocks: celld rejects `--env` and projects only the top level.
+ */
+const placeholdersIn = (text: string, topLevelOnly: boolean): D1Placeholder[] => {
+    const parsed = parseJsonc(text) as { d1_databases?: unknown; env?: Record<string, { d1_databases?: unknown } | undefined> } | undefined;
+    const scopes: { config: { d1_databases?: unknown } | undefined; environment: string | undefined; prefix: ReadonlyArray<string> }[] = [
+        { config: parsed, environment: undefined, prefix: [] },
+        ...Object.entries(topLevelOnly ? {} : (parsed?.env ?? {})).map(([name, block]) => {
+            return { config: block, environment: name, prefix: ["env", name] };
+        }),
+    ];
+
+    return scopes.flatMap(({ config, environment, prefix }) => placeholdersInScope(config?.d1_databases, prefix, environment));
 };
 
 /**
@@ -162,7 +198,7 @@ const resolveD1Id = async (
     runner: WranglerRunner,
     result: DoctorFixResult,
 ): Promise<string | undefined> => {
-    const existing = await listD1Databases(runner, options.cwd);
+    const existing = await listD1Databases(runner, options.cwd, placeholder.environment);
 
     if (existing === undefined) {
         result.skipped.push(
@@ -184,7 +220,7 @@ const resolveD1Id = async (
         return undefined;
     }
 
-    const created = await runner(["d1", "create", placeholder.name], options.cwd);
+    const created = await runner(["d1", "create", placeholder.name], options.cwd, placeholder.environment);
 
     if (created.code !== 0) {
         const reason = created.stderr.trim() || `exit ${String(created.code)}`;
@@ -195,7 +231,7 @@ const resolveD1Id = async (
     }
 
     // Read the id back from the list: the create output is prose, not a contract.
-    const listed = await listD1Databases(runner, options.cwd);
+    const listed = await listD1Databases(runner, options.cwd, placeholder.environment);
     const readBack = listed?.get(placeholder.name);
 
     if (readBack === undefined) {
@@ -218,7 +254,7 @@ const fixD1Placeholders = async (options: DoctorFixOptions, result: DoctorFixRes
 
     const runner = options.runner ?? defaultRunner;
     const text = readFileSync(options.configPath, "utf8");
-    const placeholders = placeholdersIn(text);
+    const placeholders = placeholdersIn(text, (readProjectTarget(options.cwd) ?? DEFAULT_TARGET) === "celld");
     let edited = text;
 
     for (const placeholder of placeholders) {
@@ -233,7 +269,7 @@ const fixD1Placeholders = async (options: DoctorFixOptions, result: DoctorFixRes
         const uuid = await resolveD1Id({ ...placeholder, name: placeholder.name }, options, runner, result);
 
         if (uuid !== undefined) {
-            const edits = modify(edited, ["d1_databases", placeholder.index, "database_id"], uuid, {
+            const edits = modify(edited, [...placeholder.path, "database_id"], uuid, {
                 formattingOptions: { eol: "\n", insertSpaces: true, tabSize: 4 },
             });
 

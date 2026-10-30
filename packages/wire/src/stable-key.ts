@@ -55,6 +55,8 @@
  * does not skip `undefined` fields). The two are different contracts.
  */
 
+const MAX_ARRAY_LENGTH = 2 ** 32 - 1;
+
 /**
  * Whether a string needs JSON escaping — a quote, a backslash, a control
  * character, or any surrogate code unit.
@@ -146,6 +148,19 @@ const stringifyRecord = (value: object, encode: (item: unknown) => string): stri
     return `${out}}`;
 };
 
+// A Proxy over an array can report any `length`; a real one is always an integer in
+// [0, 2**32-1], so a fractional value is truncated and an unbounded one refused rather than looped on.
+const arrayLength = (value: unknown[]): number => {
+    const { length } = value;
+    const whole = Number.isInteger(length) ? length : Math.trunc(length) || 0;
+
+    if (whole > MAX_ARRAY_LENGTH) {
+        throw new RangeError("stable-key: array length exceeds 2**32 - 1");
+    }
+
+    return whole;
+};
+
 const stableStringify = (value: unknown): string => {
     // Encode `undefined` as `null` (mirrors `JSON.stringify`'s array-element
     // behavior) so an `undefined` value never collapses an array position. This
@@ -197,10 +212,21 @@ const stableStringify = (value: unknown): string => {
     if (Array.isArray(value)) {
         // Every index is read, holes included (they encode as `null` like `undefined`), and never
         // through the array's own iterator or `map`: a custom `Symbol.iterator` must not change the
-        // key, and `map` would skip holes and make `[, 1]` collide with other shapes.
-        const items = Array.from({ length: value.length }, (_, index) => stableStringify((value as unknown[])[index]));
+        // key, and `map` would skip holes and make `[, 1]` collide with other shapes. A plain loop
+        // avoids the intermediate array that `Array.from` + `join` would allocate.
+        // The length is read once: an indexed getter that appends must not keep the loop running.
+        const length = arrayLength(value);
+        let out = "[";
 
-        return `[${items.join(",")}]`;
+        for (let index = 0; index < length; index += 1) {
+            if (index > 0) {
+                out += ",";
+            }
+
+            out += stableStringify((value as unknown[])[index]);
+        }
+
+        return `${out}]`;
     }
 
     return stringifyRecord(value, stableStringify);

@@ -15,7 +15,10 @@ listed from the cheapest outward, roughly in the order you should try them.
 ## Start with `lunora doctor`
 
 Most "it doesn't work at all" failures are configuration, not code. `doctor` is a
-read-only preflight that checks the things that silently break a project:
+preflight that checks the things that silently break a project. It is read-only
+unless you pass `--fix`, which creates placeholder D1 databases and mints missing
+`.dev.vars` secrets. `lunora doctor --fix --dry-run` prints those changes without
+making them.
 
 ```bash
 lunora doctor

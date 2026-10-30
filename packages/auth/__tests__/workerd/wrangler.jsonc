@@ -1,7 +1,7 @@
 // Minimal wrangler config used ONLY by `@cloudflare/vitest-plugin` to boot
 // the test Worker in a real workerd runtime.
 //
-// IMPORTANT: this file is not deployed. Three suites share it:
+// IMPORTANT: this file is not deployed. Several suites share it:
 //
 //   - the plugin-load smoke, which needs no storage at all (it only proves the
 //     enterprise plugins import and construct inside workerd),
@@ -13,7 +13,9 @@
 //     the Node suites build with `SQLITE_DQS=0` and raise, D1 reads a string literal.
 //     Anything gated on that distinction is untestable off this runtime.
 //
-// Hence the DO binding, the `new_sqlite_classes` migration, and the D1 binding below.
+// The second object (`OrgAuthDO`) runs the organization plugin, so the identity route's
+// membership reads hit workerd's SQLite too. Hence the DO bindings, the
+// `new_sqlite_classes` migrations, and the D1 binding below.
 // The `database_id` is a local miniflare handle, not a real database.
 {
     "$schema": "../../../../node_modules/wrangler/config-schema.json",
@@ -23,7 +25,13 @@
     "compatibility_flags": ["nodejs_compat"],
     "d1_databases": [{ "binding": "TEST_DB", "database_id": "lunora-auth-test", "database_name": "lunora-auth-test" }],
     "durable_objects": {
-        "bindings": [{ "class_name": "AuthStorageDO", "name": "AUTH_DO" }],
+        "bindings": [
+            { "class_name": "AuthStorageDO", "name": "AUTH_DO" },
+            { "class_name": "OrgAuthDO", "name": "ORG_AUTH_DO" },
+        ],
     },
-    "migrations": [{ "new_sqlite_classes": ["AuthStorageDO"], "tag": "v1" }],
+    "migrations": [
+        { "new_sqlite_classes": ["AuthStorageDO"], "tag": "v1" },
+        { "new_sqlite_classes": ["OrgAuthDO"], "tag": "v2" },
+    ],
 }

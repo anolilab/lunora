@@ -86,7 +86,7 @@ export default {
 };
 ```
 
-The runtime resolves the inbound session and stamps `ctx.auth` on every `query` / `mutation` / `action`: `ctx.auth.userId` is the signed-in user's id (or `null` when anonymous), and `ctx.auth.getIdentity()` resolves the decoded claims.
+The runtime resolves the inbound session and stamps `ctx.auth` on every `query` / `mutation` / `action`: `ctx.auth.userId` is the signed-in user's id (or `null` when anonymous), and `ctx.auth.getIdentity()` resolves the claims: `email`, `name`, `role`, `expiresAtMs`, and, with the `organization()` plugin, `orgId` / `teamId` for the session's active organization and team.
 
 ### Plugins & CAPTCHA
 

@@ -21,6 +21,7 @@ open one only when the task calls for it.
 | decide **which package owns a change**, or cross a package boundary | `.agents/docs/packages.md` |
 | scaffold a package/query/table, or touch git hooks or release       | `.agents/docs/workflow.md` |
 | work on the documentation & marketing site                          | `apps/docs/AGENTS.md`      |
+| which gate a change needs, or how to property-test stateful code    | `.agents/docs/testing.md`  |
 | know what is planned or in flight                                   | `plans/README.md`          |
 | write or regenerate a non-JS SDK                                    | `sdks/README.md`           |
 

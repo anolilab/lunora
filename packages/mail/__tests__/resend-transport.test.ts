@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import createMailer from "../src/create-mailer";
+import { isRetryableMailError, MailSendError } from "../src/send-error";
 
 // Drive the private Resend transport's error-mapping branches by faking the
 // underlying @visulima/email provider. Each test swaps `sendEmail`'s result.
@@ -49,6 +50,19 @@ describe("resend transport error mapping", () => {
 
         await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("rate limited"));
+    });
+
+    it("does not mark an accepted send without a message id as retryable", async () => {
+        expect.assertions(2);
+
+        sendEmail.mockResolvedValue({ success: true });
+
+        const error = await mailer()
+            .send({ subject: "Hi", to: "a@x.test" })
+            .catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(MailSendError);
+        expect(isRetryableMailError(error)).toBe(false);
     });
 
     it("logs a string reason", async () => {
@@ -103,5 +117,48 @@ describe("resend transport error mapping", () => {
 
         // An empty recipient list reaches the transport as `[]`.
         await expect(mailer().send({ subject: "Hi", to: [] })).rejects.toThrow(/at least one recipient/);
+    });
+
+    describe("send failure classification", () => {
+        const failure = (error: unknown) => {
+            sendEmail.mockResolvedValue({ error, success: false });
+
+            return mailer()
+                .send({ subject: "Hi", to: "a@x.test" })
+                .catch((error_: unknown) => error_);
+        };
+
+        it("refuses a 422 from the API: retrying the same message cannot succeed", async () => {
+            expect.assertions(2);
+
+            const error = await failure(Object.assign(new Error("Request failed with status 422"), { code: "422" }));
+
+            expect(isRetryableMailError(error)).toBe(false);
+            expect(error).toBeInstanceOf(MailSendError);
+        });
+
+        it("refuses a 422 that carries its status as a number, not a string", async () => {
+            expect.assertions(1);
+
+            expect(isRetryableMailError(await failure(Object.assign(new Error("Request failed with status 422"), { code: 422 })))).toBe(false);
+        });
+
+        it("retries a 500 from the API", async () => {
+            expect.assertions(1);
+
+            expect(isRetryableMailError(await failure(Object.assign(new Error("Request failed with status 500"), { code: "500" })))).toBe(true);
+        });
+
+        it("retries a provider error that carries no status", async () => {
+            expect.assertions(1);
+
+            expect(isRetryableMailError(await failure(new Error("Invalid email options: to is required")))).toBe(true);
+        });
+
+        it("retries a network failure, which carries a cause and no status", async () => {
+            expect.assertions(1);
+
+            expect(isRetryableMailError(await failure(new Error("Request failed: fetch failed", { cause: new TypeError("fetch failed") })))).toBe(true);
+        });
     });
 });
