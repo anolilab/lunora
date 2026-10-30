@@ -1,3 +1,28 @@
+## @lunora/sql-store [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.224...@lunora/sql-store@1.0.0-alpha.225) (2026-10-30)
+
+### Bug Fixes
+
+* **sql-store:** require the table for global by-id calls ([#1428](https://github.com/anolilab/lunora/issues/1428)) ([5680500](https://github.com/anolilab/lunora/commit/56805003af8612bd8f437cefb9a5cce882e4e008))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.177
+* **@lunora/do:** upgraded to 1.0.0-alpha.269
+
+## @lunora/sql-store [1.0.0-alpha.224](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.223...@lunora/sql-store@1.0.0-alpha.224) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** require the errors release that defines the duplicate-rows code ([#1429](https://github.com/anolilab/lunora/issues/1429)) ([fe5d405](https://github.com/anolilab/lunora/commit/fe5d40505851942c8734f094ec904b075b96f6d8))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.175
+* **@lunora/do:** upgraded to 1.0.0-alpha.267
+
 ## @lunora/sql-store [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.222...@lunora/sql-store@1.0.0-alpha.223) (2026-10-30)
 
 ### Performance Improvements

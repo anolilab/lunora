@@ -418,6 +418,7 @@ interface DefinePolicyInput<Context = unknown> {
 interface DefinePresenceOptions {
     disconnectGraceMs?: number;
     maxSessions?: number;
+    tenant?: (identity: Record<string, unknown> | null) => string;
     ttlMs?: number;
 }
 ```
@@ -1758,6 +1759,7 @@ interface PresenceFunctions {
     }, PresenceMember[]>;
     sweep: RegisteredMutation<{
         roomId: ReturnType<typeof v.string>;
+        tenantId: ReturnType<typeof v.string>;
     }, {
         deleted: number;
     }>;

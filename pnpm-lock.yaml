@@ -151,6 +151,9 @@ catalogs:
     giget:
       specifier: 3.3.1
       version: 3.3.1
+    jiti:
+      specifier: 2.7.0
+      version: 2.7.0
     magic-string:
       specifier: ^1.4.2
       version: 1.4.2
@@ -681,6 +684,9 @@ catalogs:
     shadcn:
       specifier: ^4.21.1
       version: 4.21.1
+    streamdown:
+      specifier: ^2.5.0
+      version: 2.7.1
     tailwind-merge:
       specifier: ^3.7.0
       version: 3.7.0
@@ -2698,7 +2704,7 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
       '@types/node':
         specifier: catalog:types
@@ -2740,7 +2746,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
       ai:
         specifier: catalog:ai
@@ -2787,7 +2793,7 @@ importers:
         version: link:../ratelimit
       '@lunora/wire':
         specifier: 1.0.0-alpha.5
-        version: link:../wire
+        version: 1.0.0-alpha.5
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -2888,7 +2894,7 @@ importers:
         version: link:../values
       '@lunora/wire':
         specifier: 1.0.0-alpha.5
-        version: link:../wire
+        version: 1.0.0-alpha.5
       '@visulima/disposable-email-domains':
         specifier: catalog:email
         version: 2.0.10
@@ -3216,7 +3222,7 @@ importers:
         version: 5.0.0(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.6))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0)
       '@visulima/tui-kit':
         specifier: catalog:cli
-        version: 1.0.34(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(@visulima/tabular@4.1.0)(@visulima/tui@5.0.0(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.6))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.3.0)(shiki@4.5.0)
+        version: 1.0.34(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(@visulima/tabular@4.1.0)(@visulima/tui@5.0.0(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.6))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0))(cfonts@3.3.1)(diff@9.0.0)(marked@18.1.2)(react@19.3.0)(shiki@4.5.0)
       adm-zip:
         specifier: '>=0.6.1'
         version: 0.6.1
@@ -3226,6 +3232,9 @@ importers:
       giget:
         specifier: catalog:cli
         version: 3.3.1
+      jiti:
+        specifier: catalog:cli
+        version: 2.7.0
       jsonc-parser:
         specifier: catalog:vite
         version: 3.3.1
@@ -3259,7 +3268,7 @@ importers:
         version: link:../testing
       '@lunora/wire':
         specifier: 1.0.0-alpha.5
-        version: link:../wire
+        version: 1.0.0-alpha.5
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
@@ -3297,7 +3306,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -3565,7 +3574,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
     devDependencies:
       '@cloudflare/containers':
@@ -3637,7 +3646,7 @@ importers:
         version: link:../search-core
       '@lunora/wire':
         specifier: 1.0.0-alpha.5
-        version: link:../wire
+        version: 1.0.0-alpha.5
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
@@ -3755,7 +3764,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -3858,7 +3867,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
       '@openfeature/server-sdk':
         specifier: catalog:flags
@@ -4122,7 +4131,7 @@ importers:
         version: link:../shard-engine
       '@lunora/wire':
         specifier: 1.0.0-alpha.5
-        version: link:../wire
+        version: 1.0.0-alpha.5
       '@modelcontextprotocol/sdk':
         specifier: catalog:mcp
         version: 1.32.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.5)
@@ -4244,7 +4253,7 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
       '@visulima/redact':
         specifier: catalog:redact
@@ -4586,7 +4595,7 @@ importers:
         version: link:../server
       '@lunora/wire':
         specifier: 1.0.0-alpha.5
-        version: link:../wire
+        version: 1.0.0-alpha.5
       fflate:
         specifier: catalog:privacy
         version: 0.8.3
@@ -4619,7 +4628,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
@@ -4727,7 +4736,7 @@ importers:
         version: link:../ratelimit
       '@lunora/wire':
         specifier: 1.0.0-alpha.5
-        version: link:../wire
+        version: 1.0.0-alpha.5
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.101.4(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -4854,7 +4863,7 @@ importers:
   packages/replica:
     dependencies:
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
       '@sqlite.org/sqlite-wasm':
         specifier: '*'
@@ -4979,7 +4988,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
@@ -5097,7 +5106,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
       '@visulima/cron-parser':
         specifier: catalog:tooling
@@ -5226,7 +5235,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -5290,7 +5299,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -5352,7 +5361,7 @@ importers:
         version: link:../ratelimit
       '@lunora/wire':
         specifier: 1.0.0-alpha.5
-        version: link:../wire
+        version: 1.0.0-alpha.5
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@1.9.15)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -5409,7 +5418,7 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -5541,7 +5550,7 @@ importers:
         version: link:../react
       '@lunora/wire':
         specifier: 1.0.0-alpha.5
-        version: link:../wire
+        version: 1.0.0-alpha.5
       '@tanstack/react-query':
         specifier: catalog:frontend
         version: 5.101.4(react@19.3.0)
@@ -5575,6 +5584,9 @@ importers:
       recharts:
         specifier: catalog:frontend
         version: 3.10.1(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-is@18.3.1)(react@19.3.0)(redux@5.0.1)
+      streamdown:
+        specifier: catalog:ui
+        version: 2.7.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(supports-color@10.2.2)
       tailwind-merge:
         specifier: catalog:ui
         version: 3.7.0
@@ -5671,7 +5683,7 @@ importers:
         version: link:../ratelimit
       '@lunora/wire':
         specifier: 1.0.0-alpha.5
-        version: link:../wire
+        version: 1.0.0-alpha.5
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -5735,7 +5747,7 @@ importers:
         version: link:../server
       '@lunora/wire':
         specifier: 1.0.0-alpha.5
-        version: link:../wire
+        version: 1.0.0-alpha.5
       '@playwright/test':
         specifier: ^1.61.1
         version: 1.63.0
@@ -5879,7 +5891,7 @@ importers:
         version: link:../ratelimit
       '@lunora/wire':
         specifier: 1.0.0-alpha.5
-        version: link:../wire
+        version: 1.0.0-alpha.5
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -5942,7 +5954,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
         version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
@@ -6042,6 +6054,24 @@ importers:
       wrangler:
         specifier: catalog:cloudflare
         version: 4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
+
+  tests/ai-evals:
+    devDependencies:
+      '@lunora/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
+      '@lunora/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
+      '@types/node':
+        specifier: catalog:types
+        version: 26.6.4
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@21.0.4)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   tests/auth-ui-solid-v2:
     devDependencies:
@@ -9049,6 +9079,10 @@ packages:
   '@lingui/message-utils@6.9.0':
     resolution: {integrity: sha512-LaFvx9Vc/lx4EPbbDaiDtyumDM4aAglRA3yvFQsJkhs1UWrCgDaaUBWhkXKYcmVe9gb7qeGYCqmGWOL84N9xDw==}
     engines: {node: '>=22.19.0'}
+
+  '@lunora/wire@1.0.0-alpha.5':
+    resolution: {integrity: sha512-8aaUnLXCbLO0kfBy/bk0aHmNb4R02TMCMIel0sndTZKmvt8325NeyLDONjsxtOyP2swwA04qVtwHDbhktf4FNQ==}
+    engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
@@ -20073,6 +20107,9 @@ packages:
   hast-util-raw@9.1.0:
     resolution: {integrity: sha512-Y8/SBAHkZGoNkpzqqfCldijcuUKh7/su31kEBp67cFY09Wy0mTRgtsLYsiIxMJxlu0f6AA5SUTbDR8K0rxnbUw==}
 
+  hast-util-sanitize@5.0.2:
+    resolution: {integrity: sha512-3yTWghByc50aGS7JlGhk61SPenfE/p1oaFeNwkOOyrscaOkMGrcW9+Cy/QAIOBpZxP1yqDIzFMR0+Np0i0+usg==}
+
   hast-util-to-estree@3.1.3:
     resolution: {integrity: sha512-48+B/rJWAp0jamNbAAf9M7Uf//UVqAoMmgXhBdxTDJLGKY+LRnZ99qcG+Qjl5HfMpYNzS5v4EAwVEF34LeAj7w==}
 
@@ -20207,6 +20244,9 @@ packages:
   html-to-text@9.0.5:
     resolution: {integrity: sha512-qY60FjREgVZL03vJU6IfMV4GDjGBIoOyvuFdpBDIX9yTlDw0TjxVBQp+P8NvpdIXNJvfWBTNul7fsAQJq2FNpg==}
     engines: {node: '>=14'}
+
+  html-url-attributes@3.0.1:
+    resolution: {integrity: sha512-ol6UPyBWqsrO6EJySPz2O7ZSr856WDrEzM5zMqp+FJJLGMW35cLYmmZnl0vztAZxRUoNZJFTCohfjuIJ8I4QBQ==}
 
   html-void-elements@3.0.0:
     resolution: {integrity: sha512-bEqo66MRXsUGxWHV5IP0PUiAWwoEjba4VCzg0LjFJBpchPaTfyfCKTG6bc5F8ucKec3q5y6qOdGyYTSBEvhCrg==}
@@ -21395,6 +21435,11 @@ packages:
   marked@15.0.12:
     resolution: {integrity: sha512-8dD6FusOQSrpv9Z1rdNMdlSgQOIP880DHqnohobOmYLElGEqAL/JvxvuxZO16r4HtjTlfPRDC1hbvxC9dPN2nA==}
     engines: {node: '>= 18'}
+    hasBin: true
+
+  marked@18.1.2:
+    resolution: {integrity: sha512-DfOnvLAQ6WYeWxWO1u4RyFOeqyHup6dks5PPqnoFiooU7ipRvidO/2j8plhAHIiZg574E9ZlzSjUiPMLAzFkgg==}
+    engines: {node: '>= 20'}
     hasBin: true
 
   marky@1.3.0:
@@ -23466,11 +23511,17 @@ packages:
     resolution: {integrity: sha512-NgRBy2Nx/bE+9F27nVHnqcN5HjyLmecqsqx2PJHu3/IEtADD4WuxuXIVExD5PoSDFVrl78dOonfcOe5O+5nbzQ==}
     hasBin: true
 
+  rehype-harden@1.1.8:
+    resolution: {integrity: sha512-Qn7vR1xrf6fZCrkm9TDWi/AB4ylrHy+jqsNm1EHOAmbARYA6gsnVJBq/sdBh6kmT4NEZxH5vgIjrscefJAOXcw==}
+
   rehype-raw@7.0.0:
     resolution: {integrity: sha512-/aE8hCfKlQeA8LmyeyQvQF3eBiLRGNlfBJEvWH7ivp9sBqs7TNqBL5X3v157rM4IFETqDnIOO+z5M/biZbo9Ww==}
 
   rehype-recma@1.0.0:
     resolution: {integrity: sha512-lqA4rGUf1JmacCNWWZx0Wv1dHqMwxzsDWYMTowuplHF3xH0N/MmrZ/G3BDZnzAkRmxDadujCjaKM2hqYdCBOGw==}
+
+  rehype-sanitize@6.0.0:
+    resolution: {integrity: sha512-CsnhKNsyI8Tub6L4sm5ZFsme4puGfc6pYylvXo1AeqaGbjOYyzNv3qZPwvs0oMJ39eryyeOdmxwUIo94IpEhqg==}
 
   remark-gfm@4.0.1:
     resolution: {integrity: sha512-1quofZ2RQ9EWdeN34S79+KExV1764+wCUGop5CPL1WGdD0ocPpu91lzPGbwWMECpEpd42kJGQwzRfyov9j4yNg==}
@@ -23489,6 +23540,9 @@ packages:
 
   remark@15.0.1:
     resolution: {integrity: sha512-Eht5w30ruCXgFmxVUSlNWQ9iiimq07URKeFS3hNc8cUWy1llX4KDWfyEDZRycMc+znsN9Ux5/tJ/BFdgdOwA3A==}
+
+  remend@1.4.0:
+    resolution: {integrity: sha512-mHiYhhwphs1IgIZmkToKLwJn0U99IjPXuutkA2acrNcG0vlEq2G4TGnd2eT0saIHwh2KjaCpvleHcsd5SAz96A==}
 
   remove-accents@0.5.0:
     resolution: {integrity: sha512-8g3/Otx1eJaVD12e31UbJj1YzdtVvzH85HV7t+9MJYk/u3XmkOUJ5Ys9wQrf9PCPK8+xn4ymzqYCiZl6QWKn+A==}
@@ -24177,6 +24231,12 @@ packages:
 
   stream-combiner2@1.1.1:
     resolution: {integrity: sha512-3PnJbYgS56AeWgtKF5jtJRT6uFJe56Z0Hc5Ngg/6sI6rIt8iiMBTa9cvdyFfpMQjaVHr8dusbNeFGIIonxOvKw==}
+
+  streamdown@2.7.1:
+    resolution: {integrity: sha512-pIz4XOB+e7iyqSJABXC9PoyHifBZVQx/7U0Qo/vdOIERqGXfgEhJxkXENsuWMO8TGXkaQ5ewV9jnliK7q47T8w==}
+    peerDependencies:
+      react: 19.3.0
+      react-dom: 19.3.0
 
   streamx@2.28.0:
     resolution: {integrity: sha512-1Yowhzjf0ivGMrTIkY9hav5TxobO9qIVqUE41fiCGMGgc3CLlf4MY+9AHmZqBWgDTue0fY9zWjYFVyf6Diuobw==}
@@ -30001,6 +30061,8 @@ snapshots:
       '@messageformat/date-skeleton': 1.1.0
       '@messageformat/parser': 5.1.1
       js-sha256: 0.10.1
+
+  '@lunora/wire@1.0.0-alpha.5': {}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true
@@ -38109,7 +38171,7 @@ snapshots:
       marked: 15.0.12
       shiki: 4.5.0
 
-  '@visulima/tui-kit@1.0.34(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(@visulima/tabular@4.1.0)(@visulima/tui@5.0.0(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.6))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.3.0)(shiki@4.5.0)':
+  '@visulima/tui-kit@1.0.34(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(@visulima/tabular@4.1.0)(@visulima/tui@5.0.0(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.6))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0))(cfonts@3.3.1)(diff@9.0.0)(marked@18.1.2)(react@19.3.0)(shiki@4.5.0)':
     dependencies:
       '@visulima/ansi': 4.2.0
       '@visulima/colorize': 2.2.0
@@ -38123,7 +38185,7 @@ snapshots:
       '@visulima/tabular': 4.1.0
       cfonts: 3.3.1
       diff: 9.0.0
-      marked: 15.0.12
+      marked: 18.1.2
       shiki: 4.5.0
 
   '@visulima/tui@5.0.0(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.5))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0)':
@@ -43385,6 +43447,12 @@ snapshots:
       web-namespaces: 2.0.1
       zwitch: 2.0.4
 
+  hast-util-sanitize@5.0.2:
+    dependencies:
+      '@types/hast': 3.0.5
+      '@ungap/structured-clone': 1.3.1
+      unist-util-position: 5.0.0
+
   hast-util-to-estree@3.1.3(supports-color@10.2.2):
     dependencies:
       '@types/estree': 1.0.9
@@ -43568,6 +43636,8 @@ snapshots:
       dom-serializer: 2.0.0
       htmlparser2: 8.0.2
       selderee: 0.11.0
+
+  html-url-attributes@3.0.1: {}
 
   html-void-elements@3.0.0: {}
 
@@ -44738,6 +44808,8 @@ snapshots:
       supports-hyperlinks: 3.2.0
 
   marked@15.0.12: {}
+
+  marked@18.1.2: {}
 
   marky@1.3.0: {}
 
@@ -47843,6 +47915,10 @@ snapshots:
     dependencies:
       jsesc: 3.1.0
 
+  rehype-harden@1.1.8:
+    dependencies:
+      unist-util-visit: 5.1.0
+
   rehype-raw@7.0.0:
     dependencies:
       '@types/hast': 3.0.5
@@ -47856,6 +47932,11 @@ snapshots:
       hast-util-to-estree: 3.1.3(supports-color@10.2.2)
     transitivePeerDependencies:
       - supports-color
+
+  rehype-sanitize@6.0.0:
+    dependencies:
+      '@types/hast': 3.0.5
+      hast-util-sanitize: 5.0.2
 
   remark-gfm@4.0.1(supports-color@10.2.2):
     dependencies:
@@ -47906,6 +47987,8 @@ snapshots:
       unified: 11.0.5
     transitivePeerDependencies:
       - supports-color
+
+  remend@1.4.0: {}
 
   remove-accents@0.5.0: {}
 
@@ -48874,6 +48957,28 @@ snapshots:
     dependencies:
       duplexer2: 0.1.4
       readable-stream: 2.3.8
+
+  streamdown@2.7.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(supports-color@10.2.2):
+    dependencies:
+      clsx: 2.1.1
+      hast-util-to-jsx-runtime: 2.3.6(supports-color@10.2.2)
+      html-url-attributes: 3.0.1
+      marked: 18.1.2
+      react: 19.3.0
+      react-dom: 19.3.0(react@19.3.0)
+      rehype-harden: 1.1.8
+      rehype-raw: 7.0.0
+      rehype-sanitize: 6.0.0
+      remark-gfm: 4.0.1(supports-color@10.2.2)
+      remark-parse: 11.0.0(supports-color@10.2.2)
+      remark-rehype: 11.1.2
+      remend: 1.4.0
+      tailwind-merge: 3.7.0
+      unified: 11.0.5
+      unist-util-visit: 5.1.0
+      unist-util-visit-parents: 6.0.2
+    transitivePeerDependencies:
+      - supports-color
 
   streamx@2.28.0:
     dependencies:

@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { useT } from "../i18n/i18n-context";
 import { errorDocumentationUrl, errorHint, errorMessage } from "../lib/internal";
 import { operationSeqOf } from "../lib/recording-client";
+import { useAssistant } from "./assistant-provider";
 import { useOperationConsole } from "./operation-console-provider";
 import { Alert } from "./ui/alert";
 
@@ -12,6 +13,8 @@ interface ErrorAlertProps {
     readonly className?: string;
     /** The thrown value (a `LunoraClientError` carries `hint`/`docsUrl`). */
     readonly error: unknown;
+    /** Shard the failed read targeted, so "Ask the assistant" reads that shard rather than the root. */
+    readonly shardKey?: string;
     readonly testId?: string;
 }
 
@@ -22,12 +25,16 @@ interface ErrorAlertProps {
  * message paragraphs so the studio surfaces the same fix the CLI and error
  * overlay show.
  */
-const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement => {
+const ErrorAlert = ({ className, error, shardKey, testId }: ErrorAlertProps): ReactElement => {
     const t = useT();
     // `undefined` when no console is mounted above this tree (a host embedding a
     // single panel, or a standalone render in a test). The affordance is then not
     // rendered at all — a button that silently does nothing is worse than none.
     const operationConsole = useOperationConsole();
+    // Same contract as the console above: `undefined` when no assistant is mounted,
+    // and then no button rather than an inert one.
+    const assistant = useAssistant();
+    const canAsk = assistant !== undefined && !assistant.unavailable;
     const hint = errorHint(error);
     const documentationUrl = errorDocumentationUrl(error);
     // `recordedCall` tags a rejection with its operation-tape entry, so this
@@ -40,6 +47,27 @@ const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement
 
     const showInConsole = (): void => {
         operationConsole?.openConsole({ errorsOnly: true, seq });
+    };
+
+    /*
+     * Ask about THIS error.
+     *
+     * The single highest-leverage entry point in the studio: this callout is
+     * already rendered by every panel that can fail, so one button here reaches
+     * every one of them without each having to grow its own affordance.
+     *
+     * The message and the catalog hint travel in the question, because that is
+     * what the operator can see — asking the model to guess from an error code
+     * gives it strictly less than the human has.
+     */
+    const askAssistant = (): void => {
+        const detail = hint === undefined ? "" : `\n\n${t("The studio suggested: {hint}", { hint: flattenHint(hint) })}`;
+
+        assistant?.openAssistant({
+            ask: t("The studio reported this error:\n{message}{detail}\n\nWhat causes it, and how do I fix it?", { detail, message: errorMessage(error) }),
+            shardKey,
+            title: t("Debug error"),
+        });
     };
 
     return (
@@ -68,6 +96,16 @@ const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement
                     {t("Show in console")}
                 </button>
             )}
+            {canAsk ? (
+                <button
+                    className="mt-1 block text-xs underline outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    data-testid="error-ask-assistant"
+                    onClick={askAssistant}
+                    type="button"
+                >
+                    {t("Ask the assistant")}
+                </button>
+            ) : null}
         </Alert>
     );
 };

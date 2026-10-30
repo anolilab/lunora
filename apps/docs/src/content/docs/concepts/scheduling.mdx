@@ -151,7 +151,7 @@ import { internal } from "@/lunora/_generated/internal";
 
 export const triggers = [
     createCronTrigger({ schedule: "0 3 * * *", fn: internal.cleanup.cleanupOldMessages }),
-    createCronTrigger({ schedule: "*/15 * * * *", fn: internal.presence.sweep }),
+    createCronTrigger({ schedule: "*/15 * * * *", fn: internal.presence.sweep, args: { roomId: "lobby", tenantId: "" } }),
 ];
 ```
 

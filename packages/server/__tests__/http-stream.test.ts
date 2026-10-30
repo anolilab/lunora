@@ -350,6 +350,20 @@ describe("httpRoute.stream — sseEvent adds an SSE id", () => {
         expect(raw).not.toContain("id: 1\nevent: complete");
     });
 
+    it("reports a bad id with the INTERNAL code the same mistake always had", async () => {
+        expect.assertions(1);
+
+        const route = httpRoute.get("/api/bad-id").stream(async function* badIdGen() {
+            yield sseEvent({ data: { line: "a" }, id: "1\nevent: complete" });
+        });
+
+        const response = await dispatch(route, "GET", "/api/bad-id", new Request("https://x/api/bad-id"));
+        const { events } = await readSse(response);
+
+        // The shared helper's plain Error would map to INTERNAL_SERVER_ERROR here; a client must see INTERNAL.
+        expect(events[0]?.data).toMatchObject({ code: "INTERNAL" });
+    });
+
     it("leaves a plain chunk byte-for-byte as before — no `id:` line", async () => {
         expect.assertions(2);
 

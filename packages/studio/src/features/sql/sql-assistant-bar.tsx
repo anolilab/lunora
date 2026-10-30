@@ -2,11 +2,11 @@ import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { Input } from "../../components/ui/input";
+import type { AssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
+import assistantReasonMessage from "../../lib/assistant-reason";
 import { fireAndForget } from "../../lib/internal";
 import { cn } from "../../lib/utils";
-import assistantReasonMessage from "./assistant-reason";
-import type { SqlAssistant } from "./hooks/use-sql-assistant";
 
 /**
  * Natural-language prompt bar above the SQL editor.
@@ -18,27 +18,27 @@ import type { SqlAssistant } from "./hooks/use-sql-assistant";
  * enforces before it gets here.
  */
 const SqlAssistantBar = ({
-    assistant,
+    rpc,
     failed,
     onGenerated,
 }: {
-    readonly assistant: SqlAssistant;
     /** The last failed run, enabling the repair affordance. */
     readonly failed?: { error: string; sql: string };
     readonly onGenerated: (sql: string) => void;
+    readonly rpc: AssistantRpc;
 }): ReactElement | null => {
     const t = useT();
 
     const [prompt, setPrompt] = useState("");
 
-    if (assistant.unavailable) {
+    if (rpc.unavailable) {
         return null;
     }
 
     // Only THIS surface's task — a chart inference running in the editor below
     // must not spin this button or print its error here.
-    const pending = assistant.pending("sql");
-    const reason = assistant.reason("sql");
+    const pending = rpc.pending("sql");
+    const reason = rpc.reason("sql");
 
     const submit = (repair: boolean): void => {
         const text = prompt.trim();
@@ -48,7 +48,7 @@ const SqlAssistantBar = ({
         }
 
         const apply = async (): Promise<void> => {
-            const sql = await assistant.generate(text === "" ? "fix the failing statement" : text, repair ? failed : undefined);
+            const sql = await rpc.generate(text === "" ? "fix the failing statement" : text, repair ? failed : undefined);
 
             if (sql !== undefined) {
                 onGenerated(sql);

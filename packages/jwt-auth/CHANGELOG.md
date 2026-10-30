@@ -1,3 +1,17 @@
+## @lunora/jwt-auth [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/@lunora/jwt-auth@1.0.0-alpha.7...@lunora/jwt-auth@1.0.0-alpha.8) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+
+## @lunora/jwt-auth [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/@lunora/jwt-auth@1.0.0-alpha.6...@lunora/jwt-auth@1.0.0-alpha.7) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.78
+
 ## @lunora/jwt-auth [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/jwt-auth@1.0.0-alpha.4...@lunora/jwt-auth@1.0.0-alpha.5) (2026-10-29)
 
 

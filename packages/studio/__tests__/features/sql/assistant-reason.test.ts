@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import assistantReasonMessage from "../../../src/features/sql/assistant-reason";
 import type { TFunction } from "../../../src/i18n/i18n-context";
+import assistantReasonMessage from "../../../src/lib/assistant-reason";
 
 /** Identity translator: the message id is the English copy. */
 const t: TFunction = (id) => id;

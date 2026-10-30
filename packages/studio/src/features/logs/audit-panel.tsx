@@ -141,7 +141,7 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
                 />
             </div>
 
-            {error !== null && <ErrorAlert error={errorSource} testId="au-error" />}
+            {error !== null && <ErrorAlert error={errorSource} shardKey={queryShardKey} testId="au-error" />}
 
             {error === null && !isLoading && filtered.length === 0 && (
                 <EmptyState

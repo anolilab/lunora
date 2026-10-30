@@ -1,3 +1,133 @@
+## @lunora/client [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.270...@lunora/client@1.0.0-alpha.271) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+* **@lunora/do:** upgraded to 1.0.0-alpha.269
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.261
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.177
+
+## @lunora/client [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.269...@lunora/client@1.0.0-alpha.270) (2026-10-30)
+
+### ⚠ BREAKING CHANGES
+
+* **studio:** the aiChat admin RPC no longer serves a loadKnowledge
+tool; callers pass documentation excerpts in `knowledge`.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* security(runtime): turn the assistant off for a level that is not a level
+
+LUNORA_AI_OPT_IN values that are not on the ladder, such as off, false or Disabled, fell back to
+the default level. An operator who wrote one to switch the assistant off kept sending schema names
+to the inference provider from the chat and every one-shot op, with nothing to say so. A set value
+that is not a level now disables the assistant; an unset or empty var still takes the default, and
+the Studio's readout shows disabled so the mistake is visible.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): keep a failed chat turn's error in its own chat
+
+The chat status is held per hook, so a failure in one conversation showed in the next one the
+operator opened before they had asked it anything. Record which session sent the turn and show
+the reason only there; a reason that latches (ai-disabled, no-ai-binding) is about the deployment
+and still shows everywhere.
+
+Also sort the docs digest's source files in code-unit order instead of localeCompare, whose
+collation follows the host locale and could reorder the committed digest between machines.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* test(studio): match the excerpt's page by its whole parenthesised url
+
+The assertions checked that an excerpt contained the docs URL as a substring, which reads like
+URL sanitising to static analysis. An excerpt names its page as `Title (url): ...`, so match the
+whole parenthesised URL instead; it states exactly which page is meant.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(client): stop a cancelled stream call between buffered frames
+
+streamRpc handed the SSE pump a fresh AbortController unrelated to the caller's signal and never
+checked that signal while dispatching frames. One read can carry a narration frame and the
+terminal frame together, so a cancel that landed between them still delivered the next frame and
+resolved the call with the answer. Tie the pump to the caller's signal, deliver nothing once it is
+aborted, and reject with the signal's reason.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* security(runtime): refuse reserved shard keys on the chat RPC
+
+The chat op is served ahead of the worker's shard gate and forwarded every tool read to any
+non-empty shard key the caller named. The gate refuses keys carrying ::relay:: or ::replica::
+for everyone, admins included, because only the runtime mints those names and a Durable Object
+reads its own name to learn its role. Apply the same rule on the chat path.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* perf(runtime): read only the transcript turns the cap can keep
+
+budgetTranscript parsed every entry of the caller-sent transcript before keeping the newest twelve,
+so one oversized admin request made the worker validate entries it could never use. Walk
+newest-first and stop once the cap is full; invalid entries are still skipped, so the same turns
+are kept and the truncated flag is unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(runtime): sign assistant approval tickets with a deployment secret
+
+Approval tickets were signed with a random key each isolate made for itself, so an operator's
+approval that reached a different isolate could not be verified and the card came back instead
+of the read running. A deployment can now set LUNORA_AI_APPROVAL_SECRET (32+ characters); the
+worker reads it off its env, never the request, and tickets then verify on any isolate. Without
+it, or with a shorter value, the per-isolate key stays, which still fails safe.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): keep the selected shard when asking the assistant
+
+An advisor finding or error callout shown for a non-root shard opened a chat with no shard, so
+the assistant's tool reads hit the root shard instead of the one that produced it. AdvisorView
+and ErrorAlert take the shard and pass it in the seed; every panel with a shard selector
+supplies its own.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(runtime): cancel an in-flight shard read when a chat turn is aborted
+
+generateChat checked the abort signal before a tool call but never handed it to the runner, so
+a cancelled turn kept a shard read running and the worker waited on it. The signal now flows
+runTool -> chatToolRunner -> forwardRpcToShard -> the shard request, and the turn stops once
+the read is cancelled. Other forwardRpcToShard callers are unaffected (the parameter is
+optional).
+
+Also rewrites the ai-chat module header to state what the module owns and who consumes it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **studio:** a conversational assistant, served off the DO admin dispatch ([#429](https://github.com/anolilab/lunora/issues/429)) ([ccba48d](https://github.com/anolilab/lunora/commit/ccba48d4f14748105e33ab33f39383cd84880604))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.78
+* **@lunora/wire:** upgraded to 1.0.0-alpha.6
+* **@lunora/do:** upgraded to 1.0.0-alpha.268
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.260
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.176
+
+## @lunora/client [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.268...@lunora/client@1.0.0-alpha.269) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.267
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.259
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.175
+
 ## @lunora/client [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.267...@lunora/client@1.0.0-alpha.268) (2026-10-30)
 
 

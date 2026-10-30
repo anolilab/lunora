@@ -573,7 +573,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                 <ArchiveFeed shardKey={queryShardKey} />
             ) : (
                 <>
-                    {readout === "error" && <ErrorAlert error={errorSource} testId="lg-error" />}
+                    {readout === "error" && <ErrorAlert error={errorSource} shardKey={queryShardKey} testId="lg-error" />}
 
                     {readout === "empty" && (
                         <EmptyState
