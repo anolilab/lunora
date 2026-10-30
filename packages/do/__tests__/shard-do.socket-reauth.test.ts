@@ -1,6 +1,7 @@
 import type { SocketAttachment } from "@lunora/shard-engine";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { claimsFingerprint } from "../../../shared/claims-fingerprint";
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -722,5 +723,76 @@ describe("socket re-authentication through a relay", () => {
 
         expect(body.error.code).toBe("IDENTITY_CHANGED");
         expect(ws.closes[0]).toBe(4005);
+    });
+});
+
+describe("resume under the claims the cursor was read under", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    const CLAIMS = { orgId: "org-a", role: "member" };
+    const fingerprint = claimsFingerprint("user-1", CLAIMS);
+
+    const resubscribe = async (sinceClaims: string | undefined) => {
+        vi.useFakeTimers({ now: NOW });
+
+        const shard = new ReauthShard(createState(), {});
+        const ws = createFakeWebSocket();
+
+        shard.register(ws, { connectionId: "conn-1", expiresAt: NOW + HOUR, identity: CLAIMS, revalidateAt: NOW + WINDOW, subs: {}, userId: "user-1" });
+
+        const evaluate = vi
+            .spyOn(shard as unknown as { evaluateResume: () => unknown }, "evaluateResume")
+            .mockReturnValue({ cursor: 3, epoch: undefined, resumable: true });
+
+        await shard.webSocketMessage(
+            ws as unknown as WebSocket,
+            JSON.stringify({
+                id: "sub-2",
+                query: { args: {}, functionPath: "messages:list", sinceSeq: 3, ...(sinceClaims === undefined ? {} : { sinceClaims }) },
+                type: "subscribe",
+            }),
+        );
+
+        return { evaluate, ws };
+    };
+
+    it("announces the fingerprint of the socket's claims on its identity frame", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const shard = new ReauthShard(createState(), {});
+        const ws = createFakeWebSocket();
+
+        shard.register(ws, { connectionId: "conn-1", expiresAt: NOW + HOUR, identity: CLAIMS, revalidateAt: NOW + WINDOW, subs: {}, userId: "user-1" });
+        await shard.webSocketMessage(ws as unknown as WebSocket, JSON.stringify({ type: "connect" }));
+
+        const identity = ws.sent.map((frame) => JSON.parse(frame) as { claims?: string; type: string }).find((frame) => frame.type === "identity");
+
+        expect(identity?.claims).toBe(fingerprint);
+    });
+
+    it("resumes warm when the claims are the ones the cursor was read under", async () => {
+        expect.assertions(2);
+
+        const { evaluate, ws } = await resubscribe(fingerprint);
+
+        expect(evaluate).toHaveBeenCalledWith(3, expect.anything(), undefined);
+        expect(ws.sent.some((frame) => frame.includes('"type":"resume"'))).toBe(true);
+    });
+
+    it.each([
+        ["claims that changed during the gap", claimsFingerprint("user-1", { orgId: "org-b", role: "member" })],
+        ["no fingerprint (an older client)", undefined],
+    ])("seeds cold, honouring no cursor, for %s", async (_name, sinceClaims) => {
+        expect.assertions(3);
+
+        const { evaluate, ws } = await resubscribe(sinceClaims);
+
+        expect(evaluate).not.toHaveBeenCalled();
+        expect(ws.sent.some((frame) => frame.includes('"type":"resume"'))).toBe(false);
+        expect(dataFrames(ws)).toHaveLength(1);
     });
 });

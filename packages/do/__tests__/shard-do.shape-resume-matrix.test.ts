@@ -24,6 +24,7 @@ import type { SocketAttachment, SqlExec } from "@lunora/shard-engine";
 import { createShardCtxDb as createShardContextDatabase, readCdcEpoch, runShardMigrations, trimCdcChanges } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
+import { claimsFingerprint } from "../../../shared/claims-fingerprint";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import messagesSchema from "./_helpers/messages-schema";
@@ -160,6 +161,9 @@ interface MatrixRow {
      */
     setup: (harness: HarnessLike) => Promise<void>;
 
+    /** `sinceClaims` placed in the envelope beside a checkpoint; defaults to the socket's own claims (the resume is under the claims it was read under). `null` omits it. */
+    sinceClaims?: null | string;
+
     /**
      * Derive the `sinceEpoch` string to embed in the subscribe envelope. Receives the
      * live SQL handle so callers can read the real epoch (`readCdcEpoch`) or return a
@@ -195,6 +199,38 @@ const matrix: MatrixRow[] = [
         sinceEpochFn: (sql) => readCdcEpoch(sql),
         expectResume: true,
         expectedOpsLen: 1, // only m2 is in (sinceSeq=1, cursor=2]
+    },
+    {
+        label: "1b — claims fingerprint differs: a checkpoint read under other claims is not resumed → full reseed",
+        cdcMigrate: true,
+        setup: async (harness) => {
+            const writer = makeWriter(harness.sql);
+
+            // seq=1: m1 in c1; seq=2: m2 in c1. sinceSeq=1 diffs only (1, 2] = m2.
+            await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "alpha" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m2", authorId: "u1", channelId: "c1", text: "beta" }, { allowExplicitId: true });
+        },
+        sinceSeq: 1,
+        sinceClaims: claimsFingerprint("user-x", undefined),
+        sinceEpochFn: (sql) => readCdcEpoch(sql),
+        expectResume: false,
+        expectedOpsLen: 2, // the full membership, not the diff
+    },
+    {
+        label: "1c — no claims fingerprint (an older client) → full reseed",
+        cdcMigrate: true,
+        setup: async (harness) => {
+            const writer = makeWriter(harness.sql);
+
+            // seq=1: m1 in c1; seq=2: m2 in c1. sinceSeq=1 diffs only (1, 2] = m2.
+            await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "alpha" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m2", authorId: "u1", channelId: "c1", text: "beta" }, { allowExplicitId: true });
+        },
+        sinceSeq: 1,
+        sinceClaims: null,
+        sinceEpochFn: (sql) => readCdcEpoch(sql),
+        expectResume: false,
+        expectedOpsLen: 2, // the full membership, not the diff
     },
     {
         label: "2 — epoch mismatch: sinceEpoch differs from server epoch → full reseed",
@@ -290,7 +326,7 @@ const matrix: MatrixRow[] = [
 // ---------------------------------------------------------------------------
 
 describe("seedOpLogShape resume-vs-reseed decision matrix", () => {
-    it.each(matrix)("$label", async ({ cdcMigrate, expectedOpsLen, expectResume, setup, sinceEpochFn, sinceSeq }) => {
+    it.each(matrix)("$label", async ({ cdcMigrate, expectedOpsLen, expectResume, setup, sinceClaims, sinceEpochFn, sinceSeq }) => {
         expect.assertions(4);
 
         // Each case gets its own in-memory SQLite database so there is no state bleed.
@@ -329,6 +365,7 @@ describe("seedOpLogShape resume-vs-reseed decision matrix", () => {
                     shape: { args: { channelId: "c1" }, name: "messagesByChannel" },
                     type: "shape_subscribe",
                     ...(sinceSeq !== undefined && { sinceCheckpoint: sinceSeq }),
+                    ...(sinceSeq !== undefined && sinceClaims !== null && { sinceClaims: sinceClaims ?? claimsFingerprint(undefined, undefined) }),
                     ...(epoch !== undefined && { sinceEpoch: epoch }),
                 }),
             );
@@ -388,6 +425,7 @@ describe("seedOpLogShape resume-vs-reseed decision matrix", () => {
                         id: "shape-1",
                         shape: { args: { channelId: "c1" }, name: "messagesByChannel" },
                         sinceCheckpoint,
+                        sinceClaims: claimsFingerprint(undefined, undefined),
                         sinceEpoch,
                         type: "shape_subscribe",
                     }),

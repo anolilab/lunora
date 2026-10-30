@@ -17,6 +17,12 @@ const isLiveStatus = (status: ConnectionStatus): boolean => status === "connecte
  */
 interface ShardConnection {
     /**
+     * Fingerprint of the verified claims this socket is authenticated with, from its `identity` frame.
+     * Stamped on a value read over it, so a later resume can say which claims the value was read under.
+     */
+    claims?: string;
+
+    /**
      * The server-minted id of this socket, from its `identity` frame. Names the socket to the
      * live-stream control route. Reset on every new socket, like `identityConfirmed`.
      */

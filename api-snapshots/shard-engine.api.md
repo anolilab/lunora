@@ -3176,6 +3176,7 @@ interface SubscriptionEnvelope {
     };
     sinceCheckpoint?: number;
     sinceChunk?: number;
+    sinceClaims?: string;
     sinceEpoch?: string;
     token?: string;
     topic?: string;
@@ -3210,6 +3211,7 @@ interface SubscriptionQuery {
     args?: Record<string, unknown>;
     functionPath?: string;
     sinceEpoch?: string;
+    sinceClaims?: string;
     sinceSeq?: number;
     table?: string;
 }

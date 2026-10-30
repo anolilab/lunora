@@ -272,6 +272,7 @@ import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { canonicalClaims, claimsFingerprint } from "../../../shared/claims-fingerprint";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
 import type { ErrorDetail } from "../../../shared/error-detail";
@@ -1731,9 +1732,6 @@ const countLiveConnections = (
     return { callerConnections, ipConnections };
 };
 
-/** Claims a refreshed credential re-issues on every refresh; they say when it was minted and until when, not who it names. */
-const VOLATILE_CLAIMS = new Set(["exp", "expiresAtMs", "iat", "jti", "nbf"]);
-
 /**
  * The revalidation deadline a newly accepted socket is held to: any non-route socket carrying a user identity,
  * admin or not. Admin authority (revoked by an admin-token rotation) says nothing about the user identity riding
@@ -1744,11 +1742,7 @@ const revalidationStamp = (route: unknown, userId: string | undefined, acceptedA
     route === undefined && userId !== undefined ? { revalidateAt: acceptedAt + SOCKET_REVALIDATE_MS } : {};
 
 /** The claims a re-auth must leave unchanged, as one comparable key (`""` for none). */
-const credentialClaimsKey = (identity: Record<string, unknown> | undefined): string => {
-    const stable = Object.fromEntries(Object.entries(identity ?? {}).filter(([claim]) => !VOLATILE_CLAIMS.has(claim)));
-
-    return Object.keys(stable).length === 0 ? "" : stableWireKey(stable);
-};
+const credentialClaimsKey = canonicalClaims;
 
 const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
     // A copy: the attachment is shared with the socket cache, and user code receives this object.
@@ -8266,6 +8260,7 @@ abstract class ShardDO {
             this.sendFrame(
                 ws,
                 JSON.stringify({
+                    claims: claimsFingerprint(attachment.userId, attachment.identity),
                     connectionId: attachment.connectionId,
                     ...(attachment.revalidateAt === undefined ? {} : { revalidateMs: SOCKET_REVALIDATE_MS }),
                     // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
@@ -8407,6 +8402,17 @@ abstract class ShardDO {
                 return;
             }
 
+            // A cursor is honoured only under the claims it was read under; otherwise this is a first subscribe.
+            {
+                const { sinceClaims, ...held } = query;
+
+                query = held;
+
+                if (held.sinceSeq !== undefined && !this.resumesUnderCurrentClaims(ws, sinceClaims)) {
+                    query = { ...held, sinceEpoch: undefined, sinceSeq: undefined };
+                }
+            }
+
             const status = this.subscribe(ws, envelope.id, query);
 
             if (status !== "ok") {
@@ -8459,8 +8465,10 @@ abstract class ShardDO {
             await this.handleShapeSubscribe(ws, envelope.id, {
                 args: shapeArgs,
                 name: envelope.shape.name,
-                sinceEpoch: envelope.sinceEpoch,
-                sinceSeq: envelope.sinceCheckpoint,
+                // As for a query: a checkpoint is honoured only under the claims it was read under.
+                ...(envelope.sinceCheckpoint === undefined || this.resumesUnderCurrentClaims(ws, envelope.sinceClaims)
+                    ? { sinceEpoch: envelope.sinceEpoch, sinceSeq: envelope.sinceCheckpoint }
+                    : {}),
             });
 
             return;
@@ -17327,6 +17335,17 @@ abstract class ShardDO {
         }
 
         return false;
+    }
+
+    /**
+     * Whether a cursor read under the claims fingerprinted `presented` may be resumed from on this socket: only when
+     * that is the fingerprint of the socket's claims now. A missing fingerprint (an older client) is a mismatch,
+     * so the default is the cold seed.
+     */
+    private resumesUnderCurrentClaims(ws: ShardSocketLike, presented: string | undefined): boolean {
+        const { identity, userId } = this.readAttachment(ws);
+
+        return presented !== undefined && presented === claimsFingerprint(userId, identity);
     }
 
     private dropLapsedSocket(ws: ShardSocketLike, code: number, reason: string): void {

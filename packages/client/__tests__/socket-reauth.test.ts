@@ -613,3 +613,114 @@ describe("socket claims change and the read cache", () => {
         client.close();
     });
 });
+
+describe("resume claims fingerprint", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    const open = async (announce: boolean) => {
+        const { sockets, WebSocket } = createSocketHarness();
+        const client = new LunoraClient({
+            fetch: vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } })),
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
+            url: "http://app.test",
+            WebSocket,
+        });
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        sockets[0]?.receive({ ...(announce ? { claims: "fp-A" } : {}), connectionId: "conn-1", subject: null, type: "identity" });
+        await settle();
+
+        const subscribe = (sockets[0]?.frames() ?? []).find((frame) => frame.type === "subscribe") as { id: string } | undefined;
+
+        sockets[0]?.receive({ cursor: 7, epoch: "e1", id: subscribe?.id, type: "data", data: ["row"] });
+        await settle();
+
+        const reconnect = async () => {
+            sockets[0]?.triggerClose();
+            await vi.advanceTimersByTimeAsync(0);
+            await settle();
+            sockets[1]?.open();
+            await settle();
+
+            return (sockets[1]?.frames() ?? []).find((frame) => frame.type === "subscribe") as { query?: Record<string, unknown> } | undefined;
+        };
+
+        return { client, reconnect, sockets };
+    };
+
+    it("sends back the fingerprint the cursor was read under, not the one the new socket will announce", async () => {
+        expect.assertions(2);
+
+        const { client, reconnect } = await open(true);
+        const resubscribe = await reconnect();
+
+        expect(resubscribe?.query?.["sinceSeq"]).toBe(7);
+        expect(resubscribe?.query?.["sinceClaims"]).toBe("fp-A");
+
+        client.close();
+    });
+
+    it("sends no fingerprint when the server announced none, which the server takes as a cold seed", async () => {
+        expect.assertions(1);
+
+        const { client, reconnect } = await open(false);
+        const resubscribe = await reconnect();
+
+        expect(resubscribe?.query).not.toHaveProperty("sinceClaims");
+
+        client.close();
+    });
+
+    it("keeps the fingerprint with a value restored from the durable cache", async () => {
+        expect.assertions(1);
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const cache = createInMemoryQueryCache();
+        const make = () =>
+            new LunoraClient({
+                fetch: vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } })),
+                heartbeatIntervalMs: 0,
+                hydrateOnStart: true,
+                queryCache: cache,
+                url: "http://app.test",
+                WebSocket,
+            });
+        const first = make();
+
+        first.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        sockets[0]?.receive({ claims: "fp-A", connectionId: "conn-1", subject: null, type: "identity" });
+        await settle();
+
+        const subscribe = (sockets[0]?.frames() ?? []).find((frame) => frame.type === "subscribe") as { id: string } | undefined;
+
+        sockets[0]?.receive({ cursor: 7, epoch: "e1", id: subscribe?.id, type: "data", data: ["row"] });
+        await vi.advanceTimersByTimeAsync(1000);
+        first.close();
+
+        // A reload: a new client restores the cached value and cursor.
+        const second = make();
+
+        await settle();
+        second.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets.at(-1)?.open();
+        await settle();
+
+        const resubscribe = (sockets.at(-1)?.frames() ?? []).find((frame) => frame.type === "subscribe") as { query?: Record<string, unknown> } | undefined;
+
+        expect(resubscribe?.query).toMatchObject({ sinceClaims: "fp-A", sinceSeq: 7 });
+
+        second.close();
+    });
+});

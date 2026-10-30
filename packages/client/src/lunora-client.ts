@@ -696,6 +696,12 @@ class LunoraClient {
     /** Polling-fallback cadence (ms); `0` disables it. See {@link LunoraClientOptions.pollingFallback}. */
     private readonly pollingFallbackIntervalMs: number;
 
+    /**
+     * The claims fingerprint of the socket whose `data`, `delta`, `resume` or poke frame is being applied, set only
+     * for the synchronous span of that handler. A value and its cursor are stamped with it as they are committed.
+     */
+    private frameClaims: string | undefined;
+
     /** See {@link LunoraClientOptions.authTokenOnUpgrade}. */
     private readonly authTokenOnUpgrade: boolean;
 
@@ -3286,6 +3292,7 @@ class LunoraClient {
                 optimisticLayers: [],
                 serverBase: cached?.value,
                 serverCursor: cached?.serverCursor,
+                serverClaims: cached?.claims,
                 shardKey: options.shardKey,
                 valueReceived: false,
                 // Encode ONCE, here, so an unsupported arg value throws at this
@@ -4996,6 +5003,8 @@ class LunoraClient {
         state.serverBase = entry.value;
         // eslint-disable-next-line no-param-reassign -- in-place seed of the shared subscription state
         state.serverCursor = entry.serverCursor;
+        // eslint-disable-next-line no-param-reassign -- in-place seed of the shared subscription state
+        state.serverClaims = entry.claims;
 
         if (entry.serverEpoch !== undefined) {
             // eslint-disable-next-line no-param-reassign -- in-place seed of the shared subscription state
@@ -5197,6 +5206,7 @@ class LunoraClient {
             serverCursor: state.serverCursor,
             ts: Date.now(),
             value: authoritative,
+            ...(state.serverClaims === undefined ? {} : { claims: state.serverClaims }),
             // Only stamp the credential when the delivering identity IS the one
             // this client holds a token for — a frame from a previous user's
             // still-open socket must not be labelled with the current bearer.
@@ -6639,6 +6649,7 @@ class LunoraClient {
                 conn.identityConfirmed = false;
                 conn.connectionId = undefined;
                 conn.reauthPending = false;
+                conn.claims = undefined;
                 conn.heldFrames = undefined;
                 conn.roomsRejoined = false;
 
@@ -7024,6 +7035,7 @@ class LunoraClient {
                 // real table name here; see `protocol/README.md` §5.1.
                 table: state.fn.__lunoraRef,
                 ...(resumable ? { sinceSeq: state.serverCursor } : {}),
+                ...(resumable && state.serverClaims !== undefined ? { sinceClaims: state.serverClaims } : {}),
                 ...(resumable && state.serverEpoch !== undefined ? { sinceEpoch: state.serverEpoch } : {}),
             },
             type: "subscribe",
@@ -7100,6 +7112,7 @@ class LunoraClient {
             // Resume from the last applied checkpoint when we hold one; a cold
             // subscribe omits it and the server seeds the full membership.
             ...(state.serverCursor === undefined ? {} : { sinceCheckpoint: state.serverCursor }),
+            ...(state.serverCursor === undefined || state.serverClaims === undefined ? {} : { sinceClaims: state.serverClaims }),
             ...(state.serverEpoch === undefined ? {} : { sinceEpoch: state.serverEpoch }),
         });
     }
@@ -7220,7 +7233,9 @@ class LunoraClient {
             }
             case "data":
             case "delta": {
-                this.handleDataMessage(message);
+                this.withFrameClaims(shardKey, () => {
+                    this.handleDataMessage(message);
+                });
 
                 return;
             }
@@ -7244,7 +7259,9 @@ class LunoraClient {
                 break;
             }
             case "pokeEnd": {
-                this.handlePokeEnd(message, shardKey);
+                this.withFrameClaims(shardKey, () => {
+                    this.handlePokeEnd(message, shardKey);
+                });
 
                 break;
             }
@@ -7259,7 +7276,9 @@ class LunoraClient {
                 break;
             }
             case "resume": {
-                this.handleResumeMessage(message);
+                this.withFrameClaims(shardKey, () => {
+                    this.handleResumeMessage(message);
+                });
 
                 break;
             }
@@ -7441,6 +7460,9 @@ class LunoraClient {
             return;
         }
 
+        // eslint-disable-next-line no-param-reassign -- commit the shared shape state in place, as `commitPokeSlice` does
+        state.serverClaims = this.frameClaims;
+
         // Fired after the emit, as before: `@lunora/db` drops its optimistic overlay on
         // this callback, so it must run once the rows have rendered.
         state.onCheckpoint?.({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
@@ -7539,7 +7561,7 @@ class LunoraClient {
         // Over the polling fallback a polled value is the only evidence a subscription was answered.
         const firstPolledValue = snapshotMark !== undefined && !state.valueReceived;
 
-        commitDataFrame(state, payload, { cursor: message.cursor, epoch: message.epoch });
+        commitDataFrame(state, payload, { claims: this.frameClaims, cursor: message.cursor, epoch: message.epoch });
 
         if (firstPolledValue) {
             state.valueReceived = true;
@@ -7589,6 +7611,16 @@ class LunoraClient {
      * watermark). No callback fires — the value didn't change, and `subscribe()`
      * already replayed the cached value to every consumer synchronously.
      */
+    private withFrameClaims(shardKey: string | undefined, apply: () => void): void {
+        this.frameClaims = this.getConnection(shardKey)?.claims;
+
+        try {
+            apply();
+        } finally {
+            this.frameClaims = undefined;
+        }
+    }
+
     private handleResumeMessage(message: ServerResumeMessage): void {
         const state = this.subscriptions.getById(message.id);
 
@@ -7598,6 +7630,8 @@ class LunoraClient {
 
         // The cached value is current as of the cursor it resumed from, so a run cut off before it is void.
         state.pendingDeltaRun = undefined;
+        // A resume is only answered when the shard found these claims to be the ones the cursor was read under.
+        state.serverClaims = this.frameClaims;
         this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
 
         // Relayed as a value, because a follower is answered only by one: its held writes are judged against the
@@ -7725,6 +7759,7 @@ class LunoraClient {
         const sameSocket = conn.connectionId === message.connectionId;
 
         conn.connectionId = message.connectionId;
+        conn.claims = message.claims;
         conn.whisperAck = message.whisperAck === true;
 
         if (!sameSocket || (conn.revalidateTimer === undefined && conn.reauthPending !== true)) {

@@ -323,7 +323,10 @@ which re-resolves the identity and restarts the window, with no reconnect and
 no re-seed. If the re-resolved claims differ, or the window passes without a
 re-auth, the shard closes the socket with `4005`. The client reconnects, and the
 upgrade resolves the current identity. `4005` is not `4001`: nothing about the
-credential lapsed, so `onTokenExpired` does not fire. A client without the
+credential lapsed, so `onTokenExpired` does not fire. When the client
+reconnects it resumes from its cursors only if the socket's claims are the ones
+those cursors were read under (the shard checks a fingerprint the client echoes
+back); otherwise it takes a full snapshot. A client without the
 re-auth call reconnects once per window. A revoked socket stops receiving within
 one window, plus the identity cache window when the resolver is memoized.
 `@lunora/client` treats the code as a refusal of the credential, not of the

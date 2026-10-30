@@ -126,6 +126,7 @@ const CONFLICT_ERROR_CODE = "CONFLICT";
 
 ```ts
 interface CachedQuery {
+    claims?: string;
     credential?: string;
     identity: string | null;
     serverCursor?: number;
@@ -203,6 +204,7 @@ interface ClientShapeSubscribeMessage {
         name: string;
     };
     sinceCheckpoint?: number;
+    sinceClaims?: string;
     sinceEpoch?: string;
     type: "shape_subscribe";
 }
@@ -1368,6 +1370,7 @@ interface SubscriptionState {
         payload: unknown;
     };
     serverBase: unknown;
+    serverClaims?: string;
     serverCursor?: number;
     serverEpoch?: string;
     readonly shardKey?: string;
@@ -2701,6 +2704,7 @@ interface ClientSubscribeMessage {
     query: {
         args?: Record<string, unknown>;
         functionPath?: string;
+        sinceClaims?: string;
         sinceEpoch?: string;
         sinceSeq?: number;
         table?: string;
@@ -2864,6 +2868,7 @@ interface ServerErrorMessage {
 
 ```ts
 interface ServerIdentityMessage {
+    claims?: string;
     connectionId?: string;
     revalidateMs?: number;
     subject: null | string;
