@@ -89,7 +89,7 @@ const deferredWiring = (
  */
 const emitAuthModule = (hasAuth: boolean): string =>
     hasAuth
-        ? `${GENERATED_HEADER}export { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth/worker";\n`
+        ? `${GENERATED_HEADER}export { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter, resolveSessionIdentity } from "@lunora/auth/worker";\n`
         : "";
 
 /**

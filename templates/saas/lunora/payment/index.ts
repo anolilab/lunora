@@ -5,8 +5,9 @@
  * you own and edit it. Re-export the functions you want from your `lunora/`
  * entry so codegen picks them up — they surface in the generated `api` as
  * `payment/checkout`, `payment/check`, `payment/portal` and
- * `payment/mySubscriptions`, and `payment/track` in `internal`, for server code
- * only.
+ * `payment/mySubscriptions` — plus `payment/adminSubscriptions` and
+ * `payment/adminPastDueSubscriptions`, which this kit adds for its platform
+ * admin — and `payment/track` in `internal`, for server code only.
  *
  * The functions are provider-agnostic: they call `ctx.payments.*` which is
  * wired in `createShardDO({ payment: (env) => ({ adapter: ..., ... }) })`.
@@ -55,6 +56,7 @@ import { env as workerEnv } from "cloudflare:workers";
 
 import { LunoraError } from "@lunora/errors";
 import type { SubscriptionState } from "@lunora/payment";
+import type { PaginationResult } from "lunorash/server";
 import { internal } from "#lunora/_generated/internal.js";
 import { action, internalAction, internalMutation, query, v } from "#lunora/_generated/server.js";
 import type { CloudflareBindings, Id } from "#lunora/_generated/server.js";
@@ -397,6 +399,27 @@ interface SubscriptionRow {
     state: SubscriptionState;
 }
 
+/** Project one stored subscription row onto {@link SubscriptionRow}. */
+const toSubscriptionRow = (document: object): SubscriptionRow => {
+    // A spread, not the document itself: in a codegen'd app the row is the
+    // typed `Doc<"payment_subscriptions">` interface, which has no index signature,
+    // while its object-literal copy satisfies the readers' record type.
+    const row: Record<string, unknown> = { ...document };
+
+    return {
+        cancelAtPeriodEnd: row["cancelAtPeriodEnd"] === true,
+        currentPeriodEnd: readOptionalNumber(row, "currentPeriodEnd"),
+        currentPeriodStart: readOptionalNumber(row, "currentPeriodStart"),
+        priceId: readString(row, "priceId"),
+        priceIds: readOptionalStringArray(row, "priceIds"),
+        provider: readString(row, "provider"),
+        providerSubscriptionId: readString(row, "providerSubscriptionId"),
+        quantity: typeof row["quantity"] === "number" ? row["quantity"] : 0,
+        referenceId: readString(row, "referenceId"),
+        state: readString(row, "state") as SubscriptionState,
+    };
+};
+
 /**
  * Reactive read of the webhook-synced subscriptions for the caller's organisation.
  *
@@ -418,25 +441,91 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
         .withIndex("by_reference", (q) => q.eq("referenceId", referenceId))
         .collect();
 
-    return rows.map((document) => {
-        // A spread, not the document itself: in a codegen'd app the row is the
-        // typed `Doc<"payment_subscriptions">` interface, which has no index signature,
-        // while its object-literal copy satisfies the readers' record type.
-        const row: Record<string, unknown> = { ...document };
+    return rows.map((document) => toSubscriptionRow(document));
+});
 
-        return {
-            cancelAtPeriodEnd: row["cancelAtPeriodEnd"] === true,
-            currentPeriodEnd: readOptionalNumber(row, "currentPeriodEnd"),
-            currentPeriodStart: readOptionalNumber(row, "currentPeriodStart"),
-            priceId: readString(row, "priceId"),
-            priceIds: readOptionalStringArray(row, "priceIds"),
-            provider: readString(row, "provider"),
-            providerSubscriptionId: readString(row, "providerSubscriptionId"),
-            quantity: typeof row["quantity"] === "number" ? row["quantity"] : 0,
-            referenceId: readString(row, "referenceId"),
-            state: readString(row, "state") as SubscriptionState,
-        };
+/** The platform-wide roles that may read every tenant's billing — `PLATFORM_ADMIN_ROLES` in `lunora/saas`. */
+const PLATFORM_ADMIN_ROLES: ReadonlySet<string> = new Set(["admin"]);
+
+/**
+ * The platform admin's cross-tenant billing reads: a platform admin — the
+ * `appRole` claim `lunora/server.ts` resolves from better-auth's `user.role` — on
+ * the root shard. A tenant shard holds an empty copy of the billing tables, so a
+ * read there would show "no subscriptions" rather than fail — refuse it as
+ * `billingReference` does.
+ */
+const requireBillingAdmin = async (ctx: { auth: { getIdentity: () => Promise<{ appRole?: string } | null> }; shardKey: string }): Promise<void> => {
+    const identity = await ctx.auth.getIdentity();
+
+    if (!identity) {
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
+    }
+
+    // Comma-joined like every better-auth role (`"admin,user"`).
+    if (!(identity.appRole?.split(",").some((role) => PLATFORM_ADMIN_ROLES.has(role.trim())) ?? false)) {
+        throw new LunoraError("FORBIDDEN", "requires the platform admin role");
+    }
+
+    if (ctx.shardKey !== ROOT_SHARD) {
+        throw new LunoraError("FORBIDDEN", "billing runs on the root shard — call it without a shardKey");
+    }
+};
+
+/** The most rows one admin subscription page may ask for, whatever `numItems` says. */
+const ADMIN_SUBSCRIPTIONS_PAGE_MAX = 100;
+
+const pageCursor = v.optional(v.union(v.string(), v.null()));
+
+/**
+ * Every tenant's subscriptions, newest first, a page at a time — for the
+ * platform admin's subscription table, which reads it with `usePaginatedQuery`.
+ *
+ * One root-shard read, not a fan-out: the billing tables are root-scoped (see
+ * `lunora/schema.ts`), so every subscription the webhooks have written is here.
+ * It lives beside the payment functions rather than in `lunora/saas` because a
+ * kit without billing is a supported shape, and there `payment_subscriptions`
+ * does not exist. The admin screen joins the rows to organisation names itself,
+ * from `saas.listOrganizations`.
+ *
+ * Paged because this table only grows: one response holding every subscription
+ * ever written would be re-sent to the admin on each webhook. `numItems` is
+ * capped here rather than trusted, so a caller cannot ask for the whole table in
+ * one page. `endCursor` is declared because `usePaginatedQuery` sends it, and
+ * input validation would otherwise strip it.
+ */
+export const adminSubscriptions = query
+    .input({ paginationOpts: v.object({ cursor: pageCursor, endCursor: pageCursor, numItems: v.number() }) })
+    .query(async ({ args: { paginationOpts }, ctx }): Promise<PaginationResult<SubscriptionRow>> => {
+        await requireBillingAdmin(ctx);
+
+        const numItems = Math.min(Math.max(Math.floor(paginationOpts.numItems), 1), ADMIN_SUBSCRIPTIONS_PAGE_MAX);
+        const result = await ctx.db
+            .query("payment_subscriptions")
+            .order("desc")
+            .paginate({ ...paginationOpts, numItems });
+
+        return { ...result, page: result.page.map((document) => toSubscriptionRow(document)) };
     });
+
+/** The most past-due subscriptions the dunning read returns. */
+const PAST_DUE_MAX = 100;
+
+/**
+ * Every `past_due` subscription, whatever page it would fall on — the dunning
+ * list the admin table puts first. `adminSubscriptions` pages newest first, so an
+ * older tenant in dunning would otherwise only appear once the admin had paged
+ * back to it; this reads them through the `by_state` index instead, a bounded
+ * read however large the table is. `more` says the cap was hit.
+ */
+export const adminPastDueSubscriptions = query.query(async ({ ctx }): Promise<{ more: boolean; rows: SubscriptionRow[] }> => {
+    await requireBillingAdmin(ctx);
+
+    const rows = await ctx.db
+        .query("payment_subscriptions")
+        .withIndex("by_state", (q) => q.eq("state", "past_due"))
+        .take(PAST_DUE_MAX + 1);
+
+    return { more: rows.length > PAST_DUE_MAX, rows: rows.slice(0, PAST_DUE_MAX).map((document) => toSubscriptionRow(document)) };
 });
 
 /**

@@ -1,3 +1,24 @@
+## @lunora/cloudflare-access [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.246...@lunora/cloudflare-access@1.0.0-alpha.247) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.255
+
+## @lunora/cloudflare-access [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.244...@lunora/cloudflare-access@1.0.0-alpha.245) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.253
+
+## @lunora/cloudflare-access [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.243...@lunora/cloudflare-access@1.0.0-alpha.244) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.252
+
 ## @lunora/cloudflare-access [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.242...@lunora/cloudflare-access@1.0.0-alpha.243) (2026-10-29)
 
 

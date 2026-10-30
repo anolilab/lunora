@@ -9,8 +9,10 @@
  */
 export type { ActivityFeedProps } from "./activity";
 export { ActivityFeed } from "./activity";
-export type { AdminOrganizationsProps } from "./admin";
-export { AdminOrganizations } from "./admin";
+export type { AdminOrganizationsProps, AdminSubscriptionsProps } from "./admin";
+export { AdminOrganizations, AdminSubscriptions } from "./admin";
+export type { AdminUsersProps, ImpersonationBannerProps } from "./admin-users";
+export { AdminUsers, ImpersonationBanner } from "./admin-users";
 export type { BillingPanelProps, GatedProps, PricingTableProps } from "./billing";
 export { BillingPanel, Gated, PricingTable } from "./billing";
 export type { OverviewProps } from "./overview";
