@@ -217,6 +217,36 @@ describe("schedulerDO cron runs", () => {
         expect(recorded[1]).toMatchObject({ endedAt: 1_700_000_060_000, startedAt: 1_700_000_001_000 });
     });
 
+    it("keeps every real run when folding a skipped tick into a full history", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const scheduler = new SchedulerDO(createFakeState(), env);
+
+        // 49 finished runs plus one skip streak fill the 50-row history.
+        for (let index = 0; index < 49; index += 1) {
+            setNow(1_700_000_000_000 + index * 10);
+            // eslint-disable-next-line no-await-in-loop -- each run lands at its own instant
+            const runId = await acquire(scheduler, "digest");
+
+            // eslint-disable-next-line no-await-in-loop -- same
+            await end(scheduler, { name: "digest", runId, status: "succeeded" });
+        }
+
+        setNow(1_700_000_001_000);
+        await acquire(scheduler, "digest");
+        setNow(1_700_000_001_001);
+        await begin(scheduler, "digest");
+        // The fold moves the streak to a new key; both keys must not count toward the limit.
+        setNow(1_700_000_001_002);
+        await begin(scheduler, "digest");
+
+        const { runs: recorded } = await runs(scheduler);
+
+        expect(recorded.filter((run) => run.status === "succeeded")).toHaveLength(49);
+        expect(recorded.filter((run) => run.status === "skipped")).toHaveLength(1);
+    });
+
     it("keeps earlier runs through a long run of paused ticks", async () => {
         expect.hasAssertions();
 

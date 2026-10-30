@@ -40,6 +40,39 @@ class AlwaysFailing extends SchedulerDO {
     }
 }
 
+/**
+ * Makes every storage `put` and `delete` take a macrotask to settle and records whether a put and a
+ * delete were ever in flight together. Durable Object storage commits writes issued in the same
+ * synchronous run together or not at all, so a delete awaited AFTER a put is a separate commit.
+ */
+const watchWriteOrder = (state: ReturnType<typeof createFakeState>): { overlapped: () => boolean } => {
+    const put = state.storage.put.bind(state.storage) as (...arguments_: unknown[]) => Promise<void>;
+    const remove = state.storage.delete.bind(state.storage);
+    const pending = { delete: 0, put: 0 };
+    let overlapped = false;
+    const slow = async (kind: "delete" | "put"): Promise<void> => {
+        pending[kind] += 1;
+        overlapped ||= pending.delete > 0 && pending.put > 0;
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+        });
+        pending[kind] -= 1;
+    };
+
+    vi.spyOn(state.storage, "put").mockImplementation(async (...arguments_: unknown[]) => {
+        await slow("put");
+
+        return put(...arguments_);
+    });
+    vi.spyOn(state.storage, "delete").mockImplementation(async (keys: string | string[]) => {
+        await slow("delete");
+
+        return remove(keys);
+    });
+
+    return { overlapped: () => overlapped };
+};
+
 /** Succeeds every dispatch, counting them. */
 class AlwaysSucceeding extends SchedulerDO {
     public dispatched = 0;
@@ -441,6 +474,95 @@ describe("schedulerDO job lifecycle", () => {
 
         // The first outcome's index entry is stale, so history does not show it.
         await expect(history(scheduler)).resolves.toMatchObject({ records: [], truncated: false });
+    });
+
+    it("drops the old outcome of a reused id in the same commit as the replacement job", async () => {
+        expect.hasAssertions();
+
+        pinClock(1_700_000_000_000);
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.run", id: "again", scheduledFor: Date.now() + 60_000 }));
+        await scheduler.fetch(post("/cancel", { id: "again" }));
+
+        const order = watchWriteOrder(state);
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.run", id: "again", scheduledFor: Date.now() + 60_000 }));
+
+        expect(order.overlapped()).toBe(true);
+    });
+
+    it("drops the dead row of a requeued job in the same commit as its revived header", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const state = createFakeState();
+        const scheduler = new AlwaysFailing(state, env);
+
+        await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "jobs.run", id: "doomed", retry: { baseMs: 0, maxAttempts: 1 }, scheduledFor: Date.now() }),
+        );
+        await scheduler.alarm();
+        setNow(1_700_000_000_001);
+        await scheduler.alarm();
+
+        const order = watchWriteOrder(state);
+
+        await scheduler.fetch(post("/dead/retry", { id: "doomed" }));
+
+        expect(order.overlapped()).toBe(true);
+    });
+
+    it("moves a corrected outcome's history entry in one commit", async () => {
+        expect.hasAssertions();
+
+        pinClock(1_700_000_000_000);
+
+        const state = createFakeState();
+        const scheduler = new BlockingScheduler(state, env);
+
+        await scheduleDue(scheduler, 1);
+
+        const drain = scheduler.alarm();
+
+        await scheduler.entered("job-0");
+        await scheduler.fetch(post("/cancel", { id: "job-0" }));
+
+        const order = watchWriteOrder(state);
+
+        scheduler.release("job-0", true);
+        await drain;
+
+        expect(order.overlapped()).toBe(true);
+    });
+
+    it("skips stale index entries instead of returning an empty page with a cursor", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const scheduler = new BlockingScheduler(createFakeState(), env);
+        const later = Date.now() + 60_000;
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.run", id: "real", scheduledFor: later }));
+        await scheduler.fetch(post("/cancel", { id: "real" }));
+
+        // A page's worth of newer index entries whose ids were scheduled again afterwards.
+        for (let index = 0; index < 120; index += 1) {
+            setNow(1_700_000_000_001 + index);
+            // eslint-disable-next-line no-await-in-loop -- each cancel must land at its own instant
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.run", id: `reused-${String(index)}`, scheduledFor: later }));
+            // eslint-disable-next-line no-await-in-loop -- same
+            await scheduler.fetch(post("/cancel", { id: `reused-${String(index)}` }));
+            // eslint-disable-next-line no-await-in-loop -- same
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.run", id: `reused-${String(index)}`, scheduledFor: later }));
+        }
+
+        const page = await history(scheduler);
+
+        expect(page.records.map((record) => record.id)).toStrictEqual(["real"]);
+        expect(page.truncated).toBe(false);
     });
 
     it("pages /history newest first", async () => {

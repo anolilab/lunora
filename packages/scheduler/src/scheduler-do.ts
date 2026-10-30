@@ -152,6 +152,8 @@ const PAUSE_KEY = "meta:paused";
 // Mirrors the alarm path's existing `limit: 100` bound so the whole file has
 // one bounded-page convention: every storage.list() here carries a limit.
 const DEFAULT_LIST_LIMIT = 100;
+// Pages of the `dt:` index one `/history` request reads while every entry is stale.
+const HISTORY_SCAN_PAGES = 10;
 
 /**
  * Retries allowed after the original attempt before {@link SchedulerDO.recordRetry}
@@ -1934,13 +1936,18 @@ class SchedulerDO {
 
         const id = resolved;
 
+        if (pool !== undefined) {
+            await this.persistPoolCap(pool, body.maxConcurrency);
+        }
+
         // A caller-chosen id is free again once its job finished, but `/get`
         // reads the terminal row first — a reused id would keep answering the
         // OLD job's outcome. Its `dt:` entry is left for the sweep, which checks
         // the row it points at before deleting it.
-        if (body.id !== undefined) {
-            await this.state.storage.delete([`${DONE_PREFIX}${id}`, `${REPAIR_PREFIX}${id}`]);
-        }
+        // Dropped in the same synchronous run as the replacement's write below, which
+        // Durable Object storage commits together or not at all: a failed write must
+        // not also cost the old outcome.
+        const dropOutcome = body.id === undefined ? undefined : this.state.storage.delete([`${DONE_PREFIX}${id}`, `${REPAIR_PREFIX}${id}`]);
 
         const record: ScheduleRecord = {
             // body is parsed from an untrusted request; args may be absent at runtime
@@ -1958,16 +1965,14 @@ class SchedulerDO {
             ...(workflow === undefined ? {} : { workflow }),
         };
 
-        if (pool !== undefined) {
-            await this.persistPoolCap(pool, body.maxConcurrency);
-        }
-
         // One multi-key put: the header, its time index and its `pq:` row land
         // together or not at all.
-        await this.state.storage.put<ScheduleRecord | string>({
+        const write = this.state.storage.put<ScheduleRecord | string>({
             ...SchedulerDO.pendingRows(record),
             [SchedulerDO.indexKey(record.scheduledFor, id)]: id,
         });
+
+        await Promise.all([dropOutcome, write]);
         // Fast path: the new job is the only thing that could have moved the
         // earliest-pending time *earlier*. If a current alarm is already at or
         // before the new job, no rescan is needed — just keep it. Only when the
@@ -2080,17 +2085,24 @@ class SchedulerDO {
         // leaves that outcome behind, and `/get` reads it before the header. Dropped
         // first: should the put below fail, the dead row still answers `failed`.
         await this.state.storage.delete(`${DONE_PREFIX}${dead.id}`);
-        await this.state.storage.put<ScheduleRecord | string>({
+
+        // The revived header and the dead row's removal are issued in the same
+        // synchronous run, which Durable Object storage commits together or not at
+        // all: a failed half must not leave a queued job that `/get` still answers
+        // `failed` for, or a dead row that blocks its id once it succeeds. The dead
+        // row goes with the `dt:` entry `parkDead` wrote, which would otherwise take
+        // a `/history` page slot until the retention sweep reclaims it.
+        const revive = this.state.storage.put<ScheduleRecord | string>({
             ...SchedulerDO.pendingRows(revived),
             [SchedulerDO.indexKey(scheduledFor, dead.id)]: dead.id,
         });
-        // With the `dt:` entry `parkDead` wrote, which would otherwise take a
-        // `/history` page slot until the retention sweep reclaims it.
-        await this.state.storage.delete(
+        const dropDead = this.state.storage.delete(
             dead.completedAt === undefined
                 ? [`${DEAD_PREFIX}${dead.id}`]
                 : [`${DEAD_PREFIX}${dead.id}`, SchedulerDO.terminalIndexKey(dead.completedAt, dead.id)],
         );
+
+        await Promise.all([revive, dropDead]);
         await this.armAlarmIfEarlier(scheduledFor);
         await this.broadcastChange();
 
@@ -2170,19 +2182,37 @@ class SchedulerDO {
      * expired is skipped rather than shown.
      */
     private async handleHistory(url: URL): Promise<Response> {
-        const cursor = url.searchParams.get("cursor") ?? undefined;
-        const entries = await this.state.storage.list<string>({
-            limit: DEFAULT_LIST_LIMIT + 1,
-            prefix: DONE_INDEX_PREFIX,
-            ...(cursor === undefined ? {} : { startAfter: cursor }),
-        });
-        const page = [...entries.entries()];
-        const truncated = page.length > DEFAULT_LIST_LIMIT;
-        const shown = page.slice(0, DEFAULT_LIST_LIMIT);
-        const rows = await Promise.all(shown.map(async ([key, id]) => this.readTerminal(id, key)));
-        const records = rows.filter((row) => row !== undefined);
+        let startAfter = url.searchParams.get("cursor") ?? undefined;
+        const records: TerminalRecord[] = [];
 
-        return SchedulerDO.json(truncated ? { cursor: shown.at(-1)?.[0], records, truncated } : { records, truncated });
+        // Stale entries (a reused id, an expired row) still count toward a page, so
+        // one page of them would answer no records with a cursor. Keep reading until
+        // something shows or the index ends, within a bound.
+        for (let pass = 0; pass < HISTORY_SCAN_PAGES; pass += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each page starts after the previous one's last key
+            const entries = await this.state.storage.list<string>({
+                limit: DEFAULT_LIST_LIMIT + 1,
+                prefix: DONE_INDEX_PREFIX,
+                ...(startAfter === undefined ? {} : { startAfter }),
+            });
+            const page = [...entries.entries()];
+            const shown = page.slice(0, DEFAULT_LIST_LIMIT);
+            // eslint-disable-next-line no-await-in-loop -- see above
+            const rows = await Promise.all(shown.map(async ([key, id]) => this.readTerminal(id, key)));
+
+            records.push(...rows.filter((row) => row !== undefined));
+            startAfter = shown.at(-1)?.[0];
+
+            if (page.length <= DEFAULT_LIST_LIMIT) {
+                return SchedulerDO.json({ records, truncated: false });
+            }
+
+            if (records.length > 0) {
+                break;
+            }
+        }
+
+        return SchedulerDO.json({ cursor: startAfter, records, truncated: true });
     }
 
     /**
@@ -2229,8 +2259,9 @@ class SchedulerDO {
             return;
         }
 
-        await this.state.storage.delete(SchedulerDO.terminalIndexKey(row.completedAt, record.id));
-        await this.writeTerminal(record, "succeeded");
+        // One synchronous run, so storage commits the old entry's removal and the new
+        // row together: a failed write must not leave a `canceled` row with no index.
+        await Promise.all([this.state.storage.delete(SchedulerDO.terminalIndexKey(row.completedAt, record.id)), this.writeTerminal(record, "succeeded")]);
     }
 
     /** Record how `record` ended: its `done:` row and `dt:` index entry, in one put. */
@@ -2544,11 +2575,7 @@ class SchedulerDO {
             const folded = { ...streak, endedAt: now, skipped: streak.skipped + 1 };
 
             // Write the folded row before dropping the old one, so a failed write keeps the streak.
-            await this.recordCronRun(folded);
-
-            if (SchedulerDO.cronRunKey(folded) !== key) {
-                await this.state.storage.delete(key);
-            }
+            await this.recordCronRun(folded, SchedulerDO.cronRunKey(folded) === key ? undefined : key);
 
             return;
         }
@@ -2570,18 +2597,21 @@ class SchedulerDO {
      * Keyed newest END first, so a run is the newest row the moment it is
      * recorded, however many ticks were skipped while it held the lease.
      */
-    private async recordCronRun(run: CronRunRecord): Promise<void> {
+    private async recordCronRun(run: CronRunRecord, superseded?: string): Promise<void> {
         const prefix = `${CRON_RUN_PREFIX}${encodePoolName(run.name)}:`;
 
         await this.state.storage.put(SchedulerDO.cronRunKey(run), run);
 
         // Each write adds one row, so the overflow past the limit is a handful
-        // at most and one bounded page reaches all of it.
-        const rows = await this.state.storage.list({ limit: CRON_HISTORY_LIMIT + MAX_STORAGE_BATCH, prefix });
-        const overflow = [...rows.keys()].slice(CRON_HISTORY_LIMIT);
+        // at most and one bounded page reaches all of it. A row this write replaces
+        // (a skip streak moved to its new key) is dropped with it and never counts
+        // toward the limit, or it would evict one real run.
+        const rows = await this.state.storage.list({ limit: CRON_HISTORY_LIMIT + MAX_STORAGE_BATCH + 1, prefix });
+        const live = [...rows.keys()].filter((key) => key !== superseded);
+        const stale = [...(superseded === undefined ? [] : [superseded]), ...live.slice(CRON_HISTORY_LIMIT)];
 
-        if (overflow.length > 0) {
-            await this.state.storage.delete(overflow);
+        if (stale.length > 0) {
+            await this.state.storage.delete(stale);
         }
     }
 
