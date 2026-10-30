@@ -367,6 +367,9 @@ Drives a heartbeat mutation (on call, on an interval, and on tab re-focus) and
 subscribes to the room's `listPresent` query. Options: `{ heartbeat, listPresent,
 sessionId?, data?, intervalMs?, shardKey? }`, where `heartbeat` and `listPresent`
 are `api.*` references. The handle is `{ present, sessionId, setData, teardown }`.
+Rooms are per tenant: the server files `roomId` under the caller's verified
+`orgId` claim (or the app-wide tenant when there is none; `definePresence({ tenant })`
+changes the rule), so the same room name in two organizations is two rooms.
 
 ```svelte
 <script lang="ts">
