@@ -1089,7 +1089,7 @@ describe("lunora preview", () => {
             expect(infos.join("\n")).toContain('d1 "lunora-app-preview-42-db" for DB');
         });
 
-        it("mints a app id into package.json on a local deploy, and a CI run refuses to", async () => {
+        it("mints an app id into package.json on a local deploy, and a CI run refuses to", async () => {
             expect.assertions(5);
 
             const account = fakeAccount();
@@ -1451,7 +1451,7 @@ describe("lunora preview", () => {
                 const { result } = await run(account, "delete");
 
                 expect(result.code).not.toBe(0);
-                expect(result.error).toMatch(/Add a app id to package\.json/u);
+                expect(result.error).toMatch(/Add an app id to package\.json/u);
                 expect(account.workers.has("lunora-app-preview-42")).toBe(true);
                 expect(registryValues(account).has("lunora-app/42")).toBe(true);
             });

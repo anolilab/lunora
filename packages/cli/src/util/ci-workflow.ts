@@ -275,7 +275,7 @@ deploy:
 preview:
   extends: .lunora_base
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_APP_ID == $CI_APP_ID
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
   resource_group: ${GITLAB_PREVIEW_GROUP}
   environment:
     name: preview/$CI_MERGE_REQUEST_IID
@@ -288,7 +288,7 @@ preview:
 preview_delete:
   extends: .lunora_base
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_APP_ID == $CI_APP_ID
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
       when: manual
   allow_failure: true
   resource_group: ${GITLAB_PREVIEW_GROUP}
@@ -303,7 +303,7 @@ preview_delete:
 check:
   extends: .lunora_base
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_APP_ID != $CI_APP_ID
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
   script:
     - ${execLine(manager, ["deploy", "--dry-run"])}
 `;

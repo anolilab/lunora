@@ -360,7 +360,7 @@ const recordFor = async (
 
     if (appId === undefined) {
         throw new Error(
-            `preview "${slug}" is recorded under the Worker name, from before projects had an id. Add a app id to package.json (\`"lunora": { "appId": "${randomUUID()}" }\`), commit it, and run this again: it re-keys the record`,
+            `preview "${slug}" is recorded under the Worker name, from before projects had an id. Add an app id to package.json (\`"lunora": { "appId": "${randomUUID()}" }\`), commit it, and run this again: it re-keys the record`,
         );
     }
 
@@ -606,7 +606,7 @@ const resolveAppId = (
         return { error: unusable };
     }
 
-    options.logger.warn(`wrote a app id to package.json ("lunora.appId"); commit it so CI finds this project's previews`);
+    options.logger.warn(`wrote an app id to package.json ("lunora.appId"); commit it so CI finds this project's previews`);
 
     return { appId: minted };
 };
@@ -875,7 +875,7 @@ const listPreviews = async (context: PreviewContext, options: PreviewCommandOpti
 
         if (legacy.records.length > 0) {
             logger.warn(
-                `${String(legacy.records.length)} preview(s) are recorded under the Worker name, from before projects had an id: ${legacy.records.map((record) => record.name).join(", ")}. ${context.appId === undefined ? "Add a app id to package.json, then run" : "Run"} \`lunora preview delete <name>\` (or deploy it again) to re-key each`,
+                `${String(legacy.records.length)} preview(s) are recorded under the Worker name, from before projects had an id: ${legacy.records.map((record) => record.name).join(", ")}. ${context.appId === undefined ? "Add an app id to package.json, then run" : "Run"} \`lunora preview delete <name>\` (or deploy it again) to re-key each`,
             );
         }
 

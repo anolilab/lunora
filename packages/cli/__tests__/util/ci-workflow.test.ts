@@ -199,7 +199,7 @@ deploy:
 preview:
   extends: .lunora_base
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_APP_ID == $CI_APP_ID
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
   resource_group: lunora-preview-$CI_MERGE_REQUEST_IID
   environment:
     name: preview/$CI_MERGE_REQUEST_IID
@@ -212,7 +212,7 @@ preview:
 preview_delete:
   extends: .lunora_base
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_APP_ID == $CI_APP_ID
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
       when: manual
   allow_failure: true
   resource_group: lunora-preview-$CI_MERGE_REQUEST_IID
@@ -227,12 +227,22 @@ preview_delete:
 check:
   extends: .lunora_base
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_APP_ID != $CI_APP_ID
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID
   script:
     - pnpm exec lunora deploy --dry-run
 `;
 
 const MANAGERS: ReadonlyArray<PackageManager> = ["npm", "pnpm", "yarn", "bun"];
+
+/** The GitLab predefined variables the generated pipeline may reference. */
+const KNOWN_GITLAB_VARIABLES: ReadonlySet<string> = new Set([
+    "$CI_COMMIT_BRANCH",
+    "$CI_DEFAULT_BRANCH",
+    "$CI_MERGE_REQUEST_IID",
+    "$CI_MERGE_REQUEST_SOURCE_PROJECT_ID",
+    "$CI_PIPELINE_SOURCE",
+    "$CI_PROJECT_ID",
+]);
 
 describe("ci-workflow", () => {
     let workdir: string;
@@ -342,10 +352,26 @@ describe("ci-workflow", () => {
         // Dependabot's pull requests get no Actions secrets either: the dry-run check, not a preview.
         expect(github.slice(github.indexOf("  check:"))).toContain("|| github.event.pull_request.user.login == 'dependabot[bot]')");
         // A fork's merge request has no CI/CD variables: it gets the dry-run check, not a preview.
-        expect(gitlab).toContain('"merge_request_event" && $CI_MERGE_REQUEST_SOURCE_APP_ID == $CI_APP_ID\n  resource_group');
+        expect(gitlab).toContain('"merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID\n  resource_group');
         expect(gitlab.slice(gitlab.indexOf("\ncheck:"))).toContain(
-            "$CI_MERGE_REQUEST_SOURCE_APP_ID != $CI_APP_ID\n  script:\n    - pnpm exec lunora deploy --dry-run",
+            "$CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID\n  script:\n    - pnpm exec lunora deploy --dry-run",
         );
+    });
+
+    it("gates the GitLab secret-holding jobs on GitLab's own predefined variables, which a rename must not touch", () => {
+        expect.assertions(4);
+
+        writeCiWorkflow(workdir, "gitlab", "pnpm");
+
+        const gitlab = readFileSync(join(workdir, ".gitlab-ci.yml"), "utf8");
+        const same = '- if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID';
+        const other = '- if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID != $CI_PROJECT_ID';
+
+        // Undefined variables are both empty, so `==` holds for every merge request, fork code included.
+        expect(gitlab.split(same)).toHaveLength(3);
+        expect(gitlab.split(other)).toHaveLength(2);
+        expect([...gitlab.matchAll(/\$CI_[A-Z_]+/gu)].every((match) => KNOWN_GITLAB_VARIABLES.has(match[0]))).toBe(true);
+        expect(gitlab).not.toContain("_APP_ID");
     });
 
     it("skips an existing pipeline unless overwrite is set", () => {
