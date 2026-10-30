@@ -460,7 +460,6 @@ type RowOutcome =
  */
 const deleteOneRow = async (
     writer: DatabaseWriterLike,
-    schema: SchemaLike,
     dialect: SqlDialect,
     args: ImportGlobalArgs,
     row: ExportRow,
@@ -470,17 +469,17 @@ const deleteOneRow = async (
     const id = doc["_id"];
 
     if (typeof id !== "string") {
-        return { error: { code: "BAD_ROW", line, message: "a delete row needs the `_id` to delete", table }, kind: "error" };
+        return { committed: false, error: { code: "BAD_ROW", line, message: "a delete row needs the `_id` to delete", table }, kind: "error" };
     }
 
     if (args.dryRun === true) {
         return { kind: "checked" };
     }
 
-    const ownership = await ownIdOrError(writer, schema, dialect, args.exec, table, id, line);
+    const ownership = await probeOwnTable(writer, dialect, args.exec, table, id, line);
 
     if ("error" in ownership) {
-        return { error: ownership.error, kind: "error" };
+        return { committed: false, error: ownership.error, kind: "error" };
     }
 
     if (ownership.existingId === undefined) {
@@ -494,7 +493,7 @@ const deleteOneRow = async (
     } catch (error: unknown) {
         const { body } = toErrorBody(error, { fallbackCode: "DELETE_FAILED" });
 
-        return { error: { code: body.code, line, message: body.message, table }, kind: "error" };
+        return { committed: false, error: { code: body.code, line, message: body.message, table }, kind: "error" };
     }
 };
 
@@ -556,7 +555,7 @@ const writeRow = async (
 };
 
 type ReadyRow = { decoded: Record<string, unknown>; explicitId: string | undefined; kind: "ready"; line: number; table: string };
-type PreparedRow = ReadyRow | { kind: "settled"; outcome: RowOutcome };
+type PreparedRow = ReadyRow | { kind: "delete"; line: number; row: ExportRow } | { kind: "settled"; outcome: RowOutcome };
 
 /**
  * Check one import row without touching the database: routing, shape, decoding,
@@ -594,8 +593,9 @@ const prepareRow = (schema: SchemaLike, dryRun: boolean, row: ExportRow, line: n
     }
 
     // A delete carries no new data, so it skips the decode and the shape check.
+    // It runs in the import loop, which holds the writer; a dry run is answered there too, after the `_id` check.
     if (row.op === "delete") {
-        return deleteOneRow(writer, schema, dialect, args, row, line);
+        return { kind: "delete", line, row };
     }
 
     // Mirror `encodeExportDocument` on the way back in: a snapshot line carries a
@@ -771,6 +771,17 @@ const probeBatch = async (
     return batched ? probeHeldIds(exec, dialect, idsByTable) : undefined;
 };
 
+/** Resolve one prepared entry: a settled outcome as it is, a delete through the pruning path, a ready row through the import. */
+const applyPrepared = (writer: DatabaseWriterLike, dialect: SqlDialect, args: ImportGlobalArgs, entry: PreparedRow, source: OwnershipSource): Promise<RowOutcome> => {
+    if (entry.kind === "settled") {
+        return Promise.resolve(entry.outcome);
+    }
+
+    return entry.kind === "delete"
+        ? deleteOneRow(writer, dialect, args, entry.row, entry.line)
+        : importOneRow(writer, dialect, args, entry, source);
+};
+
 /**
  * Import rows into `.global()` tables via the schema-aware writer. The
  * writer rejects unknown ids on `insert` (the writer assigns one when `_id` is
@@ -808,7 +819,7 @@ const importSqlGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLik
 
     for (const entry of prepared) {
         // eslint-disable-next-line no-await-in-loop -- imports apply row-by-row in input order so per-line error/conflict reporting and the shared writer stay deterministic.
-        const outcome = entry.kind === "settled" ? entry.outcome : await importOneRow(writer, dialect, args, entry, source);
+        const outcome = await applyPrepared(writer, dialect, args, entry, source);
 
         switch (outcome.kind) {
             case "conflict": {

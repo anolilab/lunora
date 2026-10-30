@@ -235,6 +235,33 @@ describe("d1 admin export/import globals", () => {
             fresh.close();
         });
 
+        it("answers a delete row in a dry run without touching the stored row, and counts nothing deleted", async () => {
+            expect.assertions(3);
+
+            const fresh = createD1Exec();
+
+            fresh.ddl(`CREATE TABLE "notes" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "title" TEXT)`);
+
+            const notes: SchemaLike = {
+                tables: { notes: { indexes: [], relationMap: {}, shape: { title: { kind: "string" } }, shardMode: { kind: "global" } } },
+            };
+            const noteWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema: notes });
+
+            await noteWriter.insert("notes", { _id: "n1", title: "stored" }, { allowExplicitId: true });
+
+            const rows = [{ doc: { _id: "n1" }, op: "delete" as const, table: "notes" }];
+
+            await expect(importGlobalRows(noteWriter, notes, { dryRun: true, rows })).resolves.toMatchObject({ deleted: 0, errors: [] });
+            await expect(noteWriter.get("notes", "n1")).resolves.toMatchObject({ title: "stored" });
+
+            // A re-run after the row is gone removes nothing and reports no error.
+            await importGlobalRows(noteWriter, notes, { rows });
+
+            await expect(importGlobalRows(noteWriter, notes, { rows })).resolves.toMatchObject({ deleted: 0, errors: [] });
+
+            fresh.close();
+        });
+
         it("inserts a batch and returns per-table counts", async () => {
             expect.assertions(3);
 
