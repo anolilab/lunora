@@ -243,14 +243,15 @@ const emitFlagsOverrides = (
 const LUNORA_FLAG_KEYS = ${renderJsonData(flagKeys, `ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }>`)};
 `;
 
-    /* eslint-disable no-secrets/no-secrets -- the flagged string is the emitted `LUNORA_FLAG_KEYS.map(async` call, not a credential. */
+    // eslint-disable-next-line no-secrets/no-secrets -- emitted source text, not a credential
+    const mapFlagKeys = "LUNORA_FLAG_KEYS.map(async";
     const evaluateOverride = `
         protected override async evaluateFlags(context?: Record<string, unknown>): Promise<FlagsResult> {${clientBuild("undefined")}
             const evalContext = context as import("${flagsSpecifier}").EvaluationContext | undefined;
             // Concurrent, not sequential: against a remote provider every read is a round
             // trip, and the request-scoped bind in createFlags is shared by all of them.
             const evaluations: FlagsResult["flags"] = await Promise.all(
-                LUNORA_FLAG_KEYS.map(async (entry) => {
+                ${mapFlagKeys} (entry) => {
                     const details =
                         entry.type === "boolean"
                             ? await flags.details.boolean(entry.key, false, evalContext)
@@ -267,7 +268,6 @@ const LUNORA_FLAG_KEYS = ${renderJsonData(flagKeys, `ReadonlyArray<{ key: string
             return { configured: true, flags: evaluations };
         }
 `;
-    /* eslint-enable no-secrets/no-secrets */
 
     // eslint-disable-next-line no-secrets/no-secrets -- the emitted ShardDO override method name, not a secret
     const subscriptionOverride = `

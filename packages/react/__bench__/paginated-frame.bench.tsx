@@ -47,6 +47,8 @@ const subs: { callback: (value: unknown) => void; opts: PaginationOpts }[] = [];
 const client = {
     expectsPush: () => true,
     getAuthToken: () => null,
+    // No socket implementation selects the HTTP `query` fallback for the page fetches; pushes still arrive through `subscribe`.
+    getWebSocketImpl: () => undefined,
     isCrossTabFollower: () => false,
     onAuthTokenChange: (): Unsubscribe => () => undefined,
     onConnectionStatus: (): Unsubscribe => () => undefined,
@@ -64,21 +66,21 @@ const client = {
     },
 } as unknown as LunoraClient;
 
-const feed: { loaded: number; loadMore?: (numberItems: number) => void } = { loaded: 0 };
+const feed: { current: { loaded: number; loadMore: (numberItems: number) => void } | null } = { current: null };
 const root = createRoot(document.createElement("div"));
 
 await act(async () => {
     root.render(
         <LunoraProvider client={client}>
-            <Feed handle={feed} numItems={NUM_ITEMS} />
+            <Feed handleRef={feed} numItems={NUM_ITEMS} />
         </LunoraProvider>,
     );
 });
 
-while (feed.loaded < ITEMS.length) {
+while ((feed.current?.loaded ?? 0) < ITEMS.length) {
     // eslint-disable-next-line no-await-in-loop -- each page must land before the next loadMore reads its cursor
     await act(async () => {
-        feed.loadMore?.(NUM_ITEMS);
+        feed.current?.loadMore(NUM_ITEMS);
     });
 }
 

@@ -1,25 +1,27 @@
-import type { ReactElement } from "react";
+import type { ReactElement, Ref } from "react";
+import { useImperativeHandle } from "react";
 
 import { usePaginatedQuery } from "../src/use-paginated-query";
 
 interface FeedHandle {
     loaded: number;
-    loadMore?: (numberItems: number) => void;
+    loadMore: (numberItems: number) => void;
 }
 
-const Feed = ({ handle, numItems }: { handle: FeedHandle; numItems: number }): ReactElement => {
+const Feed = ({ handleRef, numItems }: { handleRef: Ref<FeedHandle>; numItems: number }): ReactElement => {
     const result = usePaginatedQuery(
         { __lunoraRef: "messages:list" },
         { channelId: "general", filter: { authors: ["ada", "grace", "linus"], since: 1_700_000_000_000 } },
         { initialNumItems: numItems },
     );
+    const loaded = result.results.length;
 
-    // eslint-disable-next-line no-param-reassign -- the bench drives `loadMore` and reads the loaded count from outside the tree
-    handle.loadMore = result.loadMore;
-    // eslint-disable-next-line no-param-reassign -- see above
-    handle.loaded = result.results.length;
+    // The bench reads the feed from outside the tree through the ref, after commit.
+    useImperativeHandle(handleRef, () => {
+        return { loaded, loadMore: result.loadMore };
+    });
 
-    return <span>{handle.loaded}</span>;
+    return <span>{loaded}</span>;
 };
 
 export default Feed;

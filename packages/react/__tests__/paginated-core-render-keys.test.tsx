@@ -1,6 +1,7 @@
 import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
+import { useEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { lunoraQueryKey } from "../src/cache";
@@ -41,6 +42,7 @@ const subs: { callback: (value: unknown) => void; opts: PaginationOpts }[] = [];
 const client = {
     expectsPush: () => true,
     getAuthToken: vi.fn<() => string | null>(() => null),
+    getWebSocketImpl: () => undefined,
     isCrossTabFollower: () => false,
     onAuthTokenChange: vi.fn<() => Unsubscribe>(() => () => undefined),
     onConnectionStatus: vi.fn<() => Unsubscribe>(() => () => undefined),
@@ -65,12 +67,14 @@ const client = {
 const harness: { loadMore?: (numberItems: number) => void; renders: number } = { renders: 0 };
 
 const Feed = (): ReactElement => {
-    harness.renders += 1;
-
     // An inline args object, as callers write it: a fresh identity every render.
     const result = usePaginatedQuery({ __lunoraRef: "items:list" }, { channel: "general" }, { initialNumItems: NUM_ITEMS });
 
-    harness.loadMore = result.loadMore;
+    // One commit per render here (no StrictMode, no concurrent features), so this counts renders without a render-phase write.
+    useEffect(() => {
+        harness.renders += 1;
+        harness.loadMore = result.loadMore;
+    });
 
     return <span data-testid="results">{(result.results as string[]).join(",")}</span>;
 };
