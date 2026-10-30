@@ -1,3 +1,36 @@
+## @lunora/sql-store [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.222...@lunora/sql-store@1.0.0-alpha.223) (2026-10-30)
+
+### Performance Improvements
+
+* **wire:** skip decodeWire on tagless json text ([#1384](https://github.com/anolilab/lunora/issues/1384)) ([ec9dd3d](https://github.com/anolilab/lunora/commit/ec9dd3de697df597b24cbea981ea25a1a2c8fcea))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.174
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+* **@lunora/do:** upgraded to 1.0.0-alpha.265
+
+## @lunora/sql-store [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.220...@lunora/sql-store@1.0.0-alpha.221) (2026-10-30)
+
+### Performance Improvements
+
+* **sql-store:** batch import id probes, one catalog read per studio page ([#1386](https://github.com/anolilab/lunora/issues/1386)) ([2984272](https://github.com/anolilab/lunora/commit/2984272957df66c2a6b4ef67195b69839daef751))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.172
+* **@lunora/do:** upgraded to 1.0.0-alpha.263
+
+## @lunora/sql-store [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.219...@lunora/sql-store@1.0.0-alpha.220) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.171
+* **@lunora/do:** upgraded to 1.0.0-alpha.262
+
 ## @lunora/sql-store [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.218...@lunora/sql-store@1.0.0-alpha.219) (2026-10-29)
 
 

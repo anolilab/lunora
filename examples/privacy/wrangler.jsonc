@@ -23,6 +23,7 @@
     "observability": {
         "enabled": true,
         "head_sampling_rate": 1,
+        "redact_query_string": true,
     },
     "upload_source_maps": true,
     "exports": {

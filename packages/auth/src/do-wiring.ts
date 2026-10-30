@@ -18,6 +18,7 @@ import { isDiscoveryRequest, unlessNotFound } from "./discovery";
 import { DEFAULT_AUTH_BASE_PATH, isAuthRoutePath } from "./handler";
 import type { AuthJurisdictionMove } from "./jurisdiction-move";
 import { createAuthJurisdictionMove, MOVE_PATH } from "./jurisdiction-move";
+import type { SessionIdentity } from "./session-identity";
 
 /** The slice of a Durable Object namespace this needs — structural, so tests need no runtime. */
 /* eslint-disable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type -- bivariant params (a real `DurableObjectNamespace.get` takes a `DurableObjectId`, not `unknown`), and `this: void` is the `allowAsThisParameter` case the repo config does not enable */
@@ -111,13 +112,10 @@ export interface DoAuthWiring {
      * Resolves a request's identity by asking the object. `null` when anonymous,
      * unreachable, or ungated.
      *
-     * `expiresAtMs` (epoch ms) is the session's expiry, which the runtime forwards as
-     * the socket's credential expiry so the DO can drop a subscriber whose session has
-     * lapsed; `role` is better-auth's `admin()` column, which RLS role grants read;
-     * `email` and `name` are the profile claims `ctx.auth.getIdentity()` is documented
-     * to carry. Each is absent when the session does not carry it.
+     * The claims are the D1 wiring's ({@link SessionIdentity}); each is absent when
+     * the session does not carry it.
      */
-    resolveIdentity: (request: Request) => Promise<null | { email?: string; expiresAtMs?: number; name?: string; role?: string; userId: string }>;
+    resolveIdentity: (request: Request) => Promise<SessionIdentity | null>;
 }
 
 /**
@@ -268,26 +266,31 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
                 return null;
             }
 
-            // `Response.json()` resolves to `unknown`, so narrow once here.
-            const body: null | { email?: string; expiresAtMs?: number; name?: string; role?: string; userId?: string } = await response.json();
+            // The object is trusted, but its reply is still a JSON body: narrow each
+            // claim rather than cast, and drop an absent one rather than forward it as
+            // `undefined`, so the claims header stays minimal.
+            const body: null | Record<string, unknown> = await response.json();
+            const userId = body?.["userId"];
 
-            if (!body?.userId) {
+            if (!body || typeof userId !== "string" || userId.length === 0) {
                 return null;
             }
 
-            // `expiresAtMs` becomes the socket's credential expiry
-            // (`x-lunora-identity-exp`) so the DO drops a subscriber whose session has
-            // lapsed; `role` is what RLS role grants are read from; `email`/`name` are
-            // the claims `ctx.auth.getIdentity()` is documented to carry. Each is
-            // dropped when absent rather than forwarded as `undefined`, so the claims
-            // header stays minimal for a session that carries none of them.
-            return {
-                ...(typeof body.email === "string" && body.email.length > 0 ? { email: body.email } : {}),
-                ...(typeof body.expiresAtMs === "number" && Number.isFinite(body.expiresAtMs) ? { expiresAtMs: body.expiresAtMs } : {}),
-                ...(typeof body.name === "string" && body.name.length > 0 ? { name: body.name } : {}),
-                ...(typeof body.role === "string" && body.role.length > 0 ? { role: body.role } : {}),
-                userId: body.userId,
-            };
+            const identity: SessionIdentity = { userId };
+
+            for (const claim of ["email", "name", "orgId", "role", "teamId"] as const) {
+                const value = body[claim];
+
+                if (typeof value === "string" && value.length > 0) {
+                    identity[claim] = value;
+                }
+            }
+
+            if (typeof body["expiresAtMs"] === "number" && Number.isFinite(body["expiresAtMs"])) {
+                identity.expiresAtMs = body["expiresAtMs"];
+            }
+
+            return identity;
         },
     };
 };

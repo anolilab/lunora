@@ -194,6 +194,7 @@ import {
     handleReplicaControl,
     isDevEnvironment,
     isLossyBody,
+    isTtlExpired,
     listReactorStates,
     listTables,
     MAX_PAGE_SIZE,
@@ -5073,6 +5074,10 @@ abstract class ShardDO {
      * `this.transactionHeadroom()`, which mints a fresh per-call budget, while
      * {@link ShardDO.pollTtlSweeps} (an alarm work item draining many rows under
      * ONE ceiling) passes its own tracker explicitly.
+     *
+     * An override must reach the writer's row read without an `await`: the TTL
+     * sweep rechecks expiry synchronously just before calling this, and an
+     * interleaved write in between would let it delete a refreshed row.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardWrite(args: RunShardWriteArgs, _headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
@@ -6645,7 +6650,7 @@ abstract class ShardDO {
 
                 for (const id of page.ids) {
                     // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO (same reasoning as `runShardBulkRowOp`)
-                    const limitHit = await this.deleteExpiredTtlRow(spec.table, id, headroom, trace);
+                    const limitHit = await this.deleteExpiredTtlRow(spec, id, now, headroom, trace);
 
                     if (limitHit) {
                         return Date.now();
@@ -15528,10 +15533,29 @@ abstract class ShardDO {
      * letting it propagate — split out of {@link ShardDO.pollTtlSweeps} to keep
      * that method's own complexity down. Returns `true` when the limit was hit
      * (the caller must stop the sweep pass) and logs a `warn` recording it; `false`
-     * on an ordinary successful delete. Any OTHER thrown error still propagates —
-     * only the meter's own signal is contained here.
+     * on an ordinary successful delete, or on a row that is no longer expired.
+     * Any OTHER thrown error still propagates — only the meter's own signal is
+     * contained here.
      */
-    private async deleteExpiredTtlRow(table: string, id: string, headroom: TransactionHeadroomTracker, trace?: TraceRefLike): Promise<boolean> {
+    private async deleteExpiredTtlRow(
+        spec: TtlSweepSpec,
+        id: string,
+        now: number,
+        headroom: TransactionHeadroomTracker,
+        trace?: TraceRefLike,
+    ): Promise<boolean> {
+        const { table } = spec;
+
+        // The page was selected before the earlier rows' deletes were awaited, and
+        // a delete doing real I/O (a trigger, a `.global()` cascade) lets another
+        // request refresh a later row's TTL field. This recheck and the writer's
+        // own row read in `runShardWrite` run in one synchronous span — no `await`
+        // may sit between them — and the writer's delete CASes on that read, so a
+        // row seen expired here is the row that gets deleted.
+        if (!isTtlExpired(this.sql as SqlExec, spec, id, now)) {
+            return false;
+        }
+
         try {
             await this.runShardWrite({ id, op: "delete", table }, headroom);
 

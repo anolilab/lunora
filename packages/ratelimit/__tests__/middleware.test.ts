@@ -168,6 +168,21 @@ describe("rateLimit middleware", () => {
         expect(error.message).toBe("slow down");
     });
 
+    it("limits a key with a lone surrogate instead of failing open on it", async () => {
+        expect.assertions(3);
+
+        // A caller-supplied key (a JSON string can carry "\ud800") must be counted like any other, not throw
+        // out of the limiter into the fail-open branch.
+        const middleware = rateLimit<Context>(makeLimiter(), "api", { failOpen: true, key: () => "user:\uD800" });
+
+        await expect(invoke(middleware, {})).resolves.toMatchObject({ called: true });
+
+        const error = await catchError(() => invoke(middleware, {}));
+
+        expect(error.code).toBe("TOO_MANY_REQUESTS");
+        expect(error.status).toBe(429);
+    });
+
     it("rethrows deterministic misuse (INTERNAL) instead of masking it, even with failOpen", async () => {
         expect.assertions(3);
 

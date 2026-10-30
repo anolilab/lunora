@@ -8,7 +8,7 @@
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
     // Workers AI backs `ctx.ai` in `lunora/summaries.ts`. `wrangler dev` proxies
     // this binding to Cloudflare, so summarising needs an authenticated account
     // even locally — everything else in the demo runs fully offline.

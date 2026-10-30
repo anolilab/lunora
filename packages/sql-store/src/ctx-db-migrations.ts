@@ -215,6 +215,9 @@ const indexSortKeys = (dialect: SqlDialect): SQL | undefined => {
     return sql`${columnRefSql("_creationTime")}, ${columnRefSql("id")}`;
 };
 
+/** Blocked unique-index messages already logged in this isolate; see {@link assertNoDuplicatesUnder}. */
+const loggedBlockedIndexes = new Set<string>();
+
 /**
  * Are the rows already on disk duplicates under `spec`, so a UNIQUE index over
  * them cannot exist? Throws a diagnostic naming the table and the remedy when
@@ -251,10 +254,18 @@ const assertNoDuplicatesUnder = async (
     );
 
     if (duplicates.length > 0) {
-        throw new LunoraError(
-            "INTERNAL",
-            `unique index "${spec.name}" on "${spec.table}" ${situation}: existing rows are duplicates under it. De-duplicate the table with a data migration first.`,
-        );
+        const message = `unique index "${spec.name}" on "${spec.table}" ${situation}: existing rows are duplicates under it. De-duplicate the table with a data migration first.`;
+
+        // The refusal goes out unredacted, so no transport edge logs it, and every request re-runs this check
+        // until the rows are repaired. Log each blocked index once per isolate so operators see why the store
+        // refuses traffic without one line per request.
+        if (!loggedBlockedIndexes.has(message)) {
+            loggedBlockedIndexes.add(message);
+            // eslint-disable-next-line no-console -- the only channel a provisioning pass has; deduplicated per isolate above.
+            console.error(`[@lunora/sql-store] ${message}`);
+        }
+
+        throw new LunoraError("UNIQUE_INDEX_DUPLICATES", message);
     }
 };
 
