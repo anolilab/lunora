@@ -152,15 +152,22 @@ const runDeployments = async ({ cwd, format, logger, options, rest }: ToolRun): 
     const [sub, versionId] = rest;
 
     if (!isDeploymentsSubcommand(sub)) {
-        return refuse(logger, EXIT_CODE.USAGE, `cloudflare deployments: unknown subcommand "${sub ?? ""}" — expected list | inspect | rollback | promote`);
+        return refuse(
+            logger,
+            EXIT_CODE.USAGE,
+            `cloudflare deployments: unknown subcommand "${sub ?? ""}" — expected list | status | inspect | rollback | promote`,
+        );
     }
 
     const result = await runDeploymentsCommand({
+        confirmSharedState: options.confirmSharedState === true,
         cwd,
         env: options.env,
         format,
+        from: options.from,
         logger,
         message: options.message,
+        percent: options.percent === undefined ? undefined : Number(options.percent),
         subcommand: sub,
         versionId,
         yes: options.yes === true,

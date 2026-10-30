@@ -144,12 +144,12 @@ Commands with the flag: `add`, `advisor`, `analyze`, `backup`, `build`,
 Three carry a documented restriction, because the payload already owns stdout or
 the underlying tool has no JSON rendering: `export --format json` requires
 `--out <file>` (with `--out -` the NDJSON stream is stdout); `cloudflare
-deployments --format json` applies to `list` only; `cloudflare containers
+deployments --format json` applies to `list` and `status` only; `cloudflare containers
 --format json` applies to `list`, `info` and `images list`. Each refuses with a usage error rather than
 emitting a fabricated document.
 
 Where the flag is forwarded to a tool that writes the document itself —
-`cloudflare deployments list`, the `cloudflare containers` read subcommands, and
+`cloudflare deployments list` and `status`, the `cloudflare containers` read subcommands, and
 `logs` (a stream, not a result) — stdout carries **that** tool's output and no envelope is added, since
 a second document on the same stream would make neither parseable.
 
@@ -347,10 +347,12 @@ A read-only preflight over the current project. It reports pass / warn / fail fo
 ```bash
 lunora doctor
 lunora doctor --format json    # machine-readable; one JSON document on stdout
+lunora doctor --fix           # create placeholder D1 databases and mint missing .dev.vars secrets
 ```
 
-It writes nothing and exits non-zero when any hard check fails, so it works as a
-CI gate. See [Debugging](/docs/concepts/debugging) for how to act on each finding.
+Without `--fix` it writes nothing. With `--fix` it writes only the two things named
+above, and `--fix --dry-run` shows them first. It exits non-zero when any hard check
+fails, so it works as a CI gate. See [Debugging](/docs/concepts/debugging) for how to act on each finding.
 
 #### Machine-readable output
 
@@ -401,6 +403,9 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | `cf-config-present`                | warn  | A Cloudflare CLI `cloudflare.config.*` is in the project root (Lunora never updates it).                                  |
 | `cimd-fetch-not-strictly-public`   | warn  | `@lunora/auth/cimd/workers` is imported without the `global_fetch_strictly_public` flag.                                  |
 | `cli-shadowed`                     | warn  | The running `lunora` is not the project's own install.                                                                    |
+| `cloudflare-token-ok`              | pass  | The Cloudflare API token is active for the account.                                                                       |
+| `cloudflare-token-rejected`        | fail  | The Cloudflare API token is rejected or not active, so deploys with it fail.                                              |
+| `cloudflare-token-unchecked`       | info  | No token / account id, or the API could not verify the token, so it was not checked.                                      |
 | `cpu-limit-missing`                | info  | No `limits.cpu_ms` caps a runaway handler's CPU burn.                                                                     |
 | `d1-placeholder-id`                | fail  | A D1 binding still carries a scaffold `database_id`.                                                                      |
 | `declared-export-missing`          | fail  | A declared container / workflow / agent is not exported by the worker entry.                                              |
@@ -413,6 +418,7 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | `do-class-budget-unchecked`        | info  | No `CLOUDFLARE_API_TOKEN` / account id, or the API refused, so the class count was not read.                              |
 | `email-destination-placeholder`    | warn  | A `send_email` binding has a placeholder `destination_address`.                                                           |
 | `observability-full-sampling`      | info  | Logs or traces sample every request; Workers Observability is billed from 2026-12-01.                                     |
+| `observability-query-unredacted`   | warn  | Request logs or traces keep query strings, which carry auth-link tokens. Set `redact_query_string`.                       |
 | `paid-product-bound`               | info  | A metered product (Workers AI, Browser Rendering, Images) is bound; only an account budget alert caps it.                 |
 | `paid-product-unknown`             | info  | Argo Smart Routing and Log Explorer enablement is a dashboard setting, which lunora cannot read.                          |
 | `r2-lifecycle-unset`               | info  | An R2 bucket may lack an abort-incomplete-multipart lifecycle rule.                                                       |
@@ -976,12 +982,17 @@ Inspect deployment history and move traffic between Worker versions (wraps
 
 ```bash
 lunora cloudflare deployments list                       # 10 most recent deployments
+lunora cloudflare deployments status                     # live version and its traffic split
 lunora cloudflare deployments inspect <version-id>       # view a specific Worker version
 lunora cloudflare deployments rollback --yes             # roll back to the previous version
 lunora cloudflare deployments promote <version-id> --yes # send 100% of traffic to a version
+lunora cloudflare deployments promote <version-id> --percent 10 --from <live-version-id> --confirm-shared-state --yes
+# send 10% to a version and keep 90% on the live one (partial rollout; both versions share one Durable Object database)
 ```
 
-`rollback` and `promote` change live traffic, so they require `--yes`.
+`rollback` and `promote` change live traffic, so they require `--yes`. A partial
+promote first reads `deployments status` and refuses when `--from` is not one of
+the live versions, or when the live deployment cannot be read.
 
 #### `lunora cloudflare profile`
 

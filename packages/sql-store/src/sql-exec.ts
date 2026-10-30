@@ -23,6 +23,13 @@ import { jsonPathSegment } from "../../../shared/json-path-segment";
 import type { SqlDialect, SqlRunResult } from "./dialect";
 import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "./value-codec";
 
+/**
+ * workerd's ceiling on bound parameters per statement — the same limit the shard
+ * engine enforces. Duplicated rather than imported because `@lunora/shard-engine`
+ * keeps its builders internal.
+ */
+const MAX_BOUND_PARAMETERS = 100;
+
 /** Logical field → physical column name (`_id`/`id` → `id`; everything else, incl. `_creationTime`, is itself). */
 const physicalColumn = (field: string): string => (field === "_id" || field === "id" ? "id" : field);
 
@@ -828,6 +835,7 @@ export {
     fieldRefSql,
     forEachRowPaged,
     indexState,
+    MAX_BOUND_PARAMETERS,
     nextRowVersion,
     nullSafeEqualsSql,
     pathContainsNeedle,

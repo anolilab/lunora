@@ -111,6 +111,20 @@ describe("db store", () => {
         await expect(store.get("k")).resolves.toBeUndefined();
     });
 
+    it("keeps a key with a lone surrogate apart from its U+FFFD look-alike", async () => {
+        // The row id is hashed from the UTF-8 key, which turns a lone surrogate into U+FFFD: both keys would derive
+        // one id, and the second key's first write would be refused as a duplicate creator of the first's row.
+        expect.assertions(2);
+
+        const store = createDatabaseStore({ db: createFakeDatabase() });
+
+        await store.set("ip:a\uD800", { ts: 1, value: 1 });
+        await store.set("ip:a\uFFFD", { ts: 2, value: 9 });
+
+        await expect(store.get("ip:a\uD800")).resolves.toEqual({ ts: 1, value: 1 });
+        await expect(store.get("ip:a\uFFFD")).resolves.toEqual({ ts: 2, value: 9 });
+    });
+
     it("round-trips the sliding-window previous-window count", async () => {
         expect.assertions(1);
 

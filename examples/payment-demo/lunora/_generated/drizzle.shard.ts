@@ -68,6 +68,7 @@ export const payment_subscriptions = sqliteTable("payment_subscriptions", {
 }, (t) => ({
     by_provider_subscription: uniqueIndex("by_provider_subscription").on(t.provider, t.providerSubscriptionId),
     by_reference: index("by_reference").on(t.referenceId),
+    by_state: index("by_state").on(t.state),
 }));
 
 export const payment_usageEvents = sqliteTable("payment_usageEvents", {

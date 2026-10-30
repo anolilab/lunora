@@ -72,7 +72,10 @@ const subscriptions = defineTable({
     updatedAt: v.number(),
 })
     .index("by_provider_subscription", ["provider", "providerSubscriptionId"], { unique: true })
-    .index("by_reference", ["referenceId"]);
+    .index("by_reference", ["referenceId"])
+    // Dunning: every `past_due` subscription across references, read without scanning the
+    // table — a cross-tenant admin screen has to put those first, not wherever they page in.
+    .index("by_state", ["state"]);
 
 const sessions = defineTable({
     amountMinor: v.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),

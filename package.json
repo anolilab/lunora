@@ -31,6 +31,7 @@
         "e2e": "pnpm --filter @lunora/e2e e2e",
         "e2e:examples": "pnpm --filter \"@lunora/e2e\" run e2e:examples",
         "e2e:headed": "pnpm --filter @lunora/e2e e2e:headed",
+        "e2e:saas": "pnpm --filter \"@lunora/e2e\" run e2e:saas",
         "e2e:ui": "pnpm --filter @lunora/e2e e2e:ui",
         "fallow:affected:audit": "vis affected fallow:audit --fail-fast",
         "fallow:affected:dead-code": "vis affected fallow:dead-code --fail-fast",

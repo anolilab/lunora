@@ -23,15 +23,33 @@ import { trackedEffect } from "./solid-compat";
  * The dedupe also cannot live inside `apply`: by then the previous generation's
  * disposer has already run.
  *
- * `apply` runs in the (untracked) apply phase, so re-reading `resolveArgs()`
- * there registers no dependency; it returns the teardown for what it opened,
- * exactly as {@link trackedEffect} expects. This is Solid's counterpart to
+ * `apply` receives the exact value the key was built from, not a second read of
+ * `resolveArgs()`: an accessor that is not a pure function of its signals
+ * (`Date.now()`, a mutable ref) would otherwise open the subscription with args
+ * the key never described, and a later tick back to the keyed value would not
+ * restart it. It returns the teardown for what it opened, exactly as
+ * {@link trackedEffect} expects. This is Solid's counterpart to
  * `@lunora/svelte`'s `subscribeReactiveArgs` and `@lunora/angular`'s
  * `attachReactiveArgs`.
  */
 // eslint-disable-next-line import/prefer-default-export -- named export so it composes with the other named imports at its call sites; a default would not.
 export const trackedArgsEffect = <T>(resolveArgs: Accessor<T>, apply: (value: T) => Disposer): void => {
-    const argsKey = createMemo(() => stableWireKey(resolveArgs()));
+    // `createEffect` is inert during SSR, so the accessor was never read there; the
+    // memo below runs eagerly on the server and would call an accessor such as
+    // `() => ({ path: window.location.pathname })` that only works in a browser.
+    // Stay idle until the client takes over. `solid-js/web`'s `isServer` is not
+    // importable from both majors, so probe for the browser global instead.
+    if ((globalThis as { window?: unknown }).window === undefined) {
+        return;
+    }
 
-    trackedEffect(argsKey, () => apply(resolveArgs()));
+    let resolved: T;
+    const argsKey = createMemo(() => {
+        resolved = resolveArgs();
+
+        return stableWireKey(resolved);
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- the memo runs before its effect, so `resolved` is always assigned by then.
+    trackedEffect(argsKey, () => apply(resolved!));
 };

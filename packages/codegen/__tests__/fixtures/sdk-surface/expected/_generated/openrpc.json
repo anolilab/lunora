@@ -112,6 +112,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:clear",
@@ -248,6 +255,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:count",
@@ -384,6 +398,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:create",
@@ -531,6 +552,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:detail",
@@ -686,6 +714,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:find",
@@ -848,6 +883,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:labels",
@@ -987,6 +1029,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:match",
@@ -1129,6 +1178,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:page",
@@ -1289,6 +1345,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:pick",
@@ -1471,6 +1534,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:self",
@@ -1607,6 +1677,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:stats",
@@ -1749,6 +1826,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:summary",
@@ -1897,6 +1981,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:tags",
@@ -2036,6 +2127,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:totals",
@@ -2178,6 +2276,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "items:type",
@@ -2314,6 +2419,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "ledger:balances",
@@ -2496,6 +2608,13 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
         }
       ],
       "name": "ledger:charge",
