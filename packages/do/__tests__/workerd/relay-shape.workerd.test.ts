@@ -188,47 +188,80 @@ describe("relay shape seed (workerd e2e)", () => {
         expect(keysOf(a)).toContain("m3");
     });
 
-    it("resumes a still-current relay shape through the owner with no re-seed", async () => {
-        expect.assertions(3);
-
-        const owner = env.SYNC.get(env.SYNC.idFromName("resume-room"));
-        const relay = env.SYNC.get(env.SYNC.idFromName("resume-room::relay::0"));
+    /** A relay socket that has seeded `c1` and learned the checkpoint, epoch and claims fingerprint a later resume is made under. */
+    const seededRelaySocket = async (room: string) => {
+        const owner = env.SYNC.get(env.SYNC.idFromName(room));
+        const relay = env.SYNC.get(env.SYNC.idFromName(`${room}::relay::0`));
 
         await sendRpc(owner, "messages:send", { _id: "m1", channelId: "c1", text: "t1" });
 
         // First socket seeds the full membership and learns the checkpoint + epoch
-        // the owner computed it at (carried on the seed's pokeEnd frame).
-        const first = await openRelaySocket(relay, "resume-room-relay-0");
+        // the owner computed it at (carried on the seed's pokeEnd frame), and the
+        // fingerprint of its claims (carried on the identity frame).
+        const first = await openRelaySocket(relay, `${room}-relay-0`);
+
+        first.ws.send(JSON.stringify({ type: "connect" }));
         first.ws.send(JSON.stringify({ id: "s1", shape: { args: { channelId: "c1" }, name: "messagesByChannel" }, type: "shape_subscribe" }));
-        await waitFor(() => frameTypes(first).includes("ack"));
+        await waitFor(() => frameTypes(first).includes("ack") && frameTypes(first).includes("identity"));
 
-        const pokeEnd = first.received
-            .map((raw) => JSON.parse(raw) as { checkpoint?: number; epoch?: string; type: string })
-            .find((frame) => frame.type === "pokeEnd");
+        const frames = first.received.map((raw) => JSON.parse(raw) as { checkpoint?: number; claims?: string; epoch?: string; type: string });
+        const pokeEnd = frames.find((frame) => frame.type === "pokeEnd");
+        const claims = frames.find((frame) => frame.type === "identity")?.claims;
 
-        expect(pokeOps(first)).toHaveLength(1);
+        return { claims, first, pokeEnd, relay, room };
+    };
 
-        // A second socket reconnects at that exact checkpoint with no writes in
-        // between — the owner's resume fast-path returns an EMPTY catch-up diff
-        // (rowsPatch []), proving the relay round-trip carried sinceSeq/sinceEpoch.
-        const second = await openRelaySocket(relay, "resume-room-relay-0");
+    /** A second socket reconnects at the first one's checkpoint with no writes in between, presenting `sinceClaims`. */
+    const resumeOnSecondSocket = async (seeded: Awaited<ReturnType<typeof seededRelaySocket>>, sinceClaims: string | undefined) => {
+        const second = await openRelaySocket(seeded.relay, `${seeded.room}-relay-0`);
+
         second.ws.send(
             JSON.stringify({
                 id: "s1",
                 shape: { args: { channelId: "c1" }, name: "messagesByChannel" },
-                sinceCheckpoint: pokeEnd?.checkpoint,
-                sinceEpoch: pokeEnd?.epoch,
+                sinceCheckpoint: seeded.pokeEnd?.checkpoint,
+                ...(sinceClaims === undefined ? {} : { sinceClaims }),
+                sinceEpoch: seeded.pokeEnd?.epoch,
                 type: "shape_subscribe",
             }),
         );
         await waitFor(() => frameTypes(second).includes("ack"));
 
-        // The resume seed carries the catch-up baseCheckpoint (a full re-seed would
-        // have none) and an empty membership diff — no rows re-sent.
         const start = second.received.map((raw) => JSON.parse(raw) as { baseCheckpoint?: number; type: string }).find((frame) => frame.type === "pokeStart");
 
-        expect(start?.baseCheckpoint).toBe(pokeEnd?.checkpoint);
+        return { second, start };
+    };
+
+    it("resumes a still-current relay shape through the owner with no re-seed", async () => {
+        expect.assertions(4);
+
+        const seeded = await seededRelaySocket("resume-room");
+
+        expect(pokeOps(seeded.first)).toHaveLength(1);
+        expect(seeded.claims).toBeDefined();
+
+        // The owner's resume fast-path returns an EMPTY catch-up diff (rowsPatch []),
+        // proving the relay round-trip carried sinceSeq/sinceEpoch under matching claims.
+        const { second, start } = await resumeOnSecondSocket(seeded, seeded.claims);
+
+        // The resume seed carries the catch-up baseCheckpoint (a full re-seed would
+        // have none) and an empty membership diff — no rows re-sent.
+        expect(start?.baseCheckpoint).toBe(seeded.pokeEnd?.checkpoint);
         expect(pokeOps(second)).toHaveLength(0);
+    });
+
+    it.each([
+        ["a fingerprint from other claims", "AAAAAAAAAAAAAAAAAAAAAA"],
+        ["no fingerprint", undefined],
+    ])("seeds a relay shape in full when the resume presents %s", async (_name, sinceClaims) => {
+        expect.assertions(2);
+
+        const seeded = await seededRelaySocket(sinceClaims === undefined ? "resume-room-missing" : "resume-room-wrong");
+        const { second, start } = await resumeOnSecondSocket(seeded, sinceClaims);
+
+        // A full re-seed: no catch-up base, and the whole membership is sent again.
+        expect(start?.baseCheckpoint).toBeUndefined();
+        expect(pokeOps(second)).toHaveLength(1);
     });
 
     it("delivers live updates to a non-uniform relay shape via the per-socket owner proxy", async () => {
