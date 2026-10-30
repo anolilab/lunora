@@ -26,8 +26,16 @@ const brand = (check: () => unknown): boolean => {
     }
 };
 
+// Walks the chain once at module load: a global replaced by a subclass that does not redefine the accessor
+// still resolves to the native getter, and the brand check stays tied to the internal slot.
 const getter = (proto: object, key: string): (() => unknown) => {
-    const descriptor = Object.getOwnPropertyDescriptor(proto, key);
+    let current: object | null = proto;
+    let descriptor: PropertyDescriptor | undefined;
+
+    while (current !== null && descriptor === undefined) {
+        descriptor = Object.getOwnPropertyDescriptor(current, key);
+        current = Object.getPrototypeOf(current) as object | null;
+    }
 
     return descriptor?.get as () => unknown;
 };

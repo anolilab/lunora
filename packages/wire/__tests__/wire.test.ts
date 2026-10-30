@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { decodeDocument, decodeWire, encodeWire, needsWireEncoding, parseWire, stableStringify, stableWireKey, WIRE_TAG } from "../src";
 
@@ -298,5 +298,28 @@ describe("one prototype read per node", () => {
         };
 
         expect(parseWire(JSON.stringify(encodeWire(value)))).toStrictEqual(value);
+    });
+});
+
+describe("url classification", () => {
+    it("encodes a url when the global URL is a subclass that inherits href", async () => {
+        expect.assertions(1);
+
+        const NativeUrl = URL;
+        const expected = encodeWire(new NativeUrl("https://a.test/path"));
+
+        class SubUrl extends NativeUrl {}
+
+        vi.stubGlobal("URL", SubUrl);
+        vi.resetModules();
+
+        try {
+            const fresh = await import("../src");
+
+            expect(fresh.encodeWire(new SubUrl("https://a.test/path"))).toStrictEqual(expected);
+        } finally {
+            vi.unstubAllGlobals();
+            vi.resetModules();
+        }
     });
 });
