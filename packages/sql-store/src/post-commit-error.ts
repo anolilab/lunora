@@ -7,16 +7,15 @@
  * already being taken. The mark lets a caller that replays rows (the admin import) tell the two apart without
  * changing the error's class, code or message.
  *
- * Keyed by the error object, so the table and id say which row committed: an error that a nested write marked and
- * that then escapes the outer row's pre-commit trigger describes the nested row, not the outer one.
+ * Keyed by the error object, and it records every row it escaped after: an error that a nested write marked and
+ * that then escapes the outer row's pre-commit trigger names the nested row, not the outer one, and a trigger that
+ * throws one shared error object from two overlapping writes leaves both rows marked rather than the last one.
  */
 
-interface CommittedRow {
-    id: string;
-    table: string;
-}
+// Table names are SQL identifiers and ids are generated strings; neither holds a NUL, so the pair keys exactly.
+const rowKey = (table: string, id: string): string => `${table}\u0000${id}`;
 
-const committed = new WeakMap<object, CommittedRow>();
+const committed = new WeakMap<object, Set<string>>();
 
 /** Run `work`, the tail of a write whose base row for (`table`, `id`) already committed, marking whatever it throws. */
 const afterBaseRowCommitted = async <T>(table: string, id: string, work: () => Promise<T>): Promise<T> => {
@@ -27,7 +26,10 @@ const afterBaseRowCommitted = async <T>(table: string, id: string, work: () => P
         // is marked and rethrown as is, keeping its code and message.
         const marked = typeof error === "object" && error !== null ? error : new Error(String(error), { cause: error });
 
-        committed.set(marked, { id, table });
+        const rows = committed.get(marked) ?? new Set<string>();
+
+        rows.add(rowKey(table, id));
+        committed.set(marked, rows);
 
         // eslint-disable-next-line @typescript-eslint/only-throw-error -- a trigger may throw a non-Error object; its identity is the mark, so it is rethrown unwrapped
         throw marked;
@@ -36,9 +38,9 @@ const afterBaseRowCommitted = async <T>(table: string, id: string, work: () => P
 
 /** Whether `error` came out of the post-commit tail of a write to this `id` in `table`. */
 const isPostCommitError = (error: unknown, table: string, id: string): boolean => {
-    const row = typeof error === "object" && error !== null ? committed.get(error) : undefined;
+    const rows = typeof error === "object" && error !== null ? committed.get(error) : undefined;
 
-    return row?.table === table && row.id === id;
+    return rows?.has(rowKey(table, id)) === true;
 };
 
 export { afterBaseRowCommitted, isPostCommitError };
