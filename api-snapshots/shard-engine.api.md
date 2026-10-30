@@ -1361,6 +1361,7 @@ interface LifecycleEvent {
 ```ts
 interface LiveSocketControlCall {
     action: unknown;
+    adminReauth?: true;
     callerId: string;
     connectionId: string;
     identity?: Record<string, unknown>;

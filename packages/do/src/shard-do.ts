@@ -16965,6 +16965,7 @@ abstract class ShardDO {
 
         return this.handleLiveSocketControl({
             action: "reauth",
+            ...(request.headers.get("x-lunora-admin-reauth") === "1" ? { adminReauth: true as const } : {}),
             callerId: decodeUserIdHeader(request.headers.get("x-lunora-userid")) ?? "",
             connectionId: body.connectionId,
             ...(identity === undefined ? {} : { identity }),
@@ -16972,6 +16973,36 @@ abstract class ShardDO {
             key: "",
             subscriptionId: "",
         });
+    }
+
+    /**
+     * Re-authenticate a socket that was admitted as admin. The admin credential it was admitted with must still hold
+     * (the shard's own binding check, as on every admin read, so a rotated token fails here) and the worker must have
+     * verified an admin credential on this very request. Failing either closes the socket: a user identity riding
+     * beside it is not enough to keep the socket, since the user may be the one that was revoked. A user who is gone
+     * or changed closes it too, so it reconnects holding only what the admin credential grants; one that is unchanged
+     * is re-authenticated as any user socket.
+     */
+    private async reauthenticateAdminSocket(ws: ShardSocketLike, call: LiveSocketControlCall): Promise<Response> {
+        const attachment = this.readAttachment(ws);
+
+        if (call.adminReauth !== true || !(await this.attachmentAdminAuthorized(attachment))) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
+
+            return jsonResponse({ error: { code: "IDENTITY_STALE", message: "the admin credential no longer holds; reconnect" } }, 409);
+        }
+
+        if (attachment.userId === undefined) {
+            return jsonResponse({ ok: true });
+        }
+
+        if ((attachment.userId ?? "") !== call.callerId || credentialClaimsKey(attachment.identity) !== credentialClaimsKey(call.identity)) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, IDENTITY_CHANGED_CLOSE_REASON);
+
+            return jsonResponse({ error: { code: "IDENTITY_CHANGED", message: "the user on this admin socket changed; reconnect" } }, 409);
+        }
+
+        return this.reauthenticateSocket(ws, call);
     }
 
     /**
@@ -18776,6 +18807,10 @@ abstract class ShardDO {
             if (relayed !== undefined) {
                 return relayed;
             }
+        }
+
+        if (ws !== undefined && action === "reauth" && this.readAttachment(ws).admin === true) {
+            return this.reauthenticateAdminSocket(ws, call);
         }
 
         // Same owner rule as an SSE connection: another caller's socket is refused as absent.

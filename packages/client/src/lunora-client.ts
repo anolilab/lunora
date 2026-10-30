@@ -520,6 +520,15 @@ interface ShardSocketCredentials {
 /** A WebSocket credential as configured: a static value, a provider, or unset. */
 type WsCredentialSource = string | undefined | WsTokenProvider;
 
+/** The re-auth route for a shard (`shard=` kept even when empty, as on the upgrade URL), with the admin ticket in `token=` as the upgrade carries it. */
+const reauthPath = (shardKey: string | undefined, ticket: string | undefined): string => {
+    const query = [shardKey === undefined ? "" : `shard=${encodeURIComponent(shardKey)}`, ticket === undefined ? "" : `token=${encodeURIComponent(ticket)}`]
+        .filter(Boolean)
+        .join("&");
+
+    return query === "" ? SOCKET_REAUTH_PATH : `${SOCKET_REAUTH_PATH}?${query}`;
+};
+
 /** Resolve a static credential or a {@link WsTokenProvider}; a provider is called fresh on every connect. */
 const resolveWsCredential = async (credential: WsCredentialSource): Promise<string | undefined> =>
     typeof credential === "function" ? await credential() : credential;
@@ -6586,6 +6595,8 @@ class LunoraClient {
         // for the life of the socket.
         // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
         conn.identity = this.identityFingerprint();
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.ticketed = credentials.ticket !== undefined;
         // The bearer the upgrade presents (`upgradeProtocols`), pinned for the socket's life; see `ShardConnection.upgradeBearer`.
         // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
         conn.upgradeBearer = this.authTokenOnUpgrade ? (this.authToken ?? undefined) : undefined;
@@ -8913,13 +8924,16 @@ class LunoraClient {
         // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
         conn.reauthPending = true;
 
-        // `shard=` is kept even when empty, as on the upgrade URL: an explicit `""` names its own shard.
-        sendControl(
-            fetchImpl,
-            joinUrl(this.url, conn.shardKey === undefined ? SOCKET_REAUTH_PATH : `${SOCKET_REAUTH_PATH}?shard=${encodeURIComponent(conn.shardKey)}`),
-            JSON.stringify({ connectionId }),
-            bearer === null ? { "content-type": "application/json" } : { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
-        )
+        // An admin socket presents a freshly minted ticket, as its upgrade did; a failed mint is a refusal.
+        (conn.ticketed === true ? resolveWsCredential(this.wsTicket).catch(() => undefined) : Promise.resolve(undefined))
+            .then(async (ticket) =>
+                sendControl(
+                    fetchImpl,
+                    joinUrl(this.url, reauthPath(conn.shardKey, ticket)),
+                    JSON.stringify({ connectionId }),
+                    bearer === null ? { "content-type": "application/json" } : { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+                ),
+            )
             .then(({ text }): "changed" | "ok" | "refused" => {
                 const body = JSON.parse(text) as { error?: { code?: unknown }; ok?: unknown } | null;
 

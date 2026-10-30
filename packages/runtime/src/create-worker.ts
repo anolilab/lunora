@@ -4770,16 +4770,25 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             url,
         });
 
-        if (identity === null) {
+        // The admin credential an admin socket upgraded with, checked exactly as the upgrade checks it (the master
+        // bearer, or the short-lived sub-token in `?token=`, whose verify is constant-time). A rotated one fails here.
+        const adminReauth = requestIsAdmin(request) || (await checkAdminWsToken(request, effectiveAdminToken()));
+
+        if (identity === null && !adminReauth) {
             throw new LunoraError("re-authenticating a socket requires a credential", { code: "UNAUTHENTICATED", status: 401 });
         }
 
-        await assertShardAuthorized(identity, shardKey, false);
+        await assertShardAuthorized(identity, shardKey, adminReauth);
 
         // A fresh request carrying nothing of the caller's but the body: the shard trusts these headers verbatim.
         const headers = new Headers({ "content-type": "application/json" });
 
         setIdentityHeaders(headers, forwardedHeaders);
+
+        // Set here and nowhere else, so only a credential this request proved can make the shard keep an admin socket.
+        if (adminReauth) {
+            headers.set("x-lunora-admin-reauth", "1");
+        }
 
         // An owner woken by this call learns its namespace from it, as from an upgrade: without it the relay holding the socket is unreachable.
         const binding = resolveShardBindingName(env, options.shardDO);

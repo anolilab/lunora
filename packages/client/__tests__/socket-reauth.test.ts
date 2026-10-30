@@ -844,3 +844,62 @@ describe("claims change and the durable read cache", () => {
         client.close();
     });
 });
+
+describe("admin socket re-authentication", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("presents a freshly minted admin ticket on re-auth for a socket that upgraded with one", async () => {
+        expect.assertions(3);
+
+        const { sockets, WebSocket } = createSocketHarness();
+        let minted = 0;
+        const fetchMock = vi.fn<typeof fetch>(async (input) =>
+            (input as string).includes("/_lunora/ws/reauth") ? jsonResponse({ ok: true }) : jsonResponse({ result: { ok: true } }),
+        );
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            url: "http://app.test",
+            WebSocket,
+            wsTicket: async () => {
+                minted += 1;
+
+                return `ticket-${String(minted)}`;
+            },
+        });
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        sockets[0]?.receive({ connectionId: "conn-1", revalidateMs: 60_000, subject: "user-1", type: "identity" });
+        await settle();
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        const url = fetchMock.mock.calls.find(([input]) => (input as string).includes("/_lunora/ws/reauth"))?.[0] as string;
+
+        // The ticket the upgrade used is a minute old by now; a new one is minted for the re-auth.
+        expect(minted).toBe(2);
+        expect(new URL(url).searchParams.get("token")).toBe("ticket-2");
+        expect(sockets[0]?.readyState).toBe(1);
+
+        client.close();
+    });
+
+    it("sends no ticket for a socket that did not upgrade with one", async () => {
+        expect.assertions(1);
+
+        const { client, reauthCalls } = await openRevalidatingClient({ revalidateMs: 60_000, token: "token-1" });
+
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect(reauthCalls()[0]?.[0] as string).not.toContain("token=");
+
+        client.close();
+    });
+});

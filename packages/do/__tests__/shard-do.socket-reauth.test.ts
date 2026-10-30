@@ -2,6 +2,7 @@ import type { SocketAttachment } from "@lunora/shard-engine";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { claimsFingerprint } from "../../../shared/claims-fingerprint";
+import { adminSocketBinding } from "../../../shared/ws-admin-token";
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -804,5 +805,108 @@ describe("resume under the claims the cursor was read under", () => {
         expect(evaluate).not.toHaveBeenCalled();
         expect(ws.sent.some((frame) => frame.includes('"type":"resume"'))).toBe(false);
         expect(dataFrames(ws)).toHaveLength(1);
+    });
+});
+
+describe("admin socket re-authentication", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    const CLAIMS = { orgId: "org-a", role: "member" };
+
+    /** A Studio-style socket: admin-authorized at upgrade, carrying a cookie user held to the window. */
+    const openAdminSocket = async (token = ADMIN_FIXTURE) => {
+        const shard = new ReauthShard(createState(), { LUNORA_ADMIN_TOKEN: ADMIN_FIXTURE });
+        const ws = createFakeWebSocket();
+
+        shard.register(ws, {
+            admin: true,
+            adminBinding: await adminSocketBinding(token),
+            connectionId: "conn-1",
+            expiresAt: NOW + HOUR,
+            identity: CLAIMS,
+            revalidateAt: NOW + WINDOW,
+            subs: { "sub-1": { args: {}, functionPath: "messages:list" } },
+            userId: "user-1",
+        });
+
+        return { shard, ws };
+    };
+
+    const adminReauth = (shard: ReauthShard, headers: Record<string, string>): Promise<Response> =>
+        shard.fetch(
+            new Request("https://shard.internal/_lunora/ws/reauth", {
+                body: JSON.stringify({ connectionId: "conn-1" }),
+                headers: { "content-type": "application/json", ...headers },
+                method: "POST",
+            }),
+        );
+
+    it("keeps an admin socket whose re-auth the worker verified as admin, restarting its window", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = await openAdminSocket();
+
+        vi.setSystemTime(NOW + WINDOW / 2);
+
+        const response = await adminReauth(shard, {
+            "x-lunora-admin-reauth": "1",
+            "x-lunora-identity": JSON.stringify(CLAIMS),
+            "x-lunora-identity-exp": String(NOW + HOUR),
+            "x-lunora-userid": "user-1",
+        });
+
+        expect(response.status).toBe(200);
+        expect(ws.attachment?.revalidateAt).toBe(NOW + WINDOW / 2 + WINDOW);
+        expect(ws.closes).toStrictEqual([]);
+    });
+
+    it("closes an admin socket whose re-auth carries no verified admin credential", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = await openAdminSocket();
+        const response = await adminReauth(shard, {
+            "x-lunora-identity": JSON.stringify(CLAIMS),
+            "x-lunora-identity-exp": String(NOW + HOUR),
+            "x-lunora-userid": "user-1",
+        });
+
+        expect(response.status).toBe(409);
+        expect(ws.closes[0]).toBe(4005);
+    });
+
+    it("closes an admin socket authorized by a token that has since been rotated, whatever the re-auth presents", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = await openAdminSocket("the-previous-admin-token");
+        const response = await adminReauth(shard, {
+            "x-lunora-admin-reauth": "1",
+            "x-lunora-identity": JSON.stringify(CLAIMS),
+            "x-lunora-identity-exp": String(NOW + HOUR),
+            "x-lunora-userid": "user-1",
+        });
+
+        expect(response.status).toBe(409);
+        expect(ws.closes[0]).toBe(4005);
+    });
+
+    it("drops the user part of an admin socket whose user is gone, by closing it so only the admin grant is re-opened", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = await openAdminSocket();
+        // The admin credential still holds; the cookie no longer resolves to the user.
+        const response = await adminReauth(shard, { "x-lunora-admin-reauth": "1" });
+
+        expect(response.status).toBe(409);
+        expect(ws.closes[0]).toBe(4005);
     });
 });

@@ -921,6 +921,21 @@ emptied): the rows held were resolved under the old claims, and a resumed diff
 would not remove the ones the new claims cannot see. A server
 without the route answers `404`, so the same fallback covers it.
 
+**Admin sockets.** A socket admitted with an admin credential (the master bearer, or the
+short-lived `?token=` ticket) that also carries a user is re-authenticated with the admin
+credential as well: the client puts a freshly minted ticket in `?token=` on
+`POST /_lunora/ws/reauth`, as its upgrade did. The worker checks it exactly as the upgrade
+does (a constant-time verify against the current admin token) and exempts it from the
+per-shard user gate, so a user the gate would refuse does not make the socket reconnect each
+half window. The shard keeps such a socket only when it was admitted by the admin token that
+is current now AND the worker verified an admin credential on this request; otherwise (a
+rotated or missing credential) it closes the socket with `4005` (`identity_stale`,
+`409 IDENTITY_STALE`). If the user is gone or its claims changed it closes with
+`identity_changed`, so the client reconnects holding only what the admin credential grants.
+A client that does not present the credential on re-auth loses an admin socket that carries a
+user at its first window; a socket with no user is never held to a window. This is a
+protocol change for admin clients that re-auth (the reference client and Studio do).
+
 **Resuming under the claims a cursor was read under.** A socket can close with `4005`
 because its window lapsed while the client was away, and the claims it holds can change in
 that gap, so a cursor read before it may describe rows the new claims cannot see. The

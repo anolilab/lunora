@@ -200,6 +200,9 @@ interface ShardConnection {
      */
     stableTimer: ReturnType<typeof setTimeout> | undefined;
 
+    /** The socket upgraded with an admin ticket, which its re-auth must present afresh: a ticket outlives the upgrade by a minute at most. */
+    ticketed?: boolean;
+
     /**
      * Per subscription id, the one watchdog armed when its `subscribe` frame goes out. If the server
      * answers nothing for `RESUBSCRIBE_ACK_TIMEOUT_MS` it frees the id's pacing slot (if it holds one)
