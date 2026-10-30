@@ -116,6 +116,7 @@ import {
     stripReservedPatchFields,
     throwingScheduler,
     tiebreakDirectionFor,
+    unionAll,
     whereOfFilter,
     WORKERD_SQLITE_LIMITS,
 } from "@lunora/shard-engine";
@@ -126,11 +127,13 @@ import { readFieldPath } from "../../../shared/json-field-path";
 import { runSqlGlobalTableMigrations } from "./ctx-db-global-provisioning";
 import { runSqlAggregateMigrations, runSqlRankMigrations } from "./ctx-db-migrations";
 import type { SearchStage } from "./ctx-db-search";
-import { createSearchSync, runSqlSearch, runSqlSearchMigrations } from "./ctx-db-search";
+import { createSearchSync, reconcileSearchRow, runSqlSearch, runSqlSearchMigrations } from "./ctx-db-search";
 import { migrateSearchState } from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
 import createPointReadBatcher from "./point-read-batcher";
 import { afterBaseRowCommitted } from "./post-commit-error";
+import type { QueryTimer } from "./query-timeout";
+import { abandonedWork, DEFAULT_QUERY_TIMEOUT_MS, SqlQueryTimeoutError, withQueryTimeout } from "./query-timeout";
 import type { SqlCtxExec } from "./sql-exec";
 import {
     BACKFILL_BATCH_SIZE,
@@ -142,6 +145,7 @@ import {
     fieldRefSql,
     forEachRowPaged,
     indexState,
+    MAX_BOUND_PARAMETERS,
     nextRowVersion,
     nullSafeEqualsSql,
     OCC_VERSION_COLUMN,
@@ -380,6 +384,16 @@ interface SqlCtxDbOptions {
      * tests want (they pair a fresh database with a reused schema object).
      */
     provisionScope?: object;
+
+    /**
+     * Deadline for each statement this writer sends, in milliseconds; past it the statement is abandoned with a
+     * retryable `SqlQueryTimeoutError` instead of holding the dispatch that awaits it. Defaults to
+     * {@link DEFAULT_QUERY_TIMEOUT_MS}; `0` or `Infinity` leaves statements unbounded.
+     */
+    queryTimeoutMs?: number;
+
+    /** The timer that arms each statement's deadline; tests inject one to fire it by hand. */
+    queryTimer?: QueryTimer;
 
     /**
      * Scheduler exposed to global-table trigger handlers as `ctx.scheduler`.
@@ -1552,6 +1566,25 @@ const mapWriteError = (dialect: SqlDialect, error: unknown, table: string): neve
     throw error;
 };
 
+/** Postgres deadlock / serialization failure and InnoDB deadlock: the engine rolled the transaction back. */
+const isTransactionConflict = (error: unknown): boolean => {
+    const { code, errno } = (error ?? {}) as { code?: unknown; errno?: unknown };
+
+    return code === "40P01" || code === "40001" || errno === 1213 || code === "ER_LOCK_DEADLOCK";
+};
+
+/**
+ * A row write whose transaction the engine aborted to break a lock cycle applied nothing, so it surfaces as the
+ * same retryable `occ` conflict a lost compare-and-set does instead of a raw driver error.
+ */
+const mapTransactionConflict = (error: unknown): never => {
+    if (isTransactionConflict(error)) {
+        throw new ConflictError("the write's transaction was rolled back by a lock conflict with a concurrent write; retry it", "occ");
+    }
+
+    throw error;
+};
+
 /**
  * The provisioning sweep in flight (or completed) for a given
  * {@link SqlCtxDbOptions.provisionScope}, so per-request ctx-dbs built against
@@ -1601,6 +1634,46 @@ const COMPANION_BACKFILL_WAIT_MS = 30_000;
 const COMPANION_FENCE_TABLE = "__lunora_companion_fence";
 
 /**
+ * INSERTs of `rows` into `companion`, many rows per statement, each applied only while `held` (the rebuild's fence
+ * claim) is true. The rows travel as a `UNION ALL` derived table: the form all three engines accept under the
+ * fence's `WHERE`, nested by {@link unionAll} under workerd's five-term compound limit. Postgres types a `UNION` of
+ * bare parameters as `text`, which a `DOUBLE PRECISION` or `BYTEA` column refuses, and a nested group cannot take
+ * its types from a sibling's, so every value is cast there. Every row names its columns: MySQL names a nested
+ * group's columns from its first row, and two equal literals there would collide. Sized so each statement stays
+ * under {@link MAX_BOUND_PARAMETERS} with the fence's two.
+ */
+const fencedInsertRows = (
+    dialect: SqlDialect,
+    companion: string,
+    held: SQL,
+    columns: ReadonlyArray<{ name: string; type: string }>,
+    rows: ReadonlyArray<ReadonlyArray<unknown>>,
+): SQL[] => {
+    const perStatement = Math.max(1, Math.floor((MAX_BOUND_PARAMETERS - 2) / columns.length));
+    const cell = (value: unknown, column: { name: string; type: string }): SQL => {
+        const typed = dialect.name === "postgres" ? sql`CAST(${value} AS ${sql.raw(column.type)})` : sql`${value}`;
+
+        return sql`${typed} AS ${sql.identifier(column.name)}`;
+    };
+    const branch = (values: ReadonlyArray<unknown>): SQL =>
+        sql`SELECT ${sql.join(
+            values.map((value, index) => cell(value, columns[index] as { name: string; type: string })),
+            sql`, `,
+        )}`;
+    const statements: SQL[] = [];
+
+    for (let start = 0; start < rows.length; start += perStatement) {
+        const branches = rows.slice(start, start + perStatement).map((values) => branch(values));
+
+        statements.push(
+            sql`INSERT INTO ${sql.identifier(companion)} (${identifierList(columns.map((column) => column.name))}) SELECT * FROM (${unionAll(branches)}) AS ${sql.identifier("__rows__")} WHERE EXISTS (SELECT 1 FROM ${sql.identifier(COMPANION_FENCE_TABLE)} WHERE ${held})`,
+        );
+    }
+
+    return statements;
+};
+
+/**
  * A companion's key in {@link companionBackfillsByScope}: a JSON tuple tagged with the kind, since index names
  * may contain any separator a string key would use. One key per companion table, whatever its definition, so
  * two definitions of one index never rebuild that table at the same time.
@@ -1629,7 +1702,8 @@ const pathAwareInList = (engine: "mysql" | "postgres") => {
 };
 
 const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
-    const { crossShardCounter, crossShardReader, exec, maxRelationKeys, schema } = options;
+    const { crossShardCounter, crossShardReader, maxRelationKeys, schema } = options;
+    const exec = withQueryTimeout(options.exec, options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS, options.queryTimer);
 
     // The engine dialect for this ctx-db. Destructured into the names the body
     // already uses so the (large) closure body is unchanged — these block-scoped
@@ -1853,16 +1927,21 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const run = (async (): Promise<void> => {
             // Base `.global()` tables first — the companion migrations below and
             // every read/write path assume they exist.
-            await runSqlGlobalTableMigrations(exec, schema, dialect);
-            await runSqlAggregateMigrations(exec, schema, dialect);
-            await runSqlRankMigrations(exec, schema, dialect);
+            // DDL runs without the statement deadline: an index build on a large table can outlast it, and a
+            // timed-out build would be re-issued by every later request while the first still runs. The search
+            // migration below also indexes a page of existing rows, so it keeps the deadline.
+            const ddl = options.exec;
+
+            await runSqlGlobalTableMigrations(ddl, schema, dialect);
+            await runSqlAggregateMigrations(ddl, schema, dialect);
+            await runSqlRankMigrations(ddl, schema, dialect);
             // The search companions record their backfill progress, so the state
             // table has to exist before the first page runs.
-            await migrateSearchState(exec, dialect);
+            await migrateSearchState(ddl, dialect);
             await runSqlSearchMigrations(exec, schema, dialect);
 
             if (cdcEnabled) {
-                await runSqlCdcMigration(exec, dialect);
+                await runSqlCdcMigration(ddl, dialect);
             }
         })().catch((error: unknown) => {
             // Don't cache a rejection — a transient DDL failure (e.g. a dropped
@@ -1918,6 +1997,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
     const backfills = companionBackfills;
 
+    /** How many post-write deltas {@link settledBackfill} has skipped: a write compares it before and after its transaction. */
+    let skippedDeltas = 0;
+
     /** Identifies this writer's rebuilds in the scope-shared map. */
     const backfillOwner = {};
 
@@ -1934,8 +2016,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const entry: CompanionBackfill = { definition, owner: backfillOwner, run, settled: false };
 
         run.then(
-            () => {
-                entry.settled = true;
+            (outcome) => {
+                // A superseded run's outcome is never trusted. Replaced or evicted runs are already gone from the map;
+                // one that lost its fence is still there, and would be handed back to every caller as its own answer.
+                if (outcome === COMPANION_SUPERSEDED && backfills.get(key) === entry) {
+                    backfills.delete(key);
+                } else {
+                    entry.settled = true;
+                }
 
                 return undefined;
             },
@@ -2017,6 +2105,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         }
 
         backfills.delete(key);
+        skippedDeltas += 1;
 
         return undefined;
     };
@@ -2059,7 +2148,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      */
     const claimCompanionFence = async (
         companion: string,
-    ): Promise<{ guardedDelete: () => SQL; guardedInsert: (columns: ReadonlyArray<string>, values: ReadonlyArray<unknown>) => SQL }> => {
+    ): Promise<{
+        guardedDelete: () => SQL;
+        guardedInsertRows: (columns: ReadonlyArray<{ name: string; type: string }>, rows: ReadonlyArray<ReadonlyArray<unknown>>) => SQL[];
+        /** Whether the claim is still the stored one. Read after the guarded writes: a claim landing late makes them no-ops. */
+        stillHeld: () => Promise<boolean>;
+    }> => {
         const { key } = dialect.companionTypes;
         const token = generateId();
 
@@ -2087,8 +2181,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         return {
             guardedDelete: () =>
                 sql`DELETE FROM ${sql.identifier(companion)} WHERE EXISTS (SELECT 1 FROM ${sql.identifier(COMPANION_FENCE_TABLE)} WHERE ${held})`,
-            guardedInsert: (columns, values) =>
-                sql`INSERT INTO ${sql.identifier(companion)} (${identifierList(columns)}) SELECT ${bindList(values)} FROM ${sql.identifier(COMPANION_FENCE_TABLE)} WHERE ${held}`,
+            stillHeld: async () => {
+                const rows = await queryAll(exec, dialect, sql`SELECT 1 FROM ${sql.identifier(COMPANION_FENCE_TABLE)} WHERE ${held}`);
+
+                return rows.length > 0;
+            },
+            guardedInsertRows: (columns, rows) => fencedInsertRows(dialect, companion, held, columns, rows),
         };
     };
 
@@ -2137,11 +2235,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         await queryRun(exec, dialect, fence.guardedDelete());
 
-        const inserts: SQL[] = [];
-
-        for (const [encoded, tally] of tallies) {
-            inserts.push(fence.guardedInsert(["__key__", "__value__", "__count__"], [encoded, tally.value, tally.count]));
-        }
+        const { integer, key, real } = dialect.companionTypes;
+        const inserts = fence.guardedInsertRows(
+            [
+                { name: "__key__", type: key },
+                { name: "__value__", type: real },
+                { name: "__count__", type: integer },
+            ],
+            [...tallies].map(([encoded, tally]) => [encoded, tally.value, tally.count]),
+        );
 
         // One round trip for the whole backfill when the exec exposes `batch`
         // (rows are keyed by distinct `__key__`, so order across them doesn't
@@ -2150,7 +2252,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             await queryBatch(exec, dialect, inserts);
         }
 
-        return superseded() ? COMPANION_SUPERSEDED : true;
+        // A claim abandoned at its deadline can land after this one and turn every guarded write above into a no-op.
+        return superseded() || !(await fence.stillHeld()) ? COMPANION_SUPERSEDED : true;
     };
 
     const ensureBackfilled = (tableName: string, index: AggregateIndexDefinitionLike): Promise<boolean> =>
@@ -2175,6 +2278,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         tableName: string,
         index: AggregateIndexDefinitionLike,
         conditions: SQL[],
+        on: SqlCtxExec,
     ): Promise<null | number> => {
         // Single-group, so the tally key is the empty string and only `value` is
         // read — the caller pins `__count__` from its own tracked tally.
@@ -2189,7 +2293,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // reduced column, and `decodeRow` skips whatever the projection left out.
             // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
             const pageRows = await queryAll(
-                exec,
+                on,
                 dialect,
                 sql`SELECT ${sql.identifier("id")}, ${columnRefSql(index.field ?? "")} FROM ${sql.identifier(tableName)}${pageWhere} ORDER BY ${sql.identifier("id")} ASC LIMIT ${sql.raw(String(BACKFILL_BATCH_SIZE))}`,
             );
@@ -2220,7 +2324,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * mixed `v.any()` column the extreme would be decided by storage class rather
      * than by magnitude.
      */
-    const recomputeExtreme = async (tableName: string, index: AggregateIndexDefinitionLike, document: Record<string, unknown>): Promise<null | number> => {
+    const recomputeExtreme = async (
+        tableName: string,
+        index: AggregateIndexDefinitionLike,
+        document: Record<string, unknown>,
+        on: SqlCtxExec,
+    ): Promise<null | number> => {
         const field = index.field ?? "";
         const conditions: SQL[] = [];
         const definition = schema.tables[tableName];
@@ -2250,12 +2359,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const whereSql = conditions.length > 0 ? sql` WHERE ${sql.join(conditions, sql` AND `)}` : sql``;
 
         if (definition && mayHoldBigintKey(definition.shape[field])) {
-            return foldGroupExtreme(definition, tableName, index, conditions);
+            return foldGroupExtreme(definition, tableName, index, conditions, on);
         }
 
         const sqlFunction = aggregateSqlFunction(index.op);
         const rows = await queryAll(
-            exec,
+            on,
             dialect,
             sql`SELECT ${sql.raw(sqlFunction)}(${columnRefSql(field)}) AS ${sql.identifier("value")} FROM ${sql.identifier(tableName)}${whereSql}`,
         );
@@ -2295,6 +2404,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         index: AggregateIndexDefinitionLike,
         previous: Record<string, unknown> | undefined,
         next: Record<string, unknown> | undefined,
+        on: SqlCtxExec,
     ): Promise<SQL[]> => {
         const aggTable = aggregateTableName(tableName, index.name);
         const { op } = index;
@@ -2314,6 +2424,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // only the removes side can reach `__count__ <= 0`).
             const touched = new Set<string>();
 
+            const steps: { encoded: string; numeric: number; sign: -1 | 1 }[] = [];
+
             for (const [document, sign] of [
                 [removes, -1],
                 [adds, 1],
@@ -2326,12 +2438,17 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // numeric field value (skipping rows without one).
                 const numeric = op === "count" ? 1 : coerceAggregateNumber(document[field]);
 
-                if (numeric === undefined) {
-                    continue;
+                if (numeric !== undefined) {
+                    steps.push({ encoded: encodeAggregateKey(index.by ?? [], document), numeric, sign });
                 }
+            }
 
-                const encoded = encodeAggregateKey(index.by ?? [], document);
+            // Upserted in key order, not removes-then-adds: inside a write's transaction each upsert holds its
+            // group row's lock until commit, so two writes moving rows between the same groups in opposite
+            // directions would otherwise take the two locks in opposite order and deadlock.
+            steps.sort((left, right) => (left.encoded < right.encoded ? -1 : Number(left.encoded > right.encoded)));
 
+            for (const { encoded, numeric, sign } of steps) {
                 touched.add(encoded);
 
                 statements.push(
@@ -2365,12 +2482,20 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         // min/max.
         // Reads (the existing row, and the source recompute) happen here; the writes join the batch so they commit atomically with the other aggregates.
-        const statements: SQL[] = [];
+        // The removes side and the adds side, each with its group key: written in key order (removes first on one
+        // key) for the same lock-order reason as the count/sum/avg upserts.
+        const removing: SQL[] = [];
+        const adding: SQL[] = [];
+        let removesKey: string | undefined;
+        let addsKey: string | undefined;
+
         if (removes) {
             const encoded = encodeAggregateKey(index.by ?? [], removes);
+
+            removesKey = encoded;
             const removedValue = coerceAggregateNumber(removes[field]);
             const existingRows = await queryAll(
-                exec,
+                on,
                 dialect,
                 sql`SELECT ${sql.identifier("__value__")} AS ${sql.identifier("value")}, ${sql.identifier("__count__")} AS ${sql.identifier("count")} FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
             );
@@ -2384,15 +2509,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 // a phantom group a SQL `GROUP BY` skips). Scalar `aggregate()`
                 // reads an absent min/max group as null, same as the prior NULL
                 // row, so this stays correct.
-                statements.push(sql`DELETE FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`);
+                removing.push(sql`DELETE FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`);
             } else if (existing && removedValue !== undefined && existingValue !== null && removedValue === existingValue) {
-                const recomputed = await recomputeExtreme(tableName, index, removes);
+                const recomputed = await recomputeExtreme(tableName, index, removes, on);
 
-                statements.push(
+                removing.push(
                     sql`UPDATE ${sql.identifier(aggTable)} SET ${sql.identifier("__value__")} = ${recomputed}, ${sql.identifier("__count__")} = ${remainingCount} WHERE ${sql.identifier("__key__")} = ${encoded}`,
                 );
             } else {
-                statements.push(
+                removing.push(
                     sql`UPDATE ${sql.identifier(aggTable)} SET ${sql.identifier("__count__")} = ${sql.identifier("__count__")} - 1 WHERE ${sql.identifier("__key__")} = ${encoded}`,
                 );
             }
@@ -2400,10 +2525,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         if (adds) {
             const encoded = encodeAggregateKey(index.by ?? [], adds);
+
+            addsKey = encoded;
             const addedValue = coerceAggregateNumber(adds[field]);
 
             if (addedValue === undefined) {
-                statements.push(
+                adding.push(
                     upsertSql({
                         columns: ["__key__", "__value__", "__count__"],
                         conflictKey: "__key__",
@@ -2418,7 +2545,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             } else {
                 const op2 = op === "min" ? "MIN" : "MAX";
 
-                statements.push(
+                adding.push(
                     upsertSql({
                         columns: ["__key__", "__value__", "__count__"],
                         conflictKey: "__key__",
@@ -2435,7 +2562,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             }
         }
 
-        return statements;
+        return removesKey !== undefined && addsKey !== undefined && addsKey < removesKey ? [...adding, ...removing] : [...removing, ...adding];
     };
     /* eslint-enable sonarjs/cognitive-complexity */
 
@@ -2458,6 +2585,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         tableName: string,
         previous: Record<string, unknown> | undefined,
         next: Record<string, unknown> | undefined,
+        on: SqlCtxExec,
     ): Promise<SQL[]> => {
         const indexes = schema.tables[tableName]?.aggregateIndexes;
         const statements: SQL[] = [];
@@ -2481,7 +2609,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             }
 
             // eslint-disable-next-line no-await-in-loop -- op-aware step runs sequentially on the shared D1 connection (see above).
-            statements.push(...(await applyAggregateDelta(tableName, index, previous, next)));
+            statements.push(...(await applyAggregateDelta(tableName, index, previous, next, on)));
         }
 
         return statements;
@@ -2524,10 +2652,19 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         await queryRun(exec, dialect, fence.guardedDelete());
 
-        const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-        const insertColumns = ["__id__", "__partition__", ...sortColumns];
+        const keyType = dialect.companionTypes.key;
+        // Typed as the rank migration types them: each sort column takes its source field's column type.
+        const insertColumns = [
+            { name: "__id__", type: keyType },
+            { name: "__partition__", type: keyType },
+            ...index.sortBy.map((sortKey, i) => {
+                const validator = definition.shape[sortKey.field];
 
-        // One INSERT per source row, flushed a page at a time. The aggregate
+                return { name: sortColumnName(i), type: dialect.columnType(validator ? effectiveColumnKind(validator) : undefined) };
+            }),
+        ];
+
+        // Tuples are flushed a page at a time, several rows per INSERT. The aggregate
         // twin buffers its whole insert list because that list is `unique(by)`
         // keys, not rows; a rank tuple is per ROW, so buffering the same way put
         // the entire table — plus one drizzle `SQL` object per row — in the
@@ -2538,7 +2675,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         // `forEachRowPaged` awaits an async `onDoc`, so the flush happens from
         // inside the walk: the writes go to the companion table while the walk
         // pages the source, and the peak is one page of tuples either way.
-        let pending: SQL[] = [];
+        let pending: unknown[][] = [];
 
         const flush = async (): Promise<void> => {
             const batch = pending;
@@ -2552,7 +2689,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // Rows are keyed by distinct `__id__`, so order across a batch
             // doesn't matter; a `run()`-per-statement loop when the exec has no
             // `batch` seam.
-            await queryBatch(exec, dialect, batch);
+            await queryBatch(exec, dialect, fence.guardedInsertRows(insertColumns, batch));
         };
 
         await forEachRowPaged(exec, dialect, definition, tableName, async (document) => {
@@ -2564,7 +2701,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent sort-key column must bind `null`, not undefined.
             const sortValues = index.sortBy.map((key) => serializeColumnValue(document[key.field] ?? null));
 
-            pending.push(fence.guardedInsert(insertColumns, [document["_id"], partitionKey, ...sortValues]));
+            pending.push([document["_id"], partitionKey, ...sortValues]);
 
             if (pending.length >= BACKFILL_BATCH_SIZE) {
                 await flush();
@@ -2573,7 +2710,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         await flush();
 
-        return superseded() ? COMPANION_SUPERSEDED : true;
+        // See the aggregate twin: a late claim leaves the guarded writes above as no-ops.
+        return superseded() || !(await fence.stillHeld()) ? COMPANION_SUPERSEDED : true;
     };
 
     const ensureRankBackfilled = (tableName: string, index: RankIndexDefinitionLike): Promise<boolean> =>
@@ -2675,28 +2813,155 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
-     * Send one row write's aggregate, rank and CDC companion statements after
-     * it. They are ORDERED (a rank DELETE precedes its INSERT, an aggregate step
-     * precedes its prune), so they go through `runInOrder`, not the unordered
-     * `queryBatch`: one atomic `exec.batch` on the sqlite dialect (D1, the Node
-     * host), sequential `run()`s on an exec without `batch` or on Postgres/MySQL,
-     * whose `batch` is concurrent.
+     * Drop `tableName`'s rebuild memo after its companion statements failed outside a transaction. An abandoned
+     * statement may still land. A rebuild started before it does would count the row and then a late delta again,
+     * so the memo is dropped only once it settles: on success too, unless it was the whole batch, since the
+     * statements after a lone one never ran. A failure before anything was dispatched (a read that prepared the
+     * deltas) evicts at once: waiting for a read that may never answer would leave the unchanged counters trusted.
      */
-    const runCompanionStatements = async (tableName: string, prepare: () => Promise<SQL[]>): Promise<void> => {
-        // Preparing reads the companions too (a min/max recompute), and fails after the row committed just
-        // like the batch does.
-        try {
-            const statements = await prepare();
+    const evictAfterFailedCompanions = (tableName: string, error: unknown, progress: { batched: boolean; dispatched: boolean }): void => {
+        const late = abandonedWork(error);
 
-            if (statements.length > 0) {
-                await runInOrder(exec, dialect, statements);
+        if (late === undefined || !progress.dispatched) {
+            evictCompanionBackfills(tableName);
+
+            return;
+        }
+
+        late.then(
+            () => {
+                if (!progress.batched) {
+                    evictCompanionBackfills(tableName);
+                }
+
+                return undefined;
+            },
+            () => {
+                evictCompanionBackfills(tableName);
+            },
+        ).catch(() => undefined);
+    };
+
+    /**
+     * One row write and its aggregate, rank and CDC companion statements, as one unit wherever the exec can make
+     * them one. An exec with `transaction` (Postgres, MySQL) runs the row write, the companion reads (a min/max
+     * recompute) and the companion writes on one connection in one transaction, so a failure anywhere leaves
+     * neither the row nor its counters changed; the Node host's `transaction` does the same under `BEGIN IMMEDIATE`.
+     * Without one (D1, node-pg, a single mysql2 connection) the row commits first and the companions follow as one
+     * atomic `batch` on the sqlite dialect, so a failure between the two leaves the companions behind the row until
+     * the next rebuild: D1 has no interactive transaction to hold the row write's `RETURNING` result open across.
+     * A row write abandoned at its deadline there may still land without its companions, so it evicts the
+     * companions' rebuild memo the same way a failed companion write does, and the next companion read rebuilds.
+     *
+     * `write` reports a CAS miss as `false`; nothing was written, so no companion statement runs. The companion
+     * statements are ORDERED (a rank DELETE precedes its INSERT, an aggregate step precedes its prune), so they go
+     * through `runInOrder`, not the unordered `queryBatch`.
+     */
+    const writeWithCompanions = async (
+        tableName: string,
+        write: (on: SqlCtxExec) => Promise<boolean>,
+        prepare: (on: SqlCtxExec) => Promise<SQL[]>,
+        id: string,
+    ): Promise<boolean> => {
+        const definition = schema.tables[tableName];
+        // A lone row write already commits atomically; BEGIN/COMMIT only pays off when companions ride along.
+        const hasCompanions = cdcEnabled || (definition?.aggregateIndexes?.length ?? 0) > 0 || (definition?.rankIndexes?.length ?? 0) > 0;
+        // Without a transaction the row is already stored when its companions fail.
+        const rowCommitsAlone = exec.transaction === undefined || !hasCompanions;
+        const apply = async (on: SqlCtxExec): Promise<boolean> => {
+            let wrote: boolean;
+
+            try {
+                wrote = await write(on);
+            } catch (error) {
+                if (exec.transaction === undefined && error instanceof SqlQueryTimeoutError) {
+                    evictCompanionBackfills(tableName);
+
+                    // The abandoned write may land after a rebuild that ran in the meantime and so did not count it:
+                    // drop the memo again once it settles. If it never settles, the eviction above is the only one.
+                    const evictOnceSettled = (): undefined => {
+                        evictCompanionBackfills(tableName);
+
+                        return undefined;
+                    };
+
+                    abandonedWork(error)
+                        ?.then(evictOnceSettled, evictOnceSettled)
+                        .catch(() => undefined);
+                }
+
+                throw error;
+            }
+
+            if (!wrote) {
+                return false;
+            }
+
+            const progress = { batched: false, dispatched: false };
+
+            try {
+                const statements = await prepare(on);
+
+                if (statements.length > 0) {
+                    // Whether the companions are in flight as one atomic batch, which lands whole or not at all.
+                    progress.batched = on.batch !== undefined && dialect.name === "sqlite";
+                    progress.dispatched = true;
+                    await runInOrder(on, dialect, statements);
+                }
+            } catch (error) {
+                // Inside a transaction the row rolled back with its companions, so the counters still agree.
+                if (exec.transaction === undefined) {
+                    evictAfterFailedCompanions(tableName, error, progress);
+                }
+
+                // The error says the row is stored (see `afterBaseRowCommitted`) when it is.
+                if (rowCommitsAlone) {
+                    await afterBaseRowCommitted(tableName, id, async () => {
+                        await Promise.resolve();
+
+                        throw error;
+                    });
+                }
+
+                throw error;
+            }
+
+            return true;
+        };
+        let written: boolean;
+        const skippedBefore = skippedDeltas;
+
+        try {
+            written = exec.transaction !== undefined && hasCompanions ? await exec.transaction(apply).catch(mapTransactionConflict) : await apply(exec);
+
+            // A delta skipped inside the transaction assumed the next rebuild would count this row, but it was not yet
+            // committed: a rebuild that settled before the commit tallied the table without it and would be trusted.
+            // (Concurrent writers also move the counter; the extra eviction costs only a rebuild.)
+            if (written && skippedDeltas !== skippedBefore && exec.transaction !== undefined && hasCompanions) {
+                evictCompanionBackfills(tableName);
             }
         } catch (error) {
-            evictCompanionBackfills(tableName);
+            const late = abandonedWork(error);
+
+            // The caller's search sync never runs after a throw, and a write abandoned at its deadline may still
+            // commit: once it settles, the row's search entries are put in step with whatever it left.
+            if (late !== undefined) {
+                const settle = async (): Promise<void> => {
+                    await reconcileSearchRow({ dialect, exec, schema }, tableName, id);
+                };
+
+                late.then(settle, settle).catch(() => undefined);
+            }
+
             throw error;
         }
 
-        await sweepCdcRetention();
+        if (written) {
+            // The row and its companions are committed by now.
+            await afterBaseRowCommitted(tableName, id, sweepCdcRetention);
+        }
+
+        return written;
     };
 
     // Search companions (fts5 shadow or portable inverted table) are maintained
@@ -2754,9 +3019,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * Run a write, remapping a UNIQUE-index breach to a {@link ConflictError}
      * (code `CONFLICT`, 409).
      */
-    const runWrite = async (table: string, query: SQL): Promise<void> => {
+    const runWrite = async (table: string, query: SQL, on: SqlCtxExec = exec): Promise<void> => {
         try {
-            await queryRun(exec, dialect, query);
+            await queryRun(on, dialect, query);
         } catch (error) {
             mapWriteError(dialect, error, table);
         }
@@ -2787,7 +3052,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         verb: "DELETE" | "UPDATE",
         setClause: SQL | undefined,
         snapshot: Record<string, unknown>,
-        condition?: SQL,
+        condition: SQL | undefined,
+        on: SqlCtxExec,
     ): Promise<boolean> => {
         const versionRef = sql`${sql.identifier(OCC_VERSION_COLUMN)}`;
         const guardClause = sql.join(
@@ -2808,13 +3074,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             if (dialect.supportsReturning) {
                 // SQLite/Postgres: a `RETURNING "id"` row proves the CAS matched;
                 // an empty set means a concurrent write changed the row.
-                const returned = await queryAll(exec, dialect, sql`${base} RETURNING ${sql.identifier("id")}`);
+                const returned = await queryAll(on, dialect, sql`${base} RETURNING ${sql.identifier("id")}`);
 
                 return returned.length > 0;
             }
 
             // MySQL: no RETURNING — the affected-row count is the CAS signal.
-            const result = await queryRun(exec, dialect, base);
+            const result = await queryRun(on, dialect, base);
 
             return (dialect.affectedRows ? dialect.affectedRows(result ?? { rowsAffected: 0 }) : 0) > 0;
         } catch (error) {
@@ -2856,12 +3122,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         verb: "DELETE" | "UPDATE",
         setClause: SQL | undefined,
         snapshot: Record<string, unknown> | undefined,
+        on: SqlCtxExec,
     ): Promise<void> => {
         if (snapshot === undefined) {
             return;
         }
 
-        if (!(await tryGuardedWrite(table, verb, setClause, snapshot))) {
+        if (!(await tryGuardedWrite(table, verb, setClause, snapshot, undefined, on))) {
             throw new ConflictError(`optimistic concurrency conflict on "${table}" — the row changed during this mutation; refetch and retry`, "occ");
         }
     };
@@ -2938,15 +3205,21 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             sql`, `,
         );
 
-        if (!(await tryGuardedWrite(tableName, "UPDATE", assignments, snapshot, condition))) {
+        const written = await writeWithCompanions(
+            tableName,
+            async (on) => await tryGuardedWrite(tableName, "UPDATE", assignments, snapshot, condition, on),
+            async (on) => [
+                ...(await aggregateStatements(tableName, existing, merged, on)),
+                ...(await rankStatements(tableName, id, existing, merged)),
+                ...cdcStatements(tableName, id, "update", merged),
+            ],
+            id,
+        );
+
+        if (!written) {
             return undefined;
         }
 
-        await runCompanionStatements(tableName, async () => [
-            ...(await aggregateStatements(tableName, existing, merged)),
-            ...(await rankStatements(tableName, id, existing, merged)),
-            ...cdcStatements(tableName, id, "update", merged),
-        ]);
         await syncSearch(tableName, id, { document: merged, previous: existing, written: writtenBy(snapshot) });
 
         if (hasMatchingTrigger(tableName, "after", "update")) {
@@ -3476,17 +3749,24 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                     sql`, `,
                 );
 
-                await runGuardedWrite(tableName, "UPDATE", assignments, snapshot);
-
                 // The rank companion has no marker column to filter on, so a soft
                 // delete REMOVES the rank entry (like a physical delete); search +
                 // aggregates stay maintained (search hides via the read filter).
                 // `restore()` re-adds the rank entry through the patch path.
-                await runCompanionStatements(tableName, async () => [
-                    ...(await aggregateStatements(tableName, existing, merged)),
-                    ...(await rankStatements(tableName, id, existing, undefined)),
-                    ...cdcStatements(tableName, id, "update", merged),
-                ]);
+                await writeWithCompanions(
+                    tableName,
+                    async (on) => {
+                        await runGuardedWrite(tableName, "UPDATE", assignments, snapshot, on);
+
+                        return true;
+                    },
+                    async (on) => [
+                        ...(await aggregateStatements(tableName, existing, merged, on)),
+                        ...(await rankStatements(tableName, id, existing, undefined)),
+                        ...cdcStatements(tableName, id, "update", merged),
+                    ],
+                    id,
+                );
                 await syncSearch(tableName, id, { document: merged, previous: existing, written: writtenBy(snapshot) });
 
                 // `delete()` was called → fire the DELETE triggers (the flag flip
@@ -3498,13 +3778,21 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 return;
             }
 
-            await runGuardedWrite(tableName, "DELETE", undefined, snapshot);
+            await writeWithCompanions(
+                tableName,
+                async (on) => {
+                    await runGuardedWrite(tableName, "DELETE", undefined, snapshot, on);
 
-            await runCompanionStatements(tableName, async () => [
-                ...(await aggregateStatements(tableName, existing ?? undefined, undefined)),
-                ...(await rankStatements(tableName, id, existing ?? undefined, undefined)),
-                ...cdcStatements(tableName, id, "delete"),
-            ]);
+                    return true;
+                },
+                async (on) => [
+                    ...(await aggregateStatements(tableName, existing ?? undefined, undefined, on)),
+                    ...(await rankStatements(tableName, id, existing ?? undefined, undefined)),
+                    ...cdcStatements(tableName, id, "delete"),
+                ],
+                id,
+            );
+
             await syncSearch(tableName, id, undefined);
 
             if (hasMatchingTrigger(tableName, "after", "delete")) {
@@ -3852,15 +4140,23 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const { columns, values } = columnTuple(definition, id, creationTime, withDefaults);
 
-            await runWrite(tableName, sql`INSERT INTO ${sql.identifier(tableName)} (${identifierList(columns)}) VALUES (${bindList(values)})`);
+            await writeWithCompanions(
+                tableName,
+                async (on) => {
+                    await runWrite(tableName, sql`INSERT INTO ${sql.identifier(tableName)} (${identifierList(columns)}) VALUES (${bindList(values)})`, on);
 
-            // The row is stored from here on: a failure below is reported as such (see `afterBaseRowCommitted`).
-            await afterBaseRowCommitted(tableName, id, async () => {
-                await runCompanionStatements(tableName, async () => [
-                    ...(await aggregateStatements(tableName, undefined, documentWithMeta)),
+                    return true;
+                },
+                async (on) => [
+                    ...(await aggregateStatements(tableName, undefined, documentWithMeta, on)),
                     ...(await rankStatements(tableName, id, undefined, documentWithMeta)),
                     ...cdcStatements(tableName, id, "insert", documentWithMeta),
-                ]);
+                ],
+                id,
+            );
+
+            // The row and its companions are stored from here on: a failure below is reported as such (see `afterBaseRowCommitted`).
+            await afterBaseRowCommitted(tableName, id, async () => {
                 // eslint-disable-next-line unicorn/no-null -- an inserted row's version starts at SQL NULL
                 await syncSearch(tableName, id, { document: documentWithMeta, written: { _creationTime: creationTime, [OCC_VERSION_COLUMN]: null } });
 
@@ -4013,8 +4309,21 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 const row = decodeRow(definition, snapshot);
 
                 if (row !== null) {
-                    // eslint-disable-next-line unicorn/no-null -- the restored image clears the soft-delete marker, matching what `patch` persisted.
-                    await runCompanionStatements(tableName, async () => await rankStatements(tableName, id, undefined, { ...row, [field]: null }));
+                    // The row was written by the `patch` above; this only re-adds its rank entry.
+                    await writeWithCompanions(
+                        tableName,
+                        async () => await Promise.resolve(true),
+                        // eslint-disable-next-line unicorn/no-null -- the restored image clears the soft-delete marker, matching what `patch` persisted.
+                        async () => await rankStatements(tableName, id, undefined, { ...row, [field]: null }),
+                        id,
+                    ).catch((error: unknown) => {
+                        // The patch already committed, so a rolled-back re-add leaves the rank behind the row: rebuild it.
+                        if (exec.transaction !== undefined) {
+                            evictCompanionBackfills(tableName);
+                        }
+
+                        throw error;
+                    });
                 }
             }
         },
@@ -4564,14 +4873,23 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 sql`, `,
             );
 
-            await runGuardedWrite(tableName, "UPDATE", assignments, snapshot);
+            await writeWithCompanions(
+                tableName,
+                async (on) => {
+                    await runGuardedWrite(tableName, "UPDATE", assignments, snapshot, on);
 
-            await afterBaseRowCommitted(tableName, id, async () => {
-                await runCompanionStatements(tableName, async () => [
-                    ...(await aggregateStatements(tableName, previous, replaced)),
+                    return true;
+                },
+                async (on) => [
+                    ...(await aggregateStatements(tableName, previous, replaced, on)),
                     ...(await rankStatements(tableName, id, previous, replaced)),
                     ...cdcStatements(tableName, id, "update", replaced),
-                ]);
+                ],
+                id,
+            );
+
+            // The row and its companions are stored from here on: a failure below is reported as such (see `afterBaseRowCommitted`).
+            await afterBaseRowCommitted(tableName, id, async () => {
                 await syncSearch(tableName, id, { document: replaced, previous, written: writtenBy(snapshot, creationTime) });
 
                 if (hasMatchingTrigger(tableName, "after", "update")) {

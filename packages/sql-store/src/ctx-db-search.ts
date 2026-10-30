@@ -31,6 +31,7 @@ import {
     writeSearchBackfillState,
 } from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
+import { abandonedWork } from "./query-timeout";
 import type { SearchStage } from "./search-layout";
 import { companionFor, companionProfile, globalSearchIndexes, resolveSearchLayout } from "./search-layout";
 import type { MigrationMode, MigrationReport } from "./search-layout-migrations";
@@ -484,6 +485,60 @@ const backfillSqlSearchIndexes = async (exec: SqlCtxExec, schema: SchemaLike, di
     return result;
 };
 
+/**
+ * Purge `id`'s entry for a row that is absent, then index the row again if it came back.
+ *
+ * The purge's guard cannot lock a row that is absent, and on Postgres a DELETE reads the guard at its snapshot: a
+ * re-insert that committed mid-statement and then overwrote the entry in place (the native upsert) still reads as
+ * absent, and the purge drops its entry. So the row is read once more after the purge.
+ */
+const purgeAbsentEntry = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    tableName: string,
+    definition: TableDefinitionLike,
+    companion: string,
+    index: SearchIndexDefinitionLike,
+    id: string,
+): Promise<void> => {
+    await resolveSearchLayout(index, dialect).purgeDocument(exec, dialect, companion, id, tableName);
+
+    const sources = await readSourceRows(exec, dialect, tableName, [id]);
+    const reinserted = sources.get(id);
+
+    if (reinserted !== undefined) {
+        await indexRowsUntilCurrent(exec, dialect, definition, tableName, companion, index, new Map([[id, { row: reinserted }]]));
+    }
+};
+
+/** Index `id`'s entry from the row as it stands, or purge it when the row is gone. */
+const reconcileSearchEntry = async (
+    exec: SqlCtxExec,
+    dialect: SqlDialect,
+    tableName: string,
+    definition: TableDefinitionLike,
+    companion: string,
+    index: SearchIndexDefinitionLike,
+    id: string,
+): Promise<void> => {
+    const sources = await readSourceRows(exec, dialect, tableName, [id]);
+    const row = sources.get(id);
+
+    await (row === undefined
+        ? purgeAbsentEntry(exec, dialect, tableName, definition, companion, index, id)
+        : indexRowsUntilCurrent(exec, dialect, definition, tableName, companion, index, new Map([[id, { row }]])));
+};
+
+/** Put every search entry of `id` in step with the row as it stands: for a write whose outcome is unknown. */
+const reconcileSearchRow = async (deps: { dialect: SqlDialect; exec: SqlCtxExec; schema: SchemaLike }, tableName: string, id: string): Promise<void> => {
+    const definition = deps.schema.tables[tableName];
+
+    for (const index of definition?.searchIndexes ?? []) {
+        // eslint-disable-next-line no-await-in-loop -- companion writes run sequentially on the shared connection.
+        await reconcileSearchEntry(deps.exec, deps.dialect, tableName, definition as TableDefinitionLike, companionFor(tableName, index), index, id);
+    }
+};
+
 /** A row write, as the search hook sees it: the document now, before, and the version columns the write left. */
 interface SearchWrite {
     document: Record<string, unknown>;
@@ -519,46 +574,50 @@ const createSearchSync = (deps: {
             return;
         }
 
-        for (const index of indexes) {
-            // Fast path: this write didn't touch the indexed text, so the
-            // companion rows are already correct — no DELETE, no re-tokenizing,
-            // no INSERT round trips (mirrors the rank companion's skip).
-            if (searchTextUnchanged(change?.previous, change?.document, index)) {
-                continue;
-            }
-
+        for (const [position, index] of indexes.entries()) {
             const companion = companionFor(tableName, index);
 
-            if (change) {
-                // eslint-disable-next-line no-await-in-loop -- companion writes run sequentially on the shared connection so DELETE/INSERT pairs don't interleave across indexes.
-                await indexRowsUntilCurrent(
-                    exec,
-                    dialect,
-                    definition,
-                    tableName,
-                    companion,
-                    index,
-                    new Map([[id, { document: change.document, row: { ...change.written, id } }]]),
-                );
+            try {
+                // Fast path: this write didn't touch the indexed text, so the
+                // companion rows are already correct — no DELETE, no re-tokenizing,
+                // no INSERT round trips (mirrors the rank companion's skip).
+                if (searchTextUnchanged(change?.previous, change?.document, index)) {
+                    continue;
+                }
 
-                continue;
-            }
+                if (change) {
+                    // eslint-disable-next-line no-await-in-loop -- companion writes run sequentially on the shared connection so DELETE/INSERT pairs don't interleave across indexes.
+                    await indexRowsUntilCurrent(
+                        exec,
+                        dialect,
+                        definition,
+                        tableName,
+                        companion,
+                        index,
+                        new Map([[id, { document: change.document, row: { ...change.written, id } }]]),
+                    );
 
-            // eslint-disable-next-line no-await-in-loop -- sequential companion write on the shared connection (see above).
-            await resolveSearchLayout(index, dialect).purgeDocument(exec, dialect, companion, id, tableName);
+                    continue;
+                }
 
-            // The purge's guard cannot lock a row that is absent, and on Postgres
-            // a DELETE reads the guard at its snapshot: a re-insert that committed
-            // mid-statement and then overwrote the entry in place (the native
-            // upsert) still reads as absent, and the purge drops its entry. So the
-            // row is read once more, and a row that is back is indexed again.
-            // eslint-disable-next-line no-await-in-loop -- the re-check has to follow the purge it checks.
-            const sources = await readSourceRows(exec, dialect, tableName, [id]);
-            const reinserted = sources.get(id);
-
-            if (reinserted !== undefined) {
                 // eslint-disable-next-line no-await-in-loop -- sequential companion write on the shared connection (see above).
-                await indexRowsUntilCurrent(exec, dialect, definition, tableName, companion, index, new Map([[id, { row: reinserted }]]));
+                await purgeAbsentEntry(exec, dialect, tableName, definition, companion, index, id);
+            } catch (error) {
+                // A statement abandoned at its deadline may still land, and over an entry a later write of this row
+                // left: once it settles, the entry is put back in step with the row as it is then. The throw also
+                // skips the indexes after this one, whose entries the committed row write left behind.
+                const settle = async (): Promise<void> => {
+                    for (const remaining of indexes.slice(position)) {
+                        // eslint-disable-next-line no-await-in-loop -- companion writes run sequentially on the shared connection.
+                        await reconcileSearchEntry(exec, dialect, tableName, definition, companionFor(tableName, remaining), remaining, id);
+                    }
+                };
+
+                abandonedWork(error)
+                    ?.then(settle, settle)
+                    .catch(() => undefined);
+
+                throw error;
             }
         }
     };
@@ -566,4 +625,4 @@ const createSearchSync = (deps: {
 
 export type { SearchStage } from "./search-layout";
 export type { SqlSearchBackfillResult };
-export { backfillSqlSearchIndexes, createSearchSync, runSqlSearch, runSqlSearchMigrations };
+export { backfillSqlSearchIndexes, createSearchSync, reconcileSearchRow, runSqlSearch, runSqlSearchMigrations };

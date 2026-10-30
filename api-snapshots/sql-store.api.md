@@ -9,6 +9,12 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/sql-store`
 
+### `DEFAULT_QUERY_TIMEOUT_MS` (const)
+
+```ts
+const DEFAULT_QUERY_TIMEOUT_MS = 3e4;
+```
+
 ### `ExportGlobalArgs` (interface)
 
 ```ts
@@ -122,6 +128,12 @@ interface ImportResult {
 }
 ```
 
+### `QueryTimer` (type)
+
+```ts
+type QueryTimer = (fire: () => void, ms: number) => () => void;
+```
+
 ### `ReadGlobalTablePageOptions` (interface)
 
 ```ts
@@ -154,6 +166,8 @@ interface SqlCtxDbOptions {
     idGenerator?: () => string;
     maxRelationKeys?: number;
     provisionScope?: object;
+    queryTimeoutMs?: number;
+    queryTimer?: QueryTimer;
     scheduler?: SchedulerLike;
     schema: SchemaLike;
 }
@@ -169,6 +183,7 @@ interface SqlCtxExec {
         sql: string;
     }>) => Promise<void>;
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<SqlRunResult | void>;
+    transaction?: <T>(work: (tx: SqlCtxExec) => Promise<T>) => Promise<T>;
 }
 ```
 
@@ -221,6 +236,16 @@ interface SqlExec {
         sql: string;
     }>) => Promise<void>;
     run: (sql: string, params: ReadonlyArray<unknown>) => Promise<SqlRunResult>;
+    transaction?: <T>(work: (tx: SqlExec) => Promise<T>) => Promise<T>;
+}
+```
+
+### `SqlQueryTimeoutError` (class)
+
+```ts
+class SqlQueryTimeoutError extends LunoraError {
+    readonly timeoutMs: number;
+    constructor(timeoutMs: number);
 }
 ```
 
