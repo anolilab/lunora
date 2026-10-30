@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
-import { PAUSED_QUEUE_RETRY_SECONDS } from "../src/deployment-pause";
+import { PAUSE_CACHE_MS, PAUSE_READ_DEADLINE_MS, PAUSED_QUEUE_RETRY_SECONDS } from "../src/deployment-pause";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 const fakeContext: ExecutionContextLike = {
@@ -246,6 +246,61 @@ describe("createWorker — deployment pause", () => {
         const refused = await worker.fetch(rpc(), {}, fakeContext);
 
         expect(refused.status).toBe(503);
+    });
+
+    it("stops waiting on a flag read that never settles, and reads again for the next caller", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers({ toFake: ["clearTimeout", "setTimeout"] });
+
+        const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+
+        try {
+            let reads = 0;
+            const namespace: ShardNamespaceLike = {
+                get: () => {
+                    return {
+                        fetch: async (request: Request) => {
+                            if (request.method !== "GET") {
+                                return Response.json({ paused: true });
+                            }
+
+                            reads += 1;
+
+                            // The first request's read is cancelled with its request and never answers.
+                            return reads === 1
+                                ? new Promise<Response>(() => {
+                                      /* never settles */
+                                  })
+                                : Response.json({ paused: true });
+                        },
+                    };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            };
+            const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: countingShard().namespace });
+            const stalled = worker.fetch(rpc(), {}, fakeContext);
+            const sharing = worker.fetch(rpc(), {}, fakeContext);
+
+            await vi.advanceTimersByTimeAsync(PAUSE_READ_DEADLINE_MS);
+
+            // Both callers fail open instead of hanging on the stalled read.
+            await expect(stalled).resolves.toHaveProperty("status", 200);
+            await expect(sharing).resolves.toHaveProperty("status", 200);
+
+            // Once the failed-open window lapses the next caller reads afresh.
+            now.mockReturnValue(1_000_000 + PAUSE_CACHE_MS);
+
+            const next = await worker.fetch(rpc(), {}, fakeContext);
+
+            expect(reads).toBe(2);
+            expect(next.status).toBe(503);
+        } finally {
+            now.mockRestore();
+            vi.useRealTimers();
+        }
     });
 
     it("tells the queue consumer to hold its batch while paused, and to run it once resumed", async () => {

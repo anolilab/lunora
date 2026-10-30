@@ -35,6 +35,13 @@ const PAUSE_PATH = "/_lunora/admin/pause";
 // ponytail: a per-isolate TTL read costs one SchedulerDO GET per isolate per window; push the flag to isolates if that read ever shows up.
 const PAUSE_CACHE_MS = 5000;
 
+/**
+ * How long a caller waits on a flag read before it stops waiting. A read belongs
+ * to the request that started it; if that request is cancelled or its context
+ * ends first, the read may never settle, and every caller sharing it would hang.
+ */
+const PAUSE_READ_DEADLINE_MS = 3000;
+
 /** Seconds a paused caller is told to wait before retrying. */
 const PAUSED_RETRY_AFTER_SECONDS = 30;
 
@@ -66,6 +73,22 @@ interface DeploymentPause {
     /** The `503` a non-admin function call gets while paused, or `undefined`. */
     refusal: (request: Request) => Promise<Response | undefined>;
 }
+
+/** `promise`, or what `onDeadline` answers once {@link PAUSE_READ_DEADLINE_MS} passes first. */
+const withDeadline = async (promise: Promise<DeploymentPauseState>, onDeadline: () => DeploymentPauseState): Promise<DeploymentPauseState> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<DeploymentPauseState>((resolve) => {
+        timer = setTimeout(() => {
+            resolve(onDeadline());
+        }, PAUSE_READ_DEADLINE_MS);
+    });
+
+    try {
+        return await Promise.race([promise, deadline]);
+    } finally {
+        clearTimeout(timer);
+    }
+};
 
 const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause => {
     const now = options.now ?? Date.now;
@@ -126,19 +149,39 @@ const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause
 
         const startedAt = generation;
 
-        pending ??= fetchState(stub)
-            .catch(() => {
-                if (generation === startedAt) {
-                    cached = { readAt: now(), state: NOT_PAUSED };
-                }
+        const shared =
+            pending ??
+            fetchState(stub)
+                .catch(() => {
+                    if (generation === startedAt) {
+                        cached = { readAt: now(), state: NOT_PAUSED };
+                    }
 
-                return NOT_PAUSED;
-            })
-            .finally(() => {
+                    return NOT_PAUSED;
+                })
+                .finally(() => {
+                    if (pending === shared) {
+                        pending = undefined;
+                    }
+                });
+
+        pending = shared;
+
+        return withDeadline(shared, () => {
+            // The read is abandoned: the next caller starts its own, and until then
+            // the last state this isolate trusted stands (running, if it never had one).
+            const fallback = cached?.state ?? NOT_PAUSED;
+
+            if (pending === shared) {
                 pending = undefined;
-            });
 
-        return pending;
+                if (generation === startedAt) {
+                    cached = { readAt: now(), state: fallback };
+                }
+            }
+
+            return fallback;
+        });
     };
 
     /** The `503` a function call gets while paused, or `undefined` to let it through. */
@@ -206,4 +249,4 @@ const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause
 const PAUSED_QUEUE_RETRY_SECONDS = 300;
 
 export type { DeploymentPause, DeploymentPauseState };
-export { createDeploymentPause, PAUSE_CACHE_MS, PAUSE_PATH, PAUSED_QUEUE_RETRY_SECONDS };
+export { createDeploymentPause, PAUSE_CACHE_MS, PAUSE_PATH, PAUSE_READ_DEADLINE_MS, PAUSED_QUEUE_RETRY_SECONDS };
