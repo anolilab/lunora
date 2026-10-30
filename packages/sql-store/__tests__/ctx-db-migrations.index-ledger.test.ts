@@ -1,5 +1,5 @@
 import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createSqlCtxDb } from "../src/ctx-db";
 import type { SqlCtxExec } from "../src/sql-exec";
@@ -56,7 +56,7 @@ const indexNames = async (tableName = "notes"): Promise<string[]> => {
     return rows.map((row) => String(row["name"]));
 };
 
-describe.each(routes)("global framework index ownership (%s)", (_route, makeHarness) => {
+describe.each(routes)("global framework index ownership (%s)", (route, makeHarness) => {
     beforeEach(() => {
         harness = makeHarness();
     });
@@ -145,6 +145,30 @@ describe.each(routes)("global framework index ownership (%s)", (_route, makeHarn
         await expect(migrate(global("notes", { slug: column("string") }, [{ fields: ["slug"], name: "by_slug", unique: true }]))).rejects.toMatchObject({
             code: "UNIQUE_INDEX_DUPLICATES",
         });
+    });
+
+    it("logs a blocked unique index once, not on every refused migration", async () => {
+        expect.assertions(3);
+
+        // A table per run: the logged-once memo lives for the isolate, and this suite runs once per provisioning route.
+        const table = `blocked_${route.replaceAll(" ", "_")}`;
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+        try {
+            const writer = await migrate(global(table, { slug: column("string") }), table);
+
+            await writer.insert(table, { slug: "dup" });
+            await writer.insert(table, { slug: "dup" });
+
+            const blocked = global(table, { slug: column("string") }, [{ fields: ["slug"], name: "by_slug", unique: true }]);
+
+            await expect(migrate(blocked, table)).rejects.toMatchObject({ code: "UNIQUE_INDEX_DUPLICATES" });
+            await expect(migrate(blocked, table)).rejects.toMatchObject({ code: "UNIQUE_INDEX_DUPLICATES" });
+
+            expect(errorSpy.mock.calls.filter(([line]) => String(line).includes(`on "${table}"`))).toHaveLength(1);
+        } finally {
+            errorSpy.mockRestore();
+        }
     });
 
     it("rebuilds a unique index that gained a column after the table name changed only in case", async () => {
