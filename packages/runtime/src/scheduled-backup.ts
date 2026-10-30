@@ -72,6 +72,12 @@ const BACKUP_CRON_METADATA_KEY = "lunoraBackupCron";
  */
 const MAX_SCHEDULED_BACKUP_BYTES: number = 24 * 1_048_576;
 
+const backupTooLarge = (bytes: number): LunoraError =>
+    new LunoraError(
+        `scheduled backup reached ${String(bytes)} bytes of NDJSON, past the ${String(MAX_SCHEDULED_BACKUP_BYTES)}-byte limit for a snapshot assembled inside a Worker — nothing was written. Narrow it with \`backupTables\`, or take this snapshot off-platform with \`lunora backup create --bucket\`.`,
+        { code: "BACKUP_TOO_LARGE", status: 507 },
+    );
+
 /** What {@link selectStaleBackups} found: every sidecar this cron owns, and the subset past the retention window. */
 interface StaleBackups {
     /** Sidecars under the prefix carrying this cron's marker — the population retention chooses from. */
@@ -376,10 +382,7 @@ const runScheduledBackup = async (
         bytes += chunk.byteLength;
 
         if (bytes > MAX_SCHEDULED_BACKUP_BYTES) {
-            throw new LunoraError(
-                `scheduled backup reached ${String(bytes)} bytes of NDJSON, past the ${String(MAX_SCHEDULED_BACKUP_BYTES)}-byte limit for a snapshot assembled inside a Worker — nothing was written. Narrow it with \`backupTables\`, or take this snapshot off-platform with \`lunora backup create --bucket\`.`,
-                { code: "BACKUP_TOO_LARGE", status: 507 },
-            );
+            throw backupTooLarge(bytes);
         }
 
         chunks.push(chunk);
@@ -396,6 +399,12 @@ const runScheduledBackup = async (
     const endMarker = NDJSON_ENCODER.encode(exportEndLine(rows));
 
     bytes += endMarker.byteLength;
+
+    // The marker is part of the object, so it counts against the cap the rows were checked against.
+    if (bytes > MAX_SCHEDULED_BACKUP_BYTES) {
+        throw backupTooLarge(bytes);
+    }
+
     chunks.push(endMarker);
 
     const prefix = normalizeBackupPrefix(options.backupPrefix ?? BACKUP_KEY_PREFIX);

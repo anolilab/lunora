@@ -198,6 +198,30 @@ describe("createWorker — scheduled backup", () => {
         expect(store.checksums.has(`${ndjsonKey}.manifest.json`)).toBe(false);
     });
 
+    it("counts the end marker against the size cap, so a snapshot that only fits without it is not written", async () => {
+        expect.assertions(2);
+
+        const store = memoryBackupStore();
+        const cap = 24 * 1_048_576;
+        const empty = JSON.stringify({ doc: { _id: "p1", blob: "" }, table: "plans" });
+        // One row whose line ends 5 bytes under the cap: the marker (more than 5 bytes) is what pushes it over.
+        const blob = "x".repeat(cap - 5 - empty.length - 1);
+        const exportGlobals: WorkerOptions["exportGlobals"] = async function* () {
+            yield { doc: { _id: "p1", blob }, table: "plans" };
+        };
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupStore: store,
+            exportGlobals,
+            queryCoordinator: coordinatorWithExport([]),
+            shardDO: noopNamespace,
+        });
+
+        await expect(fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME })).rejects.toThrow(/past the \d+-byte limit/u);
+        expect(store.objects.size).toBe(0);
+    });
+
     it("refuses a snapshot past the size limit, mid-export, without writing anything", async () => {
         expect.assertions(4);
 
