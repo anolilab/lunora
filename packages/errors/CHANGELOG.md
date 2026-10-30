@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.78...@lunora/errors@1.0.0-alpha.79) (2026-10-30)
+
+### Bug Fixes
+
+* **sql-store:** require the table for global by-id calls ([#1428](https://github.com/anolilab/lunora/issues/1428)) ([5680500](https://github.com/anolilab/lunora/commit/56805003af8612bd8f437cefb9a5cce882e4e008))
+
 ## @lunora/errors [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.77...@lunora/errors@1.0.0-alpha.78) (2026-10-30)
 
 ### ⚠ BREAKING CHANGES

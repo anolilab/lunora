@@ -1,3 +1,16 @@
+## @lunora/shard-engine [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.176...@lunora/shard-engine@1.0.0-alpha.177) (2026-10-30)
+
+### Bug Fixes
+
+* **sql-store:** require the table for global by-id calls ([#1428](https://github.com/anolilab/lunora/issues/1428)) ([5680500](https://github.com/anolilab/lunora/commit/56805003af8612bd8f437cefb9a5cce882e4e008))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.144
+* **@lunora/values:** upgraded to 1.0.0-alpha.88
+
 ## @lunora/shard-engine [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.175...@lunora/shard-engine@1.0.0-alpha.176) (2026-10-30)
 
 ### ⚠ BREAKING CHANGES
