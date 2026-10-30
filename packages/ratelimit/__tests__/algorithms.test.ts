@@ -169,6 +169,19 @@ describe("token bucket retry-after bounds", () => {
         expect(evaluate(config, prior, { consume: true, count: 1, now: denied.status.retryAfter, reserve: false }).status.ok).toBe(true);
     });
 
+    it("times a reservation's wait from the debt it persists, not from a future-dated prior", () => {
+        expect.assertions(3);
+
+        // The reservation writes its negative balance at `now`, so that debt refills from `now`: a 5-per-second bucket
+        // owing one token clears in 200 ms, whatever timestamp the prior state carried.
+        const config: RateLimitConfig = { kind: "token bucket", period: 1000, rate: 5 };
+        const reserved = evaluate(config, { ts: 1000, value: 0 }, { consume: true, count: 1, now: 0, reserve: true });
+
+        expect(reserved.status.ok).toBe(true);
+        expect(reserved.status.retryAfter).toBe(200);
+        expect(evaluate(config, reserved.value, { consume: false, count: 0, now: 200, reserve: false }).status.ok).toBe(true);
+    });
+
     it("returns at magnitudes where adding a millisecond no longer changes the number", () => {
         expect.assertions(1);
 

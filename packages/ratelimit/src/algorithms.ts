@@ -146,6 +146,31 @@ const projectSlidingWindow = (
 };
 
 /**
+ * The wait from `now` until `state` projects to at least `needed` tokens, starting from the rounded `estimate`.
+ *
+ * The division behind an estimate can land a hair short in floating point, so the refill projected at
+ * `now + estimate` is a fraction below `needed` and a caller who waits exactly that long is refused again. The wait is
+ * checked with the same projection the admit test uses and stepped forward. Floating-point error is under a
+ * millisecond at normal magnitudes, so a few steps suffice; the bound, and the stop once a step no longer changes the
+ * number (around 2 ** 53), keep this from spinning.
+ */
+const correctedWait = (config: RateLimitConfig, state: RateLimitValue | undefined, now: number, needed: number, estimate: number): number => {
+    let wait = estimate;
+
+    for (let step = 0; step < MAX_RETRY_AFTER_CORRECTIONS; step += 1) {
+        const next = wait + 1;
+
+        if (projectTokenBucket(config, state, now + wait).available >= needed || next === wait) {
+            break;
+        }
+
+        wait = next;
+    }
+
+    return wait;
+};
+
+/**
  * Token bucket: tokens refill continuously at `rate / period` per millisecond
  * up to `capacity`. A fresh key starts full.
  */
@@ -159,37 +184,23 @@ const tokenBucket = (config: RateLimitConfig, prior: RateLimitValue | undefined,
     }
 
     const deficit = options.count - available;
-    // Refill starts at the stored timestamp when it is ahead of `now` (another limiter's clock ran fast), so the wait
-    // covers that gap arithmetically rather than by stepping through it.
-    const refillFrom = prior !== undefined && prior.ts > options.now ? prior.ts : options.now;
-    let retryAfter = Math.ceil(refillFrom - options.now + deficit / ratePerMs);
 
-    // The division can land a hair short in floating point: the refill projected at `now + retryAfter` is then a
-    // fraction below `count`, and a caller who waits exactly that long is refused again. Check the promise with the
-    // same projection the admit test uses and step forward. Floating-point error is under a millisecond at normal
-    // magnitudes, so a few steps suffice; the bound, and the stop once a step no longer changes the number (around
-    // 2 ** 53), keep this from spinning. Only for a count the bucket can hold: a larger one is never admitted.
-    if (options.count <= capacity) {
-        for (let step = 0; step < MAX_RETRY_AFTER_CORRECTIONS; step += 1) {
-            const next = retryAfter + 1;
-
-            if (projectTokenBucket(config, prior, options.now + retryAfter).available >= options.count || next === retryAfter) {
-                break;
-            }
-
-            retryAfter = next;
-        }
-    }
-
-    // Reserve lets the caller proceed now and pay later, but never beyond what
-    // the bucket could ever hold.
+    // Reserve lets the caller proceed now and pay later, but never beyond what the bucket could ever hold. The debt is
+    // persisted at `now`, so it refills from `now`: the wait is until that balance is repaid, whatever ts the prior had.
     if (options.consume && options.reserve && options.count <= capacity) {
-        return { status: { ok: true, retryAfter }, value: { ts: options.now, value: available - options.count } };
+        const value = { ts: options.now, value: available - options.count };
+
+        return { status: { ok: true, retryAfter: correctedWait(config, value, options.now, 0, Math.ceil(deficit / ratePerMs)) }, value };
     }
 
     if (options.count > capacity) {
         throwCountExceedsCapacity(options.count, capacity);
     }
+
+    // Refill starts at the stored timestamp when it is ahead of `now` (another limiter's clock ran fast), so the wait
+    // covers that gap arithmetically rather than by stepping through it.
+    const refillFrom = prior !== undefined && prior.ts > options.now ? prior.ts : options.now;
+    const retryAfter = correctedWait(config, prior, options.now, options.count, Math.ceil(refillFrom - options.now + deficit / ratePerMs));
 
     return { status: { ok: false, reason: "rate", retryAfter }, value: undefined };
 };
