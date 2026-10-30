@@ -74,9 +74,29 @@ const usePaginatedCore = <T>(
      */
     const pendingPageKeys = new Set<string>();
 
+    /**
+     * Each page's key, derived once per `Page` object. Every frame on any page
+     * rebuilds `pageResults` for the whole feed, so re-serialising each page's
+     * args per frame would cost one full `stableWireKey` pass per loaded
+     * page. Base args are fixed by content within an args generation, and
+     * `teardownAll` starts a fresh map for the next one.
+     */
+    let pageKeys = new WeakMap<Page, string>();
+
+    const pageKeyOf = (page: Page, baseArgs: Record<string, unknown>): string => {
+        let key = pageKeys.get(page);
+
+        if (key === undefined) {
+            key = buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgs));
+            pageKeys.set(page, key);
+        }
+
+        return key;
+    };
+
     const rebuildPageResults = (currentPages: Page[], baseArgs: Record<string, unknown>): void => {
         pageResults.value = currentPages.map((page) => {
-            const key = buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgs));
+            const key = pageKeyOf(page, baseArgs);
 
             return resultsByKey.get(key);
         });
@@ -92,7 +112,7 @@ const usePaginatedCore = <T>(
      * the new subscription once attached.
      */
     const migrateResultsForRebalance = (oldPages: Page[], newPages: Page[], baseArgs: Record<string, unknown>): void => {
-        const keyOf = (page: Page): string => buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgs));
+        const keyOf = (page: Page): string => pageKeyOf(page, baseArgs);
 
         // For each new page, find the best old-result donor.
         for (const newPage of newPages) {
@@ -120,7 +140,7 @@ const usePaginatedCore = <T>(
         const wantedKeys = new Set<string>();
 
         for (const page of currentPages) {
-            wantedKeys.add(buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgs)));
+            wantedKeys.add(pageKeyOf(page, baseArgs));
         }
 
         // Close stale subscriptions (those whose key is no longer wanted).
@@ -140,7 +160,7 @@ const usePaginatedCore = <T>(
         // Open new subscriptions for pages that have no active sub.
         for (const page of currentPages) {
             const pageArgs = buildPageArgs(page, baseArgs);
-            const key = buildPageKey(function_["__lunoraRef"], pageArgs);
+            const key = pageKeyOf(page, baseArgs);
 
             if (activeSubs.has(key)) {
                 continue;
@@ -190,12 +210,7 @@ const usePaginatedCore = <T>(
                         const current = pages.value;
                         const tail = current.at(-1);
 
-                        if (
-                            current.length > 1 &&
-                            tail &&
-                            !resultsByKey.has(key) &&
-                            buildPageKey(function_["__lunoraRef"], buildPageArgs(tail, baseArgs)) === key
-                        ) {
+                        if (current.length > 1 && tail && !resultsByKey.has(key) && pageKeyOf(tail, baseArgs) === key) {
                             pages.value = current.slice(0, -1);
                         }
 
@@ -219,6 +234,7 @@ const usePaginatedCore = <T>(
         // Clear pending markers so a fresh args cycle isn't wedged by keys left
         // behind from subscriptions torn down before their first result.
         pendingPageKeys.clear();
+        pageKeys = new WeakMap();
     };
 
     // Re-subscribe whenever the base args (or skip) change. Key the watch on a
@@ -323,8 +339,8 @@ const usePaginatedCore = <T>(
         const newPinnedPage = next.at(-2); // `applyLoadMore` inserts the new tail last
 
         if (oldTail && newPinnedPage) {
-            const oldKey = buildPageKey(function_["__lunoraRef"], buildPageArgs(oldTail, currentArgs));
-            const newKey = buildPageKey(function_["__lunoraRef"], buildPageArgs(newPinnedPage, currentArgs));
+            const oldKey = pageKeyOf(oldTail, currentArgs);
+            const newKey = pageKeyOf(newPinnedPage, currentArgs);
             const unsub = activeSubs.get(oldKey);
 
             if (unsub && oldKey !== newKey) {

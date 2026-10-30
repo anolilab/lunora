@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
 import type { RateLimitConfigMap } from "../src/index";
-import { RateLimiter } from "../src/index";
+import { createMemoryStore, RateLimiter } from "../src/index";
 
 /**
  * `limit()` is the consumer side — every request a procedure gates pays
@@ -13,6 +13,7 @@ import { RateLimiter } from "../src/index";
  * - **fixed window** — different algorithm, same store IO shape.
  * - **sliding window** — algorithm with the most arithmetic.
  * - **deny-list hit** — short-circuits before the algorithm runs.
+ * - **2000 live keys** — the retention sweep only has work with many live keys.
  */
 
 const PERIOD_MS = 1000;
@@ -56,5 +57,17 @@ describe("RateLimiter.limit() — algorithm + store-write throughput", () => {
 
     bench("deny-list hit (short-circuit before algorithm)", async () => {
         await withDenyList.limit("hits", { key: "banned-key" });
+    });
+});
+
+const LIVE_KEYS = Array.from({ length: 2000 }, (_, index) => `user-${String(index)}`);
+const manyKeys = new RateLimiter({ config: tokenBucketConfig, now: () => clock, store: createMemoryStore() });
+let keyIndex = 0;
+
+describe("RateLimiter.limit() — memory store with many live keys", () => {
+    bench("token bucket, 2000 live keys round-robin", async () => {
+        clock += 1;
+        keyIndex = (keyIndex + 1) % LIVE_KEYS.length;
+        await manyKeys.limit("hits", { key: LIVE_KEYS[keyIndex] });
     });
 });

@@ -2158,6 +2158,7 @@ interface CloudflareCredentialProbe {
 const DEFAULT_OBSERVABILITY: Readonly<{
     enabled: true;
     head_sampling_rate: 1;
+    redact_query_string: true;
 }>;
 ```
 

@@ -59,7 +59,7 @@
 
 import type { Id } from "@lunora/values";
 import { v } from "@lunora/values";
-import { decodeWire, encodeWire } from "@lunora/wire";
+import { encodeWire, parseWire } from "@lunora/wire";
 
 import { initLunora } from "./builder/index";
 import type { Component, SchemaExtension } from "./plugin";
@@ -468,8 +468,8 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
                     tableName: row["tableName"] as string,
                     // Decoded through the same codec that wrote it, so a `bigint`
                     // or `Date` column comes back as itself, not as a tagged form.
-                    ...(row["doc"] === undefined ? {} : { doc: decodeWire(JSON.parse(row["doc"] as string)) as Record<string, unknown> }),
-                    ...(row["previous"] === undefined ? {} : { previous: decodeWire(JSON.parse(row["previous"] as string)) as Record<string, unknown> }),
+                    ...(row["doc"] === undefined ? {} : { doc: parseWire(row["doc"] as string) as Record<string, unknown> }),
+                    ...(row["previous"] === undefined ? {} : { previous: parseWire(row["previous"] as string) as Record<string, unknown> }),
                     ...(row["truncated"] === true ? { truncated: true } : {}),
                 };
             });

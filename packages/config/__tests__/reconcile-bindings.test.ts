@@ -182,7 +182,7 @@ describe("reconcileWranglerBindings", () => {
 
         expect(result.changed).toBe(true);
         expect(result.added).toContain("observability");
-        expect(readConfig().observability).toEqual({ enabled: true, head_sampling_rate: 1 });
+        expect(readConfig().observability).toEqual({ enabled: true, head_sampling_rate: 1, redact_query_string: true });
     });
 
     describe("upload_source_maps", () => {

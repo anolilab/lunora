@@ -144,7 +144,8 @@ const acceptsAbsentIr = (validator: ValidatorIR): boolean => acceptsAbsent(valid
  * surfaces, enumerated from `@lunora/server`'s `CODE_STATUS` map plus the
  * runtime/DO dispatch codes (`FUNCTION_NOT_FOUND`, `PAYLOAD_TOO_LARGE`,
  * `METHOD_NOT_ALLOWED`, the `*_NOT_CONFIGURED` admin gates, …). The list documents
- * the contract; clients switch on `error.code`. Kept sorted for stable output.
+ * the contract; clients switch on `error.code`. Sorted, except that new members are
+ * appended: the OpenRPC emitter derives each error's number from its position.
  */
 const LUNORA_ERROR_CODES: ReadonlyArray<string> = [
     "BAD_REQUEST",
@@ -162,6 +163,7 @@ const LUNORA_ERROR_CODES: ReadonlyArray<string> = [
     "UNAUTHORIZED",
     "UNPROCESSABLE",
     "VALIDATION_ERROR",
+    "UNIQUE_INDEX_DUPLICATES",
 ];
 
 export { acceptsAbsentIr, literalConst, LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema };

@@ -15,7 +15,7 @@
 import { randomUUID } from "node:crypto";
 
 import { LunoraError } from "@lunora/errors";
-import { decodeWire, encodeWire } from "@lunora/wire";
+import { encodeWire, parseWire } from "@lunora/wire";
 
 import type { Dataset } from "./dataset";
 import type { PrivacyConfig } from "./define";
@@ -109,7 +109,7 @@ const codecOf = (name: string): { readonly codec: ErasedCodec; readonly method: 
 
 const toText = (value: unknown): string => JSON.stringify(encodeWire(value));
 
-const fromText = (text: string): unknown => decodeWire(JSON.parse(text));
+const fromText = (text: string): unknown => parseWire(text);
 
 /** Call a method on a port object by name. The name was checked against {@link PORT_CODECS}. */
 const callPort = async (target: object, method: string, args: ReadonlyArray<unknown>): Promise<unknown> => {

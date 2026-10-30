@@ -10,17 +10,22 @@
  * is a real number, and the first person to learn this framework's floor should
  * not be a user whose deploy Cloudflare rejected for a dependency added weeks ago.
  *
- * The reference app is `templates/standalone` — the smallest starter, and what a
- * new project is. Deliberately NOT `apps/playground`, which accumulates feature
- * demos (auth-ui, db, queue, workflow, studio…) and would track demo churn rather
- * than the framework's own weight.
+ * Two reference apps, each against its own baseline in `worker-size.json`:
+ *  - `templates/standalone` — the smallest starter, and what a new project is: the
+ *    framework's own weight. Deliberately NOT `apps/playground`, which accumulates
+ *    feature demos and would track demo churn rather than the framework's.
+ *  - `templates/saas` — the heaviest starter: eight registry items composed into one
+ *    Worker with better-auth, Stripe and a TanStack Start SSR handler. Composition
+ *    is how a template quietly outgrows the platform, and the standalone app
+ *    cannot see it.
  *
  * The measurement comes from `lunora build --format json`, so the gate and the
  * number a user sees are produced by the same code path.
  *
  * Usage:
- *   pnpm run worker-size:check     # fail when the bundle exceeds the ceiling
- *   pnpm run worker-size:update    # re-baseline after an intentional increase
+ *   pnpm run worker-size:check             # fail when a bundle exceeds its ceiling
+ *   pnpm run worker-size:update            # re-baseline after an intentional increase
+ *   node scripts/check-worker-size.js saas # weigh one template (either mode)
  *
  * PREREQUISITE: `pnpm run build:packages:prod`. The reference app resolves the
  * workspace `dist/` directories, and users install the PRODUCTION build — a plain
@@ -32,10 +37,12 @@
  * reports it.
  */
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { materializeTemplate } from "./materialize-template.mjs";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const fixturePath = join(rootDir, "worker-size.json");
@@ -60,55 +67,8 @@ const kib = (bytes) => `${(bytes / 1024).toFixed(1)} KiB`;
  */
 const RAW_LIMIT_BYTES = 64 * 1024 * 1024;
 
-/**
- * Materialize the reference template as a project whose dependencies resolve.
- *
- * A symlink farm rather than an install: every `@lunora/*` dependency is a
- * workspace package that already has its own `node_modules`, so linking the
- * package directories is enough for esbuild to resolve the whole graph — and it
- * keeps the gate offline and quick. `pnpm install` here would try to fetch
- * `lunorash@^0.0.0` from the registry instead.
- */
-const materialize = (appDirectory) => {
-    cpSync(join(rootDir, "templates", "standalone"), appDirectory, { recursive: true });
-
-    for (const file of ["package.json", "wrangler.jsonc"]) {
-        const path = join(appDirectory, file);
-
-        writeFileSync(path, readFileSync(path, "utf8").replaceAll("{{name}}", "lunora-worker-size-reference"), "utf8");
-    }
-
-    // The CLI runs wrangler through the project's package manager. A pnpm-shaped
-    // project makes `pnpm exec` verify the (absent) lockfile first and abort;
-    // `npx --` runs the linked binary directly, so the reference app declares
-    // itself npm-shaped with an empty lockfile.
-    writeFileSync(join(appDirectory, "package-lock.json"), '{ "lockfileVersion": 3 }\n', "utf8");
-
-    const modules = join(appDirectory, "node_modules");
-
-    mkdirSync(join(modules, "@lunora"), { recursive: true });
-
-    for (const directory of readdirSync(join(rootDir, "packages"))) {
-        const source = join(rootDir, "packages", directory);
-        const manifest = join(source, "package.json");
-
-        if (existsSync(manifest)) {
-            symlinkSync(source, join(modules, JSON.parse(readFileSync(manifest, "utf8")).name));
-        }
-    }
-
-    // wrangler and the Workers types come from a workspace package that already
-    // depends on them, so the gate needs no dependencies of its own.
-    const host = join(rootDir, "packages", "runtime", "node_modules");
-
-    symlinkSync(join(host, "wrangler"), join(modules, "wrangler"));
-    symlinkSync(join(host, "@cloudflare"), join(modules, "@cloudflare"));
-    mkdirSync(join(modules, ".bin"), { recursive: true });
-    symlinkSync(join(host, ".bin", "wrangler"), join(modules, ".bin", "wrangler"));
-};
-
-/** Build the reference app and return `lunora build`'s `bundle` measurement. */
-const measure = (appDirectory) => {
+/** Build a reference app and return `lunora build`'s `bundle` measurement. */
+const measure = (template, appDirectory) => {
     const cli = join(rootDir, "packages", "cli", "dist", "bin.mjs");
 
     if (!existsSync(cli)) {
@@ -126,7 +86,7 @@ const measure = (appDirectory) => {
             stdio: ["ignore", "pipe", "inherit"],
         });
     } catch {
-        fail("check-worker-size: `lunora build` failed on the reference template (its output is above).");
+        fail(`check-worker-size: \`lunora build\` failed on templates/${template} (its output is above).`);
     }
 
     // `--format json` puts every command's payload under `data` in the shared
@@ -136,63 +96,79 @@ const measure = (appDirectory) => {
     // A measurement of zero must never pass as a healthy result: that is exactly
     // what a changed wrangler out-dir layout would look like.
     if (!bundle || bundle.files < 1 || bundle.gzipBytes < 1) {
-        fail("check-worker-size: `lunora build` reported no bundle — the wrangler out-dir layout may have changed.");
+        fail(`check-worker-size: \`lunora build\` reported no bundle for templates/${template} — the wrangler out-dir layout may have changed.`);
     }
 
     return bundle;
 };
 
-const baseline = JSON.parse(readFileSync(fixturePath, "utf8"));
-const appDirectory = join(mkdtempSync(join(tmpdir(), "lunora-worker-size-")), "app");
+const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+const requested = process.argv.slice(2).filter((argument) => !argument.startsWith("--"));
+const unknown = requested.filter((template) => !(template in fixture.templates));
 
-let bundle;
-
-try {
-    materialize(appDirectory);
-    bundle = measure(appDirectory);
-} finally {
-    rmSync(join(appDirectory, ".."), { force: true, recursive: true });
+if (unknown.length > 0) {
+    fail(`check-worker-size: no baseline for ${unknown.join(", ")} in worker-size.json (known: ${Object.keys(fixture.templates).join(", ")}).`);
 }
 
-const ceiling = baseline.gzipBytes + baseline.allowanceBytes;
+const failures = [];
 
-process.stdout.write(
-    `worker size (${baseline.template}): ${kib(bundle.rawBytes)} raw, ${kib(bundle.gzipBytes)} gzipped — ` +
-        `baseline ${kib(baseline.gzipBytes)}, ceiling ${kib(ceiling)}\n`,
-);
+for (const template of requested.length > 0 ? requested : Object.keys(fixture.templates)) {
+    const baseline = fixture.templates[template];
+    const appDirectory = join(mkdtempSync(join(tmpdir(), "lunora-worker-size-")), "app");
+
+    let bundle;
+
+    try {
+        materializeTemplate(template, appDirectory, { name: "lunora-worker-size-reference" });
+        bundle = measure(template, appDirectory);
+    } finally {
+        rmSync(join(appDirectory, ".."), { force: true, recursive: true });
+    }
+
+    const ceiling = baseline.gzipBytes + baseline.allowanceBytes;
+
+    process.stdout.write(
+        `worker size (${template}): ${kib(bundle.rawBytes)} raw, ${kib(bundle.gzipBytes)} gzipped — ` +
+            `baseline ${kib(baseline.gzipBytes)}, ceiling ${kib(ceiling)}\n`,
+    );
+
+    if (update) {
+        const delta = bundle.gzipBytes - baseline.gzipBytes;
+
+        fixture.templates[template] = { ...baseline, gzipBytes: bundle.gzipBytes, rawBytes: bundle.rawBytes };
+        process.stdout.write(`worker-size.json (${template}): ${delta >= 0 ? "+" : ""}${kib(delta)} gzipped against the previous baseline.\n`);
+
+        continue;
+    }
+
+    // Cloudflare's only size ceiling is the 64 MiB uncompressed limit (both plans;
+    // there is no compressed limit). The baseline check below is a regression
+    // signal measured in gzip, so it cannot see a bundle that compresses extremely
+    // well — a large generated lookup table is tiny gzipped and enormous raw. That
+    // bundle would pass the gate and be rejected at upload, so the raw limit gets
+    // its own absolute check.
+    if (bundle.rawBytes > RAW_LIMIT_BYTES) {
+        failures.push(
+            `The reference Worker (templates/${template}) exceeds Cloudflare's pre-compression limit.\n` +
+                `  raw:   ${kib(bundle.rawBytes)}\n` +
+                `  limit: ${kib(RAW_LIMIT_BYTES)} before compression (both plans)\n` +
+                `This is an upload-time rejection, not a budget — accepting it with \`worker-size:update\` will not help.`,
+        );
+    } else if (bundle.gzipBytes > ceiling) {
+        failures.push(
+            `The reference Worker (templates/${template}) grew past its ceiling.\n` +
+                `  now:      ${kib(bundle.gzipBytes)} gzipped (${kib(bundle.rawBytes)} raw)\n` +
+                `  baseline: ${kib(baseline.gzipBytes)} gzipped, + ${kib(baseline.allowanceBytes)} allowance = ${kib(ceiling)}\n` +
+                `  delta:    +${kib(bundle.gzipBytes - baseline.gzipBytes)} against the baseline\n` +
+                `Every app built from this template carries this. Find what arrived (\`lunora analyze\` prints the heaviest\n` +
+                `modules), and if the growth is intended, accept it with \`pnpm run worker-size:update\` so the increase\n` +
+                `is visible in review rather than buried.`,
+        );
+    }
+}
 
 if (update) {
-    const delta = bundle.gzipBytes - baseline.gzipBytes;
-
-    writeFileSync(fixturePath, `${JSON.stringify({ ...baseline, gzipBytes: bundle.gzipBytes, rawBytes: bundle.rawBytes }, undefined, 4)}\n`, "utf8");
-    process.stdout.write(`worker-size.json updated: ${delta >= 0 ? "+" : ""}${kib(delta)} gzipped against the previous baseline.\n`);
-
-    process.exit(0);
-}
-
-// Cloudflare's only size ceiling is the 64 MiB uncompressed limit (both plans;
-// there is no compressed limit). The baseline check below is a regression
-// signal measured in gzip, so it cannot see a bundle that compresses extremely
-// well — a large generated lookup table is tiny gzipped and enormous raw. That
-// bundle would pass the gate and be rejected at upload, so the raw limit gets
-// its own absolute check.
-if (bundle.rawBytes > RAW_LIMIT_BYTES) {
-    fail(
-        `The reference Worker (templates/${baseline.template}) exceeds Cloudflare's pre-compression limit.\n` +
-            `  raw:   ${kib(bundle.rawBytes)}\n` +
-            `  limit: ${kib(RAW_LIMIT_BYTES)} before compression (both plans)\n` +
-            `This is an upload-time rejection, not a budget — accepting it with \`worker-size:update\` will not help.`,
-    );
-}
-
-if (bundle.gzipBytes > ceiling) {
-    fail(
-        `The reference Worker (templates/${baseline.template}) grew past its ceiling.\n` +
-            `  now:      ${kib(bundle.gzipBytes)} gzipped (${kib(bundle.rawBytes)} raw)\n` +
-            `  baseline: ${kib(baseline.gzipBytes)} gzipped, + ${kib(baseline.allowanceBytes)} allowance = ${kib(ceiling)}\n` +
-            `  delta:    +${kib(bundle.gzipBytes - baseline.gzipBytes)} against the baseline\n` +
-            `Every Lunora app carries this. Find what arrived (\`lunora analyze\` prints the heaviest modules),\n` +
-            `and if the growth is intended, accept it with \`pnpm run worker-size:update\` so the increase is\n` +
-            `visible in review rather than buried.`,
-    );
+    writeFileSync(fixturePath, `${JSON.stringify(fixture, undefined, 4)}\n`, "utf8");
+} else if (failures.length > 0) {
+    fail(failures.join("\n\n"));
 }

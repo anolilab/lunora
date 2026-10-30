@@ -5,8 +5,8 @@
  * room (a document, a board, a channel) and the set of users/sessions currently
  * looking at it, each carrying an optional `data` awareness blob (cursor,
  * selection, name, color…). Convex ships this as `@convex-dev/presence`; here
- * it's built from primitives Lunora already has — a live-query table plus a
- * read-time TTL filter, no Durable-Object-level support.
+ * it's built from primitives Lunora already has — a live-query table, a
+ * read-time TTL filter, and a table `.ttl()` that deletes expired rows.
  *
  * This file is YOURS to own and edit. `lunora add` splices a managed
  * `.extend(presence.extension)` into `lunora/schema.ts`, so the `present` table
@@ -14,17 +14,29 @@
  * auto-prefixed with the plugin key — write the bare name here). The handlers in
  * `./index.ts` read/write that prefixed name via {@link PRESENCE_TABLE}.
  *
+ * Tenancy: every row carries the `tenantId` the handlers derive server-side
+ * from the caller's identity (see `presenceTenant` in `./index.ts`), never from
+ * `args`. A client names only the room; the same room name in two tenants is
+ * two separate rooms, and no argument reaches the other one.
+ *
  * Indexes:
  *
- *   - `byRoomSession` — drives the heartbeat upsert lookup (one row per
- *     `(roomId, sessionId)`), so re-heartbeats patch instead of churning.
- *     `sessionId` is client-supplied and `listPresent` exposes it to every room
- *     subscriber, so it is NOT an ownership key on its own — the heartbeat
- *     handler additionally rejects a patch whose existing row belongs to a
- *     different `userId`, so a participant can't reuse another visible
- *     `sessionId` to hijack their presence row. Its leading `roomId` prefix also
- *     serves the `listPresent` / `sweep` per-room scans, so no separate
- *     `byRoom` index is needed (a standalone one would be a redundant prefix).
+ *   - `byTenantRoomSession` — drives the heartbeat upsert lookup (one row per
+ *     `(tenantId, roomId, sessionId)`), so re-heartbeats patch instead of
+ *     churning. `sessionId` is client-supplied and `listPresent` exposes it to
+ *     every room subscriber, so it is NOT an ownership key on its own — the
+ *     heartbeat handler additionally rejects a patch whose existing row belongs
+ *     to a different `userId`, so a participant can't reuse another visible
+ *     `sessionId` to hijack their presence row. Its `(tenantId, roomId)` prefix
+ *     also serves the `listPresent` and targeted-`sweep` per-room scans, so no
+ *     separate room index is needed (a standalone one would be a redundant prefix).
+ *
+ * Expiry: `.ttl("lastSeen", …)` has each Durable Object's alarm delete its own
+ * expired rows. That is what reaches every shard — an organization's rooms live
+ * in its shard, while a cron could only run `sweep` on the root one. It
+ * also matches by `lastSeen` alone, so it reaches rows written before `tenantId`
+ * existed, which every tenant-prefixed lookup misses. The engine keeps its own
+ * index on `lastSeen` for the alarm, so the table declares none.
  */
 import { definePlugin, defineSchemaExtension, defineTable, v } from "lunorash/server";
 
@@ -57,11 +69,20 @@ export const presence = definePlugin("presence", {
                 lastSeen: v.number(),
                 roomId: v.string(),
                 sessionId: v.string(),
+                // A separate column, not a `tenant:room` key: concatenation lets org `a:b`
+                // + room `c` collide with org `a` + room `b:c`. `""` is the app-wide tenant.
+                // Every write sets it; optional only because rows written before rooms were
+                // tenant-scoped have none, and a required column would fail the deploy's
+                // schema-drift gate on every existing install.
+                tenantId: v.optional(v.string()),
                 userId: v.optional(v.string()),
             })
-                // `byRoomSession`'s leading `roomId` also covers the per-room
-                // `listPresent`/`sweep` scans — a separate `byRoom` would be redundant.
-                .index("byRoomSession", ["roomId", "sessionId"]),
+                // The `(tenantId, roomId)` prefix also covers the per-room
+                // `listPresent`/`sweep` scans — a separate room index would be redundant.
+                .index("byTenantRoomSession", ["tenantId", "roomId", "sessionId"])
+                // Keep `after` equal to PRESENCE_TTL_MS, written out: codegen reads this
+                // literal to build the shard's alarm sweep, and does not resolve a constant.
+                .ttl("lastSeen", { after: 30_000 }),
         },
     }),
 });
