@@ -467,6 +467,48 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
             await expect(erasing).resolves.toStrictEqual({ deleted: 5 });
         });
 
+        describe("deleteAll under .rls('required')", () => {
+            const rlsSchema: SchemaLike = {
+                rlsMode: "required",
+                tables: {
+                    notes: { ...schema.tables["notes"]!, isPublic: false },
+                    stats: { ...schema.tables["notes"]!, isPublic: true },
+                },
+            };
+
+            const survivors = (table: string): number => sql.exec(`SELECT id FROM ${table}`).toArray().length;
+
+            it.each([
+                ["metered", true],
+                ["unmetered", false],
+            ])("refuses the protected table and leaves its rows, %s", async (_label, metered) => {
+                expect.assertions(3);
+
+                runShardMigrations(sql, rlsSchema);
+
+                const trusted = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: rlsSchema, sql });
+
+                await trusted.insert("notes", { body: "hidden", bucket: "a" });
+
+                const caller = createShardContextDatabase({
+                    clock: () => 1_700_000_000_000,
+                    enforceRls: true,
+                    ...(metered ? { headroom: new TransactionHeadroomTracker() } : {}),
+                    schema: rlsSchema,
+                    sql,
+                });
+
+                await expect(codeOf(async () => caller.deleteAll?.("notes"))).resolves.toBeDefined();
+                expect(survivors("notes")).toBe(1);
+
+                // A `.public()` table has no policy to bypass, so the erase proceeds on both paths.
+                await trusted.insert("stats", { body: "open", bucket: "a" });
+                await caller.deleteAll?.("stats");
+
+                expect(survivors("stats")).toBe(0);
+            });
+        });
+
         it("does not charge read bytes inside an unmetered deleteAll", async () => {
             expect.assertions(1);
 
