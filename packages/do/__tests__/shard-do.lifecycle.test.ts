@@ -250,8 +250,8 @@ describe("shardDO connection-lifecycle dispatch", () => {
         await shard.driveMessage(ws, connectEnvelope({ roomId: "room-1" }));
 
         expect(ws.sent.map((raw) => JSON.parse(raw) as unknown)).toStrictEqual([
-            { connectionId: "conn-1", subject: "user-42", type: "identity", whisperAck: true },
-            { connectionId: "conn-1", subject: "user-42", type: "identity", whisperAck: true },
+            { connectionId: "conn-1", revalidateMs: 60_000, subject: "user-42", type: "identity", whisperAck: true },
+            { connectionId: "conn-1", revalidateMs: 60_000, subject: "user-42", type: "identity", whisperAck: true },
         ]);
     });
 

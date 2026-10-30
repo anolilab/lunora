@@ -36,6 +36,9 @@ const createFakeWebSocket = (): FakeWebSocket => {
 };
 
 class ReauthShard extends ShardDO {
+    /** Runs while a subscription query is in flight, standing in for time a slow query takes. */
+    public duringQuery: (() => void) | undefined;
+
     public override async handleRpc(): Promise<unknown> {
         this.recordChangedTable("messages");
 
@@ -57,9 +60,11 @@ class ReauthShard extends ShardDO {
         );
     }
 
-    // eslint-disable-next-line class-methods-use-this -- override stub: every subscription reads the same table
-    protected override executeSubscription(): Promise<SubscriptionOutcome | null> {
-        return Promise.resolve({ result: Date.now(), tables: new Set(["messages"]) });
+    protected override async executeSubscription(): Promise<SubscriptionOutcome | null> {
+        await Promise.resolve();
+        this.duringQuery?.();
+
+        return { result: Date.now(), tables: new Set(["messages"]) };
     }
 }
 
@@ -283,6 +288,69 @@ describe("socket identity revalidation", () => {
         expect(ws.closes[0]).toBe(4005);
         expect(dataFrames(ws)).toStrictEqual([]);
         expect(ws.sent.some((frame) => frame.includes("TOKEN_EXPIRED"))).toBe(false);
+    });
+
+    it("delivers nothing when the window passes while the refresh query is still running", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = openTenantSocket();
+
+        shard.duringQuery = () => {
+            vi.setSystemTime(NOW + WINDOW);
+        };
+        await shard.write();
+
+        expect(dataFrames(ws)).toStrictEqual([]);
+        expect(ws.closes[0]).toBe(4005);
+    });
+
+    it("delivers nothing when the window passes while the socket's buffer drains", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = openTenantSocket();
+
+        Object.assign(ws, { bufferedAmount: 2_000_000 });
+        shard.duringQuery = () => {
+            // The consumer is slow: the buffer clears only after the window has passed.
+            setTimeout(() => {
+                Object.assign(ws, { bufferedAmount: 0 });
+            }, 40);
+            vi.setSystemTime(NOW + WINDOW);
+        };
+
+        const write = shard.write();
+
+        await vi.advanceTimersByTimeAsync(100);
+        await write;
+
+        expect(dataFrames(ws)).toStrictEqual([]);
+        expect(ws.closes[0]).toBe(4005);
+    });
+
+    it("gives a socket accepted before the window existed one window, then closes it", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const shard = new ReauthShard(createState(), {});
+        const ws = createFakeWebSocket();
+
+        // As a hibernated pre-deploy socket reads back: a user identity, no `revalidateAt`.
+        shard.register(ws, { connectionId: "conn-1", expiresAt: NOW + HOUR, subs: { "sub-1": { args: {}, functionPath: "messages:list" } }, userId: "user-1" });
+        await shard.write();
+
+        expect(dataFrames(ws)).toHaveLength(1);
+        expect(ws.attachment?.revalidateAt).toBe(NOW + WINDOW);
+
+        vi.setSystemTime(NOW + WINDOW);
+        await shard.write();
+
+        expect(dataFrames(ws)).toHaveLength(1);
+        expect(ws.closes[0]).toBe(4005);
     });
 
     it("restarts the window on a same-claims re-auth, so the socket keeps delivering past the first window", async () => {

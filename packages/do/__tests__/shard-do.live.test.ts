@@ -514,7 +514,7 @@ describe("shardDO live streams", () => {
 
         await shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ type: "connect" }));
 
-        expect(withoutAck(socket)).toContainEqual({ connectionId: "ws-a", subject: "user-a", type: "identity", whisperAck: true });
+        expect(withoutAck(socket)).toContainEqual({ connectionId: "ws-a", revalidateMs: 60_000, subject: "user-a", type: "identity", whisperAck: true });
     });
 
     it("keeps serving a WebSocket whose relay attach failed, and still advertises its connection id", async () => {
@@ -529,7 +529,7 @@ describe("shardDO live streams", () => {
         await shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ type: "connect" }));
 
         expect(socket.closed).toBeUndefined();
-        expect(withoutAck(socket)).toContainEqual({ connectionId: "ws-a", subject: "user-a", type: "identity", whisperAck: true });
+        expect(withoutAck(socket)).toContainEqual({ connectionId: "ws-a", revalidateMs: 60_000, subject: "user-a", type: "identity", whisperAck: true });
     });
 
     it("delivers a live publish to SSE readers without a relay hop that could fail it", async () => {

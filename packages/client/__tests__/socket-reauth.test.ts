@@ -281,3 +281,102 @@ describe("socket identity revalidation", () => {
         client.close();
     });
 });
+
+/** A client with an open, identified socket per shard in `shardKeys`, whose re-auth answers `IDENTITY_CHANGED` once `release` is called. */
+const openChangedClaimsClient = async (shardKeys: string[]) => {
+    const { sockets, WebSocket } = createSocketHarness();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+        if (!(input as string).includes("/_lunora/ws/reauth")) {
+            return jsonResponse({ result: { ok: true } });
+        }
+
+        await gate;
+
+        return jsonResponse({ error: { code: "IDENTITY_CHANGED" } }, { status: 409 });
+    });
+    const client = new LunoraClient({
+        authTokenOnUpgrade: true,
+        fetch: fetchMock,
+        heartbeatIntervalMs: 0,
+        reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
+        url: "http://app.test",
+        WebSocket,
+    });
+    let changes = 0;
+
+    client.onIdentityChange(() => {
+        changes += 1;
+    });
+    client.setAuthToken("token-1", "user-1");
+
+    for (const shardKey of shardKeys) {
+        client.subscribe(fnRef("todos.list"), {}, () => undefined, { shardKey });
+    }
+
+    await settle();
+
+    for (const [index] of shardKeys.entries()) {
+        sockets[index]?.open();
+        sockets[index]?.receive({ connectionId: `conn-${String(index)}`, revalidateMs: 60_000, subject: "user-1", type: "identity" });
+    }
+
+    await settle();
+
+    return { changes: () => changes, client, release, sockets };
+};
+
+describe("socket claims change", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("re-seeds cold when the 4005 close arrives before the 409, which is then discarded", async () => {
+        expect.assertions(3);
+
+        const { changes, client, release, sockets } = await openChangedClaimsClient([""]);
+        const subscribe = (sockets[0]?.frames() ?? []).find((frame) => frame.type === "subscribe") as { id: string } | undefined;
+
+        sockets[0]?.receive({ cursor: 7, epoch: "e1", id: subscribe?.id, type: "data", data: ["org-a row"] });
+        await settle();
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        // The shard closes the socket before it answers the request.
+        sockets[0]?.triggerClose({ code: 4005, reason: "identity_changed" });
+        await vi.advanceTimersByTimeAsync(0);
+        await settle();
+        release();
+        await settle();
+        sockets[1]?.open();
+        await settle();
+
+        const resubscribe = (sockets[1]?.frames() ?? []).find((frame) => frame.type === "subscribe") as { query?: Record<string, unknown> } | undefined;
+
+        expect(resubscribe?.query).toBeDefined();
+        expect(resubscribe?.query).not.toHaveProperty("sinceSeq");
+        expect(changes()).toBe(1);
+
+        client.close();
+    });
+
+    it("announces one identity change when two shards' sockets report the same claims change", async () => {
+        expect.assertions(1);
+
+        const { changes, client, release } = await openChangedClaimsClient(["a", "b"]);
+
+        await vi.advanceTimersByTimeAsync(30_000);
+        release();
+        await settle();
+
+        expect(changes()).toBe(1);
+
+        client.close();
+    });
+});

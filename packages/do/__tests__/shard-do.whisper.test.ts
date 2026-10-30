@@ -259,7 +259,7 @@ describe("shardDO token-expiry", () => {
     it("stops DELIVERING whispers to an expired socket, not just accepting them from it", async () => {
         expect.assertions(4);
 
-        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const a = new FakeSocket({ revalidateAt: Date.now() + 600_000, subs: {}, userId: "user-a" });
         // A passive receiver: it joined the topic while its credential was live
         // and then never sends another inbound frame. No write flush, no shape
         // poke and no global poll fire on a pure presence/cursor workload, so
@@ -287,8 +287,8 @@ describe("shardDO token-expiry", () => {
     it("stops delivering presence to a socket whose identity went unrevalidated, closing it without a token-expired signal", async () => {
         expect.assertions(3);
 
-        const a = new FakeSocket({ subs: {}, userId: "user-a" });
         const joinedAt = Date.now();
+        const a = new FakeSocket({ revalidateAt: joinedAt + 600_000, subs: {}, userId: "user-a" });
         // No credential expiry at all (a cookie session): only the revalidation window bounds it.
         const b = new FakeSocket({ revalidateAt: joinedAt + 60_000, subs: {}, userId: "user-b" });
         const shard = makeShard([a, b]);

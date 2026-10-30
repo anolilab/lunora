@@ -23,3 +23,10 @@ export const SOCKET_REVALIDATE_MS = 60_000;
  * upgrade) without signalling token expiry to the app.
  */
 export const IDENTITY_STALE_CLOSE_CODE = 4005;
+
+/**
+ * The close reason that tells a client the re-auth resolved the same user under different claims, as
+ * opposed to a window that merely lapsed. It rides the close because the shard closes the socket before
+ * it answers the re-auth request, so the answer can reach a client that has already dropped the socket.
+ */
+export const IDENTITY_CHANGED_CLOSE_REASON = "identity_changed";

@@ -7,7 +7,7 @@ import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../sha
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { REFRESH_BATCH_CAPABILITY } from "../../../shared/refresh-batch";
 import { onSessionChanged } from "../../../shared/session-change";
-import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
+import { IDENTITY_CHANGED_CLOSE_REASON, IDENTITY_STALE_CLOSE_CODE, SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import { encodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import type { AdminHost } from "./admin/host";
 import { decodeRecordArgs } from "./admin/scheduler";
@@ -6590,7 +6590,14 @@ class LunoraClient {
                     conn.polling.noteFailedOpen();
                 }
 
-                if (event?.code === 4001) {
+                if (event?.code === IDENTITY_STALE_CLOSE_CODE && event.reason === IDENTITY_CHANGED_CLOSE_REASON) {
+                    // The shard closes a socket whose claims changed before it answers the re-auth, so the 409 can
+                    // arrive after this close has cleared the socket's id. Re-seeding on the close itself means
+                    // the reconnect is never warm; a socket an eviction already retired has been handled by it.
+                    if (conn.retired !== true && !this.closed) {
+                        this.evictPreviousIdentitySession();
+                    }
+                } else if (event?.code === 4001) {
                     this.notifyTokenExpired();
                 } else if (
                     event?.code === 4003 &&
@@ -8807,6 +8814,7 @@ class LunoraClient {
      */
     private reauthenticateShardSocket(conn: ShardConnection, connectionId: string, bearer: null | string): void {
         const { authToken: heldToken, fetchImpl } = this;
+        const { socket } = conn;
 
         if (fetchImpl === undefined) {
             return;
@@ -8832,7 +8840,8 @@ class LunoraClient {
             .catch(() => "refused" as const)
             .then((outcome) => {
                 // A newer token, or a socket that has since been replaced, is already handled by whatever replaced it.
-                if (this.closed || this.authToken !== heldToken || conn.connectionId !== connectionId) {
+                // `retired` covers a socket another socket's claims change just re-seeded everything for.
+                if (this.closed || this.authToken !== heldToken || conn.connectionId !== connectionId || conn.socket !== socket || conn.retired === true) {
                     return undefined;
                 }
 
@@ -8857,16 +8866,19 @@ class LunoraClient {
      * holds the socket to nothing, so nothing is armed.
      */
     private armSocketRevalidation(conn: ShardConnection, windowMs: number | undefined): void {
-        /* eslint-disable no-param-reassign -- the shared ShardConnection record is advanced in place */
         clearTimeout(conn.revalidateTimer);
+        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
         conn.revalidateTimer = undefined;
+        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
         conn.revalidateMs = typeof windowMs === "number" && windowMs > 0 ? windowMs : undefined;
 
         if (conn.revalidateMs === undefined) {
             return;
         }
 
+        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
         conn.revalidateTimer = setTimeout(() => {
+            // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
             conn.revalidateTimer = undefined;
 
             // The credential the upgrade presented: a bearer only when it rode the handshake, else the cookie.
@@ -8876,7 +8888,6 @@ class LunoraClient {
                 this.reauthenticateShardSocket(conn, conn.connectionId, this.authTokenOnUpgrade ? this.authToken : null);
             }
         }, conn.revalidateMs / 2);
-        /* eslint-enable no-param-reassign */
     }
 
     private bounceShardSocket(conn: ShardConnection): void {

@@ -309,7 +309,7 @@ import { BATCH_END_FRAME, BATCH_START_FRAME, REFRESH_BATCH_CAPABILITY } from "..
 import { parseRelayName } from "../../../shared/relay-name";
 import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
-import { IDENTITY_STALE_CLOSE_CODE, SOCKET_REAUTH_PATH, SOCKET_REVALIDATE_MS } from "../../../shared/socket-reauth";
+import { IDENTITY_CHANGED_CLOSE_REASON, IDENTITY_STALE_CLOSE_CODE, SOCKET_REAUTH_PATH, SOCKET_REVALIDATE_MS } from "../../../shared/socket-reauth";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { adminSocketBinding, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -13441,6 +13441,13 @@ abstract class ShardDO {
                 break;
             }
 
+            // The drain can outlast the credential or the revalidation window.
+            if (this.dropIfLapsed(ws)) {
+                controller.abort();
+
+                break;
+            }
+
             ws.send(JSON.stringify({ data: encodeWire(chunk), id, type: "chunk" }));
         }
 
@@ -14142,6 +14149,12 @@ abstract class ShardDO {
                     // stalls the others. Mirrors the `handleStream` gate.
                     await awaitWsDrain(ws);
 
+                    // The authorization, the query and the drain above all yield: the window or the credential
+                    // can lapse in any of them, and the rows in hand are the lapsed identity's.
+                    if (this.dropIfLapsed(ws)) {
+                        return;
+                    }
+
                     this.pushSubscriptionData(ws, subId, outcome, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery, permit);
                     this.subscriptionFailures.clear(ws, subId);
                 } catch (error) {
@@ -14743,6 +14756,11 @@ abstract class ShardDO {
                     }
 
                     await awaitWsDrain(ws);
+
+                    // The drain can outlast the credential or the revalidation window.
+                    if (this.dropIfLapsed(ws)) {
+                        return;
+                    }
 
                     if (this.sendPoke(ws, parts, checkpoint, frameEpoch, undefined)) {
                         delivered += 1;
@@ -16969,7 +16987,7 @@ abstract class ShardDO {
         }
 
         if (credentialClaimsKey(attachment.identity) !== credentialClaimsKey(identity)) {
-            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_changed");
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, IDENTITY_CHANGED_CLOSE_REASON);
 
             return jsonResponse({ error: { code: "IDENTITY_CHANGED", message: "the credential's claims differ from the socket's; reconnect" } }, 409);
         }
@@ -17272,6 +17290,20 @@ abstract class ShardDO {
             this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
 
             return true;
+        }
+
+        // A hibernated socket accepted before the window existed carries a user and no deadline, and would keep
+        // that identity until it happened to reconnect. It gets one window from the first time it is seen.
+        if (attachment.revalidateAt === undefined && attachment.userId !== undefined && attachment.socketFunction === undefined) {
+            // Mutated in place too: a caller that writes its own copy back must not erase the deadline, which
+            // the next call would then grant afresh.
+            Object.assign(attachment, revalidationStamp(undefined, attachment.userId, Date.now()));
+
+            try {
+                this.writeAttachment(ws, attachment);
+            } catch {
+                /* an unwritable attachment is retried on the next read */
+            }
         }
 
         return false;
