@@ -482,7 +482,13 @@ const writeRow = async (
         const committedId = existingId ?? (typeof document["_id"] === "string" ? document["_id"] : undefined);
         const committed = committedId !== undefined && takePostCommitError(error, table, committedId);
 
-        return { committed, error: { code: body.code, line, message: body.message, table }, kind: "error" };
+        // The report must say a committed row is stored: a re-import would skip it as a conflict and never redo the
+        // trigger or companion work that failed, so an operator who reads "failed" as "missing" loses that work.
+        const message = committed
+            ? `${body.message} (row "${committedId}" was stored; its triggers or companion writes did not complete, and re-importing it will skip it as a conflict)`
+            : body.message;
+
+        return { committed, error: { code: body.code, line, message, table }, kind: "error" };
     }
 };
 

@@ -196,6 +196,21 @@ describe("d1 import when a write fails after the base row committed", () => {
         expect(result.errors).toHaveLength(1);
     });
 
+    it("says in the error that the row was stored, so an operator does not re-import it as missing", async () => {
+        expect.assertions(2);
+
+        const schema = schemaWith({ aggregate: true });
+        const failing = observeProbes(AGGREGATE_WRITE);
+        const result = await importGlobalRows(writerFor(schema, failing.exec), schema, {
+            exec: failing.exec,
+            rows: [{ doc: { _id: "c2", label: "boom" }, table: "alpha" }],
+        });
+
+        // A re-import would skip the row as a conflict and never redo the failed work, so the report must say so.
+        expect(result.errors).toHaveLength(1);
+        expect(result.errors[0]?.message).toMatch(/row "c2" was stored/u);
+    });
+
     it("counts a later row repeating that id as a conflict instead of rechecking the failed one", async () => {
         expect.assertions(2);
 
