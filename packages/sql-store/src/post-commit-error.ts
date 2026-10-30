@@ -23,11 +23,13 @@ const afterBaseRowCommitted = async <T>(table: string, id: string, work: () => P
     try {
         return await work();
     } catch (error: unknown) {
-        // A thrown primitive or bare object is wrapped so the mark has an `Error` to sit on; the original rides along as `cause`.
-        const marked = error instanceof Error ? error : new Error(String(error), { cause: error });
+        // A thrown primitive cannot carry a mark, so it is wrapped; any object (an `Error` or a bare `{ code, message }`)
+        // is marked and rethrown as is, keeping its code and message.
+        const marked = typeof error === "object" && error !== null ? error : new Error(String(error), { cause: error });
 
         committed.set(marked, { id, table });
 
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- a trigger may throw a non-Error object; its identity is the mark, so it is rethrown unwrapped
         throw marked;
     }
 };

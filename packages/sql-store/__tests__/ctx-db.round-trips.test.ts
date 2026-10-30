@@ -649,7 +649,7 @@ describe("createSqlCtxDb — by-id writes pinned to a table", () => {
     });
 
     it("refuses a by-id call that names no table instead of probing for the id", async () => {
-        expect.assertions(6);
+        expect.assertions(8);
 
         const { exec, statements } = recording(harness.exec);
         const writer = createSqlCtxDb({ clock: () => 1, dialect, exec, schema });
@@ -662,6 +662,8 @@ describe("createSqlCtxDb — by-id writes pinned to a table", () => {
             () => loose["replace"]?.(undefined, id, { body: "b" }),
             () => loose["delete"]?.(undefined, id),
             () => loose["restore"]?.(undefined, id),
+            () => loose["patchIf"]?.(undefined, id, { patch: { body: "b" }, where: {} }),
+            () => loose["get"]?.(undefined, id),
         ];
 
         for (const call of unpinned) {

@@ -3926,17 +3926,19 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
          * the UPDATE then misses, the row moved after that read: it is read and
          * decided again, a bounded number of times, then `ConflictError`.
          */
-        async patchIf(tableName, id, args) {
+        async patchIf(table, id, args) {
             assertNoExplicitUndefined("patchIf", args.patch);
 
-            await ensureMigrated();
+            const pinned = await resolveGlobalTable(table);
+            const definition = pinned === undefined ? undefined : schema.tables[pinned];
 
-            const definition = schema.tables[tableName];
-
-            if (!definition) {
-                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
+            // A table that keeps no rows here has no row to match.
+            if (pinned === undefined || !definition) {
+                // eslint-disable-next-line unicorn/no-null -- no such row: nothing to match, nothing written
+                return { applied: false, doc: null };
             }
 
+            const tableName = pinned;
             const condition = compileWhereSql(args.where, whereSqlStrategyFor(definition)) ?? sql`1 = 1`;
 
             for (let attempt = 0; attempt < OCC_RETRY_ATTEMPTS; attempt += 1) {
