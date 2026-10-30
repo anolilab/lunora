@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { knowledgeExcerpts } from "../../../../shared/ai-knowledge";
 import loadKnowledgeExcerpts from "../../src/lib/assistant-knowledge";
 
+// An excerpt names its page as `Title (url): ...`; matching the whole parenthesised URL says which page it is.
+const INDEXES_PAGE = /\(https:\/\/lunora\.sh\/docs\/concepts\/indexes\)/u;
+
 describe("knowledgeExcerpts", () => {
     it("renders each matching page with its URL to cite, best match first, at most four", () => {
         expect.assertions(3);
@@ -11,7 +14,7 @@ describe("knowledgeExcerpts", () => {
 
         expect(excerpts.length).toBeGreaterThan(0);
         expect(excerpts.length).toBeLessThanOrEqual(4);
-        expect(excerpts.some((excerpt) => excerpt.includes("https://lunora.sh/docs/concepts/indexes"))).toBe(true);
+        expect(excerpts.some((excerpt) => INDEXES_PAGE.test(excerpt))).toBe(true);
     });
 
     it("answers a question matching nothing with one contents line rather than nothing", () => {

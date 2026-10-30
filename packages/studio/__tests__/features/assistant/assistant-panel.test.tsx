@@ -11,6 +11,9 @@ import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
+// An excerpt names its page as `Title (url): ...`; matching the whole parenthesised URL says which page it is.
+const INDEXES_PAGE = /\(https:\/\/lunora\.sh\/docs\/concepts\/indexes\)/u;
+
 /**
  * The shell, in miniature: the provider above, the console as a page, and the
  * panel docked beside it — which is exactly how `StudioLayoutShell` composes
@@ -653,7 +656,7 @@ describe("assistantPanel", () => {
             const [, args] = mock.streamRpc.mock.calls.find((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.aiChat) ?? [];
             const { knowledge } = (args ?? {}) as { knowledge?: string[] };
 
-            expect(knowledge?.some((excerpt) => excerpt.includes("https://lunora.sh/docs/concepts/indexes"))).toBe(true);
+            expect(knowledge?.some((excerpt) => INDEXES_PAGE.test(excerpt))).toBe(true);
         });
     });
 
