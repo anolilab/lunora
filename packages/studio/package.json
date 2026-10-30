@@ -90,10 +90,10 @@
         "@xyflow/react": "catalog:frontend",
         "class-variance-authority": "catalog:ui",
         "clsx": "catalog:ui",
-        "diff": "catalog:frontend",
         "html-to-image": "catalog:frontend",
         "motion": "catalog:frontend",
         "recharts": "catalog:frontend",
+        "streamdown": "catalog:ui",
         "tailwind-merge": "catalog:ui"
     },
     "devDependencies": {

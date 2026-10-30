@@ -420,9 +420,6 @@ interface RegistryWriter {
     unregister: (table: string, shardKey: string) => Promise<void>;
 }
 
-// Admin-only (Studio AI actions): kept out of the always-loaded class chunk, fetched on first use.
-const loadSqlAssistant = () => import("./sql-assistant");
-
 /**
  * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}
  * via the DO Hibernation API's auto-response — see {@link ShardDO.armWebSocketKeepalive}.
@@ -521,6 +518,13 @@ const decodeAdminArgs = (rawArgs: Record<string, unknown>): Record<string, unkno
 
     return decoded as Record<string, unknown>;
 };
+
+/*
+ * The admin-only AI code is imported on first use. A shard pays to parse every
+ * module it imports on cold start, and most shards never serve these RPCs.
+ */
+const loadSqlAssistant = () => import("../../../shared/sql-assistant");
+const loadAiChat = () => import("../../../shared/ai-chat");
 
 /** The empty answer of {@link ShardDO.sensitiveArgNames}: a function with no `v.sensitive` argument. */
 const NO_SENSITIVE_ARGS: ReadonlySet<string> = new Set<string>();
@@ -11961,7 +11965,7 @@ abstract class ShardDO {
      * no binding at all and so records nothing.
      */
     private async handleExplainIssue(args: Record<string, unknown>): Promise<Response> {
-        const result = await explainIssue((this.env as Record<string, unknown> | undefined)?.["AI"], args);
+        const result = await explainIssue(await this.aiBinding(), args);
 
         if (!result.degraded) {
             this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, model: result.model } });
@@ -11995,7 +11999,7 @@ abstract class ShardDO {
             return { columns: this.tableColumns(table.name).map((column) => column.name), table: table.name };
         });
         const { generateSql } = await loadSqlAssistant();
-        const result = await generateSql((this.env as Record<string, unknown> | undefined)?.["AI"], args, schema);
+        const result = await generateSql(await this.aiBinding(), args, schema);
 
         if (result.degraded) {
             if (result.reason !== "no-ai-binding") {
@@ -12053,11 +12057,51 @@ abstract class ShardDO {
     /** The AI-assistant admin writes, keyed by function path. */
     private aiAdminHandlers(): Record<string, (args: Record<string, unknown>) => Promise<Response>> {
         return {
-            [ADMIN_FUNCTIONS.aiAvailable]: () => Promise.resolve(this.handleAiAvailable()),
             [ADMIN_FUNCTIONS.aiChartConfig]: async (args) => this.handleAiChartConfig(args),
+            [ADMIN_FUNCTIONS.aiCronExpression]: async (args) => this.handleAiCronExpression(args),
             [ADMIN_FUNCTIONS.aiGenerateSql]: async (args) => this.handleGenerateSql(args),
+            [ADMIN_FUNCTIONS.aiNameQuery]: async (args) => this.handleAiNameQuery(args),
             [ADMIN_FUNCTIONS.aiTableFilter]: async (args) => this.handleAiTableFilter(args),
         };
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiNameQuery` — a title and one-line description for
+     * a saved SQL query, drafted from the statement itself.
+     *
+     * A DEFAULT the operator edits and accepts; the studio's query library is
+     * browser-local, so nothing here writes anything. Grounded in the statement
+     * alone — it already names every table and column it touches.
+     */
+    private async handleAiNameQuery(args: Record<string, unknown>): Promise<Response> {
+        const { generateQueryName } = await loadSqlAssistant();
+        const result = await generateQueryName(await this.aiBinding(), args);
+
+        if (result.degraded && result.reason !== "no-ai-binding") {
+            this.recordAudit("aiNameQuery", { detail: { reason: result.reason } });
+        }
+
+        return adminResponse(result);
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiCronExpression` — a Cloudflare Cron Trigger
+     * expression from a described schedule.
+     *
+     * The engine validates the answer against the deployable 5-field grammar
+     * before returning it, so an expression `wrangler deploy` would reject never
+     * reaches the operator. Read-only in every sense: cron triggers are compiled
+     * into the worker, and the studio only offers the expression to copy.
+     */
+    private async handleAiCronExpression(args: Record<string, unknown>): Promise<Response> {
+        const { generateCron } = await loadSqlAssistant();
+        const result = await generateCron(await this.aiBinding(), args);
+
+        if (result.degraded && result.reason !== "no-ai-binding") {
+            this.recordAudit("aiCronExpression", { detail: { reason: result.reason } });
+        }
+
+        return adminResponse(result);
     }
 
     /**
@@ -12084,7 +12128,7 @@ abstract class ShardDO {
         // The declared kinds the filter compiler binds through, so a suggestion it would refuse is never offered.
         const kinds = this.columnKinds(table) ?? {};
         const { generateFilter } = await loadSqlAssistant();
-        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns, physical, kinds);
+        const result = await generateFilter(await this.aiBinding(), args, columns, physical, kinds);
 
         if (result.degraded && result.reason !== "no-ai-binding") {
             this.recordAudit("aiTableFilter", { detail: { reason: result.reason, table } });
@@ -12094,24 +12138,28 @@ abstract class ShardDO {
     }
 
     /**
-     * Serve `__lunora_admin__:aiAvailable` — does this deployment have an `AI`
-     * binding at all?
+     * The `AI` binding this shard may use, or `undefined`.
      *
-     * The studio asks ONCE on mount so it can decide whether to paint the
-     * assistant affordances. Without it the only way to find out was to issue a
-     * real request and read `no-ai-binding` off the failure — which meant an app
-     * with no binding rendered "Draft SQL" and "Suggest chart" buttons that did
-     * nothing until the operator clicked one, and only then made them vanish.
+     * `undefined` for two different deployments — one with no binding, and one
+     * whose operator disabled the assistant through its opt-in var — because every
+     * surface treats them identically: degrade, latch, hide the affordance.
      *
-     * Deliberately NOT part of `studioFeatures()`: those flags are computed at
-     * codegen time from imports and declared dependencies, while a binding is a
-     * runtime property of `env`. Folding a runtime probe into that codegen-owned
-     * contract would make its drift guard meaningless.
+     * Read HERE rather than at each of the four call sites so `disabled` cannot
+     * mean "the chat assistant is off, but Draft SQL, the filter bar, chart
+     * inference and issue explanation still call the provider".
      *
-     * No model call, no audit entry — it reads one property off `env`.
+     * A READER of `LUNORA_AI_OPT_IN`, through the shared `asOptInLevel`, never a
+     * second decision about what the level is. The one surface that REPORTS the
+     * level to the operator — `__lunora_admin__:aiAvailable` — is served at the
+     * worker (`@lunora/runtime`'s `ai-chat-rpc.ts`) off the same deps the chat gate
+     * reads, precisely so the readout cannot disagree with the gate. It used to be
+     * served here, narrowing `env` a second time.
      */
-    private handleAiAvailable(): Response {
-        return adminResponse({ available: (this.env as Record<string, unknown> | undefined)?.["AI"] !== undefined });
+    private async aiBinding(): Promise<unknown> {
+        const { asOptInLevel } = await loadAiChat();
+        const env = this.env as Record<string, unknown> | undefined;
+
+        return asOptInLevel(env?.["LUNORA_AI_OPT_IN"]) === "disabled" ? undefined : env?.["AI"];
     }
 
     /**
@@ -12136,7 +12184,7 @@ abstract class ShardDO {
                 : Object.fromEntries(Object.entries(rawTypes).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
         const rowCount = typeof args["rowCount"] === "number" ? args["rowCount"] : 0;
         const { generateChart } = await loadSqlAssistant();
-        const result = await generateChart((this.env as Record<string, unknown> | undefined)?.["AI"], args, { columns, rowCount, types });
+        const result = await generateChart(await this.aiBinding(), args, { columns, rowCount, types });
 
         if (result.degraded && result.reason !== "no-ai-binding") {
             this.recordAudit("aiChartConfig", { detail: { reason: result.reason } });

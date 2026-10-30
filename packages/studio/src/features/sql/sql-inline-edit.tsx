@@ -2,12 +2,12 @@ import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { Input } from "../../components/ui/input";
+import type { AssistantRpc } from "../../hooks/use-assistant-rpc";
 import { useT } from "../../i18n/i18n-context";
+import assistantReasonMessage from "../../lib/assistant-reason";
 import { fireAndForget } from "../../lib/internal";
 import { cn } from "../../lib/utils";
-import assistantReasonMessage from "./assistant-reason";
 import { EDITOR_TEXT_CLASS } from "./editor-spans";
-import type { SqlAssistant } from "./hooks/use-sql-assistant";
 import type { DiffLine } from "./line-diff";
 import { lineDiff } from "./line-diff";
 
@@ -41,9 +41,13 @@ const DiffView = ({ lines }: { readonly lines: ReadonlyArray<DiffLine> }): React
             className={cn("max-h-48 overflow-auto rounded-md border border-border bg-background", EDITOR_TEXT_CLASS)}
             data-testid="sql-inline-diff"
         >
-            {/* Keyed by the row's line numbers, not its text: identical lines recur in SQL (`)`, a blank line). */}
-            {lines.map((line) => (
-                <li className={cn("flex gap-2", ROW_CLASS[line.kind])} data-kind={line.kind} key={`${String(line.before)}:${String(line.after)}`}>
+            {lines.map((line, index) => (
+                <li
+                    className={cn("flex gap-2", ROW_CLASS[line.kind])}
+                    data-kind={line.kind}
+                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- the rows of one immutable proposal, in order; identical lines repeat, so nothing else is unique
+                    key={`${index.toString()}-${line.text}`}
+                >
                     <span aria-hidden="true" className="shrink-0 select-none opacity-60">
                         {ROW_MARKER[line.kind]}
                     </span>
@@ -86,13 +90,7 @@ const SqlInlineEdit = ({
     readonly onAccept: (sql: string) => void;
     /** Dismiss without touching the draft. */
     readonly onCancel: () => void;
-
-    /**
-     * The assistant RPCs. Only four members are read — `unavailable`,
-     * `pending("sql")`, `reason("sql")` and `rewrite` — so any wider assistant
-     * contract satisfies this by structure.
-     */
-    readonly rpc: SqlAssistant;
+    readonly rpc: AssistantRpc;
     /** The statement being rewritten — the operator's selection, or the whole draft. */
     readonly source: string;
     /** True when the target is the whole draft rather than a selection, which the badge names. */

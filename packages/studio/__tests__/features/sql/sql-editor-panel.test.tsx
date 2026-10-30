@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { AssistantProvider, useAssistant } from "../../../src/components/assistant-provider";
 import { SqlEditorPanel } from "../../../src/features/sql/sql-editor-panel";
 import type { SqlConsoleResult } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
@@ -37,6 +38,22 @@ const schemaMock = (): MockClientHooks =>
             return { columns: [], rowCount: 0, rows: [], truncated: false };
         },
     });
+
+/** Renders whatever question the panel seeded, so a test can read it out of the DOM. */
+const AskProbe = (): ReactElement => <span data-testid="sql-seeded-ask">{useAssistant()?.pendingAsk?.text ?? ""}</span>;
+
+/** The shard the active assistant conversation reads its tools from, and how many conversations exist. */
+const ShardProbe = (): ReactElement => {
+    const assistant = useAssistant();
+    const active = assistant?.sessions.find((session) => session.id === assistant.activeId);
+
+    return (
+        <>
+            <span data-testid="sql-assistant-shard">{active === undefined ? "" : (active.shardKey ?? "root")}</span>
+            <span data-testid="sql-assistant-count">{String(assistant?.sessions.length ?? 0)}</span>
+        </>
+    );
+};
 
 describe("sqlEditorPanel", () => {
     afterEach(() => {
@@ -725,6 +742,151 @@ describe("sqlEditorPanel", () => {
         });
 
         expect(screen.getByTestId("sql-rows").textContent).toContain("slow-result");
+    });
+
+    /*
+     * The statement an Explain run is ABOUT is captured when the run starts and
+     * read when "Read this plan" is clicked, from the tab's own output.
+     *
+     * This test pins WHICH statement the prompt is built from. The hazard asserted
+     * against is "just read the draft", which looks like the equivalent
+     * simplification — and silently sends the model a statement the plan on screen
+     * does not describe. Verified by mutation: point
+     * the prompt at `draft.trim()` and this fails, while every other test here
+     * still passes.
+     */
+    it("asks about the statement the plan was run for, not whatever the editor holds now", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true, level: "schema" };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.runSql) {
+                    return { columns: ["detail"], rowCount: 1, rows: [{ detail: "SCAN TABLE messages" }], truncated: false };
+                }
+
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <AssistantProvider>
+                    <SqlEditorPanel />
+                    <AskProbe />
+                </AssistantProvider>
+            </LunoraProvider>,
+        );
+
+        typeInEditor("SELECT explained FROM messages");
+        fireEvent.click(screen.getByTestId("sql-tab-explain"));
+
+        // The plan landed, so the Explain pane offers "Read this plan".
+        const readPlan = await screen.findByTestId("sql-explain-plan");
+
+        // The operator moves on — the editor no longer holds the explained statement.
+        typeInEditor("SELECT moved-on FROM messages");
+        fireEvent.click(readPlan);
+
+        const ask = await screen.findByTestId("sql-seeded-ask");
+
+        expect(ask.textContent).toContain("SELECT explained FROM messages");
+        expect(ask.textContent).not.toContain("moved-on");
+        // The plan ROWS travel with it — they are what the operator is asking about.
+        expect(ask.textContent).toContain("SCAN TABLE messages");
+    });
+
+    it("pairs a plan with the statement of its own tab after switching tabs", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true, level: "schema" };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.runSql) {
+                    const { sql } = args as { sql: string };
+
+                    return { columns: ["detail"], rowCount: 1, rows: [{ detail: `PLAN FOR ${sql}` }], truncated: false };
+                }
+
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <AssistantProvider>
+                    <SqlEditorPanel />
+                    <AskProbe />
+                </AssistantProvider>
+            </LunoraProvider>,
+        );
+
+        typeInEditor("SELECT alpha FROM messages");
+        fireEvent.click(screen.getByTestId("sql-tab-explain"));
+        await screen.findByTestId("sql-explain-plan");
+
+        const alphaTab = (within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)[0] as HTMLElement).dataset.testid ?? "";
+
+        fireEvent.click(screen.getByTestId("sql-tab-add"));
+        typeInEditor("SELECT beta FROM messages");
+        fireEvent.click(screen.getByTestId("sql-tab-explain"));
+        await screen.findByTestId("sql-explain-plan");
+
+        // Back on the first tab, whose plan was never re-run: the statement must be
+        // that tab's, not the one most recently explained in the panel.
+        fireEvent.click(screen.getByTestId(alphaTab));
+        fireEvent.click(await screen.findByTestId("sql-explain-plan"));
+
+        const ask = await screen.findByTestId("sql-seeded-ask");
+
+        expect(ask.textContent).toContain("SELECT alpha FROM messages");
+        expect(ask.textContent).not.toContain("beta");
+        expect(ask.textContent).toContain("PLAN FOR");
+    });
+
+    it("moves an open assistant conversation to the shard the console is switched to", async () => {
+        expect.assertions(3);
+
+        // The conversation's tools read the shard it was opened on. Switching the
+        // console's shard while it is open must point them at the new shard, in the
+        // same conversation, rather than leave them reading the old one.
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true, level: "schema" };
+                }
+
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <AssistantProvider>
+                    <SqlEditorPanel initialShardKey="shard-a" />
+                    <ShardProbe />
+                </AssistantProvider>
+            </LunoraProvider>,
+        );
+
+        // The toggle appears once the availability probe answers; clicking before then is no longer possible.
+        fireEvent.click(await screen.findByTestId("sql-chat-toggle"));
+
+        expect(screen.getByTestId("sql-assistant-shard").textContent).toBe("shard-a");
+
+        fireEvent.change(screen.getByTestId("sql-shard-input"), { target: { value: "shard-b" } });
+
+        // Typed a keystroke at a time, the shard follows without opening a conversation per key.
+        fireEvent.change(screen.getByTestId("sql-shard-input"), { target: { value: "shard-bc" } });
+
+        expect(screen.getByTestId("sql-assistant-shard").textContent).toBe("shard-bc");
+        expect(screen.getByTestId("sql-assistant-count").textContent).toBe("1");
     });
 
     it("drops a run still in flight when its draft is replaced, so the tab shows neither its result nor its time", async () => {
