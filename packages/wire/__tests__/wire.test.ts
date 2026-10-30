@@ -301,6 +301,47 @@ describe("one prototype read per node", () => {
     });
 });
 
+describe("date and error classification", () => {
+    it("brands dates with the base getTime when a subclass overrides it without a receiver check", async () => {
+        expect.assertions(2);
+
+        const NativeDate = Date;
+        const expectedMap = encodeWire(new Map([["a", 1]]));
+        const expectedDate = encodeWire(new NativeDate(5));
+        // A subclass whose `getTime` answers for any receiver: right for a real Date, a made-up number otherwise.
+        const nativeGetTime = Reflect.get(NativeDate.prototype, "getTime");
+
+        const LooseDate = function LooseDate(...arguments_: ConstructorParameters<typeof Date>): Date {
+            return Reflect.construct(NativeDate, arguments_, LooseDate) as Date;
+        };
+
+        LooseDate.prototype = Object.create(NativeDate.prototype, {
+            getTime: {
+                value(this: unknown): number {
+                    try {
+                        return Reflect.apply(nativeGetTime, this, []);
+                    } catch {
+                        return 0;
+                    }
+                },
+            },
+        }) as Date;
+        Object.setPrototypeOf(LooseDate, NativeDate);
+        vi.stubGlobal("Date", LooseDate);
+        vi.resetModules();
+
+        try {
+            const fresh = await import("../src");
+
+            expect(fresh.encodeWire(new Map([["a", 1]]))).toStrictEqual(expectedMap);
+            expect(fresh.encodeWire(new NativeDate(5))).toStrictEqual(expectedDate);
+        } finally {
+            vi.unstubAllGlobals();
+            vi.resetModules();
+        }
+    });
+});
+
 describe("url classification", () => {
     it("encodes a url when the global URL is a subclass that inherits href", async () => {
         expect.assertions(1);

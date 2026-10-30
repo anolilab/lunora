@@ -26,30 +26,35 @@ const brand = (check: () => unknown): boolean => {
     }
 };
 
-// Takes the DEEPEST accessor on the chain, once at module load. When the global is a subclass, the base
-// class's getter is the one that checks its receiver's internal slot; an override above it may answer for
-// any object (a Map would then pass as a URL), so it is never the brand.
-const getter = (proto: object, key: string): (() => unknown) => {
+/*
+ * Every brand is the DEEPEST definition of its name on the chain, read once at module load. When a global is a
+ * subclass, the base class's member is the one that checks its receiver's internal slot; an override above it may
+ * answer for any object (a Map would then pass as a URL or a Date), so it is never the brand.
+ */
+const deepest = (start: object, key: string, part: "get" | "value"): (() => unknown) | undefined => {
     let found: (() => unknown) | undefined;
 
-    for (let current: object | null = proto; current !== null; current = Object.getPrototypeOf(current) as object | null) {
-        const accessor = Object.getOwnPropertyDescriptor(current, key)?.get;
+    for (let current: object | null = start; current !== null; current = Object.getPrototypeOf(current) as object | null) {
+        const member: unknown = Object.getOwnPropertyDescriptor(current, key)?.[part];
 
-        if (accessor !== undefined) {
-            found = accessor as () => unknown;
+        if (typeof member === "function") {
+            found = member as () => unknown;
         }
     }
 
-    return found as () => unknown;
+    return found;
 };
 
-const dateGetTime = Date.prototype.getTime;
+const getter = (proto: object, key: string): (() => unknown) => deepest(proto, key, "get") as () => unknown;
+
+const dateGetTime = deepest(Date.prototype, "getTime", "value") as () => unknown;
 const mapSize = getter(Map.prototype, "size");
 const setSize = getter(Set.prototype, "size");
 const bufferByteLength = getter(ArrayBuffer.prototype, "byteLength");
 // `URL` is absent from some embedded runtimes; its brand is then simply never matched.
 const urlHref = typeof URL === "function" ? getter(URL.prototype, "href") : undefined;
-const nativeErrorCheck = (Error as { isError?: (value: unknown) => boolean }).isError;
+// The static is looked up the same way, on the constructor chain, so a subclass's own `isError` is never the test.
+const nativeErrorCheck = deepest(Error, "isError", "value") as ((value: unknown) => boolean) | undefined;
 const errorPrototype = Error.prototype;
 
 // `Error.isError` tests the internal slot. Without it (older runtimes) the best available
