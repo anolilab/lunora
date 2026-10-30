@@ -141,6 +141,27 @@ describe("schedulerDO job lifecycle", () => {
         expect(page.records[0]).toMatchObject({ completedAt: 1_700_000_000_600, state: "failed" });
     });
 
+    it("drops the history index entry of a dead job when it is requeued", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const state = createFakeState();
+        const scheduler = new AlwaysFailing(state, env);
+
+        await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "jobs.run", id: "doomed", retry: { baseMs: 0, maxAttempts: 1 }, scheduledFor: Date.now() }),
+        );
+        await scheduler.alarm();
+        setNow(1_700_000_000_001);
+        await scheduler.alarm();
+
+        await expect(state.storage.list({ prefix: "dt:" })).resolves.toHaveProperty("size", 1);
+
+        await scheduler.fetch(post("/dead/retry", { id: "doomed" }));
+
+        await expect(state.storage.list({ prefix: "dt:" })).resolves.toHaveProperty("size", 0);
+    });
+
     it("reads a requeued dead job as pending even when a half-finished purge left its failed outcome", async () => {
         expect.hasAssertions();
 

@@ -2063,7 +2063,13 @@ class SchedulerDO {
             ...SchedulerDO.pendingRows(revived),
             [SchedulerDO.indexKey(scheduledFor, dead.id)]: dead.id,
         });
-        await this.state.storage.delete(`${DEAD_PREFIX}${dead.id}`);
+        // With the `dt:` entry `parkDead` wrote, which would otherwise take a
+        // `/history` page slot until the retention sweep reclaims it.
+        await this.state.storage.delete(
+            dead.completedAt === undefined
+                ? [`${DEAD_PREFIX}${dead.id}`]
+                : [`${DEAD_PREFIX}${dead.id}`, SchedulerDO.terminalIndexKey(dead.completedAt, dead.id)],
+        );
         await this.armAlarmIfEarlier(scheduledFor);
         await this.broadcastChange();
 
