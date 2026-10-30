@@ -270,8 +270,10 @@ deploy:
 
 # Every merge request from this project gets an isolated preview: its own
 # Worker, Durable Objects, D1, KV and R2, never production's. GitLab runs the
-# stop job below when the merge request is merged or closed, or the environment
-# auto-stops.
+# stop job below when the environment stops: its source branch is deleted (merge
+# with "delete source branch"), someone stops it under Operate > Environments,
+# or it auto-stops. A closed merge request that keeps its branch is cleaned up
+# by the auto-stop, or by stopping the environment by hand.
 preview:
   extends: .lunora_base
   rules:

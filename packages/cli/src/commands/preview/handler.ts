@@ -34,7 +34,7 @@ import { resolveRequiredSecretKeys } from "../deploy/secrets";
 import { runSeedCommand } from "../seed/handler";
 import { mintAppId, readAppId } from "./app-id";
 import type { PreviewOptions } from "./index";
-import type { PlannedResource, PreviewConfig, PreviewPlan, ResourceIds } from "./plan";
+import type { PlannedResource, PreviewConfig, PreviewNames, PreviewPlan, ResourceIds } from "./plan";
 import {
     planPreview,
     PREVIEW_MARKER_VAR,
@@ -57,6 +57,8 @@ import {
     recordedResourceState,
     recordKey,
     registryNamespace,
+    releaseLease,
+    takeLease,
     workerMarker,
     workersSubdomain,
     writeRecord,
@@ -339,6 +341,7 @@ const recordFor = async (
     production: string,
     slug: string,
     logger: Logger,
+    rekey = true,
 ): Promise<PreviewRecord | undefined> => {
     if (appId !== undefined) {
         const current = await readRecord(request, namespace, recordKey(appId, slug));
@@ -365,6 +368,11 @@ const recordFor = async (
     }
 
     const rekeyed: PreviewRecord = { ...legacy, appId };
+
+    // A dry run shows what it would find and changes nothing in the account.
+    if (!rekey) {
+        return rekeyed;
+    }
 
     await writeRecord(request, namespace, rekeyed);
     await deleteRecord(request, namespace, legacy);
@@ -435,35 +443,35 @@ const reportPlan = (logger: Logger, plan: PreviewPlan, block: Record<string, unk
     logger.info(`  env.${plan.environment}: ${JSON.stringify(shown)}`);
 };
 
-/** Everything after the plan: record, resources, the env block, the deploy, then migrations (in the deploy) and the seed. */
-const shipPreview = async (
+const heldMessage = (slug: string, since: string): string =>
+    `another run is deploying or deleting preview "${slug}" (since ${since}); wait for it. If it crashed, its hold lapses by itself after 30 minutes`;
+
+/** What a deploy has settled before it creates anything: the secrets, the workers.dev subdomain, the registry and its hold on this preview. */
+interface ShipPrerequisites {
+    namespace: string;
+    secrets: { adminToken: string; values: Record<string, string> };
+    subdomain: string;
+}
+
+const shipHeld = async (
     context: PreviewContext,
     plan: PreviewPlan,
     variables: Readonly<Record<string, string>>,
     options: PreviewCommandOptions,
     request: Request,
+    prerequisites: ShipPrerequisites,
 ): Promise<PreviewCommandResult> => {
-    const { config, cwd, appId, wranglerPath } = context;
+    const { appId, config, cwd, wranglerPath } = context;
     const { logger } = options;
+    const { namespace, secrets, subdomain } = prerequisites;
 
     if (appId === undefined) {
         return fail(logger, "the project has no id to key the preview record by");
     }
 
-    const secrets = await previewSecrets(cwd, config, plan.worker, options);
-
-    if (secrets.error !== undefined) {
-        return fail(logger, secrets.error);
-    }
-
-    for (const key of secrets.missing) {
-        logger.warn(`the preview has no ${key}: production's is never copied. Pass --secret ${key} with ${key} set in the environment to give it one.`);
-    }
-
     let record: PreviewRecord;
     let ids: ResourceIds;
-    let url: string;
-    let namespace: string;
+    const url = `https://${plan.worker}.${subdomain}.workers.dev`;
 
     try {
         // A Worker with the preview's name that this command did not deploy is someone else's: never deploy over it.
@@ -472,8 +480,6 @@ const shipPreview = async (
         if (existingWorker.exists && existingWorker.marker !== previewMarker(plan)) {
             return fail(logger, `a Worker named "${plan.worker}" already exists and was not deployed as preview "${plan.slug}"; refusing to deploy over it`);
         }
-
-        namespace = (await registryNamespace(request, true)) ?? "";
 
         const now = new Date().toISOString();
         const existing = await recordFor(request, namespace, appId, plan.production, plan.slug, logger);
@@ -497,7 +503,6 @@ const shipPreview = async (
         };
         await writeRecord(request, namespace, record);
         ids = await ensureResources(request, namespace, plan, record, logger);
-        url = `https://${plan.worker}.${await workersSubdomain(request)}.workers.dev`;
     } catch (error) {
         return fail(logger, `preview "${plan.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
     }
@@ -570,6 +575,67 @@ const shipPreview = async (
     logger.success(`preview "${plan.slug}" is live at ${record.url ?? url} — remove it with \`lunora preview delete ${plan.slug}\``);
 
     return { code: EXIT_CODE.SUCCESS, data: { preview: summarize(record) } };
+};
+
+/**
+ * Everything after the plan. Every precondition that can refuse the preview (secrets, the workers.dev subdomain, the
+ * registry, another run holding this preview) is settled first, so a refused preview leaves nothing in the account.
+ */
+const shipPreview = async (
+    context: PreviewContext,
+    plan: PreviewPlan,
+    variables: Readonly<Record<string, string>>,
+    options: PreviewCommandOptions,
+    request: Request,
+): Promise<PreviewCommandResult> => {
+    const { appId, config, cwd } = context;
+    const { logger } = options;
+
+    if (appId === undefined) {
+        return fail(logger, "the project has no id to key the preview record by");
+    }
+
+    const secrets = await previewSecrets(cwd, config, plan.worker, options);
+
+    if (secrets.error !== undefined) {
+        return fail(logger, secrets.error);
+    }
+
+    for (const key of secrets.missing) {
+        logger.warn(`the preview has no ${key}: production's is never copied. Pass --secret ${key} with ${key} set in the environment to give it one.`);
+    }
+
+    let namespace: string;
+    let subdomain: string;
+    let token: string;
+
+    try {
+        // A Worker with the preview's name that this command did not deploy is someone else's: never deploy over it.
+        const existingWorker = await workerMarker(request, plan.worker, PREVIEW_MARKER_VAR);
+
+        if (existingWorker.exists && existingWorker.marker !== previewMarker(plan)) {
+            return fail(logger, `a Worker named "${plan.worker}" already exists and was not deployed as preview "${plan.slug}"; refusing to deploy over it`);
+        }
+
+        subdomain = await workersSubdomain(request);
+        namespace = (await registryNamespace(request, true)) ?? "";
+
+        const lease = await takeLease(request, namespace, appId, plan.slug);
+
+        if (lease.held !== undefined) {
+            return fail(logger, heldMessage(plan.slug, lease.held));
+        }
+
+        ({ token } = lease);
+    } catch (error) {
+        return fail(logger, `preview "${plan.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
+    }
+
+    try {
+        return await shipHeld(context, plan, variables, options, request, { namespace, secrets, subdomain });
+    } finally {
+        await releaseLease(request, namespace, appId, plan.slug, token);
+    }
 };
 
 /**
@@ -772,30 +838,44 @@ const removePreview = async (
     return { code: EXIT_CODE.SUCCESS, data: { deleted: summarize(record) } };
 };
 
-const deletePreview = async (context: PreviewContext, options: PreviewCommandOptions, name: string): Promise<PreviewCommandResult> => {
+/** Why a preview with no readable record may still exist: its Worker or a resource under the preview's names is in the account. */
+const leftBehind = async (request: Request, config: PreviewConfig, names: PreviewNames, slug: string): Promise<string[]> => {
+    const worker = await workerMarker(request, names.worker, PREVIEW_MARKER_VAR);
+    const found = worker.exists && worker.marker === previewMarker(names) ? [`Worker "${names.worker}" exists`] : [];
+    const planned = planPreview(config, slug).plan?.resources ?? [];
+    const resources = await unrecordedResources(request, planned, undefined);
+
+    return [...found, ...resources.map((resource) => `${resource} exists`)];
+};
+
+const deleteRecorded = async (
+    context: PreviewContext,
+    options: PreviewCommandOptions,
+    { names, namespace, request }: { names: PreviewNames; namespace: string | undefined; request: Request },
+): Promise<PreviewCommandResult> => {
     const { config } = context;
     const { logger } = options;
-    const named = previewNames(config, name);
-
-    if (named.error !== undefined) {
-        return fail(logger, named.error);
-    }
-
-    const { names } = named;
-    const access = accountRequest(options, config);
-
-    if (access.error !== undefined) {
-        return fail(logger, access.error, EXIT_CODE.AUTH);
-    }
-
-    const { request } = access;
-
-    let namespace: string | undefined;
     let record: PreviewRecord | undefined;
 
     try {
-        namespace = await registryNamespace(request, false);
-        record = namespace === undefined ? undefined : await recordFor(request, namespace, context.appId, names.production, names.slug, logger);
+        record =
+            namespace === undefined
+                ? undefined
+                : await recordFor(request, namespace, context.appId, names.production, names.slug, logger, options.dryRun !== true);
+
+        if (namespace === undefined || record === undefined) {
+            const remains = await leftBehind(request, config, names, names.slug);
+
+            // KV is eventually consistent, and a checkout can carry a different app id than the one that deployed: an absent
+            // record is "nothing to delete" only when nothing under the preview's names is left in the account.
+            if (remains.length > 0) {
+                return fail(
+                    logger,
+                    `no record of preview "${names.slug}" could be read, but ${remains.join(" and ")}; nothing was deleted. If a deploy just ran, its record may not have reached this location yet: run delete again. Otherwise delete from a checkout whose package.json has the lunora.appId that deployed it`,
+                    EXIT_CODE.FAILURE,
+                );
+            }
+        }
     } catch (error) {
         return fail(logger, `preview "${names.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
     }
@@ -849,7 +929,59 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
         return { code: EXIT_CODE.SUCCESS, data: { plan: summarize(record) } };
     }
 
-    return removePreview(request, namespace, record, planPreview({ ...config, name: record.production }, name).plan, logger);
+    return removePreview(request, namespace, record, planPreview({ ...config, name: record.production }, names.slug).plan, logger);
+};
+
+const deletePreview = async (context: PreviewContext, options: PreviewCommandOptions, name: string): Promise<PreviewCommandResult> => {
+    const { config } = context;
+    const { logger } = options;
+    const named = previewNames(config, name);
+
+    if (named.error !== undefined) {
+        return fail(logger, named.error);
+    }
+
+    const { names } = named;
+    const access = accountRequest(options, config);
+
+    if (access.error !== undefined) {
+        return fail(logger, access.error, EXIT_CODE.AUTH);
+    }
+
+    const { request } = access;
+
+    let namespace: string | undefined;
+
+    try {
+        namespace = await registryNamespace(request, false);
+    } catch (error) {
+        return fail(logger, `preview "${names.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
+    }
+
+    // A delete and a deploy of one preview never overlap: either could otherwise write back a record for what the other removed.
+    if (context.appId === undefined || namespace === undefined || options.dryRun === true) {
+        return deleteRecorded(context, options, { names, namespace, request });
+    }
+
+    let token: string;
+
+    try {
+        const lease = await takeLease(request, namespace, context.appId, names.slug);
+
+        if (lease.held !== undefined) {
+            return fail(logger, heldMessage(names.slug, lease.held));
+        }
+
+        ({ token } = lease);
+    } catch (error) {
+        return fail(logger, `preview "${names.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
+    }
+
+    try {
+        return await deleteRecorded(context, options, { names, namespace, request });
+    } finally {
+        await releaseLease(request, namespace, context.appId, names.slug, token);
+    }
 };
 
 const listPreviews = async (context: PreviewContext, options: PreviewCommandOptions): Promise<PreviewCommandResult> => {

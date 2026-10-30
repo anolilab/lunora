@@ -107,7 +107,7 @@ point at the preview, such as an auth base URL, with `--var KEY=VALUE`.
 What a preview owns is recorded in the account (a `lunora-preview-registry` KV
 namespace), so the job that deletes it does not need the runner that deployed
 it. The record is keyed by the project's id (`lunora.appId` in
-`package.json`, written by the first local deploy: commit it), so renaming the
+`package.json`, written by the first local `lunora preview deploy`: commit it), so renaming the
 Worker does not lose a preview and two apps sharing a Worker name never see each
 other's. `delete` acts only on that record, and refuses a record that names anything
 production's config uses. An app binding something a preview cannot isolate
@@ -126,8 +126,10 @@ That scaffolds a production deploy on the default branch and a
 `preview-delete` job runs `lunora preview delete <number>` when the pull request
 closes. A fork's pull or merge request, and a Dependabot pull request, gets no
 secrets, so it runs `lunora deploy --dry-run` instead. On GitLab, the preview is a review
-environment whose stop job deletes it when the merge request is merged or
-closed, or after two weeks. Set `CLOUDFLARE_API_TOKEN` (with D1, KV and R2 edit
+environment whose stop job deletes it when the environment stops: the source
+branch is deleted (merging with "delete source branch"), someone stops it under
+Operate > Environments, or after two weeks. A closed merge request that keeps
+its branch waits for the two weeks or a manual stop. Set `CLOUDFLARE_API_TOKEN` (with D1, KV and R2 edit
 rights, since previews make their own) and `CLOUDFLARE_ACCOUNT_ID` as the
 provider's secrets. That token can redeploy any preview with any secrets, and the
 preview job holds it (and the optional `LUNORA_PREVIEW_SECRET_SEED` that keeps

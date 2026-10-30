@@ -333,7 +333,7 @@ const productionCollisions = (config: PreviewConfig, candidates: ReadonlyArray<s
     return candidates.filter((candidate) => identities.has(candidate));
 };
 
-export type { PlannedResource, PreviewConfig, PreviewPlan, PreviewResourceKind, ResourceIds };
+export type { PlannedResource, PreviewConfig, PreviewNames, PreviewPlan, PreviewResourceKind, ResourceIds };
 export {
     planPreview,
     PREVIEW_MARKER_VAR,

@@ -806,14 +806,20 @@ in the job controls the account's previews.
 
 What a preview owns is recorded in the account, in a KV namespace called
 `lunora-preview-registry`, one record per preview, written as soon as each
-resource exists. That way a fresh CI runner can delete it. A record is keyed by
+resource exists. That way a fresh CI runner can delete it. A `deploy` and a
+`delete` of one preview never overlap, wherever they run: each takes a hold
+(`lock/<app id>/<name>` in the same namespace, lapsing after 30 minutes if the
+run crashes) and the other refuses while it is held. `delete` also refuses to
+report "no record" while the preview's Worker or a resource under its names is
+still in the account (a record this location has not seen yet, or an app id that
+differs from the one that deployed it), and exits `1` instead. A record is keyed by
 the project's id, `lunora.appId` in `package.json`, not by the Worker's
-name: the first local `deploy` writes the id (commit it), a CI run refuses to
+name: the first local `lunora preview deploy` writes the id (commit it), a CI run refuses to
 mint one because its checkout is discarded, and two apps that share a Worker
 name never see each other's previews. Renaming the Worker leaves existing
 previews findable, and `delete` removes them under the name they were made
 with. A preview recorded under the Worker name, from before projects had an id,
-is re-keyed the next time you `deploy` or `delete` it (`list` shows it with a
+is re-keyed the next time you `deploy` or `delete` it (not by `delete --dry-run`, which changes nothing) (`list` shows it with a
 note); without an id in `package.json` that is refused with the line to add. `delete <name>`
 deletes the preview Worker (with its Durable Objects) and then each recorded
 resource. It refuses a preview with no record, a record whose Worker is not the

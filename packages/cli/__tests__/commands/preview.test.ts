@@ -103,7 +103,7 @@ const ACCOUNT_PREFIX = /^\/client\/v4\/accounts\/[^/]+/u;
  * deploy that has not yet seen another's create would.
  */
 const fakeAccount = (
-    options: { hiddenKvListings?: number; keysPageSize?: number } = {},
+    options: { hiddenKvListings?: number; keysPageSize?: number; noSubdomain?: boolean } = {},
 ): {
     calls: { method: string; path: string }[];
     d1: Map<string, string>;
@@ -340,7 +340,7 @@ const fakeAccount = (
 
     const handle = (method: string, path: string, search: URLSearchParams, body: string | undefined): Response => {
         if (path === "/workers/subdomain") {
-            return envelope({ subdomain: "acme" });
+            return envelope(options.noSubdomain === true ? {} : { subdomain: "acme" });
         }
 
         const settings = SCRIPT_SETTINGS_PATH.exec(path);
@@ -619,6 +619,12 @@ describe("lunora preview", () => {
     const registryValues = (account: ReturnType<typeof fakeAccount>): Map<string, string> =>
         account.kvValues.get([...account.kv].find(([, title]) => title === "lunora-preview-registry")?.[0] ?? "") ?? new Map<string, string>();
 
+    /** The account-changing calls of these methods, not counting the hold a run takes on its preview and lets go of. */
+    const changes = (account: ReturnType<typeof fakeAccount>, ...methods: string[]): { method: string; path: string }[] =>
+        account.calls.filter((call) => methods.includes(call.method) && !call.path.includes("lock%2F"));
+
+    const leaseKeys = (account: ReturnType<typeof fakeAccount>): string[] => [...registryValues(account).keys()].filter((key) => key.startsWith("lock/"));
+
     const deployWith = async (account: ReturnType<typeof fakeAccount>, spawner: Spawner): Promise<Awaited<ReturnType<typeof runPreviewCommand>>> =>
         runPreviewCommand({
             adminFetch: adminRecorder().fetch,
@@ -833,7 +839,7 @@ describe("lunora preview", () => {
             });
 
             expect(result.error).toMatch(/exists but no preview record says this preview deployed it/u);
-            expect(account.calls.filter((call) => call.method === "POST" || call.method === "PUT")).toHaveLength(1);
+            expect(changes(account, "POST", "PUT")).toHaveLength(1);
             expect(deploys).toHaveLength(0);
         });
 
@@ -1226,6 +1232,45 @@ describe("lunora preview", () => {
             expect(deploys).toHaveLength(0);
         });
 
+        it("checks the workers.dev subdomain before creating anything, so a refused preview leaves no resources", async () => {
+            expect.assertions(4);
+
+            const account = fakeAccount({ noSubdomain: true });
+            const { deploys, spawner } = wranglerAt(workdir, account.workers);
+
+            const result = await deployWith(account, spawner);
+
+            expect(result.error).toMatch(/no workers\.dev subdomain/u);
+            expect(account.calls.filter((call) => call.method !== "GET")).toHaveLength(0);
+            expect(account.d1.size + account.r2.size + account.kv.size).toBe(0);
+            expect(deploys).toHaveLength(0);
+        });
+
+        it("refuses to deploy while another run holds the preview, and releases the hold when done", async () => {
+            expect.assertions(5);
+
+            const account = fakeAccount();
+            const { spawner } = wranglerAt(workdir, account.workers);
+            const first = await deployWith(account, spawner);
+
+            expect(first.code).toBe(0);
+            // Done: nothing is held, so a second deploy goes through.
+            expect(leaseKeys(account)).toStrictEqual([]);
+
+            registryValues(account).set(`lock/${APP_ID}/42`, JSON.stringify({ at: new Date().toISOString(), token: "someone-else" }));
+
+            const blocked = await deployWith(account, spawner);
+
+            expect(blocked.error).toMatch(/another run is deploying or deleting preview "42"/u);
+            expect(registryValues(account).get(`lock/${APP_ID}/42`)).toContain("someone-else");
+
+            registryValues(account).delete(`lock/${APP_ID}/42`);
+
+            const again = await deployWith(account, spawner);
+
+            expect(again.code).toBe(0);
+        });
+
         it("refuses a --secret that has no value in the environment, before touching the account", async () => {
             expect.assertions(2);
 
@@ -1362,7 +1407,7 @@ describe("lunora preview", () => {
         });
 
         it("keeps two apps with the same Worker name in one account apart", async () => {
-            expect.assertions(8);
+            expect.assertions(9);
 
             const account = await deployed();
             const other = "0a1b2c3d-1111-4222-8333-444455556666";
@@ -1375,7 +1420,9 @@ describe("lunora preview", () => {
 
             const removal = await run(account, "delete");
 
-            expect(removal.result.code).toBe(EXIT_CODE.NOT_FOUND);
+            // Not "nothing to delete": the Worker is there, only another app's record names it.
+            expect(removal.result.code).toBe(EXIT_CODE.FAILURE);
+            expect(removal.result.error).toMatch(/Worker "lunora-app-preview-42" exists/u);
             expect(account.workers.has("lunora-app-preview-42")).toBe(true);
 
             // The other app's deploy meets a Worker and resources it has no record of: it takes none of them.
@@ -1393,6 +1440,76 @@ describe("lunora preview", () => {
             expect(own.result.data?.previews).toHaveLength(1);
             expect(removed.result.code).toBe(0);
             expect(account.workers.has("lunora-app-preview-42")).toBe(false);
+        });
+
+        it("refuses to delete while another run holds the preview, deleting nothing", async () => {
+            expect.assertions(3);
+
+            const account = await deployed();
+
+            registryValues(account).set(`lock/${APP_ID}/42`, JSON.stringify({ at: new Date().toISOString(), token: "someone-else" }));
+
+            const { result } = await run(account, "delete");
+
+            expect(result.error).toMatch(/another run is deploying or deleting preview "42"/u);
+            expect(account.workers.has("lunora-app-preview-42")).toBe(true);
+            expect(registryValues(account).has(`${APP_ID}/42`)).toBe(true);
+        });
+
+        it("takes over a hold older than its lifetime, and leaves none behind", async () => {
+            expect.assertions(2);
+
+            const account = await deployed();
+
+            registryValues(account).set(`lock/${APP_ID}/42`, JSON.stringify({ at: "2020-01-01T00:00:00.000Z", token: "crashed" }));
+
+            const { result } = await run(account, "delete");
+
+            expect(result.code).toBe(0);
+            expect(leaseKeys(account)).toStrictEqual([]);
+        });
+
+        it("a delete --dry-run on a record from before app ids changes nothing in the account", async () => {
+            expect.assertions(3);
+
+            const account = await deployed();
+            const values = registryValues(account);
+            const record = JSON.parse(values.get(`${APP_ID}/42`) ?? "{}") as Record<string, unknown>;
+
+            delete record.appId;
+            values.delete(`${APP_ID}/42`);
+            values.set("lunora-app/42", JSON.stringify(record));
+            account.calls.length = 0;
+
+            const { logger } = silentLogger();
+            const result = await runPreviewCommand({
+                cwd: workdir,
+                dryRun: true,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                logger,
+                name: "42",
+                subcommand: "delete",
+            });
+
+            expect(result.code).toBe(0);
+            expect(account.calls.filter((call) => call.method !== "GET")).toHaveLength(0);
+            expect(values.has("lunora-app/42")).toBe(true);
+        });
+
+        it("does not report a preview as absent when its Worker still exists but no record is read", async () => {
+            expect.assertions(3);
+
+            const account = await deployed();
+
+            // A record this location has not seen yet, or one filed under another app id: the Worker is still there.
+            registryValues(account).delete(`${APP_ID}/42`);
+
+            const { result } = await run(account, "delete");
+
+            expect(result.code).toBe(EXIT_CODE.FAILURE);
+            expect(result.error).toMatch(/Worker "lunora-app-preview-42" exists/u);
+            expect(account.workers.has("lunora-app-preview-42")).toBe(true);
         });
 
         describe("a preview recorded before projects had an id", () => {
@@ -1505,7 +1622,7 @@ describe("lunora preview", () => {
             const result = await runPreviewCommand({ cwd: workdir, environment: CREDENTIALS, fetch: account.fetch, logger, name: "42", subcommand: "delete" });
 
             expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
-            expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+            expect(changes(account, "DELETE")).toHaveLength(0);
         });
 
         it("refuses a record that names a production resource, and deletes nothing", async () => {
@@ -1530,7 +1647,7 @@ describe("lunora preview", () => {
             });
 
             expect(result.error).toMatch(/production's prod-d1-uuid; refusing to delete anything/u);
-            expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+            expect(changes(account, "DELETE")).toHaveLength(0);
         });
 
         it("refuses to delete a Worker by the preview's name that the preview did not deploy, and deletes nothing", async () => {
@@ -1552,7 +1669,7 @@ describe("lunora preview", () => {
             });
 
             expect(result.error).toMatch(/was not deployed as preview "42"; refusing to delete anything/u);
-            expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+            expect(changes(account, "DELETE")).toHaveLength(0);
             expect(account.workers.has("lunora-app-preview-42")).toBe(true);
         });
 
@@ -1595,7 +1712,7 @@ describe("lunora preview", () => {
             const result = await deleteIt(account);
 
             expect(result.error).toMatch(/d1 billing-uuid, which no longer name\(s\) the recorded resource/u);
-            expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+            expect(changes(account, "DELETE")).toHaveLength(0);
             expect(account.d1.has("billing-db")).toBe(true);
         });
 
@@ -1614,7 +1731,7 @@ describe("lunora preview", () => {
             const result = await deleteIt(account);
 
             expect(result.error).toMatch(/refusing to delete anything/u);
-            expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+            expect(changes(account, "DELETE")).toHaveLength(0);
         });
 
         it("exits 1, never the not-on-record code, when a Cloudflare call fails mid-delete (the CI teardown tolerates only the latter)", async () => {
@@ -1664,7 +1781,7 @@ describe("lunora preview", () => {
             const result = await deleteIt(account);
 
             expect(result.error).toMatch(/is not one this CLI wrote/u);
-            expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+            expect(changes(account, "DELETE")).toHaveLength(0);
         });
 
         it("leaves the newer record alone when a stale read of it misses a resource, so a re-run deletes everything", async () => {
@@ -1763,7 +1880,7 @@ describe("lunora preview", () => {
             await runPreviewCommand({ cwd: workdir, dryRun: true, environment: CREDENTIALS, fetch: account.fetch, logger, name: "42", subcommand: "delete" });
 
             expect(infos.join("\n")).toContain('would delete Worker "lunora-app-preview-42"');
-            expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+            expect(changes(account, "DELETE")).toHaveLength(0);
         });
     });
 });

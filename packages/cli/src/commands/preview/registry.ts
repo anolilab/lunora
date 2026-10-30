@@ -7,6 +7,8 @@
  * preview, written right after each resource is created, so a deploy that fails halfway still leaves
  * everything it made on record. Deletion acts only on what a record lists.
  */
+import { randomUUID } from "node:crypto";
+
 import type { CloudflareRestOutcome } from "../../../../../shared/cloudflare-rest";
 import type { PreviewResourceKind } from "./plan";
 import { previewResourceName } from "./plan";
@@ -139,6 +141,76 @@ const registryNamespace = async (request: Request, create: boolean): Promise<str
 const recordKey = (owner: string, slug: string): string => `${owner}/${slug}`;
 
 const valuePath = (namespace: string, key: string): string => `/storage/kv/namespaces/${encodeURIComponent(namespace)}/values/${encodeURIComponent(key)}`;
+
+/**
+ * One run at a time per preview, across checkouts and machines: a lease record beside the preview's own. KV cannot
+ * compare-and-set, so this is take, read back, and see whether the token is still ours; a run that crashes lets go
+ * by KV expiry. It keeps a deploy's last record write from landing after a delete removed the preview.
+ */
+const LEASE_SECONDS = 1800;
+
+const leaseKey = (appId: string, slug: string): string => `lock/${appId}/${slug}`;
+
+interface Lease {
+    at?: unknown;
+    token?: unknown;
+}
+
+const readLease = async (request: Request, path: string): Promise<Lease | undefined> => {
+    const outcome = await request(path);
+
+    if (!outcome.ok && outcome.status === 404) {
+        return undefined;
+    }
+
+    try {
+        return expectOk(outcome, "reading the preview hold");
+    } catch {
+        // A value that is not a lease is not held by anyone.
+        return undefined;
+    }
+};
+
+/** `{ token }` when this run now holds the preview, else `{ held }` with when the run that does took it. */
+const takeLease = async (
+    request: Request,
+    namespace: string,
+    appId: string,
+    slug: string,
+): Promise<{ held?: never; token: string } | { held: string; token?: never }> => {
+    const path = valuePath(namespace, leaseKey(appId, slug));
+    const current = await readLease(request, path);
+
+    if (typeof current?.at === "string" && Date.now() - Date.parse(current.at) < LEASE_SECONDS * 1000) {
+        return { held: current.at };
+    }
+
+    const token = randomUUID();
+
+    expectOk(
+        await request(`${path}?expiration_ttl=${String(LEASE_SECONDS)}`, { body: JSON.stringify({ at: new Date().toISOString(), token }), method: "PUT" }),
+        "taking the preview hold",
+    );
+
+    const back = await readLease(request, path);
+
+    return back?.token === token ? { token } : { held: typeof back?.at === "string" ? back.at : "just now" };
+};
+
+/** Let go of the preview if this run still holds it; a hold that cannot be released lapses by itself. */
+const releaseLease = async (request: Request, namespace: string, appId: string, slug: string, token: string): Promise<void> => {
+    const path = valuePath(namespace, leaseKey(appId, slug));
+
+    try {
+        const held = await readLease(request, path);
+
+        if (held?.token === token) {
+            await request(path, { method: "DELETE" });
+        }
+    } catch {
+        // KV expiry clears it.
+    }
+};
 
 const RESOURCE_KINDS: ReadonlySet<unknown> = new Set<PreviewResourceKind>(["d1", "kv", "r2"]);
 
@@ -433,6 +505,8 @@ export {
     recordedResourceState,
     recordKey,
     registryNamespace,
+    releaseLease,
+    takeLease,
     workerMarker,
     workersSubdomain,
     writeRecord,
