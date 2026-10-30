@@ -1892,8 +1892,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      */
     const resolveGlobalTable = async (table: string): Promise<string | undefined> => {
         // `hasOwn` keeps a name such as `constructor` from resolving to a prototype member. A swapped `(id, table)`
-        // call, or one that names no table, would otherwise read as a missing row; no id names a schema table.
-        if (!Object.hasOwn(schema.tables, table)) {
+        // call, or one that names no table, would otherwise read as a missing row; no id names a schema table. The
+        // type check comes first because `hasOwn` coerces an omitted table to the key "undefined".
+        if (typeof table !== "string" || !Object.hasOwn(schema.tables, table)) {
             throw new LunoraError("BAD_REQUEST", `ctx.db by-id write (table, id): "${table}" is not a table in this schema`);
         }
 

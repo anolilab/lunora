@@ -683,6 +683,18 @@ describe("createSqlCtxDb — by-id writes pinned to a table", () => {
 
         await expect(writer.patch("constructor", id, { body: "b" })).rejects.toThrow(`"constructor" is not a table in this schema`);
     });
+
+    it("does not read an omitted table as a table named undefined", async () => {
+        expect.assertions(2);
+
+        const named: SchemaLike = { tables: { undefined: { indexes: [], shape: { body: col("string") }, shardMode: { kind: "global" } } } } as never;
+        const writer = createSqlCtxDb({ clock: () => 1, dialect, exec: harness.exec, schema: named });
+        const id = await writer.insert("undefined", { body: "a" });
+        const loose = writer as unknown as Record<string, (...arguments_: unknown[]) => Promise<unknown>>;
+
+        await expect(loose["patch"]?.(undefined, id, { body: "b" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        await expect(writer.get("undefined", id)).resolves.toMatchObject({ body: "a" });
+    });
 });
 
 describe("createSqlCtxDb — the changed-tables poll", () => {
