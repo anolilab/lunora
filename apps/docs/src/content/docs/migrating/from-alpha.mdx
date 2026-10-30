@@ -342,6 +342,14 @@ rows=$(grep -c . backup.ndjson)
 printf '{"end":true,"rows":%s}\n' "$rows" >> backup.ndjson
 ```
 
+A worker deployed before this change does not write the marker, so a CLI from
+this release refuses its export: `lunora export`, `lunora backup create`,
+`lunora migrate`, and the stored-row check of the drift gate all fail against it
+until the worker is redeployed. Upgrade the worker first. The one deploy that
+ships the new runtime therefore cannot clear a schema tightening by reading
+rows (the check is inconclusive); give that deploy a migration, or confirm the
+drift with `--allow-schema-drift`.
+
 Hand-written NDJSON needs the same line. Imports from Convex, Supabase and
 Firestore, and `--table` imports of bare documents, are unaffected.
 
