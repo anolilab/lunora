@@ -62,6 +62,18 @@ describe("emitApp — framework-host trigger passthrough", () => {
         }
     });
 
+    it("logs why auth failed when a host-owned event carries on without it", () => {
+        expect.assertions(2);
+
+        // Auth retries on every event, so an isolate that only ever sees cron, queue or mail would otherwise
+        // repeat the failure indefinitely with nothing in the logs saying why admin and auth are missing.
+        const output = emitApp({ ...baseOptions, hasAuth: true, hasFramework: true, hasQueue: true });
+        const helper = output.slice(output.indexOf("const authReady"), output.indexOf("const authReady") + 600);
+
+        expect(helper).toMatch(/console\.error\(/u);
+        expect(helper).toMatch(/error\)/u);
+    });
+
     it("gives a host-owned event an uncached worker when auth failed to initialise", () => {
         expect.assertions(3);
 

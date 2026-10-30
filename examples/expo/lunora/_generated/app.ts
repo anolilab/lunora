@@ -281,10 +281,17 @@ class AppBuilder<Env extends object> {
                 throw error;
             }));
 
+        // For host-owned events (cron, queue, mail), which must not go down with auth. The failure is
+        // logged each time: auth retries on the next event, and an isolate that only ever sees these
+        // would otherwise repeat it with nothing saying why the admin and auth surfaces are missing.
         const authReady = (env: Env): Promise<boolean> =>
             ensureAuth(env).then(
                 () => true,
-                () => false,
+                (error: unknown) => {
+                    console.error("[lunora] auth failed to initialise; this event runs without auth:", error);
+
+                    return false;
+                },
             );
 
         const buildWorker = (env: Env, deferred: DeferredModules): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth, identityMemos, deferred));
