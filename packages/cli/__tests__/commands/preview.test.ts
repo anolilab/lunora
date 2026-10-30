@@ -540,7 +540,9 @@ const healthy = async (): Promise<{ ok: boolean; status: number }> => {
     return { ok: true, status: 200 };
 };
 
-describe("lunora preview", () => {
+// Every deploy here runs the real pre-deploy pipeline (config load through Vite included), about a second
+// each locally and several times that under coverage, and some cases deploy four times.
+describe("lunora preview", { timeout: 120_000 }, () => {
     let workdir: string;
 
     beforeEach(() => {
