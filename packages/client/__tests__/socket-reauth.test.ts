@@ -336,6 +336,43 @@ describe("socket identity revalidation", () => {
         client.close();
     });
 
+    it("does not let the periodic timer fire over a refresh already in flight for the socket", async () => {
+        expect.assertions(2);
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const answers: ((response: Response) => void)[] = [];
+        const fetchMock = vi.fn<typeof fetch>(async (input) =>
+            (input as string).includes("/_lunora/ws/reauth")
+                ? new Promise<Response>((resolve) => {
+                      answers.push(resolve);
+                  })
+                : jsonResponse({ result: { ok: true } }),
+        );
+        const client = new LunoraClient({ authTokenOnUpgrade: true, fetch: fetchMock, heartbeatIntervalMs: 0, url: "http://app.test", WebSocket });
+
+        client.setAuthToken("token-1", "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        sockets[0]?.receive({ connectionId: "conn-1", revalidateMs: 60_000, subject: "user-1", type: "identity" });
+        await settle();
+
+        // A refreshed bearer is handed to the socket just before the timer is due.
+        await vi.advanceTimersByTimeAsync(29_000);
+        client.setAuthToken("token-2", "user-1");
+        await vi.advanceTimersByTimeAsync(2000);
+
+        // The timer's request would present the handshake bearer, which the server refuses as older.
+        expect(answers).toHaveLength(1);
+
+        answers[0]?.(jsonResponse({ ok: true }));
+        await settle();
+
+        expect(sockets[0]?.readyState).toBe(1);
+
+        client.close();
+    });
+
     it("presents the cookie session alone when the socket has no bearer", async () => {
         expect.assertions(2);
 

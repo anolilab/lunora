@@ -8837,6 +8837,11 @@ class LunoraClient {
 
         const attempt = (conn.reauthAttempt ?? 0) + 1;
 
+        // The periodic timer must not fire over this request with an older credential; a success re-arms it.
+        clearTimeout(conn.revalidateTimer);
+        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+        conn.revalidateTimer = undefined;
+
         // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
         conn.reauthAttempt = attempt;
 
