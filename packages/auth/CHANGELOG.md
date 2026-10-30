@@ -1,3 +1,14 @@
+## @lunora/auth [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.246...@lunora/auth@1.0.0-alpha.247) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** pin every wire dependent to the workspace version ([#1432](https://github.com/anolilab/lunora/issues/1432)) ([07eaf13](https://github.com/anolilab/lunora/commit/07eaf13f4f4e65319cbcf9089d5def29f431ead3))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.430
+
 ## @lunora/auth [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.245...@lunora/auth@1.0.0-alpha.246) (2026-10-30)
 
 

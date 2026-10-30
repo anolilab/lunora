@@ -1,3 +1,14 @@
+## @lunora/mcp [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.275...@lunora/mcp@1.0.0-alpha.276) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** pin every wire dependent to the workspace version ([#1432](https://github.com/anolilab/lunora/issues/1432)) ([07eaf13](https://github.com/anolilab/lunora/commit/07eaf13f4f4e65319cbcf9089d5def29f431ead3))
+
+
+### Dependencies
+
+* **@lunora/auth:** upgraded to 1.0.0-alpha.247
+
 ## @lunora/mcp [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.274...@lunora/mcp@1.0.0-alpha.275) (2026-10-30)
 
 

@@ -1,3 +1,14 @@
+## @lunora/solid [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.271...@lunora/solid@1.0.0-alpha.272) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** pin every wire dependent to the workspace version ([#1432](https://github.com/anolilab/lunora/issues/1432)) ([07eaf13](https://github.com/anolilab/lunora/commit/07eaf13f4f4e65319cbcf9089d5def29f431ead3))
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.184
+
 ## @lunora/solid [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.270...@lunora/solid@1.0.0-alpha.271) (2026-10-30)
 
 ### ⚠ BREAKING CHANGES

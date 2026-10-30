@@ -1,3 +1,14 @@
+## @lunora/svelte [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.301...@lunora/svelte@1.0.0-alpha.302) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** pin every wire dependent to the workspace version ([#1432](https://github.com/anolilab/lunora/issues/1432)) ([07eaf13](https://github.com/anolilab/lunora/commit/07eaf13f4f4e65319cbcf9089d5def29f431ead3))
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.184
+
 ## @lunora/svelte [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.300...@lunora/svelte@1.0.0-alpha.301) (2026-10-30)
 
 ### ⚠ BREAKING CHANGES

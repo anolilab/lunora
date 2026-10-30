@@ -1,3 +1,14 @@
+## @lunora/testing [1.0.0-alpha.319](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.318...@lunora/testing@1.0.0-alpha.319) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** pin every wire dependent to the workspace version ([#1432](https://github.com/anolilab/lunora/issues/1432)) ([07eaf13](https://github.com/anolilab/lunora/commit/07eaf13f4f4e65319cbcf9089d5def29f431ead3))
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.184
+
 ## @lunora/testing [1.0.0-alpha.318](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.317...@lunora/testing@1.0.0-alpha.318) (2026-10-30)
 
 
