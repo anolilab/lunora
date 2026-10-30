@@ -178,6 +178,26 @@ describe("transaction near-limit warning", () => {
         await expect(drain(200)).rejects.toThrow("over the 100-byte limit");
     });
 
+    it("warns once per stream instance, and not again in each of its windows", () => {
+        expect.assertions(2);
+
+        const events: { functionPath?: string }[] = [];
+        const shard = createShard(events);
+        const first = shard.streamTracker("items:tail");
+        const second = shard.streamTracker("items:tail");
+
+        first.recordReadBytes(90);
+        first.beginReadWindow();
+        first.recordReadBytes(90);
+
+        expect(events).toHaveLength(1);
+
+        second.recordReadBytes(90);
+
+        // A later stream of the same function still reports its own approach to the limit.
+        expect(events).toHaveLength(2);
+    });
+
     it("names the function a fallback tracker was minted for", async () => {
         expect.assertions(1);
 

@@ -7570,7 +7570,9 @@ abstract class ShardDO {
      * as before; bytes are capped per frame by {@link ShardDO.windowStreamReads}.
      */
     protected streamHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker {
-        return this.mintHeadroom(functionPath, { trace: undefined, userId: identity?.userId }, this.rerunNearLimitWarned);
+        // Not the shared re-run set: that would silence every later stream of this function. The tracker
+        // itself warns once per limit for the stream's life, windows included.
+        return this.mintHeadroom(functionPath, { trace: undefined, userId: identity?.userId });
     }
 
     /** Pass `frames` through, opening a fresh read-byte window after each one. */

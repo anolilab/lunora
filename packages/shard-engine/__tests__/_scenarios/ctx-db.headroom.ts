@@ -275,9 +275,7 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
             };
             const tracker = new TransactionHeadroomTracker();
 
-            meterReadBytes(sharing, tracker, () => false)
-                .exec("SELECT")
-                .toArray();
+            meterReadBytes(sharing, tracker).exec("SELECT").toArray();
 
             expect(tracker.headroom().readBytes).toBe(8);
         });
@@ -305,7 +303,7 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
                     return cursor;
                 },
             };
-            const metered = meterReadBytes(unbounded, new TransactionHeadroomTracker({ maxReadBytes: doc.length * 3 }), () => false);
+            const metered = meterReadBytes(unbounded, new TransactionHeadroomTracker({ maxReadBytes: doc.length * 3 }));
 
             expect(() => metered.exec("SELECT").toArray()).toThrow(/TRANSACTION_LIMIT_EXCEEDED|limit/iu);
             // The native `toArray` would have pulled all 1000 before any charge landed.
@@ -378,6 +376,55 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
                 await expect(codeOf(async () => writer.get("shared", "g0"))).resolves.toBeUndefined();
             });
 
+            it("sizes a global document that has page, row or document fields as a whole", async () => {
+                expect.assertions(2);
+
+                const fat = { _id: "f1", body: "y".repeat(500), document: { n: 1 }, page: [1], row: { n: 1 } };
+                const tracker = new TransactionHeadroomTracker();
+                const writer = createShardContextDatabase({
+                    clock: () => 1_700_000_000_000,
+                    globalDb: { get: async () => fat } as unknown as DatabaseWriterLike,
+                    headroom: tracker,
+                    schema: globalSchema,
+                    sql,
+                });
+
+                await expect(writer.get("shared", "f1")).resolves.toStrictEqual(fat);
+                expect(tracker.headroom().readBytes).toBeGreaterThan(500);
+            });
+
+            it("charges documents a global query yields through async iteration", async () => {
+                expect.assertions(1);
+
+                const writer = createShardContextDatabase({
+                    clock: () => 1_700_000_000_000,
+                    globalDb: {
+                        query: () => {
+                            return {
+                                async* [Symbol.asyncIterator]() {
+                                    yield* rows;
+                                },
+                            };
+                        },
+                    } as unknown as DatabaseWriterLike,
+                    headroom: new TransactionHeadroomTracker({ maxReadBytes: 250 }),
+                    schema: globalSchema,
+                    sql,
+                });
+
+                await expect(
+                    codeOf(async () => {
+                        const seen: unknown[] = [];
+
+                        for await (const row of writer.query("shared") as unknown as AsyncIterable<unknown>) {
+                            seen.push(row);
+                        }
+
+                        return seen;
+                    }),
+                ).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+            });
+
             it("charges a global row once however often it is read", async () => {
                 expect.assertions(3);
 
@@ -399,6 +446,25 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
                 expect(all).toBe(once * rows.length);
                 expect(tracker.headroom().readBytes).toBe(all);
             });
+        });
+
+        it("still meters a read that overlaps an unmetered deleteAll", async () => {
+            expect.assertions(2);
+
+            const seed = build({});
+            let first = "";
+
+            for (let index = 0; index < 5; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                first = await seed.insert("notes", { body: "x".repeat(200), bucket: "a" });
+            }
+
+            const writer = build({ maxReadBytes: 100 });
+            const erasing = writer.deleteAll?.("notes");
+
+            // The erase is awaiting; a read on the same writer is not part of it.
+            await expect(codeOf(async () => writer.get("notes", first))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+            await expect(erasing).resolves.toStrictEqual({ deleted: 5 });
         });
 
         it("does not charge read bytes inside an unmetered deleteAll", async () => {
@@ -429,7 +495,7 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
             };
 
             for (let writer = 0; writer < 3; writer += 1) {
-                isFtsAvailable(meterReadBytes(counting, new TransactionHeadroomTracker(), () => false));
+                isFtsAvailable(meterReadBytes(counting, new TransactionHeadroomTracker()));
             }
 
             expect(probes).toBe(1);
@@ -442,7 +508,7 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
 
             const [stored] = sql.exec<{ __doc__: string }>("SELECT __doc__ FROM notes").toArray();
             const tracker = new TransactionHeadroomTracker();
-            const rows = [...meterReadBytes(sql, tracker, () => false).exec("SELECT id, __doc__ FROM notes")];
+            const rows = [...meterReadBytes(sql, tracker).exec("SELECT id, __doc__ FROM notes")];
 
             expect(rows).toHaveLength(1);
             expect(tracker.headroom().readBytes).toBe(stored?.__doc__.length);
@@ -465,7 +531,7 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
                 },
             };
             const tracker = new TransactionHeadroomTracker();
-            const metered = meterReadBytes(selfIterating, tracker, () => false);
+            const metered = meterReadBytes(selfIterating, tracker);
 
             metered.exec("SELECT").toArray();
             metered.exec("SELECT").one();

@@ -16,6 +16,23 @@ const codeOf = (act: () => void): string | undefined => {
 };
 
 describe("transactionHeadroomTracker", () => {
+    it("refuses a document again when a caught over-limit read is retried", () => {
+        expect.assertions(2);
+
+        const tracker = new TransactionHeadroomTracker({ maxReadBytes: 10 });
+
+        expect(
+            codeOf(() => {
+                tracker.recordDocumentRead("doc", 50);
+            }),
+        ).toBe("TRANSACTION_LIMIT_EXCEEDED");
+        expect(
+            codeOf(() => {
+                tracker.recordDocumentRead("doc", 50);
+            }),
+        ).toBe("TRANSACTION_LIMIT_EXCEEDED");
+    });
+
     it("allows work up to each ceiling", () => {
         expect.assertions(2);
 

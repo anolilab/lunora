@@ -154,8 +154,9 @@ class TransactionHeadroomTracker {
      */
     public recordDocumentRead(key: string, bytes: number): void {
         if (!this.chargedDocuments.has(key)) {
-            this.chargedDocuments.add(key);
+            // Marked only once the charge is accepted: a caught breach must not let a retry read the document free.
             this.recordReadBytes(bytes);
+            this.chargedDocuments.add(key);
         }
     }
 
@@ -167,7 +168,6 @@ class TransactionHeadroomTracker {
     public beginReadWindow(): void {
         this.readBytes = 0;
         this.chargedDocuments.clear();
-        this.warned.delete("readBytes");
     }
 
     /** Charge one written document, sized by {@link estimateBytes}. */
