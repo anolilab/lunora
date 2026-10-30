@@ -1489,9 +1489,11 @@ operators (`lunora pause status`, Studio). A realtime socket opened before the p
 subscriptions until it reconnects; writes go over HTTP, so they are refused. Scheduled jobs stay where they are, with their attempt budgets
 untouched, and run when you resume. Cron ticks are skipped and recorded as such,
 and a raw `crons` handler is skipped too; the built-in scheduled backup still runs.
-Queue batches are retried after five minutes, and each retry spends one of the
-consumer's `max_retries`, so a pause longer than that sends held messages to the
-dead-letter queue. A Workers-for-Platforms tenant answers forwarded batches with
+Queue messages are re-sent as delayed copies every five minutes with their
+attempt budgets intact, so no pause length sends them to the dead-letter queue. A
+message that cannot be copied (no producer binding or admin token, or a send that
+fails or is too large) is retried with the same delay instead, which does spend
+one of the consumer's `max_retries`. A Workers-for-Platforms tenant answers forwarded batches with
 every message marked for retry. Calls carrying the admin token or an `adminGate`
 grant keep working, so Studio, the CLI and health checks stay usable. Studio shows a banner on every page while
 paused, and the Schedule tab has the switch.
