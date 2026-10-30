@@ -1,3 +1,14 @@
+## @lunora/scheduler [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.158...@lunora/scheduler@1.0.0-alpha.159) (2026-10-30)
+
+### Performance Improvements
+
+* **wire:** skip decodeWire on tagless json text ([#1384](https://github.com/anolilab/lunora/issues/1384)) ([ec9dd3d](https://github.com/anolilab/lunora/commit/ec9dd3de697df597b24cbea981ea25a1a2c8fcea))
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+
 ## @lunora/scheduler [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.156...@lunora/scheduler@1.0.0-alpha.157) (2026-10-29)
 
 ### Bug Fixes

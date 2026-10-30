@@ -2698,7 +2698,7 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@types/node':
         specifier: catalog:types
@@ -2740,7 +2740,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       ai:
         specifier: catalog:ai
@@ -2787,7 +2787,7 @@ importers:
         version: link:../ratelimit
       '@lunora/wire':
         specifier: 1.0.0-alpha.4
-        version: link:../wire
+        version: 1.0.0-alpha.4
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -2888,7 +2888,7 @@ importers:
         version: link:../values
       '@lunora/wire':
         specifier: 1.0.0-alpha.4
-        version: link:../wire
+        version: 1.0.0-alpha.4
       '@visulima/disposable-email-domains':
         specifier: catalog:email
         version: 2.0.10
@@ -3259,7 +3259,7 @@ importers:
         version: link:../testing
       '@lunora/wire':
         specifier: 1.0.0-alpha.4
-        version: link:../wire
+        version: 1.0.0-alpha.4
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
@@ -3297,7 +3297,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
@@ -3565,7 +3565,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
     devDependencies:
       '@cloudflare/containers':
@@ -3636,7 +3636,7 @@ importers:
         specifier: workspace:*
         version: link:../search-core
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@types/node':
         specifier: catalog:types
@@ -3755,7 +3755,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -3858,7 +3858,7 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@openfeature/server-sdk':
         specifier: catalog:flags
@@ -4122,7 +4122,7 @@ importers:
         version: link:../shard-engine
       '@lunora/wire':
         specifier: 1.0.0-alpha.4
-        version: link:../wire
+        version: 1.0.0-alpha.4
       '@modelcontextprotocol/sdk':
         specifier: catalog:mcp
         version: 1.32.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.5)
@@ -4244,7 +4244,7 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@visulima/redact':
         specifier: catalog:redact
@@ -4586,7 +4586,7 @@ importers:
         version: link:../server
       '@lunora/wire':
         specifier: 1.0.0-alpha.4
-        version: link:../wire
+        version: 1.0.0-alpha.4
       fflate:
         specifier: catalog:privacy
         version: 0.8.3
@@ -4619,7 +4619,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
@@ -4727,7 +4727,7 @@ importers:
         version: link:../ratelimit
       '@lunora/wire':
         specifier: 1.0.0-alpha.4
-        version: link:../wire
+        version: 1.0.0-alpha.4
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.101.4(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -4854,7 +4854,7 @@ importers:
   packages/replica:
     dependencies:
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@sqlite.org/sqlite-wasm':
         specifier: '*'
@@ -4979,7 +4979,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
@@ -5097,7 +5097,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       '@visulima/cron-parser':
         specifier: catalog:tooling
@@ -5226,7 +5226,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -5290,7 +5290,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -5352,7 +5352,7 @@ importers:
         version: link:../ratelimit
       '@lunora/wire':
         specifier: 1.0.0-alpha.4
-        version: link:../wire
+        version: 1.0.0-alpha.4
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@1.9.15)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -5409,7 +5409,7 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
@@ -5541,7 +5541,7 @@ importers:
         version: link:../react
       '@lunora/wire':
         specifier: 1.0.0-alpha.4
-        version: link:../wire
+        version: 1.0.0-alpha.4
       '@tanstack/react-query':
         specifier: catalog:frontend
         version: 5.101.4(react@19.3.0)
@@ -5671,7 +5671,7 @@ importers:
         version: link:../ratelimit
       '@lunora/wire':
         specifier: 1.0.0-alpha.4
-        version: link:../wire
+        version: 1.0.0-alpha.4
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -5735,7 +5735,7 @@ importers:
         version: link:../server
       '@lunora/wire':
         specifier: 1.0.0-alpha.4
-        version: link:../wire
+        version: 1.0.0-alpha.4
       '@playwright/test':
         specifier: ^1.61.1
         version: 1.63.0
@@ -5879,7 +5879,7 @@ importers:
         version: link:../ratelimit
       '@lunora/wire':
         specifier: 1.0.0-alpha.4
-        version: link:../wire
+        version: 1.0.0-alpha.4
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -5942,7 +5942,7 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.4
+        specifier: 1.0.0-alpha.5
         version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
@@ -9049,6 +9049,10 @@ packages:
   '@lingui/message-utils@6.9.0':
     resolution: {integrity: sha512-LaFvx9Vc/lx4EPbbDaiDtyumDM4aAglRA3yvFQsJkhs1UWrCgDaaUBWhkXKYcmVe9gb7qeGYCqmGWOL84N9xDw==}
     engines: {node: '>=22.19.0'}
+
+  '@lunora/wire@1.0.0-alpha.4':
+    resolution: {integrity: sha512-7CJ+2em1pX4xp8R1bVPPzuejaAPY6rP9gsTv4YKzs/lA/sZgjig2MgF2dj4kk7VWIRRARGdHtm4U+UxnjDv6HQ==}
+    engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
@@ -30001,6 +30005,8 @@ snapshots:
       '@messageformat/date-skeleton': 1.1.0
       '@messageformat/parser': 5.1.1
       js-sha256: 0.10.1
+
+  '@lunora/wire@1.0.0-alpha.4': {}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true
