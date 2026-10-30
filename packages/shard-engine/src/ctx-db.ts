@@ -2908,13 +2908,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
     /**
      * Locate a row by id and return both the owning table and the decoded
-     * document in a single pass. The previous code base did this in two
-     * steps — `tableNameFromId` (which probes every table with a SELECT
-     * 1) followed by another `tableNameFromId` lookup inside each write
-     * method, plus a separate SELECT for the row — so a single `patch`/
-     * `delete` made 3–4 SQL round-trips even on a one-table schema.
-     * Routing every writer through this helper collapses the lookup to a
-     * single probe loop that returns the row when it hits.
+     * document in a single pass, so a `patch`/`delete` costs one lookup rather than a table probe plus a read.
      * @returns the row, its owning table, and its serialised document, or `undefined` when the id is absent
      */
     const locateRowById = (id: string, expectedTable?: string): { docJson: string; row: Record<string, unknown>; tableName: string } | undefined => {
@@ -3264,8 +3258,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         async delete(table, id, deleteOptions) {
             assertSchemaTable(table, "ctx.db.delete(table, id)");
 
-            // Single probe — get the table + row in one pass instead of
-            // probing twice (`tableNameFromId` + `writer.get`).
+            // One lookup returns the table and the row together.
             const located = locateRowById(id, table);
 
             if (!located) {
@@ -4204,9 +4197,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         async patch(table, id, patch, patchOptions) {
             assertSchemaTable(table, "ctx.db.patch(table, id, values)");
 
-            // Single probe — eliminates the redundant `tableNameFromId` +
-            // `writer.get` chain that doubled the SQL round-trips per patch
-            // on the prior code path.
+            // One lookup returns the table and the row together.
             const located = locateRowById(id, table);
 
             if (!located) {

@@ -612,7 +612,7 @@ describe("createSqlCtxDb — by-id writes pinned to a table", () => {
         harness.close();
     });
 
-    /** The id probe `tableNameFromId` fans out across tables. */
+    /** A bare existence probe: the id-only resolution this writer no longer does. */
     const isProbe = (statement: string): boolean => statement.startsWith("SELECT 1 FROM");
 
     it("reads the row once, with no id probe ahead of it", async () => {
@@ -646,6 +646,31 @@ describe("createSqlCtxDb — by-id writes pinned to a table", () => {
         // A missing row is a no-op before any trigger runs.
         expect(deletes).toStrictEqual([]);
         await expect(writer.get("tags", tagId)).resolves.toMatchObject({ label: "x" });
+    });
+
+    it("refuses a by-id call that names no table instead of probing for the id", async () => {
+        expect.assertions(6);
+
+        const { exec, statements } = recording(harness.exec);
+        const writer = createSqlCtxDb({ clock: () => 1, dialect, exec, schema });
+        const id = await writer.insert("notes", { body: "a" });
+        const before = statements.length;
+        // A JS caller (or a stale cast) can still omit the table the types require.
+        const loose = writer as unknown as Record<string, (...arguments_: unknown[]) => Promise<unknown>>;
+        const unpinned = [
+            () => loose["patch"]?.(undefined, id, { body: "b" }),
+            () => loose["replace"]?.(undefined, id, { body: "b" }),
+            () => loose["delete"]?.(undefined, id),
+            () => loose["restore"]?.(undefined, id),
+        ];
+
+        for (const call of unpinned) {
+            // eslint-disable-next-line no-await-in-loop -- each rejection is asserted in turn
+            await expect(call()).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        }
+
+        expect(statements.slice(before).filter((statement) => isProbe(statement))).toStrictEqual([]);
+        await expect(writer.get("notes", id)).resolves.toMatchObject({ body: "a" });
     });
 
     it("refuses a pinned table that does not live in this store", async () => {

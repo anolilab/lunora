@@ -122,7 +122,6 @@ import {
 import { decodeWire, encodeWire, needsWireEncoding, parseWire } from "@lunora/wire";
 import { SQL, sql } from "drizzle-orm";
 
-import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { readFieldPath } from "../../../shared/json-field-path";
 import { runSqlGlobalTableMigrations } from "./ctx-db-global-provisioning";
 import { runSqlAggregateMigrations, runSqlRankMigrations } from "./ctx-db-migrations";
@@ -131,6 +130,7 @@ import { createSearchSync, runSqlSearch, runSqlSearchMigrations } from "./ctx-db
 import { migrateSearchState } from "./ctx-db-search-state";
 import type { SqlDialect } from "./dialect";
 import createPointReadBatcher from "./point-read-batcher";
+import { afterBaseRowCommitted } from "./post-commit-error";
 import type { SqlCtxExec } from "./sql-exec";
 import {
     BACKFILL_BATCH_SIZE,
@@ -433,114 +433,8 @@ const applyOnUpdate = (
     }
 };
 
-/**
- * Capacity of the per-ctx-db `id → tableName` LRU. Bounded so a long-lived ctx
- * (the writer outlives a single request) doesn't accumulate unbounded entries.
- */
-const TABLE_NAME_CACHE_CAPACITY = 128;
-
-/**
- * LRU cache over `id → tableName` resolutions. Backed by a `Map` whose insertion
- * order is the LRU order: on hit we delete-then-reinsert to move the key to the
- * tail; on overflow we evict the head (the oldest entry). Per-instance so a new
- * ctx-db starts cold and a unit test never inherits another's cache.
- */
-const createTableNameCache = (): {
-    delete: (id: string) => void;
-    get: (id: string) => string | undefined;
-    set: (id: string, table: string) => void;
-} => {
-    const map = new Map<string, string>();
-
-    return {
-        delete: (id) => {
-            map.delete(id);
-        },
-
-        get: (id): string | undefined => {
-            const hit = map.get(id);
-
-            if (hit === undefined) {
-                return undefined;
-            }
-
-            // Move to tail (most-recently-used) by re-inserting.
-            map.delete(id);
-            map.set(id, hit);
-
-            return hit;
-        },
-        set: (id, table) => {
-            if (map.has(id)) {
-                map.delete(id);
-            } else {
-                // New key: bound the cache before inserting. The move-to-tail on
-                // `get` above is what makes this LRU; the eviction itself is the
-                // shared FIFO primitive.
-                evictOldestEntry(map, TABLE_NAME_CACHE_CAPACITY);
-            }
-
-            map.set(id, table);
-        },
-    };
-};
-
-/** Whether rows of this table live in the `.global()` store (unmarked legacy schemas count, see `tableNameFromId`). */
+/** Whether rows of this table live in the `.global()` store (a schema authored before the `.global()` flag leaves `shardMode` unset and counts). */
 const holdsGlobalRows = (definition: TableDefinitionLike): boolean => definition.shardMode === undefined || definition.shardMode.kind === "global";
-
-/**
- * Probe each table for `id`, mirroring the DO's id-only `get`/`patch`/`delete`
- * resolution. The schema handed in is the global-table subset, so this is a
- * small fixed scan — we fan the probes out in parallel and return on the first
- * hit. A small LRU caches successful lookups so a hot id (e.g. the same row
- * updated repeatedly within a request) avoids the fan-out on every call.
- *
- * Callers route through the ctx-db's `resolveTableName`, which provisions the
- * tables (memoized) first — so the probes always hit existing tables and no
- * missing-table handling is needed here.
- */
-const tableNameFromId = async (
-    exec: SqlCtxExec,
-    dialect: SqlDialect,
-    schema: SchemaLike,
-    id: string,
-    cache: ReturnType<typeof createTableNameCache>,
-): Promise<string | undefined> => {
-    const cached = cache.get(id);
-
-    if (cached !== undefined) {
-        return cached;
-    }
-
-    // Skip tables that don't live in D1 — `.shardBy()` is spread across many
-    // DOs and would never have a D1 row to find. The default root mode is also
-    // DO-side; we only need to probe `.global()` tables. (Schemas authored
-    // before the `.global()` flag existed don't set shardMode at all — preserve
-    // the legacy "probe every table" behaviour there so existing fixtures keep
-    // working.)
-    const candidates = Object.entries(schema.tables)
-        .filter(([, definition]) => holdsGlobalRows(definition))
-        .map(([tableName]) => tableName);
-
-    // Fire every probe at once; the first non-empty result wins.
-    const probes = await Promise.all(
-        candidates.map(async (tableName) => {
-            const rows = await queryAll(exec, dialect, sql`SELECT 1 FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} = ${id} LIMIT 1`);
-
-            return { found: rows.length > 0, tableName };
-        }),
-    );
-
-    for (const result of probes) {
-        if (result.found) {
-            cache.set(id, result.tableName);
-
-            return result.tableName;
-        }
-    }
-
-    return undefined;
-};
 
 /** Coerce a SQL aggregate scalar into `GroupByEntry.value` (`number | null`). */
 // eslint-disable-next-line unicorn/no-null -- GroupByEntry.value / AggregateResult are `number | null`; an empty reduction is null.
@@ -1925,10 +1819,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
     const scheduler = options.scheduler ?? throwingScheduler;
 
-    // Per-ctx-db LRU bounding the `id → tableName` resolution cost. See
-    // {@link createTableNameCache} for the size cap rationale.
-    const tableNameCache = createTableNameCache();
-
     let triggerDepth = 0;
 
     // Memoized companion-DDL guard. In production NOTHING outside this ctx-db
@@ -1992,36 +1882,26 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
-     * Resolve the table an `id` belongs to — the single choke-point for the
-     * id-addressed ops (`get`/`patch`/`replace`/`delete`). Provisioning runs
-     * first (memoized), so the per-table probe always hits existing tables: the
-     * tables are a hard precondition, not a maybe, which is why `tableNameFromId`
-     * needs no missing-table handling.
+     * The single choke-point for the id-addressed ops (`delete`/`patch`/`replace`/`restore`): validates the
+     * table the caller pinned and provisions the tables (memoized) first. There is no id-only resolution. The id
+     * is only ever read from `table`, so a foreign id finds nothing there and is treated as absent, and an id
+     * held by two global tables (a `.source()` table may overlap another's) is never ambiguous.
      *
-     * A pinned table is returned without probing for the id: every caller reads
-     * the row next (`rawRow`) and treats an absent one as not found, so the
-     * `SELECT 1` probe was a second round trip for the same answer.
+     * A pinned table is returned without probing for the id: every caller reads the row next (`rawRow`) and
+     * treats an absent one as not found.
      */
-    const resolveTableName = async (id: string, expectedTable?: string): Promise<string | undefined> => {
-        // A swapped `(id, table)` call would otherwise read as a missing row; no id names a schema table.
-        if (expectedTable !== undefined && !Object.hasOwn(schema.tables, expectedTable)) {
-            throw new LunoraError("BAD_REQUEST", `ctx.db by-id write (table, id): "${expectedTable}" is not a table in this schema`);
+    const resolveGlobalTable = async (table: string): Promise<string | undefined> => {
+        // `hasOwn` keeps a name such as `constructor` from resolving to a prototype member. A swapped `(id, table)`
+        // call, or one that names no table, would otherwise read as a missing row; no id names a schema table.
+        if (!Object.hasOwn(schema.tables, table)) {
+            throw new LunoraError("BAD_REQUEST", `ctx.db by-id write (table, id): "${table}" is not a table in this schema`);
         }
 
         await ensureMigrated();
 
-        if (expectedTable === undefined) {
-            return tableNameFromId(exec, dialect, schema, id, tableNameCache);
-        }
+        const pinned = schema.tables[table];
 
-        // The caller pinned a table (the `ctx.db.<table>.get/delete/...` by-id
-        // facade forwards its bound name), so the row is only ever read from
-        // that table: a foreign id finds nothing there and is treated as absent,
-        // and can never read or mutate cross-table through a branded
-        // `Id<"posts">` (IDOR).
-        const pinned = Object.hasOwn(schema.tables, expectedTable) ? schema.tables[expectedTable] : undefined;
-
-        return pinned !== undefined && holdsGlobalRows(pinned) ? expectedTable : undefined;
+        return pinned !== undefined && holdsGlobalRows(pinned) ? table : undefined;
     };
 
     // Per-companion backfill state, shared across the ctx-dbs of one
@@ -3500,7 +3380,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         },
 
         async delete(table, id, deleteOptions) {
-            const tableName = await resolveTableName(id, table);
+            const tableName = await resolveGlobalTable(table);
 
             if (!tableName) {
                 return;
@@ -3618,11 +3498,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             }
 
             await runGuardedWrite(tableName, "DELETE", undefined, snapshot);
-
-            // The id no longer lives in `tableName`; drop the stale cache entry
-            // so a later re-insert of the same id into a different global table
-            // re-probes instead of resolving to the now-empty original table.
-            tableNameCache.delete(id);
 
             await runCompanionStatements(tableName, async () => [
                 ...(await aggregateStatements(tableName, existing ?? undefined, undefined)),
@@ -3945,11 +3820,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             assertStorableStrings(dialect.name, withDefaults);
 
             let id: string;
-            // Whether the id was pinned by the caller (validated `clientId` or the
-            // trusted-import `allowExplicitId`) rather than freshly minted — drives
-            // the tableName-cache pin below.
-            let usedExplicitId = true;
-
             if (insertOptions?.clientId !== undefined) {
                 assertValidClientId(insertOptions.clientId);
                 id = insertOptions.clientId;
@@ -3958,7 +3828,6 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 id = withDefaults["_id"];
             } else {
                 id = generateId();
-                usedExplicitId = false;
             }
             // Like `_id` above, a document-supplied `_creationTime` is only honored
             // under the trusted-import `allowExplicitId` opt-in. The default mutation
@@ -3984,26 +3853,20 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             await runWrite(tableName, sql`INSERT INTO ${sql.identifier(tableName)} (${identifierList(columns)}) VALUES (${bindList(values)})`);
 
-            // A caller-pinned id may collide with a stale cache entry from a
-            // prior delete/re-insert in this ctx-db lifetime; point the cache
-            // at the table the row now actually lives in. (Generated ids are
-            // random and never pre-seeded, so this only matters for the
-            // explicit-id import path.)
-            if (usedExplicitId) {
-                tableNameCache.set(id, tableName);
-            }
+            // The row is stored from here on: a failure below is reported as such (see `afterBaseRowCommitted`).
+            await afterBaseRowCommitted(tableName, id, async () => {
+                await runCompanionStatements(tableName, async () => [
+                    ...(await aggregateStatements(tableName, undefined, documentWithMeta)),
+                    ...(await rankStatements(tableName, id, undefined, documentWithMeta)),
+                    ...cdcStatements(tableName, id, "insert", documentWithMeta),
+                ]);
+                // eslint-disable-next-line unicorn/no-null -- an inserted row's version starts at SQL NULL
+                await syncSearch(tableName, id, { document: documentWithMeta, written: { _creationTime: creationTime, [OCC_VERSION_COLUMN]: null } });
 
-            await runCompanionStatements(tableName, async () => [
-                ...(await aggregateStatements(tableName, undefined, documentWithMeta)),
-                ...(await rankStatements(tableName, id, undefined, documentWithMeta)),
-                ...cdcStatements(tableName, id, "insert", documentWithMeta),
-            ]);
-            // eslint-disable-next-line unicorn/no-null -- an inserted row's version starts at SQL NULL
-            await syncSearch(tableName, id, { document: documentWithMeta, written: { _creationTime: creationTime, [OCC_VERSION_COLUMN]: null } });
-
-            if (hasMatchingTrigger(tableName, "after", "insert")) {
-                await fireTriggers("after", "insert", { doc: documentWithMeta, id, op: "insert", table: tableName });
-            }
+                if (hasMatchingTrigger(tableName, "after", "insert")) {
+                    await fireTriggers("after", "insert", { doc: documentWithMeta, id, op: "insert", table: tableName });
+                }
+            });
 
             return id;
         },
@@ -4021,7 +3884,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // sharing its guard rather than restating it is what keeps the two
             // from drifting again.
             assertNoExplicitUndefined("patch", patch);
-            const tableName = await resolveTableName(id, table);
+            const tableName = await resolveGlobalTable(table);
 
             if (!tableName) {
                 throw new LunoraError("INTERNAL", `document not found: ${id}`);
@@ -4111,7 +3974,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         },
 
         async restore(table, id) {
-            const tableName = await resolveTableName(id, table);
+            const tableName = await resolveGlobalTable(table);
             // Snapshot the raw row before the patch so we know whether it was
             // actually soft-deleted (drives the rank re-add) and have its sort
             // fields to rebuild the rank-companion entry. Read before the table
@@ -4623,7 +4486,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         async replace(table, id, document, replaceOptions) {
             assertNoExplicitUndefined("replace", document);
-            const tableName = await resolveTableName(id, table);
+            const tableName = await resolveGlobalTable(table);
 
             if (!tableName) {
                 throw new LunoraError("INTERNAL", `document not found: ${id}`);
@@ -4700,16 +4563,18 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             await runGuardedWrite(tableName, "UPDATE", assignments, snapshot);
 
-            await runCompanionStatements(tableName, async () => [
-                ...(await aggregateStatements(tableName, previous, replaced)),
-                ...(await rankStatements(tableName, id, previous, replaced)),
-                ...cdcStatements(tableName, id, "update", replaced),
-            ]);
-            await syncSearch(tableName, id, { document: replaced, previous, written: writtenBy(snapshot, creationTime) });
+            await afterBaseRowCommitted(tableName, id, async () => {
+                await runCompanionStatements(tableName, async () => [
+                    ...(await aggregateStatements(tableName, previous, replaced)),
+                    ...(await rankStatements(tableName, id, previous, replaced)),
+                    ...cdcStatements(tableName, id, "update", replaced),
+                ]);
+                await syncSearch(tableName, id, { document: replaced, previous, written: writtenBy(snapshot, creationTime) });
 
-            if (hasMatchingTrigger(tableName, "after", "update")) {
-                await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
-            }
+                if (hasMatchingTrigger(tableName, "after", "update")) {
+                    await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
+                }
+            });
         },
     };
 
