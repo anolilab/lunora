@@ -33,8 +33,12 @@ describe("emitShard — ctx.random", () => {
 
         const shard = emitShard({ schema: discover(PLAIN) });
 
-        expect(shard).toContain("newId: scoped((scope) => createStableIdFactory(stableKey, scope)),");
-        expect(shard).toContain('random: scoped((scope) => createStableRandomFactory(contextKind === "mutation" ? stableKey : undefined, scope)),');
+        expect(shard).toContain(
+            'newId: contextKind === "query" ? createStableIdFactory(undefined, "") : scoped((scope) => createStableIdFactory(stableKey, scope)),',
+        );
+        expect(shard).toContain(
+            'random: contextKind === "mutation" ? scoped((scope) => createStableRandomFactory(stableKey, scope)) : createStableRandomFactory(undefined, ""),',
+        );
         expect(shard).toContain("createStableRandomFactory, ");
     });
 

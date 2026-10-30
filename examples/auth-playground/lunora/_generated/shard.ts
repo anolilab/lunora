@@ -1275,7 +1275,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // A replay key only means something inside the caller's dedup namespace; without one the call is not
                 // deduplicated, so its ids stay random.
                 // `ctx.random()` shares the replay key and scope, so a replay reproduces both sequences.
-                newId: scoped((scope) => createStableIdFactory(stableKey, scope)),
+                // A query is never replayed, so its ids skip `scoped` (whose first draw reads the caller) and stay random.
+                newId: contextKind === "query" ? createStableIdFactory(undefined, "") : scoped((scope) => createStableIdFactory(stableKey, scope)),
                 // Only a mutation is a replay the key reproduces; a query or action carrying the header draws Math.random,
                 // and never goes through `scoped`, whose first draw reads the caller.
                 random: contextKind === "mutation" ? scoped((scope) => createStableRandomFactory(stableKey, scope)) : createStableRandomFactory(undefined, ""),

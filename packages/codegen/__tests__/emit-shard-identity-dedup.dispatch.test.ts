@@ -138,6 +138,15 @@ const registerAll = (): void => {
     );
 
     register(
+        "live:mintsId",
+        query.input({}).query(async ({ ctx }) => {
+            count("live:mintsId");
+
+            return { minted: typeof (ctx as unknown as { newId: () => string }).newId() === "string", values: await values(ctx) };
+        }),
+    );
+
+    register(
         "live:mine",
         query.input({}).query(async ({ ctx }) => {
             count("live:mine");
@@ -456,6 +465,26 @@ describe("emitted shard — live runs shared across identities", () => {
         const { delta } = await subscribeAllThenWrite("live:drawsRandom", 1, harness);
 
         // A query's random sequence never uses the replay key, so drawing from it must not read the caller.
+        expect(delta).toBe(1);
+    });
+
+    it("keeps sharing a query that mints an id after a client calls it over /rpc with a replay key", async () => {
+        expect.assertions(2);
+
+        const harness = createHarness();
+        const response = await harness.shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "live:mintsId" }),
+                headers: { "content-type": "application/json", "x-lunora-mutation-id": "replay-1", "x-lunora-userid": "user-A" },
+                method: "POST",
+            }),
+        );
+
+        expect(response.ok).toBe(true);
+
+        const { delta } = await subscribeAllThenWrite("live:mintsId", 1, harness);
+
+        // A query is never replayed, so its ids never use the replay key and minting one must not read the caller.
         expect(delta).toBe(1);
     });
 
