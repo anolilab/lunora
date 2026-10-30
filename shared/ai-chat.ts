@@ -1,10 +1,8 @@
 /**
  * The Studio's conversational assistant engine.
  *
- * Split out of `sql-assistant.ts` when that file crossed a thousand lines. Its
- * consumers are already disjoint: the shard DO imports only the one-shot SQL
- * tasks, and `@lunora/runtime` imports only this. What they share is
- * `shared/ai-prompt.ts`.
+ * Consumed by `@lunora/runtime` only; the shard DO imports the one-shot SQL
+ * tasks from `sql-assistant.ts` instead. The two share `shared/ai-prompt.ts`.
  *
  * Holds the transcript budget, the read-only tool catalog and its data-sharing
  * ladder, the tool-request validator, the chat prompts, and `generateChat`
@@ -298,7 +296,7 @@ export interface ForwardedToolCall {
  * that, the same way the `AI` binding is injected rather than imported. Takes a
  * {@link ForwardedToolCall}: the validated call, narrowed to what a forwarder needs.
  */
-export type ChatToolRunner = (call: ForwardedToolCall) => Promise<unknown>;
+export type ChatToolRunner = (call: ForwardedToolCall, signal?: AbortSignal) => Promise<unknown>;
 
 /**
  * Tool-and-refusal rounds one turn may spend before it must answer with what it
@@ -1049,9 +1047,15 @@ const generateChat = async (
 
         try {
             // eslint-disable-next-line no-await-in-loop -- see above
-            result = fitToBudget(await runTool(forwarded));
+            result = fitToBudget(await runTool(forwarded, signal));
         } catch {
             result = "the tool failed";
+        }
+
+        // The read was cancelled with the turn (the runner rejects on the signal);
+        // its failure is not an observation for a reader who is gone.
+        if (signal?.aborted) {
+            return degraded("ai-error");
         }
 
         user = `${user}\n${observation(result)}`;

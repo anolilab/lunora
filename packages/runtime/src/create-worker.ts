@@ -2723,7 +2723,8 @@ const shardRpcRequest = (
     args: Record<string, unknown>,
     headers: Record<string, string>,
     body: string = JSON.stringify({ args, functionPath }),
-): Request => new Request("https://shard.internal/rpc", { body, headers, method: "POST" });
+    signal?: AbortSignal,
+): Request => new Request("https://shard.internal/rpc", { body, headers, method: "POST", ...(signal === undefined ? {} : { signal }) });
 
 /**
  * The server-minted `x-lunora-*` values the DOs trust verbatim on an upgrade: the
@@ -4959,6 +4960,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         shardKey: string,
         outgoingHeaders: Record<string, string>,
         forwardBody: string | undefined,
+        signal?: AbortSignal,
     ): Promise<Response> => {
         const replica = replicaTargetFor(request, functionPath, shardKey);
 
@@ -4979,14 +4981,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 replicaHeaders["x-lunora-min-seq"] = String(minSeq);
             }
 
-            const fromReplica = await forwardToShard(shardDO, replica.name, shardRpcRequest(functionPath, args, replicaHeaders, forwardBody), replica.region);
+            const fromReplica = await forwardToShard(
+                shardDO,
+                replica.name,
+                shardRpcRequest(functionPath, args, replicaHeaders, forwardBody, signal),
+                replica.region,
+            );
 
             if (fromReplica.status !== 421) {
                 return fromReplica;
             }
         }
 
-        return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, outgoingHeaders, forwardBody));
+        return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, outgoingHeaders, forwardBody, signal));
     };
 
     /**

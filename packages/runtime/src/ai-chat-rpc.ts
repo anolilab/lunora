@@ -170,6 +170,8 @@ type ForwardToShard = (
     headers: Record<string, string>,
     // Tool reads carry no pre-serialised body; the worker's forwarder takes one for the passthrough RPC path.
     forwardBody?: string,
+    // Cancels the shard request in flight, so an abandoned turn does not wait on a read nobody will see.
+    signal?: AbortSignal,
 ) => Promise<Response>;
 
 /**
@@ -214,8 +216,8 @@ const chatToolRunner = (
     schema: ReadonlyArray<SchemaFact>,
 ): ChatToolRunner => {
     /** One forwarded admin read, decoded. */
-    const read = async (path: string, args: Record<string, unknown>): Promise<unknown> => {
-        const response = await forward(request, path, args, shardKey, headers);
+    const read = async (path: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> => {
+        const response = await forward(request, path, args, shardKey, headers, undefined, signal);
 
         // A non-2xx body is an error envelope, not data. Without this check it was
         // JSON-stringified into an observation prefixed "Tool result:", telling the
@@ -241,12 +243,12 @@ const chatToolRunner = (
      * the turn in, or about every table the shard has when the turn came with none
      * (an error opened from a page that holds no schema).
      */
-    const tablesToDescribe = async (): Promise<string[]> => {
+    const tablesToDescribe = async (signal?: AbortSignal): Promise<string[]> => {
         if (schema.length > 0) {
             return schema.map((fact) => fact.table);
         }
 
-        const listed = await read(LIST_TABLES_OP, {});
+        const listed = await read(LIST_TABLES_OP, {}, signal);
 
         return Array.isArray(listed)
             ? listed
@@ -256,14 +258,14 @@ const chatToolRunner = (
             : [];
     };
 
-    return async (call: ForwardedToolCall): Promise<unknown> => {
+    return async (call: ForwardedToolCall, signal?: AbortSignal): Promise<unknown> => {
         const path = TOOL_OPS[call.name];
 
         if (call.name === "describeTables") {
-            return read(path, { tables: await tablesToDescribe() });
+            return read(path, { tables: await tablesToDescribe(signal) }, signal);
         }
 
-        return read(path, call.sql === undefined ? {} : { sql: call.sql });
+        return read(path, call.sql === undefined ? {} : { sql: call.sql }, signal);
     };
 };
 

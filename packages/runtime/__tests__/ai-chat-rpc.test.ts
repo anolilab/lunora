@@ -2059,6 +2059,66 @@ describe("createWorker — aiChat token streaming", () => {
         expect(written.some((frame) => frame.event === "error")).toBe(false);
     });
 
+    it("cancels an in-flight shard read when the request is aborted", async () => {
+        expect.assertions(4);
+
+        let reachedShard!: () => void;
+        const shardReached = new Promise<void>((resolve) => {
+            reachedShard = resolve;
+        });
+        let shardSawAbort = false;
+
+        // A shard that never answers on its own: it settles only if the forwarded
+        // request carries a signal that fires.
+        const hangingShard: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: (request: Request) =>
+                        new Promise<Response>((_resolve, reject) => {
+                            reachedShard();
+                            request.signal.addEventListener(
+                                "abort",
+                                () => {
+                                    shardSawAbort = true;
+                                    reject(new Error("aborted"));
+                                },
+                                { once: true },
+                            );
+                        }),
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const binding: AiRunBinding = {
+            run: vi.fn<AiRun>(async () => {
+                return { response: '```tool\n{"name":"describeTables"}\n```' };
+            }),
+        };
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, aiChatBinding: binding, shardDO: hangingShard });
+        const abort = new AbortController();
+        const request = new Request("https://app.example/_lunora/rpc", {
+            body: JSON.stringify({ args: { prompt: "what tables?" }, functionPath: AI_CHAT_OP }),
+            headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+            method: "POST",
+            signal: abort.signal,
+        });
+
+        const response = await worker.fetch(request, {}, fakeContext);
+
+        await shardReached;
+        abort.abort();
+
+        const written = await frames(response);
+
+        expect(shardSawAbort).toBe(true);
+        // The turn stopped at the read: no second model round, no terminal frame.
+        expect(binding.run).toHaveBeenCalledTimes(1);
+        expect(written.some((frame) => frame.event === "complete")).toBe(false);
+        expect(written.some((frame) => frame.event === "error")).toBe(false);
+    });
+
     it("writes no terminal frame when the turn cannot finish", async () => {
         expect.hasAssertions();
 
