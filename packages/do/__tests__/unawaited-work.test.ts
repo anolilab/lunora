@@ -120,6 +120,40 @@ describe("watchPendingWork", () => {
         await sending;
     });
 
+    it("names a push left running through the ctx.notify.push alias and keeps the alias identity", async () => {
+        expect.assertions(3);
+
+        const slow = deferred();
+        const push = { send: async () => slow.promise };
+        const ctx: Record<string, unknown> = { notify: { push }, push };
+        const finish = watchPendingWork(ctx);
+
+        expect((ctx.notify as { push: unknown }).push).toBe(ctx.push);
+
+        const sending = (ctx.notify as { push: { send: () => Promise<string> } }).push.send();
+
+        expect(finish()).toStrictEqual(["ctx.push.send"]);
+
+        slow.resolve();
+        await sending;
+
+        expect(ctx.push).toBe(push);
+    });
+
+    it.each(["ai", "live"])("names a call left running on ctx.%s", async (facade) => {
+        expect.assertions(1);
+
+        const slow = deferred();
+        const ctx: Record<string, unknown> = { [facade]: { run: async () => slow.promise } };
+        const finish = watchPendingWork(ctx);
+        const running = (ctx[facade] as { run: () => Promise<string> }).run();
+
+        expect(finish()).toStrictEqual([`ctx.${facade}.run`]);
+
+        slow.resolve();
+        await running;
+    });
+
     it("restores the original members so identity-keyed queues still find the facade", () => {
         expect.assertions(2);
 

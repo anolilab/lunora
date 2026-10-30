@@ -14,8 +14,14 @@
 /** `ctx` members that return a promise and are wrapped directly. */
 const CALL_KINDS = ["fetch", "runAction", "runMutation", "runQuery"] as const;
 
-/** `ctx` members that are objects of promise-returning methods. */
-const FACADE_KINDS = ["notify", "push", "scheduler", "storage"] as const;
+/**
+ * `ctx` members that are Lunora-owned objects of promise-returning methods.
+ *
+ * The pass-through platform bindings (`aiSearch`, `browser`, `images`, …) and `db` are left alone: a
+ * runtime binding is brand-checked by native code the handler may hand it to, and `db` carries identity
+ * the engine keys on, so a proxy standing in for either could break a call that works today.
+ */
+const FACADE_KINDS = ["ai", "live", "notify", "push", "scheduler", "storage"] as const;
 
 const isThenable = (value: unknown): value is PromiseLike<unknown> =>
     (typeof value === "object" || typeof value === "function") && value !== null && typeof (value as { then?: unknown }).then === "function";
@@ -80,10 +86,23 @@ const watchPendingWork = (context: Record<string, unknown>): (() => string[]) =>
         }
     }
 
-    const watchFacade = (label: string, facade: object): object =>
-        new Proxy(facade, {
+    // One proxy per facade, so `ctx.notify.push` stays the very object `ctx.push` is.
+    const watched = new Map<object, object>();
+
+    const watchFacade = (label: string, facade: object): object => {
+        const existing = watched.get(facade);
+
+        if (existing !== undefined) {
+            return existing;
+        }
+
+        const proxy = new Proxy(facade, {
             get: (target, property) => {
                 const member: unknown = Reflect.get(target, property);
+
+                if (typeof member === "object" && member !== null && watched.has(member)) {
+                    return watched.get(member);
+                }
 
                 if (typeof member !== "function" || typeof property !== "string") {
                     return member;
@@ -104,6 +123,11 @@ const watchPendingWork = (context: Record<string, unknown>): (() => string[]) =>
                 };
             },
         });
+
+        watched.set(facade, proxy);
+
+        return proxy;
+    };
 
     for (const name of FACADE_KINDS) {
         const original = context[name];
