@@ -11,8 +11,18 @@
  */
 import type { ResolvedShard } from "./resolve-shard";
 
-/** What `beginCronRun` decided: run under `runId`, run unguarded (no `runId`), or skip the tick. */
-type CronRunGate = { runId?: string; skip: false } | { reason: string; skip: true };
+/**
+ * How often a running job tells the scheduler it is alive. A third of the
+ * scheduler's fifteen-minute lease, so two renewals can fail before the lease
+ * lapses.
+ */
+const CRON_LEASE_RENEW_MS = 300_000;
+
+/**
+ * What `beginCronRun` decided: run under `runId` (renewing its lease until
+ * `endCronRun`), run unguarded (no `runId`), or skip the tick.
+ */
+type CronRunGate = { renewal?: ReturnType<typeof setInterval>; runId?: string; skip: false } | { reason: string; skip: true };
 
 const describeError = (value: unknown): string => (value instanceof Error ? value.message : JSON.stringify(value));
 
@@ -26,6 +36,36 @@ const post = async (stub: ResolvedShard, path: string, body: unknown): Promise<u
     }
 
     return response.json();
+};
+
+/**
+ * Renew the lease of run `runId` every {@link CRON_LEASE_RENEW_MS} until
+ * `endCronRun` clears the timer. The scheduler treats a lease with no sign of
+ * life for fifteen minutes as lost, which is right for a `scheduled()`
+ * invocation (torn down at that age) but not for a run with no such bound, such
+ * as a manual run from a fetch handler: without renewal the next tick would
+ * start a second copy beside it. A renewal that fails is only logged — the
+ * lease then lapses as it would have, and the run itself is unaffected — and an
+ * answer of `renewed: false` means the lease is no longer this run's, so the
+ * timer stops.
+ */
+const keepLeaseAlive = (stub: ResolvedShard, name: string, runId: string): ReturnType<typeof setInterval> => {
+    const timer: ReturnType<typeof setInterval> = setInterval(() => {
+        post(stub, "/cron/renew", { name, runId })
+            .then((answer) => {
+                if ((answer as { renewed?: unknown }).renewed === false) {
+                    clearInterval(timer);
+                }
+
+                return undefined;
+            })
+            .catch((error: unknown) => {
+                // eslint-disable-next-line no-console -- see beginCronRun
+                console.warn(`[lunora] cron job "${name}" could not renew its lease: ${describeError(error)}`);
+            });
+    }, CRON_LEASE_RENEW_MS);
+
+    return timer;
 };
 
 /**
@@ -44,7 +84,9 @@ const beginCronRun = async (stub: ResolvedShard | undefined, name: string): Prom
             return { reason: typeof answer.reason === "string" ? answer.reason : "in-flight", skip: true };
         }
 
-        return { runId: typeof answer.runId === "string" ? answer.runId : undefined, skip: false };
+        const runId = typeof answer.runId === "string" ? answer.runId : undefined;
+
+        return runId === undefined ? { skip: false } : { renewal: keepLeaseAlive(stub, name, runId), runId, skip: false };
     } catch (error: unknown) {
         // eslint-disable-next-line no-console -- the scheduled() entry has no request-scoped logger; the host captures console
         console.warn(`[lunora] cron job "${name}" runs without its overlap guard: ${describeError(error)}`);
@@ -58,6 +100,8 @@ const endCronRun = async (stub: ResolvedShard | undefined, name: string, gate: C
     if (stub === undefined || gate.skip || gate.runId === undefined) {
         return;
     }
+
+    clearInterval(gate.renewal);
 
     try {
         await post(stub, "/cron/end", {
@@ -73,4 +117,4 @@ const endCronRun = async (stub: ResolvedShard | undefined, name: string, gate: C
 };
 
 export type { CronRunGate };
-export { beginCronRun, endCronRun };
+export { beginCronRun, CRON_LEASE_RENEW_MS, endCronRun };

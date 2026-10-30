@@ -52,6 +52,7 @@ interface CronJobsBuilder {
 ```ts
 interface CronRunInFlight {
     name: string;
+    renewedAt?: number;
     runId: string;
     skipped: number;
     startedAt: number;

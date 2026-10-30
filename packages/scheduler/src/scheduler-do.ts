@@ -440,6 +440,11 @@ class SchedulerDO {
         return `${CRON_RUN_PREFIX}${encodePoolName(run.name)}:${padTime(MAX_SCHEDULED_FOR_MS - run.endedAt)}:${run.runId}`;
     }
 
+    /** Whether `lease` still holds: its newest sign of life is within {@link DISPATCH_LEASE_MS}. */
+    private static leaseIsLive(lease: CronRunInFlight, now: number): boolean {
+        return (lease.renewedAt ?? lease.startedAt) > now - DISPATCH_LEASE_MS;
+    }
+
     /** A cron job name off an untrusted body, or `undefined` when absent or implausible. */
     private static cronName(body: unknown): string | undefined {
         const name = (body as { name?: unknown } | undefined)?.name;
@@ -708,6 +713,9 @@ class SchedulerDO {
             }
             case "POST /cron/end": {
                 return this.handleCronEnd(request);
+            }
+            case "POST /cron/renew": {
+                return this.handleCronRenew(request);
             }
             case "POST /dead/cancel": {
                 return this.handleDeadCancel(request);
@@ -2344,10 +2352,9 @@ class SchedulerDO {
      * other request out while a storage operation is pending, and nothing between
      * them awaits I/O.
      *
-     * A lease older than {@link DISPATCH_LEASE_MS} is treated as lost, for the
-     * same platform reason that constant gives: a `scheduled()` invocation is
-     * torn down at fifteen minutes of wall time, so no run can still hold it. The
-     * lost run is recorded as failed rather than vanishing.
+     * A lease with no sign of life (its start, or its last `/cron/renew`) within
+     * {@link DISPATCH_LEASE_MS} is treated as lost: the run was torn down or its
+     * worker died. The lost run is recorded as failed rather than vanishing.
      */
     private async handleCronBegin(request: Request): Promise<Response> {
         const name = SchedulerDO.cronName(await request.json().catch(() => undefined));
@@ -2372,7 +2379,7 @@ class SchedulerDO {
 
         const lease = await this.state.storage.get<CronRunInFlight>(leaseKey);
 
-        if (lease !== undefined && lease.startedAt > now - DISPATCH_LEASE_MS) {
+        if (lease !== undefined && SchedulerDO.leaseIsLive(lease, now)) {
             await this.state.storage.put(leaseKey, { ...lease, skipped: lease.skipped + 1 }).catch(() => undefined);
             await this.recordCronSkip(name, "in-flight", now).catch(() => undefined);
 
@@ -2388,6 +2395,38 @@ class SchedulerDO {
         await this.state.storage.put(leaseKey, { name, runId, skipped: 0, startedAt: now } satisfies CronRunInFlight);
 
         return SchedulerDO.json({ acquired: true, runId });
+    }
+
+    /**
+     * `POST /cron/renew { name, runId }` — a running cron job says it is still
+     * alive, which restarts the {@link DISPATCH_LEASE_MS} window. The ceiling
+     * assumes a `scheduled()` invocation is torn down at fifteen minutes; a run
+     * with no such bound (a manual run from Studio, a host that does not enforce
+     * it) renews instead of being declared lost while it works.
+     *
+     * Only the run that holds the lease, and only while it is still live, can
+     * extend it. A lapsed lease may already have been recorded as lost or taken
+     * over, and reviving it would give two runs the lease.
+     */
+    private async handleCronRenew(request: Request): Promise<Response> {
+        const body = (await request.json().catch(() => undefined)) as { runId?: unknown } | undefined;
+        const name = SchedulerDO.cronName(body);
+
+        if (name === undefined || typeof body?.runId !== "string") {
+            return SchedulerDO.error(400, "INVALID_INPUT", "name and runId are required");
+        }
+
+        const leaseKey = `${CRON_LEASE_PREFIX}${encodePoolName(name)}`;
+        const lease = await this.state.storage.get<CronRunInFlight>(leaseKey);
+        const now = Date.now();
+
+        if (lease?.runId !== body.runId || !SchedulerDO.leaseIsLive(lease, now)) {
+            return SchedulerDO.json({ renewed: false });
+        }
+
+        await this.state.storage.put(leaseKey, { ...lease, renewedAt: now } satisfies CronRunInFlight);
+
+        return SchedulerDO.json({ renewed: true });
     }
 
     /**
@@ -2443,7 +2482,7 @@ class SchedulerDO {
         const now = Date.now();
 
         await this.forEachPage<CronRunInFlight>(CRON_LEASE_PREFIX, (lease, key) => {
-            if (lease.startedAt > now - DISPATCH_LEASE_MS) {
+            if (SchedulerDO.leaseIsLive(lease, now)) {
                 inFlight.push(lease);
             } else {
                 lost.push([key, lease]);

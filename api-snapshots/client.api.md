@@ -245,6 +245,7 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 ```ts
 interface CronRunInFlight {
     name: string;
+    renewedAt?: number;
     runId: string;
     skipped: number;
     startedAt: number;

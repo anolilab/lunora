@@ -251,6 +251,8 @@ export interface CronRunRecord {
 /** A cron run that holds its lease right now. */
 export interface CronRunInFlight {
     name: string;
+    /** When the run last said it was still alive; the lease lapses fifteen minutes after this, or after `startedAt` when it never did. */
+    renewedAt?: number;
     runId: string;
     /** Ticks skipped so far because this run was still going. */
     skipped: number;

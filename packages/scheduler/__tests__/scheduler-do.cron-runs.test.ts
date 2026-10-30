@@ -29,6 +29,12 @@ const end = async (scheduler: SchedulerDO, body: Record<string, unknown>): Promi
     return response.json();
 };
 
+const renew = async (scheduler: SchedulerDO, name: string, runId: string): Promise<{ renewed: boolean }> => {
+    const response = await scheduler.fetch(post("/cron/renew", { name, runId }));
+
+    return response.json();
+};
+
 const runs = async (scheduler: SchedulerDO): Promise<{ inFlight: CronRunInFlight[]; runs: CronRunRecord[] }> => {
     const response = await scheduler.fetch(new Request("https://scheduler.internal/cron/runs"));
 
@@ -118,6 +124,49 @@ describe("schedulerDO cron runs", () => {
 
         expect(state.inFlight).toMatchObject([{ runId: next }]);
         expect(state.runs.find((run) => run.runId === lost)).toMatchObject({ skipped: 1, status: "failed" });
+    });
+
+    it("keeps a renewed lease past the fifteen-minute ceiling, so a long run is not overlapped", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const scheduler = new SchedulerDO(createFakeState(), env);
+        const runId = await acquire(scheduler, "digest");
+
+        setNow(1_700_000_000_000 + DISPATCH_LEASE_MS - 1);
+
+        await expect(renew(scheduler, "digest", runId)).resolves.toStrictEqual({ renewed: true });
+
+        // Twenty minutes in: lost without the renewal, held with it.
+        setNow(1_700_000_000_000 + DISPATCH_LEASE_MS + 300_000);
+
+        await expect(begin(scheduler, "digest")).resolves.toMatchObject({ acquired: false, reason: "in-flight" });
+
+        const state = await runs(scheduler);
+
+        expect(state.inFlight).toMatchObject([{ runId, startedAt: 1_700_000_000_000 }]);
+        await expect(end(scheduler, { name: "digest", runId, status: "succeeded" })).resolves.toStrictEqual({ recorded: true });
+    });
+
+    it("refuses to renew a lease another run has taken over, or one that already lapsed", async () => {
+        expect.hasAssertions();
+
+        const setNow = pinClock(1_700_000_000_000);
+        const scheduler = new SchedulerDO(createFakeState(), env);
+        const stale = await acquire(scheduler, "digest");
+
+        setNow(1_700_000_000_000 + DISPATCH_LEASE_MS);
+
+        // Lapsed, nobody has taken it over yet: it is lost, not revivable.
+        await expect(renew(scheduler, "digest", stale)).resolves.toStrictEqual({ renewed: false });
+
+        const successor = await acquire(scheduler, "digest");
+
+        setNow(1_700_000_000_000 + DISPATCH_LEASE_MS + 1);
+
+        await expect(renew(scheduler, "digest", stale)).resolves.toStrictEqual({ renewed: false });
+        await expect(renew(scheduler, "other", successor)).resolves.toStrictEqual({ renewed: false });
+        await expect(runs(scheduler)).resolves.toMatchObject({ inFlight: [{ runId: successor, startedAt: 1_700_000_000_000 + DISPATCH_LEASE_MS }] });
     });
 
     it("keeps the newest fifty runs per cron job", async () => {

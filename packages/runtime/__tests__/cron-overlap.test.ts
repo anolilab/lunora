@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
+import { CRON_LEASE_RENEW_MS } from "../src/cron-runs";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 const fakeContext: ExecutionContextLike = {
@@ -69,6 +70,10 @@ const leaseScheduler = (failWith?: number): { calls: { body: Record<string, unkn
 
                         if (failWith !== undefined) {
                             return new Response("down", { status: failWith });
+                        }
+
+                        if (path === "/cron/renew") {
+                            return Response.json({ renewed: true });
                         }
 
                         if (path === "/cron/begin") {
@@ -165,6 +170,124 @@ describe("createWorker — cron overlap guard", () => {
 
         shard.release();
         await fire;
+    });
+
+    describe("lease renewal", () => {
+        const paths = (scheduler: { calls: { path: string }[] }): string[] => scheduler.calls.map((call) => call.path);
+
+        it("renews a scheduled run's lease while it works, and stops once it ends", async () => {
+            expect.hasAssertions();
+
+            vi.useFakeTimers({ toFake: ["clearInterval", "setInterval"] });
+
+            try {
+                const shard = blockingShard();
+                const scheduler = leaseScheduler();
+                const worker = createWorker({
+                    cronJobs: { [CRON]: [{ functionPath: "digest:send", name: "digest" }] },
+                    schedulerDO: scheduler.namespace,
+                    shardDO: shard.namespace,
+                });
+                const run = worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, fakeContext);
+
+                await shard.entered;
+                await vi.advanceTimersByTimeAsync(CRON_LEASE_RENEW_MS);
+
+                expect(paths(scheduler)).toStrictEqual(["/cron/begin", "/cron/renew"]);
+                expect(scheduler.calls[1]?.body).toStrictEqual({ name: "digest", runId: "run-1" });
+
+                shard.release();
+                await run;
+                await vi.advanceTimersByTimeAsync(CRON_LEASE_RENEW_MS * 3);
+
+                expect(paths(scheduler)).toStrictEqual(["/cron/begin", "/cron/renew", "/cron/end"]);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it("renews a manual run's lease too, which has no wall-clock teardown of its own", async () => {
+            expect.hasAssertions();
+
+            vi.useFakeTimers({ toFake: ["clearInterval", "setInterval"] });
+
+            try {
+                const shard = blockingShard();
+                const scheduler = leaseScheduler();
+                const worker = createWorker({
+                    adminToken: ADMIN_TOKEN,
+                    cronJobs: { [CRON]: [{ functionPath: "digest:send", name: "digest" }] },
+                    schedulerDO: scheduler.namespace,
+                    shardDO: shard.namespace,
+                });
+                const manual = worker.fetch(
+                    new Request("https://app.example/_lunora/admin/cron-jobs/run", {
+                        body: JSON.stringify({ name: "digest" }),
+                        headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+                        method: "POST",
+                    }),
+                    {},
+                    fakeContext,
+                );
+
+                await shard.entered;
+                await vi.advanceTimersByTimeAsync(CRON_LEASE_RENEW_MS * 2);
+
+                expect(paths(scheduler)).toStrictEqual(["/cron/begin", "/cron/renew", "/cron/renew"]);
+
+                shard.release();
+                await manual;
+                await vi.advanceTimersByTimeAsync(CRON_LEASE_RENEW_MS);
+
+                expect(paths(scheduler).at(-1)).toBe("/cron/end");
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it("stops renewing once the scheduler says the lease is no longer this run's", async () => {
+            expect.hasAssertions();
+
+            vi.useFakeTimers({ toFake: ["clearInterval", "setInterval"] });
+
+            try {
+                const shard = blockingShard();
+                const calls: string[] = [];
+                const worker = createWorker({
+                    cronJobs: { [CRON]: [{ functionPath: "digest:send", name: "digest" }] },
+                    schedulerDO: {
+                        get: () => {
+                            return {
+                                fetch: async (request: Request) => {
+                                    const { pathname } = new URL(request.url);
+
+                                    calls.push(pathname);
+
+                                    return pathname === "/cron/begin"
+                                        ? Response.json({ acquired: true, runId: "run-1" })
+                                        : Response.json({ recorded: false, renewed: false });
+                                },
+                            };
+                        },
+                        idFromName: (name: string) => {
+                            return { __name: name };
+                        },
+                    },
+                    shardDO: shard.namespace,
+                });
+                const run = worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, fakeContext);
+
+                await shard.entered;
+                await vi.advanceTimersByTimeAsync(CRON_LEASE_RENEW_MS * 3);
+
+                expect(calls.filter((path) => path === "/cron/renew")).toHaveLength(1);
+
+                shard.release();
+                await run;
+            } finally {
+                vi.useRealTimers();
+            }
+        });
     });
 
     it("refuses a manual run (409) while the job is already running", async () => {
