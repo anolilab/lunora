@@ -350,6 +350,70 @@ describe("socket identity revalidation", () => {
         expect(ws.closes[0]).toBe(4005);
     });
 
+    it("stops a lapsed socket's live frames, as a relay delivering to a socket it holds does", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const shard = new ReauthShard(createState(), {});
+        const ws = createFakeWebSocket();
+
+        shard.register(ws, {
+            connectionId: "r2.conn-1",
+            expiresAt: NOW + HOUR,
+            liveGrants: { "sub-live": "key-1" },
+            revalidateAt: NOW + WINDOW,
+            subs: {},
+            userId: "user-1",
+            whispers: ["feed"],
+        });
+
+        const deliver = (): number =>
+            (shard as unknown as { deliverLiveLocal: (topic: string, key: string, frame: string) => number }).deliverLiveLocal("feed", "key-1", "{}");
+
+        expect(deliver()).toBe(1);
+
+        vi.setSystemTime(NOW + WINDOW);
+
+        expect([deliver(), ws.closes[0]]).toStrictEqual([0, 4005]);
+    });
+
+    it("names a relay's connection ids after the relay, so a re-auth can go straight to it", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+
+        const accepted: string[] = [];
+
+        for (const name of ["shard-a::relay::2", "shard-a"]) {
+            const server = createFakeWebSocket();
+            const globalWithPair = globalThis as { WebSocketPair?: unknown };
+            const original = globalWithPair.WebSocketPair;
+
+            globalWithPair.WebSocketPair = function WebSocketPair() {
+                return { 0: {}, 1: server } as unknown;
+            };
+
+            const shard = new ReauthShard({ ...createState(), id: { name } }, {});
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- the WebSocketPair stub is swapped per iteration, so the upgrades must not overlap
+                await shard.fetch(new Request("https://shard.internal/_lunora/ws", { headers: { Upgrade: "websocket", "x-lunora-userid": "user-1" } }));
+            } catch (error) {
+                if (!(error instanceof RangeError)) {
+                    throw error;
+                }
+            } finally {
+                globalWithPair.WebSocketPair = original;
+            }
+
+            accepted.push(server.attachment?.connectionId ?? "");
+        }
+
+        expect(accepted[0]).toMatch(/^r2\.[\da-f-]{36}$/u);
+        expect(accepted[1]).toMatch(/^[\da-f-]{36}$/u);
+    });
+
     it("gives a socket accepted before the window existed one window, then closes it", async () => {
         expect.assertions(4);
 

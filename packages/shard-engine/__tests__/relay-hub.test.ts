@@ -1274,6 +1274,66 @@ describe("relay hub", () => {
             expect(relayAt(relays, 0).posts).toStrictEqual([]);
         });
 
+        it("sends a re-auth for a relay-held socket to its holding relay only", async () => {
+            expect.assertions(3);
+
+            const relays = new Map<number, RelayDouble>([
+                [0, { down: false, liveStatus: 404, posts: [] }],
+                [1, { down: false, liveStatus: 200, posts: [] }],
+                [2, { down: false, liveStatus: 404, posts: [] }],
+            ]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await attach(owner, 1);
+            await attach(owner, 2);
+
+            const response = await owner.forwardLiveControl({ action: "reauth", callerId: "u1", connectionId: "r1.c-alice", key: "", subscriptionId: "" });
+
+            expect(response?.status).toBe(200);
+            expect(relayAt(relays, 1).posts.map((post) => post["type"])).toStrictEqual(["relay_live_control"]);
+            expect([relayAt(relays, 0).posts, relayAt(relays, 2).posts]).toStrictEqual([[], []]);
+        });
+
+        it("answers nothing, calling no other relay, when the holding relay of a re-auth is unreachable", async () => {
+            expect.assertions(2);
+
+            const relays = new Map<number, RelayDouble>([
+                [0, { down: false, liveStatus: 200, posts: [] }],
+                [1, { down: true, posts: [] }],
+            ]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await attach(owner, 1);
+
+            await expect(
+                owner.forwardLiveControl({ action: "reauth", callerId: "u1", connectionId: "r1.c-alice", key: "", subscriptionId: "" }),
+            ).resolves.toBeUndefined();
+
+            expect(relayAt(relays, 0).posts).toStrictEqual([]);
+        });
+
+        it("still fans a re-auth out for an id that names no attached relay", async () => {
+            expect.assertions(2);
+
+            const relays = new Map<number, RelayDouble>([
+                [0, { down: false, liveStatus: 404, posts: [] }],
+                [1, { down: false, liveStatus: 200, posts: [] }],
+            ]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await attach(owner, 1);
+
+            // A socket accepted before ids named their relay, and an id naming a relay this owner never attached.
+            const legacy = await owner.forwardLiveControl({ action: "reauth", callerId: "u1", connectionId: "c-alice", key: "", subscriptionId: "" });
+            const forged = await owner.forwardLiveControl({ action: "reauth", callerId: "u1", connectionId: "r9.c-alice", key: "", subscriptionId: "" });
+
+            expect([legacy?.status, forged?.status]).toStrictEqual([200, 200]);
+            expect(relayAt(relays, 0).posts).toHaveLength(2);
+        });
+
         it("delivers a publish only to the relay that answered a grant with a non-404", async () => {
             expect.assertions(3);
 

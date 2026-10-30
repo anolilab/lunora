@@ -306,7 +306,7 @@ import { buildTraceparent, LUNORA_ATTR, parseTraceparent } from "../../../shared
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { RAY_ID_HEADER } from "../../../shared/ray-id";
 import { BATCH_END_FRAME, BATCH_START_FRAME, REFRESH_BATCH_CAPABILITY } from "../../../shared/refresh-batch";
-import { parseRelayName } from "../../../shared/relay-name";
+import { holderConnectionId, parseRelayName } from "../../../shared/relay-name";
 import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { IDENTITY_CHANGED_CLOSE_REASON, IDENTITY_STALE_CLOSE_CODE, SOCKET_REAUTH_PATH, SOCKET_REVALIDATE_MS } from "../../../shared/socket-reauth";
@@ -17158,7 +17158,8 @@ abstract class ShardDO {
         // Accept and stamp are one call for the same reason they were adjacent
         // before: the runtime only tracks attachments for sockets it has accepted,
         // and no frame can arrive against an unstamped socket in between.
-        const connectionId = crypto.randomUUID();
+        // Named for the relay that holds it, so a re-auth can go straight there; see `holderConnectionId`.
+        const connectionId = holderConnectionId(crypto.randomUUID(), parseRelayName(this.runner.shardKey ?? "")?.relayIndex);
         const accepted = this.socketHost.accept(server, {
             admin,
             connectionId,

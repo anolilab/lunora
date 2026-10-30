@@ -921,6 +921,14 @@ emptied): the rows held were resolved under the old claims, and a resumed diff
 would not remove the ones the new claims cannot see. A server
 without the route answers `404`, so the same fallback covers it.
 
+`connectionId` is opaque to a client: a server MAY put routing in it. The Cloudflare shard does so for
+a socket held by a fan-out relay, prefixing the id with `r<index>.` so the owner sends that socket's
+re-auth to the one relay named, not to every relay. A re-auth whose holding relay does not answer is
+refused (`404`) and the socket lapses at its window with `4005`; an id with no prefix, or one naming a
+relay the owner has not attached, is asked of every relay. The relay tier is a Durable Object
+mechanism: other targets have no relay, so their ids stay bare and nothing about it is advertised in
+`PlatformCapabilities`.
+
 A cookie session re-authenticates the same way, with no `Authorization` header:
 the request carries the cookie. The reference client re-authenticates each socket
 at half its `revalidateMs`, presenting the credential its upgrade presented.

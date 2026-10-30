@@ -24,6 +24,7 @@
 import { LunoraError, toErrorBody } from "@lunora/errors";
 import { decodeWire, encodeWire } from "@lunora/wire";
 
+import { connectionIdRelay } from "../../../shared/relay-name";
 import type { SqlExec } from "./ctx-db";
 import type { RelayMemoRow, RelayShapeMemo } from "./ctx-db-relay-memos";
 import { deleteAllRelayMemos, deleteRelayMemo, deleteRelayMemosForConnection, migrateRelayMemos, readRelayMemos, writeRelayMemos } from "./ctx-db-relay-memos";
@@ -723,7 +724,17 @@ class OwnerRelay extends RelayLink {
         // reaches the relay that will hold it.
         // ponytail: a publish that lands while a relay's first subscribe is still in flight misses
         // that relay, since it is recorded as a holder only once its answer returns.
-        const targets = control.action === "unsubscribe" ? new Set([...this.liveGrantRelaySet(), ...this.pendingSubscribeRelays.keys()]) : this.ownerRelaySet();
+        let targets = control.action === "unsubscribe" ? new Set([...this.liveGrantRelaySet(), ...this.pendingSubscribeRelays.keys()]) : this.ownerRelaySet();
+
+        // A re-auth runs for every socket every half window, so it goes to the relay its connection id names rather
+        // than to all of them. A holder that is down or does not answer leaves the socket unrefreshed (the caller
+        // answers 404 and the client reconnects it, else its own window closes it with 4005): asking the other relays
+        // could not find a socket that lives on exactly one. An id naming no attached relay (a bare or forged one) fans out.
+        const holder = control.action === "reauth" ? connectionIdRelay(control.connectionId) : undefined;
+
+        if (holder !== undefined && targets.has(holder)) {
+            targets = new Set([holder]);
+        }
 
         if (targets.size === 0) {
             return Promise.resolve(undefined);
