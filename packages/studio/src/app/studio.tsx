@@ -983,7 +983,8 @@ const StudioLayoutShell = (): ReactElement => {
                     <StudioHeader domain={groupLabel[activeGroup.key]} onOpenCommandPalette={openCommandPalette} page={tabLabel[current]} />
 
                     {chrome?.rulesInstalled === false && <RulesBanner />}
-                    {connected && <DeploymentPauseBanner />}
+                    {/* Bare studio: the injected client brings its own credentials. With app chrome, wait for a token. */}
+                    {(chrome === null || connected) && <DeploymentPauseBanner />}
 
                     <div
                         aria-labelledby={`dash-tab-${current}`}

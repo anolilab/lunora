@@ -11,7 +11,7 @@ import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget } from "../../lib/internal";
+import { errorCode, errorMessage, fireAndForget } from "../../lib/internal";
 import { CronLastRun, CronRunHistory } from "./cron-run-history";
 import CronScheduleAssistant from "./cron-schedule-assistant";
 
@@ -46,6 +46,9 @@ interface CronTriggersPanelProps {
 type RunState = { kind: "error"; message: string } | { kind: "idle" } | { kind: "ok" } | { kind: "running" };
 
 const IDLE: RunState = { kind: "idle" };
+
+// The code the worker answers when it has no `schedulerDO` namespace: no history exists to show.
+const SCHEDULER_NOT_CONFIGURED = "SCHEDULER_NOT_CONFIGURED";
 
 const NO_RUNS: CronRunsResult = { inFlight: [], runs: [] };
 
@@ -86,12 +89,23 @@ export const CronTriggersPanel = ({ loadCronJobs, loadCronRuns, runCronJob }: Cr
     const jobsQuery = useClientQuery(["lunora-cron-jobs", loadCronJobs ? "custom" : "default"], () => (loadCronJobs ?? (() => client.getCronJobs()))());
     const { data: jobs, error } = jobsQuery;
 
-    // History is secondary to the trigger list: a worker without a scheduler (or
-    // an older one without the route) simply shows none rather than an error.
+    // History is secondary to the trigger list: a worker without a scheduler simply
+    // shows none. Any other failure is shown, and the query keeps the last runs it
+    // read, so a transient error neither blanks the table nor passes for "never ran".
     const runsImpl = loadCronRuns ?? (loadCronJobs === undefined ? () => client.listCronRuns() : undefined);
-    const runsQuery = useClientQuery(["lunora-cron-runs", loadCronRuns ? "custom" : "default"], async () =>
-        runsImpl === undefined ? NO_RUNS : runsImpl().catch(() => NO_RUNS),
-    );
+    const runsQuery = useClientQuery(["lunora-cron-runs", loadCronRuns ? "custom" : "default"], async () => {
+        if (runsImpl === undefined) {
+            return NO_RUNS;
+        }
+
+        return runsImpl().catch((error_: unknown) => {
+            if (errorCode(error_) === SCHEDULER_NOT_CONFIGURED) {
+                return NO_RUNS;
+            }
+
+            throw error_;
+        });
+    });
     const cronRuns = runsQuery.data ?? NO_RUNS;
 
     useAutoRefresh(() => runsQuery.poll(), runsImpl !== undefined);
@@ -142,6 +156,12 @@ export const CronTriggersPanel = ({ loadCronJobs, loadCronRuns, runCronJob }: Cr
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="cron-error" role="alert">
                     {error}
+                </p>
+            )}
+
+            {runsQuery.error !== null && (
+                <p className="text-sm text-destructive" data-testid="cron-runs-error" role="alert">
+                    {runsQuery.error}
                 </p>
             )}
 
