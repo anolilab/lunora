@@ -148,6 +148,24 @@ describe("socket re-authentication", () => {
         expect(ws.sent).toStrictEqual([]);
     });
 
+    it("moves a credential expiry that has already passed on a refresh from the same user, without dropping the socket", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = open();
+
+        // An idle socket whose token lapsed a moment ago; its revalidation window still holds.
+        Object.assign(ws.attachment ?? {}, { expiresAt: NOW - 1000, revalidateAt: NOW + 60_000 });
+
+        const response = await reauth(shard, { claims: { exp: (NOW + HOUR) / 1000, role: "member" }, expiresAt: NOW + HOUR, userId: "user-1" });
+
+        expect(response.status).toBe(200);
+        expect(ws.attachment?.expiresAt).toBe(NOW + HOUR);
+        expect(ws.closes).toStrictEqual([]);
+        expect(ws.sent.some((frame) => frame.includes("TOKEN_EXPIRED"))).toBe(false);
+    });
+
     it("keeps a refreshed socket delivering past its original expiry", async () => {
         expect.assertions(2);
 
@@ -861,6 +879,23 @@ describe("admin socket re-authentication", () => {
 
         expect(response.status).toBe(200);
         expect(ws.attachment?.revalidateAt).toBe(NOW + WINDOW / 2 + WINDOW);
+        expect(ws.closes).toStrictEqual([]);
+    });
+
+    it("does not let another user close an admin socket, or learn that it is one", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const { shard, ws } = await openAdminSocket();
+        const response = await adminReauth(shard, {
+            "x-lunora-identity": JSON.stringify(CLAIMS),
+            "x-lunora-identity-exp": String(NOW + HOUR),
+            "x-lunora-userid": "user-2",
+        });
+
+        // The same answer as for any socket the caller does not own, and the socket is untouched.
+        expect(response.status).toBe(404);
         expect(ws.closes).toStrictEqual([]);
     });
 

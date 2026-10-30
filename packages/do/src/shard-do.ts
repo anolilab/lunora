@@ -17019,7 +17019,10 @@ abstract class ShardDO {
         const { identity, identityExpiry } = call;
 
         // A socket already past its window is closed, not revived: a late re-auth must not keep what its lapse ended.
-        if (this.dropIfLapsed(ws, attachment)) {
+        // Only the window: a credential expiry that has passed is what this call exists to move forward.
+        if (isIdentityExpired(attachment.revalidateAt)) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
+
             return jsonResponse({ error: { code: "IDENTITY_STALE", message: "the socket's revalidation window passed; reconnect" } }, 409);
         }
 
@@ -18809,7 +18812,14 @@ abstract class ShardDO {
             }
         }
 
-        if (ws !== undefined && action === "reauth" && this.readAttachment(ws).admin === true) {
+        // Closing a socket is for its owner, or for a request the worker proved carries an admin credential: anyone else gets
+        // the answer for a socket they do not own.
+        if (
+            ws !== undefined &&
+            action === "reauth" &&
+            this.readAttachment(ws).admin === true &&
+            (call.adminReauth === true || (this.readAttachment(ws).userId ?? "") === callerId)
+        ) {
             return this.reauthenticateAdminSocket(ws, call);
         }
 
