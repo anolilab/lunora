@@ -89,6 +89,7 @@ import {
     WRAPPED_SQL,
 } from "./do-sql";
 import { renderSql, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
+import { estimateBytes } from "./estimate-bytes";
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import { NotFoundError } from "./not-found-error";
 import { assertPatchAllowed, operatorFields, readPatchField, resolvePatch } from "./patch-operators";
@@ -2135,6 +2136,129 @@ const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | und
     });
 };
 
+/** Reads on a global (D1) writer that hand back documents, and the terminals of its query builder. */
+const GLOBAL_ROW_READS: ReadonlySet<PropertyKey> = new Set(["findFirst", "findFirstOrThrow", "findMany", "get", "lookupById"]);
+const GLOBAL_READER_TERMINALS: ReadonlySet<PropertyKey> = new Set(["collect", "collectWithScores", "first", "paginate", "take", "unique"]);
+
+/**
+ * Charge the documents a global (D1) read returned against the read-byte ceiling.
+ *
+ * A global row comes back decoded, not as the stored JSON string the local meter sizes, so each one
+ * is serialised once with `estimateBytes` — the same unit (UTF-16 code units) local reads and writes
+ * are charged in — and charged once per transaction by its `_id`. Rows are charged one at a time, so a
+ * result over the ceiling throws part-way, as a local `toArray()` does.
+ */
+const chargeGlobalResult = (result: unknown, headroom: TransactionHeadroomTracker): void => {
+    if (typeof result !== "object" || result === null) {
+        return;
+    }
+
+    if (Array.isArray(result)) {
+        for (const item of result) {
+            chargeGlobalResult(item, headroom);
+        }
+
+        return;
+    }
+
+    const record = result as Record<string, unknown>;
+
+    if (Array.isArray(record["page"])) {
+        chargeGlobalResult(record["page"], headroom);
+
+        return;
+    }
+
+    // `lookupById` wraps the row; a scored hit wraps it as `document`.
+    const wrapped = record["row"] ?? record["document"];
+
+    if (typeof wrapped === "object" && wrapped !== null) {
+        chargeGlobalResult(wrapped, headroom);
+
+        return;
+    }
+
+    const bytes = estimateBytes(record);
+
+    if (bytes === undefined) {
+        return;
+    }
+
+    const id = record["_id"] ?? record["id"];
+
+    if (typeof id === "string") {
+        headroom.recordDocumentRead(`global\u0000${id}`, bytes);
+    } else {
+        headroom.recordReadBytes(bytes);
+    }
+};
+
+const meterGlobalReader = <Reader extends object>(reader: Reader, headroom: TransactionHeadroomTracker, exempt: () => boolean): Reader =>
+    new Proxy(reader, {
+        get: (target, property) => {
+            const member: unknown = Reflect.get(target, property, target);
+
+            if (typeof member !== "function") {
+                return member;
+            }
+
+            return (...args: unknown[]): unknown => {
+                const result: unknown = Reflect.apply(member, target, args);
+
+                if (GLOBAL_READER_TERMINALS.has(property)) {
+                    return Promise.resolve(result).then((rows) => {
+                        if (!exempt()) {
+                            chargeGlobalResult(rows, headroom);
+                        }
+
+                        return rows;
+                    });
+                }
+
+                return typeof result === "object" && result !== null && !(result instanceof Promise) ? meterGlobalReader(result, headroom, exempt) : result;
+            };
+        },
+    });
+
+/** Byte-meter a global writer's document reads; every other member reads through untouched. */
+const meterGlobalDatabase = (
+    global: DatabaseWriterLike | undefined,
+    headroom: TransactionHeadroomTracker | undefined,
+    exempt: () => boolean,
+): DatabaseWriterLike | undefined => {
+    if (global === undefined || headroom === undefined) {
+        return global;
+    }
+
+    return new Proxy(global, {
+        get: (target, property) => {
+            const member: unknown = Reflect.get(target, property, target);
+
+            if (typeof member !== "function") {
+                return member;
+            }
+
+            if (property === "query") {
+                return (...args: unknown[]): unknown => meterGlobalReader(Reflect.apply(member, target, args) as object, headroom, exempt);
+            }
+
+            if (!GLOBAL_ROW_READS.has(property)) {
+                return member;
+            }
+
+            return async (...args: unknown[]): Promise<unknown> => {
+                const result: unknown = await Reflect.apply(member, target, args);
+
+                if (!exempt()) {
+                    chargeGlobalResult(result, headroom);
+                }
+
+                return result;
+            };
+        },
+    });
+};
+
 const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { baselineSeq, onStalePatchDropped } = options;
     const { headroom } = options;
@@ -2463,7 +2587,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const scheduler = options.scheduler ?? throwingScheduler;
-    const { globalDb } = options;
+    const globalDb = meterGlobalDatabase(options.globalDb, headroom, () => meterExempt);
     // Resolved request auth for `.serverDefault(fn)` column factories; defaults
     // to the anonymous slice so server-trusted columns stamp `null` when the
     // generated writer is built without a caller identity.

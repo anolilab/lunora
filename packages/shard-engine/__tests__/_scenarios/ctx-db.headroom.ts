@@ -348,6 +348,59 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
             expect(tracker.headroom().readBytes).toBe((stored?.__doc__.length ?? 0) * 2);
         });
 
+        describe("global tables", () => {
+            const globalSchema: SchemaLike = {
+                tables: { shared: { indexes: [], shape: { body: { kind: "string" } }, shardMode: { kind: "global" } } },
+            };
+            const rows = Array.from({ length: 5 }, (_unused, index) => {
+                return { _id: `g${String(index)}`, body: "x".repeat(100) };
+            });
+            const fakeGlobal = {
+                findFirst: async () => rows[0] ?? null,
+                findMany: async () => {
+                    return { continueCursor: null, isDone: true, page: rows };
+                },
+                get: async (_table: string, id: string) => rows.find((row) => row._id === id) ?? null,
+                query: () => {
+                    return { collect: async () => rows };
+                },
+            } as unknown as DatabaseWriterLike;
+            const buildGlobal = (tracker: TransactionHeadroomTracker): DatabaseWriterLike =>
+                createShardContextDatabase({ clock: () => 1_700_000_000_000, globalDb: fakeGlobal, headroom: tracker, schema: globalSchema, sql });
+
+            it("refuses a global read that loads more than the read ceiling", async () => {
+                expect.assertions(3);
+
+                const writer = buildGlobal(new TransactionHeadroomTracker({ maxReadBytes: 250 }));
+
+                await expect(codeOf(async () => writer.findMany("shared", {}))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+                await expect(codeOf(async () => writer.query("shared").collect())).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+                await expect(codeOf(async () => writer.get("shared", "g0"))).resolves.toBeUndefined();
+            });
+
+            it("charges a global row once however often it is read", async () => {
+                expect.assertions(3);
+
+                const tracker = new TransactionHeadroomTracker();
+                const writer = buildGlobal(tracker);
+
+                await writer.get("shared", "g0");
+                await writer.get("shared", "g0");
+
+                const once = tracker.headroom().readBytes;
+
+                await writer.findMany("shared", {});
+
+                const all = tracker.headroom().readBytes;
+
+                await writer.findMany("shared", {});
+
+                expect(once).toBeGreaterThan(100);
+                expect(all).toBe(once * rows.length);
+                expect(tracker.headroom().readBytes).toBe(all);
+            });
+        });
+
         it("does not charge read bytes inside an unmetered deleteAll", async () => {
             expect.assertions(1);
 
