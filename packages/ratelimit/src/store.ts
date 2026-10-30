@@ -112,8 +112,24 @@ const ESCAPED_KEY = "\uFFFF";
 const encodeStorageKey = (storageKey: string): string =>
     storageKey.isWellFormed() && !storageKey.startsWith(ESCAPED_KEY) ? storageKey : `${ESCAPED_KEY}${JSON.stringify(storageKey)}`;
 
-/** The caller's key for a stored key; the inverse of {@link encodeStorageKey}. */
-const decodeStorageKey = (stored: string): string => (stored.startsWith(ESCAPED_KEY) ? (JSON.parse(stored.slice(ESCAPED_KEY.length)) as string) : stored);
+/**
+ * The caller's key for a stored key; the inverse of {@link encodeStorageKey}. A marker-prefixed row that is not
+ * JSON text was written verbatim before keys were escaped, and its stored text is its key, so a sweep over old rows
+ * never throws.
+ */
+const decodeStorageKey = (stored: string): string => {
+    if (!stored.startsWith(ESCAPED_KEY)) {
+        return stored;
+    }
+
+    try {
+        const decoded: unknown = JSON.parse(stored.slice(ESCAPED_KEY.length));
+
+        return typeof decoded === "string" ? decoded : stored;
+    } catch {
+        return stored;
+    }
+};
 
 /**
  * A durable store whose keys round-trip exactly: every key is encoded on the way in, and a sweep's ownership test

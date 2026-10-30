@@ -30,10 +30,24 @@ interface RateLimiterOptions<Names extends string> {
     store?: RateLimitStore;
 }
 
+const LONE_SURROGATE = /(\p{Cs})/u;
+
+// `encodeURIComponent` throws on a lone surrogate, and a key is often caller input (a JSON string can carry one),
+// so a throw here would reach a fail-open middleware as an outage and admit the request. A lone surrogate is
+// written as `%u` plus its hex code unit instead: `encodeURIComponent` only ever emits `%` before two hex digits,
+// so the escape can not meet the encoding of any other string, and `a\uD800` keeps a budget apart from `a\uFFFD`.
+const encodeKeyPart = (part: string): string =>
+    part.isWellFormed()
+        ? encodeURIComponent(part)
+        : part
+              .split(LONE_SURROGATE)
+              .map((piece, index) => (index % 2 === 1 ? `%u${(piece.codePointAt(0) ?? 0).toString(16).toUpperCase()}` : encodeURIComponent(piece)))
+              .join("");
+
 // Both halves are percent-encoded so the separator stays unambiguous: a limit
 // named `a:b` (global) can't collide with limit `a` keyed by `b`.
 const storageKeyFor = (name: string, key: string | undefined): string =>
-    key === undefined ? encodeURIComponent(name) : `${encodeURIComponent(name)}:${encodeURIComponent(key)}`;
+    key === undefined ? encodeKeyPart(name) : `${encodeKeyPart(name)}:${encodeKeyPart(key)}`;
 
 /** Read-decide-write rounds one consume makes before failing closed; see `RateLimiter.decide`. */
 const MAX_DECIDE_ATTEMPTS = 16;
@@ -105,8 +119,8 @@ class RateLimiter<Names extends string = string> {
         // values, and a caller mutating its object after construction must not move
         // the horizon out from under entries the sweep has not yet reached.
         this.config = structuredClone(options.config);
-        // Keys are `encodeURIComponent(name)` plus an optional `:key`, so the part before the first `:` is the name.
-        const names = new Set(Object.keys(this.config).map((name) => encodeURIComponent(name)));
+        // Keys are the encoded name plus an optional `:key`, so the part before the first `:` is the name.
+        const names = new Set(Object.keys(this.config).map((name) => encodeKeyPart(name)));
         this.owns = (storageKey) => names.has(storageKey.split(":")[0] ?? "");
         this.normalize = withIpCollapse(options.normalize);
         // Store every entry in BOTH forms so an entry can be written either way.

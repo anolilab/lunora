@@ -252,6 +252,32 @@ describe("sql store retention sweep (real node:sqlite)", () => {
         expect(store.get("theirs:\uD800")).toStrictEqual({ ts: 1, value: 1 });
     });
 
+    it("sweeps a marker-prefixed row written before keys were escaped", async () => {
+        expect.assertions(2);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        await store.set("warm", { ts: 1000, value: 1 });
+        // A row from before escaping: its stored text starts with the marker but is not JSON.
+        harness.sql.exec(`INSERT INTO "_lunora_rate_limits" (k, value, ts, prev) VALUES (?, 1, 1, NULL)`, "\uFFFFlegacy");
+
+        const owned: string[] = [];
+
+        await store.sweep?.(500, 32, (k) => {
+            owned.push(k);
+
+            return true;
+        });
+
+        expect(owned).toStrictEqual(["\uFFFFlegacy"]);
+        expect(
+            harness.sql
+                .exec<{ k: string }>(`SELECT k FROM "_lunora_rate_limits"`)
+                .toArray()
+                .map((row) => row.k),
+        ).toStrictEqual(["warm"]);
+    });
+
     it("deletes only owned rows, in one DELETE however many expired", async () => {
         expect.assertions(2);
 
