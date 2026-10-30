@@ -1,3 +1,45 @@
+## @lunora/runtime [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.261...@lunora/runtime@1.0.0-alpha.262) (2026-10-30)
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** an (env) => options factory passed to createLunoraHandler
+or withFrameworkWorker is now called once per env object instead of once
+per request, and the worker it builds is reused for later requests.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(codegen): keep host cron, queue and mail alive if auth init fails
+
+Cron, queue and host-email entries awaited auth before building the worker, so a failed auth
+migration threw inside events that belong to the framework host and may never use Lunora auth.
+They now use a worker built for that one event when auth is not ready and leave the cached
+worker unset, so the next request retries auth instead of inheriting a worker built without it.
+
+Also assert the auth prerequisite for the fetch entry, which the regression test skipped.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(codegen): log why auth failed when a host event runs without it
+
+The generated authReady helper turned every auth initialisation failure into false without a word.
+Auth retries on the next event, so an isolate that only ever sees cron, queue or mail events
+could repeat the failure indefinitely with nothing in the logs explaining why the admin and auth
+surfaces are missing. Log the error each time it falls back. Regenerates the examples' app.ts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* chore(examples): regenerate privacy's app.ts
+
+The privacy example's generated app.ts was patched by hand for the auth-failure log and missed the
+blank line its formatter inserts, so the generated-files check failed. Regenerate it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Performance Improvements
+
+* **runtime:** build a composed worker once per env, not per request ([#1392](https://github.com/anolilab/lunora/issues/1392)) ([4add08b](https://github.com/anolilab/lunora/commit/4add08bfb05eac62f95bf5ef404843ca92fe5b40))
+
 ## @lunora/runtime [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.260...@lunora/runtime@1.0.0-alpha.261) (2026-10-30)
 
 

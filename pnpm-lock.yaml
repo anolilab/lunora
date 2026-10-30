@@ -2893,8 +2893,8 @@ importers:
         specifier: workspace:*
         version: link:../values
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
-        version: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       '@visulima/disposable-email-domains':
         specifier: catalog:email
         version: 2.0.10
@@ -4130,8 +4130,8 @@ importers:
         specifier: workspace:*
         version: link:../shard-engine
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
-        version: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       '@modelcontextprotocol/sdk':
         specifier: catalog:mcp
         version: 1.32.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.5)
@@ -4594,8 +4594,8 @@ importers:
         specifier: workspace:*
         version: link:../server
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
-        version: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       fflate:
         specifier: catalog:privacy
         version: 0.8.3
@@ -9079,10 +9079,6 @@ packages:
   '@lingui/message-utils@6.9.0':
     resolution: {integrity: sha512-LaFvx9Vc/lx4EPbbDaiDtyumDM4aAglRA3yvFQsJkhs1UWrCgDaaUBWhkXKYcmVe9gb7qeGYCqmGWOL84N9xDw==}
     engines: {node: '>=22.19.0'}
-
-  '@lunora/wire@1.0.0-alpha.5':
-    resolution: {integrity: sha512-8aaUnLXCbLO0kfBy/bk0aHmNb4R02TMCMIel0sndTZKmvt8325NeyLDONjsxtOyP2swwA04qVtwHDbhktf4FNQ==}
-    engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
@@ -30061,8 +30057,6 @@ snapshots:
       '@messageformat/date-skeleton': 1.1.0
       '@messageformat/parser': 5.1.1
       js-sha256: 0.10.1
-
-  '@lunora/wire@1.0.0-alpha.5': {}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true

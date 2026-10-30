@@ -1,3 +1,9 @@
+## @lunora/flags [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.96...@lunora/flags@1.0.0-alpha.97) (2026-10-30)
+
+### Performance Improvements
+
+* **react,codegen:** cache page keys and evaluate flags concurrently ([#1391](https://github.com/anolilab/lunora/issues/1391)) ([aa302ec](https://github.com/anolilab/lunora/commit/aa302ec401c41ba573a6e772591cc8399f2f56ee))
+
 ## @lunora/flags [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.95...@lunora/flags@1.0.0-alpha.96) (2026-10-30)
 
 

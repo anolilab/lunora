@@ -1,3 +1,14 @@
+## @lunora/react [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.281...@lunora/react@1.0.0-alpha.282) (2026-10-30)
+
+### Performance Improvements
+
+* **react,codegen:** cache page keys and evaluate flags concurrently ([#1391](https://github.com/anolilab/lunora/issues/1391)) ([aa302ec](https://github.com/anolilab/lunora/commit/aa302ec401c41ba573a6e772591cc8399f2f56ee))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.272
+
 ## @lunora/react [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.280...@lunora/react@1.0.0-alpha.281) (2026-10-30)
 
 
