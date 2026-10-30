@@ -218,8 +218,10 @@ const stableStringify = (value: unknown): string => {
     }
 
     if (kind !== "plain") {
-        // Reject non-plain objects (`Date`, `ArrayBuffer`, typed arrays, `Map`, `Set`,
-        // `RegExp`, class instances, Proxies). They have no own enumerable string keys, so the
+        // Reject non-plain objects (`Date`, `ArrayBuffer`, typed arrays, `Map`, `Set`, `RegExp`,
+        // class instances, and any Proxy whose one prototype read is not `Object.prototype` or
+        // `null`; a Proxy that reports a plain prototype is keyed through its traps like a plain
+        // object). Most have no own enumerable string keys, so the
         // record branch would encode every one of them to `{}` — a SILENT cache-key collision
         // where two distinct values share a key and are served each other's cached data. Fail
         // loud at the call site instead. (Only plain objects and arrays are keyable.)

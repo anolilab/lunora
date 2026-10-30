@@ -322,4 +322,41 @@ describe("url classification", () => {
             vi.resetModules();
         }
     });
+
+    it("brands urls with the base getter when a subclass overrides href without a receiver check", async () => {
+        expect.assertions(1);
+
+        const NativeUrl = URL;
+        const expected = encodeWire(new Map([["a", 1]]));
+
+        // A subclass whose `href` answers for any receiver: right for a real URL, a made-up string otherwise.
+        const LooseUrl = function LooseUrl(...arguments_: ConstructorParameters<typeof URL>) {
+            return Reflect.construct(NativeUrl, arguments_, LooseUrl) as URL;
+        } as unknown as typeof URL;
+
+        LooseUrl.prototype = Object.create(NativeUrl.prototype, {
+            href: {
+                get(this: unknown): string {
+                    try {
+                        return Reflect.get(NativeUrl.prototype, "href", this);
+                    } catch {
+                        return "https://loose.test/";
+                    }
+                },
+            },
+        }) as URL;
+        Object.setPrototypeOf(LooseUrl, NativeUrl);
+
+        vi.stubGlobal("URL", LooseUrl);
+        vi.resetModules();
+
+        try {
+            const fresh = await import("../src");
+
+            expect(fresh.encodeWire(new Map([["a", 1]]))).toStrictEqual(expected);
+        } finally {
+            vi.unstubAllGlobals();
+            vi.resetModules();
+        }
+    });
 });

@@ -26,18 +26,21 @@ const brand = (check: () => unknown): boolean => {
     }
 };
 
-// Walks the chain once at module load: a global replaced by a subclass that does not redefine the accessor
-// still resolves to the native getter, and the brand check stays tied to the internal slot.
+// Takes the DEEPEST accessor on the chain, once at module load. When the global is a subclass, the base
+// class's getter is the one that checks its receiver's internal slot; an override above it may answer for
+// any object (a Map would then pass as a URL), so it is never the brand.
 const getter = (proto: object, key: string): (() => unknown) => {
-    let current: object | null = proto;
-    let descriptor: PropertyDescriptor | undefined;
+    let found: (() => unknown) | undefined;
 
-    while (current !== null && descriptor === undefined) {
-        descriptor = Object.getOwnPropertyDescriptor(current, key);
-        current = Object.getPrototypeOf(current) as object | null;
+    for (let current: object | null = proto; current !== null; current = Object.getPrototypeOf(current) as object | null) {
+        const accessor = Object.getOwnPropertyDescriptor(current, key)?.get;
+
+        if (accessor !== undefined) {
+            found = accessor as () => unknown;
+        }
     }
 
-    return descriptor?.get as () => unknown;
+    return found as () => unknown;
 };
 
 const dateGetTime = Date.prototype.getTime;
