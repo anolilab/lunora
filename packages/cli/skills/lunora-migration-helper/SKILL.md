@@ -125,7 +125,7 @@ To change rows in a second table, write a second migration over that table.
 If the field is the table's `.shardBy()` key, a migration can't help: a row with
 no shard key belongs to no shard (so the runner never sees it), and setting the
 key would mean moving the row to another Durable Object. Re-key with
-`lunora export` → rewrite the NDJSON → `lunora import`. Ids are preserved, so
+`lunora export` → rewrite the NDJSON → `lunora import`. A rewrite that adds, drops or splits rows must also update the last line, the end marker `{"end":true,"rows":N}`, to the new row count, or the import refuses the file. Ids are preserved, so
 foreign keys survive. The same route applies to any shard-mode change.
 
 ### Run it

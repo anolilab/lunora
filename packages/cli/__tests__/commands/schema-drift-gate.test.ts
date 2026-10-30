@@ -148,6 +148,25 @@ describe("schema-drift gate", () => {
             expect(result.schemaDrift?.blocked).not.toBe(true);
         });
 
+        it("lets a backward-compatible change through a --dry-run with no deployment URL or admin token, as a pull-request check runs it", async () => {
+            expect.assertions(2);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+
+            writeFileSync(
+                schemaPath,
+                readFileSync(schemaPath, "utf8").replace("name: v.string(),", "name: v.string(),\n        nickname: v.optional(v.string()),"),
+                "utf8",
+            );
+
+            const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            expect(result.schemaDrift?.blocked).not.toBe(true);
+            expect(result.code).toBe(0);
+        });
+
         it("blocks a deploy when a breaking change ships without a new migration", async () => {
             expect.assertions(4);
 

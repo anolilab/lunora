@@ -97,7 +97,10 @@ with, and its URL is taken as given. A refused URL keeps the block and the
 message names it. A celld deploy prints no worker URL to link, so record the fleet's URL
 once with `lunora link --url` or pass `--migrate-url`. The Node target has no
 `lunora deploy`. The scaffolded CI pipelines pass `LUNORA_DEPLOY_URL` and
-`LUNORA_ADMIN_TOKEN` from the provider's secrets.
+`LUNORA_ADMIN_TOKEN` from the provider's secrets. CI has no project link (the
+`.lunora/` directory is not committed), so on a `*.workers.dev` URL the stored
+rows are not read there and a tightening still needs a migration or
+`--allow-schema-drift`; a custom domain on a route in the Wrangler config is read.
 
 Some changes cannot be settled by reading rows, and keep their block: a new
 `.unique()` column or unique index (a duplicate is a property of two rows), a

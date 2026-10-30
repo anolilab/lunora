@@ -62,7 +62,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # When a schema change tightens a table, the drift gate reads that table's
       # stored rows from this worker and lets the change ship if every row fits.
-      # Unset (a first deploy), the gate blocks as before.
+      # Unset (a first deploy), the gate blocks as before. A *.workers.dev URL is
+      # only trusted when the project is linked and .lunora/ is not committed, so
+      # CI has no link: there the gate stays blocked, and a tightening needs a
+      # migration or --allow-schema-drift. A custom domain on a declared route works.
       - run: pnpm exec lunora deploy --migrate-url "\${{ secrets.LUNORA_DEPLOY_URL }}"
         env:
           LUNORA_ADMIN_TOKEN: \${{ secrets.LUNORA_ADMIN_TOKEN }}
@@ -115,7 +118,10 @@ deploy:
   script:
     # When a schema change tightens a table, the drift gate reads that table's
     # stored rows from this worker and lets the change ship if every row fits.
-    # Unset (a first deploy), the gate blocks as before.
+    # Unset (a first deploy), the gate blocks as before. A *.workers.dev URL is
+    # only trusted when the project is linked and .lunora/ is not committed, so
+    # CI has no link: there the gate stays blocked, and a tightening needs a
+    # migration or --allow-schema-drift. A custom domain on a declared route works.
     - pnpm exec lunora deploy --migrate-url "$LUNORA_DEPLOY_URL"
 
 # Every merge request runs the full deploy pipeline, bundle included, and
