@@ -78,12 +78,19 @@ const typeName = (value: unknown): string => {
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> => typeName(value) === "object";
 
+const BIGINT_LITERAL = /^-?\d+n$/u;
+
 /** A `v.literal()` source text as the value it denotes. */
 const literalOf = (text: string): unknown => {
     const trimmed = text.trim();
 
     if (trimmed.length >= 2 && trimmed.startsWith("'") && trimmed.endsWith("'")) {
         return trimmed.slice(1, -1);
+    }
+
+    // `JSON.parse` has no bigint literal, and a stored bigint reads back as a bigint.
+    if (BIGINT_LITERAL.test(trimmed)) {
+        return BigInt(trimmed.slice(0, -1));
     }
 
     try {

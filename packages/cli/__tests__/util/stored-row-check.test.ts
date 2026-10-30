@@ -186,6 +186,20 @@ describe(checkStoredRows, () => {
         });
     });
 
+    it("confirms a stored bigint against a bigint literal, and fails one that differs", async () => {
+        expect.assertions(2);
+
+        const counters = table("counters", { level: { kind: "literal", literalValue: "1n" } });
+        const rows = (level: bigint) => target([{ doc: encodeWire({ _id: "c1", level }) as Record<string, unknown>, table: "counters" }]);
+
+        await expect(checkStoredRows({ changes: [change("counters", "level")], tables: [counters], target: rows(1n) })).resolves.toMatchObject({
+            kind: "conforms",
+        });
+        await expect(checkStoredRows({ changes: [change("counters", "level")], tables: [counters], target: rows(2n) })).resolves.toMatchObject({
+            kind: "fails",
+        });
+    });
+
     it("checks a record's keys against its new key validator, without naming the key", async () => {
         expect.assertions(2);
 
