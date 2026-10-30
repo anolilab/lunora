@@ -81,6 +81,13 @@ export interface ValidatorIR {
      * flag, because compiling it would silently skip the predicate.
      */
     unmodelledRefinement?: boolean;
+
+    /**
+     * `true` on a `v.object(...)` whose `shape` is not the whole validator: the
+     * argument is built at runtime, spreads something unreadable, or is absent. An
+     * empty `shape` then stands for "unknown", not "no properties".
+     */
+    unresolvedShape?: boolean;
     valueType?: ValidatorIR;
 }
 

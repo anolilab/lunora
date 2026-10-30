@@ -227,6 +227,7 @@ const unverifiable = (validator: ValidatorIR, path: string): string | undefined 
     if (
         validator.sourceText !== undefined ||
         validator.unmodelledRefinement === true ||
+        validator.unresolvedShape === true ||
         (validator.hasRefinement === true && validator.stringMaxLength === undefined)
     ) {
         return `${path} has a validator or refinement that cannot be checked outside the worker`;

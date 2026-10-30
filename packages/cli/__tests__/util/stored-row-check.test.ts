@@ -157,6 +157,17 @@ describe(checkStoredRows, () => {
         });
     });
 
+    it("is inconclusive about an object whose shape codegen could not read, rather than checking it as an empty object", async () => {
+        expect.assertions(1);
+
+        const users = table("users", { profile: { kind: "object", shape: {}, unresolvedShape: true } });
+        const rows = target([{ doc: { _id: "u1", profile: {} }, table: "users" }]);
+
+        await expect(checkStoredRows({ changes: [change("users", "profile")], tables: [users], target: rows })).resolves.toMatchObject({
+            kind: "inconclusive",
+        });
+    });
+
     it("checks a record's keys against its new key validator, without naming the key", async () => {
         expect.assertions(2);
 
@@ -181,6 +192,31 @@ describe(checkStoredRows, () => {
 
         expect(verdict).toMatchObject({ failures: [{ field: "flags[*]", id: "p1", table: "prefs" }], kind: "fails" });
         expect(JSON.stringify(verdict)).not.toContain("secret-key");
+    });
+
+    it("treats an export that ends inside a row as incomplete, even when the cut-off text parses as a row", async () => {
+        expect.assertions(1);
+
+        const users = table("users", { name: { kind: "number" } });
+        const body = JSON.stringify({ doc: { _id: "u1", name: 1 }, table: "users" });
+        const fetchImpl: StreamingFetchLike = async () => {
+            return {
+                body: new ReadableStream<Uint8Array>({
+                    start(controller) {
+                        controller.enqueue(new TextEncoder().encode(body));
+                        controller.close();
+                    },
+                }),
+                json: async () => undefined,
+                ok: true,
+                status: 200,
+                text: async () => body,
+            };
+        };
+
+        await expect(
+            checkStoredRows({ changes: [change("users", "name")], tables: [users], target: { baseUrl: "https://app.example", fetchImpl, token: "t" } }),
+        ).resolves.toMatchObject({ kind: "inconclusive" });
     });
 
     it.each([

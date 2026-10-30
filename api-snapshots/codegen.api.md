@@ -1094,6 +1094,7 @@ interface ValidatorIR {
     tableName?: string;
     tsType?: string;
     unmodelledRefinement?: boolean;
+    unresolvedShape?: boolean;
     valueType?: ValidatorIR;
 }
 ```
