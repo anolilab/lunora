@@ -34,7 +34,7 @@
     // Raise it if a legitimate handler needs longer.
     "limits": { "cpu_ms": 30000 },
     // Cost default: sample 10% of requests into Workers Logs. Raise it while debugging.
-    "observability": { "enabled": true, "head_sampling_rate": 0.1, "logs": { "invocation_logs": true } },
+    "observability": { "enabled": true, "head_sampling_rate": 0.1, "redact_query_string": true, "logs": { "invocation_logs": true } },
     // Deploy attribution: the runtime reads this binding and stamps
     // `deploymentId` / `versionTag` onto every request-log row and Workers-Logs
     // event, so a spike resolves to a deploy by group-by, not by eyeballing graphs.

@@ -4,6 +4,9 @@ import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { createRootRouteWithContext, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import { useState } from "react";
 
+import { ImpersonationBanner } from "../../lunora/saas-ui/react";
+import { authClient } from "../auth-client";
+
 interface RouterContext {
     queryClient: QueryClient;
 }
@@ -47,11 +50,32 @@ function RootComponent() {
             <body>
                 <QueryClientProvider client={queryClient}>
                     <LunoraProvider client={lunoraClient}>
+                        <Impersonation />
                         <Outlet />
                     </LunoraProvider>
                 </QueryClientProvider>
                 <Scripts />
             </body>
         </html>
+    );
+}
+
+/**
+ * Whose session an admin is in, on every page — the admin screen itself refuses
+ * the impersonated user, so it cannot hold the way back. A full load after the
+ * swap, not a router navigation: every live query and cached result belongs to
+ * the other user.
+ */
+function Impersonation() {
+    const { data: session } = authClient.useSession();
+
+    return (
+        <ImpersonationBanner
+            client={authClient.admin}
+            onSessionChange={() => {
+                globalThis.location.assign("/admin");
+            }}
+            session={session}
+        />
     );
 }

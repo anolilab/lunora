@@ -120,7 +120,7 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
     `cloudflareSend` in the copied `lunora/mail/index.ts` is module-private and reads that module's `env`, so the handler builds its own from the `env` it is given:
 
     ```ts
-    import { consumeQueuedSend, createMailerFromEnv } from "@lunora/mail";
+    import { consumeQueuedSend, createMailerFromEnv, isRetryableMailError } from "@lunora/mail";
 
     export default {
         queue: async (batch, env) => {
@@ -133,7 +133,20 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
             const mailer = createMailerFromEnv(env, { cloudflareSend });
 
             for (const message of batch.messages) {
-                await consumeQueuedSend(mailer, message.body);
+                try {
+                    await consumeQueuedSend(mailer, message.body);
+                } catch (error) {
+                    // A refusal (a rejected address or a malformed body) fails the same way
+                    // on every retry, so ack it and log it rather than filling the dead-letter queue.
+                    if (!isRetryableMailError(error)) {
+                        console.error("mail refused", error);
+                        message.ack();
+                        continue;
+                    }
+
+                    message.retry();
+                    continue;
+                }
                 // Queues are at-least-once: without a per-message ack a single throw
                 // retries the WHOLE batch, resending every email already delivered in it.
                 message.ack();

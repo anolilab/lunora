@@ -1,0 +1,199 @@
+---
+title: Worker startup CPU limit (error 10021)
+description: Why a large app fails to deploy with "Script startup exceeded CPU time limit", how to measure it, and how lazy function loading and lighter imports fix it.
+related:
+    - to: /docs/limits
+    - to: /docs/deployment
+    - to: /docs/packages/codegen
+---
+
+A deploy that fails with this error has hit Cloudflare's startup limit, not a
+bug in your code:
+
+```text
+ScriptStartupError: Script startup exceeded CPU time limit [code: 10021]
+```
+
+A Worker must evaluate its whole global scope within **1 s of CPU**. Past
+that, Cloudflare rejects the upload. The limit is not configurable, and every
+Worker that shares the bundle (the app, workflow and queue consumers) fails with
+it. Apps usually reach it gradually as they grow, so a deploy that worked
+yesterday can fail after one more feature.
+
+## Why startup grows with the app
+
+By default the generated `_generated/functions.ts` statically imports every
+function module. Evaluating the Worker therefore runs every procedure's builder
+chain and validators, **and everything those modules import**, before the first
+request, whether or not a request ever calls them. A heavy import in one shared
+helper is paid by every module that uses the helper.
+
+The registry itself is cheap (about 50 µs per procedure in a synthetic app).
+What makes a real app fail is the module graph the function modules reach:
+auth, SDK clients, a rate limiter, validator libraries. In a large app (about
+1,000 procedures, 130 tables, an 11 MB bundle) startup measured about 0.4 s
+locally with no single hot spot, and was rejected on Cloudflare.
+
+## Measure it locally
+
+Cloudflare's CPU is slower than a laptop, so a figure that looks comfortable
+locally can still fail. Treat anything above a few hundred milliseconds locally
+as a warning.
+
+```bash
+lunora build --out-dir .lunora/build        # writes the bundle and bundle-meta.json
+npx wrangler check startup                  # writes worker-startup.cpuprofile (run it in an app whose `main` is the Worker entry)
+lunora analyze                              # the heaviest modules in the bundle
+```
+
+Open the `.cpuprofile` in Chrome DevTools (Performance, Load profile) or VS
+Code. Timings vary a lot between runs (garbage collection alone can be a third
+of the total), so take several runs and compare medians.
+
+## The fix: load function modules on demand
+
+Lazy function loading makes codegen emit a registry that imports each function
+module with `import()` the first time one of its functions is called, instead of
+importing all of them at startup. It is opt-in; without it, generation stays
+eager.
+
+On the 1,000-procedure app above, a prototype of the lazy registry cut
+`wrangler check startup` from a median of 421 ms to 290 ms. Separately, the generated `app.ts` loads
+`@lunora/auth` and the OpenAPI / OpenRPC documents on the first event rather
+than at startup, which applies whether or not the registry is lazy.
+
+### Turn it on
+
+There are three ways to opt in, and they are not read by the same commands:
+
+| Opt in with                                        | Read by                                                                                      |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `LUNORA_LAZY_FUNCTIONS=1` in your shell and in CI  | every `lunora` command and both bundler plugins                                              |
+| `--lazy-functions`                                 | the one `lunora` command you pass it to                                                      |
+| `lazyFunctions: true` in the Vite or Rspack plugin | `vite dev` / `vite build` (Rsbuild alike), and `lunora dev`, `build`, `deploy` that run them |
+
+The environment variable is the only setting every surface reads, so set it
+wherever the project builds. In a Vite or Rspack project you can also set the
+plugin option:
+
+```ts
+// vite.config.ts
+import { defineConfig } from "vite";
+import { lunora } from "@lunora/vite";
+
+export default defineConfig({
+    plugins: [lunora({ lazyFunctions: true })],
+});
+```
+
+How the setting travels:
+
+- **`--lazy-functions`** exists on `lunora dev`, `codegen`, `prepare`, `build`,
+  `deploy` and `verify`. `lunora dev` passes it to the bundler process it
+  spawns as `LUNORA_LAZY_FUNCTIONS=1`, and `lunora build` / `deploy` pass it to the
+  framework build the same way.
+- **`LUNORA_LAZY_FUNCTIONS`** accepts `1` or `true` and is read by the CLI and
+  both bundler plugins, in dev and in production builds. Either opt-in enables
+  lazy loading; a false flag value does not switch off an enabled environment
+  variable.
+- **The plugin option** covers `lunora build` / `deploy` in a Vite or Rspack
+  project: the framework build writes `_generated/` there, and the CLI's own
+  codegen pass after it is a dry run. It does **not** reach `lunora codegen`,
+  `prepare` or `verify`, which run codegen without the bundler. Without the
+  environment variable, `lunora prepare` in CI regenerates an eager registry and
+  its smoke-load has nothing to check.
+- **There is no `lunora.config.ts` option.**
+
+Keep dev, build and deploy on the same setting. `_generated/` is committed and
+deterministic, so any eager run (a teammate's `lunora codegen`, a CI job without
+the variable) rewrites `functions.ts` back to eager and shows up as a diff.
+Developing eagerly also means you never exercise the first-call loading you ship.
+`lunora deploy --prebuilt` deploys whatever an earlier build wrote, without
+regenerating.
+
+### Trade-offs
+
+- **The first call pays the load.** Each function module is evaluated once
+  per isolate, on the first call to any function it defines. A module shared by
+  several functions loads once. Expect the first request after a cold start to
+  be slower for every module it touches.
+- **Evaluation errors move from upload to first call.** With an eager registry
+  a module that throws while loading fails the upload. With a lazy one it
+  would fail the first request that reaches it, and a module that failed to
+  evaluate keeps failing for the life of that isolate. (The deferred `@lunora/auth` and API
+  spec modules in the generated `app.ts` behave the same way in every build:
+  an evaluation error there surfaces on the first event, and the smoke-load
+  below does not cover them.)
+- **So `lunora build`, `prepare` and `deploy` smoke-load lazy builds.** Before
+  shipping, they boot the Worker in workerd (`wrangler dev --local`), evaluate
+  every lazy module, and refuse to ship if any fails, naming each failing
+  module. Whether this runs depends on the generated output, not the flag, so
+  `deploy --prebuilt` is covered too. Pass `--no-smoke-load` to skip it. It is
+  skipped with a warning, not an error, when it cannot run: a target that is
+  not workerd, an entry that is not a file on disk, a project that declares
+  containers, or a Hyperdrive binding with no local database. In those cases
+  nothing checks the modules before they ship.
+- **It defers only what nothing else imports.** A module is taken off the
+  startup path only if the registry is its sole static importer. The schema,
+  workflows, agents, the queue registry, and any module that defines a
+  migration, mutator or shape stay eager, and so does anything your own shared
+  modules or `src/server.ts` import statically.
+- **Small gain for cheap modules.** A bundler turns each `import()` into a
+  lazy-init wrapper. When function modules import little, the wrappers cost
+  about what they save. Measure before and after.
+
+## Keep heavy packages off the startup path
+
+Lazy loading can only defer what the function modules alone pull in. A shared
+builder module (a `crpc` or middleware file every function imports) is
+imported by every function module, so what it imports statically stays on the
+startup path. If that builder imports the auth stack, auth stays eager however
+the registry loads.
+
+Measured on a synthetic app with 1,000 procedures over 130 tables, in
+`wrangler check startup` medians:
+
+| What the function modules import from `@lunora/auth` | Startup |
+| ---------------------------------------------------- | ------- |
+| Nothing (auth wired only through `.auth()`)          | 29 ms   |
+| A light helper such as `isDevEnvironment`            | 29 ms   |
+| `createAuth`                                         | 48 ms   |
+
+The cost follows what you import, not the package name. In practice:
+
+1. **Do no work at module scope.** Build clients, parse large constants, and
+   construct auth or SDK instances inside the handler or behind a memoised
+   function, not at the top of a file in `lunora/`.
+2. **Do not create auth in a shared builder.** Wire auth through
+   `defineApp().auth()` and read `ctx.auth` in middleware. A builder that calls
+   or imports `createAuth` puts better-auth on the startup path of every
+   function.
+3. **Import types as types.** `import type { LunoraAuth } from "@lunora/auth"`
+   is erased at build time and costs nothing at startup.
+4. **Import the narrow entry.** Prefer a subpath that holds only what you use,
+   such as `@lunora/auth/middleware` for `withAuthPlugins`, over the package
+   root.
+5. **Defer what only some requests need** with `import()` inside the handler:
+
+    ```ts
+    import { action, v } from "./_generated/server";
+
+    export const exportPdf = action.input({ id: v.string() }).action(async ({ args }) => {
+        // Evaluated on the first call, not at startup.
+        const { renderPdf } = await import("./lib/pdf");
+
+        return renderPdf(args.id);
+    });
+    ```
+
+    Do not import a barrel that re-exports your whole app this way: it is
+    evaluated as a whole.
+
+6. **Know what splitting the app cannot do.** Moving large SDKs into another
+   Worker does not help when the cost is registering procedures and building
+   the schema and auth, which need the database and so stay in the app Worker.
+
+The framework itself adds a floor (the runtime, the Durable Object classes, the
+generated schema metadata) that you cannot remove from your side. An app that
+exports `LunoraAuthDO` for Durable Object-backed auth also keeps the auth
+closure on the startup path.

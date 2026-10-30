@@ -109,6 +109,41 @@ describe("memory store sweep", () => {
         expect(store.get("debt")).toEqual({ ts: 1, value: -4 });
         expect(store.get("spent")).toBeUndefined();
     });
+
+    it("stops at the first owned live entry instead of examining the live keys behind it", async () => {
+        expect.assertions(2);
+
+        const store = createMemoryStore();
+
+        await Promise.all(Array.from({ length: 100 }, async (_, index) => store.set(`k${String(index)}`, { ts: 100, value: 1 })));
+
+        const owns = vi.fn<(storageKey: string) => boolean>(() => true);
+
+        await store.sweep?.(10, 32, owns);
+
+        expect(owns).toHaveBeenCalledTimes(1);
+        expect(store.get("k99")).toEqual({ ts: 100, value: 1 });
+    });
+});
+
+describe("memory store sweep on a shared store", () => {
+    it("still reaches an expired key that another limiter's sweep rotated behind a live one", async () => {
+        expect.assertions(2);
+
+        const store = createMemoryStore();
+
+        await store.set("b-old", { ts: 1, value: 1 });
+        await store.set("a-live", { ts: 100, value: 1 });
+        await store.set("b-live", { ts: 101, value: 1 });
+
+        // Limiter A's sweep rotates "b-old" (not its own) behind the live entries and stops at "a-live".
+        await store.sweep?.(10, 10, (key) => key.startsWith("a-"));
+        // Limiter B's sweep now meets its own live entry first; it must still reach "b-old".
+        await store.sweep?.(10, 10, (key) => key.startsWith("b-"));
+
+        expect(store.get("b-old")).toBeUndefined();
+        expect(store.get("b-live")).toEqual({ ts: 101, value: 1 });
+    });
 });
 
 describe("limiter retention", () => {
@@ -318,5 +353,20 @@ describe("sweep horizon ownership and clock", () => {
         const replayed = await limiter.limit("send", { key: "u" });
 
         expect(replayed.ok).toBe(false);
+    });
+
+    it("still reaches an expired entry written behind a live one with an older timestamp", async () => {
+        expect.assertions(2);
+
+        // Two limiters sharing a store read different clocks: the second write is older
+        // than the first, so insertion order no longer tracks `ts`.
+        const store = createMemoryStore();
+
+        await store.set("send:future", { ts: 1000, value: 1 });
+        await store.set("send:stale", { ts: 0, value: 1 });
+        await store.sweep?.(500, 10, () => true);
+
+        await expect(Promise.resolve(store.get("send:stale"))).resolves.toBeUndefined();
+        await expect(Promise.resolve(store.get("send:future"))).resolves.toBeDefined();
     });
 });

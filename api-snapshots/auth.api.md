@@ -639,13 +639,7 @@ interface DoAuthWiring {
     authHandler: (request: Request) => Promise<Response | undefined>;
     discoveryHandler: (request: Request) => Promise<Response | undefined>;
     jurisdictionMove?: AuthJurisdictionMove;
-    resolveIdentity: (request: Request) => Promise<null | {
-        email?: string;
-        expiresAtMs?: number;
-        name?: string;
-        role?: string;
-        userId: string;
-    }>;
+    resolveIdentity: (request: Request) => Promise<SessionIdentity | null>;
 }
 ```
 
@@ -818,6 +812,20 @@ interface ReadAuthAuditOptions {
     limit?: number;
     sinceSeq?: number;
 }
+```
+
+### `SessionIdentity` (type)
+
+```ts
+type SessionIdentity = {
+    email?: string;
+    expiresAtMs?: number;
+    name?: string;
+    orgId?: string;
+    role?: string;
+    teamId?: string;
+    userId: string;
+};
 ```
 
 ### `SessionPolicy` (type)
@@ -1141,6 +1149,12 @@ const readAuthAuditLog: (executor: SqlExecutor, options?: ReadAuthAuditOptions) 
 
 ```ts
 const resolveAuthOptions: (options: LunoraAuthOptions) => LunoraAuthOptions;
+```
+
+### `resolveSessionIdentity` (const)
+
+```ts
+const resolveSessionIdentity: (auth: LunoraAuth, headers: Headers) => Promise<SessionIdentity | null>;
 ```
 
 ### `revokeSignUpInvitation` (const)
@@ -1892,6 +1906,10 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `lunoraD1Adapter` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `resolveSessionIdentity` (const)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 

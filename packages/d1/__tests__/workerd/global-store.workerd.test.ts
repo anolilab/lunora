@@ -48,7 +48,7 @@ describe("global store (workerd)", () => {
         const result = await post<UniqueResult>("/unique-over-duplicates");
 
         expect(result.outcome).toBe("threw");
-        expect(result.code).toBe("INTERNAL");
+        expect(result.code).toBe("UNIQUE_INDEX_DUPLICATES");
         expect(result.message).toMatch(/dups_unique_slug.*duplicates/isu);
     });
 

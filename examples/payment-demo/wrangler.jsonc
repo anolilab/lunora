@@ -10,7 +10,7 @@
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
     // Secrets are NOT declared here — `vars` ship in the deployed config and are
     // visible in the dashboard. `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`
     // live in `.dev.vars` for local dev (see `.dev.vars.example`, auto-loaded by
