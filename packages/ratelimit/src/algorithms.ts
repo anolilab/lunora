@@ -48,6 +48,9 @@ const throwCountExceedsCapacity = (count: number, capacity: number): never => {
  * caller reuses. Shared by {@link evaluate} and {@link availableAt} so the
  * refill math lives in one place.
  */
+/** Corrections the token bucket makes to a rounded-short retry-after; see {@link tokenBucket}. */
+const MAX_RETRY_AFTER_CORRECTIONS = 4;
+
 const projectTokenBucket = (
     config: RateLimitConfig,
     prior: RateLimitValue | undefined,
@@ -156,15 +159,25 @@ const tokenBucket = (config: RateLimitConfig, prior: RateLimitValue | undefined,
     }
 
     const deficit = options.count - available;
-    let retryAfter = Math.ceil(deficit / ratePerMs);
+    // Refill starts at the stored timestamp when it is ahead of `now` (another limiter's clock ran fast), so the wait
+    // covers that gap arithmetically rather than by stepping through it.
+    const refillFrom = prior !== undefined && prior.ts > options.now ? prior.ts : options.now;
+    let retryAfter = Math.ceil(refillFrom - options.now + deficit / ratePerMs);
 
     // The division can land a hair short in floating point: the refill projected at `now + retryAfter` is then a
     // fraction below `count`, and a caller who waits exactly that long is refused again. Check the promise with the
-    // same projection the admit test uses and step forward until it holds (one or two milliseconds at most). Only
-    // for a count the bucket can hold: a larger one is never admitted, so the projection would never catch up.
+    // same projection the admit test uses and step forward. Floating-point error is under a millisecond at normal
+    // magnitudes, so a few steps suffice; the bound, and the stop once a step no longer changes the number (around
+    // 2 ** 53), keep this from spinning. Only for a count the bucket can hold: a larger one is never admitted.
     if (options.count <= capacity) {
-        while (projectTokenBucket(config, prior, options.now + retryAfter).available < options.count) {
-            retryAfter += 1;
+        for (let step = 0; step < MAX_RETRY_AFTER_CORRECTIONS; step += 1) {
+            const next = retryAfter + 1;
+
+            if (projectTokenBucket(config, prior, options.now + retryAfter).available >= options.count || next === retryAfter) {
+                break;
+            }
+
+            retryAfter = next;
         }
     }
 

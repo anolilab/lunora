@@ -153,6 +153,33 @@ describe("token bucket retry-after", () => {
     });
 });
 
+describe("token bucket retry-after bounds", () => {
+    it("names a wait that covers a future-dated stored state without walking the clock gap", () => {
+        expect.assertions(3);
+
+        // A state written by a limiter whose clock runs a day ahead: refill only starts once `now` reaches it.
+        const config: RateLimitConfig = { kind: "token bucket", period: 1000, rate: 5 };
+        const day = 86_400_000;
+        const prior: RateLimitValue = { ts: day, value: 0 };
+        const started = performance.now();
+        const denied = evaluate(config, prior, { consume: true, count: 1, now: 0, reserve: false });
+
+        expect(performance.now() - started).toBeLessThan(50);
+        expect(denied.status.retryAfter).toBeGreaterThanOrEqual(day);
+        expect(evaluate(config, prior, { consume: true, count: 1, now: denied.status.retryAfter, reserve: false }).status.ok).toBe(true);
+    });
+
+    it("returns at magnitudes where adding a millisecond no longer changes the number", () => {
+        expect.assertions(1);
+
+        const config: RateLimitConfig = { kind: "token bucket", period: 2 ** 53, rate: 1 };
+        const consumed = evaluate(config, undefined, { consume: true, count: 1, now: Number.MAX_VALUE, reserve: false });
+        const denied = evaluate(config, consumed.value, { consume: true, count: 1, now: Number.MAX_VALUE, reserve: false });
+
+        expect(denied.status.ok).toBe(false);
+    });
+});
+
 describe("fixed window", () => {
     it("grants rate tokens at the window start", () => {
         expect.assertions(2);
