@@ -16,6 +16,7 @@ import { generateSecretValue } from "@lunora/config";
 import { applyModify, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { cloudflareRestRequest } from "../../../../../shared/cloudflare-rest";
+import acquireCheckoutLock from "../../util/checkout-lock";
 import type { CloudflareEnvironment } from "../../util/cloudflare-credentials";
 import { resolveCloudflareCredentials } from "../../util/cloudflare-credentials";
 import type { CommandHandler } from "../../util/command";
@@ -369,7 +370,11 @@ const reportPlan = (logger: Logger, plan: PreviewPlan, block: Record<string, unk
         logger.info(`  ${resource.kind} "${resource.name}" for ${resource.binding} (created, or reused when this preview's record lists it)`);
     }
 
-    logger.info(`  env.${plan.environment}: ${JSON.stringify(block)}`);
+    // `vars` are copied from production and overridden with `--var`; a dry run lands in terminals and CI logs, so show their names only.
+    const { vars } = block as { vars?: Record<string, unknown> };
+    const shown = vars === undefined ? block : { ...block, vars: Object.fromEntries(Object.keys(vars).map((key) => [key, "<redacted>"])) };
+
+    logger.info(`  env.${plan.environment}: ${JSON.stringify(shown)}`);
 };
 
 /** Everything after the plan: record, resources, the env block, the deploy, then migrations (in the deploy) and the seed. */
@@ -513,6 +518,12 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
     }
 
     const { variables } = parsed;
+    const lock = acquireCheckoutLock(cwd);
+
+    if (lock.error !== undefined) {
+        return fail(logger, lock.error);
+    }
+
     // The preview's env block, and whatever reconcile adds to the top level, exist only for this run.
     const restore = snapshotPreviewConfig(cwd);
     // Codegen writes a first schema baseline when there is none; the branch's schema must not become production's.
@@ -569,6 +580,7 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
         return await shipPreview({ ...context, config }, plan, variables, options, access.request);
     } finally {
         restore();
+        lock.release();
 
         if (!hadBaseline) {
             rmSync(baselinePath, { force: true });

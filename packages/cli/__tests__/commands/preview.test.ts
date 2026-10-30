@@ -1079,6 +1079,81 @@ describe("lunora preview", () => {
             expect(infos.join("\n")).toContain('d1 "lunora-app-preview-42-db" for DB');
         });
 
+        it("--dry-run names the vars it would set but never prints their values", async () => {
+            expect.assertions(4);
+
+            const account = fakeAccount();
+            const { infos, logger } = silentLogger();
+
+            const result = await runPreviewCommand({
+                cwd: workdir,
+                dryRun: true,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                logger,
+                name: "42",
+                subcommand: "deploy",
+                vars: ["WEBHOOK_URL=https://hooks.example/path"],
+            });
+
+            const output = infos.join("\n");
+
+            expect(result.code).toBe(0);
+            expect(output).not.toContain("hooks.example");
+            expect(output).toContain("WEBHOOK_URL");
+            expect(output).toContain("PUBLIC_FLAG");
+        });
+
+        it("refuses to run beside another preview command in the same checkout, which would restore the config mid-deploy", async () => {
+            expect.assertions(3);
+
+            const account = fakeAccount();
+            const { logger } = silentLogger();
+            const before = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
+
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            writeFileSync(join(workdir, ".lunora", "preview.lock"), String(process.pid));
+
+            const result = await runPreviewCommand({
+                cwd: workdir,
+                dryRun: true,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                logger,
+                name: "42",
+                subcommand: "deploy",
+            });
+
+            expect(result.error).toMatch(/another preview command is running in this checkout/u);
+            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(before);
+            // The lock belongs to the other command: this one must not remove it on its way out.
+            expect(existsSync(join(workdir, ".lunora", "preview.lock"))).toBe(true);
+        });
+
+        it("takes over a lock left by a process that is gone, and releases its own", async () => {
+            expect.assertions(2);
+
+            const account = fakeAccount();
+            const { logger } = silentLogger();
+
+            mkdirSync(join(workdir, ".lunora"), { recursive: true });
+            // Beyond any real pid range, so `process.kill(pid, 0)` reports no such process.
+            writeFileSync(join(workdir, ".lunora", "preview.lock"), "2147483646");
+
+            const result = await runPreviewCommand({
+                cwd: workdir,
+                dryRun: true,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                logger,
+                name: "42",
+                subcommand: "deploy",
+            });
+
+            expect(result.code).toBe(0);
+            expect(existsSync(join(workdir, ".lunora", "preview.lock"))).toBe(false);
+        });
+
         it("refuses a --secret that has no value in the environment, before touching the account", async () => {
             expect.assertions(2);
 

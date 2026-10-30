@@ -117,7 +117,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec lunora preview delete \${{ github.event.pull_request.number }}
+      # Exit 5 is "no record": the pull request never got a preview (refused, or opened before this workflow).
+      - run: pnpm exec lunora preview delete \${{ github.event.pull_request.number }} || [ "$?" -eq 5 ]
 
   # A fork's or Dependabot's pull request gets no secrets, so it runs the
   # deploy pipeline, bundle included, and publishes nothing.
@@ -295,7 +296,7 @@ describe("ci-workflow", () => {
     });
 
     it("both providers deploy an isolated preview per pull/merge request and delete it when it closes, never a version upload", () => {
-        expect.assertions(13);
+        expect.assertions(14);
 
         writeCiWorkflow(workdir, "github", "pnpm");
         writeCiWorkflow(workdir, "gitlab", "pnpm");
@@ -311,6 +312,8 @@ describe("ci-workflow", () => {
 
         expect(teardown).toContain("github.event.action == 'closed'");
         expect(teardown).toContain("lunora preview delete ${{ github.event.pull_request.number }}");
+        // A pull request that never got a preview (refused, or opened before the workflow) has no record: not a failed cleanup.
+        expect(teardown).toContain('lunora preview delete ${{ github.event.pull_request.number }} || [ "$?" -eq 5 ]');
         expect(github).not.toContain("--preview");
         expect(gitlab).toContain('lunora preview deploy "$CI_MERGE_REQUEST_IID"');
         expect(gitlab).toContain("on_stop: preview_delete");

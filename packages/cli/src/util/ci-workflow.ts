@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 
 import type { PackageManager } from "./detect-package-manager";
 import { execArgsFor, installArgsFor } from "./detect-package-manager";
+import { EXIT_CODE } from "./exit-code";
 import type { Logger } from "./logger";
 
 /** Supported CI providers. */
@@ -188,7 +189,8 @@ ${githubSetupSteps(pm)}
       # A closed, unmerged pull request may have no merge ref left to check out;
       # the base branch names the same production Worker the record is keyed by.
 ${githubSetupSteps(pm, `\${{ github.event.pull_request.base.ref }}`)}
-      - run: ${execLine(manager, ["preview", "delete", `\${{ github.event.pull_request.number }}`])}
+      # Exit 5 is "no record": the pull request never got a preview (refused, or opened before this workflow).
+      - run: ${execLine(manager, ["preview", "delete", `\${{ github.event.pull_request.number }}`])} || [ "$?" -eq ${String(EXIT_CODE.NOT_FOUND)} ]
 
   # A fork's or Dependabot's pull request gets no secrets, so it runs the
   # deploy pipeline, bundle included, and publishes nothing.
