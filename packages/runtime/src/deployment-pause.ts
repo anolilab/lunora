@@ -73,8 +73,19 @@ const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause
     // Shared by every caller that finds the cache stale while a read is out, so a
     // burst of calls costs one scheduler read, not one each.
     let pending: Promise<DeploymentPauseState> | undefined;
+    // Bumped around every write of the flag. A read that started before a bump
+    // holds a snapshot older than the write, so it must not replace the cache the
+    // write just filled (the isolate that set the flag has to see it at once).
+    let generation = 0;
 
     const fetchState = async (stub: ResolvedShard, init?: RequestInit): Promise<DeploymentPauseState> => {
+        const isWrite = init?.method === "POST";
+        const startedAt = generation;
+
+        if (isWrite) {
+            generation += 1;
+        }
+
         const response = await stub.fetch(new Request("https://scheduler.internal/pause", init));
 
         if (!response.ok) {
@@ -83,7 +94,14 @@ const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause
 
         const state: DeploymentPauseState = await response.json();
 
-        cached = { readAt: now(), state };
+        if (isWrite) {
+            // Reads that began during the write may still carry the old flag.
+            generation += 1;
+        }
+
+        if (isWrite || generation === startedAt) {
+            cached = { readAt: now(), state };
+        }
 
         return state;
     };
@@ -106,9 +124,13 @@ const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause
             return cached.state;
         }
 
+        const startedAt = generation;
+
         pending ??= fetchState(stub)
             .catch(() => {
-                cached = { readAt: now(), state: NOT_PAUSED };
+                if (generation === startedAt) {
+                    cached = { readAt: now(), state: NOT_PAUSED };
+                }
 
                 return NOT_PAUSED;
             })

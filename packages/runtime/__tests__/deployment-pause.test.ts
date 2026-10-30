@@ -197,6 +197,57 @@ describe("createWorker — deployment pause", () => {
         expect(scheduler.reads()).toBe(1);
     });
 
+    it("keeps a fresh toggle when an older read resolves after it", async () => {
+        expect.hasAssertions();
+
+        let state: Record<string, unknown> = { paused: false };
+        let releaseRead: (() => void) | undefined;
+        let gateFirstRead = true;
+        const namespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async (request: Request) => {
+                        if (request.method === "GET") {
+                            const snapshot = state;
+
+                            if (gateFirstRead) {
+                                gateFirstRead = false;
+                                await new Promise<void>((resolve) => {
+                                    releaseRead = resolve;
+                                });
+                            }
+
+                            return Response.json(snapshot);
+                        }
+
+                        const body: { paused: boolean } = await request.json();
+
+                        state = { paused: body.paused };
+
+                        return Response.json(state);
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const shard = countingShard();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: shard.namespace });
+
+        // A call's background read starts while the flag is still clear and stalls.
+        const inFlight = worker.fetch(rpc(), {}, fakeContext);
+
+        await worker.fetch(setPaused(true), {}, fakeContext);
+        releaseRead?.();
+        await inFlight;
+
+        // The isolate that set the flag must see it at once, not the stale read.
+        const refused = await worker.fetch(rpc(), {}, fakeContext);
+
+        expect(refused.status).toBe(503);
+    });
+
     it("hands a queue batch back for later instead of running it while paused", async () => {
         expect.hasAssertions();
 
