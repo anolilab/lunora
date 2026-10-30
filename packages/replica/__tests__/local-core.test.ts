@@ -411,6 +411,38 @@ describe(EventLog, () => {
         }).toThrow(RangeError);
     });
 
+    it("keeps its order when a loaded snapshot's entry is edited afterwards", () => {
+        // Editing the caller's object must not reorder the log under the binary-searched tail reads.
+        expect.assertions(2);
+
+        const source = new EventLog();
+
+        for (const type of ["a", "b", "c", "d"]) {
+            source.append(type, type);
+        }
+
+        const entries = source.snapshot().entries.map((entry) => ({ ...entry }));
+        const log = new EventLog();
+
+        log.load({ ...source.snapshot(), entries });
+        (entries[1] as { seq: number }).seq = 100;
+
+        expect(log.getSince(1).map((entry) => entry.seq)).toStrictEqual([1, 2, 3]);
+        expect(log.getSince(50)).toStrictEqual([]);
+    });
+
+    it("hands out entries that cannot be edited", () => {
+        expect.assertions(3);
+
+        const log = new EventLog();
+        const appended = log.append("a", 1);
+        const [committed] = log.commitAll([{ payload: 2, type: "b" }]);
+
+        expect(Object.isFrozen(appended)).toBe(true);
+        expect(Object.isFrozen(committed)).toBe(true);
+        expect(log.getSince(0).every((entry) => Object.isFrozen(entry))).toBe(true);
+    });
+
     it("rejects a snapshot whose nextSeq is not above the last entry seq", () => {
         expect.assertions(2);
 

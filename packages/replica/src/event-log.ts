@@ -267,7 +267,9 @@ export class EventLog {
 
         this.#nextSeq += 1;
 
-        const entry: EventLogEntry = {
+        // Frozen: the entry is handed back to the caller and later out of `getSince`/`getFrom`, and an edit to its
+        // `seq` would break the ascending order every tail read binary-searches.
+        const entry: EventLogEntry = Object.freeze({
             seq,
             type,
             payload: pl,
@@ -280,7 +282,7 @@ export class EventLog {
             clientId: resolvedOptions?.clientId,
             sessionId: resolvedOptions?.sessionId,
             parentSeqNum: parentSeqNumber,
-        };
+        });
 
         this.#entries.push(entry);
         this.#headSeq = entry.seq;
@@ -316,13 +318,14 @@ export class EventLog {
 
             this.#nextSeq += 1;
 
-            const entry: EventLogEntry = {
+            // Frozen for the same reason as in `append`.
+            const entry: EventLogEntry = Object.freeze({
                 seq,
                 type,
                 payload,
                 timestamp: ts,
                 parentSeqNum: parentSeqNumber,
-            };
+            });
 
             this.#entries.push(entry);
             entries.push(entry);
@@ -348,24 +351,28 @@ export class EventLog {
      * the tail reads binary-search over a log whose appends stay ascending.
      */
     public load(snapshot: EventLogSnapshot): void {
+        // Frozen copies, validated as copied: the caller keeps the snapshot's own objects, and an edit to one after
+        // loading would otherwise reorder the log under the binary-searched tail reads.
+        const entries = snapshot.entries.map((entry) => Object.freeze({ ...entry }));
+
         // `<=` is false for NaN, so a non-integer seq is rejected up front rather than by the order check.
-        for (const [index, entry] of snapshot.entries.entries()) {
+        for (const [index, entry] of entries.entries()) {
             if (!Number.isSafeInteger(entry.seq)) {
                 throw new RangeError("EventLog snapshot entry seq must be a safe integer");
             }
 
-            if (index > 0 && entry.seq <= (snapshot.entries[index - 1] as EventLogEntry).seq) {
+            if (index > 0 && entry.seq <= (entries[index - 1] as EventLogEntry).seq) {
                 throw new RangeError("EventLog snapshot entries must be in strictly ascending seq order");
             }
         }
 
-        const last = snapshot.entries.at(-1);
+        const last = entries.at(-1);
 
         if (!Number.isSafeInteger(snapshot.nextSeq) || (last !== undefined && snapshot.nextSeq <= last.seq)) {
             throw new RangeError("EventLog snapshot nextSeq must be above the last entry seq");
         }
 
-        this.#entries = [...snapshot.entries];
+        this.#entries = entries;
         this.#headOffset = 0;
         this.#nextSeq = snapshot.nextSeq;
         this.#headSeq = snapshot.headSeq;
