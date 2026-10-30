@@ -16,6 +16,7 @@ import type {
     RankIndexDefinitionLike,
     RecordQueueMessageInput,
     RelatedPage,
+    SchedulerLike,
     SchemaLike,
     ShardRankPageResult,
     SocketAttachment,
@@ -243,6 +244,25 @@ type ExplainIssueArm<D extends boolean> = Omit<Extract<ExplainIssueResult, { deg
  * this file instead of silently passing.
  */
 type ExplainIssueResultView = Partial<ExplainIssueArm<false> & ExplainIssueArm<true>> & { degraded: boolean };
+
+/** An admin shard whose configured scheduler can cancel, as the real client can. */
+class SchedulingAdminShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
+    public override async handleRpc(): Promise<unknown> {
+        throw new Error("handleRpc must not run for admin RPCs");
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- test double for the configured scheduler
+    protected override scheduleOutboxScheduler(): SchedulerLike {
+        return {
+            cancel: async () => {
+                return { cancelled: false };
+            },
+            runAfter: async () => "job",
+            runAt: async () => "job",
+        } as unknown as SchedulerLike;
+    }
+}
 
 /**
  * A real-SQLite-backed ShardDO whose `handleRpc` throws — proving the admin
@@ -1327,11 +1347,23 @@ describe("shardDO admin introspection", () => {
 
             seed();
 
-            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const shard = new SchedulingAdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
             const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.dropOutboxEntry, { id: "job-live" }, ADMIN_TOKEN));
 
             await expect(response.json()).resolves.toEqual({ result: { dropped: true } });
             await expect(readOutbox(shard)).resolves.toMatchObject([{ id: "job-parked" }]);
+        });
+
+        it("keeps a dropped entry, parked, when no scheduler is configured to confirm the cancel", async () => {
+            expect.assertions(2);
+
+            seed();
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.dropOutboxEntry, { id: "job-live" }, ADMIN_TOKEN));
+
+            expect(response.ok).toBe(false);
+            await expect(readOutbox(shard)).resolves.toMatchObject([{ id: "job-live", parked: true }, { id: "job-parked" }]);
         });
 
         it("pages to the parked entries behind the live ones", async () => {

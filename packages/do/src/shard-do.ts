@@ -1642,16 +1642,19 @@ const parseScheduleOutboxEnvelope = (
 };
 
 /**
- * Ask the scheduler to cancel `id`. `SchedulerLike` only declares the hand-off
- * methods, but the scheduler a shard is configured with is the real client, which
- * has `cancel`; a stub without one has nothing to cancel.
+ * Ask the scheduler to cancel `id`, or reject when it cannot be asked. `SchedulerLike` only
+ * declares the hand-off methods, but the scheduler a shard is configured with is the real client,
+ * which has `cancel`. A missing scheduler or `cancel` is not a confirmation: the job may have been
+ * accepted under a binding that has since gone, so the caller must keep the entry.
  */
 const cancelScheduleOutboxJob = async (scheduler: SchedulerLike | undefined, id: string): Promise<void> => {
     const cancel = (scheduler as { cancel?: (jobId: string) => Promise<unknown> } | undefined)?.cancel;
 
-    if (typeof cancel === "function") {
-        await cancel.call(scheduler, id);
+    if (typeof cancel !== "function") {
+        throw new TypeError("no scheduler with a cancel method is configured on this shard, so the cancel cannot be confirmed");
     }
+
+    await cancel.call(scheduler, id);
 };
 
 const retriesForever = (envelope: ScheduleOutboxEnvelope): boolean => {
@@ -15855,6 +15858,14 @@ abstract class ShardDO {
      */
     private async runScheduleOutboxHandOff(id: string, run: () => Promise<unknown>): Promise<void> {
         const sql = this.sql as SqlExec;
+
+        // An operator may have dropped the entry (or the retry loop parked it) while an earlier
+        // hand-off in the same drain was still awaiting: the call must not start then. Checked
+        // synchronously with the registration below, the same ordering a drop uses.
+        if (this.scheduleOutboxDropping.has(id) || readDueScheduleOutboxEntry(sql, id, Number.MAX_SAFE_INTEGER) === undefined) {
+            return;
+        }
+
         const attempt = { dropped: false, stale: false };
         const awaiting = this.scheduleOutboxAttempts.get(id) ?? new Set<typeof attempt>();
 
@@ -15863,19 +15874,36 @@ abstract class ShardDO {
 
         try {
             await run();
-            await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, attempt.dropped);
         } catch (error) {
-            if (attempt.dropped) {
-                await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, true);
+            try {
+                if (attempt.dropped) {
+                    await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, true);
+                }
+            } catch {
+                // The original failure is the one to report; the row stays for the retry loop.
+            } finally {
+                this.releaseScheduleOutboxAttempt(id, awaiting, attempt);
             }
 
             throw error;
-        } finally {
-            awaiting.delete(attempt);
+        }
 
-            if (awaiting.size === 0) {
-                this.scheduleOutboxAttempts.delete(id);
-            }
+        try {
+            await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, attempt.dropped);
+        } catch {
+            // The scheduler accepted the job and the mutation committed. A bookkeeping failure here
+            // (a storage hiccup, a stub handle) must not surface as a failed mutation: the row that
+            // is left behind is re-offered by the retry loop and refused as a duplicate.
+        } finally {
+            this.releaseScheduleOutboxAttempt(id, awaiting, attempt);
+        }
+    }
+
+    private releaseScheduleOutboxAttempt(id: string, awaiting: Set<{ dropped: boolean; stale: boolean }>, attempt: { dropped: boolean; stale: boolean }): void {
+        awaiting.delete(attempt);
+
+        if (awaiting.size === 0) {
+            this.scheduleOutboxAttempts.delete(id);
         }
     }
 

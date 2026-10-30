@@ -375,6 +375,14 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
             return { jobId, ok: true };
         });
 
+        register("outbox:twoJobs", "mutation", async (ctx) => {
+            await ctx.db.insert("notes", { boardId: "b1", body: "two", ownerId: "u1" });
+            await ctx.scheduler.runAfter(0, { __lunoraRef: "outbox:charge" }, { orderId: "first" });
+            await ctx.scheduler.runAfter(0, { __lunoraRef: "outbox:charge" }, { orderId: "second" });
+
+            return { ok: true };
+        });
+
         register("outbox:countNotes", "query", async (ctx) => {
             const rows = await ctx.db.query("notes").collect();
 
@@ -757,6 +765,63 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         await secondRpc.catch(() => undefined);
 
         expect(second.outbox()).toStrictEqual([{ attempts: 0, dead: 1, id: secondId }]);
+    });
+
+    it("does not fail a committed mutation when the bookkeeping after an accepted hand-off throws", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        // The table is created by shard init, which the first dispatch runs.
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        harness.run("CREATE TRIGGER outbox_delete_down BEFORE DELETE ON __schedule_outbox BEGIN SELECT RAISE(ABORT, 'bookkeeping down'); END");
+
+        // The scheduler accepted the job; a failed delete of the custody row must not turn that into an error.
+        await expect(harness.shard.handleRpc("outbox:orderPlaced", {})).resolves.toMatchObject({ ok: true });
+
+        expect(harness.scheduled).toHaveLength(1);
+    });
+
+    it("parks rather than deletes a dropped entry when no scheduler is left to confirm the cancel", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness({ scheduler: false });
+
+        await expect(harness.shard.handleRpc("outbox:countNotes", {})).resolves.toBe(0);
+
+        harness.run(
+            "INSERT INTO __schedule_outbox (id, envelope_json, attempts, next_attempt_at, created_at, dead) VALUES (?, ?, 3, 0, ?, 0)",
+            "job-1",
+            JSON.stringify({ args: {}, options: undefined, target: { __lunoraRef: "outbox:charge" }, when: 0 }),
+            Date.now(),
+        );
+
+        // The job may have been accepted before the binding went away: the drop cannot claim it is stopped.
+        await expect(harness.drop("job-1")).rejects.toThrow(/cancel/u);
+        expect(harness.outbox()).toStrictEqual([{ attempts: 3, dead: 1, id: "job-1" }]);
+    });
+
+    it("never hands a dropped entry to the scheduler when its hand-off had not started", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const rpc = harness.shard.handleRpc("outbox:twoJobs", {});
+
+        // The first hand-off is awaiting the scheduler; the second has not started.
+        await entered;
+
+        const first = harness.received[0]?.id;
+        const second = harness.outbox().find((entry) => entry.id !== first)?.id ?? "<no entry>";
+
+        await harness.drop(second);
+        release();
+        await rpc;
+
+        expect(harness.scheduled.map((job) => job.id)).toStrictEqual([first]);
+        expect(harness.received).toHaveLength(1);
+        expect(harness.outbox()).toStrictEqual([]);
     });
 
     it("does not hand a dropped entry to the scheduler when it was already queued in the same batch", async () => {
