@@ -96,13 +96,6 @@ export class SpanBuffer {
     private readonly capacity: number;
 
     /**
-     * The trace id each buffered span was counted under, parallel to `buffer`.
-     * Eviction decrements this, not `span.traceId`, so a caller that edits a
-     * retained span cannot strand a count for an id that no longer matches.
-     */
-    private readonly countedIds: string[] = [];
-
-    /**
      * Buffered span count per trace, so {@link SpanBuffer.hasTrace} — run on
      * every dispatch, usually a miss against a full ring — is a lookup, not a scan.
      */
@@ -133,7 +126,6 @@ export class SpanBuffer {
     /** Drop every buffered span, including the eviction count. */
     public clear(): void {
         this.buffer.length = 0;
-        this.countedIds.length = 0;
         this.traceCounts.clear();
         this.droppedCount = 0;
     }
@@ -148,22 +140,25 @@ export class SpanBuffer {
         return this.traceCounts.has(traceId);
     }
 
-    /** Append a span, evicting the oldest when at capacity. */
+    /**
+     * Append a span, evicting the oldest when at capacity. A frozen shallow copy
+     * is stored, never the caller's object (which is shared with the sink and
+     * stays writable), so the span and its `traceCounts` entry cannot diverge.
+     */
     public push(span: SpanEvent): void {
-        this.buffer.push(span);
-        this.countedIds.push(span.traceId);
-        this.traceCounts.set(span.traceId, (this.traceCounts.get(span.traceId) ?? 0) + 1);
+        const stored = Object.freeze({ ...span });
+
+        this.buffer.push(stored);
+        this.traceCounts.set(stored.traceId, (this.traceCounts.get(stored.traceId) ?? 0) + 1);
 
         if (this.buffer.length > this.capacity) {
-            this.buffer.shift();
-
-            const evictedId = this.countedIds.shift() as string;
-            const remaining = (this.traceCounts.get(evictedId) ?? 1) - 1;
+            const evicted = this.buffer.shift() as SpanEvent;
+            const remaining = (this.traceCounts.get(evicted.traceId) ?? 1) - 1;
 
             if (remaining === 0) {
-                this.traceCounts.delete(evictedId);
+                this.traceCounts.delete(evicted.traceId);
             } else {
-                this.traceCounts.set(evictedId, remaining);
+                this.traceCounts.set(evicted.traceId, remaining);
             }
 
             this.droppedCount += 1;

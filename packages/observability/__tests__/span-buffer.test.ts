@@ -109,6 +109,51 @@ describe("spanBuffer", () => {
         expect(buffer.hasTrace("t2")).toBe(false);
         expect(buffer.hasTrace("t3")).toBe(true);
     });
+
+    it("keeps hasTrace and entries in agreement when the caller edits a span after push", () => {
+        expect.assertions(6);
+
+        const buffer = new SpanBuffer(4);
+        const original = span({ spanId: "a", traceId: "t1" });
+
+        buffer.push(original);
+        original.traceId = "t2";
+
+        // The buffered span keeps the id it was counted under, and the caller's
+        // object stays writable (it is shared with the sink and sampled-out hold).
+        expect(buffer.hasTrace("t1")).toBe(true);
+        expect(buffer.hasTrace("t2")).toBe(false);
+        expect(buffer.entries()[0]?.traceId).toBe("t1");
+        expect(Object.isFrozen(original)).toBe(false);
+        expect(original.traceId).toBe("t2");
+        expect(Object.isFrozen(buffer.entries()[0])).toBe(true);
+    });
+
+    it("decrements the counted trace on eviction after the caller edited the span", () => {
+        expect.assertions(4);
+
+        const buffer = new SpanBuffer(2);
+        const first = span({ spanId: "a", traceId: "t1" });
+
+        buffer.push(first);
+        first.traceId = "t2";
+
+        for (const [spanId, traceId] of [
+            ["b", "t1"],
+            ["c", "t3"],
+        ] as const) {
+            buffer.push(span({ spanId, traceId }));
+        }
+
+        // `a` evicted: t1 still has `b`.
+        expect(buffer.hasTrace("t1")).toBe(true);
+
+        buffer.push(span({ spanId: "d", traceId: "t3" }));
+
+        expect(buffer.hasTrace("t1")).toBe(false);
+        expect(buffer.hasTrace("t2")).toBe(false);
+        expect(buffer.hasTrace("t3")).toBe(true);
+    });
 });
 
 describe("spanBuffer capacity normalization", () => {
