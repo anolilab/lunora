@@ -454,6 +454,8 @@ export const ERROR_CATALOG = {
     AI_CHAT_FAILED: { status: 500, title: "Assistant turn failed" },
     BAD_ROW: { status: 400, title: "Malformed import row" },
     BAD_SUBSCRIPTION_ARGS: { status: 400, title: "Invalid subscription arguments" },
+    /** A subscribe named a table instead of a function on a socket that carries claims; the raw-delta path is not claim-scoped, so it is refused. */
+    SUBSCRIPTION_FUNCTION_REQUIRED: { status: 400, title: "Subscription needs a function path" },
     BATCH_LIMIT_EXCEEDED: { status: 400, title: "Batch limit exceeded" },
     /** An `onDelete` cascade / `set null` would touch more holder rows than one delete may (`CASCADE_MAX_ROWS` in `@lunora/shard-engine`). */
     CASCADE_LIMIT: { status: 400, title: "Cascade limit exceeded" },

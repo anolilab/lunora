@@ -1744,6 +1744,9 @@ const revalidationStamp = (route: unknown, userId: string | undefined, acceptedA
 /** The claims a re-auth must leave unchanged, as one comparable key (`""` for none). */
 const credentialClaimsKey = canonicalClaims;
 
+/** Whether the socket carries a user or claims, as opposed to being anonymous. */
+const socketHasClaims = (attachment: SocketAttachment): boolean => attachment.userId !== undefined || canonicalClaims(attachment.identity) !== "";
+
 const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
     // A copy: the attachment is shared with the socket cache, and user code receives this object.
     return { identity: attachment.identity === undefined ? undefined : structuredClone(attachment.identity), ip: attachment.ip, userId: attachment.userId };
@@ -8358,6 +8361,20 @@ abstract class ShardDO {
         if (envelope.type === "subscribe" && envelope.query) {
             const { functionPath } = envelope.query;
             const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
+
+            // A table-only subscribe (no function path) is fed raw table deltas that no claim scopes, and nothing can
+            // seed or reset its rows when the socket's claims change. Refused as soon as the socket's claims are
+            // known, before anything is stored or sent; a socket with none (anonymous) has nothing to leak.
+            if (!functionPath && socketHasClaims(this.readAttachment(ws))) {
+                this.sendSubscriptionError(
+                    ws,
+                    envelope.id,
+                    "SUBSCRIPTION_FUNCTION_REQUIRED",
+                    "a subscription on an authenticated socket must name a function (functionPath)",
+                );
+
+                return;
+            }
 
             // Admin introspection subscriptions read shard internals (raw rows,
             // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`

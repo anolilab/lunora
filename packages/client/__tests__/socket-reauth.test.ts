@@ -373,6 +373,19 @@ describe("socket identity revalidation", () => {
         client.close();
     });
 
+    it("still names the function on every subscribe, so an authenticated socket never refuses it", async () => {
+        expect.assertions(1);
+
+        const { client, sockets } = await openRevalidatingClient({ revalidateMs: 60_000, token: "token-1" });
+        const subscribe = (sockets[0]?.sent ?? [])
+            .map((raw) => JSON.parse(raw) as { query?: { functionPath?: string }; type: string })
+            .find((frame) => frame.type === "subscribe");
+
+        expect(subscribe?.query?.functionPath).toBe("todos.list");
+
+        client.close();
+    });
+
     it("presents the cookie session alone when the socket has no bearer", async () => {
         expect.assertions(2);
 

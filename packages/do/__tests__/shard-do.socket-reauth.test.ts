@@ -945,3 +945,54 @@ describe("admin socket re-authentication", () => {
         expect(ws.closes[0]).toBe(4005);
     });
 });
+
+describe("table-only subscriptions on a socket that carries claims", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    const frames = (ws: FakeWebSocket) => ws.sent.map((frame) => JSON.parse(frame) as { code?: string; id?: string; type: string });
+
+    const subscribe = async (attachment: Partial<SocketAttachment>, query: Record<string, unknown>) => {
+        vi.useFakeTimers({ now: NOW });
+
+        const shard = new ReauthShard(createState(), {});
+        const ws = createFakeWebSocket();
+
+        shard.register(ws, { connectionId: "conn-1", subs: {}, ...attachment });
+        await shard.webSocketMessage(ws as unknown as WebSocket, JSON.stringify({ id: "sub-1", query, type: "subscribe" }));
+
+        return ws;
+    };
+
+    it("refuses a subscribe with no function path, and sends no rows", async () => {
+        expect.assertions(3);
+
+        const ws = await subscribe({ expiresAt: NOW + HOUR, identity: { orgId: "org-a" }, userId: "user-1" }, { table: "messages" });
+
+        expect(frames(ws).find((frame) => frame.type === "error")?.code).toBe("SUBSCRIPTION_FUNCTION_REQUIRED");
+        expect(frames(ws).some((frame) => frame.type === "data" || frame.type === "ack")).toBe(false);
+        expect(Object.keys(ws.attachment?.subs ?? {})).toStrictEqual([]);
+    });
+
+    it("still accepts the same subscribe on a socket with no claims", async () => {
+        expect.assertions(2);
+
+        const ws = await subscribe({}, { table: "messages" });
+
+        expect(frames(ws).some((frame) => frame.type === "error")).toBe(false);
+        expect(frames(ws).some((frame) => frame.type === "ack")).toBe(true);
+    });
+
+    it("leaves a subscribe with a function path alone on a socket with claims", async () => {
+        expect.assertions(2);
+
+        const ws = await subscribe(
+            { expiresAt: NOW + HOUR, identity: { orgId: "org-a" }, userId: "user-1" },
+            { functionPath: "messages:list", table: "messages:list" },
+        );
+
+        expect(frames(ws).some((frame) => frame.type === "error")).toBe(false);
+        expect(frames(ws).some((frame) => frame.type === "data")).toBe(true);
+    });
+});

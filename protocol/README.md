@@ -543,7 +543,11 @@ on their frame BUILDERS only (`build_subscribe_frame` / `BuildSubscribeFrame` /
 `buildSubscribeFrame`), where it likewise defaults to `functionPath`; no public
 `subscribe` in any of the eight takes it, and every one of them passes that
 default. So `broadcastDelta` is not addressable from any client in this tree —
-only by a consumer that builds the frame itself. `sinceSeq` /
+only by a consumer that builds the frame itself. **Breaking for legacy table clients:** on a socket that carries a user or claims, a `subscribe`
+with no `functionPath` is refused with an `error` frame (`SUBSCRIPTION_FUNCTION_REQUIRED`,
+`400`) before anything is stored or sent, because raw table deltas are not claim-scoped and
+nothing can reset such a view when the claims change. An anonymous socket (no user, no claims)
+keeps accepting table-only subscribes as before. `sinceSeq` /
 `sinceEpoch` ride along only on a resume. Subscription ids are conventionally
 `sub_<n>`; shape ids `shape_<n>`; stream ids `stream_<n>`.
 
