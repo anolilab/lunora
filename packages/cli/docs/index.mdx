@@ -144,7 +144,7 @@ Commands with the flag: `add`, `advisor`, `analyze`, `backup`, `build`,
 Three carry a documented restriction, because the payload already owns stdout or
 the underlying tool has no JSON rendering: `export --format json` requires
 `--out <file>` (with `--out -` the NDJSON stream is stdout); `cloudflare
-deployments --format json` applies to `list` only; `cloudflare containers
+deployments --format json` applies to `list` and `status` only; `cloudflare containers
 --format json` applies to `list`, `info` and `images list`. Each refuses with a usage error rather than
 emitting a fabricated document.
 
