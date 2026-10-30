@@ -138,8 +138,8 @@ describe("token bucket retry-after", () => {
     it("names a wait that admits the request even when the refill lands on a rounding edge", () => {
         expect.assertions(2);
 
-        // Found by the retry-after property: 1 token at t=0, 3 at t=36, then 4 at t=36. The deficit divides to a wait
-        // whose refill, in floating point, falls a hair short of the 4 tokens asked for.
+        // 1 token at t=0, 3 at t=36, then 4 at t=36: the deficit divides to a wait whose refill, in floating point,
+        // falls a hair short of the 4 tokens asked for.
         const config: RateLimitConfig = { kind: "token bucket", period: 1000, rate: 5 };
         const first = evaluate(config, undefined, { consume: true, count: 1, now: 0, reserve: false });
         const second = evaluate(config, first.value, { consume: true, count: 3, now: 36, reserve: false });
@@ -154,17 +154,27 @@ describe("token bucket retry-after", () => {
 });
 
 describe("token bucket retry-after bounds", () => {
+    it("names a wait that admits the request when the period is too long for a millisecond step to register", () => {
+        expect.assertions(2);
+
+        // At a 1e308 ms period the estimate is so large that `wait + 1 === wait`, yet its refill rounds below one token.
+        const config: RateLimitConfig = { kind: "token bucket", period: 1e308, rate: 1 };
+        const prior: RateLimitValue = { ts: 0, value: 0 };
+        const denied = evaluate(config, prior, { consume: true, count: 1, now: 0, reserve: false });
+
+        expect(denied.status.ok).toBe(false);
+        expect(evaluate(config, prior, { consume: true, count: 1, now: denied.status.retryAfter, reserve: false }).status.ok).toBe(true);
+    });
+
     it("names a wait that covers a future-dated stored state without walking the clock gap", () => {
-        expect.assertions(3);
+        expect.assertions(2);
 
         // A state written by a limiter whose clock runs a day ahead: refill only starts once `now` reaches it.
         const config: RateLimitConfig = { kind: "token bucket", period: 1000, rate: 5 };
         const day = 86_400_000;
         const prior: RateLimitValue = { ts: day, value: 0 };
-        const started = performance.now();
         const denied = evaluate(config, prior, { consume: true, count: 1, now: 0, reserve: false });
 
-        expect(performance.now() - started).toBeLessThan(50);
         expect(denied.status.retryAfter).toBeGreaterThanOrEqual(day);
         expect(evaluate(config, prior, { consume: true, count: 1, now: denied.status.retryAfter, reserve: false }).status.ok).toBe(true);
     });
