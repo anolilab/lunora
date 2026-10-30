@@ -254,4 +254,50 @@ describe("scheduleOutboxJobs", () => {
 
         await expect(screen.findByText("That job is no longer in the outbox.")).resolves.toBeDefined();
     });
+
+    it("does not show an action's error under a different shard", async () => {
+        expect.assertions(3);
+
+        const reply = Promise.withResolvers<{ retried: boolean }>();
+        let reads = 0;
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getScheduleOutbox) {
+                    reads += 1;
+
+                    return { entries: [entry()] };
+                }
+
+                return reply.promise;
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <ScheduleOutboxJobs initialShardKey="shard-a" />
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("outbox-retry-job-1"));
+        fireEvent.change(screen.getByTestId("outbox-shard-input"), { target: { value: "shard-b" } });
+        await screen.findByTestId("outbox-row-job-1");
+        const readsBefore = reads;
+
+        reply.resolve({ retried: false });
+
+        // The action refetches right after it records its outcome, so a new read means the outcome is in.
+        await vi.waitFor(() => {
+            if (reads === readsBefore) {
+                throw new Error("the action has not settled yet");
+            }
+        });
+
+        expect(screen.queryByTestId("outbox-error")).toBeNull();
+
+        fireEvent.change(screen.getByTestId("outbox-shard-input"), { target: { value: "shard-a" } });
+
+        // Back on the shard the action ran against, its outcome is still the thing to tell the operator.
+        await expect(screen.findByTestId("outbox-error")).resolves.toBeDefined();
+        expect(screen.getByTestId("outbox-error").textContent).toContain("no longer in the outbox");
+    });
 });

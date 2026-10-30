@@ -189,8 +189,9 @@ export const ScheduleOutboxJobs = ({ initialShardKey }: ScheduleOutboxJobsProps 
     const entries = settling ? undefined : data?.entries;
     const nextCursor = settling ? undefined : data?.nextCursor;
 
-    const [actionError, setActionError] = useState<string | undefined>(undefined);
-    const shownError = error ?? actionError;
+    // Tagged with the shard it came from: a reply that lands after the operator moved on is not about the shard on screen.
+    const [actionError, setActionError] = useState<{ message: string; shardKey: string } | undefined>(undefined);
+    const shownError = error ?? (actionError?.shardKey === queryShardKey ? actionError.message : undefined);
 
     useAutoRefresh(poll, true);
 
@@ -202,12 +203,12 @@ export const ScheduleOutboxJobs = ({ initialShardKey }: ScheduleOutboxJobsProps 
 
             // A drop of an entry that is already gone is what was asked for; a retry is not.
             if (reply.retried === false) {
-                setActionError(t("That job is no longer in the outbox."));
+                setActionError({ message: t("That job is no longer in the outbox."), shardKey: queryShardKey });
             }
 
             refetch();
         } catch (error_) {
-            setActionError(errorMessage(error_));
+            setActionError({ message: errorMessage(error_), shardKey: queryShardKey });
         }
     };
 

@@ -12166,7 +12166,8 @@ abstract class ShardDO {
     private async handleRetryOutboxEntry(args: Record<string, unknown>): Promise<Response> {
         const { id } = parseScheduleOutboxEntryArgs("retryOutboxEntry", args);
         const now = Date.now();
-        const retried = requeueScheduleOutbox(this.sql as SqlExec, id, now);
+        // A drop owns the id until its cancel settles; requeueing now would report a retry the drop then undoes.
+        const retried = !this.scheduleOutboxDropping.has(id) && requeueScheduleOutbox(this.sql as SqlExec, id, now);
 
         if (retried) {
             for (const attempt of this.scheduleOutboxAttempts.get(id) ?? []) {
@@ -15865,7 +15866,7 @@ abstract class ShardDO {
             await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, attempt.dropped);
         } catch (error) {
             if (attempt.dropped) {
-                forgetScheduleOutbox(sql, id);
+                await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, true);
             }
 
             throw error;
@@ -15903,10 +15904,11 @@ abstract class ShardDO {
             return;
         }
 
-        // The operator dropped the entry while this attempt was awaiting, and the scheduler
-        // never took the job: nothing to cancel, so the parked row has served its purpose.
+        // The operator dropped the entry while this attempt was awaiting.
+        // The accept may have been lost on the way back, so the job can still exist: cancel it, and
+        // keep the row (parked) if that cannot be confirmed.
         if (attempt.dropped) {
-            forgetScheduleOutbox(sql, id);
+            await this.settleScheduleOutboxHandOff(sql, scheduler, id, true, trace);
 
             return;
         }

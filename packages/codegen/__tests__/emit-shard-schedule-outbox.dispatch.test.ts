@@ -114,6 +114,8 @@ interface Harness {
     failWith: (error: Error) => void;
     /** Hold the next scheduler call: `entered` settles once it is waiting, `release` lets it finish. */
     hold: () => { entered: Promise<void>; release: () => void };
+    /** Hold the next `cancel` call the same way. */
+    holdCancel: () => { entered: Promise<void>; release: () => void };
     /** Shard log lines pushed for `functionPath`. */
     logs: (functionPath: string) => { level: string; message: string }[];
     /** Make every live entry due now, so the retry ladder can be driven without waiting it out. */
@@ -147,6 +149,7 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
     const cancelOutcomes: boolean[] = [];
     let failure: Error | undefined;
     let cancelFailure: Error | undefined;
+    let heldCancel: { entered: () => void; released: Promise<undefined> } | undefined;
     let held: { entered: () => void; released: Promise<undefined> } | undefined;
 
     const accept = async (target: unknown, args: unknown, options?: { id?: string }): Promise<string> => {
@@ -177,6 +180,14 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
                 ? () => {
                       return {
                           cancel: async (id: string): Promise<{ cancelled: boolean }> => {
+                              if (heldCancel !== undefined) {
+                                  const { entered, released } = heldCancel;
+
+                                  heldCancel = undefined;
+                                  entered();
+                                  await released;
+                              }
+
                               if (cancelFailure !== undefined) {
                                   throw cancelFailure;
                               }
@@ -252,6 +263,24 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
         },
         failWith: (error: Error) => {
             failure = error;
+        },
+        holdCancel: () => {
+            const entered = Promise.withResolvers<undefined>();
+            const released = Promise.withResolvers<undefined>();
+
+            heldCancel = {
+                entered: () => {
+                    entered.resolve(undefined);
+                },
+                released: released.promise,
+            };
+
+            return {
+                entered: entered.promise,
+                release: () => {
+                    released.resolve(undefined);
+                },
+            };
         },
         hold: () => {
             const entered = Promise.withResolvers<undefined>();
@@ -666,6 +695,68 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         expect(harness.scheduled.map((job) => job.id)).toContain(id);
         expect(harness.cancelOutcomes.at(-1)).toBe(true);
         expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("refuses a Retry now for an entry whose drop is still cancelling", async () => {
+        expect.assertions(3);
+
+        const harness = createHarness();
+
+        harness.setReachable(false);
+
+        await expect(harness.shard.handleRpc("outbox:orderPlacedForever", {})).rejects.toThrow("SchedulerDO unreachable");
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+        const { entered, release } = harness.holdCancel();
+        const drop = harness.drop(id);
+
+        await entered;
+
+        await expect(harness.shard.requeue(id).then(async (response) => response.json())).resolves.toStrictEqual({ result: { retried: false } });
+
+        release();
+        await drop;
+
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
+    it("cancels a job whose hand-off was rejected after a drop, since the accept may have been lost", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const rpc = harness.shard.handleRpc("outbox:orderPlaced", {});
+
+        await entered;
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        await harness.drop(id);
+        harness.cancelled.length = 0;
+        harness.failWith(new Error("response lost"));
+        release();
+
+        await expect(rpc).rejects.toThrow("response lost");
+
+        expect(harness.cancelled).toStrictEqual([id]);
+        expect(harness.outbox()).toStrictEqual([]);
+
+        // A cancel that cannot be confirmed keeps the entry, parked, instead of forgetting a job that may run.
+        const second = createHarness();
+        const held = second.hold();
+        const secondRpc = second.shard.handleRpc("outbox:orderPlaced", {});
+
+        await held.entered;
+
+        const secondId = second.outbox()[0]?.id ?? "<no entry>";
+
+        await second.drop(secondId);
+        second.failCancel(new Error("cancel refused"));
+        second.failWith(new Error("response lost"));
+        held.release();
+        await secondRpc.catch(() => undefined);
+
+        expect(second.outbox()).toStrictEqual([{ attempts: 0, dead: 1, id: secondId }]);
     });
 
     it("does not hand a dropped entry to the scheduler when it was already queued in the same batch", async () => {
