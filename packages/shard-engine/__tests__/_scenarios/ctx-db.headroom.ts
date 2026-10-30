@@ -282,6 +282,72 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
             expect(tracker.headroom().readBytes).toBe(8);
         });
 
+        it("stops pulling rows from a cursor once the read ceiling is crossed", () => {
+            expect.assertions(2);
+
+            let pulled = 0;
+            const doc = JSON.stringify({ body: "x".repeat(100) });
+            const unbounded: SqlExec = {
+                exec: <Row>() => {
+                    const rows = function* rowsOf(): Generator<Row> {
+                        for (let index = 0; index < 1000; index += 1) {
+                            pulled += 1;
+
+                            yield { __doc__: doc, id: `row-${String(index)}` } as Row;
+                        }
+                    };
+                    const cursor = {
+                        one: () => undefined as Row,
+                        [Symbol.iterator]: rows,
+                        toArray: () => [...rows()],
+                    };
+
+                    return cursor;
+                },
+            };
+            const metered = meterReadBytes(unbounded, new TransactionHeadroomTracker({ maxReadBytes: doc.length * 3 }), () => false);
+
+            expect(() => metered.exec("SELECT").toArray()).toThrow(/TRANSACTION_LIMIT_EXCEEDED|limit/iu);
+            // The native `toArray` would have pulled all 1000 before any charge landed.
+            expect(pulled).toBeLessThan(10);
+        });
+
+        it("charges a patched document once, whatever size the patch leaves it", async () => {
+            expect.assertions(1);
+
+            const id = await build({}).insert("notes", { body: "x".repeat(100), bucket: "a" });
+            const [stored] = sql.exec<{ __doc__: string }>("SELECT __doc__ FROM notes").toArray();
+            const tracker = new TransactionHeadroomTracker();
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, headroom: tracker, schema, sql });
+
+            await writer.get("notes", id);
+            await writer.patch("notes", id, { body: "y".repeat(400) });
+            await writer.get("notes", id);
+
+            expect(tracker.headroom().readBytes).toBe(stored?.__doc__.length);
+        });
+
+        it("charges equal ids held by two tables separately", async () => {
+            expect.assertions(1);
+
+            const twoTables: SchemaLike = { tables: { memos: schema.tables["notes"]!, notes: schema.tables["notes"]! } };
+
+            runShardMigrations(sql, twoTables);
+
+            const id = await build({}).insert("notes", { body: "x".repeat(100), bucket: "a" });
+
+            sql.exec("INSERT INTO memos SELECT * FROM notes");
+
+            const [stored] = sql.exec<{ __doc__: string }>("SELECT __doc__ FROM notes").toArray();
+            const tracker = new TransactionHeadroomTracker();
+            const reader = createShardContextDatabase({ clock: () => 1_700_000_000_000, headroom: tracker, schema: twoTables, sql });
+
+            await reader.get("notes", id);
+            await reader.get("memos", id);
+
+            expect(tracker.headroom().readBytes).toBe((stored?.__doc__.length ?? 0) * 2);
+        });
+
         it("does not charge read bytes inside an unmetered deleteAll", async () => {
             expect.assertions(1);
 

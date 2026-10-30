@@ -2003,12 +2003,38 @@ const deriveSoftDeleteFields = (schema: SchemaLike): ReadonlyMap<string, string>
     return fields;
 };
 
+const tablePatterns = new WeakMap<object, RegExp | undefined>();
+
 /**
- * Charge each stored document in `rows`, read off the JSON column the row store
- * already returned. The key pairs the id with the length: an id repeats across
- * tables only through an explicit or custom id, and the length keeps those apart.
+ * The schema tables a query names, as `"table"` identifiers. A document is charged by (table, id) so a
+ * patch that resizes it is not charged again; a query that names no table, or more than one, cannot say
+ * which table its rows came from and falls back to id plus length, which only ever over-charges.
  */
-const chargeDocuments = (rows: ReadonlyArray<unknown>, headroom: TransactionHeadroomTracker): void => {
+const queryTable = (query: string, schema: SchemaLike): string | undefined => {
+    let pattern = tablePatterns.get(schema.tables);
+
+    if (!tablePatterns.has(schema.tables)) {
+        const names = Object.keys(schema.tables).map((name) => name.replaceAll(/[$()*+.?[\\\]^{|}]/gu, String.raw`\$&`));
+
+        pattern = names.length === 0 ? undefined : new RegExp(`"(${names.join("|")})"`, "gu");
+        tablePatterns.set(schema.tables, pattern);
+    }
+
+    if (pattern === undefined) {
+        return undefined;
+    }
+
+    const found = new Set<string>();
+
+    for (const match of query.matchAll(pattern)) {
+        found.add(match[1] as string);
+    }
+
+    return found.size === 1 ? [...found][0] : undefined;
+};
+
+/** Charge each stored document in `rows`, read off the JSON column the row store already returned. */
+const chargeDocuments = (rows: ReadonlyArray<unknown>, headroom: TransactionHeadroomTracker, table: string | undefined): void => {
     for (const row of rows) {
         const record = row as Record<string, unknown> | undefined;
         const raw = record?.[DOC_COLUMN];
@@ -2016,10 +2042,12 @@ const chargeDocuments = (rows: ReadonlyArray<unknown>, headroom: TransactionHead
         if (typeof raw === "string") {
             const id = record?.["id"];
 
-            if (typeof id === "string") {
+            if (typeof id !== "string") {
+                headroom.recordReadBytes(raw.length);
+            } else if (table === undefined) {
                 headroom.recordDocumentRead(`${id}\u0000${String(raw.length)}`, raw.length);
             } else {
-                headroom.recordReadBytes(raw.length);
+                headroom.recordDocumentRead(`${table}\u0000${id}`, raw.length);
             }
         }
     }
@@ -2035,50 +2063,51 @@ const chargeDocuments = (rows: ReadonlyArray<unknown>, headroom: TransactionHead
  * one of them skips is no cap. The stored JSON is already a string in hand, so
  * its length costs nothing; nothing is re-serialized. Each document is charged
  * once per transaction (see `recordDocumentRead`), wherever it is first loaded.
- * `toArray()`, `one()` and
- * iteration are each charged. A host whose `toArray`/`one` is built on its own
- * iterator would charge each row twice, so iteration inside those two is not
- * charged.
+ *
+ * `toArray()` is drained through the cursor's iterator, charging each row as it
+ * arrives, so a runaway candidate set stops at the ceiling instead of being
+ * built in full first. `one()` and iteration are charged too; `one()` is
+ * wrapped so a host that builds it on its own iterator does not charge twice.
  */
-const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | undefined, exempt: () => boolean): SqlExec => {
+const meterReadBytes = (sql: SqlExec, headroom: TransactionHeadroomTracker | undefined, exempt: () => boolean, schema?: SchemaLike): SqlExec => {
     if (headroom === undefined) {
         return sql;
     }
 
     const exec = <Row = Record<string, unknown>>(query: string, ...params: unknown[]): SqlCursor<Row> => {
         const cursor = sql.exec<Row>(query, ...params);
-        const toArray = cursor.toArray.bind(cursor);
         const one = cursor.one.bind(cursor);
         const iterate = cursor[Symbol.iterator].bind(cursor);
+        const table = schema === undefined ? undefined : queryTable(query, schema);
         let materializing = false;
-        const materialize = <T>(read: () => T): T => {
-            materializing = true;
-
-            try {
-                return read();
-            } finally {
-                materializing = false;
-            }
-        };
         const charge = (rows: ReadonlyArray<unknown>): void => {
             if (!exempt()) {
-                chargeDocuments(rows, headroom);
+                chargeDocuments(rows, headroom, table);
             }
         };
 
         cursor.toArray = () => {
-            const rows = materialize(toArray);
+            const rows: Row[] = [];
 
-            charge(rows);
+            for (const row of { [Symbol.iterator]: iterate }) {
+                charge([row]);
+                rows.push(row);
+            }
 
             return rows;
         };
         cursor.one = () => {
-            const row = materialize(one);
+            materializing = true;
 
-            charge([row]);
+            try {
+                const row = one();
 
-            return row;
+                charge([row]);
+
+                return row;
+            } finally {
+                materializing = false;
+            }
         };
         cursor[Symbol.iterator] = function* chargedRows() {
             for (const row of { [Symbol.iterator]: iterate }) {
@@ -2142,7 +2171,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * the meter exists to close.
      */
     let meterExempt = false;
-    const sql = meterReadBytes(options.sql, headroom, () => meterExempt);
+    const sql = meterReadBytes(options.sql, headroom, () => meterExempt, options.schema);
     const { schema } = options;
     const broadcast = options.broadcast ?? (() => undefined);
 
