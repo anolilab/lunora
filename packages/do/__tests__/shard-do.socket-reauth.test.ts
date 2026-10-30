@@ -316,18 +316,28 @@ describe("socket identity revalidation", () => {
 
         const { shard, ws } = openTenantSocket();
 
-        Object.assign(ws, { bufferedAmount: 2_000_000 });
-        shard.duringQuery = () => {
-            // The consumer is slow: the buffer clears only after the window has passed.
-            setTimeout(() => {
-                Object.assign(ws, { bufferedAmount: 0 });
-            }, 40);
-            vi.setSystemTime(NOW + WINDOW);
-        };
+        let buffered = 2_000_000;
+        let drainStarted: () => void = () => undefined;
+        const started = new Promise<void>((resolve) => {
+            drainStarted = resolve;
+        });
+
+        // The first read of the buffer is the pump reaching its drain wait: the milestone the window is moved at.
+        Object.defineProperty(ws, "bufferedAmount", {
+            get() {
+                drainStarted();
+
+                return buffered;
+            },
+        });
 
         const write = shard.write();
 
-        await vi.advanceTimersByTimeAsync(100);
+        await started;
+        // The consumer is slow: the buffer clears only after the window has passed.
+        vi.setSystemTime(NOW + WINDOW);
+        buffered = 0;
+        await vi.advanceTimersByTimeAsync(20);
         await write;
 
         expect(dataFrames(ws)).toStrictEqual([]);

@@ -647,6 +647,10 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Socket identity changed";
     };
+    readonly IDENTITY_STALE: {
+        readonly status: 409;
+        readonly title: "Socket identity stale";
+    };
     readonly FORBIDDEN_FANOUT: {
         readonly status: 403;
         readonly title: "Fan-out forbidden";

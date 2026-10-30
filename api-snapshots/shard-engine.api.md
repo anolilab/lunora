@@ -2296,6 +2296,7 @@ interface RelayHost {
     deliverLiveLocal: (topic: string, key: string, frame: string) => number;
     deliverWhisperLocal: (topic: string, frame: string, exclude: undefined | ShardSocketLike) => number;
     doName: () => string | undefined;
+    dropIfLapsed: (ws: ShardSocketLike) => boolean;
     env: () => unknown;
     getWebSockets: () => ShardSocketLike[];
     liveControl: (control: LiveSocketControlCall) => Promise<Response>;
@@ -3210,8 +3211,8 @@ interface SubscriptionInfo {
 interface SubscriptionQuery {
     args?: Record<string, unknown>;
     functionPath?: string;
-    sinceEpoch?: string;
     sinceClaims?: string;
+    sinceEpoch?: string;
     sinceSeq?: number;
     table?: string;
 }

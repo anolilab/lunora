@@ -508,6 +508,10 @@ A write queued offline was replayed on a session that now belongs to someone els
 
 `@lunora/client` re-resolves the session on this refusal and settles the write itself. If every replay is refused while the same user stays signed in, your worker's `resolveIdentity` returns a different `userId` than better-auth's `user.id`, or the RPC request carries no session cookie.
 
+### `IDENTITY_STALE`
+
+`409` — Socket identity stale
+
 ### `ID_COLLISION`
 
 `409` — Document id already belongs to another table

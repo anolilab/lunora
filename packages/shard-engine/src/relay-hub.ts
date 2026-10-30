@@ -24,7 +24,6 @@
 import { LunoraError, toErrorBody } from "@lunora/errors";
 import { decodeWire, encodeWire } from "@lunora/wire";
 
-import { isIdentityExpired } from "../../../shared/identity-header";
 import { connectionIdRelay } from "../../../shared/relay-name";
 import type { SqlExec } from "./ctx-db";
 import type { RelayMemoRow, RelayShapeMemo } from "./ctx-db-relay-memos";
@@ -179,6 +178,8 @@ interface RelayHost {
     deliverWhisperLocal: (topic: string, frame: string, exclude: undefined | ShardSocketLike) => number;
     /** This DO's name (the shard key for an owner, the `…::relay::N` name for a relay), or `undefined` for an unnamed DO. */
     doName: () => string | undefined;
+    /** Close `ws` when its credential or revalidation window has lapsed (the DO's own check, shared with every other delivery path); `true` when it was dropped. */
+    dropIfLapsed: (ws: ShardSocketLike) => boolean;
     /** This DO's env record (read for relay binding + threshold/fan/cap knobs). */
     env: () => unknown;
 
@@ -2354,12 +2355,11 @@ class RelayMember extends RelayLink {
         let matched = 0;
 
         for (const ws of this.host.getWebSockets()) {
-            const { connectionId, expiresAt, revalidateAt, shapes } = this.host.readAttachment(ws);
+            const { connectionId, shapes } = this.host.readAttachment(ws);
 
-            // A socket past its credential or its revalidation window is owed nothing. The relay cannot close it (the
-            // lapse teardown lives on the DO class), but it must not be sent rows meanwhile; the next frame the DO
-            // handles for it closes it.
-            if (isIdentityExpired(expiresAt) || isIdentityExpired(revalidateAt)) {
+            // A socket past its credential or its revalidation window is owed nothing: the host closes it (4001/4005), so
+            // it reconnects instead of sitting open and silent, and its memos go with it.
+            if (this.host.dropIfLapsed(ws)) {
                 continue;
             }
 

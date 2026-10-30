@@ -508,6 +508,9 @@ describe("relay hub", () => {
             const attachment: SocketAttachment = { connectionId: "c-alice", shapes: { s1: OPEN_SHAPE }, subs: {} };
             /** Flipped by a test to model a socket whose outbound buffer is gone — `send` throws, which is the only delivery-failure signal the runtime exposes. */
             const sending = { broken: false };
+            /** Flipped by a test: the host's lapse check then drops every socket it is asked about. */
+            const lapse = { now: false };
+            const dropped: ShardSocketLike[] = [];
             const socket = {
                 send: (frame: string) => {
                     if (sending.broken) {
@@ -525,6 +528,13 @@ describe("relay hub", () => {
             const host = {
                 currentCdcEpoch: () => "e1",
                 deliverWhisperLocal: () => 0,
+                dropIfLapsed: (ws: ShardSocketLike) => {
+                    if (lapse.now) {
+                        dropped.push(ws);
+                    }
+
+                    return lapse.now;
+                },
                 doName: () => `${OWNER_KEY}::relay::0`,
                 env: () => {
                     return { SHARD: { get: () => ownerStub, getByName: () => ownerStub, idFromName: (id: string) => id } };
@@ -548,7 +558,7 @@ describe("relay hub", () => {
                 return link;
             };
 
-            return { attachment, fanout, frames, linkFor, relay: linkFor(), sending, socket };
+            return { attachment, dropped, fanout, frames, lapse, linkFor, relay: linkFor(), sending, socket };
         };
 
         const poke = (relay: NonNullable<ReturnType<typeof createRelayLink>>, fromCursor: number, checkpoint: number): Promise<Response> =>
@@ -599,20 +609,19 @@ describe("relay hub", () => {
             expect(part?.["baseCheckpoint"]).toBe(10);
         });
 
-        it.each([
-            ["a revalidation window that has passed", { revalidateAt: Date.now() - 1 }],
-            ["a credential that has expired", { expiresAt: Date.now() - 1 }],
-        ])("delivers no poke to a socket past %s", async (_name, lapse) => {
-            expect.assertions(1);
+        it("has the host close a socket past its deadline instead of poking it, so it reconnects rather than sitting silent", async () => {
+            expect.assertions(3);
 
-            const { attachment, frames, relay, socket } = relayFor(10);
+            const { dropped, frames, lapse, relay, socket } = relayFor(10);
 
             await relay.seedRelayShape(socket, "s1", OPEN_SHAPE, {});
-            Object.assign(attachment, lapse);
+            lapse.now = true;
             await poke(relay, 10, 20);
 
-            // Only the seed went out: an idle socket past its deadline is not sent rows it can no longer be shown.
+            // Only the seed went out, and the host was asked to drop the socket.
             expect(frames).toStrictEqual(["seed"]);
+            expect(dropped).toStrictEqual([socket]);
+            expect(lapse.now).toBe(true);
         });
 
         it("still refuses a poke the socket is genuinely behind, rather than skipping the gap", async () => {

@@ -3404,6 +3404,7 @@ abstract class ShardDO {
             currentCdcEpoch: () => this.currentCdcEpoch(),
             deliverWhisperLocal: (topic, frame, exclude) => this.deliverWhisperLocal(topic, frame, exclude),
             deliverLiveLocal: (topic, key, frame) => this.deliverLiveLocal(topic, key, frame),
+            dropIfLapsed: (ws) => this.dropIfLapsed(ws),
             liveControl: (control) => this.handleLiveSocketControl(control),
             getWebSockets: () => this.runner.sockets(),
             maskMetadata: () => this.maskMetadata(),

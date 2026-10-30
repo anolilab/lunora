@@ -357,6 +357,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     computeOpLogShapeSeed: unreachable("computeOpLogShapeSeed"),
                     currentCdcEpoch: unreachable("currentCdcEpoch"),
                     deliverWhisperLocal: unreachable("deliverWhisperLocal"),
+                    dropIfLapsed: () => false,
                     doName: () => relayName(OWNER_KEY, 0),
                     env: () => {
                         return { SHARD: namespace };
@@ -670,6 +671,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     },
                     currentCdcEpoch: () => "e1",
                     deliverWhisperLocal: () => 0,
+                    dropIfLapsed: () => false,
                     doName: () => OWNER_KEY,
                     env: () => {
                         return { SHARD: { get: () => stub, getByName: () => stub, idFromName: (id: string) => id } };
