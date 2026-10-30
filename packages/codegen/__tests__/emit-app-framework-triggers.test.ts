@@ -42,17 +42,35 @@ describe("emitApp — framework-host trigger passthrough", () => {
     });
 
     it("awaits auth before every entry point that can build the worker", () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         // The worker is built once per isolate and reads `getAuth()` while it builds,
         // so whichever entry point runs first must find auth initialised.
         const output = emitApp({ ...baseOptions, hasAuth: true, hasFramework: true, hasQueue: true });
-        const builds = output.split("worker ??= buildWorker(").slice(0, -1);
+        const builds = output.split(/worker \?\?= buildWorker\(|\? \(worker \?\?= buildWorker\(/u).slice(0, -1);
 
+        // fetch, scheduled, serverQuery, queue, host email.
         expect(builds).toHaveLength(5);
 
-        for (const preceding of builds.slice(1)) {
-            expect(preceding.trimEnd()).toMatch(/await ensureAuth\(rawEnv as Env\);$/u);
+        const [fetchSegment, scheduledSegment, serverQuerySegment, queueSegment, emailSegment] = builds as [string, string, string, string, string];
+
+        expect(fetchSegment.trimEnd()).toMatch(/await ensureAuth\(env\);$/u);
+        expect(serverQuerySegment.trimEnd()).toMatch(/await ensureAuth\(rawEnv as Env\);$/u);
+
+        for (const segment of [scheduledSegment, queueSegment, emailSegment]) {
+            expect(segment.trimEnd()).toMatch(/const target = \(await authReady\(rawEnv as Env\)\)$/u);
         }
+    });
+
+    it("gives a host-owned event an uncached worker when auth failed to initialise", () => {
+        expect.assertions(3);
+
+        // A failed auth init must not take the host's cron/queue/mail down, and must not leave a
+        // cached worker that was built without auth.
+        const output = emitApp({ ...baseOptions, hasAuth: true, hasFramework: true, hasQueue: true });
+
+        expect(output).toContain("ensureAuth(env).then(");
+        expect(output).toContain(": buildWorker(rawEnv as Env, deferred);");
+        expect(output).toContain("return target.queue?.(batch, rawEnv, context);");
     });
 });

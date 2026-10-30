@@ -303,6 +303,12 @@ class AppBuilder<Env extends object> {
                 throw error;
             }));
 
+        const authReady = (env: Env): Promise<boolean> =>
+            ensureAuth(env).then(
+                () => true,
+                () => false,
+            );
+
         const buildWorker = (env: Env, deferred: DeferredModules): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth, identityMemos, deferred));
 
         const composed: ComposedApp = {
@@ -317,10 +323,9 @@ class AppBuilder<Env extends object> {
             },
             scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
                 const deferred = await loadDeferredModules();
-                await ensureAuth(rawEnv as Env);
-                worker ??= buildWorker(rawEnv as Env, deferred);
+                const target = (await authReady(rawEnv as Env)) ? (worker ??= buildWorker(rawEnv as Env, deferred)) : buildWorker(rawEnv as Env, deferred);
 
-                return worker.scheduled(controller, rawEnv, context);
+                return target.scheduled(controller, rawEnv, context);
             },
             serverQuery: async (request, rawEnv, reference, args, options) => {
                 const deferred = await loadDeferredModules();

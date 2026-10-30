@@ -62,6 +62,31 @@ ${fields.map(([name, , load]) => `            ${name}: ${load},`).join("\n")}
 `;
 };
 
+/**
+ * How a cron, queue or email entry obtains its worker. Those events are often the host's own and
+ * must not die because Lunora's auth failed to initialise: when auth is not ready the event gets a
+ * worker built just for it and the cached one stays unset, so the next request retries auth rather
+ * than inherit a worker built without it.
+ */
+const eventWorkerWiring = (
+    hasAuth: boolean,
+    deferredArgument: string,
+): { ensureAuthCall: string; ensureRawAuthCall: string; eventWorker: string; eventWorkerLine: string } => {
+    const build = `buildWorker(rawEnv as Env${deferredArgument})`;
+
+    const ensureAuthCall = hasAuth ? `\n                await ensureAuth(env);` : "";
+    const ensureRawAuthCall = hasAuth ? `\n                await ensureAuth(rawEnv as Env);` : "";
+
+    return hasAuth
+        ? {
+              ensureAuthCall,
+              ensureRawAuthCall,
+              eventWorker: "target",
+              eventWorkerLine: `\n                const target = (await authReady(rawEnv as Env)) ? (worker ??= ${build}) : ${build};`,
+          }
+        : { ensureAuthCall, ensureRawAuthCall, eventWorker: "worker", eventWorkerLine: `\n                worker ??= ${build};` };
+};
+
 /** The fragments that thread {@link buildDeferredModules}' load through the entries and `buildWorkerOptions`; all empty when nothing is deferred. */
 const deferredWiring = (
     options: ResolvedAppOptions,
@@ -219,15 +244,19 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
                 authInit = null;
                 throw error;
             }));
+
+        const authReady = (env: Env): Promise<boolean> =>
+            ensureAuth(env).then(
+                () => true,
+                () => false,
+            );
 `
         : "";
     const { asyncIfDeferred, deferredArgument, deferredParameter, loadDeferredLine } = deferredWiring(options);
-    // Every entry point that can build the worker awaits auth first: the worker is
-    // built once per isolate and reads \`getAuth()\` while building (\`authAdmin\`), so a
-    // cron or queue batch that built it first would leave auth unset for every later request.
-    const ensureAuthFor = (environment: string): string => (hasAuth ? `\n                await ensureAuth(${environment});` : "");
-    const ensureAuthCall = ensureAuthFor("env");
-    const ensureRawAuthCall = ensureAuthFor("rawEnv as Env");
+    // Every entry point that can build the worker awaits auth first: the worker is built once per
+    // isolate and reads \`getAuth()\` while building (\`authAdmin\`), so a cron or queue batch that
+    // built it first would leave auth unset for every later request.
+    const { ensureAuthCall, ensureRawAuthCall, eventWorker, eventWorkerLine } = eventWorkerWiring(hasAuth, deferredArgument);
     const getAuthArgument = `${hasAuth ? `() => auth, identityMemos` : `() => null`}${deferredArgument}`;
     const getAuthParameter = `${hasAuth ? `getAuth: () => LunoraAuth | null, identityMemos: IdentityMemoStore` : `_getAuth: () => null`}${deferredParameter}`;
     const buildWorkerParameters = `env: Env${deferredParameter}`;
@@ -333,10 +362,9 @@ ${buildWorkerLine}
 
                 return worker.fetch(request, rawEnv, context);
             },
-            scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}${ensureRawAuthCall}
-                worker ??= buildWorker(rawEnv as Env${deferredArgument});
+            scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}${eventWorkerLine}
 
-                return worker.scheduled(controller, rawEnv, context);
+                return ${eventWorker}.scheduled(controller, rawEnv, context);
             },
             serverQuery: ${asyncIfDeferred}(request, rawEnv, reference, args, options) => {${loadDeferredLine}${ensureRawAuthCall}
                 worker ??= buildWorker(rawEnv as Env${deferredArgument});
@@ -351,10 +379,9 @@ ${buildWorkerLine}
                 // acked and destroyed.
                 options.hasQueue || options.hasFramework
                     ? `
-            queue: async (batch: unknown, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}${ensureRawAuthCall}
-                worker ??= buildWorker(rawEnv as Env${deferredArgument});
+            queue: async (batch: unknown, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {${loadDeferredLine}${eventWorkerLine}
 
-                return worker.queue?.(batch, rawEnv, context);
+                return ${eventWorker}.queue?.(batch, rawEnv, context);
             },`
                     : ""
             }
@@ -373,10 +400,9 @@ ${
         // of its own the host's is the only one there is — forward to it rather than
         // dropping the entry.
         if (!composed.email && host && typeof host === "object" && typeof host.email === "function") {
-            composed.email = ${asyncIfDeferred}(message, rawEnv, context) => {${loadDeferredLine}${ensureRawAuthCall}
-                worker ??= buildWorker(rawEnv as Env${deferredArgument});
+            composed.email = ${asyncIfDeferred}(message, rawEnv, context) => {${loadDeferredLine}${eventWorkerLine}
 
-                return worker.email?.(message, rawEnv, context) ?? Promise.resolve();
+                return ${eventWorker}.email?.(message, rawEnv, context) ?? Promise.resolve();
             };
         }
 `
