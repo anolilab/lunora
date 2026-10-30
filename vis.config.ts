@@ -145,6 +145,48 @@ export default defineConfig({
     taskRunner: {
         parallel: 5,
     },
+    // CI runs this through scripts/vis-release.mjs, not `vis release ci release`.
+    release: {
+        acknowledgeUnstable: true,
+        // `vis release generate` merge-bases against this on a PR branch.
+        baseBranch: "alpha",
+        // apps/docs parses the semantic-release CHANGELOG format for its public feed.
+        changelog: "./scripts/vis-changelog-format.js",
+        channels: {
+            alpha: { mode: "auto-publish", prerelease: "alpha", tag: "alpha" },
+            beta: { mode: "auto-publish", prerelease: "beta", tag: "beta" },
+            main: { mode: "auto-publish", tag: "latest" },
+            next: { mode: "auto-publish", tag: "next" },
+        },
+        // Continues each package's existing `{name}@{version}` tag stream.
+        currentVersionResolver: "git-tag",
+        defaultManaged: true,
+        formatChangedFiles: true,
+        // vis would release every other type as a patch; breaking commits bypass this pattern.
+        ignoreCommitPattern: ["^(build|chore|ci|deps|docs|refactor|security|style|test|translation)(\\([^)]*\\))?:"],
+        // Keeps promotion-safe sibling ranges (`>=1.0.0-alpha.76 <2.0.0-0`) that still admit
+        // the new version; the default rewrite drops the ceiling.
+        internalDependencyRanges: "preserve-satisfying",
+        gitUser: { email: "github-actions[bot]@users.noreply.github.com", name: "github-actions-shell" },
+        publish: {
+            catalogResolution: "auto",
+            cleanPackageJson: true,
+            packManager: "auto",
+            protocolResolution: "pack",
+            publishArgs: ["--provenance"],
+            publishStrategy: "npm-publish-tarball",
+        },
+        // Rebase-and-retry the release commit when the branch moved mid-run.
+        pushRetries: 5,
+        // vis's stock walk skips prerelease channels, and every release here is one.
+        successWalk: { skipPrerelease: false },
+        // Tags go on the planned commit, which is already on the branch, so a lost or
+        // rebased release commit never strands a tag (#1054).
+        tagTarget: "source",
+        // A satisfied sibling peer range does not release its consumer; asserted by
+        // scripts/check-sibling-peer-ranges.js.
+        updateInternalDependencies: "out-of-range",
+    },
     staged: {
         // Reject a raw NUL byte (which turns a source file binary, hiding it from
         // diff/blame/review), then Prettier-format every staged file, repo-wide.

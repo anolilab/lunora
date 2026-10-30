@@ -59,9 +59,6 @@
         "unplugin-vue",
         // Release / commit tooling consumed through config files.
         "@anolilab/commitlint-config",
-        "@anolilab/semantic-release-pnpm",
-        "@anolilab/semantic-release-preset",
-        "conventional-changelog-conventionalcommits",
         "cz-conventional-changelog",
         // Intentional optional AI-SDK providers (bring-your-own, per @lunora/ai).
         "@ai-sdk/anthropic",

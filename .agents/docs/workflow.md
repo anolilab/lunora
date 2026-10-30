@@ -17,7 +17,23 @@ If hooks aren't firing, run `pnpm exec vis hook install` (or `vis hook validate`
 
 ## Release
 
-Independent per-package versioning via `multi-semantic-release`. Publishable packages ship a `.releaserc.json` extending `@anolilab/semantic-release-preset/pnpm`. Conventional Commits drive bumps; the `semantic-release.yml` workflow publishes on push to `alpha` / `main` / `next` / `beta`. The root `release.config.mjs` removes `@semantic-release/git` from every package's plugin list: packages only tag and publish, and the workflow pushes all bumps, changelogs and the lockfile as one `chore(release)` commit, because each branch push rebuilds every merge-queue group. Do not author `release` commits manually.
+Independent per-package versioning via `vis release` — the `release` block in `vis.config.ts` is the whole configuration; there is no per-package release file. Conventional Commits drive bumps; `.github/workflows/semantic-release.yml` publishes on push to `alpha` / `main` / `next` / `beta`. Do not author `release` commits manually.
+
+The workflow keeps its filename because npm's trusted publishers are registered against `semantic-release.yml` for every package — renaming it breaks publishing until all 57 entries are updated.
+
+### What the release does on a push
+
+1. The job checks out the branch tip and resolves the baseline: this channel's last release tag (`git describe --match`), or the `base` dispatch input. Not `github.event.before`: a burst of merges during a release cancels every queued run but the last. A channel with no tag yet fails; dispatch with `base`.
+2. `vis release ci release --auto-publish --generate --generate-from <baseline>` writes one change file per package, versions, pushes ONE `chore(release)` commit (rebased and retried up to `pushRetries` when the branch moved), then publishes and pushes the tags. Tags point at the planned commit (`tagTarget: "source"`), so a rebased release commit never strands them. Versions an earlier run left unpublished are published first (`--publish-missing`, on by default). One branch push and one tag push per run; one concurrency group for all release branches.
+3. Released PRs and issues get a comment and the `released` label (`successWalk`).
+
+Locally: `vis release status --channel alpha` prints the pending plan, `vis release publish --dry-run` the dist-tag and versions it would publish, and `vis release doctor` checks the setup.
+
+### Rules the release depends on
+
+- **`internalDependencyRanges: "preserve-satisfying"`.** Without it vis rewrites `>=1.0.0-alpha.76 <2.0.0-0` to `>=<new version>` (no ceiling). `scripts/check-sibling-peer-ranges.js` fails the install on a sibling peer range without an upper bound, and if `updateInternalDependencies: "out-of-range"` disappears.
+- **`ignoreCommitPattern` limits releases to feat / fix / perf / revert / breaking**, as before. vis maps every other conventional type to a patch; breaking commits bypass the pattern.
+- **`release.changelog` points at `scripts/vis-changelog-format.js`.** `apps/docs` parses `packages/*/CHANGELOG.md` for its changelog feed and needs the semantic-release heading shape plus `### Features` / `### Dependencies` sections.
 
 ## Internal scaffolding (`vis generate`)
 

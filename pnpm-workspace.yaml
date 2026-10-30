@@ -192,9 +192,8 @@ overrides:
 
   # ---------------------------------------------------------------------------
   # Internal packages → local workspace source. Lives in root overrides (NOT each
-  # package's dependencies) so semantic-release-pnpm's per-package range rewrite
-  # never clobbers it; published tarballs are unaffected (overrides are
-  # install-time).
+  # package's dependencies) so the release's per-package specifier rewrite never
+  # clobbers it; published tarballs are unaffected (overrides are install-time).
   # ---------------------------------------------------------------------------
   "@lunora/advisor": "workspace:*"
   "@lunora/agent": "workspace:*"
@@ -292,17 +291,8 @@ catalogs:
     "rollup-plugin-svelte": ^7.2.3
     "unplugin-vue": ^8.0.0
   dev:
-    "@anolilab/semantic-release-pnpm": ^8.1.32
-    "@anolilab/semantic-release-preset": ^13.4.33
-    "@semantic-release/exec": ^7.1.0
     "@total-typescript/ts-reset": ^0.6.1
     "@tsconfig/node24": ^24.0.5
-    # Held on the 9.x line: the preset's 10.x templates need
-    # conventional-changelog-writer@9, and @semantic-release/release-notes-generator
-    # (via semantic-release 25) pulls writer 8. On 10.x every release fails in
-    # generateNotes with `Missing helper`. 9.x is the newest major that writer 8
-    # renders — lift this range only once the generator ships writer 9.
-    conventional-changelog-conventionalcommits: ^9.3.1
     cross-env: ^10.1.0
   lint:
     # Held at 28.0.1: 28.1.x turns on ~20 new `unicorn/*` rules (filename-case,
@@ -364,12 +354,11 @@ catalogs:
     adm-zip: 0.6.1
     csv-parse: 7.0.3
     "@anolilab/commitlint-config": 10.1.3
-    "@anolilab/multi-semantic-release": ^4.4.23
     "@anolilab/textlint-config": 13.0.6
     "@commitlint/cli": ^21.2.3
     "@commitlint/config-conventional": ^21.2.3
     cz-conventional-changelog: ^3.3.0
-    "@visulima/vis": 6.1.3
+    "@visulima/vis": 6.4.0
     "@visulima/tabular": 4.1.0
     "@visulima/error": 6.1.0
   test:
@@ -855,7 +844,6 @@ catalogs:
     "@resvg/resvg-wasm": 2.6.2
     rimraf: 6.1.3
     secretlint: 13.0.7
-    semantic-release: 25.0.9
     shiki: ^4.5.0
     tailwind-csstree: 0.4.1
     tailwind-merge: 3.7.0
@@ -976,9 +964,9 @@ catalogs:
     "@visulima/free-email-domains": 2.0.0
     "@visulima/email-verifier": 1.0.54
 
-# multi-semantic-release rewrites every intra-repo dependency from `workspace:*`
-# to the exact released version (e.g. "@lunora/errors": "1.0.0-alpha.9") and
-# commits that. pnpm 10+ defaults `linkWorkspacePackages` to false, which makes
+# The release rewrites every intra-repo dependency from `workspace:*` to the
+# exact released version (e.g. "@lunora/errors": "1.0.0-alpha.9") and commits
+# that. pnpm 10+ defaults `linkWorkspacePackages` to false, which makes
 # those pins resolve from the npm registry instead of the local package — so a
 # lockfile refresh would silently swap workspace sources for published tarballs
 # and `preferWorkspacePackages` below would be inert (it only applies once
@@ -1133,6 +1121,15 @@ minimumReleaseAgeExclude:
   - '@visulima/packem@4.0.2'
   - '@visulima/rollup-plugin-css@3.0.2'
   - '@visulima/rollup-plugin-dts@2.1.0'
+  - '@visulima/vis@6.4.0'
+  - '@visulima/vis-binding-darwin-arm64@6.4.0'
+  - '@visulima/vis-binding-darwin-x64@6.4.0'
+  - '@visulima/vis-binding-linux-arm64-gnu@6.4.0'
+  - '@visulima/vis-binding-linux-arm64-musl@6.4.0'
+  - '@visulima/vis-binding-linux-x64-gnu@6.4.0'
+  - '@visulima/vis-binding-linux-x64-musl@6.4.0'
+  - '@visulima/vis-binding-win32-arm64-msvc@6.4.0'
+  - '@visulima/vis-binding-win32-x64-msvc@6.4.0'
   - 'astro@6.4.6'
   - 'brace-expansion@1.1.17 || 1.1.18 || 2.1.3 || 2.1.4 || 5.0.8 || 5.0.9'
   - 'deslop-js@0.0.21'
@@ -1191,18 +1188,6 @@ packageExtensions:
   recast@0.23.11:
     dependencies:
       "@babel/parser": "^7.24.1"
-  # `@visulima/fs@6` swapped its YAML backend from `yaml` to `@visulima/yaml` and
-  # declares it as an OPTIONAL peer, which pnpm does not auto-install. `readYaml`
-  # imports it unconditionally, so any consumer that reads a YAML file throws
-  # ERR_MODULE_NOT_FOUND. The one fs@6 left is `@visulima/package@5`, which reads
-  # `pnpm-workspace.yaml` for `@anolilab/semantic-release-pnpm` in the release job.
-  # Promote it to a real dependency. Scoped to `@6`:
-  # fs@7 (our own pin) moved the YAML readers to the `@visulima/fs/yaml` subpath,
-  # so its root entry no longer imports `@visulima/yaml`; it also peers yaml@2
-  # exactly, which an unscoped 1.0.0 extension would contradict.
-  "@visulima/fs@6":
-    dependencies:
-      "@visulima/yaml": "1.0.0"
 
 patchedDependencies:
   '@cloudflare/containers@0.3.7': patches/@cloudflare__containers@0.3.7.patch

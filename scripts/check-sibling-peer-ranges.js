@@ -11,25 +11,22 @@
  *
  * Two mechanisms interact here:
  *
- * 1. multi-semantic-release rewrites local sibling specifiers on every release.
- *    Its default `deps.bump: "override"` replaces ANY specifier — ranges
- *    included — with the exact new version (that is how @lunora/replica's
- *    original `>=1.0.0-alpha.17 <2.0.0` peer got clobbered to `1.0.0-alpha.24`).
- *    The root `.multi-releaserc.json` therefore sets `deps.bump: "satisfy"`,
- *    which leaves a specifier alone while the new version still satisfies it
- *    (exact-pinned regular dependencies keep their lockstep bumps — an exact pin
- *    never satisfies the next version, so "satisfy" falls back to override).
+ * 1. vis.config.ts sets `internalDependencyRanges: "preserve-satisfying"`, so the
+ *    release keeps a sibling range that still admits the new version (vis's default
+ *    would write `>=<new version>` and drop the ceiling); this guard fails on an
+ *    unbounded sibling peer range as a backstop. Exact pins become `^<new version>`.
+ *    `updateInternalDependencies: "out-of-range"` (asserted below) keeps a satisfied
+ *    range from cascading a release to its consumer.
  *
  * 2. npm-semver prerelease matching is tuple-scoped: `>=1.0.0-alpha.24 <2.0.0-0`
  *    does NOT match a post-stable prerelease like `1.0.1-alpha.1`. If the alpha
- *    train continues past `1.0.0`, "satisfy" falls back to an exact pin again —
- *    this guard then fails the next install so a maintainer widens the range
- *    floor instead of shipping a fresh time bomb.
+ *    train continues past `1.0.0`, the release rewrites that range, and this guard
+ *    fails the next install so a maintainer restores a bounded range.
  *
  * A second, report-only mode covers exact sibling `dependencies` pins (as
  * opposed to `peerDependencies`). Exact-pinned regular dependencies are this
- * repo's *deliberate* lockstep convention (see point 1 above) — "satisfy"
- * bumps them in lockstep whenever the CONSUMER package itself releases. But a
+ * repo's *deliberate* lockstep convention (see point 1 above) — the release
+ * rewrites them to `^<new version>` whenever the CONSUMER package itself releases. But a
  * consumer with no triggering commits since its dependency's last release
  * keeps its stale pin indefinitely — the terminal case is a `private: true`
  * package that never releases at all. For a published sibling that drift means
@@ -50,7 +47,7 @@
  * drift. (`workspace:*` peers pass the exact-pin peer check above.)
  *
  * The same report covers sibling `>=<floor>` RANGES (used for `@lunora/errors`
- * so every sibling dedupes onto one `LunoraError` class). "satisfy" never raises
+ * so every sibling dedupes onto one `LunoraError` class). The release never raises
  * a floor the new version still satisfies, so a floor below the dependency's
  * current version is reported for a maintainer to raise by hand.
  *
@@ -70,8 +67,8 @@ const packagesDir = join(rootDir, "packages");
 /** Matches an exact, range-free semver literal (`1.0.0`, `1.0.0-alpha.24`). */
 const EXACT_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
-/** Captures the floor of a `>=<floor> …` range (`>=1.0.0-alpha.51 <2.0.0-0`). */
-const RANGE_FLOOR_RE = /^>=\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s|$)/;
+/** Captures the floor of a `>=<floor> …` or `^<floor>` range (`>=1.0.0-alpha.51 <2.0.0-0`). */
+const RANGE_FLOOR_RE = /^(?:>=|\^)\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s|$)/;
 
 const isSibling = (name) => name === "lunorash" || name.startsWith("@lunora/");
 
@@ -100,7 +97,21 @@ let hasFailure = false;
 
 for (const { dir, manifest } of manifests) {
     for (const [name, specifier] of Object.entries(manifest.peerDependencies ?? {})) {
-        if (!isSibling(name) || typeof specifier !== "string" || !EXACT_VERSION_RE.test(specifier)) {
+        if (!isSibling(name) || typeof specifier !== "string") {
+            continue;
+        }
+
+        // The shape vis writes for a range it does not preserve: floor ratcheted, ceiling dropped.
+        if (specifier.startsWith(">=") && !specifier.includes("<")) {
+            hasFailure = true;
+
+            console.error(`❌ packages/${dir}'s peerDependency "${name}" has no upper bound (${specifier}).`);
+            console.error('   The release rewrote a sibling range; restore the previous range, e.g. ">=<floor> <2.0.0-0".');
+
+            continue;
+        }
+
+        if (!EXACT_VERSION_RE.test(specifier)) {
             continue;
         }
 
@@ -168,23 +179,22 @@ if (dependencyWarnings > 0) {
     );
 }
 
-// The range fix only holds while multi-semantic-release runs with
-// `deps.bump: "satisfy"` — under the default "override" the next release
-// rewrites every sibling range back to an exact pin. Fail if that config drifts.
+// Read as text: vis.config.ts is TypeScript, and this runs from `postinstall`, where a failure
+// turns every CI job red in its setup step.
 try {
-    const msrConfig = JSON.parse(readFileSync(join(rootDir, ".multi-releaserc.json"), "utf8"));
+    const visConfig = readFileSync(join(rootDir, "vis.config.ts"), "utf8");
 
-    if (msrConfig?.deps?.bump !== "satisfy") {
+    if (!/updateInternalDependencies:\s*"out-of-range"/.test(visConfig)) {
         hasFailure = true;
 
-        console.error('❌ .multi-releaserc.json no longer sets "deps.bump": "satisfy".');
-        console.error("   Without it, multi-semantic-release overrides sibling peer RANGES back to exact pins on the next release.");
+        console.error('❌ vis.config.ts no longer sets release.updateInternalDependencies: "out-of-range".');
+        console.error("   Without it, every release of a sibling also releases each package that peers on it through a range.");
     }
 } catch {
     hasFailure = true;
 
-    console.error("❌ .multi-releaserc.json is missing or unparsable.");
-    console.error('   It must set "deps.bump": "satisfy" so sibling peer ranges survive releases.');
+    console.error("❌ vis.config.ts is missing or unreadable.");
+    console.error('   Its release block must set updateInternalDependencies: "out-of-range".');
 }
 
 if (hasFailure) {
@@ -192,5 +202,5 @@ if (hasFailure) {
 }
 
 console.log(
-    "✅ No exact @lunora/* or lunorash peerDependency pins; private packages use workspace:/catalog: siblings; multi-semantic-release keeps ranges (deps.bump: satisfy).",
+    '✅ No exact or unbounded @lunora/* or lunorash peerDependency ranges; private packages use workspace:/catalog: siblings; updateInternalDependencies: "out-of-range".',
 );
