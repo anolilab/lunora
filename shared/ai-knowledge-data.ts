@@ -243,7 +243,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Who changed what",
         ],
         id: "concepts/environments",
-        summary: "Running staging next to production, shipping a preview per pull request, and rolling traffic back when something goes wrong.",
+        summary: "Running staging next to production, deploying an isolated environment, checking pull requests with a dry run, and rolling traffic back when ",
         title: "Environments & releases",
     },
     {

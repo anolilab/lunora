@@ -395,7 +395,7 @@ describe("exportImportPanel", () => {
 
         render(renderPanel(createModeClient([])));
 
-        expect(screen.getByRole("option", { name: /new _id values are inserted/u })).toBe(true);
+        expect(screen.getByRole("option", { name: /new _id values are inserted/u })).toBeInstanceOf(HTMLOptionElement);
 
         chooseMode("upsert");
         fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([withEnd(messageRows("m1"))], "shard.ndjson")] } });

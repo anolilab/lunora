@@ -458,13 +458,7 @@ type RowOutcome =
  * still hold the rows it was asked to remove, and a cascade would change tables
  * the file never names. An `_id` already gone is `absent`, so a re-run converges.
  */
-const deleteOneRow = async (
-    writer: DatabaseWriterLike,
-    dialect: SqlDialect,
-    args: ImportGlobalArgs,
-    row: ExportRow,
-    line: number,
-): Promise<RowOutcome> => {
+const deleteOneRow = async (writer: DatabaseWriterLike, dialect: SqlDialect, args: ImportGlobalArgs, row: ExportRow, line: number): Promise<RowOutcome> => {
     const { doc, table } = row;
     const id = doc["_id"];
 
@@ -772,14 +766,18 @@ const probeBatch = async (
 };
 
 /** Resolve one prepared entry: a settled outcome as it is, a delete through the pruning path, a ready row through the import. */
-const applyPrepared = (writer: DatabaseWriterLike, dialect: SqlDialect, args: ImportGlobalArgs, entry: PreparedRow, source: OwnershipSource): Promise<RowOutcome> => {
+const applyPrepared = (
+    writer: DatabaseWriterLike,
+    dialect: SqlDialect,
+    args: ImportGlobalArgs,
+    entry: PreparedRow,
+    source: OwnershipSource,
+): Promise<RowOutcome> => {
     if (entry.kind === "settled") {
         return Promise.resolve(entry.outcome);
     }
 
-    return entry.kind === "delete"
-        ? deleteOneRow(writer, dialect, args, entry.row, entry.line)
-        : importOneRow(writer, dialect, args, entry, source);
+    return entry.kind === "delete" ? deleteOneRow(writer, dialect, args, entry.row, entry.line) : importOneRow(writer, dialect, args, entry, source);
 };
 
 /**
