@@ -281,7 +281,9 @@ const storedValue = (table: TableIR, field: string, validator: ValidatorIR, docu
 
 /** The first changed field of `document` that does not fit, as `[path, reason]`. */
 const rowMismatch = (plan: TablePlan, document: Record<string, unknown>): Mismatch => {
-    const removed = plan.removed.find((field) => document[field] !== undefined);
+    // A `.global()` column that was never set is stored, and exported, as SQL NULL, so it does not hold a value.
+    const unset = (field: string): boolean => document[field] === undefined || (plan.table.shardMode === "global" && document[field] === null);
+    const removed = plan.removed.find((field) => !unset(field));
 
     if (removed !== undefined) {
         return [removed, "is no longer declared, but the row still holds it"];

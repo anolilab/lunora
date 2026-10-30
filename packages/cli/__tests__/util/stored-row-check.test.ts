@@ -119,6 +119,17 @@ describe(checkStoredRows, () => {
         ).resolves.toMatchObject({ failures: [{ field: "legacy", id: "s1", reason: "is no longer declared, but the row still holds it" }], kind: "fails" });
     });
 
+    it("reads a NULL in a removed global column as unset, but a NULL in a removed shard-local field as still held", async () => {
+        expect.assertions(2);
+
+        const rows = target([{ doc: { _id: "n1", nickname: null }, table: "notes" }]);
+        const removed = [change("notes", "nickname", "removedField")];
+
+        // A `.global()` column that was never set is stored and exported as SQL NULL.
+        await expect(checkStoredRows({ changes: removed, tables: [table("notes", {}, "global")], target: rows })).resolves.toMatchObject({ kind: "conforms" });
+        await expect(checkStoredRows({ changes: removed, tables: [table("notes", {})], target: rows })).resolves.toMatchObject({ kind: "fails" });
+    });
+
     it("never reports a stored value that is data: a record key, an undeclared property, or the shard key", async () => {
         expect.assertions(3);
 
