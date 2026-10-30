@@ -103,29 +103,18 @@ const judgeToken = async (token: string, accountIds: ReadonlyArray<string>, fetc
 
     // An account-owned token answers only at its own account, so a config that deploys to several accounts is
     // checked against each: one active answer passes, and only a refusal from every account is a rejection.
-    let inconclusive: TokenVerdict | undefined;
+    // The accounts are asked at once, so unreachable ones cost one timeout in total, not one each. A probe that
+    // fails on the network is one inconclusive account, not the verdict.
+    const verdicts = await Promise.all(
+        accountIds.map(
+            async (accountId) =>
+                await judgeAccount(accountId, token, fetchImpl).catch((error: unknown): TokenVerdict => {
+                    return { reason: error instanceof Error ? error.message : String(error), verdict: "unchecked" };
+                }),
+        ),
+    );
 
-    for (const accountId of accountIds) {
-        // A probe that fails on the network is one inconclusive account, not the verdict: a later account may still
-        // report the token active.
-        // eslint-disable-next-line no-await-in-loop -- stops at the first account that reports the token active
-        const verdict = await judgeAccount(accountId, token, fetchImpl).catch((error: unknown): TokenVerdict => {
-            return {
-                reason: error instanceof Error ? error.message : String(error),
-                verdict: "unchecked",
-            };
-        });
-
-        if (verdict.verdict === "active") {
-            return verdict;
-        }
-
-        if (verdict.verdict === "unchecked") {
-            inconclusive = verdict;
-        }
-    }
-
-    return inconclusive ?? { verdict: "rejected" };
+    return verdicts.find((verdict) => verdict.verdict === "active") ?? verdicts.find((verdict) => verdict.verdict === "unchecked") ?? { verdict: "rejected" };
 };
 
 /** Every account the config deploys to, top level first, so an account-owned token is checked against its own account. */

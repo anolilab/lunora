@@ -1514,6 +1514,48 @@ describe("runDoctor", () => {
             }
         });
 
+        it("asks every configured account at once rather than one after another", async () => {
+            expect.assertions(2);
+
+            const cwd = mkdtempSync(join(tmpdir(), "lunora-doctor-token-"));
+
+            try {
+                seed(
+                    cwd,
+                    JSON.stringify({ ...(JSON.parse(CLEAN_WRANGLER) as object), account_id: "top-acc", env: { production: { account_id: "prod-acc" } } }),
+                );
+
+                const pending: ((response: Response) => void)[] = [];
+                const fetchImpl = vi.fn<typeof globalThis.fetch>(async (url) => {
+                    if (urlOf(url).endsWith("/user/tokens/verify")) {
+                        return Response.json({ success: false }, { status: 401 });
+                    }
+
+                    // Other doctor checks call Cloudflare too; only the account token probes are held.
+                    if (!urlOf(url).endsWith("/tokens/verify")) {
+                        return Response.json({ result: [], success: true });
+                    }
+
+                    // Held open until both account probes are in flight: a sequential loop never asks the second.
+                    return await new Promise<Response>((resolve) => {
+                        pending.push(resolve);
+
+                        if (pending.length === 2) {
+                            for (const answer of pending) {
+                                answer(Response.json({ result: { status: "active" }, success: true }));
+                            }
+                        }
+                    });
+                });
+                const result = await runDoctor({ cwd, environment: { CLOUDFLARE_API_TOKEN: "token" }, fetch: fetchImpl, logger: makeLogger().logger });
+
+                expect(pending).toHaveLength(2);
+                expect(result.findings.find((finding) => finding.code.startsWith("cloudflare-token"))).toMatchObject({ code: "cloudflare-token-ok" });
+            } finally {
+                rmSync(cwd, { force: true, recursive: true });
+            }
+        });
+
         it("checks an account that is configured only in an env block", async () => {
             expect.assertions(2);
 
