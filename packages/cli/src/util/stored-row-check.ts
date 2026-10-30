@@ -79,24 +79,32 @@ const typeName = (value: unknown): string => {
 const isPlainRecord = (value: unknown): value is Record<string, unknown> => typeName(value) === "object";
 
 const BIGINT_LITERAL = /^-?\d+n$/u;
+const TEMPLATE_SUBSTITUTION = /\$\{/u;
 
-/** A `v.literal()` source text as the value it denotes. */
-const literalOf = (text: string): unknown => {
+/**
+ * A `v.literal()` source text as the value it denotes, or `undefined` when the text is an expression this check cannot evaluate (a
+ * constant, a template with substitutions, `1 + 1`, `0x10`, `1_000`). Comparing rows to such text would fail every row, or pass a row
+ * that merely spells the source.
+ */
+const resolveLiteral = (text: string): { value: unknown } | undefined => {
     const trimmed = text.trim();
+    const quote = trimmed[0];
 
-    if (trimmed.length >= 2 && trimmed.startsWith("'") && trimmed.endsWith("'")) {
-        return trimmed.slice(1, -1);
+    if (trimmed.length >= 2 && (quote === "'" || quote === "`") && trimmed.endsWith(quote)) {
+        const inner = trimmed.slice(1, -1);
+
+        return inner.includes("\\") || TEMPLATE_SUBSTITUTION.test(inner) || (quote === "'" && inner.includes("'")) ? undefined : { value: inner };
     }
 
     // `JSON.parse` has no bigint literal, and a stored bigint reads back as a bigint.
     if (BIGINT_LITERAL.test(trimmed)) {
-        return BigInt(trimmed.slice(0, -1));
+        return { value: BigInt(trimmed.slice(0, -1)) };
     }
 
     try {
-        return JSON.parse(trimmed);
+        return { value: JSON.parse(trimmed) as unknown };
     } catch {
-        return trimmed;
+        return undefined;
     }
 };
 
@@ -151,7 +159,7 @@ const COMPOSITE_CHECKS: Record<string, (value: unknown, validator: ValidatorIR, 
               )
             : [path, `expected array, found ${typeName(value)}`],
     literal: (value, validator, path) =>
-        value === literalOf(validator.literalValue ?? "")
+        value === resolveLiteral(validator.literalValue ?? "")?.value
             ? undefined
             : [path, `expected the literal ${validator.literalValue ?? "?"}, found a different ${typeName(value)}`],
     object: (value, validator, path) =>
@@ -238,6 +246,10 @@ const unverifiable = (validator: ValidatorIR, path: string): string | undefined 
         (validator.hasRefinement === true && validator.stringMaxLength === undefined)
     ) {
         return `${path} has a validator or refinement that cannot be checked outside the worker`;
+    }
+
+    if (validator.kind === "literal" && resolveLiteral(validator.literalValue ?? "") === undefined) {
+        return `${path} is a \`v.literal()\` whose value is not a plain literal, so rows cannot be compared to it outside the worker`;
     }
 
     if (validator.kind === "from") {

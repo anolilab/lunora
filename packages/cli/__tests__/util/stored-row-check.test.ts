@@ -211,6 +211,40 @@ describe(checkStoredRows, () => {
         });
     });
 
+    // eslint-disable-next-line no-template-curly-in-string -- the literal is source text: a template with a substitution
+    it.each(["STATUS_ACTIVE", "1 + 1", "0x10", "1_000", "`a${b}`", "someObject.kind"])(
+        "is inconclusive about a literal whose source text (%s) it cannot resolve, rather than comparing rows to that text",
+        async (literalValue) => {
+            expect.assertions(1);
+
+            const users = table("users", { status: { kind: "literal", literalValue } });
+            // A row whose value equals the raw source text must not conform, nor must any other row fail on it.
+            const rows = target([{ doc: { _id: "u1", status: literalValue }, table: "users" }]);
+
+            await expect(checkStoredRows({ changes: [change("users", "status")], tables: [users], target: rows })).resolves.toMatchObject({
+                kind: "inconclusive",
+            });
+        },
+    );
+
+    it.each([
+        ["'a'", "a"],
+        ['"b"', "b"],
+        ["`c`", "c"],
+        ["42", 42],
+        ["true", true],
+        ["null", null],
+    ])("resolves the literal %s and checks rows against it", async (literalValue, stored) => {
+        expect.assertions(2);
+
+        const users = table("users", { status: { kind: "literal", literalValue } });
+        const ok = target([{ doc: { _id: "u1", status: stored }, table: "users" }]);
+        const bad = target([{ doc: { _id: "u1", status: "other" }, table: "users" }]);
+
+        await expect(checkStoredRows({ changes: [change("users", "status")], tables: [users], target: ok })).resolves.toMatchObject({ kind: "conforms" });
+        await expect(checkStoredRows({ changes: [change("users", "status")], tables: [users], target: bad })).resolves.toMatchObject({ kind: "fails" });
+    });
+
     it("checks a record's keys against its new key validator, without naming the key", async () => {
         expect.assertions(2);
 
