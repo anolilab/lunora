@@ -1,23 +1,37 @@
-import { WIRE_TAG } from "@lunora/wire";
-import { describe, expect, it } from "vitest";
+import { decodeWire, WIRE_TAG } from "@lunora/wire";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { decodeDocJson, encodeDocJson } from "../src/do-sql";
 
+// Spied, not replaced: the decode still runs, so the value assertions keep checking correctness.
+vi.mock(import("@lunora/wire"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, decodeWire: vi.fn(actual.decodeWire) };
+});
+
 describe("decodeDocJson", () => {
+    beforeEach(() => {
+        vi.mocked(decodeWire).mockClear();
+    });
+
     it("revives wire-tagged leaves, top-level and nested", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const document = { at: new Date(5), n: 7n, nested: { bytes: new Uint8Array([1, 2]), when: new Date(9) } };
 
         expect(decodeDocJson(encodeDocJson(document))).toStrictEqual(document);
+        expect(decodeWire).toHaveBeenCalledTimes(1);
     });
 
-    it("returns a plain row as parsed", () => {
-        expect.assertions(1);
+    it("returns a plain row as parsed, without running the wire decode", () => {
+        expect.assertions(2);
 
         const document = { list: [1, "two", { three: null }], name: "plain" };
 
         expect(decodeDocJson(encodeDocJson(document))).toStrictEqual(document);
+        // The skip is the point of the fast path: a plain row must not pay for `decodeWire`.
+        expect(decodeWire).not.toHaveBeenCalled();
     });
 
     it("keeps a string that merely contains the tag text", () => {
