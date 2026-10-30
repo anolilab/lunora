@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraClient } from "../src/lunora-client";
+import { createInMemoryQueryCache } from "../src/query-cache";
 import { createSocketHarness, fnRef, jsonResponse, settle } from "./lib/harness";
 
 /** A React Native-style client (bearer on the upgrade) with one open, identified socket. */
@@ -217,10 +218,65 @@ describe("socket identity revalidation", () => {
         client.close();
     });
 
+    it("does not start a second re-auth when the identity is re-sent while one is still in flight", async () => {
+        expect.assertions(2);
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const fetchMock = vi.fn<typeof fetch>(async (input) =>
+            (input as string).includes("/_lunora/ws/reauth")
+                ? new Promise<Response>(() => {
+                      // Never answers: the request stays in flight.
+                  })
+                : jsonResponse({ result: { ok: true } }),
+        );
+        const client = new LunoraClient({
+            authTokenOnUpgrade: true,
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            url: "http://app.test",
+            WebSocket,
+        });
+
+        client.setAuthToken("token-1", "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        sockets[0]?.receive({ connectionId: "conn-1", revalidateMs: 60_000, subject: "user-1", type: "identity" });
+        await vi.advanceTimersByTimeAsync(30_000);
+        sockets[0]?.receive({ connectionId: "conn-1", revalidateMs: 60_000, subject: "user-1", type: "identity" });
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        const calls = () => fetchMock.mock.calls.filter(([input]) => (input as string).includes("/_lunora/ws/reauth"));
+
+        expect(calls()).toHaveLength(1);
+        expect(sockets[0]?.readyState).toBe(1);
+
+        client.close();
+    });
+
     it("presents the cookie session alone when the socket has no bearer", async () => {
         expect.assertions(2);
 
         const { client, reauthCalls } = await openRevalidatingClient({ revalidateMs: 60_000 });
+
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect(reauthCalls()).toHaveLength(1);
+        expect(reauthCalls()[0]?.[1]?.headers).not.toHaveProperty("authorization");
+
+        client.close();
+    });
+
+    it("keeps presenting the cookie a socket upgraded with after the client is handed a bearer for the same subject", async () => {
+        expect.assertions(3);
+
+        const { client, reauthCalls, sockets } = await openRevalidatingClient({ revalidateMs: 60_000 });
+
+        client.setAuthToken("token-later", "user-1");
+        await settle();
+
+        // The socket stays open: nothing about its identity changed.
+        expect(sockets).toHaveLength(1);
 
         await vi.advanceTimersByTimeAsync(30_000);
 
@@ -376,6 +432,64 @@ describe("socket claims change", () => {
         await settle();
 
         expect(changes()).toBe(1);
+
+        client.close();
+    });
+});
+
+describe("socket claims change and the read cache", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("drops the durable and pending read cache when the claims change, so nothing read under the old ones can seed a later session", async () => {
+        expect.assertions(3);
+
+        const { sockets, WebSocket } = createSocketHarness();
+        const cache = createInMemoryQueryCache();
+        const fetchMock = vi.fn<typeof fetch>(async (input) =>
+            (input as string).includes("/_lunora/ws/reauth")
+                ? jsonResponse({ error: { code: "IDENTITY_CHANGED" } }, { status: 409 })
+                : jsonResponse({ result: { ok: true } }),
+        );
+        const client = new LunoraClient({
+            authTokenOnUpgrade: true,
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            queryCache: cache,
+            reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
+            url: "http://app.test",
+            WebSocket,
+        });
+
+        client.setAuthToken("token-1", "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        sockets[0]?.receive({ connectionId: "conn-1", revalidateMs: 60_000, subject: "user-1", type: "identity" });
+        await settle();
+
+        const subscribe = (sockets[0]?.frames() ?? []).find((frame) => frame.type === "subscribe") as { id: string } | undefined;
+
+        sockets[0]?.receive({ cursor: 7, epoch: "e1", id: subscribe?.id, type: "data", data: ["org-a row"] });
+        // Flushed to the durable cache, then a second value still waiting in the write batch when the claims change.
+        await vi.advanceTimersByTimeAsync(1000);
+        await vi.advanceTimersByTimeAsync(29_000 - 100);
+        sockets[0]?.receive({ cursor: 8, epoch: "e1", id: subscribe?.id, type: "data", data: ["org-a row", "org-a row 2"] });
+        await vi.advanceTimersByTimeAsync(100);
+        await settle();
+
+        expect(sockets[0]?.readyState).toBe(3);
+        await expect(cache.load()).resolves.toHaveLength(0);
+
+        // Nothing is left to flush later either.
+        await vi.advanceTimersByTimeAsync(1000);
+
+        await expect(cache.load()).resolves.toHaveLength(0);
 
         client.close();
     });

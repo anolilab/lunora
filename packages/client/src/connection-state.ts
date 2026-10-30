@@ -112,7 +112,13 @@ interface ShardConnection {
      * retry that replaced it.
      */
     providerAttempt?: symbol;
+    /** Counts the socket's re-auth requests; only the latest one may act on its answer, so an older refusal cannot undo a newer success. */
+    reauthAttempt?: number;
+    /** A re-auth request is awaiting its answer: its answer re-arms the schedule, so a repeated identity frame must not. */
+    reauthPending?: boolean;
+
     reconnect: ReconnectCalculator;
+
     reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
     /** Subscriptions waiting their turn to be re-sent on this shard (see `RESUBSCRIBE_CONCURRENCY`). */
@@ -166,6 +172,7 @@ interface ShardConnection {
      * (protocol §6) and never in the upgrade URL. Absent when the client holds none.
      */
     sessionToken?: string;
+
     /** `undefined` for the default shard (connects without a `shard` param). */
     readonly shardKey: string | undefined;
     socket: undefined | WebSocket;
@@ -194,6 +201,13 @@ interface ShardConnection {
      * first frame bearing the id and by every teardown of the socket.
      */
     unackedWatchdogs: Map<string, ReturnType<typeof setTimeout>>;
+
+    /**
+     * The bearer this socket is authenticated with, or `undefined` when it upgraded on the cookie session alone.
+     * Pinned when the socket opens, and moved only when the server accepts a refreshed one in place: a later
+     * bearer for the same subject does not reconnect it, so re-auth must present this, not the client's current one.
+     */
+    upgradeBearer?: string;
 
     wasEverConnected: boolean;
 

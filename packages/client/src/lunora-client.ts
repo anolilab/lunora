@@ -6554,6 +6554,9 @@ class LunoraClient {
         // for the life of the socket.
         // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
         conn.identity = this.identityFingerprint();
+        // The bearer the upgrade presents (`upgradeProtocols`), pinned for the socket's life; see `ShardConnection.upgradeBearer`.
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.upgradeBearer = this.authTokenOnUpgrade ? (this.authToken ?? undefined) : undefined;
 
         if (credentials.ticket === undefined && this.authToken === null) {
             this.identityQuestions += 1;
@@ -6595,7 +6598,7 @@ class LunoraClient {
                     // arrive after this close has cleared the socket's id. Re-seeding on the close itself means
                     // the reconnect is never warm; a socket an eviction already retired has been handled by it.
                     if (conn.retired !== true && !this.closed) {
-                        this.evictPreviousIdentitySession();
+                        this.retireChangedClaims();
                     }
                 } else if (event?.code === 4001) {
                     this.notifyTokenExpired();
@@ -6635,6 +6638,7 @@ class LunoraClient {
                 // A new socket has confirmed no identity and rejoined no room yet.
                 conn.identityConfirmed = false;
                 conn.connectionId = undefined;
+                conn.reauthPending = false;
                 conn.heldFrames = undefined;
                 conn.roomsRejoined = false;
 
@@ -7723,7 +7727,7 @@ class LunoraClient {
         conn.connectionId = message.connectionId;
         conn.whisperAck = message.whisperAck === true;
 
-        if (!sameSocket || conn.revalidateTimer === undefined) {
+        if (!sameSocket || (conn.revalidateTimer === undefined && conn.reauthPending !== true)) {
             this.armSocketRevalidation(conn, message.revalidateMs);
         }
 
@@ -8808,6 +8812,17 @@ class LunoraClient {
     }
 
     /**
+     * The same user resolved under different claims. The identity fingerprint names the user, not the claims, so the
+     * read cache's own gate would accept what was read under the old ones: drop it (hydrated, pending and durable) as
+     * well as the views, so nothing read under the old claims is shown or resumed from. Queued offline mutations are
+     * kept: they carry no read data, and the server authorizes each under the new claims when it replays.
+     */
+    private retireChangedClaims(): void {
+        this.clearQueryCacheForIdentityChange();
+        this.evictPreviousIdentitySession();
+    }
+
+    /**
      * Post a credential for `conn`'s socket to {@link SOCKET_REAUTH_PATH} and bounce the socket
      * unless the server took it. `bearer` is `null` to present the cookie session alone, which
      * the request carries on its own (`credentials: "include"`).
@@ -8819,6 +8834,14 @@ class LunoraClient {
         if (fetchImpl === undefined) {
             return;
         }
+
+        const attempt = (conn.reauthAttempt ?? 0) + 1;
+
+        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+        conn.reauthAttempt = attempt;
+
+        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+        conn.reauthPending = true;
 
         // `shard=` is kept even when empty, as on the upgrade URL: an explicit `""` names its own shard.
         sendControl(
@@ -8840,17 +8863,27 @@ class LunoraClient {
             .catch(() => "refused" as const)
             .then((outcome) => {
                 // A newer token, or a socket that has since been replaced, is already handled by whatever replaced it.
+                if (conn.reauthAttempt !== attempt) {
+                    return undefined;
+                }
+
+                // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+                conn.reauthPending = false;
+
                 // `retired` covers a socket another socket's claims change just re-seeded everything for.
                 if (this.closed || this.authToken !== heldToken || conn.connectionId !== connectionId || conn.socket !== socket || conn.retired === true) {
                     return undefined;
                 }
 
                 if (outcome === "ok") {
+                    // The server now holds the refreshed bearer for this socket.
+                    // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+                    conn.upgradeBearer = bearer ?? conn.upgradeBearer;
                     this.armSocketRevalidation(conn, conn.revalidateMs);
                 } else if (outcome === "changed") {
                     // Same user, different claims (a role, an `orgId`): every value and shape row held was resolved
                     // under the old ones, and a warm resume would only diff on top of them. Re-seed cold, everywhere.
-                    this.evictPreviousIdentitySession();
+                    this.retireChangedClaims();
                 } else {
                     this.bounceShardSocket(conn);
                 }
@@ -8885,7 +8918,7 @@ class LunoraClient {
             // Presenting the other one could resolve different claims and close a socket nothing changed on.
             if (conn.connectionId !== undefined && conn.socket !== undefined && conn.retired !== true) {
                 // eslint-disable-next-line unicorn/no-null -- `null` is `reauthenticateShardSocket`'s "cookie alone", mirroring `authToken`'s cleared value
-                this.reauthenticateShardSocket(conn, conn.connectionId, this.authTokenOnUpgrade ? this.authToken : null);
+                this.reauthenticateShardSocket(conn, conn.connectionId, conn.upgradeBearer ?? null);
             }
         }, conn.revalidateMs / 2);
     }
