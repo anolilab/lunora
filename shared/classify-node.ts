@@ -66,6 +66,58 @@ const errorPrototype = Error.prototype;
 const isError = (value: object, proto: object | null): boolean =>
     typeof nativeErrorCheck === "function" ? nativeErrorCheck(value) : proto !== null && (proto === errorPrototype || errorPrototype.isPrototypeOf(proto));
 
+const mapForEach = deepest(Map.prototype, "forEach", "value") as (callback: (value: unknown, key: unknown) => void) => void;
+const setForEach = deepest(Set.prototype, "forEach", "value") as (callback: (value: unknown) => void) => void;
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object;
+const viewGetters = {
+    data: {
+        buffer: getter(DataView.prototype, "buffer"),
+        byteLength: getter(DataView.prototype, "byteLength"),
+        byteOffset: getter(DataView.prototype, "byteOffset"),
+    },
+    typed: {
+        buffer: getter(typedArrayPrototype, "buffer"),
+        byteLength: getter(typedArrayPrototype, "byteLength"),
+        byteOffset: getter(typedArrayPrototype, "byteOffset"),
+    },
+};
+
+/*
+ * Readers for a value {@link classifyNode} branded. The brand is the internal slot, so the contents come from the
+ * slot too, through the same native functions: an `entries()`, iterator, `getTime` or `buffer` a subclass (or a
+ * subclass from another realm) overrides could otherwise omit or invent what is encoded.
+ */
+export const nativeTime = (value: object): number => Reflect.apply(dateGetTime, value, []) as number;
+
+export const nativeHref = (value: object): string => Reflect.apply(urlHref as () => unknown, value, []) as string;
+
+export const nativeMapEntries = (value: object): [unknown, unknown][] => {
+    const entries: [unknown, unknown][] = [];
+
+    Reflect.apply(mapForEach, value, [(entry: unknown, key: unknown) => entries.push([key, entry])]);
+
+    return entries;
+};
+
+export const nativeSetValues = (value: object): unknown[] => {
+    const values: unknown[] = [];
+
+    Reflect.apply(setForEach, value, [(entry: unknown) => values.push(entry)]);
+
+    return values;
+};
+
+/** The bytes a view covers, through the native getters for its kind (a `DataView` has its own). */
+export const nativeViewBytes = (view: object): Uint8Array => {
+    const getters = brand(() => Reflect.apply(viewGetters.typed.buffer, view, [])) ? viewGetters.typed : viewGetters.data;
+
+    return new Uint8Array(
+        Reflect.apply(getters.buffer, view, []) as ArrayBuffer,
+        Reflect.apply(getters.byteOffset, view, []) as number,
+        Reflect.apply(getters.byteLength, view, []) as number,
+    );
+};
+
 export const classifyNode = (value: object): NodeKind => {
     if (Array.isArray(value)) {
         return "array";

@@ -56,7 +56,7 @@
 
 import { fromBase64, toBase64 } from "../../../shared/base64";
 import type { NodeKind } from "../../../shared/classify-node";
-import { classifyNode } from "../../../shared/classify-node";
+import { classifyNode, nativeHref, nativeMapEntries, nativeSetValues, nativeTime, nativeViewBytes } from "../../../shared/classify-node";
 import { isPlainObject } from "../../../shared/is-plain-object";
 
 /**
@@ -331,7 +331,7 @@ const encodeError = (error: Error & Record<string, unknown>, next: Recurse): unk
 
 const encodeView = (view: ArrayBufferView): unknown[] => {
     const ctorName = view.constructor.name;
-    const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+    const bytes = nativeViewBytes(view);
 
     // `Uint8Array` keeps Cap'n Web's 2-element form; every other view carries
     // its constructor name so `decodeWire` rebuilds the exact view type.
@@ -349,7 +349,7 @@ const encodeBuiltin = (value: object, kind: NodeKind, next: Recurse): unknown =>
             // Date's `getTime()` is `NaN`, which raw JSON coerces to `null` (→ epoch 0);
             // route the epoch through the codec's own number handling so `NaN` survives
             // as a `["nan"]` tag and `decodeWire` rebuilds an invalid Date exactly.
-            return [TAG, "date", next((value as Date).getTime())];
+            return [TAG, "date", next(nativeTime(value))];
         }
         case "builtin-error": {
             return encodeError(value as Error & Record<string, unknown>, next);
@@ -357,13 +357,13 @@ const encodeBuiltin = (value: object, kind: NodeKind, next: Recurse): unknown =>
         case "builtin-map": {
             // Entries recurse (keys and values), so bigint/bytes/nested structures in a
             // Map round-trip. `decodeWire` rebuilds a real `Map`.
-            return [TAG, "map", [...(value as Map<unknown, unknown>).entries()].map(([k, v]) => [next(k), next(v)])];
+            return [TAG, "map", nativeMapEntries(value).map(([k, v]) => [next(k), next(v)])];
         }
         case "builtin-set": {
-            return [TAG, "set", [...(value as Set<unknown>)].map((item) => next(item))];
+            return [TAG, "set", nativeSetValues(value).map((item) => next(item))];
         }
         case "builtin-url": {
-            return [TAG, "url", (value as URL).href];
+            return [TAG, "url", nativeHref(value)];
         }
         case "builtin-view": {
             return encodeView(value as ArrayBufferView);

@@ -301,6 +301,29 @@ describe("one prototype read per node", () => {
     });
 });
 
+describe("built-in contents read natively", () => {
+    it("encodes a collection's real contents when a subclass hides them from its iterators", () => {
+        expect.assertions(3);
+
+        // A Map or Set passes classification by its internal slot, so its contents must come from that slot too, not
+        // from `entries()` / the iterator a subclass (or another realm's subclass) can override to omit values.
+        const hidingMap = new Map([["a", 1]]);
+        const hidingSet = new Set([1, 2]);
+        const lyingDate = new Date(5);
+
+        Object.defineProperties(hidingMap, {
+            [Symbol.iterator]: { value: () => new Map<string, number>().entries() },
+            entries: { value: () => new Map<string, number>().entries() },
+        });
+        Object.defineProperty(hidingSet, Symbol.iterator, { value: () => new Set<number>().values() });
+        Object.defineProperty(lyingDate, "getTime", { value: () => 0 });
+
+        expect(encodeWire(hidingMap)).toStrictEqual(encodeWire(new Map([["a", 1]])));
+        expect(encodeWire(hidingSet)).toStrictEqual(encodeWire(new Set([1, 2])));
+        expect(encodeWire(lyingDate)).toStrictEqual(encodeWire(new Date(5)));
+    });
+});
+
 describe("brands under a polluted root prototype", () => {
     it("ignores an href accessor added to Object.prototype", async () => {
         expect.assertions(1);
