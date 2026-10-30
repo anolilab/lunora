@@ -35,6 +35,31 @@ import type { NodeWorkflowHost } from "./node-workflow-host";
 import { createNodeWorkflowHost } from "./node-workflow-host";
 import { createNodeWorkflowStore } from "./node-workflow-store";
 
+/**
+ * Deliver a due job to the shard through `invoke`, carrying its due time so the shard can record
+ * scheduler lag. A non-2xx marks the delivery failed, which re-arms it with backoff.
+ */
+const createJobDelivery =
+    (invoke: ReturnType<typeof createShardInvoke>): NonNullable<NodeSchedulerHostOptions["onDispatch"]> =>
+    async (functionPath, args, job) => {
+        const response = await invoke({
+            args,
+            functionPath,
+            id: job.id,
+            identity: undefined,
+            scheduledFor: job.scheduledFor,
+            shardKey: "__root__",
+            traceparent: undefined,
+        });
+
+        if (!response.ok) {
+            throw new LunoraError(
+                "SERVICE_UNAVAILABLE",
+                `@lunora/platform-node: scheduled job ${functionPath} was refused with status ${String(response.status)}`,
+            );
+        }
+    };
+
 /** Every contract this package provides, composed for one Node process. */
 export interface NodePlatform<
     Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>,
@@ -246,14 +271,21 @@ export const createNodePlatform = <
 
         // In-process: the route's `invoke` reaches the shard through the same
         // directory the fan-out coordinator uses, so no listener is involved.
+        const invoke = createShardInvoke(directory, options.onFetch !== undefined);
         const dispatch = createNodeDispatchRoute({
             adminToken: options.dispatch?.adminToken,
             defaultShardKey: "__root__",
-            invoke: createShardInvoke(directory, options.onFetch !== undefined),
+            invoke,
             schedulerSecret: options.dispatch?.schedulerSecret,
         });
+
+        // A due job reaches the shard through the same `invoke` the route uses, carrying its due
+        // time so the shard can record scheduler lag. An embedder's own `onDispatch` replaces this
+        // outright, so a job is never delivered twice. Without `onFetch` there is no shard handler
+        // to run it, and the host keeps its old behaviour of completing the delivery.
+        const deliverJob = options.onFetch === undefined ? undefined : createJobDelivery(invoke);
+        const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, { ...options, onDispatch: options.onDispatch ?? deliverJob });
         const { socket: sockets } = createNodeSocketHost(database);
-        const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, options);
 
         teardown.push(disposeScheduler);
 

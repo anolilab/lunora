@@ -220,8 +220,10 @@ pipeline as `ctx.metrics`, so a configured sink exports it, and the Studio's
 Schedule → Pools view lists it per job. A pooled job that waited for a free
 slot counts the wait from its original due time; a retry counts only its own
 attempt's lateness, not the backoff. A lag that keeps climbing means the queue
-is falling behind. On the Node host the scheduler hands `scheduledFor`
-to `onDispatch`; forward it in the dispatch body to get the same metric.
+is falling behind. On the Node host, `createNodePlatform` dispatches due jobs
+to the shard itself (when `onFetch` is wired) and stamps `scheduledFor`, so the
+metric is recorded. If you pass your own `onDispatch` it replaces that
+delivery; forward `scheduledFor` in the dispatch body to get the same metric.
 
 ## See also
 
