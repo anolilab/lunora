@@ -1,3 +1,11 @@
+## @lunora/ai [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.156...@lunora/ai@1.0.0-alpha.157) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.78
+* **@lunora/wire:** upgraded to 1.0.0-alpha.6
+
 ## @lunora/ai [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.155...@lunora/ai@1.0.0-alpha.156) (2026-10-30)
 
 
