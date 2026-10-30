@@ -289,6 +289,22 @@ describe("onFollowerSubscriptionData", () => {
         expect(seen).toStrictEqual([[{ id: "a" }]]);
     });
 
+    it("keeps the leader's claims fingerprint with the cursor it commits, so a promoted follower can still resume", () => {
+        expect.assertions(2);
+
+        const state = liveSubscription({ serverClaims: "fp-old" });
+        const { host } = fakeHost({ subscription: () => state });
+
+        onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a", "fp-leader");
+
+        expect(state.serverClaims).toBe("fp-leader");
+
+        // A broadcast that carries no fingerprint says the position was read under unknown claims.
+        onFollowerSubscriptionData(host, "s1", [{ id: "b" }], 6, "e1", "subj:a");
+
+        expect(state.serverClaims).toBeUndefined();
+    });
+
     it("counts the leader's first value as the answer even over a hydrated cache, and only the first", () => {
         expect.assertions(4);
 

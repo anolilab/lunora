@@ -724,3 +724,123 @@ describe("resume claims fingerprint", () => {
         second.close();
     });
 });
+
+describe("claims change and the durable read cache", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    /** A cache adapter whose `load` and `clear` the test releases, recording the order of every operation. */
+    const gatedCache = () => {
+        const inner = createInMemoryQueryCache();
+        const log: string[] = [];
+        let releaseLoad: (entries: Awaited<ReturnType<typeof inner.load>>) => void = () => undefined;
+        let releaseClear: () => void = () => undefined;
+        const loadGate = new Promise<Awaited<ReturnType<typeof inner.load>>>((resolve) => {
+            releaseLoad = resolve;
+        });
+        const clearGate = new Promise<void>((resolve) => {
+            releaseClear = resolve;
+        });
+        const cache = {
+            ...inner,
+            clear: async () => {
+                log.push("clear:start");
+                await clearGate;
+                await inner.clear();
+                log.push("clear:end");
+            },
+            load: () => loadGate,
+            put: async (key: string, entry: Parameters<typeof inner.put>[1]) => {
+                log.push(`put:${key}`);
+                await inner.put(key, entry);
+            },
+        };
+
+        return { cache, inner, log, releaseClear, releaseLoad };
+    };
+
+    const openChanging = async (cache: ReturnType<typeof gatedCache>["cache"]) => {
+        const { sockets, WebSocket } = createSocketHarness();
+        const fetchMock = vi.fn<typeof fetch>(async (input) =>
+            (input as string).includes("/_lunora/ws/reauth")
+                ? jsonResponse({ error: { code: "IDENTITY_CHANGED" } }, { status: 409 })
+                : jsonResponse({ result: { ok: true } }),
+        );
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            hydrateOnStart: true,
+            queryCache: cache,
+            reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
+            url: "http://app.test",
+            WebSocket,
+        });
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        sockets[0]?.receive({ claims: "fp-A", connectionId: "conn-1", revalidateMs: 60_000, subject: null, type: "identity" });
+        await settle();
+
+        return { client, sockets };
+    };
+
+    it("discards a cache load that finishes after the claims changed, so old-claims rows never seed a subscription", async () => {
+        expect.assertions(1);
+
+        const { cache, releaseLoad } = gatedCache();
+        const { client, sockets } = await openChanging(cache);
+
+        // The claims change while the load is still pending.
+        await vi.advanceTimersByTimeAsync(30_000);
+        sockets[0]?.triggerClose();
+        await vi.advanceTimersByTimeAsync(0);
+        releaseLoad([{ identity: null, key: "todos.list::{}::", serverCursor: 7, serverEpoch: "e1", ts: Date.now(), value: ["org-a row"] }]);
+        await settle();
+        sockets[1]?.open();
+        await settle();
+
+        const resubscribe = (sockets[1]?.frames() ?? []).find((frame) => frame.type === "subscribe") as { query?: Record<string, unknown> } | undefined;
+
+        // Seeded from the old entry it would resume from cursor 7.
+        expect(resubscribe?.query).not.toHaveProperty("sinceSeq");
+
+        client.close();
+    });
+
+    it("writes a new-claims value only after the clear has finished, so the clear cannot erase it", async () => {
+        expect.assertions(3);
+
+        const { cache, inner, log, releaseClear, releaseLoad } = gatedCache();
+        const { client, sockets } = await openChanging(cache);
+
+        releaseLoad([]);
+        await vi.advanceTimersByTimeAsync(30_000);
+        sockets[0]?.triggerClose();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(log).toStrictEqual(["clear:start"]);
+
+        // The reconnected socket delivers a value under the new claims while the clear is still running.
+        sockets[1]?.open();
+        sockets[1]?.receive({ claims: "fp-B", connectionId: "conn-2", subject: null, type: "identity" });
+        await settle();
+
+        const subscribe = (sockets[1]?.frames() ?? []).find((frame) => frame.type === "subscribe") as { id: string } | undefined;
+
+        sockets[1]?.receive({ cursor: 9, epoch: "e1", id: subscribe?.id, type: "data", data: ["org-b row"] });
+        await vi.advanceTimersByTimeAsync(1000);
+        releaseClear();
+        await vi.advanceTimersByTimeAsync(1000);
+
+        expect(log.indexOf("clear:end")).toBeLessThan(log.findIndex((entry) => entry.startsWith("put:")));
+        await expect(inner.load()).resolves.toHaveLength(1);
+
+        client.close();
+    });
+});

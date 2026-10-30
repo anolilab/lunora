@@ -796,6 +796,15 @@ class LunoraClient {
     private readonly queryCache: QueryCacheAdapter | undefined;
 
     /**
+     * Counts the clears of the read cache. A load or a write batch begun before a clear belongs to the identity
+     * the clear retired, so it is dropped when its epoch no longer matches.
+     */
+    private queryCacheEpoch = 0;
+
+    /** Durable cache writes and clears, run in order so a clear cannot finish over a later write. */
+    private queryCacheChain: Promise<unknown> = Promise.resolve();
+
+    /**
      * Values restored from the `queryCache` at construction, keyed by the
      * read-cache key, awaiting the `subscribe()` that will consume them. A
      * key is consumed (deleted) the first time its subscription is created, so
@@ -4264,8 +4273,8 @@ class LunoraClient {
             onConnectionStatus: (status, identity) => {
                 onLeaderStatus(leadership, status, identity);
             },
-            onSubscriptionData: (key, data, cursor, epoch, identity) => {
-                onFollowerSubscriptionData(leadership, key, data, cursor, epoch, identity);
+            onSubscriptionData: (key, data, cursor, epoch, identity, claims) => {
+                onFollowerSubscriptionData(leadership, key, data, cursor, epoch, identity, claims);
             },
             onLeaderClaimAnswered: () => {
                 onLeaderClaimAnswered(leadership);
@@ -4946,7 +4955,13 @@ class LunoraClient {
         }
 
         try {
+            const epoch = this.queryCacheEpoch;
             const entries = await this.queryCache.load();
+
+            // The identity this was loaded for was retired while it ran: none of it may seed anything.
+            if (epoch !== this.queryCacheEpoch) {
+                return;
+            }
 
             // Index the already-open subscriptions by READ-CACHE key (the
             // registry keys on the raw args object, the cache on `argsKey`).
@@ -5236,6 +5251,7 @@ class LunoraClient {
         }
 
         const batch = [...this.pendingCacheWrites.entries()];
+        const { queryCacheEpoch: epoch } = this;
 
         this.pendingCacheWrites.clear();
 
@@ -5243,7 +5259,13 @@ class LunoraClient {
         // failures (a quota error on one key must not drop the others). Each
         // `put` is deferred into promise-land so a synchronously-throwing
         // adapter is captured per-entry too, not allowed to escape `.map()`.
-        await Promise.allSettled(batch.map(async ([key, entry]) => queryCache.put(key, entry)));
+        // Queued behind any clear, and dropped if one began after this batch was taken.
+        const written = this.queryCacheChain.then(async () =>
+            epoch === this.queryCacheEpoch ? Promise.allSettled(batch.map(async ([key, entry]) => queryCache.put(key, entry))) : undefined,
+        );
+
+        this.queryCacheChain = written.catch(() => undefined);
+        await written;
     }
 
     /**
@@ -7597,20 +7619,13 @@ class LunoraClient {
         if (this.tabCoordinator?.isLeader()) {
             const key = SubscriptionRegistry.keyOf(state);
 
-            this.tabCoordinator.broadcastSubscriptionData(key, payload, state.serverCursor, state.serverEpoch, this.identityFingerprint());
+            this.tabCoordinator.broadcastSubscriptionData(key, payload, state.serverCursor, state.serverEpoch, this.identityFingerprint(), state.serverClaims);
         }
 
         this.settleAwaitedAnswer(state, true);
     }
 
-    /**
-     * Handle a `resume` frame (Pillar 1b): the server proved nothing the
-     * subscription reads changed since our `sinceSeq`, so the cached value is
-     * still current. We keep `lastValue` as-is, mark the sub acked, and advance
-     * the cursor (re-persisting so the next reconnect resumes from the newer
-     * watermark). No callback fires — the value didn't change, and `subscribe()`
-     * already replayed the cached value to every consumer synchronously.
-     */
+    /** Run `apply` with the claims fingerprint of the socket that delivered the frame, for the values and cursors it commits. */
     private withFrameClaims(shardKey: string | undefined, apply: () => void): void {
         this.frameClaims = this.getConnection(shardKey)?.claims;
 
@@ -7621,6 +7636,14 @@ class LunoraClient {
         }
     }
 
+    /**
+     * Handle a `resume` frame (Pillar 1b): the server proved nothing the
+     * subscription reads changed since our `sinceSeq`, so the cached value is
+     * still current. We keep `lastValue` as-is, mark the sub acked, and advance
+     * the cursor (re-persisting so the next reconnect resumes from the newer
+     * watermark). No callback fires — the value didn't change, and `subscribe()`
+     * already replayed the cached value to every consumer synchronously.
+     */
     private handleResumeMessage(message: ServerResumeMessage): void {
         const state = this.subscriptions.getById(message.id);
 
@@ -7643,6 +7666,7 @@ class LunoraClient {
                 state.serverCursor,
                 state.serverEpoch,
                 this.identityFingerprint(),
+                state.serverClaims,
             );
         }
 
@@ -8690,7 +8714,13 @@ class LunoraClient {
 
         this.pendingCacheWrites.clear();
         this.hydratedQueryCache.clear();
-        this.queryCache?.clear().catch(() => undefined);
+        this.queryCacheEpoch += 1;
+
+        const { queryCache } = this;
+
+        if (queryCache) {
+            this.queryCacheChain = this.queryCacheChain.then(async () => queryCache.clear()).catch(() => undefined);
+        }
     }
 
     /**

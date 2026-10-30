@@ -82,7 +82,7 @@ interface TabCoordinatorOptions {
      * `onConnectionStatus`'s docblock for the full rationale and the
      * absent-field mixed-version rule — identical here).
      */
-    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void;
+    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void;
     onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null) => void;
 
     /**
@@ -120,6 +120,7 @@ type WsFollowerMessage =
  * as it lands, as before.
  */
 type SubscriptionDataMessage = {
+    claims?: string;
     cursor?: number;
     data: unknown;
     epoch?: string;
@@ -200,7 +201,8 @@ class TabCoordinator {
     private readonly onBecomeLeader: (() => void) | undefined;
     private readonly onStopBeingLeader: (() => void) | undefined;
     private readonly onConnectionStatus: ((status: ConnectionStatus, identity?: string | null) => void) | undefined;
-    private readonly onSubscriptionData: ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void) | undefined;
+    private readonly onSubscriptionData:
+        ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void) | undefined;
     private readonly onLeaderClaimAnswered: (() => void) | undefined;
     private readonly onSubscriptionError: ((key: string, error: SubscriptionError, identity?: string | null) => void) | undefined;
     private readonly onSubscriptionSettled:
@@ -377,7 +379,7 @@ class TabCoordinator {
      * supplied, since a fixed leader always knows its own identity (never
      * omits it) and `null` must round-trip distinctly from "field absent".
      */
-    public broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null): void {
+    public broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string): void {
         if (!this.leader) {
             return;
         }
@@ -396,6 +398,7 @@ class TabCoordinator {
             ...(cursor === undefined ? {} : { cursor }),
             ...(epoch === undefined ? {} : { epoch }),
             ...(identity === undefined ? {} : { identity }),
+            ...(claims === undefined ? {} : { claims }),
         });
     }
 
@@ -535,7 +538,7 @@ class TabCoordinator {
         withDeferredNotifications(
             () => {
                 for (const frame of held) {
-                    this.onSubscriptionData?.(frame.key, frame.data, frame.cursor, frame.epoch, frame.identity);
+                    this.onSubscriptionData?.(frame.key, frame.data, frame.cursor, frame.epoch, frame.identity, frame.claims);
                 }
             },
             () => this.running,

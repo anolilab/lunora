@@ -186,6 +186,7 @@ export const onFollowerSubscriptionData = (
     cursor: number | undefined,
     epoch: string | undefined,
     identity: string | null | undefined,
+    claims?: string,
 ): void => {
     if (isForeignStamp(identity, host.identityFingerprint())) {
         return;
@@ -204,7 +205,7 @@ export const onFollowerSubscriptionData = (
     const firstValue = !state.valueReceived;
 
     state.valueReceived = true;
-    commitDataFrame(state, data, cursor === undefined ? {} : { cursor, epoch });
+    commitDataFrame(state, data, cursor === undefined ? { claims } : { claims, cursor, epoch });
 
     if (cursor !== undefined) {
         dropConfirmedLayers(state, cursor);
