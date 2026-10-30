@@ -45,6 +45,8 @@ interface PreviewRecord {
     name: string;
     production: string;
     resources: RecordedResource[];
+    /** The Wrangler environment the preview was planned from (`--env`), when it was: `delete` plans from it too. */
+    sourceEnv?: string;
     updatedAt: string;
     url?: string;
     version: 1;
@@ -180,6 +182,7 @@ const isRecord = (value: unknown): value is PreviewRecord => {
         typeof candidate.worker === "string" &&
         typeof candidate.production === "string" &&
         (candidate.appId === undefined || typeof candidate.appId === "string") &&
+        (candidate.sourceEnv === undefined || typeof candidate.sourceEnv === "string") &&
         Array.isArray(candidate.resources) &&
         candidate.resources.every((resource) => isRecordedResource(candidate.worker as string, resource))
     );

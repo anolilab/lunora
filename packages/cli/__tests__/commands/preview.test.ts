@@ -13,7 +13,7 @@ import { runCli } from "../../src/cli";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer/shared";
 import { runPreviewCommand } from "../../src/commands/preview/handler";
 import type { PreviewConfig, PreviewPlan } from "../../src/commands/preview/plan";
-import { planPreview, previewEnvironmentBlock, previewNames, productionCollisions, resourceKey } from "../../src/commands/preview/plan";
+import { environmentConfig, planPreview, previewEnvironmentBlock, previewNames, productionCollisions, resourceKey } from "../../src/commands/preview/plan";
 import { keepLease, lockDatabase, releaseLease, takeLease } from "../../src/commands/preview/registry";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
@@ -672,6 +672,30 @@ describe("lunora preview", { timeout: 120_000 }, () => {
                         ) as { vars: object }
                     ).vars,
             ).toBe(false);
+        });
+
+        it("plans an environment's own bindings with --env, and refuses an unknown environment with the valid names", () => {
+            expect.assertions(5);
+
+            const envOnly = {
+                ...production,
+                d1_databases: undefined,
+                env: {
+                    ...production.env,
+                    production: { d1_databases: [{ binding: "ENVDB", database_id: "prod-env-uuid", database_name: "env-db" }], name: "lunora-app-prod" },
+                },
+            } as unknown as PreviewConfig;
+            const merged = environmentConfig(envOnly, "production");
+
+            expect(merged.config?.name).toBe("lunora-app-prod");
+
+            const { plan } = planPreview(merged.config as PreviewConfig, "42", "production");
+
+            expect(plan?.resources.filter((resource) => resource.kind === "d1").map((resource) => resource.binding)).toStrictEqual(["ENVDB"]);
+            expect(plan?.worker).toBe("lunora-app-prod-preview-42");
+            // Without it, the same app is refused and told how to preview it.
+            expect(planPreview(envOnly, "42").error).toMatch(/pass --env production/u);
+            expect(environmentConfig(envOnly, "nope").error).toMatch(/no environment "nope"; the environments are: staging, production/u);
         });
 
         it("refuses an app whose bindings exist only inside an environment, which a preview planned from the top level would lack", () => {
@@ -2033,6 +2057,80 @@ describe("lunora preview", { timeout: 120_000 }, () => {
 
             expect(result.code).toBe(0);
             expect(account.r2.size).toBe(0);
+        });
+
+        const withEnvironment = (): void => {
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                PRODUCTION_WRANGLER.replace(
+                    '"env": {',
+                    '"env": {\n        "production": { "name": "lunora-app-prod", "d1_databases": [{ "binding": "DB", "database_name": "env-main", "database_id": "prod-main-uuid" }, { "binding": "ENVDB", "database_name": "env-db", "database_id": "prod-env-uuid" }] },',
+                ),
+                "utf8",
+            );
+        };
+
+        it("with --env, gives an environment-only D1 binding a preview database of its own, records the environment, and delete removes it", async () => {
+            expect.assertions(7);
+
+            withEnvironment();
+
+            const account = fakeAccount();
+            const { spawner } = wranglerAt(workdir, account.workers);
+            const { errors, logger } = silentLogger();
+
+            expect.assertions(8);
+
+            const deploy = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                env: "production",
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect([deploy.error, ...errors]).toStrictEqual([undefined]);
+            expect(deploy.code).toBe(0);
+            expect(account.d1.has("lunora-app-prod-preview-42-envdb")).toBe(true);
+            expect(account.workers.has("lunora-app-prod-preview-42")).toBe(true);
+            expect((JSON.parse(registryValues(account).get(`${APP_ID}/42`) ?? "{}") as { sourceEnv?: string }).sourceEnv).toBe("production");
+
+            // Deleted without --env: the record says which environment it was made from.
+            const { result } = await run(account, "delete");
+
+            expect(result.code).toBe(0);
+            expect(account.d1.has("lunora-app-prod-preview-42-envdb")).toBe(false);
+            expect(account.workers.has("lunora-app-prod-preview-42")).toBe(false);
+        });
+
+        it("refuses an unknown --env before creating anything, naming the valid environments", async () => {
+            expect.assertions(3);
+
+            withEnvironment();
+
+            const account = fakeAccount();
+            const { deploys, spawner } = wranglerAt(workdir, account.workers);
+            const result = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                env: "nope",
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect(result.error).toMatch(/no environment "nope"; the environments are: production, staging/u);
+            expect(changes(account, "POST", "PUT")).toHaveLength(0);
+            expect(deploys).toHaveLength(0);
         });
 
         it("refuses to delete while another run holds the preview, deleting nothing", async () => {

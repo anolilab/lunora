@@ -110,7 +110,11 @@ it. The record is keyed by the project's id (`lunora.appId` in
 `package.json`, written by the first local `lunora preview deploy`: commit it), so renaming the
 Worker does not lose a preview and two apps sharing a Worker name never see each
 other's. `delete` acts only on that record, and refuses a record that names anything
-production's config uses. An app binding something a preview cannot isolate
+production's config uses. An app whose bindings live only inside `env.<name>` is previewed with
+`lunora preview deploy <number> --env <name>`, which plans from that
+environment (the top level with `env.<name>` laid over it); without it such an
+app is refused. The environment is recorded with the preview, so `delete` needs
+no flag. An app binding something a preview cannot isolate
 yet (Hyperdrive, service bindings, queues, workflows, Vectorize, …) is refused
 with the list. See [`lunora preview`](/docs/packages/cli#lunora-preview) for
 the details and the API token permissions it needs.

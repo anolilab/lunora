@@ -37,6 +37,8 @@ interface PreviewPlan {
     resources: PlannedResource[];
     /** The preview's name in Cloudflare's alphabet. */
     slug: string;
+    /** The Wrangler environment the preview is planned from (`--env`); absent when it is planned from the top level. */
+    sourceEnv?: string;
     /** The preview Worker's name: its own Durable Object namespace. */
     worker: string;
 }
@@ -184,27 +186,73 @@ const previewNames = (config: PreviewConfig, name: string): { error: string; nam
 };
 
 /**
- * Whether `env.<key>` is the block a preview run of `config` wrote: its key, Worker name and marker are all the
- * ones the slug in its marker derives. Any other block, marked or not, is one of the user's environments.
+ * Whether `env.<key>` is the block a preview run wrote: its key, Worker name and marker are all the ones the slug
+ * and production name in its marker derive. Any other block, marked or not, is one of the user's environments.
  */
-const isPreviewBlock = (config: PreviewConfig, key: string, block: PreviewConfig | undefined): boolean => {
+const isPreviewBlock = (_config: PreviewConfig, key: string, block: PreviewConfig | undefined): boolean => {
     const marker = block?.vars?.[PREVIEW_MARKER_VAR];
-    const production = typeof config.name === "string" ? config.name : "";
+    const split = typeof marker === "string" ? marker.lastIndexOf("/") : -1;
 
-    if (typeof marker !== "string" || production === "" || !marker.startsWith(`${production}/`)) {
+    if (typeof marker !== "string" || split <= 0) {
         return false;
     }
 
-    const { names } = previewNames(config, marker.slice(production.length + 1));
+    const production = marker.slice(0, split);
+    const slug = marker.slice(split + 1);
 
-    return names !== undefined && previewMarker(names) === marker && names.environment === key && block?.name === names.worker;
+    return (
+        previewSlug(slug) === slug &&
+        previewMarker({ production, slug }) === marker &&
+        key === boundedName(`preview-${slug}`, NAME_LIMIT) &&
+        block?.name === previewWorkerName(production, slug)
+    );
+};
+
+/**
+ * The config a preview of Wrangler environment `envName` is planned from: the top level with `env.<envName>` laid over
+ * it, as the app is deployed with `--env <envName>`. The Worker is named as Wrangler names it: the environment's own
+ * `name`, else `<name>-<envName>`. An unknown environment is an error that lists the valid ones.
+ */
+const environmentConfig = (config: PreviewConfig, envName: string): { config: PreviewConfig; error?: never } | { config?: never; error: string } => {
+    const blocks = Object.entries(config.env ?? {}).filter(([key, block]) => !isPreviewBlock(config, key, block));
+    const found = blocks.find(([key]) => key === envName)?.[1];
+
+    if (found === undefined) {
+        return {
+            error: `wrangler.jsonc declares no environment "${envName}"${blocks.length === 0 ? ", and no environments at all" : `; the environments are: ${blocks.map(([key]) => key).join(", ")}`}`,
+        };
+    }
+
+    const top = typeof config.name === "string" ? config.name : "";
+
+    return { config: { ...config, ...found, name: typeof found.name === "string" ? found.name : `${top}-${envName}` } };
 };
 
 /** The name of the resource a preview Worker owns for `binding`. */
 const previewResourceName = (worker: string, binding: string): string => boundedName(`${worker}-${binding}`, NAME_LIMIT);
 
+/**
+ * A preview is planned from the top-level config unless `--env` says otherwise. Bindings declared only inside an
+ * `env.<name>` (an app that deploys with `--env production`) would be missing from it, leaving a working-looking
+ * preview with no database or storage.
+ */
+const envOnlyRefusals = (config: PreviewConfig): string[] =>
+    Object.entries(config.env ?? {}).flatMap(([envName, block]) =>
+        isPreviewBlock(config, envName, block)
+            ? []
+            : Object.entries(block as Record<string, unknown>).flatMap(([key, value]) => {
+                  const binds = key in ISOLATED_KEYS || key === "durable_objects" || refusalFor(key, value) !== undefined;
+
+                  return binds && isPresent(value) && !isPresent((config as Record<string, unknown>)[key])
+                      ? [
+                            `"env.${envName}.${key}": declared only in this environment, and a preview is planned from the top-level config, which has none; pass --env ${envName} to preview that environment`,
+                        ]
+                      : [];
+              }),
+    );
+
 /** The plan for previewing `config` as `name`, or why it cannot be made. Pure: reads nothing, writes nothing. */
-const planPreview = (config: PreviewConfig, name: string): { error: string; plan?: never } | { error?: never; plan: PreviewPlan } => {
+const planPreview = (config: PreviewConfig, name: string, fromEnv?: string): { error: string; plan?: never } | { error?: never; plan: PreviewPlan } => {
     const named = previewNames(config, name);
 
     if (named.error !== undefined) {
@@ -223,21 +271,7 @@ const planPreview = (config: PreviewConfig, name: string): { error: string; plan
 
         return refusal === undefined ? [] : [refusal];
     });
-    // A preview is planned from the top-level config. Bindings declared only inside an `env.<name>` (an app that deploys
-    // with `--env production`) would be missing from it, leaving a working-looking preview with no database or storage.
-    for (const [envName, block] of Object.entries(config.env ?? {})) {
-        if (isPreviewBlock(config, envName, block)) {
-            continue;
-        }
-
-        for (const [key, value] of Object.entries(block as Record<string, unknown>)) {
-            const binds = key in ISOLATED_KEYS || key === "durable_objects" || refusalFor(key, value) !== undefined;
-
-            if (binds && isPresent(value) && !isPresent((config as Record<string, unknown>)[key])) {
-                refusals.push(`"env.${envName}.${key}": declared only in this environment, and a preview is planned from the top-level config, which has none`);
-            }
-        }
-    }
+    refusals.push(...(fromEnv === undefined ? envOnlyRefusals(config) : []));
 
     const jurisdictional = entriesOf(config.r2_buckets).find((entry) => entry.jurisdiction !== undefined);
 
@@ -266,7 +300,7 @@ const planPreview = (config: PreviewConfig, name: string): { error: string; plan
         };
     }
 
-    return { plan: { ...named.names, resources } };
+    return { plan: { ...named.names, ...(fromEnv === undefined ? {} : { sourceEnv: fromEnv }), resources } };
 };
 
 /** The id each planned resource was given in the account (an R2 bucket's id is its name), keyed by `<kind>:<binding>`. */
@@ -376,6 +410,7 @@ const productionCollisions = (config: PreviewConfig, candidates: ReadonlyArray<s
 
 export type { PlannedResource, PreviewConfig, PreviewNames, PreviewPlan, PreviewResourceKind, ResourceIds };
 export {
+    environmentConfig,
     planPreview,
     PREVIEW_MARKER_VAR,
     previewEnvironmentBlock,

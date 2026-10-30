@@ -37,6 +37,7 @@ import { mintAppId, readAppId } from "./app-id";
 import type { PreviewOptions } from "./index";
 import type { PlannedResource, PreviewConfig, PreviewNames, PreviewPlan, ResourceIds } from "./plan";
 import {
+    environmentConfig,
     planPreview,
     PREVIEW_MARKER_VAR,
     previewEnvironmentBlock,
@@ -90,6 +91,8 @@ interface PreviewCommandOptions {
     adminFetch?: StreamingFetchLike;
     cwd?: string;
     dryRun?: boolean;
+    /** `--env`: plan the preview from this Wrangler environment (top level with `env.<name>` laid over it). */
+    env?: string;
     /** Where credentials and `--secret` values are read; defaults to `process.env`. */
     environment?: CloudflareEnvironment & Record<string, string | undefined>;
     /** Fetch for Cloudflare's REST API. */
@@ -549,6 +552,7 @@ const shipHeld = async (
             name: plan.slug,
             production: plan.production,
             appId,
+            ...(plan.sourceEnv === undefined ? {} : { sourceEnv: plan.sourceEnv }),
             resources: [],
             updatedAt: now,
             version: 1,
@@ -796,8 +800,15 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
             );
         }
 
-        const config = readWranglerJsonc<PreviewConfig>(context.wranglerPath).parsed ?? context.config;
-        const planned = planPreview(config, name);
+        const committed = readWranglerJsonc<PreviewConfig>(context.wranglerPath).parsed ?? context.config;
+        const sourced = options.env === undefined ? { config: committed } : environmentConfig(committed, options.env);
+
+        if (sourced.error !== undefined) {
+            return fail(logger, sourced.error);
+        }
+
+        const { config } = sourced;
+        const planned = planPreview(config, name, options.env);
 
         if (planned.error !== undefined) {
             return fail(logger, planned.error);
@@ -932,6 +943,13 @@ const leftBehind = async (request: Request, config: PreviewConfig, names: Previe
     return [...found, ...resources.map((resource) => `${resource} exists`)];
 };
 
+/** The plan the record was made from, to find what a deploy left unrecorded: from the environment it recorded, if any. */
+const plannedAs = (config: PreviewConfig, record: PreviewRecord): PreviewPlan | undefined => {
+    const origin = record.sourceEnv === undefined ? { config } : environmentConfig(config, record.sourceEnv);
+
+    return origin.config === undefined ? undefined : planPreview({ ...origin.config, name: record.production }, record.name, record.sourceEnv).plan;
+};
+
 const deleteRecorded = async (
     context: PreviewContext,
     options: PreviewCommandOptions,
@@ -1013,7 +1031,7 @@ const deleteRecorded = async (
         return { code: EXIT_CODE.SUCCESS, data: { plan: summarize(record) } };
     }
 
-    return removePreview(request, namespace, record, planPreview({ ...config, name: record.production }, names.slug).plan, logger);
+    return removePreview(request, namespace, record, plannedAs(config, record), logger);
 };
 
 const deletePreview = async (context: PreviewContext, options: PreviewCommandOptions, name: string): Promise<PreviewCommandResult> => {
@@ -1155,6 +1173,7 @@ const execute: CommandHandler<PreviewOptions> = defineHandler<PreviewOptions, Pr
     const result = await runPreviewCommand({
         cwd,
         dryRun: options.dryRun === true,
+        env: options.env,
         format,
         logger,
         name: argument[1],

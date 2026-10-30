@@ -15,6 +15,7 @@ const previewCommand: Command = {
         ["lunora preview deploy 123 --seed", "Deploy, then fill the preview with `lunora seed` data"],
         ["lunora preview deploy 123 --secret RESEND_API_KEY", "Give the preview a secret, read from the environment"],
         ["lunora preview deploy 123 --var AUTH_URL=https://app-preview-123.acme.workers.dev", "Override a production var in the preview"],
+        ["lunora preview deploy 123 --env production", "Plan the preview from env.production's bindings, for an app that declares them only there"],
         ["lunora preview deploy 123 --dry-run", "Show the Worker, resources and env block a deploy would use"],
         ["lunora preview list", "List the previews on record"],
         ["lunora preview delete 123", "Delete the preview Worker and every resource recorded for it"],
@@ -30,6 +31,12 @@ const previewCommand: Command = {
             description: "deploy: show the plan without calling Cloudflare; delete: read the record and show what would be deleted, changing nothing",
             name: "dry-run",
             type: Boolean,
+        },
+        {
+            description:
+                "deploy: plan the preview from this Wrangler environment (the top level with env.<name> laid over it), for an app whose bindings live in env.<name>",
+            name: "env",
+            type: String,
         },
         OUTPUT_FORMAT_OPTION,
         {
@@ -53,6 +60,7 @@ export { previewCommand };
 
 export type PreviewOptions = CreateOptions<{
     "dry-run": boolean | undefined;
+    env: string | undefined;
     format: string | undefined;
     secret: string[] | undefined;
     seed: boolean | undefined;
