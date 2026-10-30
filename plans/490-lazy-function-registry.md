@@ -13,8 +13,8 @@ the `lunorash` entries and `@lunora/server/drizzle` side-effectful: esbuild drop
 behind an `export *` in a `sideEffects: false` package, which crashed such builds at startup. Still open: the lazy registry as
 the default, lighter shared builders (§8 last paragraph), and extending the smoke-load to eager
 builds now that `authModule.ts` and the spec modules evaluate on the first event.
-The email-guard prerequisite (§8) has shipped (#1159). Measurement scripts are not committed; §6 says
-what to add.
+The email-guard prerequisite (§8) has shipped (#1159). Measurement scripts for a realistic app are
+in `apps/bench/scripts/` (startup, first-call cold start, chunked builds); results in §5.2.
 
 ## 0. Headline finding
 
@@ -158,8 +158,10 @@ already renders them for OpenAPI/`api.ts`), instead of reading the live validato
   that was enough (§5.1: −31 %). On a synthetic app of cheap modules the wrappers cost about
   what they save, so it is a regression there (§5). Real code splitting (esbuild `--splitting`
   with `no_bundle`) gave **no** additional gain on the real app (§5.1) and costs more files; do
-  not make it a prerequisite. Whether rolldown's chunked output saves _parse_ time is
-  unmeasured (the `check startup` "Active" figure may not include compile time).
+  not make it a prerequisite. rolldown's chunked output (Vite) is a different matter: on the
+  bench app, when it boots, it starts a lazy build about 3× faster than the single file. But its
+  default evaluation order crashes depending on unrelated edits, and a real `import()` there
+  yields to the event loop (§5.2).
 
 ## 5. Measurements
 
@@ -258,12 +260,93 @@ better-auth/core ~35, `@simplewebauthn/*` ~25, rate-limiter 48, agent modules ~1
 `@lunora/values` ~28, schema 19, rls policies 18, lazy-init helper 170–190 self. All of these
 are reachable only from function modules except `schema` and the generated-app auth import.
 
+### 5.2 Bench app (`apps/bench`, customer preset)
+
+`apps/bench` is a realistic app built from the SaaS kit, with every server package that runs
+without credentials. Its `--preset customer` adds 40 generated domains, half of them with an action
+module on a real SDK (`@aws-sdk/client-s3`, `e2b`, `@bufbuild/protobuf`, `tldts`,
+`@ai-sdk/openai`) that only the registry imports. The aim is §5.1's profile. How to run each bench:
+`apps/bench/README.md`. Findings: `apps/bench/FINDINGS.md`.
+
+Machine: Apple M5 Max (18 cores, 36 GiB), macOS 26.7, Node 24.15, wrangler 4.149, Vite 8.3.5,
+load average 2.0–3.5 throughout. That is much quieter than §5.1's ~16, so absolute ms are not
+comparable with §5.1, only the ratios. All three benches ran at `18edf37e6`.
+
+Startup, single-file esbuild bundle (`scripts/startup.mjs`, 9 interleaved runs, median / min):
+
+| Metric                          | Bench customer       | Real app (§5.1)      |
+| ------------------------------- | -------------------- | -------------------- |
+| Functions / tables              | 998 / 131            | ~1,000 / ~130        |
+| Eager modules                   | 3,530                | 4,088                |
+| Registry-only modules           | 1,069 (30 %)         | 1,340 (33 %)         |
+| … of which dependency modules   | 762                  | 979                  |
+| Registry-only bytes             | 3.97 MiB             | 5.95 MiB             |
+| Registry-only `lunora/` modules | 307 of 330 (93 %)    | 347 of 534 (65 %)    |
+| Bundle (minified)               | 13.2 MiB             | 11.1 MiB             |
+| Eager Active                    | 162 / 161 ms         | 421 / 364 ms         |
+| Lazy Active                     | 104 / 102 ms (−36 %) | 290 / 267 ms (−31 %) |
+
+The relative win reproduces. The absolute gap (2.6×) is partly load and partly what the bench
+does not model: the real app's ~100 ms of agent modules, and shared builders that keep 187 app
+modules eager. Without the heavy SDKs, the same 40 domains measured 106 eager against 112 ms lazy
+(+6 %, at `cf2cc3f75`): a lazy registry pays only when function modules alone reach expensive
+imports.
+
+Chunked builds (`scripts/chunked.mjs`, 7 interleaved runs, Active median ms):
+
+| Artifact                                | core   | customer |
+| --------------------------------------- | ------ | -------- |
+| esbuild single file, eager              | 75.4   | 160.5    |
+| esbuild single file, lazy               | 84.0   | 103.4    |
+| rolldown chunks, eager                  | fails¹ | 103.6    |
+| rolldown chunks, lazy                   | fails¹ | fails¹   |
+| rolldown, `strictExecutionOrder`, eager | 134.1  | 200.8    |
+| rolldown, `strictExecutionOrder`, lazy  | 127.1  | 156.5    |
+
+¹ `tsyringe requires a reflect polyfill`: rolldown evaluates the ESM `tsyringe` before the CJS
+`reflect-metadata` that `@peculiar/x509` (passkey) imports first. One commit earlier, before
+two small app edits, both lazy builds booted, at 47.8 (core) and 55.6 ms (customer). So whether
+default rolldown output boots depends on unrelated graph changes. `strictExecutionOrder` fixes
+the order but costs more than the chunking saves.
+
+→ When it boots, chunked lazy is the fastest artifact by far (about −65 % against the eager
+single file). It cannot be taken as a result yet, for three reasons:
+
+- its default evaluation order crashes depending on unrelated edits, and the order-safe variant
+  is the slowest of all;
+- a parallel branch found that a real `import()` in a chunked or uploaded-module build yields
+  to the event loop and broke Durable Object request ordering, and that fix
+  (`test/lazy-input-gate`) is not on the measured branch;
+- these artifacts were profiled at startup only, never served, and whether Active counts compile
+  time is not documented.
+
+Cold start (`scripts/cold-start.mjs`): 20 fresh local isolates per mode, 94 functions, ms
+p50 / p95 / p99. The functions are 4–5 of each domain's 6–8 modules, including every heavy-SDK
+action, so the deferred cost is a lower bound:
+
+| Metric                          | eager                 | lazy                  |
+| ------------------------------- | --------------------- | --------------------- |
+| cold → first response           | 1,244 / 1,259 / 1,259 | 1,216 / 1,235 / 1,238 |
+| first call per function         | 3.6 / 8.4 / 23.3      | 3.8 / 10.0 / 15.7     |
+| first call, heavy-SDK action    | 3.2 / 8.1 / 27.1      | 3.4 / 15.1 / 21.6     |
+| all 94 first calls, per isolate | 395 / 457 / 461       | 437 / 493 / 504       |
+| warm call                       | 3.3 / 8.0 / 9.8       | 3.4 / 8.2 / 11.4      |
+
+→ The ~58 ms of startup Active a lazy registry saves reappears as about +42 ms spread over 94
+first calls, at most ~15 ms p95 for a heavy-SDK action. The first-call penalty is not a reason
+to keep the registry eager. A local cold start is dominated by ~1.2 s that is the same in both
+modes and was not profiled.
+
 ## 6. Proposed work (if approved)
 
 0. **Bundler is not a prerequisite (corrected).** An earlier draft said real code splitting
    was required. The real-app run (§5.1) shows the default single-file wrangler bundle already
-   gets most of the win; splitting added nothing. Keep chunking as a follow-up to measure
-   _parse_ time once a real chunked (rolldown) artifact is available.
+   gets most of the win; esbuild splitting added nothing. rolldown chunks cut a lazy build's
+   startup a further ~45–50 % on the bench when the build booted (§5.2). They are not usable
+   until two correctness problems are solved: rolldown's default output can evaluate a CommonJS
+   polyfill after the ESM that needs it, and a real `import()` yields to the event loop inside a
+   Durable Object request. Treat chunked lazy builds as a follow-up behind those fixes, not part
+   of this plan.
 1. **Codegen — manifest + loaders** (`emit/functions.ts`). Lazy compiled validators: emit one
    shim per user module, `_generated/fn/<namespace>.ts`, that imports the module, runs the
    `installCompiledValidatorMap(m.fn.args, …)` calls for its functions and re-exports the

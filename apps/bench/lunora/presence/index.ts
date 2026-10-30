@@ -1,0 +1,240 @@
+/**
+ * Presence functions — added by `lunora add presence`.
+ *
+ * This file is YOURS: it's a normal Lunora module, copied into your project so
+ * you own and edit it. Re-export these from your `lunora/` entry (or rely on
+ * file-based discovery) so codegen picks them up — they surface in the generated
+ * `api` as `presence/heartbeat`, `presence/listPresent`, `presence/sweep`.
+ *
+ *   - **heartbeat** (mutation) — upsert the caller's presence row for a room and
+ *     stamp `lastSeen = now`. Keyed by `(roomId, sessionId)`, so a re-heartbeat
+ *     *patches* the existing row: subscribers receive a single-row delta, not an
+ *     insert/delete churn that would re-send the whole present list. A session
+ *     that joins the room also reclaims a batch of the room's expired rows, so closed
+ *     tabs cannot pile up between sweeps nobody scheduled.
+ *   - **listPresent** (query) — the non-expired members of a room, newest
+ *     heartbeat first. Subscribe to it for a reactive "who's here" list; the TTL
+ *     filter ({@link PRESENCE_TTL_MS}) drops members that stopped heart-beating,
+ *     so no client-side reaping is needed.
+ *   - **sweep** (internal mutation) — hard-delete the expired rows for a room.
+ *     Stale rows already vanish from `listPresent` via the read-time filter; this
+ *     only reclaims storage — and a joining session already does that for its
+ *     own room. It's *internal* (server-only) so a client can't trigger bulk
+ *     deletes — wire it to a cron / `runAfter` to also reclaim rooms nobody joins.
+ *
+ * The client half is `usePresence` in `@lunora/react`, which calls `heartbeat`
+ * on an interval and subscribes to `listPresent`.
+ */
+import { LunoraError } from "@lunora/errors";
+import { RateLimiter, rateLimit, createMemoryStore } from "lunorash/ratelimit";
+
+import type { MutationCtx } from "#lunora/_generated/server.js";
+import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
+
+import { requireOrg } from "../lib/crpc.js";
+import { PRESENCE_TABLE, PRESENCE_TTL_MS } from "./schema.js";
+
+/**
+ * Bench edit to the registry copy: a room belongs to one organisation. The
+ * caller must have an active organisation, and the room must be that
+ * organisation's id or `<organizationId>:<anything>`. The registry item takes the
+ * room id from the caller as-is, so on a shard every signed-in user can reach
+ * (`__root__` here), anyone could read or join any room (FINDINGS.md).
+ */
+const requireTenantRoom = async (ctx: Parameters<typeof requireOrg>[0], roomId: string): Promise<void> => {
+    const { organizationId } = await requireOrg(ctx);
+
+    if (roomId !== organizationId && !roomId.startsWith(`${organizationId}:`)) {
+        throw new LunoraError("FORBIDDEN", "presence: the room belongs to another organization");
+    }
+};
+
+export { presence } from "./schema.js";
+
+/**
+ * Per-session rate limit for the public `heartbeat` mutation — clients call it on
+ * an interval, so cap the rate to defend against a runaway/forged loop. The
+ * default store is in-memory (per-isolate, resets on eviction); run
+ * `lunora add ratelimit` for a durable, `ctx.db`-backed store in production.
+ */
+const limiter = new RateLimiter({
+    config: {
+        heartbeat: { kind: "token bucket", period: 60_000, rate: 120 },
+    },
+    store: createMemoryStore(),
+});
+
+/**
+ * Caps on the awareness payload. `listPresent` re-sends every member's `data` to
+ * every room subscriber on each heartbeat, so one oversized blob is multiplied
+ * by the room size and the heartbeat rate. The validator bounds each key and
+ * value; these bound the record as a whole, which a per-value limit cannot.
+ */
+const PRESENCE_DATA_MAX_ENTRIES = 32;
+const PRESENCE_DATA_MAX_BYTES = 4096;
+
+/** A single present member as returned by `listPresent`. */
+interface PresenceMember {
+    /** Opaque awareness blob (selection, cursor, name, color…). */
+    data?: Record<string, unknown>;
+    /** Last heartbeat time (epoch ms). */
+    lastSeen: number;
+    /** The room / channel / document this presence is scoped to. */
+    roomId: string;
+    /** Stable per-tab / per-connection id. */
+    sessionId: string;
+    /** Authenticated user id, when known. */
+    userId?: string;
+}
+
+/**
+ * Expired rows a joining session reclaims at most. A room nobody swept can hold
+ * far more than one mutation may read and delete, and a join that threw on that
+ * backlog would never insert its own row. The rest go on later joins and `sweep`.
+ */
+const JOIN_CLEANUP_BATCH = 50;
+
+/**
+ * Hard-delete up to `limit` rows of `roomId` last seen at or before `cutoff`
+ * (all of them without one). Rows sharing the mutation's snapshot, so the
+ * deletes go out together.
+ */
+const deleteExpired = async (ctx: MutationCtx, roomId: string, cutoff: number, limit?: number): Promise<number> => {
+    const expired = ctx.db
+        .query(PRESENCE_TABLE)
+        .withIndex("byRoomSession", (q) => q.eq("roomId", roomId))
+        .filter((row) => (row["lastSeen"] as number) <= cutoff);
+    const stale = limit === undefined ? await expired.collect() : await expired.take(limit);
+
+    await Promise.all(stale.map((row) => ctx.db.delete(PRESENCE_TABLE, row["_id"] as never)));
+
+    return stale.length;
+};
+
+/**
+ * Upsert the caller's presence row for `roomId` and stamp `lastSeen = now`.
+ * Patches the existing `(roomId, sessionId)` row on re-heartbeat so subscribers
+ * get a single-row delta.
+ */
+export const heartbeat = mutation
+    .input({
+        // Awareness payload (cursor, status, color, …) — a map of scalar values
+        // rather than `v.any()`. The validator bounds each key and value; the
+        // entry count and total size are checked in the handler below
+        // (PRESENCE_DATA_MAX_ENTRIES / PRESENCE_DATA_MAX_BYTES). Widen the value
+        // union or the caps if you need more.
+        data: v.optional(v.record(v.string().max(64), v.union(v.string().max(1024), v.number(), v.boolean()))),
+        roomId: v.string().max(256),
+        sessionId: v.string().max(256),
+    })
+    // Keyed by the authenticated caller, falling back to the server-trusted
+    // `ctx.ip` (Cloudflare's `CF-Connecting-IP`, forwarded server-side, never read
+    // from a client header). Without the `ctx.ip` hop every anonymous client
+    // shares one `"anon"` bucket, so a single one exhausts the limit for all of
+    // them — see the `ratelimit_key_spoofable_or_global` advisor lint.
+    .use(rateLimit(limiter, "heartbeat", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }))
+    .mutation(async ({ args: { data, roomId, sessionId }, ctx }): Promise<{ lastSeen: number }> => {
+        await requireTenantRoom(ctx, roomId);
+
+        if (data !== undefined) {
+            const entries = Object.keys(data).length;
+            const bytes = new TextEncoder().encode(JSON.stringify(data)).byteLength;
+
+            if (entries > PRESENCE_DATA_MAX_ENTRIES || bytes > PRESENCE_DATA_MAX_BYTES) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `presence/heartbeat: data has ${String(entries)} entries / ${String(bytes)} bytes; the limit is ${String(PRESENCE_DATA_MAX_ENTRIES)} entries / ${String(PRESENCE_DATA_MAX_BYTES)} bytes.`,
+                );
+            }
+        }
+
+        const lastSeen = ctx.now;
+        const userId = ctx.auth.userId ?? undefined;
+
+        const existing = await ctx.db
+            .query(PRESENCE_TABLE)
+            .withIndex("byRoomSession", (q) => q.eq("roomId", roomId).eq("sessionId", sessionId))
+            .first();
+
+        // Ownership guard. `sessionId` is client-supplied and `listPresent`
+        // exposes it to every room subscriber, so without this a participant
+        // could reuse another visible `sessionId` and overwrite that member's
+        // presence row. Reject a heartbeat that targets a row owned by a
+        // *different* authenticated user; an anonymous caller (no `userId`)
+        // likewise may not patch a row that belongs to an authenticated user.
+        if (existing && existing["userId"] !== undefined && existing["userId"] !== userId) {
+            // Coded, not a bare `Error`: an uncoded throw is redacted to a
+            // generic 500, so the caller sees a server fault instead of the
+            // ownership refusal.
+            throw new LunoraError(
+                "FORBIDDEN",
+                "presence/heartbeat: sessionId belongs to a different user — refusing to overwrite another participant's presence.",
+            );
+        }
+
+        const row: Record<string, unknown> = {
+            lastSeen,
+            roomId,
+            sessionId,
+            ...(data === undefined ? {} : { data }),
+            ...(userId === undefined ? {} : { userId }),
+        };
+
+        if (existing) {
+            await ctx.db.patch(PRESENCE_TABLE, existing["_id"] as never, row);
+        } else {
+            // A new session is the one moment the room grows, and the only write
+            // that is certain to happen: reclaim what the room has outgrown first.
+            await deleteExpired(ctx, roomId, ctx.now - PRESENCE_TTL_MS, JOIN_CLEANUP_BATCH);
+            await ctx.db.insert(PRESENCE_TABLE, row);
+        }
+
+        return { lastSeen };
+    });
+
+/**
+ * Live query: the non-expired members of `roomId`, newest heartbeat first.
+ * Subscribe to it for a reactive present-list.
+ */
+export const listPresent = query.input({ roomId: v.string().max(256) }).query(async ({ args: { roomId }, ctx }): Promise<PresenceMember[]> => {
+    await requireTenantRoom(ctx, roomId);
+
+    const cutoff = ctx.now - PRESENCE_TTL_MS;
+
+    const rows = await ctx.db
+        .query(PRESENCE_TABLE)
+        .withIndex("byRoomSession", (q) => q.eq("roomId", roomId))
+        .collect();
+
+    return rows
+        .filter((row) => (row["lastSeen"] as number) > cutoff)
+        .map((row) => {
+            const member: PresenceMember = {
+                lastSeen: row["lastSeen"] as number,
+                roomId: row["roomId"] as string,
+                sessionId: row["sessionId"] as string,
+            };
+
+            if (row["userId"] !== undefined) {
+                member.userId = row["userId"] as string;
+            }
+
+            if (row["data"] !== undefined) {
+                member.data = row["data"] as Record<string, unknown>;
+            }
+
+            return member;
+        })
+        .toSorted((a, b) => b.lastSeen - a.lastSeen);
+});
+
+/**
+ * Hard-delete every expired row for `roomId`. Internal (server-only) — schedule
+ * it from a cron / `runAfter` to reclaim storage. Stale rows already vanish from
+ * `listPresent` via the read-time TTL filter, so this is purely housekeeping.
+ */
+export const sweep = internalMutation.input({ roomId: v.string() }).mutation(async ({ args: { roomId }, ctx }): Promise<{ deleted: number }> => {
+    return { deleted: await deleteExpired(ctx, roomId, ctx.now - PRESENCE_TTL_MS) };
+});
+
+export type { PresenceMember };

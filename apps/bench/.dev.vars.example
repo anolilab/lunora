@@ -1,0 +1,56 @@
+# Local dev secrets for the bench app. Copy to `.dev.vars` (gitignored):
+#
+#   cp .dev.vars.example .dev.vars
+#
+# Every origin below must be THIS checkout's dev port, which `pnpm dev` prints as
+# `dev ports: playground :N` (a linked worktree gets an offset; the main checkout
+# uses 5173). vite.config.ts refuses to start when LUNORA_ORIGIN_URL disagrees:
+# workflow, scheduler and agent callbacks dispatch to it.
+
+# better-auth (min 32 chars) and the origin it builds callback URLs against.
+BETTER_AUTH_SECRET="replace-with-openssl-rand-base64-32"
+BETTER_AUTH_URL="http://localhost:5173"
+
+# Auth and onboarding mail is captured into the studio's Mail tab in dev.
+MAIL_FROM="Bench <noreply@bench.test>"
+
+# Origin for checkout / portal return URLs (payment kit).
+APP_BASE_URL="http://localhost:5173"
+
+# Origin the SchedulerDO, workflows and agents call back into, and the admin
+# bearer those callbacks (and the studio) present. `lunora dev` fills the token.
+LUNORA_ORIGIN_URL="http://localhost:5173"
+LUNORA_ADMIN_TOKEN="replace-with-openssl-rand-hex-32"
+
+# Signed upload / download URLs (min 32 chars).
+STORAGE_SIGNING_SECRET="replace-with-openssl-rand-base64-32"
+STORAGE_PUBLIC_BASE_URL="http://localhost:5173"
+
+# --- Optional: wired, inert until set -------------------------------------------
+# Payments (Stripe test mode). Unset, every payment call fails with NOT_IMPLEMENTED
+# and the rest of the app runs.
+# STRIPE_SECRET_KEY="sk_test_..."
+# STRIPE_WEBHOOK_SECRET="whsec_..."
+#
+# x402: the EVM address paid procedures settle to (base-sepolia). Unset, the
+# charge gate is off and `public-api:benchmarkFeed` refuses.
+# X402_PAYOUT_ADDRESS="0x..."
+#
+# OTLP export for logs / traces / metrics; unset, they go to the console.
+# LUNORA_OTLP_ENDPOINT="https://otlp.example.com"
+# LUNORA_OTLP_TOKEN=""
+#
+# Web Push / FCM keys (`npx web-push generate-vapid-keys`); unset, sends are skipped.
+# Workers AI (`ai/*`, the support agent, `web:preview` via Browser Rendering) needs
+# `wrangler login`: those bindings are remote-only, so those calls fail locally
+# while everything else runs.
+#
+# Generated heavy-SDK domains (`scripts/generate.mjs --heavy-share`, `--preset customer`).
+# Unset, their credentialed actions refuse with NOT_IMPLEMENTED; the offline ones
+# (`inspectLinks`, `exportBinary`, `sandboxSpec`, `draftPrompt`) run regardless.
+# S3_ENDPOINT="https://<account>.r2.cloudflarestorage.com"
+# S3_BUCKET="exports"
+# S3_ACCESS_KEY_ID=""
+# S3_SECRET_ACCESS_KEY=""
+# E2B_API_KEY=""
+# OPENAI_API_KEY=""
