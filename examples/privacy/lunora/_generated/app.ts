@@ -311,6 +311,7 @@ class AppBuilder<Env extends object> {
                 () => true,
                 (error: unknown) => {
                     console.error("[lunora] auth failed to initialise; this event runs without auth:", error);
+
                     return false;
                 },
             );
