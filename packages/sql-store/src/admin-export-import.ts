@@ -454,6 +454,7 @@ const writeRow = async (
     document: Record<string, unknown>,
     existingId: string | undefined,
     line: number,
+    onConflict: ImportGlobalArgs["onConflict"],
 ): Promise<RowOutcome> => {
     try {
         if (existingId !== undefined) {
@@ -482,10 +483,15 @@ const writeRow = async (
         const committedId = existingId ?? (typeof document["_id"] === "string" ? document["_id"] : undefined);
         const committed = committedId !== undefined && takePostCommitError(error, table, committedId);
 
-        // The report must say a committed row is stored: a re-import would skip it as a conflict and never redo the
-        // trigger or companion work that failed, so an operator who reads "failed" as "missing" loses that work.
+        // Say what is known: the base row committed, and the work after it did not finish. Not that the row is still
+        // there (its own trigger may have deleted it before throwing), and advice that matches the conflict mode: a
+        // skip-mode re-import skips a row that still exists, so the failed work is redone only under "replace".
+        const advice =
+            onConflict === "replace"
+                ? 're-importing it with onConflict "replace" redoes that work'
+                : 'a re-import skips it while it exists; use onConflict "replace" to redo that work';
         const message = committed
-            ? `${body.message} (row "${committedId}" was stored; its triggers or companion writes did not complete, and re-importing it will skip it as a conflict)`
+            ? `${body.message} (row "${committedId}" committed before this failure, so its triggers or companion writes may not have completed; ${advice})`
             : body.message;
 
         return { committed, error: { code: body.code, line, message, table }, kind: "error" };
@@ -605,7 +611,7 @@ const recheckOwnTable = async (
     }
 
     // The row appeared in its own table after it was probed: under replace it is the row to overwrite.
-    return onConflict === "replace" ? writeRow(writer, table, decoded, explicitId, line) : { kind: "conflict" };
+    return onConflict === "replace" ? writeRow(writer, table, decoded, explicitId, line, onConflict) : { kind: "conflict" };
 };
 
 /** Resolve one prepared import row to a single outcome, isolating the per-row branching from the accumulation loop. */
@@ -636,7 +642,7 @@ const importOneRow = async (
         return { kind: "conflict" };
     }
 
-    const outcome = await writeRow(writer, table, decoded, existingId, line);
+    const outcome = await writeRow(writer, table, decoded, existingId, line, args.onConflict);
 
     if (explicitId === undefined) {
         return outcome;
