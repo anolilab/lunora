@@ -1,3 +1,15 @@
+## @lunora/wire [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/wire@1.0.0-alpha.4...@lunora/wire@1.0.0-alpha.5) (2026-10-30)
+
+### Performance Improvements
+
+* **wire:** skip decodeWire on tagless json text ([#1384](https://github.com/anolilab/lunora/issues/1384)) ([ec9dd3d](https://github.com/anolilab/lunora/commit/ec9dd3de697df597b24cbea981ea25a1a2c8fcea))
+
+## @lunora/wire [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/wire@1.0.0-alpha.3...@lunora/wire@1.0.0-alpha.4) (2026-10-30)
+
+### Performance Improvements
+
+* **wire:** cheaper encode, decode and stable keys ([#1375](https://github.com/anolilab/lunora/issues/1375)) ([a62a3bf](https://github.com/anolilab/lunora/commit/a62a3bfcf3115b1a61db47a4121f493c1192e5e7))
+
 ## @lunora/wire [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/wire@1.0.0-alpha.2...@lunora/wire@1.0.0-alpha.3) (2026-10-27)
 
 ### Performance Improvements

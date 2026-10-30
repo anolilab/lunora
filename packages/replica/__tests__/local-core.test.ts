@@ -396,6 +396,91 @@ describe(EventLog, () => {
         expect(log2.size).toBe(2);
     });
 
+    it("rejects a snapshot whose entries are not in ascending seq order", () => {
+        expect.assertions(1);
+
+        const log = new EventLog();
+
+        log.append("a", 1);
+        log.append("b", 2);
+
+        const snap = log.snapshot();
+
+        expect(() => {
+            new EventLog().load({ ...snap, entries: snap.entries.toReversed() });
+        }).toThrow(RangeError);
+    });
+
+    it("keeps its order when a loaded snapshot's entry is edited afterwards", () => {
+        // Editing the caller's object must not reorder the log under the binary-searched tail reads.
+        expect.assertions(2);
+
+        const source = new EventLog();
+
+        for (const type of ["a", "b", "c", "d"]) {
+            source.append(type, type);
+        }
+
+        const entries = source.snapshot().entries.map((entry) => ({ ...entry }));
+        const log = new EventLog();
+
+        log.load({ ...source.snapshot(), entries });
+        (entries[1] as { seq: number }).seq = 100;
+
+        expect(log.getSince(1).map((entry) => entry.seq)).toStrictEqual([1, 2, 3]);
+        expect(log.getSince(50)).toStrictEqual([]);
+    });
+
+    it("hands out entries that cannot be edited", () => {
+        expect.assertions(3);
+
+        const log = new EventLog();
+        const appended = log.append("a", 1);
+        const [committed] = log.commitAll([{ payload: 2, type: "b" }]);
+
+        expect(Object.isFrozen(appended)).toBe(true);
+        expect(Object.isFrozen(committed)).toBe(true);
+        expect(log.getSince(0).every((entry) => Object.isFrozen(entry))).toBe(true);
+    });
+
+    it("rejects a snapshot whose nextSeq is not above the last entry seq", () => {
+        expect.assertions(2);
+
+        const log = new EventLog();
+
+        log.append("a", 1);
+        log.append("b", 2);
+
+        const snap = log.snapshot();
+
+        expect(() => {
+            new EventLog().load({ ...snap, nextSeq: snap.entries.at(-1)!.seq });
+        }).toThrow(RangeError);
+        expect(() => {
+            new EventLog().load({ ...snap, nextSeq: 0 });
+        }).toThrow(RangeError);
+    });
+
+    it("rejects a snapshot holding a NaN seq or a NaN nextSeq", () => {
+        expect.assertions(2);
+
+        const log = new EventLog();
+
+        log.append("a", 1);
+        log.append("b", 2);
+        log.append("c", 3);
+
+        const snap = log.snapshot();
+        const entries = snap.entries.map((entry, index) => (index === 1 ? { ...entry, seq: Number.NaN } : entry));
+
+        expect(() => {
+            new EventLog().load({ ...snap, entries });
+        }).toThrow(RangeError);
+        expect(() => {
+            new EventLog().load({ ...snap, nextSeq: Number.NaN });
+        }).toThrow(RangeError);
+    });
+
     it("snapshot captures headSeq", () => {
         expect.assertions(2);
 
@@ -592,6 +677,27 @@ describe(EventLog, () => {
 
         expect(log.size).toBe(3);
         expect(log.getSince(0).map((e) => e.seq)).toStrictEqual([7, 8, 9]);
+    });
+
+    it("reads by watermark skip entries evicted but not yet compacted away", () => {
+        expect.assertions(6);
+
+        // 15 appends under a cap of 10 leave 5 evicted entries in the backing array.
+        const log = new EventLog({ maxEntries: 10 });
+
+        for (let index = 0; index < 15; index += 1) {
+            log.append("tick", index);
+        }
+
+        expect(log.getSince(3).map((e) => e.seq)).toStrictEqual([5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+        expect(log.getSince(12).map((e) => e.seq)).toStrictEqual([12, 13, 14]);
+        expect(log.getSince(99)).toStrictEqual([]);
+        expect(log.getSince(Number.NaN)).toStrictEqual([]);
+
+        const page = log.getFrom(3, 2);
+
+        expect(page.entries.map((e) => e.seq)).toStrictEqual([5, 6]);
+        expect(page.hasMore).toBe(true);
     });
 
     it("without maxEntries the log stays unbounded (default, backward-compatible)", () => {

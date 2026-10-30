@@ -13,6 +13,11 @@ import type { RateLimitStore, RateLimitValue } from "./types";
  */
 const createMemoryStore = (): RateLimitStore => {
     const map = new Map<string, RateLimitValue>();
+    // Whether every write so far carried a `ts` at least as large as the one before. Limiters
+    // sharing a store read their own clocks, and a window store keeps the window start as `ts`,
+    // so one inversion is enough to put an expired entry behind a live one for good.
+    let ordered = true;
+    let lastTs = Number.NEGATIVE_INFINITY;
 
     return {
         delete: (storageKey) => {
@@ -24,6 +29,13 @@ const createMemoryStore = (): RateLimitStore => {
             // tracks write time, and the oldest entries sit at the front for `sweep`.
             map.delete(storageKey);
             map.set(storageKey, value);
+
+            // A NaN `ts` is ordered by no comparison, so it also counts as an inversion.
+            if (Number.isNaN(value.ts) || value.ts < lastTs) {
+                ordered = false;
+            }
+
+            lastTs = value.ts;
         },
         sweep: (olderThanTs, limit, owns) => {
             let examined = 0;
@@ -33,16 +45,30 @@ const createMemoryStore = (): RateLimitStore => {
                     break;
                 }
 
+                // While writes arrived in `ts` order, an owned live entry ends the sweep instead
+                // of rotating to the end: every entry behind it was written later. Rotating it
+                // would cost a delete and a set per live key on every consume. After an
+                // inversion that no longer holds, so live entries rotate like they used to.
+                if (ordered && value.ts > olderThanTs && owns?.(storageKey) !== false) {
+                    break;
+                }
+
                 examined += 1;
                 map.delete(storageKey);
 
                 // An entry is kept when it is a reserved debt (which outlives any age bound,
-                // since reserves stack), or belongs to another limiter sharing this store. A
+                // since reserves stack), is still live, or belongs to another limiter sharing this store. A
                 // kept entry moves to the end, so it cannot stop the sweep from reaching the
                 // entries behind it. ponytail: a debt key stays until a consume rewrites it
                 // or reset; add a debt-aware bound if abandoned debts show up in memory profiles.
                 if (value.value < 0 || value.ts > olderThanTs || owns?.(storageKey) === false) {
                     map.set(storageKey, value);
+
+                    // Rotating an older entry behind newer ones (another limiter's expired key, or
+                    // a debt) breaks the order the early break relies on.
+                    if (Number.isNaN(value.ts) || value.ts < lastTs) {
+                        ordered = false;
+                    }
                 }
             }
         },
@@ -71,6 +97,64 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlLike, query: string, ...p
 };
 
 /**
+ * Leads an escaped key; no key stored as-is starts with it. U+FFFF is a noncharacter that SQLite TEXT keeps intact
+ * (a NUL would end the string).
+ */
+const ESCAPED_KEY = "\uFFFF";
+
+/**
+ * The text a durable store keeps for `storageKey`. SQLite stores TEXT as UTF-8, and `TextEncoder` encodes the
+ * same way, so a lone UTF-16 surrogate is written as U+FFFD: `"a\uD800"` and `"a\uFFFD"` would share one row, and
+ * one caller's key could spend another's budget. A well-formed key is kept verbatim (the common case, no cost); any
+ * other key, and any key that starts with {@link ESCAPED_KEY}, is stored as that marker plus its JSON text, which
+ * escapes lone surrogates as ASCII. The mapping is one-to-one, so no two keys meet in a row.
+ */
+const encodeStorageKey = (storageKey: string): string =>
+    storageKey.isWellFormed() && !storageKey.startsWith(ESCAPED_KEY) ? storageKey : `${ESCAPED_KEY}${JSON.stringify(storageKey)}`;
+
+/**
+ * The caller's key for a stored key; the inverse of {@link encodeStorageKey}. A marker-prefixed row that is not
+ * JSON text was written verbatim before keys were escaped, and its stored text is its key, so a sweep over old rows
+ * never throws.
+ */
+const decodeStorageKey = (stored: string): string => {
+    if (!stored.startsWith(ESCAPED_KEY)) {
+        return stored;
+    }
+
+    try {
+        const decoded: unknown = JSON.parse(stored.slice(ESCAPED_KEY.length));
+
+        return typeof decoded === "string" ? decoded : stored;
+    } catch {
+        return stored;
+    }
+};
+
+/**
+ * A durable store whose keys round-trip exactly: every key is encoded on the way in, and a sweep's ownership test
+ * sees the caller's key, not its stored form, so a limiter still recognises its own escaped keys.
+ */
+const withLosslessKeys = (store: RateLimitStore): RateLimitStore => {
+    const wrapped: RateLimitStore = {
+        delete: (storageKey) => store.delete(encodeStorageKey(storageKey)),
+        get: (storageKey) => store.get(encodeStorageKey(storageKey)),
+        set: (storageKey, value) => store.set(encodeStorageKey(storageKey), value),
+    };
+    const { setIf, sweep } = store;
+
+    if (setIf) {
+        wrapped.setIf = (storageKey, value, prior) => setIf(encodeStorageKey(storageKey), value, prior);
+    }
+
+    if (sweep) {
+        wrapped.sweep = (olderThanTs, limit, owns) => sweep(olderThanTs, limit, owns === undefined ? undefined : (stored) => owns(decodeStorageKey(stored)));
+    }
+
+    return wrapped;
+};
+
+/**
  * SQLite-backed store for durable, per-DO rate-limit state. Persists each
  * `(name, key)` pair as one row so limits survive hibernation and eviction.
  *
@@ -90,7 +174,7 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlLike, query: string, ...p
  * configured rate. Two isolates sharing one SQLite file (not a Durable Object
  * case) are not covered; serialize those yourself.
  */
-const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
+const createRawSqlStore = (options: SqlStoreOptions): RateLimitStore => {
     const { sql } = options;
     const table = options.table ?? "_lunora_rate_limits";
 
@@ -104,14 +188,14 @@ const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
         },
         // The `value >= 0` must stay literal so the planner can use the partial index.
         // The limit is a bound parameter, not inlined. Ownership is checked in JS, so a
-        // row another limiter wrote is never deleted.
+        // row another limiter wrote is never deleted. The owned keys go to one DELETE as
+        // a JSON array: one statement text however many rows, instead of one per row.
         sweep: (olderThanTs, limit, owns) => {
             const candidates = runSql<{ k: string }>(sql, `SELECT k FROM "${table}" WHERE ts <= ? AND value >= 0 ORDER BY ts LIMIT ?`, olderThanTs, limit);
+            const owned = candidates.map(({ k }) => k).filter((k) => owns?.(k) !== false);
 
-            for (const { k } of candidates) {
-                if (owns?.(k) !== false) {
-                    runSql(sql, `DELETE FROM "${table}" WHERE k = ?`, k);
-                }
+            if (owned.length > 0) {
+                runSql(sql, `DELETE FROM "${table}" WHERE k IN (SELECT value FROM json_each(?))`, JSON.stringify(owned));
             }
         },
         get: (storageKey) => {
@@ -144,6 +228,9 @@ const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
         },
     };
 };
+
+/** Sql store, with keys stored losslessly; see {@link encodeStorageKey}. */
+const createSqlStore = (options: SqlStoreOptions): RateLimitStore => withLosslessKeys(createRawSqlStore(options));
 
 /**
  * The READ slice — everything the store needs to answer `RateLimiter.getValue`
@@ -285,7 +372,7 @@ const isConflict = (error: unknown): boolean => (error as { code?: unknown } | n
  * failure value from the mutation instead of throwing. A `.global()` table's
  * row lives in D1, outside the DO transaction, so there the unit stays spent.
  */
-const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
+const createRawDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     const { db } = options;
     const table = options.table ?? "rateLimits";
     const keyField = options.keyField ?? "key";
@@ -449,6 +536,9 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
         },
     };
 };
+
+/** Database store, with keys stored losslessly; see {@link encodeStorageKey}. */
+const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => withLosslessKeys(createRawDatabaseStore(options));
 
 /**
  * Read-only counterpart to {@link createDatabaseStore}, for a query context.

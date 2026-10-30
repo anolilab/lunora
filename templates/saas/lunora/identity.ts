@@ -51,6 +51,8 @@
  *         activeOrganizationId: member ? activeOrganizationId : undefined,
  *         appRole: (session.user as { role?: string | null }).role ?? undefined,
  *         email: session.user.email || undefined,
+ *         // The claim `lunora/presence` scopes rooms by; without it every organization shares them.
+ *         orgId: member ? activeOrganizationId : undefined,
  *         orgRole: member?.role,
  *         userId: session.user.id,
  *     };

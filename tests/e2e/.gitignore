@@ -3,3 +3,6 @@ dist/
 playwright-report/
 test-results/
 .tsbuildinfo
+.saas-app/
+test-results-saas/
+playwright-report-saas/

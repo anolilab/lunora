@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MailboxSink } from "../src/capture-transport";
 import { createCaptureTransport } from "../src/capture-transport";
 import createMailer from "../src/create-mailer";
+import { isRetryableMailError } from "../src/send-error";
 import type { MailTransport, QueueLike, SendPayload } from "../src/types";
 
 const FROM_PATTERN = /from/;
@@ -46,6 +47,15 @@ describe("createMailer", () => {
         await expect(mailer.queue({ subject: "Hi", text: "x", to: "a@x.test" })).resolves.toStrictEqual({ queued: true });
         expect(enqueue).toHaveBeenCalledTimes(1);
         await expect(mailer.send({ subject: "Hi", text: "x", to: "a@x.test" })).rejects.toThrow(NO_TRANSPORT_PATTERN);
+    });
+
+    it("a queue-only mailer's send() failure is retryable, so a consumer missing its binding does not ack and drop the mail", async () => {
+        expect.assertions(1);
+
+        const mailer = createMailer({ from: "noreply@x.test", queue: { send: vi.fn<QueueLike["send"]>(async () => undefined) } });
+        const failure: unknown = await mailer.send({ subject: "Hi", text: "x", to: "a@x.test" }).catch((error: unknown) => error);
+
+        expect(isRetryableMailError(failure)).toBe(true);
     });
 
     it("send() forwards to the transport with the default `from`", async () => {

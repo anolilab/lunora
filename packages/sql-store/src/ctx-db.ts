@@ -119,7 +119,7 @@ import {
     whereOfFilter,
     WORKERD_SQLITE_LIMITS,
 } from "@lunora/shard-engine";
-import { decodeWire, encodeWire, needsWireEncoding } from "@lunora/wire";
+import { decodeWire, encodeWire, needsWireEncoding, parseWire } from "@lunora/wire";
 import { SQL, sql } from "drizzle-orm";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
@@ -1398,7 +1398,7 @@ const readSqlCdcChanges = async (
         // `decodeWire` mirrors the `encodeWire` on the append side, so a
         // `v.bigint()` / `v.bytes()` post-image comes back as the real value
         // rather than its tagged form. Identity for a pure-JSON document.
-        return typeof doc === "string" ? { ...base, doc: decodeWire(JSON.parse(doc)) as Record<string, unknown> } : base;
+        return typeof doc === "string" ? { ...base, doc: parseWire(doc) as Record<string, unknown> } : base;
     });
 
     return { changes, cursor: changes.at(-1)?.seq ?? sinceSeq };

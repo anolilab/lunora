@@ -64,9 +64,24 @@ export const toQueuedPayload = (options: SendOptions): QueuedSend => {
  *     // createMailerFromEnv, so dev captures the message here instead of sending it.
  *     const mailer = createMailerFromEnv(env);
  *     for (const message of batch.messages) {
- *       const { idempotencyKey } = message.body;
+ *       const idempotencyKey = message.body?.idempotencyKey;
+ *       // Malformed, and no retry fixes it; unguarded, this would throw and retry the whole batch. Logged without the
+ *       // body, which can still carry recipients and content.
+ *       if (typeof idempotencyKey !== "string") { console.error("malformed mail message: no idempotencyKey"); message.ack(); continue; }
  *       if (await env.SENT.get(idempotencyKey)) { message.ack(); continue; }
- *       await consumeQueuedSend(mailer, message.body);
+ *       try {
+ *         await consumeQueuedSend(mailer, message.body);
+ *       } catch (error) {
+ *         // A refusal the provider will never accept: a retry only dead-letters it.
+ *         if (!isRetryableMailError(error)) {
+ *           console.error("mail refused", error);
+ *           message.ack();
+ *           continue;
+ *         }
+ *
+ *         message.retry();
+ *         continue;
+ *       }
  *       await env.SENT.put(idempotencyKey, "1", { expirationTtl: 86_400 });
  *       message.ack();
  *     }

@@ -125,8 +125,12 @@ The runtime resolves the inbound session and populates `ctx.auth` on every
 - `ctx.auth.userId` is the signed-in user's id, or `null` for an anonymous
   request. A truthy check narrows it to `string` and doubles as your "is signed
   in" guard.
-- `ctx.auth.getIdentity()` resolves the decoded identity claims, or `null` when
-  anonymous.
+- `ctx.auth.getIdentity()` resolves the identity claims, or `null` when
+  anonymous: `email`, `name`, `role` (from `admin()`) and `expiresAtMs`, plus
+  `orgId` and `teamId` (the session's active organization and team) when the
+  `organization()` plugin is on, each checked against current membership (it can
+  lag a removal by the identity cache window, at most 60 s by default). A claim
+  the session does not carry is absent.
 
 ```ts
 if (!ctx.auth.userId) throw new Error("must be signed in");

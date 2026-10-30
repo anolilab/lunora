@@ -2,7 +2,7 @@
 
 Collaborative-awareness presence for Lunora — the "who's here" + cursors primitive (Convex [`@convex-dev/presence`](https://www.npmjs.com/package/@convex-dev/presence) parity). A room (a document, board, or channel) and the set of users/sessions currently looking at it, each carrying an optional awareness `data` blob (cursor, selection, name, color…).
 
-Built entirely from primitives Lunora already has — a live-query table plus a read-time TTL filter — so there's no new package and no Durable-Object-level support to enable.
+Built entirely from primitives Lunora already has — a live-query table, a read-time TTL filter and a table `.ttl()` — so there's no new package to install.
 
 ## Install
 
@@ -26,11 +26,21 @@ The functions surface in the generated `api` as `presence/heartbeat`, `presence/
 
 ## How it works
 
-- **heartbeat** (mutation) upserts the caller's row for `(roomId, sessionId)` and stamps `lastSeen = now`. Re-heartbeats _patch_ the existing row, so subscribers receive a single-row delta rather than an insert/delete churn.
-- **listPresent** (query) returns the non-expired members of a room, newest first. It filters `lastSeen > now - PRESENCE_TTL_MS` at read time, so a client that stops heart-beating silently drops out — **no reaper needed**.
-- **sweep** (internal mutation) hard-deletes expired rows to reclaim storage. It's _internal_ (server-only) so clients can't trigger bulk deletes; wire it to a cron or `runAfter` if your tables grow.
+- **heartbeat** (mutation) upserts the caller's row for `(tenant, roomId, sessionId)` and stamps `lastSeen = now`. Re-heartbeats _patch_ the existing row, so subscribers receive a single-row delta rather than an insert/delete churn.
+- **listPresent** (query) returns the non-expired members of the caller's room, newest first. It filters `lastSeen > now - PRESENCE_TTL_MS` at read time, so a client that stops heart-beating silently drops out — **no reaper needed**.
+- **sweep** (internal mutation) hard-deletes expired rows to reclaim storage. It's _internal_ (server-only) so clients can't trigger bulk deletes; the table's `.ttl()` already deletes expired rows in every shard, so it is an on-demand tool, not something to schedule (see [Expired rows](#expired-rows)).
 
-Tune the time-to-live by editing `PRESENCE_TTL_MS` in `lunora/presence/schema.ts` (default 30s). Keep your client heartbeat cadence well under it.
+## Rooms are scoped to the caller's tenant
+
+A client names only the room. The server files it under the tenant it derives from the caller's verified identity (`presenceTenant` in `lunora/presence/index.ts`), so `roomId: "lobby"` in organization A and in organization B are two separate rooms, and no argument reaches another tenant's. The tenant is stored in its own `tenantId` column and never returned to clients.
+
+The tenant is the identity's `orgId` claim — the one the `auth-auth0-jwt`, `auth-clerk-jwt` and `auth-workos-jwt` presets emit. Callers without one (anonymous, or an app with no organizations) share the app-wide tenant `""`, which is right for a single-tenant app and holds no organization's rooms.
+
+With `@lunora/auth`, the built-in identity carries `orgId` whenever the organization plugin is on: the caller's active organization, emitted only while their membership still exists. A removal can lag by up to the identity cache window (60 s by default; immediate with the `strict` preset), and an open subscription keeps the claim it connected with until it reconnects, so a removed member can stay in a room's member list until then. A `resolveIdentity` of your own replaces the built-in one, so forward the membership-checked organization as `orgId` from it.
+
+To scope by something else (a team, a workspace), change `presenceTenant` — it is the one place the policy lives. Read the tenant from the identity, never from `args`: a tenant the client chooses is no boundary.
+
+Tune the time-to-live by editing `PRESENCE_TTL_MS` in `lunora/presence/schema.ts` (default 30s), and the `.ttl()` `after` beside it to match. Keep your client heartbeat cadence well under it.
 
 ## Use it from React
 
@@ -62,23 +72,26 @@ function Room({ roomId }: { roomId: string }) {
 
 `setData(next)` replaces the awareness blob sent with subsequent heartbeats (and heartbeats once immediately) — use it to publish a moving cursor or a changed selection. `sessionId` defaults to one row per tab; pass your own to dedupe across tabs by user.
 
-## Sweep on a schedule (optional)
+## Expired rows
 
-`listPresent` never returns stale rows, so sweeping is purely about reclaiming storage. To run it, schedule the internal mutation from a cron:
+`listPresent` never returns stale rows, so deleting them is purely about reclaiming storage, and the table does it on its own: `.ttl("lastSeen", { after: 30_000 })` in `lunora/presence/schema.ts` has every Durable Object's alarm delete its own expired rows. That matters in a sharded app — an organization's rooms live in its own shard, and nothing else reaches all of them. Keep that `after` equal to `PRESENCE_TTL_MS` when you change the TTL; codegen reads the literal, not the constant.
 
-```ts
-// lunora/crons.ts
-import { cronJobs } from "@lunora/server";
+There is nothing to schedule. The internal `sweep` mutation is an on-demand tool — run it from another server function (`ctx.runMutation(internal.presence.sweep, …)`) when you want rows gone before the alarm gets to them — and it only reaches **the shard it runs on**:
 
-import { internal } from "./_generated/internal";
+- `{ roomId, tenantId }` — every expired row of that one room (`""` is the app-wide tenant), read through the `byTenantRoomSession` index.
+- `{ roomId }` — up to 500 expired rows of that room in every tenant; the shape crons written before rooms were tenant-scoped pass, so they keep working until you remove them.
+- `{}` — up to 500 expired rows of every tenant and room.
 
-const crons = cronJobs();
+The last two filter a scan of the whole table (the TTL's `lastSeen` index is the engine's own, which a query cannot name), so neither belongs on a schedule. A `tenantId` without a `roomId` is refused.
 
-crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, { roomId: "lobby" });
+### Upgrading from untenanted rooms
 
-export default crons;
-```
+If your `lunora/crons.ts` schedules `internal.presence.sweep`, delete that entry: the table's `.ttl()` replaces it, in every shard, without scanning the table.
+
+Rows written before rooms were tenant-scoped have no `tenantId` — which is why the column is optional. Every heartbeat, `listPresent` and join-time cleanup looks rows up by tenant, so those rows are invisible to them: members re-appear with their next heartbeat as new rows, and the old ones sit in storage. The table's `.ttl()` alarm deletes them once they are past the TTL, in every shard.
+
+The deploy's schema-drift gate reports two breaking changes for this upgrade. The `byRoomSession` index is replaced by `byTenantRoomSession`, and the gate cannot know that the only query using it was this item's own code, which the upgrade also replaced. The new `.ttl()` deletes every row already past the cutoff on its first alarm, which for presence only enforces the expiry `listPresent` already applies at read time — so there is nothing to back-fill. Accept the new shape once: `lunora prepare --update-schema-baseline`, or `--allow-schema-drift` on that one `lunora deploy`.
 
 ## What you own
 
-Everything under `lunora/presence/` is copied into your repo — change the TTL, the table columns (add a `name`/`color` column instead of stuffing them in `data`), the sort order, or the functions however you like. This component is the idiomatic Lunora glue; once added, it's just your code.
+Everything under `lunora/presence/` is copied into your repo — change the TTL, the tenant policy, the table columns (add a `name`/`color` column instead of stuffing them in `data`), the sort order, or the functions however you like. This component is the idiomatic Lunora glue; once added, it's just your code.

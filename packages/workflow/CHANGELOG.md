@@ -1,3 +1,15 @@
+## @lunora/workflow [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.100...@lunora/workflow@1.0.0-alpha.101) (2026-10-30)
+
+### Performance Improvements
+
+* **wire:** skip decodeWire on tagless json text ([#1384](https://github.com/anolilab/lunora/issues/1384)) ([ec9dd3d](https://github.com/anolilab/lunora/commit/ec9dd3de697df597b24cbea981ea25a1a2c8fcea))
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+* **@lunora/server:** upgraded to 1.0.0-alpha.255
+
 ## @lunora/workflow [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.98...@lunora/workflow@1.0.0-alpha.99) (2026-10-28)
 
 

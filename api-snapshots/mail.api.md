@@ -62,6 +62,27 @@ interface LunoraMailOptions {
 type MailEnv = Record<string, unknown>;
 ```
 
+### `MailSendError` (class)
+
+```ts
+class MailSendError extends LunoraError {
+    readonly retryable: boolean;
+    constructor(options: {
+        cause?: unknown;
+        message?: string;
+        retryable: boolean;
+    });
+}
+```
+
+### `MailSendErrorData` (interface)
+
+```ts
+interface MailSendErrorData {
+    retryable: boolean;
+}
+```
+
 ### `MailTransport` (interface)
 
 ```ts
@@ -196,6 +217,12 @@ const createMailerFromEnv: (env: MailEnv, options?: FromEnvOptions) => Mailer;
 
 ```ts
 const createResendTransport: (apiKey: string, defaultFrom: string) => MailTransport;
+```
+
+### `isRetryableMailError` (const)
+
+```ts
+const isRetryableMailError: (error: unknown) => boolean;
 ```
 
 ### `renderEmail` (const)

@@ -212,6 +212,8 @@ Checklist:
 - [ ] You've read [Limits](/docs/limits) and know which Cloudflare ceiling
       you'll hit first: DO SQLite size and per-DO request rate are the usual
       sharding signals, subrequest counts bound fan-out reads.
+- [ ] A large app's startup stays well under Cloudflare's 1 s CPU limit
+      (`npx wrangler check startup`); past it the deploy fails with error 10021. See [Worker startup CPU limit](/docs/startup-cpu-limit).
 
 ## Advisors as the final gate
 
