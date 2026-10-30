@@ -814,7 +814,7 @@ deleted. A resource that cannot be deleted stays on record for the next
 
 An app that binds anything a preview cannot isolate yet is refused with the
 list: Hyperdrive, service bindings, queues, workflows, Vectorize, Analytics
-Engine, the `analytics` (Analytics SQL) binding, which reads the account's datasets, containers, Artifacts, `lunora.config` services, a Durable Object on
+Engine, the `analytics` (Analytics SQL) binding, which reads the account's datasets, `send_email`, which would send mail through production's sender, containers, Artifacts, `lunora.config` services, a Durable Object on
 another Worker's `script_name`, a singular `route`, an R2 bucket with a
 jurisdiction, or any binding kind the CLI does not know. A `secrets.required`
 entry has to be passed with `--secret`; the preview refuses before creating

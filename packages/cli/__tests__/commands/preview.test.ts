@@ -602,6 +602,7 @@ describe("lunora preview", () => {
             ["a Durable Object on another Worker", { durable_objects: { bindings: [{ class_name: "Billing", name: "BILL", script_name: "billing" }] } }],
             ["a singular route", { route: "app.example.com/*" }],
             ["the Analytics SQL binding, which reads the account's datasets", { analytics: { binding: "ANALYTICS" } }],
+            ["a send_email binding, which would mail through production's sender", { send_email: [{ name: "MAIL" }] }],
         ])("refuses an app that binds %s rather than share production's resource", (_label, extra) => {
             expect.assertions(1);
 
@@ -1154,6 +1155,23 @@ describe("lunora preview", () => {
             expect(existsSync(join(workdir, ".lunora", "preview.lock"))).toBe(false);
         });
 
+        it("never overwrites a foreign value that sits at its record key in a namespace carrying the registry's title", async () => {
+            expect.assertions(4);
+
+            const account = fakeAccount();
+            const { deploys, spawner } = wranglerAt(workdir, account.workers);
+
+            account.kv.set("kv-foreign", "lunora-preview-registry");
+            account.kvValues.set("kv-foreign", new Map([["lunora-app/42", "someone else's data"]]));
+
+            const result = await deployWith(account, spawner);
+
+            expect(result.code).not.toBe(0);
+            expect(result.error).toMatch(/reading the preview record "lunora-app\/42"/u);
+            expect(account.kvValues.get("kv-foreign")?.get("lunora-app/42")).toBe("someone else's data");
+            expect(deploys).toHaveLength(0);
+        });
+
         it("refuses a --secret that has no value in the environment, before touching the account", async () => {
             expect.assertions(2);
 
@@ -1372,6 +1390,38 @@ describe("lunora preview", () => {
 
             expect(result.error).toMatch(/refusing to delete anything/u);
             expect(account.calls.filter((call) => call.method === "DELETE")).toHaveLength(0);
+        });
+
+        it("exits 1, never the not-on-record code, when a Cloudflare call fails mid-delete (the CI teardown tolerates only the latter)", async () => {
+            expect.assertions(3);
+
+            const account = await deployed();
+            const failing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                const { pathname } = new URL(input as string);
+
+                if (init?.method === "DELETE" && pathname.includes("/d1/")) {
+                    return Response.json({ errors: [{ code: 7003, message: "not found" }], success: false }, { status: 404 });
+                }
+
+                if (init?.method === "DELETE" && pathname.includes("/storage/kv/")) {
+                    return new Response("{}", { status: 403 });
+                }
+
+                return account.fetch(input, init);
+            }) as typeof globalThis.fetch;
+
+            const result = await runPreviewCommand({
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: failing,
+                logger: silentLogger().logger,
+                name: "42",
+                subcommand: "delete",
+            });
+
+            expect(result.code).toBe(EXIT_CODE.FAILURE);
+            expect(result.code).not.toBe(EXIT_CODE.NOT_FOUND);
+            expect(result.error).toMatch(/could not be deleted/u);
         });
 
         it("refuses a record with a resource this CLI could not have written", async () => {
