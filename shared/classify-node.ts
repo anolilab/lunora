@@ -133,10 +133,6 @@ export const classifyNode = (value: object): NodeKind => {
         return "builtin-date";
     }
 
-    if (isError(value, proto)) {
-        return "builtin-error";
-    }
-
     if (urlHref !== undefined && brand(() => Reflect.apply(urlHref, value, []))) {
         return "builtin-url";
     }
@@ -153,5 +149,11 @@ export const classifyNode = (value: object): NodeKind => {
         return "builtin-array-buffer";
     }
 
-    return ArrayBuffer.isView(value) ? "builtin-view" : "other";
+    if (ArrayBuffer.isView(value)) {
+        return "builtin-view";
+    }
+
+    // Last on purpose: every brand above is an internal slot no object can fake, while the Error test may fall back
+    // to a shim or to ancestry. Testing it first would let a permissive `isError` claim a real Map or Date.
+    return isError(value, proto) ? "builtin-error" : "other";
 };

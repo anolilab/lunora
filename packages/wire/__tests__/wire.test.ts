@@ -301,6 +301,36 @@ describe("one prototype read per node", () => {
     });
 });
 
+describe("error classification without a slot check", () => {
+    it("keeps a real Map a Map when only Error ancestry is there to test", async () => {
+        expect.assertions(1);
+
+        // Without `Error.isError` the Error test falls back to ancestry, which a prototype swap satisfies. It must
+        // run after the slot brands, so a real Map whose prototype claims Error is still encoded as a Map.
+        const expected = encodeWire(new Map([["a", 1]]));
+        const errorStatics = Error as unknown as Record<string, unknown>;
+        const nativeIsError = Object.getOwnPropertyDescriptor(Error, "isError");
+
+        Reflect.deleteProperty(errorStatics, "isError");
+        vi.resetModules();
+
+        try {
+            const fresh = await import("../src");
+            const disguised = new Map([["a", 1]]);
+
+            Object.setPrototypeOf(disguised, Error.prototype);
+
+            expect(fresh.encodeWire(disguised)).toStrictEqual(expected);
+        } finally {
+            if (nativeIsError !== undefined) {
+                Object.defineProperty(Error, "isError", nativeIsError);
+            }
+
+            vi.resetModules();
+        }
+    });
+});
+
 describe("built-in contents read natively", () => {
     it("encodes a collection's real contents when a subclass hides them from its iterators", () => {
         expect.assertions(3);
