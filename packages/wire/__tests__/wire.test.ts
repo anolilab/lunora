@@ -301,6 +301,28 @@ describe("one prototype read per node", () => {
     });
 });
 
+describe("brands under a polluted root prototype", () => {
+    it("ignores an href accessor added to Object.prototype", async () => {
+        expect.assertions(1);
+
+        const expected = encodeWire(new Map([["a", 1]]));
+
+        // A polluted root must not become the deepest `href` and brand every object as a URL.
+        // eslint-disable-next-line no-extend-native -- the pollution under test; removed again in `finally`
+        Object.defineProperty(Object.prototype, "href", { configurable: true, get: () => "https://polluted.test/" });
+        vi.resetModules();
+
+        try {
+            const fresh = await import("../src");
+
+            expect(fresh.encodeWire(new Map([["a", 1]]))).toStrictEqual(expected);
+        } finally {
+            Reflect.deleteProperty(Object.prototype, "href");
+            vi.resetModules();
+        }
+    });
+});
+
 describe("date and error classification", () => {
     it("brands dates with the base getTime when a subclass overrides it without a receiver check", async () => {
         expect.assertions(2);

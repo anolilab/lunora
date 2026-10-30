@@ -29,12 +29,16 @@ const brand = (check: () => unknown): boolean => {
 /*
  * Every brand is the DEEPEST definition of its name on the chain, read once at module load. When a global is a
  * subclass, the base class's member is the one that checks its receiver's internal slot; an override above it may
- * answer for any object (a Map would then pass as a URL or a Date), so it is never the brand.
+ * answer for any object (a Map would then pass as a URL or a Date), so it is never the brand. The walk stops at the
+ * shared roots: a member planted on `Object.prototype` or `Function.prototype` is inherited by everything, so it
+ * would brand every object.
  */
+const SHARED_ROOTS: ReadonlySet<object> = new Set([Object.prototype, Function.prototype]);
+
 const deepest = (start: object, key: string, part: "get" | "value"): (() => unknown) | undefined => {
     let found: (() => unknown) | undefined;
 
-    for (let current: object | null = start; current !== null; current = Object.getPrototypeOf(current) as object | null) {
+    for (let current: object | null = start; current !== null && !SHARED_ROOTS.has(current); current = Object.getPrototypeOf(current) as object | null) {
         const member: unknown = Object.getOwnPropertyDescriptor(current, key)?.[part];
 
         if (typeof member === "function") {
