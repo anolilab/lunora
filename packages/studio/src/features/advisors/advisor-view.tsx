@@ -33,6 +33,8 @@ interface AdvisorViewProps {
     readonly errorSource?: unknown;
     /** Findings to display; `null` before the first load completes. */
     readonly rows: AdvisorRow[] | null;
+    /** Shard the findings came from, so a seeded question reads that shard rather than the root. */
+    readonly shardKey?: string;
     /** Scopes the `data-testid`s (`{testId}-tab-error`, …). */
     readonly testId: string;
 
@@ -123,7 +125,7 @@ const tallyByLevel = (rows: AdvisorRow[] | null): Record<AdvisorLevel, number> =
  * findings, with a centered per-tab empty state. The Security and Performance
  * advisors both render through this so they stay visually identical.
  */
-export const AdvisorView = ({ error = null, errorSource, rows, testId, toolbar }: AdvisorViewProps): ReactElement => {
+export const AdvisorView = ({ error = null, errorSource, rows, shardKey, testId, toolbar }: AdvisorViewProps): ReactElement => {
     const t = useT();
     // `undefined` when no assistant is mounted above this tree — then no button,
     // rather than one that cannot work. Same contract as `useOperationConsole`.
@@ -166,7 +168,7 @@ export const AdvisorView = ({ error = null, errorSource, rows, testId, toolbar }
             {/* Toolbar (rendered only when a panel supplies controls, e.g. a shard selector). */}
             {toolbar !== undefined && <div className="flex flex-wrap items-center gap-2">{toolbar}</div>}
 
-            {error !== null && <ErrorAlert error={errorSource ?? error} testId={`${testId}-error`} />}
+            {error !== null && <ErrorAlert error={errorSource ?? error} shardKey={shardKey} testId={`${testId}-error`} />}
 
             {/* Findings table for the active tab. */}
             <Card className="overflow-hidden py-0">
@@ -222,6 +224,7 @@ export const AdvisorView = ({ error = null, errorSource, rows, testId, toolbar }
                                                                                       }),
                                                                         },
                                                                     ),
+                                                                    shardKey,
                                                                     suggestions: [t("How do I verify this is fixed?")],
                                                                     title: row.issueType,
                                                                 });

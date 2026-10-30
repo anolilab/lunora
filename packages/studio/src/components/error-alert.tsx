@@ -13,6 +13,8 @@ interface ErrorAlertProps {
     readonly className?: string;
     /** The thrown value (a `LunoraClientError` carries `hint`/`docsUrl`). */
     readonly error: unknown;
+    /** Shard the failed read targeted, so "Ask the assistant" reads that shard rather than the root. */
+    readonly shardKey?: string;
     readonly testId?: string;
 }
 
@@ -23,7 +25,7 @@ interface ErrorAlertProps {
  * message paragraphs so the studio surfaces the same fix the CLI and error
  * overlay show.
  */
-const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement => {
+const ErrorAlert = ({ className, error, shardKey, testId }: ErrorAlertProps): ReactElement => {
     const t = useT();
     // `undefined` when no console is mounted above this tree (a host embedding a
     // single panel, or a standalone render in a test). The affordance is then not
@@ -63,6 +65,7 @@ const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): ReactElement
 
         assistant?.openAssistant({
             ask: t("The studio reported this error:\n{message}{detail}\n\nWhat causes it, and how do I fix it?", { detail, message: errorMessage(error) }),
+            shardKey,
             title: t("Debug error"),
         });
     };
