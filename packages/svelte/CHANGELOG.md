@@ -1,3 +1,46 @@
+## @lunora/svelte [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.304...@lunora/svelte@1.0.0-alpha.305) (2026-10-30)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** presence_present gains a required tenantId column, the
+byRoomSession / byRoom / byRoomLastSeen indexes are replaced by
+byTenantRoomSession and byTenantRoomLastSeen, and sweep takes
+{ roomId, tenantId }. The schema-drift gate reports the added required field
+and removed indexes. Rows written before the upgrade carry no tenantId, so no
+tenant sees or reaps them; they are ephemeral, clear them with a data
+migration. Apps whose identity has an orgId claim now get per-organization
+rooms; better-auth apps must forward activeOrganizationId as orgId from
+resolveIdentity to get that isolation.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(scheduling): pass the presence sweep its room and tenant
+
+The cron example called `internal.presence.sweep` with no args, which
+already failed on the required `roomId` and now also needs `tenantId`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* style(server): rewrap the presence doc comments
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(server): name the tenant-prefixed presence index
+
+The maxSessions and listPresent comments still described the removed
+(roomId, lastSeen) index; the reads go through byTenantRoomLastSeen.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **server:** scope definePresence rooms to the caller's tenant ([#1421](https://github.com/anolilab/lunora/issues/1421)) ([43fecb1](https://github.com/anolilab/lunora/commit/43fecb1cbc099f0cc771a7446a9a9a68c3979e81))
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.187
+
 ## @lunora/svelte [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.303...@lunora/svelte@1.0.0-alpha.304) (2026-10-30)
 
 

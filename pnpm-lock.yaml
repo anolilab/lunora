@@ -2792,8 +2792,8 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
-        version: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -3267,8 +3267,8 @@ importers:
         specifier: workspace:*
         version: link:../testing
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
-        version: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
@@ -3645,8 +3645,8 @@ importers:
         specifier: workspace:*
         version: link:../search-core
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
-        version: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
@@ -4735,8 +4735,8 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
-        version: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.101.4(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -5360,8 +5360,8 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
-        version: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@1.9.15)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -5549,8 +5549,8 @@ importers:
         specifier: workspace:*
         version: link:../react
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
-        version: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       '@tanstack/react-query':
         specifier: catalog:frontend
         version: 5.101.4(react@19.3.0)
@@ -5682,8 +5682,8 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
-        version: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -5746,8 +5746,8 @@ importers:
         specifier: workspace:*
         version: link:../server
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
-        version: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       '@playwright/test':
         specifier: ^1.61.1
         version: 1.63.0
@@ -5890,8 +5890,8 @@ importers:
         specifier: workspace:*
         version: link:../ratelimit
       '@lunora/wire':
-        specifier: 1.0.0-alpha.5
-        version: 1.0.0-alpha.5
+        specifier: 1.0.0-alpha.6
+        version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
