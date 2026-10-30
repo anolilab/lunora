@@ -1069,6 +1069,78 @@ describe("assistantPanel", () => {
         expect(needs.textContent).toContain("LUNORA_AI_OPT_IN");
     });
 
+    it("keeps a failed turn's error in its own chat when the operator switches to another", async () => {
+        expect.hasAssertions();
+
+        // The chat status is per hook, not per session, so a failure in one conversation used to follow the
+        // operator into the next one before they had asked it anything.
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true, level: "schema" };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiChat) {
+                    return { degraded: true, reason: "ai-error" };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 0 }];
+                }
+
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+        const Host = (): ReactElement => {
+            const assistant = useAssistant();
+
+            return (
+                <>
+                    <button
+                        aria-label="open first chat"
+                        data-testid="host-open"
+                        onClick={() => {
+                            assistant?.openAssistant({ title: "First" });
+                        }}
+                        type="button"
+                    />
+                    <button
+                        aria-label="start second chat"
+                        data-testid="host-new"
+                        onClick={() => {
+                            assistant?.newChat({ title: "Second" });
+                        }}
+                        type="button"
+                    />
+                    {assistant !== undefined && assistant.open && <AssistantPanel assistant={assistant} />}
+                </>
+            );
+        };
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <AssistantProvider>
+                    <Host />
+                </AssistantProvider>
+            </LunoraProvider>,
+        );
+
+        fireEvent.click(screen.getByTestId("host-open"));
+        await screen.findByTestId("assistant-input");
+
+        ask("why is this slow?");
+
+        await screen.findByTestId("assistant-error");
+
+        fireEvent.click(screen.getByTestId("host-new"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId<HTMLTextAreaElement>("assistant-input").value).toBe("");
+        });
+
+        expect(screen.queryByTestId("assistant-error")).toBeNull();
+    });
+
     it("says only that a malformed request was refused, since no var would fix it", async () => {
         expect.hasAssertions();
 

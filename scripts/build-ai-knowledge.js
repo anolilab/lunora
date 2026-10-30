@@ -48,7 +48,9 @@ const MAX_HEADINGS = 8;
 const docFiles = (directory) => {
     const found = [];
 
-    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    // Code-unit order, not `localeCompare`: collation follows the host's locale and ICU data, so a hyphenated or
+    // punctuated name could sort differently in CI than on a developer's machine and flip the committed digest.
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
         const path = join(directory, entry.name);
 
         if (entry.isDirectory()) {

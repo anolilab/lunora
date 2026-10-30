@@ -72,6 +72,9 @@ const useAssistantChat = ({
     // turn, and without the id it followed the operator into a session that never
     // truncated anything. Set on every answer, so a later untruncated answer clears it.
     const [truncatedFor, setTruncatedFor] = useState<string | undefined>(undefined);
+    // Which session sent the turn the chat status describes. The status is per hook, so without the id a failure in
+    // one conversation showed in the next one before it was asked anything.
+    const [reasonFor, setReasonFor] = useState<string | undefined>(undefined);
 
     // The draft seed already applied, so a re-render does not re-prefill over
     // whatever the operator has since typed.
@@ -98,10 +101,12 @@ const useAssistantChat = ({
     );
 
     const pending = ops.pending("chat");
-    const reason = ops.reason("chat");
+    const chatReason = ops.reason("chat");
 
     const { setTurns, takeAsk, unavailable } = assistant;
     const sessionId = session?.id;
+    // A reason that latches is about the deployment, not one conversation, so it shows in every session.
+    const reason = chatReason === "ai-disabled" || chatReason === "no-ai-binding" || reasonFor === sessionId ? chatReason : undefined;
 
     const branchHere = (index: number): void => {
         if (sessionId !== undefined) {
@@ -139,6 +144,7 @@ const useAssistantChat = ({
 
         setTurns(session.id, asked);
         setLive({ sessionId: session.id, text: "" });
+        setReasonFor(session.id);
 
         fireAndForget(
             ops
