@@ -102,6 +102,8 @@ interface Harness {
     audit: () => { detail: string | null; op: string }[];
     /** Ids the scheduler was asked to cancel. */
     cancelled: string[];
+    /** Whether the scheduler held the job each time `cancel` was called, in order. */
+    cancelOutcomes: boolean[];
     /** Operator drop of an outbox entry. */
     drop: (id: string) => Promise<Response>;
     /** Make arming the alarm fail (or work again). */
@@ -142,6 +144,7 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
     const received: ReceivedOptions[] = [];
     const alarms: number[] = [];
     const cancelled: string[] = [];
+    const cancelOutcomes: boolean[] = [];
     let failure: Error | undefined;
     let cancelFailure: Error | undefined;
     let held: { entered: () => void; released: Promise<undefined> } | undefined;
@@ -180,7 +183,11 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
 
                               cancelled.push(id);
 
-                              return { cancelled: scheduled.some((job) => job.id === id) };
+                              const holds = scheduled.some((job) => job.id === id);
+
+                              cancelOutcomes.push(holds);
+
+                              return { cancelled: holds };
                           },
                           runAfter: async (_delayMs: number, target: unknown, args: unknown, options?: { id?: string }): Promise<string> =>
                               accept(target, args, options),
@@ -234,6 +241,7 @@ const createHarness = (configuration: { scheduler?: boolean } = {}): Harness => 
                 .map((row) => {
                     return { detail: row.detail, op: row.op };
                 }),
+        cancelOutcomes,
         cancelled,
         failAlarms: (fail: boolean) => {
             alarmControl.fail = fail;
@@ -637,6 +645,29 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         ]);
     });
 
+    it("cancels a job that lands from the FIRST post-commit hand-off after the entry was dropped", async () => {
+        expect.assertions(4);
+
+        const harness = createHarness();
+        const { entered, release } = harness.hold();
+        const rpc = harness.shard.handleRpc("outbox:orderPlaced", {});
+
+        // The mutation committed and its first hand-off is waiting on a slow scheduler.
+        await entered;
+
+        const id = harness.outbox()[0]?.id ?? "<no entry>";
+
+        await expect(harness.drop(id).then(async (response) => response.json())).resolves.toStrictEqual({ result: { dropped: true } });
+
+        release();
+        await rpc;
+
+        // The job landed after the drop, so only a cancel issued after it landed can stop it.
+        expect(harness.scheduled.map((job) => job.id)).toContain(id);
+        expect(harness.cancelOutcomes.at(-1)).toBe(true);
+        expect(harness.outbox()).toStrictEqual([]);
+    });
+
     it("does not hand a dropped entry to the scheduler when it was already queued in the same batch", async () => {
         expect.assertions(3);
 
@@ -651,7 +682,9 @@ describe("emitted shard — a deferred schedule that never reaches the scheduler
         const { entered, release } = harness.hold();
 
         harness.setReachable(true);
-        harness.makeDue();
+        // The tick takes due rows by next attempt, so pin the order the test relies on.
+        harness.run("UPDATE __schedule_outbox SET next_attempt_at = 1 WHERE id = ?", first);
+        harness.run("UPDATE __schedule_outbox SET next_attempt_at = 2 WHERE id = ?", second);
 
         const attempt = harness.retry();
 

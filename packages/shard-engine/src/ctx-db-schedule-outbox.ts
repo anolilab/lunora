@@ -117,6 +117,13 @@ interface ScheduleOutbox {
     forget: (id: string) => void;
 
     /**
+     * Run one post-commit hand-off under the store's eye and release custody when it lands, so an
+     * operator who drops the entry while the call is still awaiting the scheduler is seen, and the
+     * job is taken back out when it lands. When absent the facade runs the call and `forget`s the id.
+     */
+    handOff?: (id: string, run: () => Promise<unknown>) => Promise<void>;
+
+    /**
      * Take custody of one buffered call. Runs INSIDE the transaction, so a throw
      * here rolls the mutation back — which is the right answer, and the only
      * moment at which failing is free.

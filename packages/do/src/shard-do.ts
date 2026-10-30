@@ -6893,6 +6893,9 @@ abstract class ShardDO {
                     // stale entry is re-offered and refused as a duplicate.
                 }
             },
+            handOff: async (id, run): Promise<void> => {
+                await this.runScheduleOutboxHandOff(id, run);
+            },
             record: (id, envelope): void => {
                 recordScheduleOutbox(this.sql as SqlExec, id, JSON.stringify(envelope), Date.now());
             },
@@ -15843,6 +15846,38 @@ abstract class ShardDO {
         }
     }
 
+    /**
+     * The post-commit hand-off of a deferred schedule, run as a recorded attempt like every retry:
+     * a drop that arrives while the call awaits the scheduler is seen here and the job is cancelled
+     * when it lands (the row stays parked if that cancel fails). A failure leaves the row for the
+     * retry loop, unless a drop already ended the entry, in which case the row goes.
+     */
+    private async runScheduleOutboxHandOff(id: string, run: () => Promise<unknown>): Promise<void> {
+        const sql = this.sql as SqlExec;
+        const attempt = { dropped: false, stale: false };
+        const awaiting = this.scheduleOutboxAttempts.get(id) ?? new Set<typeof attempt>();
+
+        awaiting.add(attempt);
+        this.scheduleOutboxAttempts.set(id, awaiting);
+
+        try {
+            await run();
+            await this.settleScheduleOutboxHandOff(sql, this.scheduleOutboxScheduler(), id, attempt.dropped);
+        } catch (error) {
+            if (attempt.dropped) {
+                forgetScheduleOutbox(sql, id);
+            }
+
+            throw error;
+        } finally {
+            awaiting.delete(attempt);
+
+            if (awaiting.size === 0) {
+                this.scheduleOutboxAttempts.delete(id);
+            }
+        }
+    }
+
     /** A hand-off that threw: end custody if the scheduler turns out to hold the job, else defer or park the entry. */
     private async settleFailedScheduleOutboxAttempt(
         sql: SqlExec,
@@ -15896,7 +15931,13 @@ abstract class ShardDO {
      * hand-off was awaiting (or a drop is cancelling it right now), the operator asked
      * for the job NOT to run, so take it back out of the scheduler.
      */
-    private async settleScheduleOutboxHandOff(sql: SqlExec, scheduler: SchedulerLike, id: string, dropped: boolean, trace?: TraceRefLike): Promise<void> {
+    private async settleScheduleOutboxHandOff(
+        sql: SqlExec,
+        scheduler: SchedulerLike | undefined,
+        id: string,
+        dropped: boolean,
+        trace?: TraceRefLike,
+    ): Promise<void> {
         if (!dropped && !this.scheduleOutboxDropping.has(id)) {
             forgetScheduleOutbox(sql, id);
 

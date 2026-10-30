@@ -124,6 +124,13 @@ interface ScheduleOutbox {
     forget: (id: string) => void;
 
     /**
+     * Run one post-commit hand-off under the store's eye and release custody when it lands, so an
+     * operator who drops the entry while the call is still awaiting the scheduler is seen, and the
+     * job is taken back out when it lands. When absent the facade runs the call and `forget`s the id.
+     */
+    handOff?: (id: string, run: () => Promise<unknown>) => Promise<void>;
+
+    /**
      * Take custody of one buffered call. Runs INSIDE the transaction, so a throw
      * here rolls the mutation back — which is the right answer, and the only
      * moment at which failing is free.
@@ -234,6 +241,22 @@ interface SchedulerLike {
  */
 const deferredWhen = (method: "runAfter" | "runAt", when: number, deferredTo: number): number =>
     method === "runAfter" ? Math.max(when, deferredTo - Date.now()) : Math.max(when, deferredTo);
+
+/**
+ * One post-commit call. Accepted means custody ends; anything still in the outbox after the drain
+ * is a job the caller was told it had and the scheduler does not, which the retry loop is for.
+ * An outbox with `handOff` runs the call itself so a concurrent drop is seen.
+ */
+const handOffDeferred = async (outbox: ScheduleOutbox | undefined, id: string, run: () => Promise<unknown>): Promise<void> => {
+    if (outbox?.handOff !== undefined) {
+        await outbox.handOff(id, run);
+
+        return;
+    }
+
+    await run();
+    outbox?.forget(id);
+};
 
 /**
  * Wrap a scheduler so `runAfter`/`runAt` can be held for a transaction.
@@ -438,12 +461,7 @@ export const beginDeferredSchedules = (context: DeferredScheduleContext): ((comm
         for (const { id, run } of draining) {
             try {
                 // eslint-disable-next-line no-await-in-loop -- declaration order is the contract: `runAfter(0, a)` then `runAfter(0, b)` must enqueue a before b
-                await run();
-
-                // Accepted, so custody ends. Anything still in the outbox after
-                // this loop is a job the caller was told it had and the scheduler
-                // does not — which is exactly what the retry loop is for.
-                queue.outbox?.forget(id);
+                await handOffDeferred(queue.outbox, id, run);
             } catch (error) {
                 failures.push(error);
             }
