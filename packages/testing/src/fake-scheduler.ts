@@ -393,7 +393,7 @@ const createFakeScheduler = (
                         attempts,
                         completedAt: nowMs,
                         // The dead-letter reason `SchedulerDO` records, not the handler's message.
-                        error: `after ${String(attempts)} attempts`,
+                        error: `dead-lettered after ${String(attempts)} attempts`,
                         state: "failed",
                     });
                 } else {

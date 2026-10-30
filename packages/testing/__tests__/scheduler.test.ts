@@ -669,7 +669,7 @@ describe("fake scheduler", () => {
             expect(t.scheduler.failures()).toHaveLength(1);
             expect(t.scheduler.list()).toHaveLength(0);
             await expect(t.run(async (ctx) => ctx.scheduler.get(jobId))).resolves.toMatchObject({
-                error: `after ${String(MAX_RETRY_ATTEMPTS + 1)} attempts`,
+                error: `dead-lettered after ${String(MAX_RETRY_ATTEMPTS + 1)} attempts`,
                 state: "failed",
             });
         });
