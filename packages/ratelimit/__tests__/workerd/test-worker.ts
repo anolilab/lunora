@@ -172,7 +172,7 @@ const d1Exec = (database: D1Database): D1Exec => {
  * `ctx.db` forwards a global table's reads and writes to.
  */
 const d1Database = (database: D1Database): RateLimitDb =>
-    createD1CtxDb({ exec: d1Exec(database), idGenerator: () => crypto.randomUUID(), schema: D1_SCHEMA });
+    createD1CtxDb({ exec: d1Exec(database), idGenerator: () => crypto.randomUUID(), schema: D1_SCHEMA }) as unknown as RateLimitDb;
 
 class RateLimitDO extends DurableObject<Env> {
     readonly #stores = new Map<StoreKind, RateLimitStore>();
