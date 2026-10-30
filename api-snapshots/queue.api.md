@@ -396,6 +396,7 @@ interface DispatchOptions {
     capture?: QueueCaptureSink;
     env: Record<string, unknown>;
     fetchImpl?: typeof fetch;
+    holdSeconds?: number;
     live?: QueueLivePublisher;
     traceparent?: string;
 }
