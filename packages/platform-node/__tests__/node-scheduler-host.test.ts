@@ -116,6 +116,28 @@ describe("createNodeSchedulerHost", () => {
             database.close();
         });
 
+        it("reclaims an expired cancelled row on a later cancel, without a restart or a completion", async () => {
+            expect.assertions(1);
+
+            vi.useFakeTimers();
+
+            const database = new Database(":memory:");
+            const host = createNodeSchedulerHost(database);
+            const old = await host.scheduler.schedule("jobs:run", {}, { delayMs: 10_000_000 });
+
+            await host.scheduler.cancel(old.id);
+            vi.setSystemTime(Date.now() + 604_800_000);
+
+            const recent = await host.scheduler.schedule("jobs:run", {}, { delayMs: 10_000_000 });
+
+            await host.scheduler.cancel(recent.id);
+
+            expect(database.prepare("SELECT id FROM _lunora_scheduler_jobs").all()).toStrictEqual([{ id: recent.id }]);
+
+            host.dispose();
+            database.close();
+        });
+
         it("sweeps retained rows through an index rather than a table scan", () => {
             expect.assertions(1);
 

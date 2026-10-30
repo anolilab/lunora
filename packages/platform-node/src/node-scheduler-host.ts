@@ -652,7 +652,14 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             // `false`. A dead-lettered job is no longer on its way — answering
             // `true` would tell a caller it stopped a delivery that had already
             // permanently failed.
-            return cancelPendingJob.run(Date.now(), id).changes > 0;
+            const now = Date.now();
+            const cancelled = cancelPendingJob.run(now, id).changes > 0;
+
+            // A host that only cancels never completes a job or restarts, the other
+            // two places finished rows are reclaimed.
+            sweepTerminal.run(now - TERMINAL_RETENTION_MS);
+
+            return cancelled;
         },
 
         // eslint-disable-next-line @typescript-eslint/require-await -- see `cancel`
