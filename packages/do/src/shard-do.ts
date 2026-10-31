@@ -272,6 +272,7 @@ import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { canonicalClaims, claimsFingerprint } from "../../../shared/claims-fingerprint";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
 import type { ErrorDetail } from "../../../shared/error-detail";
@@ -306,10 +307,10 @@ import { buildTraceparent, LUNORA_ATTR, parseTraceparent } from "../../../shared
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { RAY_ID_HEADER } from "../../../shared/ray-id";
 import { BATCH_END_FRAME, BATCH_START_FRAME, REFRESH_BATCH_CAPABILITY } from "../../../shared/refresh-batch";
-import { parseRelayName } from "../../../shared/relay-name";
+import { holderConnectionId, parseRelayName } from "../../../shared/relay-name";
 import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
-import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
+import { IDENTITY_CHANGED_CLOSE_REASON, IDENTITY_STALE_CLOSE_CODE, SOCKET_REAUTH_PATH, SOCKET_REVALIDATE_MS } from "../../../shared/socket-reauth";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { adminSocketBinding, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -1731,15 +1732,20 @@ const countLiveConnections = (
     return { callerConnections, ipConnections };
 };
 
-/** Claims a refreshed credential re-issues on every refresh; they say when it was minted and until when, not who it names. */
-const VOLATILE_CLAIMS = new Set(["exp", "expiresAtMs", "iat", "jti", "nbf"]);
+/**
+ * The revalidation deadline a newly accepted socket is held to: any non-route socket carrying a user identity,
+ * admin or not. Admin authority (revoked by an admin-token rotation) says nothing about the user identity riding
+ * beside it, so exempting admin sockets would let a removed user keep its user subscriptions on one. A route socket
+ * is the app's own protocol with no re-auth channel; an anonymous socket has no identity to go stale.
+ */
+const revalidationStamp = (route: unknown, userId: string | undefined, acceptedAt: number): Pick<SocketAttachment, "revalidateAt"> =>
+    route === undefined && userId !== undefined ? { revalidateAt: acceptedAt + SOCKET_REVALIDATE_MS } : {};
 
 /** The claims a re-auth must leave unchanged, as one comparable key (`""` for none). */
-const credentialClaimsKey = (identity: Record<string, unknown> | undefined): string => {
-    const stable = Object.fromEntries(Object.entries(identity ?? {}).filter(([claim]) => !VOLATILE_CLAIMS.has(claim)));
+const credentialClaimsKey = canonicalClaims;
 
-    return Object.keys(stable).length === 0 ? "" : stableWireKey(stable);
-};
+/** Whether the socket carries a user or claims, as opposed to being anonymous. */
+const socketHasClaims = (attachment: SocketAttachment): boolean => attachment.userId !== undefined || canonicalClaims(attachment.identity) !== "";
 
 const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
     // A copy: the attachment is shared with the socket cache, and user code receives this object.
@@ -3401,6 +3407,7 @@ abstract class ShardDO {
             currentCdcEpoch: () => this.currentCdcEpoch(),
             deliverWhisperLocal: (topic, frame, exclude) => this.deliverWhisperLocal(topic, frame, exclude),
             deliverLiveLocal: (topic, key, frame) => this.deliverLiveLocal(topic, key, frame),
+            dropIfLapsed: (ws) => this.dropIfLapsed(ws),
             liveControl: (control) => this.handleLiveSocketControl(control),
             getWebSockets: () => this.runner.sockets(),
             maskMetadata: () => this.maskMetadata(),
@@ -3520,6 +3527,11 @@ abstract class ShardDO {
         }
         if (url.pathname === "/_lunora/route") {
             return jsonResponse({ relayCount: 0 });
+        }
+        // The socket's scheduled re-auth: it moves a deadline and compares claims, and delivers nothing, so it is not
+        // a mode the authorization hook has to cover. Refusing it would reconnect every socket each half window.
+        if (url.pathname === SOCKET_REAUTH_PATH && request.method === "POST") {
+            return this.runner.handleFetch(request);
         }
         if (url.pathname !== "/rpc" || request.method !== "POST") {
             return jsonResponse({ error: { code: "NOT_IMPLEMENTED", message: DELIVERY_MODE_UNSUPPORTED } }, 501);
@@ -6488,6 +6500,8 @@ abstract class ShardDO {
         // wire round-trips; every other outbound path already requires that.
         const deltaJson = JSON.stringify(encodeWire(delta));
 
+        // One clock read for the whole fan-out, shared by every socket's lapse check.
+        const now = Date.now();
         for (const ws of sockets) {
             const attachment = this.readAttachment(ws);
 
@@ -6495,9 +6509,7 @@ abstract class ShardDO {
             // socket whose credential lapsed must not keep receiving its user's
             // rows. This path is subclass-driven (see the README's `broadcast`
             // hook), so nothing upstream of it has already checked.
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment, now)) {
                 continue;
             }
 
@@ -6509,11 +6521,18 @@ abstract class ShardDO {
             // NOT `for...in`: it walks inherited enumerable keys, where
             // `Object.entries` was own-only. See the "never inherited ones" test.
             const { subs } = attachment;
+            const claimed = socketHasClaims(attachment);
 
             for (const subId of Object.keys(subs)) {
                 const query = subs[subId];
 
                 if (query === undefined || !this.matchesSubscription(query, delta)) {
+                    continue;
+                }
+
+                // A table-only subscription (no function) is refused on an authenticated socket now, but one persisted
+                // before that stays in the attachment: raw table deltas are not claim-scoped, so it is not served.
+                if (claimed && !query.functionPath) {
                     continue;
                 }
 
@@ -8083,9 +8102,7 @@ abstract class ShardDO {
         // Read once here and reused for the route check below.
         const inboundAttachment = this.readAttachment(ws);
 
-        if (isIdentityExpired(inboundAttachment.expiresAt)) {
-            this.dropExpiredSocket(ws);
-
+        if (this.dropIfLapsed(ws, inboundAttachment)) {
             return;
         }
 
@@ -8251,10 +8268,19 @@ abstract class ShardDO {
             // subscribe (`POST` to the stream's control route); the frame goes only to this socket.
             // `whisperAck` advertises that every live join is answered with `whisper_subscribed`, so a
             // client can hold a live grant until its join is acknowledged. An older shard omits it.
+            // `revalidateMs` is the window a client re-auths the socket within to keep it open; a relative
+            // duration, so the client's clock never has to agree with this one.
             this.sendFrame(
                 ws,
-                // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
-                JSON.stringify({ connectionId: attachment.connectionId, subject: attachment.userId ?? null, type: "identity", whisperAck: true }),
+                JSON.stringify({
+                    claims: claimsFingerprint(attachment.userId, attachment.identity),
+                    connectionId: attachment.connectionId,
+                    ...(attachment.revalidateAt === undefined ? {} : { revalidateMs: SOCKET_REVALIDATE_MS }),
+                    // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
+                    subject: attachment.userId ?? null,
+                    type: "identity",
+                    whisperAck: true,
+                }),
                 "control",
             );
 
@@ -8345,6 +8371,20 @@ abstract class ShardDO {
             const { functionPath } = envelope.query;
             const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
 
+            // A table-only subscribe (no function path) is fed raw table deltas that no claim scopes, and nothing can
+            // seed or reset its rows when the socket's claims change. Refused as soon as the socket's claims are
+            // known, before anything is stored or sent; a socket with none (anonymous) has nothing to leak.
+            if (!functionPath && socketHasClaims(this.readAttachment(ws))) {
+                this.sendSubscriptionError(
+                    ws,
+                    envelope.id,
+                    "SUBSCRIPTION_FUNCTION_REQUIRED",
+                    "a subscription on an authenticated socket must name a function (functionPath)",
+                );
+
+                return;
+            }
+
             // Admin introspection subscriptions read shard internals (raw rows,
             // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
             // as the HTTP admin RPCs — recorded on the socket at upgrade and
@@ -8387,6 +8427,17 @@ abstract class ShardDO {
                 );
 
                 return;
+            }
+
+            // A cursor is honoured only under the claims it was read under; otherwise this is a first subscribe.
+            {
+                const { sinceClaims, ...held } = query;
+
+                query = held;
+
+                if (held.sinceSeq !== undefined && !this.resumesUnderCurrentClaims(ws, sinceClaims, held.functionPath)) {
+                    query = { ...held, sinceEpoch: undefined, sinceSeq: undefined };
+                }
             }
 
             const status = this.subscribe(ws, envelope.id, query);
@@ -8441,8 +8492,10 @@ abstract class ShardDO {
             await this.handleShapeSubscribe(ws, envelope.id, {
                 args: shapeArgs,
                 name: envelope.shape.name,
-                sinceEpoch: envelope.sinceEpoch,
-                sinceSeq: envelope.sinceCheckpoint,
+                // As for a query: a checkpoint is honoured only under the claims it was read under.
+                ...(envelope.sinceCheckpoint === undefined || this.resumesUnderCurrentClaims(ws, envelope.sinceClaims, envelope.shape.name)
+                    ? { sinceEpoch: envelope.sinceEpoch, sinceSeq: envelope.sinceCheckpoint }
+                    : {}),
             });
 
             return;
@@ -8620,6 +8673,11 @@ abstract class ShardDO {
             }
 
             if (typeof envelope.topic === "string" && envelope.topic.length > 0 && (await this.authorizeWhisper(ws, envelope.topic, "send"))) {
+                // The authorizer's await can outlast the sender's credential or window; the frame carries its user id.
+                if (this.dropIfLapsed(ws)) {
+                    return;
+                }
+
                 // A room topic is handled server-side rather than blindly relayed:
                 // the shard decodes the client's typed message, dispatches the
                 // room's `onMessage` (which decides what, if anything, members
@@ -13420,8 +13478,7 @@ abstract class ShardDO {
             // on the frame that STARTED this stream, and a pump can outlive
             // it indefinitely. Tear the iterator down rather than keep
             // pushing the user's data at an expired socket.
-            if (this.isSocketExpired(ws)) {
-                this.dropExpiredSocket(ws);
+            if (this.dropIfLapsed(ws)) {
                 controller.abort();
 
                 break;
@@ -13438,6 +13495,13 @@ abstract class ShardDO {
             // backpressure. Do not let its pending chunk land on a new stream
             // that has since reused the same id.
             if (isStreamCancelled(controller)) {
+                break;
+            }
+
+            // The drain can outlast the credential or the revalidation window.
+            if (this.dropIfLapsed(ws)) {
+                controller.abort();
+
                 break;
             }
 
@@ -13508,7 +13572,9 @@ abstract class ShardDO {
         // anonymous reload starts over, which is the honest answer when nothing
         // durable identifies the caller.
         const caller = attachment.userId ?? anonymousStreamCaller(attachment, id);
-        const runKey = `${caller}\u0000${functionPath}:${stableWireKey(args)}`;
+        // The claims are part of the key: a run produced under one tenant's claims is never attached to the same user's
+        // socket after a claims change, which starts a run of its own, as a cold resume would.
+        const runKey = `${caller}\u0000${claimsFingerprint(attachment.userId, attachment.identity)}\u0000${functionPath}:${stableWireKey(args)}`;
         const cancellers = socketMap(this.streamCancellers, ws);
         const frames = streamFrames(ws, id);
 
@@ -13537,8 +13603,7 @@ abstract class ShardDO {
                 // Same mid-run expiry rule as the ephemeral pump. `false` is the
                 // sink contract's "this consumer is gone", so the runner drops it
                 // and the transcript keeps producing for whoever else is attached.
-                if (this.isSocketExpired(ws)) {
-                    this.dropExpiredSocket(ws);
+                if (this.dropIfLapsed(ws)) {
                     detach();
 
                     return false;
@@ -14072,9 +14137,7 @@ abstract class ShardDO {
             // the socket and skip its push.
             const attachment = this.readAttachment(ws);
 
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment)) {
                 return;
             }
 
@@ -14346,6 +14409,11 @@ abstract class ShardDO {
         // the client must receive; otherwise the pre-run epoch pairs with the
         // pre-run cursor.
         const epoch = isAdmin ? undefined : (resume?.epoch ?? readEpoch);
+
+        // The authorization and the query above yield; a socket whose window passed meanwhile gets neither a resume nor rows.
+        if (this.dropIfLapsed(ws)) {
+            return;
+        }
 
         if (resume?.resumable) {
             // Never reached under delivery authorization: `resume` is forced to
@@ -14699,9 +14767,7 @@ abstract class ShardDO {
         const pokeOne = async (ws: ShardSocketLike): Promise<void> => {
             const attachment = this.readAttachment(ws);
 
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment)) {
                 return;
             }
             const { shapes } = attachment;
@@ -16157,9 +16223,7 @@ abstract class ShardDO {
         for (const ws of sockets) {
             const attachment = this.readAttachment(ws);
 
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment)) {
                 continue;
             }
 
@@ -16266,6 +16330,11 @@ abstract class ShardDO {
         epoch: string | undefined,
         baseCheckpoint: number | undefined,
     ): boolean {
+        // The one send for every shape frame (seed, poke, global poll): checked here, after the awaits that built it.
+        if (this.dropIfLapsed(ws)) {
+            return false;
+        }
+
         this.pokeSequence += 1;
         const pokeId = `poke-${String(this.pokeSequence)}`;
         const frames = buildPokeFrames(parts, {
@@ -16550,7 +16619,9 @@ abstract class ShardDO {
         delivery: SocketDelivery,
         permit?: SubscriptionDeliveryPermit,
     ): void {
-        if (!this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
+        // Every row-bearing subscription frame (seed, refresh, resume) passes here after its awaited query and drain,
+        // so checking at the send is what keeps a socket that lapsed meanwhile from receiving the rows in hand.
+        if (this.dropIfLapsed(ws) || !this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
             return;
         }
         const existing = this.socketIndex.memo(ws, subId);
@@ -16664,6 +16735,11 @@ abstract class ShardDO {
     ): boolean {
         const memo = this.socketIndex.memo(ws, subId);
         if (memo === undefined || !this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
+            return false;
+        }
+        // A settlement moves the client's cursor and watermark, so a socket that lapsed during the awaited
+        // authorization gets none, as it would get no rows.
+        if (this.dropIfLapsed(ws)) {
             return false;
         }
         if (
@@ -16939,6 +17015,7 @@ abstract class ShardDO {
 
         return this.handleLiveSocketControl({
             action: "reauth",
+            ...(request.headers.get("x-lunora-admin-reauth") === "1" ? { adminReauth: true as const } : {}),
             callerId: decodeUserIdHeader(request.headers.get("x-lunora-userid")) ?? "",
             connectionId: body.connectionId,
             ...(identity === undefined ? {} : { identity }),
@@ -16949,15 +17026,55 @@ abstract class ShardDO {
     }
 
     /**
-     * Move a socket's credential expiry to the refreshed one, keeping its
-     * subscriptions and memos. Refused — and the socket left to lapse at its old
-     * expiry with 4001 — when the credential is anonymous, already expired, older
-     * than the one the socket holds (a replay), or carries different claims; the
-     * client then reconnects, and a changed identity re-seeds there as on any upgrade.
+     * Re-authenticate a socket that was admitted as admin. The admin credential it was admitted with must still hold
+     * (the shard's own binding check, as on every admin read, so a rotated token fails here) and the worker must have
+     * verified an admin credential on this very request. Failing either closes the socket: a user identity riding
+     * beside it is not enough to keep the socket, since the user may be the one that was revoked. A user who is gone
+     * or changed closes it too, so it reconnects holding only what the admin credential grants; one that is unchanged
+     * is re-authenticated as any user socket.
+     */
+    private async reauthenticateAdminSocket(ws: ShardSocketLike, call: LiveSocketControlCall): Promise<Response> {
+        const attachment = this.readAttachment(ws);
+
+        if (call.adminReauth !== true || !(await this.attachmentAdminAuthorized(attachment))) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
+
+            return jsonResponse({ error: { code: "IDENTITY_STALE", message: "the admin credential no longer holds; reconnect" } }, 409);
+        }
+
+        if (attachment.userId === undefined) {
+            return jsonResponse({ ok: true });
+        }
+
+        if ((attachment.userId ?? "") !== call.callerId || credentialClaimsKey(attachment.identity) !== credentialClaimsKey(call.identity)) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, IDENTITY_CHANGED_CLOSE_REASON);
+
+            return jsonResponse({ error: { code: "IDENTITY_CHANGED", message: "the user on this admin socket changed; reconnect" } }, 409);
+        }
+
+        return this.reauthenticateSocket(ws, call);
+    }
+
+    /**
+     * Move a socket's credential expiry to the refreshed one and restart its
+     * revalidation window, keeping its subscriptions and memos. Refused — and the
+     * socket left to lapse at its old expiry or window — when the credential is
+     * anonymous, already expired, or older than the one the socket holds (a replay).
+     * Different claims close the socket at once with `4005`: the caller's identity
+     * has changed (a role, an `orgId`), so the socket must not deliver another
+     * moment under the old one. The client reconnects and re-seeds under the new one.
      */
     private reauthenticateSocket(ws: ShardSocketLike, call: LiveSocketControlCall): Response {
         const attachment = this.readAttachment(ws);
         const { identity, identityExpiry } = call;
+
+        // A socket already past its window is closed, not revived: a late re-auth must not keep what its lapse ended.
+        // Only the window: a credential expiry that has passed is what this call exists to move forward.
+        if (isIdentityExpired(attachment.revalidateAt)) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
+
+            return jsonResponse({ error: { code: "IDENTITY_STALE", message: "the socket's revalidation window passed; reconnect" } }, 409);
+        }
 
         if (call.callerId === "") {
             return jsonResponse({ error: { code: "UNAUTHENTICATED", message: "an anonymous socket has no credential to refresh" } }, 401);
@@ -16967,14 +17084,16 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: "TOKEN_EXPIRED", message: "authentication token expired" } }, 401);
         }
 
+        if (credentialClaimsKey(attachment.identity) !== credentialClaimsKey(identity)) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, IDENTITY_CHANGED_CLOSE_REASON);
+
+            return jsonResponse({ error: { code: "IDENTITY_CHANGED", message: "the credential's claims differ from the socket's; reconnect" } }, 409);
+        }
+
         // A credential without an expiry (a cookie session, say) cannot lift the one the socket holds: the socket
         // would outlive both its bearer and the session.
         if (attachment.expiresAt !== undefined && (identityExpiry === undefined || identityExpiry < attachment.expiresAt)) {
             return jsonResponse({ error: { code: "STALE_CREDENTIAL", message: "the socket already holds a later credential" } }, 409);
-        }
-
-        if (credentialClaimsKey(attachment.identity) !== credentialClaimsKey(identity)) {
-            return jsonResponse({ error: { code: "IDENTITY_CHANGED", message: "the credential's claims differ from the socket's; reconnect" } }, 409);
         }
 
         const next: SocketAttachment = { ...attachment };
@@ -16989,6 +17108,10 @@ abstract class ShardDO {
             delete next.identity;
         } else {
             next.identity = identity;
+        }
+
+        if (attachment.revalidateAt !== undefined) {
+            next.revalidateAt = Date.now() + SOCKET_REVALIDATE_MS;
         }
 
         try {
@@ -17143,7 +17266,8 @@ abstract class ShardDO {
         // Accept and stamp are one call for the same reason they were adjacent
         // before: the runtime only tracks attachments for sockets it has accepted,
         // and no frame can arrive against an unstamped socket in between.
-        const connectionId = crypto.randomUUID();
+        // Named for the relay that holds it, so a re-auth can go straight there; see `holderConnectionId`.
+        const connectionId = holderConnectionId(crypto.randomUUID(), parseRelayName(this.runner.shardKey ?? "")?.relayIndex);
         const accepted = this.socketHost.accept(server, {
             admin,
             connectionId,
@@ -17153,6 +17277,7 @@ abstract class ShardDO {
             ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),
             ...(ip === undefined ? {} : { ip }),
+            ...revalidationStamp(route, userId, acceptedAt),
             ...(route === undefined ? {} : { socketFunction: route.functionPath, socketPath: url.pathname }),
             ...(routeTopic === undefined ? {} : { whispers: [routeTopic] }),
             ...(userId === undefined ? {} : { userId }),
@@ -17254,33 +17379,94 @@ abstract class ShardDO {
     }
 
     /**
-     * Whether `ws` carries a credential whose expiry (stamped at upgrade) is
-     * now past. Delegates to the shared boundary check `@lunora/agent`'s
-     * voice DO uses for the same decision, so the two DOs can never disagree
-     * about it.
+     * Drop `ws` when it may no longer receive: its credential lapsed (`TOKEN_EXPIRED` / `4001`, through the
+     * helper `@lunora/agent`'s voice DO shares) or its identity went unrevalidated past its window (`4005`, see
+     * `SocketAttachment.revalidateAt`).
+     * @returns whether the socket was dropped
      */
-    private isSocketExpired(ws: ShardSocketLike): boolean {
-        return isIdentityExpired(this.readAttachment(ws).expiresAt);
+    private dropIfLapsed(ws: ShardSocketLike, attachment: SocketAttachment = this.readAttachment(ws), now: number = Date.now()): boolean {
+        const { expiresAt, revalidateAt } = attachment;
+
+        // No expiry, no window, no user to give one: nothing here can lapse (an anonymous socket, a user-less admin socket).
+        if (expiresAt === undefined && revalidateAt === undefined && attachment.userId === undefined) {
+            return false;
+        }
+
+        // `now` is read once by a fan-out for all its sockets; the comparison is `isIdentityExpired`'s.
+        if (typeof expiresAt === "number" && now >= expiresAt) {
+            this.dropLapsedSocket(ws, 4001, "token_expired");
+
+            return true;
+        }
+
+        if (typeof revalidateAt === "number" && now >= revalidateAt) {
+            this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
+
+            return true;
+        }
+
+        // A hibernated socket accepted before the window existed carries a user and no deadline, and would keep
+        // that identity until it happened to reconnect. It gets one window from the first time it is seen.
+        if (
+            attachment.revalidateAt === undefined &&
+            attachment.userId !== undefined &&
+            attachment.socketPath === undefined &&
+            attachment.socketFunction === undefined
+        ) {
+            // Mutated in place too: a caller that writes its own copy back must not erase the deadline, which
+            // the next call would then grant afresh.
+            Object.assign(attachment, revalidationStamp(undefined, attachment.userId, now));
+
+            try {
+                this.writeAttachment(ws, attachment);
+            } catch {
+                // A deadline that cannot be stored would be granted afresh on every check: fail closed instead.
+                this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
+
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
-     * Drop an expired-credential socket via the shared `TOKEN_EXPIRED`/`4001`
-     * helper `@lunora/agent`'s voice DO also calls, so both DOs send the
-     * client-facing wire shape from one place.
+     * Whether a cursor read under the claims fingerprinted `presented` may be resumed from on this socket: only when
+     * that is the fingerprint of the socket's claims now. A missing fingerprint (an older client) is a mismatch,
+     * so the default is the cold seed.
      */
-    private dropExpiredSocket(ws: ShardSocketLike): void {
+    private resumesUnderCurrentClaims(ws: ShardSocketLike, presented: string | undefined, name: string | undefined): boolean {
+        const { identity, userId } = this.readAttachment(ws);
+
+        // The address is not in the fingerprint, since a reconnect from a new network would then always seed cold. A
+        // function seen reading `ctx.ip` is the exception: its rows may belong to the address the cursor was read at.
+        return presented !== undefined && presented === claimsFingerprint(userId, identity) && (name === undefined || !this.ipKeyedFunctionPaths.has(name));
+    }
+
+    private dropLapsedSocket(ws: ShardSocketLike, code: number, reason: string): void {
         // The close this drop starts is not delivered back to `webSocketClose` (the runtime dispatches that event
         // for a peer's close, not a server-initiated one), so the whole teardown runs here instead: the route's
         // `onClose` or the connection's `onDisconnect`, the room leaves, the per-socket memos and the durable
         // shape-poke rows. Started before the close, so it reads the attachment first. `webSocketClose` runs at most
         // once per socket, so a runtime that does deliver a close finds nothing left to repeat.
-        const teardown = this.webSocketClose(ws as unknown as WebSocket, 4001, "token_expired", true).catch((error: unknown) => {
+        const teardown = this.webSocketClose(ws as unknown as WebSocket, code, reason, true).catch((error: unknown) => {
             // eslint-disable-next-line no-console -- server-side diagnostic: the socket is already closed, so there is nothing to propagate a teardown failure to
-            console.error("[@lunora/do] expired-socket teardown failed:", error);
+            console.error("[@lunora/do] lapsed-socket teardown failed:", error);
         });
 
         this.shardHost.waitUntil?.(teardown);
-        dropExpiredCredentialSocket(ws);
+
+        if (code === 4001) {
+            dropExpiredCredentialSocket(ws);
+
+            return;
+        }
+
+        try {
+            ws.close?.(code, reason);
+        } catch {
+            /* socket already gone */
+        }
     }
 
     /**
@@ -17679,6 +17865,8 @@ abstract class ShardDO {
         // Only a route topic needs the per-socket route re-check; decided once, so an ordinary whisper adds no call per member.
         const routeTopic = topic.startsWith(SOCKET_TOPIC_PREFIX);
 
+        // One clock read for the whole fan-out, shared by every socket's lapse check.
+        const now = Date.now();
         for (const ws of this.runner.sockets()) {
             scanned += 1;
 
@@ -17712,9 +17900,7 @@ abstract class ShardDO {
             // check. Without this a lapsed socket keeps receiving every whisper
             // on its joined topics — including the sender's `from` userId — for
             // the rest of its life.
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment, now)) {
                 continue;
             }
 
@@ -18229,6 +18415,12 @@ abstract class ShardDO {
             return false;
         }
 
+        // The receive-time check ran when the frame arrived; the event may have waited since for its authorization or
+        // the events ahead of it. A lapsed identity runs no handler. A leave still runs: its cleanup must not be skipped.
+        if (kind !== "leave" && this.roomSenderLapsed(ws)) {
+            return false;
+        }
+
         // Checked here, not at receive: a queued event runs only once the events ahead of it have settled.
         if (this.skipsQueuedRoomEvent(ws, topic, kind, joinEpoch)) {
             return true;
@@ -18288,7 +18480,28 @@ abstract class ShardDO {
             this.failedRoomJoins.get(ws)?.delete(topic);
         }
 
+        // The handler awaited: the sender's deadline may have passed meanwhile. What it committed stays, but a
+        // lapsed identity does not reach the other members. A leave is cleanup and still tells them.
+        if (kind !== "leave" && this.roomSenderLapsed(ws)) {
+            return false;
+        }
+
         this.broadcastPending(ws, topic, functionPath, kind, pending);
+
+        return true;
+    }
+
+    /** Whether the sender's credential has lapsed. A local socket is dropped; a relayed event's stand-in has none to close. */
+    private roomSenderLapsed(ws: ShardSocketLike): boolean {
+        const current = this.readAttachment(ws);
+
+        if (!isIdentityExpired(current.expiresAt) && !isIdentityExpired(current.revalidateAt)) {
+            return false;
+        }
+
+        if (typeof (ws as { close?: unknown }).close === "function") {
+            this.dropIfLapsed(ws, current);
+        }
 
         return true;
     }
@@ -18384,8 +18597,10 @@ abstract class ShardDO {
             attachment: {
                 connectionId,
                 context: attachment.context,
+                expiresAt: attachment.expiresAt,
                 identity: attachment.identity,
                 ip: attachment.ip,
+                revalidateAt: attachment.revalidateAt,
                 userId: attachment.userId,
             },
             connectionId,
@@ -18688,6 +18903,17 @@ abstract class ShardDO {
             }
         }
 
+        // Closing a socket is for its owner, or for a request the worker proved carries an admin credential: anyone else gets
+        // the answer for a socket they do not own.
+        if (
+            ws !== undefined &&
+            action === "reauth" &&
+            this.readAttachment(ws).admin === true &&
+            (call.adminReauth === true || (this.readAttachment(ws).userId ?? "") === callerId)
+        ) {
+            return this.reauthenticateAdminSocket(ws, call);
+        }
+
         // Same owner rule as an SSE connection: another caller's socket is refused as absent.
         if (ws === undefined || (this.readAttachment(ws).userId ?? "") !== callerId) {
             return jsonResponse({ error: { code: "LIVE_CONNECTION_NOT_FOUND", message: "no such live connection" } }, 404);
@@ -18851,6 +19077,8 @@ abstract class ShardDO {
 
         let delivered = 0;
 
+        // One clock read for the whole fan-out, shared by every socket's lapse check.
+        const now = Date.now();
         for (const ws of this.liveGrantSockets) {
             const attachment = this.readAttachment(ws);
             const grants = Object.values(attachment.liveGrants ?? {});
@@ -18869,9 +19097,7 @@ abstract class ShardDO {
                 continue;
             }
 
-            if (isIdentityExpired(attachment.expiresAt)) {
-                this.dropExpiredSocket(ws);
-
+            if (this.dropIfLapsed(ws, attachment, now)) {
                 continue;
             }
 

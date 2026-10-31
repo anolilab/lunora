@@ -8,13 +8,21 @@ import { asOptInLevel } from "../../../shared/ai-opt-in";
 import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { claimsFingerprint } from "../../../shared/claims-fingerprint";
 import { collectPages } from "../../../shared/collect-pages";
 import { isDuplicateInstanceError } from "../../../shared/duplicate-instance";
 import { decodeErrorDetail, describeError, describeInternal, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
-import { decodeExpectedSubjectHeader, encodeUserIdHeader, EXPECT_SUBJECT_HEADER, isIdentityExpired } from "../../../shared/identity-header";
+import {
+    decodeExpectedSubjectHeader,
+    decodeIdentityHeader,
+    decodeUserIdHeader,
+    encodeUserIdHeader,
+    EXPECT_SUBJECT_HEADER,
+    isIdentityExpired,
+} from "../../../shared/identity-header";
 import { LIVE_PUBLISH_PATH } from "../../../shared/live-stream";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
@@ -27,7 +35,7 @@ import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { checkBearerToken, isReservedRelationFunctionPath, SCHEDULER_DISPATCH_PATH, verifySchedulerDispatch } from "../../../shared/scheduler-dispatch";
-import { SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
+import { CLAIMS_FINGERPRINT_PATH, SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import { buildSystemDispatchHeaders, readForwardedDispatchIdentity } from "../../../shared/system-dispatch-headers";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -4776,21 +4784,31 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         const shardKey = url.searchParams.get("shard") ?? defaultShard;
-        const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity, {
+        // The admin credential an admin socket upgraded with, checked exactly as the upgrade checks it (the master
+        // bearer, or the short-lived sub-token in `?token=`, whose verify is constant-time). A rotated one fails here.
+        const adminReauth = requestIsAdmin(request) || (await checkAdminWsToken(request, effectiveAdminToken()));
+        const resolved = await forwardContext(request, env, publicResolveIdentity, {
             executionContext: context ?? executionContextByRequest.get(request),
             url,
         });
+        // A lapsed session beside a valid admin credential is ignored, as on the admin upgrade; without one it is refused.
+        const { headers: forwardedHeaders, identity } = adminReauth ? withoutLapsedCredential(resolved) : assertLiveCredential(resolved);
 
-        if (identity === null) {
+        if (identity === null && !adminReauth) {
             throw new LunoraError("re-authenticating a socket requires a credential", { code: "UNAUTHENTICATED", status: 401 });
         }
 
-        await assertShardAuthorized(identity, shardKey, false);
+        await assertShardAuthorized(identity, shardKey, adminReauth);
 
         // A fresh request carrying nothing of the caller's but the body: the shard trusts these headers verbatim.
         const headers = new Headers({ "content-type": "application/json" });
 
         setIdentityHeaders(headers, forwardedHeaders);
+
+        // Set here and nowhere else, so only a credential this request proved can make the shard keep an admin socket.
+        if (adminReauth) {
+            headers.set("x-lunora-admin-reauth", "1");
+        }
 
         // An owner woken by this call learns its namespace from it, as from an upgrade: without it the relay holding the socket is unreachable.
         const binding = resolveShardBindingName(env, options.shardDO);
@@ -4803,6 +4821,30 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             shardDO,
             shardKey,
             new Request(new URL(SOCKET_REAUTH_PATH, url.origin), { body: JSON.stringify({ connectionId: body["connectionId"] }), headers, method: "POST" }),
+        );
+    };
+
+    /**
+     * Answer a caller with the fingerprint of its own verified claims, computed from the same forwarded headers and by the
+     * same function the shard uses for a socket's `identity` frame, so the two agree. It resolves the caller exactly as a
+     * re-auth does (a lapsed or missing credential is refused) and returns nothing but that one value: there is no way to
+     * ask about another credential.
+     */
+    const handleClaimsFingerprint = async (request: Request, env: unknown, context: ExecutionContextLike | undefined, url: URL): Promise<Response> => {
+        assertMethod(request, "POST", "claims fingerprint");
+
+        const { headers, identity } = await forwardCallerContext(request, env, publicResolveIdentity, {
+            executionContext: context ?? executionContextByRequest.get(request),
+            url,
+        });
+
+        if (identity === null) {
+            throw new LunoraError("a claims fingerprint requires a credential", { code: "UNAUTHENTICATED", status: 401 });
+        }
+
+        return Response.json(
+            { claims: claimsFingerprint(decodeUserIdHeader(headers["x-lunora-userid"]), decodeIdentityHeader(headers["x-lunora-identity"])) },
+            { headers: { "cache-control": "no-store" } },
         );
     };
 
@@ -6094,6 +6136,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         },
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [SOCKET_REAUTH_PATH]: (request, env, url, context) => handleSocketReauth(request, env, context, url),
+        [CLAIMS_FINGERPRINT_PATH]: (request, env, url, context) => handleClaimsFingerprint(request, env, context, url),
         [RPC_PATH]: (request, env, url, context) => handleRpc(request, env, context, url),
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
         [SCHEDULER_DISPATCH_PATH]: (request, env, _url, context) => handleSchedulerDispatch(request, env, context),

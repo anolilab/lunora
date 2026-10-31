@@ -868,6 +868,43 @@ describe("shardDO streaming queries", () => {
         expect(yielded).toBeLessThan(200);
     });
 
+    it("sends no chunk when the revalidation window passes while the pump waits for the socket to drain", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: 1_000_000 });
+
+        try {
+            const shard = new StreamShard(state, {});
+            const drainStarted = createDeferred();
+            let bufferedAmount = 1_048_576;
+            const ws = createFakeWebSocket();
+
+            Object.defineProperty(ws, "bufferedAmount", {
+                get() {
+                    drainStarted.resolve();
+
+                    return bufferedAmount;
+                },
+            });
+            shard.registered.set("metrics:slow", async function* slowGen() {
+                yield "row";
+            });
+            shard.registerSocket(ws, { revalidateAt: 1_060_000, subs: {}, userId: "user-1" });
+            await shard.driveMessage(ws, { id: "slow", query: { functionPath: "metrics:slow" }, type: "stream" });
+            await drainStarted.promise;
+
+            // The window passes while the consumer is still slow, then the buffer clears.
+            vi.setSystemTime(1_060_000);
+            bufferedAmount = 0;
+            await vi.advanceTimersByTimeAsync(20);
+
+            expect(parseFrames(ws).filter((frame) => frame.type === "chunk")).toHaveLength(0);
+            expect(parseFrames(ws).map((frame) => frame.type)).not.toContain("complete");
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("caps concurrent streams per socket at MAX_STREAMS_PER_SOCKET", async () => {
         expect.assertions(3);
 

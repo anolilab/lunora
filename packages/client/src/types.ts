@@ -319,6 +319,9 @@ export interface OutboxSink {
  * needed to render offline on reload and to resume the live subscription.
  */
 export interface CachedQuery {
+    /** Fingerprint of the claims the value was read under (see `SubscriptionState.serverClaims`), replayed as `sinceClaims`. */
+    claims?: string;
+
     /**
      * Token-hash fingerprint of the bearer the value was cached under, when the
      * entry was written by the identity the client currently advertises.
@@ -698,7 +701,7 @@ export interface ClientSubscribeMessage {
      * snapshot when nothing the query reads changed since it. Absent on a
      * first-time subscribe.
      */
-    query: { args?: Record<string, unknown>; functionPath?: string; sinceEpoch?: string; sinceSeq?: number; table?: string };
+    query: { args?: Record<string, unknown>; functionPath?: string; sinceClaims?: string; sinceEpoch?: string; sinceSeq?: number; table?: string };
     type: "subscribe";
 }
 
@@ -760,6 +763,9 @@ export interface ClientShapeSubscribeMessage {
      * delta.
      */
     sinceCheckpoint?: number;
+
+    /** The claims fingerprint {@link ClientShapeSubscribeMessage.sinceCheckpoint} was read under; absent resumes cold. */
+    sinceClaims?: string;
 
     /**
      * The CDC epoch {@link ClientShapeSubscribeMessage.sinceCheckpoint} belongs
@@ -1004,7 +1010,20 @@ export interface ServerLiveMessage {
  * before it posts a grant, and posts at once when the flag is absent.
  */
 export interface ServerIdentityMessage {
+    /**
+     * Fingerprint of the verified claims the socket is authenticated with. Opaque to the client, which only
+     * hands it back as `sinceClaims` when it resubscribes from a cursor read under these claims.
+     */
+    claims?: string;
     connectionId?: string;
+
+    /**
+     * Milliseconds within which the socket must be re-authenticated through
+     * `POST /_lunora/ws/reauth`, or the server closes it with `4005`. Present only
+     * for an authenticated subscription socket.
+     */
+    revalidateMs?: number;
+
     subject: null | string;
     type: "identity";
     whisperAck?: boolean;

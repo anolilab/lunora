@@ -619,6 +619,10 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Invalid subscription arguments";
     };
+    readonly SUBSCRIPTION_FUNCTION_REQUIRED: {
+        readonly status: 400;
+        readonly title: "Subscription needs a function path";
+    };
     readonly BATCH_LIMIT_EXCEEDED: {
         readonly status: 400;
         readonly title: "Batch limit exceeded";
@@ -646,6 +650,10 @@ const ERROR_CATALOG: {
     readonly IDENTITY_CHANGED: {
         readonly status: 409;
         readonly title: "Socket identity changed";
+    };
+    readonly IDENTITY_STALE: {
+        readonly status: 409;
+        readonly title: "Socket identity stale";
     };
     readonly FORBIDDEN_FANOUT: {
         readonly status: 403;

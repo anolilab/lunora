@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 203 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 205 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -508,6 +508,10 @@ A write queued offline was replayed on a session that now belongs to someone els
 
 `@lunora/client` re-resolves the session on this refusal and settles the write itself. If every replay is refused while the same user stays signed in, your worker's `resolveIdentity` returns a different `userId` than better-auth's `user.id`, or the RPC request carries no session cookie.
 
+### `IDENTITY_STALE`
+
+`409` — Socket identity stale
+
 ### `ID_COLLISION`
 
 `409` — Document id already belongs to another table
@@ -893,6 +897,10 @@ Without it a bucket-backed `lunora backup restore --bucket` cannot read the snap
 ### `STREAM_TOO_LONG`
 
 `507` — Durable stream exceeded its chunk ceiling
+
+### `SUBSCRIPTION_FUNCTION_REQUIRED`
+
+`400` — Subscription needs a function path
 
 ### `SUBSCRIPTION_PERSIST_FAILED`
 

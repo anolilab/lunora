@@ -55,7 +55,7 @@ class WhisperShard extends ShardDO {
     public sockets: FakeSocket[] = [];
 
     // eslint-disable-next-line class-methods-use-this -- abstract stub; whisper/expiry paths never dispatch an RPC
-    public override handleRpc(): Promise<unknown> {
+    public override handleRpc(_functionPath?: string, _args?: unknown): Promise<unknown> {
         return Promise.resolve({});
     }
 }
@@ -91,6 +91,48 @@ const makeRoomShard = (sockets: FakeSocket[]): WhisperShard => {
 
     return new RoomWhisperShard(state, {});
 };
+
+/** A room whose message handler outlasts the sender's revalidation window, then broadcasts. */
+class LapsingRoomShard extends RoomWhisperShard {
+    public lapseTo: number | undefined;
+
+    public override handleRpc(_functionPath?: string, args?: unknown): Promise<unknown> {
+        const { kind, socket } = args as { kind: string; socket: { broadcast: (payload: unknown) => void } };
+
+        if (kind === "message" && this.lapseTo !== undefined) {
+            vi.spyOn(Date, "now").mockReturnValue(this.lapseTo);
+            socket.broadcast({ text: "hello" });
+        }
+
+        return Promise.resolve({});
+    }
+}
+
+describe("shardDO room handler outliving the sender's deadline", () => {
+    it("drops the broadcast of a sender whose window lapsed while the handler ran, and closes it", async () => {
+        expect.assertions(3);
+
+        const joinedAt = Date.now();
+        const a = new FakeSocket({ revalidateAt: joinedAt + 60_000, subs: {}, userId: "user-a" });
+        const b = new FakeSocket({ revalidateAt: joinedAt + 600_000, subs: {}, userId: "user-b" });
+        const shard = new LapsingRoomShard({ acceptWebSocket() {}, getWebSockets: () => [a, b], storage: { sql: {} } } as unknown as ShardDOState, {});
+
+        await send(shard, a, { topic: "room:r1", type: "whisper_subscribe" });
+        await send(shard, b, { topic: "room:r1", type: "whisper_subscribe" });
+
+        shard.lapseTo = joinedAt + 60_000;
+
+        try {
+            await send(shard, a, { data: { text: "hello" }, topic: "room:r1", type: "whisper" });
+        } finally {
+            vi.restoreAllMocks();
+        }
+
+        expect(withoutAck(b)).toStrictEqual([]);
+        expect(a.closes[0]).toEqual({ code: 4005, reason: "identity_stale" });
+        expect(withoutAck(a)).toStrictEqual([]);
+    });
+});
 
 describe("shardDO whispering", () => {
     it("acknowledges an admitted join after recording membership, so a whisper reaches it", async () => {
@@ -259,7 +301,7 @@ describe("shardDO token-expiry", () => {
     it("stops DELIVERING whispers to an expired socket, not just accepting them from it", async () => {
         expect.assertions(4);
 
-        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const a = new FakeSocket({ revalidateAt: Date.now() + 600_000, subs: {}, userId: "user-a" });
         // A passive receiver: it joined the topic while its credential was live
         // and then never sends another inbound frame. No write flush, no shape
         // poke and no global poll fire on a pure presence/cursor workload, so
@@ -282,6 +324,29 @@ describe("shardDO token-expiry", () => {
         expect(withoutAck(b)[0]?.type).not.toBe("whisper");
         expect(withoutAck(b)[0]?.code).toBe("TOKEN_EXPIRED");
         expect(b.closes[0]).toEqual({ code: 4001, reason: "token_expired" });
+    });
+
+    it("stops delivering presence to a socket whose identity went unrevalidated, closing it without a token-expired signal", async () => {
+        expect.assertions(3);
+
+        const joinedAt = Date.now();
+        const a = new FakeSocket({ revalidateAt: joinedAt + 600_000, subs: {}, userId: "user-a" });
+        // No credential expiry at all (a cookie session): only the revalidation window bounds it.
+        const b = new FakeSocket({ revalidateAt: joinedAt + 60_000, subs: {}, userId: "user-b" });
+        const shard = makeShard([a, b]);
+
+        await send(shard, a, { topic: "presence", type: "whisper_subscribe" });
+        await send(shard, b, { topic: "presence", type: "whisper_subscribe" });
+
+        const lapsed = vi.spyOn(Date, "now").mockReturnValue(joinedAt + 60_000);
+
+        await send(shard, a, { data: { online: true }, topic: "presence", type: "whisper" }).finally(() => {
+            lapsed.mockRestore();
+        });
+
+        expect(withoutAck(b)).toStrictEqual([]);
+        expect(b.closes[0]).toEqual({ code: 4005, reason: "identity_stale" });
+        expect(withoutAck(a)).toStrictEqual([]);
     });
 
     it("processes a socket whose token has not yet expired", async () => {

@@ -12,6 +12,13 @@ export interface SubscriptionQuery {
     functionPath?: string;
 
     /**
+     * Fingerprint of the claims the client's cached value was read under, as the shard announced it on the
+     * socket's `identity` frame. The server resumes from `sinceSeq` only when it equals the fingerprint of the
+     * socket's current claims; absent or different, it takes a full snapshot and honours no cursor.
+     */
+    sinceClaims?: string;
+
+    /**
      * Resume epoch: the `epoch` token the client persisted alongside
      * `sinceSeq` from an earlier frame. The server resumes only when this
      * matches the shard's current epoch — a mismatch means the changelog
@@ -136,6 +143,9 @@ export interface SubscriptionEnvelope {
      * different watermarks on the same envelope need two different names.
      */
     sinceChunk?: number;
+
+    /** Claims fingerprint the {@link SubscriptionEnvelope.sinceCheckpoint} was read under (see {@link SubscriptionQuery.sinceClaims}). */
+    sinceClaims?: string;
 
     /** CDC epoch the {@link SubscriptionEnvelope.sinceCheckpoint} belongs to. */
     sinceEpoch?: string;
@@ -340,6 +350,16 @@ export interface SocketAttachment {
 
     /** `true` when `connect` announced `refreshBatch` (`shared/refresh-batch.ts`); persisted for the same reason as `pageDeltas`. */
     refreshBatch?: boolean;
+
+    /**
+     * Epoch ms by which an authenticated subscription socket must have its
+     * identity re-resolved through the worker's re-auth route. The shard cannot
+     * run `resolveIdentity`, so without this deadline a socket kept the identity
+     * of its upgrade for life: a revoked session or a removed organization member
+     * kept receiving. Past it the socket is closed with code `4005`, which every
+     * client treats as an ordinary reconnect. Absent on anonymous and route sockets.
+     */
+    revalidateAt?: number;
 
     /**
      * Live shape subscriptions registered on this socket, keyed by the

@@ -1,6 +1,7 @@
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { claimsFingerprint } from "../../../shared/claims-fingerprint";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 
@@ -250,8 +251,22 @@ describe("shardDO connection-lifecycle dispatch", () => {
         await shard.driveMessage(ws, connectEnvelope({ roomId: "room-1" }));
 
         expect(ws.sent.map((raw) => JSON.parse(raw) as unknown)).toStrictEqual([
-            { connectionId: "conn-1", subject: "user-42", type: "identity", whisperAck: true },
-            { connectionId: "conn-1", subject: "user-42", type: "identity", whisperAck: true },
+            {
+                claims: claimsFingerprint("user-42", { roles: ["member"] }),
+                connectionId: "conn-1",
+                revalidateMs: 60_000,
+                subject: "user-42",
+                type: "identity",
+                whisperAck: true,
+            },
+            {
+                claims: claimsFingerprint("user-42", { roles: ["member"] }),
+                connectionId: "conn-1",
+                revalidateMs: 60_000,
+                subject: "user-42",
+                type: "identity",
+                whisperAck: true,
+            },
         ]);
     });
 
@@ -265,6 +280,8 @@ describe("shardDO connection-lifecycle dispatch", () => {
 
         await shard.driveMessage(ws, connectEnvelope());
 
-        expect(ws.sent.map((raw) => JSON.parse(raw) as unknown)).toStrictEqual([{ connectionId: "conn-1", subject: null, type: "identity", whisperAck: true }]);
+        expect(ws.sent.map((raw) => JSON.parse(raw) as unknown)).toStrictEqual([
+            { claims: claimsFingerprint(undefined, undefined), connectionId: "conn-1", subject: null, type: "identity", whisperAck: true },
+        ]);
     });
 });

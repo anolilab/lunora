@@ -204,4 +204,16 @@ describe("emitShard — every writer reaches the cache", () => {
         expect(writers).toBeGreaterThan(0);
         expect(tunings).toBe(writers);
     });
+    it("seeds the address-keyed set from the statically found readers, and only when there are some", () => {
+        expect.assertions(4);
+
+        const withReaders = emitShard({ hasIpReaders: true, schema: { tables: [], vectorIndexes: [] } });
+        const without = emitShard({ schema: { tables: [], vectorIndexes: [] } });
+
+        // Before any dispatch has taught the base class, so a first resubscribe is not resumed warm.
+        expect(withReaders).toContain("LUNORA_IP_READER_PATHS");
+        expect(withReaders).toContain("this.ipKeyedFunctionPaths.add(path);");
+        expect(without).not.toContain("LUNORA_IP_READER_PATHS");
+        expect(without).not.toContain("ipKeyedFunctionPaths");
+    });
 });

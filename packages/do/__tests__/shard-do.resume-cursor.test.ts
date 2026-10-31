@@ -2,6 +2,7 @@ import type { SqlExec } from "@lunora/shard-engine";
 import { CDC_LOG_TABLE, readCdcEpoch, runShardMigrations } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
+import { claimsFingerprint } from "../../../shared/claims-fingerprint";
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import messagesSchema from "./_helpers/messages-schema";
@@ -113,7 +114,7 @@ const subscribeEnvelope = (sinceSeq?: number, sinceEpoch?: string): string =>
         id: "s1",
         query: {
             functionPath: "messages:list",
-            ...(sinceSeq === undefined ? {} : { sinceSeq }),
+            ...(sinceSeq === undefined ? {} : { sinceClaims: claimsFingerprint(undefined, undefined), sinceSeq }),
             ...(sinceEpoch === undefined ? {} : { sinceEpoch }),
         },
         type: "subscribe",

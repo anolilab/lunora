@@ -1373,6 +1373,7 @@ interface LifecycleEvent {
 ```ts
 interface LiveSocketControlCall {
     action: unknown;
+    adminReauth?: true;
     callerId: string;
     connectionId: string;
     identity?: Record<string, unknown>;
@@ -2308,6 +2309,7 @@ interface RelayHost {
     deliverLiveLocal: (topic: string, key: string, frame: string) => number;
     deliverWhisperLocal: (topic: string, frame: string, exclude: undefined | ShardSocketLike) => number;
     doName: () => string | undefined;
+    dropIfLapsed: (ws: ShardSocketLike) => boolean;
     env: () => unknown;
     getWebSockets: () => ShardSocketLike[];
     liveControl: (control: LiveSocketControlCall) => Promise<Response>;
@@ -2366,7 +2368,7 @@ interface RelayPokeDelivery {
 
 ```ts
 interface RelayRoomEvent {
-    attachment: Pick<SocketAttachment, "connectionId" | "context" | "identity" | "ip" | "userId">;
+    attachment: Pick<SocketAttachment, "connectionId" | "context" | "expiresAt" | "identity" | "ip" | "revalidateAt" | "userId">;
     connectionId: string;
     data?: unknown;
     kind: "join" | "leave" | "message";
@@ -2997,6 +2999,7 @@ interface SocketAttachment {
     pageDeltas?: boolean;
     pendingSince?: number;
     refreshBatch?: boolean;
+    revalidateAt?: number;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     socketFunction?: string;
     socketPath?: string;
@@ -3187,6 +3190,7 @@ interface SubscriptionEnvelope {
     };
     sinceCheckpoint?: number;
     sinceChunk?: number;
+    sinceClaims?: string;
     sinceEpoch?: string;
     token?: string;
     topic?: string;
@@ -3220,6 +3224,7 @@ interface SubscriptionInfo {
 interface SubscriptionQuery {
     args?: Record<string, unknown>;
     functionPath?: string;
+    sinceClaims?: string;
     sinceEpoch?: string;
     sinceSeq?: number;
     table?: string;

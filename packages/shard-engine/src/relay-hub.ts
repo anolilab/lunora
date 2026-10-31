@@ -24,6 +24,7 @@
 import { LunoraError, toErrorBody } from "@lunora/errors";
 import { decodeWire, encodeWire } from "@lunora/wire";
 
+import { connectionIdRelay } from "../../../shared/relay-name";
 import type { SqlExec } from "./ctx-db";
 import type { RelayMemoRow, RelayShapeMemo } from "./ctx-db-relay-memos";
 import { deleteAllRelayMemos, deleteRelayMemo, deleteRelayMemosForConnection, migrateRelayMemos, readRelayMemos, writeRelayMemos } from "./ctx-db-relay-memos";
@@ -177,6 +178,8 @@ interface RelayHost {
     deliverWhisperLocal: (topic: string, frame: string, exclude: undefined | ShardSocketLike) => number;
     /** This DO's name (the shard key for an owner, the `…::relay::N` name for a relay), or `undefined` for an unnamed DO. */
     doName: () => string | undefined;
+    /** Close `ws` when its credential or revalidation window has lapsed (the DO's own check, shared with every other delivery path); `true` when it was dropped. */
+    dropIfLapsed: (ws: ShardSocketLike) => boolean;
     /** This DO's env record (read for relay binding + threshold/fan/cap knobs). */
     env: () => unknown;
 
@@ -723,7 +726,17 @@ class OwnerRelay extends RelayLink {
         // reaches the relay that will hold it.
         // ponytail: a publish that lands while a relay's first subscribe is still in flight misses
         // that relay, since it is recorded as a holder only once its answer returns.
-        const targets = control.action === "unsubscribe" ? new Set([...this.liveGrantRelaySet(), ...this.pendingSubscribeRelays.keys()]) : this.ownerRelaySet();
+        let targets = control.action === "unsubscribe" ? new Set([...this.liveGrantRelaySet(), ...this.pendingSubscribeRelays.keys()]) : this.ownerRelaySet();
+
+        // A re-auth runs for every socket every half window, so it goes to the relay its connection id names rather
+        // than to all of them. A holder that is down or does not answer leaves the socket unrefreshed (the caller
+        // answers 404 and the client reconnects it, else its own window closes it with 4005): asking the other relays
+        // could not find a socket that lives on exactly one. An id naming no attached relay (a bare or forged one) fans out.
+        const holder = control.action === "reauth" ? connectionIdRelay(control.connectionId) : undefined;
+
+        if (holder !== undefined && targets.has(holder)) {
+            targets = new Set([holder]);
+        }
 
         if (targets.size === 0) {
             return Promise.resolve(undefined);
@@ -1953,6 +1966,12 @@ class RelayMember extends RelayLink {
 
         await awaitWsDrain(ws);
 
+        // The owner round trip and the drain both yield; a socket whose credential or window lapsed meanwhile is closed
+        // by the host and is owed none of these rows.
+        if (this.host.dropIfLapsed(ws)) {
+            return { code: "IDENTITY_STALE", message: "the socket lapsed before its shape seed was delivered" };
+        }
+
         for (const frame of seed.frames) {
             trySendFrame(ws, frame);
         }
@@ -2343,6 +2362,12 @@ class RelayMember extends RelayLink {
 
         for (const ws of this.host.getWebSockets()) {
             const { connectionId, shapes } = this.host.readAttachment(ws);
+
+            // A socket past its credential or its revalidation window is owed nothing: the host closes it (4001/4005), so
+            // it reconnects instead of sitting open and silent, and its memos go with it.
+            if (this.host.dropIfLapsed(ws)) {
+                continue;
+            }
 
             // Address first, hydrate second. A targeted (per-socket proxy) poke
             // concerns exactly one connection, and this relay holds thousands —

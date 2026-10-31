@@ -149,4 +149,27 @@ describe("discover/shapes", () => {
 
         expect(discoverShapes(newProject(), workdir)).toEqual([]);
     });
+    it("marks a shape whose where may read ctx.ip, directly or through a helper, and leaves others unmarked", () => {
+        expect.assertions(1);
+
+        writeShapes(`
+            import { defineShape } from "@lunora/server";
+
+            declare const helper: (ctx: unknown) => Record<string, unknown>;
+            declare const byRef: any;
+
+            export const aDirect = defineShape({ table: "messages", where: (ctx) => ({ ip: ctx.ip }) });
+            export const bHelper = defineShape({ table: "messages", where: (ctx) => helper(ctx) });
+            export const cByReference = defineShape({ table: "messages", where: byRef });
+            export const dPlain = defineShape({ table: "messages", where: (ctx) => ({ owner: ctx.auth.userId }) });
+            export const eUnused = defineShape({ table: "messages", where: (_context, { id }) => ({ id }) });
+            export const fRenamed = defineShape({ table: "messages", where: (context) => ({ owner: context.auth.userId }) });
+        `);
+
+        const marked = discoverShapes(newProject(), workdir)
+            .filter((shape) => shape.readsIp === true)
+            .map((shape) => shape.exportName);
+
+        expect(marked).toStrictEqual(["aDirect", "bHelper", "cByReference", "fRenamed"]);
+    });
 });

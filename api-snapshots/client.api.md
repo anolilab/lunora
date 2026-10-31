@@ -126,6 +126,7 @@ const CONFLICT_ERROR_CODE = "CONFLICT";
 
 ```ts
 interface CachedQuery {
+    claims?: string;
     credential?: string;
     identity: string | null;
     serverCursor?: number;
@@ -203,6 +204,7 @@ interface ClientShapeSubscribeMessage {
         name: string;
     };
     sinceCheckpoint?: number;
+    sinceClaims?: string;
     sinceEpoch?: string;
     type: "shape_subscribe";
 }
@@ -1368,6 +1370,7 @@ interface SubscriptionState {
         payload: unknown;
     };
     serverBase: unknown;
+    serverClaims?: string;
     serverCursor?: number;
     serverEpoch?: string;
     readonly shardKey?: string;
@@ -1409,9 +1412,9 @@ class TabCoordinator {
     get leaderTabId(): string | undefined;
     get id(): string;
     get isRunning(): boolean;
-    broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null): void;
-    broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null): void;
-    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null): void;
+    broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string): void;
+    broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null, claims?: string): void;
+    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null, claims?: string): void;
     broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void;
 }
 ```
@@ -2701,6 +2704,7 @@ interface ClientSubscribeMessage {
     query: {
         args?: Record<string, unknown>;
         functionPath?: string;
+        sinceClaims?: string;
         sinceEpoch?: string;
         sinceSeq?: number;
         table?: string;
@@ -2864,7 +2868,9 @@ interface ServerErrorMessage {
 
 ```ts
 interface ServerIdentityMessage {
+    claims?: string;
     connectionId?: string;
+    revalidateMs?: number;
     subject: null | string;
     type: "identity";
     whisperAck?: boolean;
@@ -2943,9 +2949,9 @@ interface TabCoordinatorOptions {
     onConnectionStatus?: (status: ConnectionStatus, identity?: string | null) => void;
     onLeaderClaimAnswered?: () => void;
     onStopBeingLeader?: () => void;
-    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void;
-    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null) => void;
-    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void;
+    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void;
+    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null, claims?: string) => void;
+    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null, claims?: string) => void;
 }
 ```
 

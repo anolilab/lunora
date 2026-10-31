@@ -48,4 +48,21 @@ const parseRelayName = (name: string): undefined | { ownerKey: string; relayInde
     return { ownerKey, relayIndex };
 };
 
-export { parseRelayName, RELAY_NAME_INFIX, relayName };
+/**
+ * A connection id minted by a relay carries that relay's number as an `r<index>.` prefix, so the owner can send
+ * a socket's re-auth to the one relay that holds it instead of asking every relay. The prefix is written where the
+ * socket is accepted, so it cannot disagree with where the socket lives; an owner-held socket keeps a bare id.
+ */
+const holderConnectionId = (id: string, relayIndex: number | undefined): string => (relayIndex === undefined ? id : `r${String(relayIndex)}.${id}`);
+
+/**
+ * The relay number a connection id names, or `undefined` for a bare (owner-held or pre-prefix) id. The id comes from a
+ * client, so the number is only a routing hint: a relay still answers 404 for a socket it does not hold.
+ */
+const connectionIdRelay = (connectionId: string): number | undefined => {
+    const match = /^r(0|[1-9]\d*)\./u.exec(connectionId);
+
+    return match === null ? undefined : Number(match[1]);
+};
+
+export { connectionIdRelay, holderConnectionId, parseRelayName, RELAY_NAME_INFIX, relayName };

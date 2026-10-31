@@ -144,6 +144,7 @@ const renderFunctionRegistry = (
     dispatchBody: string;
     importBlock: string;
     installBlock: string;
+    ipReaderPaths: ReadonlyArray<string>;
     manifestBody: string;
     migrationBody: string;
     moduleLoaders: string;
@@ -230,6 +231,15 @@ const renderFunctionRegistry = (
     // The `namespace:fn` paths the DO's `isCustomMutator` override routes through
     // the client-watermark push protocol — exactly the `LUNORA_FUNCTIONS` keys above.
     const mutatorPaths = mutators.map((mutator) => `${sanitizeNamespace(mutator.filePath)}:${mutator.exportName}`);
+
+    // The queries codegen found (failing closed) reading `ctx.ip`, which the shard never resumes warm.
+    // A shape's bare export name rides in the same set (no query path lacks its `:`), since a shape resumes by that name.
+    const ipReaderPaths = [
+        ...functions
+            .filter((definition) => definition.readsIp === true)
+            .map((definition) => `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`),
+        ...shapes.filter((shape) => shape.readsIp === true).map((shape) => shape.exportName),
+    ];
 
     // Splice mutator entries onto the function dispatch body (both already sorted
     // by `${filePath}:${exportName}`); `filter` keeps the joiner clean when either side is empty.
@@ -350,6 +360,7 @@ const renderFunctionRegistry = (
         manifestBody: manifestEntries.length > 0 ? `\n${manifestEntries}\n` : "",
         migrationBody: migrationEntries.length > 0 ? `\n${migrationEntries}\n` : "",
         moduleLoaders: moduleLoaders.length > 0 ? `\n${moduleLoaders}\n` : "",
+        ipReaderPaths,
         mutatorPaths,
         roomMessagesBody,
         shapeBody: shapeEntries.length > 0 ? `\n${shapeEntries}\n` : "",
@@ -619,7 +630,7 @@ const renderCallerAssembly = (functions: ReadonlyArray<FunctionIR>, lazyFunction
 const emitFunctions = (options: EmitFunctionsOptions): string => {
     const { agents = [], functions, lazyFunctions = false, migrations = [], mutators = [], shapes = [], useUmbrella = false, usesSandbox = false } = options;
     const base = baseSpecifiers(useUmbrella);
-    const { dispatchBody, importBlock, installBlock, manifestBody, migrationBody, moduleLoaders, mutatorPaths, roomMessagesBody, shapeBody } =
+    const { dispatchBody, importBlock, installBlock, ipReaderPaths, manifestBody, migrationBody, moduleLoaders, mutatorPaths, roomMessagesBody, shapeBody } =
         renderFunctionRegistry(functions, migrations, mutators, shapes, lazyFunctions);
     // Auto-registered agent runtime + sandbox dispatcher functions (see the
     // render*FunctionRegistry helpers). Both are empty-gated so an unused feature
@@ -672,6 +683,11 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
     const mutatorPathsRegistry =
         mutatorPaths.length > 0
             ? `\n/**\n * Custom-mutator function paths — the \`LUNORA_FUNCTIONS\` keys the generated\n * ShardDO's \`isCustomMutator\` override routes through the client-watermark push\n * protocol (\`x-lunora-client-id\`/\`x-lunora-client-seq\` ordering).\n */\nexport const LUNORA_MUTATOR_PATHS: ReadonlySet<string> = new Set([${mutatorPaths.map((path) => JSON.stringify(path)).join(", ")}]);\n`
+            : "";
+
+    const ipReadersRegistry =
+        ipReaderPaths.length > 0
+            ? `\n/**\n * Queries and shapes that may read \`ctx.ip\`, decided statically (failing closed). The generated ShardDO marks them\n * address-keyed from its first run, so it never resumes one warm: its rows can depend on the address the cursor\n * was read at, which a claims fingerprint leaves out.\n */\nexport const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set([${ipReaderPaths.map((path) => JSON.stringify(path)).join(", ")}]);\n`
             : "";
 
     const roomsRegistry = renderRoomRegistry(hasRooms, lazyFunctions, functions);
@@ -866,7 +882,7 @@ ${agentRegistry.prelude}${sandboxRegistry.prelude}${lazyRegistryPrelude}${smokeL
  * emits (\`api[namespace][fn].__lunoraRef === "namespace:fn"\`).
  */
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {${dispatchBodyWithAgents}};
-${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}${roomsRegistry}${rooms.messagesBlock}${socketsRegistry}
+${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}${ipReadersRegistry}${roomsRegistry}${rooms.messagesBlock}${socketsRegistry}
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
  * client's WebSocket connects (\`connect\`) or disconnects (\`disconnect\`), once

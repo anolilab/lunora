@@ -82,8 +82,8 @@ interface TabCoordinatorOptions {
      * `onConnectionStatus`'s docblock for the full rationale and the
      * absent-field mixed-version rule — identical here).
      */
-    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void;
-    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null) => void;
+    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void;
+    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null, claims?: string) => void;
 
     /**
      * Called when the leader broadcasts a `settled` frame's checkpoint advance
@@ -108,7 +108,15 @@ interface TabCoordinatorOptions {
      * `identity` is the leader's `identityFingerprint()` — see
      * `onConnectionStatus`'s docblock for the drop rule (identical here).
      */
-    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void;
+    onSubscriptionSettled?: (
+        key: string,
+        cursor?: number,
+        epoch?: string,
+        lastMutationId?: number,
+        clientId?: string,
+        identity?: string | null,
+        claims?: string,
+    ) => void;
 }
 
 type WsFollowerMessage =
@@ -120,6 +128,7 @@ type WsFollowerMessage =
  * as it lands, as before.
  */
 type SubscriptionDataMessage = {
+    claims?: string;
     cursor?: number;
     data: unknown;
     epoch?: string;
@@ -132,8 +141,9 @@ type SubscriptionDataMessage = {
 
 type WsLeaderMessage =
     | SubscriptionDataMessage
-    | { error: SubscriptionError; identity?: string | null; key: string; tabId: string; type: "subscription-error" }
+    | { claims?: string; error: SubscriptionError; identity?: string | null; key: string; tabId: string; type: "subscription-error" }
     | {
+          claims?: string;
           clientId?: string;
           cursor?: number;
           epoch?: string;
@@ -200,11 +210,13 @@ class TabCoordinator {
     private readonly onBecomeLeader: (() => void) | undefined;
     private readonly onStopBeingLeader: (() => void) | undefined;
     private readonly onConnectionStatus: ((status: ConnectionStatus, identity?: string | null) => void) | undefined;
-    private readonly onSubscriptionData: ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void) | undefined;
+    private readonly onSubscriptionData:
+        ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void) | undefined;
     private readonly onLeaderClaimAnswered: (() => void) | undefined;
-    private readonly onSubscriptionError: ((key: string, error: SubscriptionError, identity?: string | null) => void) | undefined;
+    private readonly onSubscriptionError: ((key: string, error: SubscriptionError, identity?: string | null, claims?: string) => void) | undefined;
     private readonly onSubscriptionSettled:
-        ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void) | undefined;
+        | ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null, claims?: string) => void)
+        | undefined;
 
     public constructor(options: TabCoordinatorOptions = {}) {
         // A random UUID suffix makes `tabId` globally unique across tabs/realms,
@@ -377,7 +389,7 @@ class TabCoordinator {
      * supplied, since a fixed leader always knows its own identity (never
      * omits it) and `null` must round-trip distinctly from "field absent".
      */
-    public broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null): void {
+    public broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string): void {
         if (!this.leader) {
             return;
         }
@@ -396,6 +408,7 @@ class TabCoordinator {
             ...(cursor === undefined ? {} : { cursor }),
             ...(epoch === undefined ? {} : { epoch }),
             ...(identity === undefined ? {} : { identity }),
+            ...(claims === undefined ? {} : { claims }),
         });
     }
 
@@ -411,12 +424,19 @@ class TabCoordinator {
      * deliver one caller's rejection to a tab that had since signed in as
      * someone else.
      */
-    public broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null): void {
+    public broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null, claims?: string): void {
         if (!this.leader) {
             return;
         }
 
-        this.broadcast({ type: "subscription-error", tabId: this.tabId, key, error, ...(identity === undefined ? {} : { identity }) });
+        this.broadcast({
+            type: "subscription-error",
+            tabId: this.tabId,
+            key,
+            error,
+            ...(identity === undefined ? {} : { identity }),
+            ...(claims === undefined ? {} : { claims }),
+        });
     }
 
     /**
@@ -436,6 +456,7 @@ class TabCoordinator {
         lastMutationId?: number,
         clientId?: string,
         identity?: string | null,
+        claims?: string,
     ): void {
         if (!this.leader) {
             return;
@@ -450,6 +471,7 @@ class TabCoordinator {
             ...(lastMutationId === undefined ? {} : { lastMutationId }),
             ...(clientId === undefined ? {} : { clientId }),
             ...(identity === undefined ? {} : { identity }),
+            ...(claims === undefined ? {} : { claims }),
         });
     }
 
@@ -535,7 +557,7 @@ class TabCoordinator {
         withDeferredNotifications(
             () => {
                 for (const frame of held) {
-                    this.onSubscriptionData?.(frame.key, frame.data, frame.cursor, frame.epoch, frame.identity);
+                    this.onSubscriptionData?.(frame.key, frame.data, frame.cursor, frame.epoch, frame.identity, frame.claims);
                 }
             },
             () => this.running,
@@ -581,7 +603,7 @@ class TabCoordinator {
                     break;
                 }
 
-                this.onSubscriptionError?.(message.key, message.error, message.identity);
+                this.onSubscriptionError?.(message.key, message.error, message.identity, message.claims);
 
                 break;
             }
@@ -591,7 +613,15 @@ class TabCoordinator {
                     break;
                 }
 
-                this.onSubscriptionSettled?.(message.key, message.cursor, message.epoch, message.lastMutationId, message.clientId, message.identity);
+                this.onSubscriptionSettled?.(
+                    message.key,
+                    message.cursor,
+                    message.epoch,
+                    message.lastMutationId,
+                    message.clientId,
+                    message.identity,
+                    message.claims,
+                );
 
                 break;
             }

@@ -306,6 +306,36 @@ export default defineSchema({
             expect(emittedJsonData(withEvents, "LUNORA_WORKFLOWS_INFO")).toMatchObject({ eventTypes: ["order-approved"] });
         });
 
+        it("seeds the shard's address-keyed set with a shape whose where reads ctx.ip, and with nothing for one that does not", () => {
+            expect.assertions(4);
+
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `
+                import { defineShape } from "@lunora/server";
+                export const calm = defineShape({ table: "messages", where: () => ({}) });
+            `,
+            );
+
+            const calm = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
+
+            expect(calm.functions).not.toContain("LUNORA_IP_READER_PATHS");
+
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `
+                import { defineShape } from "@lunora/server";
+                export const nearby = defineShape({ table: "messages", where: (ctx) => ({ ip: ctx.ip }) });
+            `,
+            );
+
+            const nearby = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
+
+            expect(nearby.functions).toContain('new Set(["nearby"])');
+            expect(nearby.shard).toContain("LUNORA_IP_READER_PATHS");
+            expect(nearby.shard).toContain("this.ipKeyedFunctionPaths.add(path)");
+        });
+
         it("rejects a defineShape that replicates a table a mask() chain masks a column on (plan 208, fail closed)", () => {
             expect.assertions(1);
 
