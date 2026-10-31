@@ -102,6 +102,19 @@ describe("dodopayments adapter", () => {
         await expect(adapter.refundPayment({ sessionId: "pay_1" })).resolves.toMatchObject({ pending: false, refundId: "ref_1", state: "refunded" });
     });
 
+    it("rejects a partial refund without loading the client", async () => {
+        expect.assertions(1);
+
+        const adapter = createDodoPaymentsAdapter({
+            client: () => {
+                throw new Error("loader reached");
+            },
+            webhookSecret: SECRET,
+        });
+
+        await expect(adapter.refundPayment({ amount: { currency: "USD", minorUnits: 100n }, sessionId: "pay_1" })).rejects.toThrow(/partial refunds/);
+    });
+
     it("flags a refund Dodo has only accepted, not settled", async () => {
         expect.assertions(2);
 

@@ -417,8 +417,6 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
         },
 
         refundPayment: async (input: RefundInput) => {
-            const client = await loadClient();
-
             // Dodo's refund API takes no flat amount — a partial refund is expressed per line item
             // (`items[].item_id` + amount), which this amount-based interface can't supply. Fail loudly
             // rather than silently issuing a FULL refund when a partial one was requested.
@@ -429,6 +427,7 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
                 );
             }
 
+            const client = await loadClient();
             const refund = asRecord(await client.refunds.create({ payment_id: input.sessionId, reason: input.reason }));
             const currency = readString(refund, "currency") ?? "usd";
             const refundedAmount = moneyFromMinor(readNumber(refund, "amount") ?? 0, currency);
