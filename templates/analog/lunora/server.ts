@@ -3,6 +3,7 @@ import type { ShardNamespaceLike } from "lunorash/runtime";
 import { defineApp } from "#lunora/_generated/app.js";
 
 interface Env extends Record<string, unknown> {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     SHARD: ShardNamespaceLike;
     SHARD_REGISTRY: ShardNamespaceLike;
 }
@@ -26,6 +27,7 @@ interface Env extends Record<string, unknown> {
  */
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .adminRevocations((env) => env.ADMIN_REVOCATIONS)
     .shardRegistry((env) => env.SHARD_REGISTRY)
     // Demo/local default: this app has no auth, so shard access is left OPEN
     // (any caller may target any shard). Nothing else guards the data either: the
@@ -39,4 +41,7 @@ const app = defineApp<Env>()
 export const ShardDO = app.ShardDO;
 // Tracks which shards hold `.shardBy()` rows, for cross-shard export / CDC sync.
 export { ShardRegistryDO } from "#lunora/_generated/shardRegistry.js";
+// Records revoked named admin tokens where a restore of the shard cannot rewind them. The `.js` stays:
+// a `#lunora/*` subpath import is a package `imports` pattern, which does no extension probing.
+export { AdminRevocationDO } from "#lunora/_generated/adminRevocations.js";
 export default app;

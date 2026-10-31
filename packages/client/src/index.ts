@@ -65,6 +65,7 @@ export type { SyncWatermark } from "./subscription";
 export type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState } from "./subscription";
 export { SubscriptionRegistry } from "./subscription";
 export type {
+    AdminTokenSummary,
     ArgsOf,
     AuthCapabilities,
     AuthConfigInfo,
@@ -78,6 +79,7 @@ export type {
     ClientMessage,
     ClientShapeSubscribeMessage,
     ClientShapeUnsubscribeMessage,
+    CreatedAdminToken,
     CronJobInfo,
     CronRunInFlight,
     CronRunRecord,

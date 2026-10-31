@@ -1,7 +1,9 @@
 import type {
+    AdminTokenSummary,
     AuthPage,
     AuthSession,
     AuthUser,
+    CreatedAdminToken,
     CronJobInfo,
     CronRunsResult,
     DeploymentPauseStatus,
@@ -23,6 +25,7 @@ import type {
     VectorQueryMatch,
 } from "@lunora/client";
 import type { LunoraAdminClient } from "@lunora/client/admin";
+import type { Mock } from "vitest";
 import { vi } from "vitest";
 
 interface MockClientHooks {
@@ -33,6 +36,7 @@ interface MockClientHooks {
     banAuthUser: ReturnType<typeof vi.fn>;
     cancelAuthOrgInvitation: ReturnType<typeof vi.fn>;
     cancelScheduledJob: ReturnType<typeof vi.fn>;
+    createAdminToken: Mock<(options: { expiresAt?: number; name: string }) => Promise<CreatedAdminToken>>;
     createAuthOrganization: ReturnType<typeof vi.fn>;
     createAuthOrgRole: ReturnType<typeof vi.fn>;
     createAuthOrgTeam: ReturnType<typeof vi.fn>;
@@ -61,6 +65,7 @@ interface MockClientHooks {
     getKvValue: ReturnType<typeof vi.fn>;
     impersonateAuthUser: ReturnType<typeof vi.fn>;
     inviteAuthOrgMember: ReturnType<typeof vi.fn>;
+    listAdminTokens: Mock<() => Promise<AdminTokenSummary[]>>;
     listAuthAccounts: ReturnType<typeof vi.fn>;
     listAuthOrganizations: ReturnType<typeof vi.fn>;
     listAuthOrgInvitations: ReturnType<typeof vi.fn>;
@@ -91,6 +96,7 @@ interface MockClientHooks {
     removeAuthOrgTeam: ReturnType<typeof vi.fn>;
     removeAuthOrgTeamMember: ReturnType<typeof vi.fn>;
     removeAuthUser: ReturnType<typeof vi.fn>;
+    revokeAdminToken: Mock<(name: string) => Promise<void>>;
     revokeAuthSession: ReturnType<typeof vi.fn>;
     revokeAuthSignUpInvitation: ReturnType<typeof vi.fn>;
     revokeAuthUserSessions: ReturnType<typeof vi.fn>;
@@ -221,6 +227,18 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         async (table: string) => impls.shardTraffic?.(table) ?? { failed: 0, ok: 0, shards: [] },
     );
     const listGlobalTables = vi.fn<() => Promise<GlobalTableInfo[]>>(async () => impls.listGlobalTables?.() ?? []);
+
+    // In-memory named admin-token store, so the Settings card's create → list → revoke round-trips.
+    const adminTokens = new Map<string, AdminTokenSummary>();
+    const createAdminToken = vi.fn<(options: { expiresAt?: number; name: string }) => Promise<CreatedAdminToken>>(async ({ name }) => {
+        adminTokens.set(name, { createdAt: 1, name });
+
+        return { createdAt: 1, name, token: `lnat.${name}.${"s".repeat(43)}` };
+    });
+    const listAdminTokens = vi.fn<() => Promise<AdminTokenSummary[]>>(async () => [...adminTokens.values()]);
+    const revokeAdminToken = vi.fn<(name: string) => Promise<void>>(async (name: string) => {
+        adminTokens.delete(name);
+    });
 
     // In-memory KV store, seeded from `impls.kvSeed` and mutated in place by
     // put/delete so create → list → edit → delete round-trips the way the real
@@ -514,6 +532,9 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         // `getAuthToken` supplies the admin bearer. Stable, non-empty values so a
         // test asserts on what the console actually forwards.
         getAuthToken: () => "mock-admin-token",
+        createAdminToken,
+        listAdminTokens,
+        revokeAdminToken,
         deleteStorageObject,
         facetGlobalColumn,
         fetchArchitecture,
@@ -557,6 +578,9 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     return {
         action,
         asClient,
+        createAdminToken,
+        listAdminTokens,
+        revokeAdminToken,
         cancelScheduledJob,
         deleteKvKey,
         deleteStorageObject,

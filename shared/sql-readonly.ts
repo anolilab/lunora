@@ -32,6 +32,7 @@
  */
 
 import { maskSqlNonCode, skipBlockComment, skipLineComment } from "./sql-mask";
+import { findReservedStorage } from "./sql-reserved-storage";
 
 /** Why a statement was rejected. Mirrors the codes the DO serializes to the client. */
 type SqlRejectionCode = "SQL_EMPTY" | "SQL_MULTIPLE_STATEMENTS" | "SQL_NOT_READONLY";
@@ -192,6 +193,16 @@ const classifyStatement = (query: string): SqlRejection | undefined => {
             length: forbidden[0].length,
             message: `${notReadonly} (\`${forbidden[0].toUpperCase()}\` is not allowed)`,
             offset: start + forbidden.index,
+        };
+    }
+
+    // Reserved storage no console statement may touch, for any caller including the root token.
+    const reserved = findReservedStorage(single);
+
+    if (reserved !== undefined) {
+        return {
+            code: "SQL_NOT_READONLY",
+            message: `\`${reserved}\` is reserved framework storage and cannot be queried`,
         };
     }
 

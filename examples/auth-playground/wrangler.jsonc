@@ -5,7 +5,10 @@
     "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
-        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
+        ],
     },
     "d1_databases": [
         // Auth identity, sessions, organizations, members live in D1 — better-auth
@@ -13,7 +16,10 @@
         // against this binding via `ensureMigrated` / `compileMigrationsSql`.
         { "binding": "DB", "database_name": "lunora-auth-playground", "database_id": "<replace-with-d1-create-id>" },
     ],
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["AdminRevocationDO"] },
+    ],
     "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
     // Secrets are NOT declared here — `vars` ship in the deployed config and are
     // visible in the dashboard. `AUTH_SECRET` lives in `.dev.vars` for local dev

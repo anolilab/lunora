@@ -13,6 +13,7 @@ import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { CLOUDFLARE_WORKERS_URL } from "../../lib/cf-links";
 import type { Shortcuts } from "../../lib/shortcuts";
 import { resetShortcuts, setShortcut, useShortcuts } from "../../lib/shortcuts";
+import AdminTokensCard from "./admin-tokens-card";
 
 interface SettingsPanelProps {
     /** Shard key the settings read targets on first load. Defaults to the root shard. */
@@ -265,6 +266,7 @@ export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactEle
             )}
 
             <DataSharingCard />
+            <AdminTokensCard />
 
             {/* Browser preferences, not deployment config — everything above this
                 card is served by the worker and read-only; everything in it lives

@@ -20,6 +20,7 @@
  */
 import { decodeWire, encodeWire } from "@lunora/wire";
 
+import { ADMIN_SIGNAL_HEADER } from "../../../shared/admin-token";
 import type {
     AiOptInLevel,
     AiRunBinding,
@@ -117,6 +118,12 @@ interface AiChatRpcDeps {
      * level is (through a refusal it can render) and can never raise it.
      */
     optInLevel: (env: unknown) => AiOptInLevel;
+
+    /**
+     * The headers for the next tool read, given the ones the turn started with. A named admin token's
+     * signal is short-lived, so this re-signs it; absent, the starting headers are reused.
+     */
+    resolveToolHeaders?: (headers: Record<string, string>) => Promise<Record<string, string>>;
 }
 
 /** The worker-served handler for {@link AI_CHAT_OP}. */
@@ -211,13 +218,14 @@ const LIST_TABLES_OP = "__lunora_admin__:listTables";
 const chatToolRunner = (
     forward: ForwardToShard,
     shardKey: string,
-    headers: Record<string, string>,
+    resolveHeaders: () => Promise<Record<string, string>>,
     request: Request,
     schema: ReadonlyArray<SchemaFact>,
 ): ChatToolRunner => {
     /** One forwarded admin read, decoded. */
     const read = async (path: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> => {
-        const response = await forward(request, path, args, shardKey, headers, undefined, signal);
+        // Resolved per read: a turn can outlast the signal a named token's first read carried.
+        const response = await forward(request, path, args, shardKey, await resolveHeaders(), undefined, signal);
 
         // A non-2xx body is an error envelope, not data. Without this check it was
         // JSON-stringified into an observation prefixed "Tool result:", telling the
@@ -376,11 +384,19 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
                        * error. Offering no tools says so once, up front, as the
                        * engine's "no tools are available" refusal.
                        */
-                      if (headers["authorization"] === undefined) {
+                      if (headers["authorization"] === undefined && headers[ADMIN_SIGNAL_HEADER] === undefined) {
                           return undefined;
                       }
 
-                      return chatToolRunner(forward, shardKey, headers, request, schema);
+                      const { resolveToolHeaders } = deps;
+
+                      return chatToolRunner(
+                          forward,
+                          shardKey,
+                          async () => (resolveToolHeaders === undefined ? headers : resolveToolHeaders(headers)),
+                          request,
+                          schema,
+                      );
                   })();
 
         const encoder = new TextEncoder();

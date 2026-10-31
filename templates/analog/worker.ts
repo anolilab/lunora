@@ -70,4 +70,5 @@ const worker = {
 
 export { ShardDO };
 export { ShardRegistryDO } from "./lunora/server";
+export { AdminRevocationDO } from "./lunora/server";
 export default worker;

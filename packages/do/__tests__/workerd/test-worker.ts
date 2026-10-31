@@ -19,6 +19,7 @@ import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 import { v } from "@lunora/values";
 import { DurableObject } from "cloudflare:workers";
 
+import { AdminRevocationDO } from "../../src/admin-revocation-do";
 import { mergeDurableObjects } from "../../src/merge-durable-objects";
 import { SessionDO } from "../../src/session-do";
 import type { ShardDOState } from "../../src/shard-do";
@@ -28,6 +29,7 @@ import messagesSchema from "../_helpers/messages-schema";
 import type { DeliveryAuthorizationTestDO } from "./delivery-authorization-worker";
 
 interface Env {
+    ADMIN_REVOCATIONS: DurableObjectNamespace;
     AUTHORIZED: DurableObjectNamespace<DeliveryAuthorizationTestDO>;
     COUNTER: DurableObjectNamespace<TestCounterDO>;
     ECHO: DurableObjectNamespace<TestEchoDO>;
@@ -688,6 +690,15 @@ class TestShardRegistryRole extends ShardRegistryDO {
     }
 }
 
+/** The revocation store answers only the root admin token; this env supplies one without changing the pool's shared bindings. */
+const TEST_ADMIN_TOKEN = "workerd-test-admin-token";
+
+class TestAdminRevocationDO extends AdminRevocationDO {
+    public constructor(state: ConstructorParameters<typeof AdminRevocationDO>[0], env: unknown) {
+        super(state, { ...(env as Record<string, unknown>), LUNORA_ADMIN_TOKEN: TEST_ADMIN_TOKEN });
+    }
+}
+
 const TestMergedDO = mergeDurableObjects({ scheduler: MergedSchedulerRole, shard: MergedShardRole, shardRegistry: TestShardRegistryRole });
 
 const handler = {
@@ -698,5 +709,5 @@ const handler = {
 
 export default handler;
 export { DeliveryAuthorizationTestDO } from "./delivery-authorization-worker";
-export { TestCounterDO, TestEchoDO, TestLiveShardDO, TestMergedDO, TestSessionDO, TestShardDO, TestSyncDO };
+export { TestAdminRevocationDO, TestCounterDO, TestEchoDO, TestLiveShardDO, TestMergedDO, TestSessionDO, TestShardDO, TestSyncDO };
 export type { Env };

@@ -15,9 +15,11 @@ import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
 import { LUNORA_VECTOR_INDEXES } from "../../lunora/_generated/vectors.js";
 
-export { SchedulerDO } from "./scheduler-do.js";
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../../lunora/_generated/adminRevocations.js";
 
 interface Env {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     AUTH_SECRET?: string;
     AUTH_URL?: string;
     DB: unknown;
@@ -35,6 +37,8 @@ interface ShardEnv {
     SCHEDULER?: DurableObjectNamespaceLike;
     STORAGE_SECRET?: string;
 }
+
+export { SchedulerDO } from "./scheduler-do.js";
 
 export const ShardDO = createShardDO({
     scheduler: (env) => {
@@ -171,6 +175,7 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
             return session?.user.id ? { userId: session.user.id } : null;
         },
         routes: {},
+        adminRevocations: env.ADMIN_REVOCATIONS,
         shardDO: env.SHARD,
     });
 

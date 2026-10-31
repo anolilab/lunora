@@ -375,7 +375,7 @@ const streamingImport = async (
     request: Request,
     options: WorkerOptions,
     coordinator: QueryCoordinator,
-    forwardedHeaders: Record<string, string>,
+    resolveForwardedHeaders: () => Promise<Record<string, string>>,
     namespace: ShardNamespaceLike,
     dryRun: boolean,
     onConflict: "replace" | "skip",
@@ -444,7 +444,9 @@ const streamingImport = async (
             batches: [...perShard.values()],
             deletes: importWantsDeletes(request),
             dryRun,
-            headers: forwardedHeaders,
+            // Resolved only now, after the whole body is read: a named admin token's
+            // shard signal is short-lived, and a slow upload must not use it up.
+            headers: await resolveForwardedHeaders(),
             onConflict,
         });
 

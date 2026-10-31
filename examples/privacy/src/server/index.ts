@@ -9,6 +9,9 @@ import { buildWorker } from "./worker";
 /** The better-auth router's base path, as `@lunora/auth` mounts it. */
 const AUTH_PATH_PREFIX = "/api/auth/";
 
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../../lunora/_generated/adminRevocations.js";
+
 // The two Workflow classes must be exported from the entry, or wrangler provisions no binding for them.
 export * from "../../lunora/_generated/workflows.js";
 

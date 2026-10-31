@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { LunoraAdminClient } from "../src/admin/admin-client";
+import { createAdminToken, listAdminTokens, revokeAdminToken } from "../src/admin/admin-tokens";
 import { getCronJobs, runCronJob } from "../src/admin/functions";
 import { listGlobalTables } from "../src/admin/global-tables";
 import type { AdminHost } from "../src/admin/host";
@@ -18,6 +19,7 @@ import {
 import { listStorageBuckets, uploadStorageObject } from "../src/admin/storage";
 import { listVectorIndexes } from "../src/admin/vector-indexes";
 import {
+    ADMIN_TOKENS_PATH,
     CRON_JOBS_PATH,
     CRON_JOBS_RUN_PATH,
     GLOBAL_TABLES_PATH,
@@ -172,6 +174,21 @@ describe("admin modules: request shape", () => {
 
         await expect(listGlobalTables(host)).resolves.toBe(tables);
         expect(calls[0]).toMatchObject({ method: "GET", path: GLOBAL_TABLES_PATH });
+    });
+
+    it("admin-token calls hit the tokens route with the right verb", async () => {
+        expect.assertions(4);
+
+        const { calls, host } = recordingHost();
+
+        await expect(listAdminTokens(host)).resolves.toStrictEqual([]);
+
+        await createAdminToken(host, { name: "ci" });
+        await revokeAdminToken(host, "ci");
+
+        expect(calls[0]).toMatchObject({ method: "GET", path: ADMIN_TOKENS_PATH });
+        expect(calls[1]).toMatchObject({ method: "POST", path: ADMIN_TOKENS_PATH, payload: { name: "ci" } });
+        expect(calls[2]).toMatchObject({ method: "DELETE", path: `${ADMIN_TOKENS_PATH}?name=ci` });
     });
 
     it("listKvNamespaces gets the namespaces and defaults to none", async () => {

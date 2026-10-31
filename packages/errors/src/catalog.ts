@@ -268,6 +268,8 @@ export const ERROR_CATALOG = {
      * `internal: true` individually, with the reason noted alongside.
      */
     ADMIN_FORBIDDEN: { status: 403, title: "Admin access forbidden" },
+    ADMIN_ROOT_REQUIRED: { status: 403, title: "Root admin token required" },
+    ADMIN_TOKEN_EXISTS: { status: 409, title: "Admin token name already in use" },
     ADMIN_TOKEN_NOT_CONFIGURED: { status: 400, title: "Admin token not configured" },
 
     /**
