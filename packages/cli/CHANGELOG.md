@@ -1,3 +1,14 @@
+## @lunora/cli [1.0.0-alpha.465](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.464...@lunora/cli@1.0.0-alpha.465) (2026-10-31)
+
+### Features
+
+* **cli:** isolated per-PR preview deployments ([#1400](https://github.com/anolilab/lunora/issues/1400)) ([2d08947](https://github.com/anolilab/lunora/commit/2d089479c64ec240817ccfa95128159572664ecf))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.440
+
 ## @lunora/cli [1.0.0-alpha.464](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.463...@lunora/cli@1.0.0-alpha.464) (2026-10-31)
 
 
