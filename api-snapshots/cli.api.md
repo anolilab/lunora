@@ -1470,6 +1470,7 @@ interface TablePlan {
     add: number;
     delete: number;
     existing: number;
+    matched: number;
     source: number;
     table: string;
     target: number;

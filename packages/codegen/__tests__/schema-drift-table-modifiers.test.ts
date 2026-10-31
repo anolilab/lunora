@@ -163,20 +163,20 @@ describe("schema-drift — table modifiers", () => {
             expect(snapshotOf().tables.rows?.ttl).toBeUndefined();
         });
 
-        it("reports a newly declared TTL as breaking", () => {
-            expect.assertions(4);
+        it("reports a newly declared TTL as a warning that carries the policy, not a block", () => {
+            expect.assertions(5);
 
             const change = soleChange({}, ttl("expiresAt", 1000));
 
             expect(change.type).toBe("changedTtlPolicy");
-            expect(change.severity).toBe("breaking");
-            // Rewriting the expiry column on the rows already on disk IS the fix,
-            // and that is exactly what a `defineMigration` does.
-            expect(change.remediation).toBe("backfill");
+            expect(change.severity).toBe("safe");
+            // The schema cannot make a stored row invalid; the next sweep deleting rows is something to hear about.
+            expect(change.warning).toBe(true);
+            expect(change.expiry).toStrictEqual({ after: 1000, field: "expiresAt" });
         });
 
-        it("reports a SHORTENED `after` as breaking and a LENGTHENED one as safe", () => {
-            expect.assertions(6);
+        it("warns about a SHORTENED `after` and stays silent about a LENGTHENED one; neither blocks", () => {
+            expect.assertions(7);
 
             /*
              * `selectExpiredIds` computes `cutoff = now - after`, so a larger
@@ -187,10 +187,11 @@ describe("schema-drift — table modifiers", () => {
             const shortened = soleChange(ttl("expiresAt", 60_000), ttl("expiresAt", 1000));
             const lengthened = soleChange(ttl("expiresAt", 1000), ttl("expiresAt", 60_000));
 
-            expect(shortened.severity).toBe("breaking");
-            expect(shortened.remediation).toBe("backfill");
+            expect(shortened.severity).toBe("safe");
+            expect(shortened.warning).toBe(true);
+            expect(shortened.expiry?.previous).toStrictEqual({ after: 60_000, field: "expiresAt" });
             expect(lengthened.severity).toBe("safe");
-            expect(lengthened.remediation).toBe("none");
+            expect(lengthened.warning).toBeUndefined();
         });
 
         it("treats an absent `after` as a zero offset rather than as a different policy", () => {
@@ -202,15 +203,16 @@ describe("schema-drift — table modifiers", () => {
             expect(soleChange(ttl("expiresAt"), ttl("expiresAt", 1000)).severity).toBe("safe");
         });
 
-        it("reports a repointed expiry column as breaking, and a dropped policy as safe", () => {
-            expect.assertions(5);
+        it("warns about a repointed expiry column, and a dropped policy is silent; neither blocks", () => {
+            expect.assertions(6);
 
             const repointed = soleChange(ttl("expiresAt", 1000), ttl("purgeAt", 1000));
             const dropped = soleChange(ttl("expiresAt", 1000), {});
 
-            expect(repointed.severity).toBe("breaking");
-            expect(repointed.remediation).toBe("backfill");
+            expect(repointed.severity).toBe("safe");
+            expect(repointed.warning).toBe(true);
             expect(dropped.severity).toBe("safe");
+            expect(dropped.warning).toBeUndefined();
         });
     });
 
@@ -235,15 +237,15 @@ describe("schema-drift — table modifiers", () => {
             expect(change.remediation).toBe("backfill");
         });
 
-        it("reports opting out as breaking, fixable in the consumer", () => {
+        it("reports opting out as a warning: the consumer is what breaks, not the data", () => {
             expect.assertions(4);
 
             const change = soleChange({ commitOrdered: true }, {});
 
-            expect(change.severity).toBe("breaking");
+            expect(change.severity).toBe("safe");
             // Nothing happens to stored data — the rows keep the sequence they
             // were written with. It is the changefeed query that stops advancing.
-            expect(change.remediation).toBe("code");
+            expect(change.warning).toBe(true);
             expect(change.summary).toContain("_commitSeq");
         });
     });
@@ -339,7 +341,7 @@ describe("schema-drift — table modifiers", () => {
             expect(change.summary).toContain("export/import");
         });
 
-        it("a removed table and a changed jurisdiction both re-home", () => {
+        it("a removed table warns and does not block, while a changed jurisdiction re-homes", () => {
             expect.assertions(4);
 
             const removed = diffSchemaSnapshots(snapshotOf(), buildSchemaSnapshot(schema([]), [])).changes;
@@ -348,8 +350,8 @@ describe("schema-drift — table modifiers", () => {
                 buildSchemaSnapshot(schema([table("rows")], "us"), []),
             ).changes;
 
-            expect(removed[0]?.severity).toBe("breaking");
-            expect(removed[0]?.remediation).toBe("rehome");
+            expect(removed[0]?.severity).toBe("safe");
+            expect(removed[0]?.warning).toBe(true);
             expect(rejurisdicted[0]?.severity).toBe("breaking");
             expect(rejurisdicted[0]?.remediation).toBe("rehome");
         });

@@ -145,6 +145,7 @@ interface CodegenResult {
         vectors: string;
         workflows: string;
     };
+    indexReferences: ReadonlyArray<IndexReference>;
     migrations: ReadonlyArray<MigrationIR>;
     outputDirectory: string;
     platformDiagnostics: ReadonlyArray<PlatformDiagnostic>;
@@ -244,6 +245,16 @@ interface DriftChange {
     summary: string;
     field?: string;
     table?: string;
+    warning?: true;
+    expiry?: {
+        after?: number;
+        field: string;
+        previous?: {
+            after?: number;
+            field: string;
+        };
+    };
+    index?: string;
     uniqueOn?: ReadonlyArray<string>;
     type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedCommitOrdering" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedMemoryMode" | "changedShardMode" | "changedTtlPolicy" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
 }
@@ -415,6 +426,18 @@ interface IndexIR {
     fields: ReadonlyArray<string>;
     name: string;
     unique?: boolean;
+}
+```
+
+### `IndexReference` (interface)
+
+```ts
+interface IndexReference {
+    file: string;
+    function: string;
+    index: string | undefined;
+    line: number;
+    table: string;
 }
 ```
 
@@ -1525,6 +1548,7 @@ const evaluateSchemaDrift: (options: {
     baseline: SchemaSnapshot | undefined;
     command?: string;
     current: SchemaSnapshot;
+    indexReferences?: ReadonlyArray<IndexReference>;
     migrations: ReadonlyArray<Pick<MigrationIR, "id" | "identity" | "table">>;
 }) => SchemaDriftDecision;
 ```
@@ -1572,6 +1596,12 @@ const formatAdvisories: (findings: ReadonlyArray<Finding>) => string;
 ### `generateSdk` (const)
 
 Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
+
+### `indexReferencesOf` (const)
+
+```ts
+const indexReferencesOf: (queries: ReadonlyArray<QueryReadIR>) => IndexReference[];
+```
 
 ### `isD1GlobalTable` (const)
 

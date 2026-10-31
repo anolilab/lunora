@@ -52,10 +52,16 @@ diffs the schema against the committed `lunora/.lunora-schema.json`.
   type, optional → required, new required field on an existing table, a new
   unique index or `.unique()` column (existing duplicates would make the shard
   fail to open).
-- **Breaking, not fixable by a migration:** changing a table's shard mode
-  (root ↔ `.shardBy()` ↔ `.global()`, or the `.global()` backend) moves rows to
-  other storage; use export → import. A dropped relation needs call sites
-  changed. A dropped index never blocks.
+- **Moves data, blocks until a migration accompanies it:** changing a table's
+  shard mode (root ↔ `.shardBy()` ↔ `.global()`, or the `.global()` backend), turning
+  on `.memory()`, or changing the jurisdiction. Move the rows with export → import,
+  and declare a migration on the table (`up` gives each row what its new home
+  needs, e.g. its shard key); one that returns the document unchanged covers nothing.
+- **Never blocks, may warn:** a dropped table (its rows stay in place, unreachable),
+  a dropped relation, a TTL added, moved or shortened (rows past the cutoff go on the
+  next sweep, counted when `lunora deploy` can read the worker), `.commitOrdered()`
+  turned off, and a dropped index. A dropped index is refused only while a function
+  still names it through `.withIndex("name")`; point the query elsewhere first.
 
 A migration covers a change only if it is new since the baseline, its `table`
 is a string literal naming the affected table, and its `up` does more than return

@@ -365,6 +365,21 @@ for on its own:
   naming the repeating rows by `_id`, while any value repeats or the rows cannot be
   read.
 
+The gate also classifies the rest of the changes it cannot verify by what they can
+do to stored data, so none of them is left needing the flag:
+
+- A dropped table, a dropped relation, a TTL change and `.commitOrdered()` turned off
+  no longer block. Each warns instead: a dropped table's rows are left in place, a
+  removed relation's `onDelete` stops running, and a TTL that now covers rows already
+  on disk says so (with the count of those rows when `lunora deploy` can read the
+  worker). A dropped index is refused only while a function still names it through
+  `withIndex`.
+- A shard-mode flip, a table turned `.memory()` and a jurisdiction change still block,
+  because they move or empty data. They clear once a new migration on the table (any
+  new migration, for a jurisdiction change) accompanies them; the blocked message shows
+  an export/import example. The full list is in
+  [Migrations](/docs/concepts/migrations).
+
 **Migration:** drop the flag from scripts and CI. When every change is verified, or
 a new migration covers it, the baseline advances after a successful deploy.
 `--allow-schema-drift` is still the one-run override: it checks nothing and leaves

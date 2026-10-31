@@ -83,6 +83,45 @@ describe("discover/migrations", () => {
             });
         });
 
+        it("resolves an `up` given by name: a same-file identity function is an identity, a transforming or unresolvable one is not", () => {
+            expect.assertions(1);
+
+            writeSource(
+                "helpers.ts",
+                `
+            export const importedIdentity = (doc: unknown) => doc;
+        `,
+            );
+            writeSource(
+                "migrations.ts",
+                `
+            import { defineMigration } from "@lunora/server";
+            import { importedIdentity } from "./helpers";
+            const noop = (doc: unknown) => doc;
+            function noopDeclaration(doc: unknown) { return doc; }
+            const rewrite = (doc: Record<string, unknown>) => ({ ...doc, touched: true });
+            export const a = defineMigration({ id: "named-const", table: "t", up: noop });
+            export const b = defineMigration({ id: "named-function", table: "t", up: noopDeclaration });
+            export const c = defineMigration({ id: "named-transform", table: "t", up: rewrite });
+            export const d = defineMigration({ id: "imported", table: "t", up: importedIdentity });
+            export const up = noop;
+            export const e = defineMigration({ id: "shorthand", table: "t", up });
+            export const f = defineMigration({ id: "unresolvable", table: "t", up: someGlobal });
+        `,
+            );
+
+            const result = discoverMigrations(newProject(), workdir);
+
+            expect(Object.fromEntries(result.map((migration) => [migration.id, migration.identity === true]))).toStrictEqual({
+                imported: true,
+                "named-const": true,
+                "named-function": true,
+                "named-transform": false,
+                shorthand: true,
+                unresolvable: false,
+            });
+        });
+
         it("detects an aliased import — `import { defineMigration as dm }`", () => {
             expect.assertions(2);
 

@@ -9,6 +9,7 @@ import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { createCodegenProject, refreshCodegenProject } from "./codegen-project";
 import type { AgentIR, ContainerIR, MigrationIR, QueueIR, TableIR, WorkflowIR, WranglerQueueProducerIR, WranglerVariableIR } from "./ir";
 import type { PlatformDiagnostic } from "./platform-target";
+import type { IndexReference } from "./schema-drift";
 
 export interface CodegenOptions {
     /**
@@ -204,12 +205,19 @@ export interface CodegenResult {
     };
 
     /**
+     * Every `.withIndex(name)` the application's functions make, so the drift gate can refuse to drop an index a
+     * query still names. Computed on every run, lint or not: the gate must not depend on an advisory opt-out.
+     */
+    indexReferences: ReadonlyArray<IndexReference>;
+
+    /**
      * Data migrations discovered from `defineMigration` exports under `lunora/`,
      * each with the table it iterates. The drift gate matches a NEW id against
      * its table so a backfill only excuses breaking drift on the table it
      * actually visits. Empty when the project declares none.
      */
     migrations: ReadonlyArray<MigrationIR>;
+
     outputDirectory: string;
 
     /**

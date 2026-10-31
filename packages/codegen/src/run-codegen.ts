@@ -77,7 +77,7 @@ import { platformFeatureAvailable, resolveCodegenTarget } from "./platform-targe
 import { readMergeDurableObjects } from "./project-config-file";
 import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
-import { buildSchemaSnapshot } from "./schema-drift";
+import { buildSchemaSnapshot, indexReferencesOf } from "./schema-drift";
 import { buildSpecArtifacts } from "./spec-artifacts";
 
 /**
@@ -531,6 +531,10 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
                   tableWrites: discoverTableWrites(project, lunoraDirectory),
                   workflowCalls: discoverWorkflowCalls(project, lunoraDirectory),
               };
+
+    // The drift gate refuses to drop an index a query still names, so these are read on every run: they do not hang off the
+    // advisory opt-out. A run that already walked the queries reuses them.
+    const indexReferences = indexReferencesOf(callSites?.queries ?? discoverQueries(project, lunoraDirectory, functions));
 
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
     // fields, filter-without-index, …). Cheap, derived from the schema + the
@@ -1015,6 +1019,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         outputDirectory,
         platformDiagnostics: platformGate.diagnostics,
         queues,
+        indexReferences,
         schemaSnapshot,
         schemaSnapshotPath,
         schemaTables: schema.tables,

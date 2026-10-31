@@ -24,6 +24,9 @@ import type { Logger } from "./logger";
 import type { StoredRowVerdict } from "./stored-row-check";
 import { describeFailures, isRowCheckable } from "./stored-row-check";
 
+/** Counts the stored rows a widened TTL deletes on the next sweep, per table, or says why it could not. Only `lunora deploy` has one. */
+type ExpiringRowCounter = (changes: ReadonlyArray<SchemaDriftDecision["changes"][number]>) => Promise<ReadonlyMap<string, number> | string>;
+
 /** Reads the deployment's stored rows for `changes` and judges them against the new schema. Only `lunora deploy` has one. */
 type StoredRowChecker = (changes: ReadonlyArray<SchemaDriftDecision["uncovered"][number]>) => Promise<StoredRowVerdict>;
 
@@ -99,6 +102,7 @@ interface SchemaDriftGateResult {
 interface GateContext {
     checkStoredRows?: StoredRowChecker;
     command?: string;
+    countExpiringRows?: ExpiringRowCounter;
     logger: Logger;
     readOnly: boolean;
     rebless: () => void;
@@ -122,6 +126,40 @@ const corruptBaselineResult = (context: GateContext): SchemaDriftGateResult => {
     }
 
     return { blocked: true, changes: [], reason };
+};
+
+/** The count clause of a TTL warning: how many rows the next sweep deletes, or why that is not known. */
+const expiryNote = (count: number | undefined, counts: ReadonlyMap<string, number> | string | undefined, canCount: boolean): string => {
+    if (count !== undefined) {
+        return ` — ${String(count)} stored row(s) are past the new cutoff and are deleted on the next sweep`;
+    }
+
+    if (typeof counts === "string") {
+        return ` (the affected rows could not be counted: ${counts})`;
+    }
+
+    return canCount ? "" : " (the affected rows are counted by `lunora deploy`, which reads the deployed worker)";
+};
+
+/**
+ * Say, for a run that goes ahead, what it leaves behind or sweeps: a dropped table's rows left in place, a removed relation's
+ * behaviour, a TTL that now expires rows already on disk (counted when the deployment can be read).
+ */
+const warnAboutProceeding = async (changes: SchemaDriftDecision["changes"], context: GateContext): Promise<void> => {
+    if (context.readOnly) {
+        return;
+    }
+
+    const warned = changes.filter((change) => change.warning === true);
+    const expiring = warned.filter((change) => change.expiry !== undefined);
+    const counts = expiring.length > 0 && context.countExpiringRows !== undefined ? await context.countExpiringRows(expiring) : undefined;
+
+    for (const change of warned) {
+        const count = typeof counts === "object" && change.table !== undefined ? counts.get(change.table) : undefined;
+        const suffix = change.expiry === undefined ? "" : expiryNote(count, counts, context.countExpiringRows !== undefined);
+
+        context.logger.warn(`schema-drift warning: ${change.summary}${suffix}`);
+    }
 };
 
 /** A run `--allow-schema-drift` let through: nothing is checked and the baseline stays at its committed shape. */
@@ -179,6 +217,8 @@ const blockedDecisionResult = async (decision: SchemaDriftDecision, context: Gat
             `schema-drift gate: all ${String(verdict.rows)} stored row(s) of ${verdict.tables.join(", ")} fit the new schema — the change needs no backfill`,
         );
 
+        await warnAboutProceeding(decision.changes, context);
+
         return { blocked: false, changes: decision.changes, reason: decision.reason, rebless: context.rebless };
     }
 
@@ -208,15 +248,19 @@ const runSchemaDriftGate = async (options: {
      * command that printed it.
      */
     command?: string;
+
+    /** Counts the rows a widened TTL deletes next sweep, for the warning. Present only where a deployment can be read. */
+    countExpiringRows?: ExpiringRowCounter;
     logger: Logger;
     readOnly?: boolean;
 }): Promise<SchemaDriftGateResult> => {
-    const { allowDrift, checkStoredRows, codegen, command, logger, readOnly = false } = options;
+    const { allowDrift, checkStoredRows, codegen, command, countExpiringRows, logger, readOnly = false } = options;
     const snapshotPath = codegen.schemaSnapshotPath;
     const baseline = readBaseline(snapshotPath);
     const context: GateContext = {
         checkStoredRows,
         command,
+        countExpiringRows,
         logger,
         readOnly,
         rebless: () => {
@@ -235,6 +279,7 @@ const runSchemaDriftGate = async (options: {
             baseline: baseline.status === "ok" ? baseline.snapshot : undefined,
             command,
             current: codegen.schemaSnapshot,
+            indexReferences: codegen.indexReferences,
             migrations: codegen.migrations,
         });
 
@@ -263,11 +308,13 @@ const runSchemaDriftGate = async (options: {
             return overriddenResult(decision, context);
         }
 
+        await warnAboutProceeding(decision.changes, context);
+
         return { blocked: false, changes: decision.changes, reason: decision.reason, rebless: readOnly ? undefined : context.rebless };
     }
 
     return { blocked: false, changes: decision.changes, reason: decision.reason };
 };
 
-export type { SchemaDriftGateResult, StoredRowChecker };
+export type { ExpiringRowCounter, SchemaDriftGateResult, StoredRowChecker };
 export { runSchemaDriftGate };

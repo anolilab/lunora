@@ -55,14 +55,15 @@ import projectRootFor from "../../util/project-root";
 import { buildRailpackImages } from "../../util/railpack";
 import { resolveWorkerUrl } from "../../util/resolve-target";
 import rowCheckTargetRefusal from "../../util/row-check-target";
-import type { StoredRowChecker } from "../../util/schema-drift-gate";
+import type { ExpiringRowCounter, StoredRowChecker } from "../../util/schema-drift-gate";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
-import { checkStoredRows } from "../../util/stored-row-check";
+import { checkStoredRows, countExpiringRows } from "../../util/stored-row-check";
 import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
 import { clientBuildRefusal, clientBuildRuns, pluginBuildRuns, runClientBuild } from "../build/framework-build";
+import type { ExportTarget } from "../data-transfer/export-rows";
 import type { PreDeployCommand } from "./checks";
 import { resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
 import { generatedConfigPath, provisionDeployHyperdrive } from "./hyperdrive";
@@ -746,23 +747,49 @@ const celldToolchainError = async (options: DeployCommandOptions, target: string
  * bearer. No URL means no target — never the localhost default, which would
  * judge a production schema change by an empty dev database.
  */
+/** The deployed worker the gate reads rows from, or why there is none. */
+const rowReadTarget = (cwd: string, options: DeployCommandOptions): { reason: string } | { target: ExportTarget | undefined } => {
+    // An empty `--migrate-url` is unset, and the link recorded for this `--env` stands in for a missing one.
+    const url = resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl });
+    const refusal = url === undefined ? undefined : rowCheckTargetRefusal(cwd, options.env, url);
+
+    if (refusal !== undefined) {
+        return { reason: refusal };
+    }
+
+    const baseUrl = url === undefined ? undefined : resolveAdminBaseUrl(url, options.logger, cwd);
+    const token = baseUrl === undefined ? undefined : resolveAdminBearer({ cwd, token: options.migrateToken, url: baseUrl }).token;
+
+    return { target: baseUrl === undefined || !token ? undefined : { baseUrl, fetchImpl: options.fetchImpl ?? adminFetch, token } };
+};
+
 const storedRowChecker =
     (cwd: string, options: DeployCommandOptions, codegen: CodegenResult): StoredRowChecker =>
     async (changes) => {
-        // An empty `--migrate-url` is unset, and the link recorded for this `--env` stands in for a missing one.
-        const url = resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl });
-        const refusal = url === undefined ? undefined : rowCheckTargetRefusal(cwd, options.env, url);
+        const read = rowReadTarget(cwd, options);
 
-        if (refusal !== undefined) {
-            return { kind: "inconclusive", reason: refusal };
-        }
-
-        const baseUrl = url === undefined ? undefined : resolveAdminBaseUrl(url, options.logger, cwd);
-        const token = baseUrl === undefined ? undefined : resolveAdminBearer({ cwd, token: options.migrateToken, url: baseUrl }).token;
-        const target = baseUrl === undefined || !token ? undefined : { baseUrl, fetchImpl: options.fetchImpl ?? adminFetch, token };
-
-        return checkStoredRows({ changes, tables: codegen.schemaTables, target });
+        return "reason" in read
+            ? { kind: "inconclusive", reason: read.reason }
+            : checkStoredRows({ changes, tables: codegen.schemaTables, target: read.target });
     };
+
+/** The count behind a TTL warning: how many stored rows the next sweep deletes. Best-effort, from the same target as the row check. */
+const expiringRowCounter =
+    (cwd: string, options: DeployCommandOptions): ExpiringRowCounter =>
+    async (changes) => {
+        const read = rowReadTarget(cwd, options);
+
+        return "reason" in read ? read.reason : countExpiringRows({ changes, now: Date.now(), target: read.target });
+    };
+
+/** The gate's readers of the deployed worker's rows: only `lunora deploy` has one. */
+const rowReaders = (
+    command: string,
+    cwd: string,
+    options: DeployCommandOptions,
+    codegen: CodegenResult,
+): { checkStoredRows?: StoredRowChecker; countExpiringRows?: ExpiringRowCounter } =>
+    command === "deploy" ? { checkStoredRows: storedRowChecker(cwd, options, codegen), countExpiringRows: expiringRowCounter(cwd, options) } : {};
 
 /**
  * Everything both `lunora prepare` and `lunora deploy` must do before anything
@@ -844,7 +871,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     if (codegen !== undefined) {
         const gate = await runSchemaDriftGate({
             allowDrift: options.allowSchemaDrift === true,
-            checkStoredRows: command === "deploy" ? storedRowChecker(cwd, options, codegen) : undefined,
+            ...rowReaders(command, cwd, options, codegen),
             codegen,
             command,
             logger: options.logger,

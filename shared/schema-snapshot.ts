@@ -181,11 +181,12 @@ type DriftScope = "schema" | "table";
  * - `"backfill"` — a `defineMigration` transform rewrites the affected rows.
  *   The ONLY value for which a data migration is the answer.
  * - `"rehome"` — the rows' physical storage moves (a different Durable Object,
- *   or a different region). The per-shard runner only ever replaces a row inside
- *   the shard it was handed, so no transform reaches these; the fix is an
- *   export/import round trip, or a revert.
+ *   or a different region), or a table is emptied on cold start. The per-shard
+ *   runner only ever replaces a row inside the shard it was handed, so the move
+ *   itself is an export/import round trip; the change clears once a new migration
+ *   on the table accompanies it (to give each row what its new home needs).
  * - `"code"` — nothing happens to stored data; a query or a call site has to
- *   change (a dropped index, a dropped relation).
+ *   change (a dropped index a query still names).
  * - `"none"` — additive, nothing to do.
  *
  * This lives HERE, next to the change union, for the same reason {@link DriftScope}
@@ -219,6 +220,15 @@ interface DriftChange {
     field?: string;
     /** The table this change belongs to. Always set when `scope` is `"table"`. */
     table?: string;
+    /**
+     * Set on a change that is safe for the stored data but that the operator must hear about: what happens to data the schema
+     * no longer describes, or which rows a new TTL will sweep. The gate logs it as a warning when the run proceeds.
+     */
+    warning?: true;
+    /** The TTL a change installs, and the one it replaces, so a caller that can read rows can count what the next sweep deletes. */
+    expiry?: { after?: number; field: string; previous?: { after?: number; field: string } };
+    /** The index a change is about, set on a removed index so a caller can check whether a query still names it. */
+    index?: string;
     /**
      * Set when the change adds a uniqueness constraint: the fields whose combined value must not repeat among a table's stored rows.
      * Rows can settle it, so a caller that can read them checks for duplicates instead of asking for a migration.
@@ -932,6 +942,7 @@ const diffIndexes = (tableName: string, baseline: TableSnapshot, current: TableS
             changes.push({
                 remediation: "none",
                 severity: "safe",
+                index: name,
                 summary: `removed index ${name} on ${tableName} — a query that used \`.withIndex("${name}")\` no longer compiles`,
                 table: tableName,
                 scope: "table",
@@ -958,13 +969,15 @@ const diffRelations = (tableName: string, baseline: TableSnapshot, current: Tabl
 
     for (const name of Object.keys(baseline.relations)) {
         if (current.relations[name] === undefined) {
+            // Nothing stored is touched: the foreign-key column keeps its values. What goes is the relation's behaviour, so say so.
             changes.push({
-                remediation: "code",
+                remediation: "none",
                 scope: "schema",
-                severity: "breaking",
-                summary: `removed relation ${tableName}.${name}`,
+                severity: "safe",
+                summary: `removed relation ${tableName}.${name} — the stored foreign-key values stay in place, but its \`onDelete\` action no longer runs and a \`with: { ${name} }\` read no longer compiles`,
                 table: tableName,
                 type: "removedRelation",
+                warning: true,
             });
         }
     }
@@ -1083,18 +1096,32 @@ const describeTtl = (ttl: TtlSnapshot): string => (ttl.after === undefined ? `.t
  * all widen the match over rows already on disk, and the alarm removes them on
  * its next tick with nothing to announce it.
  *
- * `"backfill"` is the honest remediation for the breaking direction: the rows
- * stay where they are and it is their expiry COLUMN that has to be refreshed —
- * one value per row, which is precisely what a `defineMigration` transform
- * rewrites.
+ * Neither direction blocks a deploy, because the schema cannot make a stored row
+ * invalid. The widening direction is a warning that carries the policy
+ * (`expiry`), so a caller that can read the table counts the rows it will delete.
  */
 const diffTtl = (tableName: string, baseline: TtlSnapshot | undefined, current: TtlSnapshot | undefined): DriftChange | undefined => {
     if (baseline === undefined && current === undefined) {
         return undefined;
     }
 
-    const breaking = (summary: string): DriftChange => {
-        return { remediation: "backfill", scope: "table", severity: "breaking", summary, table: tableName, type: "changedTtlPolicy" };
+    // Never blocks: the rows stay where they are and the schema cannot make one invalid. What a wider policy does is delete rows on
+    // the next alarm sweep, so it is a warning that carries the policy, for a caller that can read the rows to count them.
+    const widening = (summary: string, next: TtlSnapshot): DriftChange => {
+        return {
+            expiry: {
+                ...(next.after === undefined ? {} : { after: next.after }),
+                field: next.field,
+                ...(baseline === undefined ? {} : { previous: { ...(baseline.after === undefined ? {} : { after: baseline.after }), field: baseline.field } }),
+            },
+            remediation: "none",
+            scope: "table",
+            severity: "safe",
+            summary,
+            table: tableName,
+            type: "changedTtlPolicy",
+            warning: true,
+        };
     };
     const safe = (summary: string): DriftChange => {
         return { remediation: "none", scope: "table", severity: "safe", summary, table: tableName, type: "changedTtlPolicy" };
@@ -1105,14 +1132,16 @@ const diffTtl = (tableName: string, baseline: TtlSnapshot | undefined, current: 
     }
 
     if (baseline === undefined) {
-        return breaking(
-            `table ${tableName} gained a TTL policy ${describeTtl(current)} — every row already past the cutoff is deleted on the next alarm sweep; add a data migration to refresh or clear "${current.field}" on the rows written before it`,
+        return widening(
+            `table ${tableName} gained a TTL policy ${describeTtl(current)} — every row already past the cutoff is deleted on the next alarm sweep; refresh or clear "${current.field}" on the rows that must survive before this deploys`,
+            current,
         );
     }
 
     if (baseline.field !== current.field) {
-        return breaking(
-            `table ${tableName} moved its TTL to a different column: ${describeTtl(baseline)} → ${describeTtl(current)} — rows are now expired by a column they were never written against; add a data migration to populate "${current.field}"`,
+        return widening(
+            `table ${tableName} moved its TTL to a different column: ${describeTtl(baseline)} → ${describeTtl(current)} — rows are now expired by a column they were never written against; populate "${current.field}" on the rows that must survive before this deploys`,
+            current,
         );
     }
 
@@ -1120,8 +1149,9 @@ const diffTtl = (tableName: string, baseline: TtlSnapshot | undefined, current: 
     const after = ttlOffset(current);
 
     if (after < before) {
-        return breaking(
-            `table ${tableName} shortened its TTL: ${describeTtl(baseline)} → ${describeTtl(current)} — rows that were not expired under the old offset are deleted on the next alarm sweep; add a data migration to refresh "${current.field}" on the rows that must survive`,
+        return widening(
+            `table ${tableName} shortened its TTL: ${describeTtl(baseline)} → ${describeTtl(current)} — rows that were not expired under the old offset are deleted on the next alarm sweep; refresh "${current.field}" on the rows that must survive before this deploys`,
+            current,
         );
     }
 
@@ -1182,12 +1212,13 @@ const diffTableFlags = (tableName: string, baseline: TableSnapshot, current: Tab
                       type: "changedCommitOrdering",
                   }
                 : {
-                      remediation: "code",
+                      remediation: "none",
                       scope: "table",
-                      severity: "breaking",
-                      summary: `table ${tableName} is no longer .commitOrdered() — new rows carry no _commitSeq, so a \`_commitSeq > cursor\` changefeed stops advancing without erroring; update the consumers before deploying`,
+                      severity: "safe",
+                      summary: `table ${tableName} is no longer .commitOrdered() — stored rows are untouched, but new rows carry no _commitSeq, so a \`_commitSeq > cursor\` changefeed stops advancing without erroring; update the consumers`,
                       table: tableName,
                       type: "changedCommitOrdering",
+                      warning: true,
                   },
         );
     }
@@ -1251,12 +1282,13 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
                 // delete the rows nor copy them anywhere. The table is also gone
                 // from the schema by now, so the migration's target would not
                 // resolve. Export the shard if the data is wanted.
-                remediation: "rehome",
+                remediation: "none",
                 scope: "table",
-                severity: "breaking",
-                summary: `removed table ${tableName} — its rows stay in each shard's SQLite, unreachable through the schema; export the shard first if the data must be kept`,
+                severity: "safe",
+                summary: `removed table ${tableName} — its rows are left in place in each shard's SQLite (nothing deletes them) but are unreachable through the schema; export the shard first if the data must be kept, or declare the table again to reach it`,
                 table: tableName,
                 type: "removedTable",
+                warning: true,
             });
         }
     }

@@ -87,14 +87,44 @@ const dropIndex = (): void => {
     writeFileSync(schemaPath, readFileSync(schemaPath, "utf8").replace(`.index("by_channel", ["channelId"])\n`, ""), "utf8");
 };
 
-/** Drop the `attachments` relation from `users` — a breaking change no stored row can confirm. */
-const dropRelations = (): void => {
+/** Drop the `places` table: a breaking change before, now a warning that its rows stay in place. */
+const dropTable = (): void => {
     const schemaPath = join(workdir, "lunora", "schema.ts");
     const source = readFileSync(schemaPath, "utf8");
-    const start = source.indexOf("        .relations((r) => ({");
-    const end = source.indexOf("})),", start) + "})),".length;
+    const start = source.indexOf("    // Coverage table — exercises `v.geoPoint()`");
+    const end = source.indexOf('}).geoIndex("by_location", { field: "location" }),', start) + '}).geoIndex("by_location", { field: "location" }),'.length;
 
-    writeFileSync(schemaPath, `${source.slice(0, start).trimEnd()},${source.slice(end)}`, "utf8");
+    writeFileSync(schemaPath, `${source.slice(0, start)}${source.slice(end)}`, "utf8");
+};
+
+/** Remove or restore the `sessions` TTL so a later run gains one. */
+const setSessionsTtl = (ttl: boolean): void => {
+    const schemaPath = join(workdir, "lunora", "schema.ts");
+    const source = readFileSync(schemaPath, "utf8");
+
+    writeFileSync(
+        schemaPath,
+        ttl
+            ? source.replace("}),\n\n    // Coverage table — exercises the drizzle", '}).ttl("expiresAt"),\n\n    // Coverage table — exercises the drizzle')
+            : source.replace('.ttl("expiresAt")', ""),
+        "utf8",
+    );
+};
+
+/** `messages` stops being `.shardBy("channelId")`: its rows would have to move. */
+const flipShardMode = (): void => {
+    const schemaPath = join(workdir, "lunora", "schema.ts");
+
+    writeFileSync(schemaPath, readFileSync(schemaPath, "utf8").replace('        .shardBy("channelId")\n', ""), "utf8");
+};
+
+/** A function that queries `messages` through the `by_channel` index. */
+const addIndexedQuery = (): void => {
+    writeFileSync(
+        join(workdir, "lunora", "finder.ts"),
+        `import { query, v } from "@lunora/server";\n\nexport const byChannel = query({\n    args: { channelId: v.id("channels") },\n    handler: async (context, args) => context.db.query("messages").withIndex("by_channel", (q) => q.eq("channelId", args.channelId)).collect(),\n});\n`,
+        "utf8",
+    );
 };
 
 /** Add a unique index on `users.name`, a constraint the stored rows may already violate. */
@@ -390,6 +420,101 @@ describe("schema-drift gate", () => {
             expect(result.code).toBe(0);
             expect(calls.length).toBeGreaterThan(0);
             expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).not.toBe(baselineBefore);
+        });
+
+        it("a dropped table passes with a warning that its rows are left in place, and the baseline advances", async () => {
+            expect.assertions(4);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            const baselineBefore = readFileSync(join(workdir, SNAPSHOT_FILE), "utf8");
+
+            dropTable();
+
+            const { logger, warns } = silentLogger();
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
+
+            expect(result.code).toBe(0);
+            expect(warns.join("\n")).toContain("removed table places");
+            expect(warns.join("\n")).toContain("left in place");
+            expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).not.toBe(baselineBefore);
+        });
+
+        it("gaining a TTL passes, and the warning counts the stored rows the next sweep deletes", async () => {
+            expect.assertions(3);
+
+            setSessionsTtl(false);
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            setSessionsTtl(true);
+
+            const worker = deployedWorker([
+                { doc: { _id: "s1", expiresAt: 1, token: "a" }, table: "sessions" },
+                { doc: { _id: "s2", expiresAt: 1, token: "b" }, table: "sessions" },
+                { doc: { _id: "s3", expiresAt: Date.now() + 1e12, token: "c" }, table: "sessions" },
+                { doc: { _id: "s4", token: "d" }, table: "sessions" },
+            ]);
+            const { logger, warns } = silentLogger();
+            const result = await runDeployCommand({ ...TARGET, cwd: workdir, fetchImpl: worker.fetchImpl, logger, spawner: createRecordingSpawner().spawner });
+
+            expect(result.code).toBe(0);
+            expect(warns.join("\n")).toContain("gained a TTL policy");
+            expect(warns.join("\n")).toContain("2 stored row(s) are past the new cutoff");
+        });
+
+        it("gaining a TTL still passes when the rows cannot be read, and says they were not counted", async () => {
+            expect.assertions(2);
+
+            setSessionsTtl(false);
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            setSessionsTtl(true);
+
+            const { logger, warns } = silentLogger();
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
+
+            expect(result.code).toBe(0);
+            expect(warns.join("\n")).toContain("could not be counted");
+        });
+
+        it("a shard-mode flip stays blocked and names the migration path, and a migration on that table clears it", async () => {
+            expect.assertions(5);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            flipShardMode();
+
+            const { errors, logger } = silentLogger();
+            const blocked = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
+
+            expect(blocked.schemaDrift?.blocked).toBe(true);
+            expect(errors.join("\n")).toContain("lunora export --tables messages --out messages.ndjson");
+            expect(errors.join("\n")).toContain('defineMigration({ id: "rehome_messages", table: "messages"');
+
+            addMigration("rehome_messages", "messages", "(doc) => ({ ...doc, tenant: 'default' })");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const cleared = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner });
+
+            expect(cleared.code).toBe(0);
+            expect(calls.length).toBeGreaterThan(0);
+        });
+
+        it("a dropped index a query still names is refused with the function named; an unused one passes", async () => {
+            expect.assertions(3);
+
+            addIndexedQuery();
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            dropIndex();
+
+            const { errors, logger } = silentLogger();
+            const refused = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
+
+            expect(refused.schemaDrift?.blocked).toBe(true);
+            expect(errors.join("\n")).toContain("byChannel");
+
+            rmSync(join(workdir, "lunora", "finder.ts"));
+
+            const passed = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            expect(passed.code).toBe(0);
         });
 
         it("names each stored row that does not fit — table, id, field, reason, never the value — and stays blocked", async () => {
@@ -739,7 +864,7 @@ describe("schema-drift gate", () => {
             const baselineBefore = readFileSync(join(workdir, SNAPSHOT_FILE), "utf8");
 
             introduceBreakingDrift();
-            dropRelations();
+            flipShardMode();
 
             const { errors, logger } = silentLogger();
             const result = await runDeployCommand({
@@ -751,7 +876,7 @@ describe("schema-drift gate", () => {
             });
 
             expect(result.schemaDrift?.blocked).toBe(true);
-            expect(errors.join("\n")).toContain("attachments");
+            expect(errors.join("\n")).toContain("changed shard mode");
             expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).toBe(baselineBefore);
         });
 

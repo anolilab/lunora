@@ -1,4 +1,15 @@
-import type { CallExpression, Identifier, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type {
+    ArrowFunction,
+    CallExpression,
+    FunctionDeclaration,
+    FunctionExpression,
+    Identifier,
+    MethodDeclaration,
+    ObjectLiteralExpression,
+    Project,
+    SourceFile,
+    VariableDeclaration,
+} from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
@@ -54,17 +65,65 @@ const stringProperty = (object: ObjectLiteralExpression, name: string): string |
 /** `node` with any wrapping parentheses removed. */
 const unparenthesized = (node: Node): Node => (Node.isParenthesizedExpression(node) ? unparenthesized(node.getExpression()) : node);
 
+type UpFunction = ArrowFunction | FunctionDeclaration | FunctionExpression | MethodDeclaration;
+
+const isUpFunction = (node: Node): node is UpFunction =>
+    Node.isArrowFunction(node) || Node.isFunctionExpression(node) || Node.isMethodDeclaration(node) || Node.isFunctionDeclaration(node);
+
+/**
+ * The function an `up` names. A name is followed to its declaration (through an import too) for a few hops; one that cannot be
+ * resolved to a function yields `undefined`, which {@link hasIdentityUp} reads as a real transform: the side of "covers" that
+ * keeps a migration whose body we cannot read from being called a no-op.
+ */
+const resolveUpFunction = (node: Node, hops = 4): UpFunction | undefined => {
+    const target = unparenthesized(node);
+
+    if (isUpFunction(target)) {
+        return target;
+    }
+
+    if (hops === 0 || !Node.isIdentifier(target)) {
+        return undefined;
+    }
+
+    // In `{ up }` the name's own symbol is the property; the value it stands for is the variable.
+    const parent = target.getParent();
+    const symbol = Node.isShorthandPropertyAssignment(parent) ? parent.getValueSymbol() : target.getSymbol();
+    const resolved = symbol?.getAliasedSymbol() ?? symbol;
+    const declaration = resolved?.getValueDeclaration() ?? resolved?.getDeclarations()[0];
+
+    if (declaration === undefined) {
+        return undefined;
+    }
+
+    if (Node.isVariableDeclaration(declaration)) {
+        const initializer = declaration.getInitializer();
+
+        return initializer === undefined ? undefined : resolveUpFunction(initializer, hops - 1);
+    }
+
+    return isUpFunction(declaration) ? declaration : undefined;
+};
+
 /**
  * Whether `up` returns its first parameter unchanged — `(document) => document`,
- * `async (doc) => doc`, or a body that is a single `return doc;`. Anything else,
- * including an `up` that is not a function literal, is treated as a real transform.
+ * `async (doc) => doc`, or a body that is a single `return doc;` — written inline or given by
+ * name (a function declared in this file or imported). Anything else, including an `up` that
+ * cannot be resolved to a function, is treated as a real transform.
  */
 const hasIdentityUp = (object: ObjectLiteralExpression): boolean => {
     const property = findObjectProperty(object, "up");
-    const initializer = property !== undefined && Node.isPropertyAssignment(property) ? property.getInitializer() : property;
-    const up = initializer === undefined ? undefined : unparenthesized(initializer);
+    let initializer: Node | undefined = property;
 
-    if (up === undefined || !(Node.isArrowFunction(up) || Node.isFunctionExpression(up) || Node.isMethodDeclaration(up))) {
+    if (Node.isPropertyAssignment(property)) {
+        initializer = property.getInitializer();
+    } else if (Node.isShorthandPropertyAssignment(property)) {
+        initializer = property.getNameNode();
+    }
+
+    const up = initializer === undefined ? undefined : resolveUpFunction(initializer);
+
+    if (up === undefined) {
         return false;
     }
 
