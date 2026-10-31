@@ -196,6 +196,27 @@ describe("d1 import when a write fails after the base row committed", () => {
         expect(result.errors).toHaveLength(1);
     });
 
+    it("reports a delete whose companion write failed as a delete that did land", async () => {
+        expect.assertions(3);
+
+        const schema = schemaWith({ aggregate: true });
+        const plain = writerFor(schema);
+
+        await plain.insert("alpha", { _id: "c9", label: "x" }, { allowExplicitId: true });
+
+        // The backfill that precedes the delete also clears the aggregate table, so only the maintenance DELETE of the emptied group is failed.
+        const failing = observeProbes(/^\s*DELETE FROM "alpha__agg_c" WHERE "__key__"/u);
+        const result = await importGlobalRows(writerFor(schema, failing.exec), schema, {
+            exec: failing.exec,
+            rows: [{ doc: { _id: "c9" }, op: "delete", table: "alpha" }],
+        });
+
+        expect(result.errors).toHaveLength(1);
+        expect(result.errors[0]?.message).toMatch(/row "c9" was deleted before this failure/u);
+        // The base row was removed before the companion write failed.
+        await expect(plain.get("alpha", "c9")).resolves.toBeNull();
+    });
+
     it.each([
         ["skip", /a re-import skips it while it exists; use onConflict "replace" to redo that work/u],
         ["replace", /re-importing it with onConflict "replace" redoes that work/u],

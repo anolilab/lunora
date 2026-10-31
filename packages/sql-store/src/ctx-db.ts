@@ -3800,11 +3800,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 cdcStatements(tableName, id, "delete"),
             );
 
-            await syncSearch(tableName, id, undefined);
+            // The row is gone from here on: a failure below is reported as such (see `afterBaseRowCommitted`).
+            await afterBaseRowCommitted(tableName, id, async () => {
+                await syncSearch(tableName, id, undefined);
 
-            if (hasMatchingTrigger(tableName, "after", "delete")) {
-                await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
-            }
+                if (hasMatchingTrigger(tableName, "after", "delete")) {
+                    await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+                }
+            });
         },
 
         async findFirst(tableName, args = {}) {

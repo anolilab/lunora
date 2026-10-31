@@ -486,8 +486,13 @@ const deleteOneRow = async (writer: DatabaseWriterLike, dialect: SqlDialect, arg
         return { kind: "deleted" };
     } catch (error: unknown) {
         const { body } = toErrorBody(error, { fallbackCode: "DELETE_FAILED" });
+        // A hard delete removes the row before its companion and after-delete trigger writes run, so a failure there leaves it gone.
+        const committed = takePostCommitError(error, table, id);
+        const message = committed
+            ? `${body.message} (row "${id}" was deleted before this failure, so its triggers or companion writes may not have completed; a re-run finds it absent and does not redo them)`
+            : body.message;
 
-        return { committed: false, error: { code: body.code, line, message: body.message, table }, kind: "error" };
+        return { committed, error: { code: body.code, line, message, table }, kind: "error" };
     }
 };
 
