@@ -10,8 +10,13 @@ refs #1166). On a 1,000-procedure synthetic app that roughly halved `wrangler ch
 through `defineApp().auth()` (50 → 37 ms); an eager app whose function modules import `@lunora/auth`
 themselves pays ~6 ms more (esbuild lazy-init wrappers, zod no longer tree-shaken). The same PR marks
 the `lunorash` entries and `@lunora/server/drizzle` side-effectful: esbuild drops the lazy-init call
-behind an `export *` in a `sideEffects: false` package, which crashed such builds at startup. Still open: the lazy registry as
-the default, lighter shared builders (§8 last paragraph), and extending the smoke-load to eager
+behind an `export *` in a `sideEffects: false` package, which crashed such builds at startup. Phase 2 (§3.1, refs #1166) defers, in lazy
+builds only, the push-queue registry, the `onEmail` agent definitions and the modules behind the
+generated workflow and agent `WorkflowEntrypoint` classes; on the startup gate's fixture (now with a
+queue, a workflow and an agent) that cut the lazy eager graph from 979 modules / 5,982 KiB to 581 /
+3,693 KiB. Still open: the lazy registry as
+the default, lighter shared builders (§8 last paragraph), the `@lunora/agent` barrel that the shard
+imports for `ctx.agents` (§3.1), and extending the smoke-load to eager
 builds now that `authModule.ts` and the spec modules evaluate on the first event.
 The email-guard prerequisite (§8) has shipped (#1159). Measurement scripts are not committed; §6 says
 what to add.
@@ -118,14 +123,55 @@ already renders them for OpenAPI/`api.ts`), instead of reading the live validato
   profile, and it defines the tables. Keep eager.
 - `LUNORA_LIFECYCLE_HOOKS` (path arrays; IR-derived), `LUNORA_CRONS`, cron triggers, queue
   registry: these name **paths** or are user-written modules, not function bodies. Cron/queue
-  consumers dispatch by path, so they benefit from the same loader. Workflow classes
-  (`../workflows.js`), containers, agents (`../agents.js`), `http.ts` routes and `queues.ts`
-  are imported by value in generated output (`emit/shard-runtime.ts` 75/180/271/378) and stay
-  eager in phase 1; they are a phase-2 candidate (HTTP routes are the awkward one: the router
-  needs the route table to match a request).
+  consumers dispatch by path, so they benefit from the same loader. Containers
+  (`../containers.js`), workflows (`../workflows.js`), agents (`../agents.js`) and the queue
+  modules are imported by value in generated output (`emit/shard-runtime.ts`); phase 2 (§3.1)
+  defers all but containers. `http.ts` is not imported by generated output at all (§3.1).
 - `LUNORA_MUTATOR_PATHS`, `LUNORA_SHAPES`: shapes run `assertShapesDeclareReadPolicies` at
   module scope (`shard-shapes.ts:112`) and mutators must be recognised before dispatch, so
   both stay eager in phase 1 (typically a handful of entries).
+
+### 3.1 Phase 2: what else a lazy build defers
+
+Behind the same opt-in; eager output is byte-identical (the golden fixtures pin it).
+
+| Surface                 | Lazy build                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Push queues             | **Deferred.** `app.ts` drops its static `./queues.js` import; the `queue()` consumer passes `(await import("./queues.js")).LUNORA_QUEUE_REGISTRY` to `dispatchQueueBatch`. One `import()` for the whole registry, not one per queue: every queue-declaring file loads on the first batch of any queue (first-batch latency, not startup). That keeps the target in `app.ts`, where the smoke-load looks, and leaves `@lunora/queue`'s registry type alone.                                                                                                                                         |
+| `onEmail` agents        | **Deferred.** `email()` loads `@lunora/agent/inbound` and `../agents.js` on the first message and builds the dispatcher once. The eager build's static `../agents.js` import in `app.ts` would otherwise keep the agent module eager even with lazy entrypoints.                                                                                                                                                                                                                                                                                                                                   |
+| Workflow entrypoints    | **Deferred.** The class stays exported (wrangler binds `class_name` at upload), but `LunoraWorkflow` now also takes a loader, `async () => (await import("../workflows.js")).<export>`, awaited at the top of `run`. Safe because a `WorkflowEntrypoint` has no constructor-time or `blockConcurrencyWhile` contract, nothing reads the definition before `run`, and `run` is async and replays from the top in each isolate. Types come from `import type`.                                                                                                                                       |
+| Agent entrypoints       | **Deferred unless an agent declares `voice`.** The loader `import()`s `@lunora/agent` and `../agents.js` together and calls `compileAgentWorkflow` on the first run. `VoiceSessionDO` is a Durable Object whose constructor and synchronous `fetch` read the definition, so with any voice agent `agents.ts` keeps the eager shape (a loader would defer nothing while the voice class imports the module).                                                                                                                                                                                        |
+| Containers              | Eager. Not attempted: `LunoraContainer` is a Durable Object constructed with its definition, the same constraint as the voice session.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| HTTP routes (`http.ts`) | Eager, and not codegen's to defer. Generated output never imports `http.ts`: the app's entry imports its `httpRouter()` app and hands the value to `createWorker({ httpRouter })` / `.httpRouter()`. `discoverHttpRoutes` reads only `httpRoute.<verb>("literal")` chains, for OpenAPI and `api.ts` types; a hono app's own routes and middleware, and computed paths, never reach the IR, so a static route table could not stand in for the router. Deferring it would need a codegen-owned mount API (route table emitted from IR, handler module loaded on match), which is a separate change. |
+
+Measured with `pnpm run worker-startup:check`, every row on the same local `build:prod` of the
+packages the app reaches (that build put the old fixture at 914 / 5,721 KiB against the committed
+915 / 5,905 KiB, so re-baseline after a full `build:packages:prod` if CI disagrees). The synthetic app
+now also declares one push queue, one workflow and one agent, each importing the shared
+`@lunora/auth` module, and the entry re-exports `_generated/workflows.js` / `agents.js`. That moved
+the eager baseline from 914 modules / 5,721 KiB to 995 / 6,104 KiB (`worker-startup.json`). With
+`LUNORA_LAZY_FUNCTIONS=1` the graph shrinks by ~40 % (the deterministic figure); the CPU column is
+advisory and, at under 2× on a loaded machine, unproven by §5's own rule:
+
+| Lazy build, same fixture                     | Eager graph             | Advisory CPU (median / min, load ~15) |
+| -------------------------------------------- | ----------------------- | ------------------------------------- |
+| phase 1 only (queues/workflows/agents eager) | 979 modules / 5,982 KiB | 64 / 56 ms                            |
+| phase 2                                      | 581 modules / 3,693 KiB | 48 / 39 ms                            |
+| for reference: fixture without the three     | 409 modules / 2,481 KiB | —                                     |
+
+The remaining 172 modules / 1.2 MiB over the reference are framework edges, not user modules: the
+generated `shard.ts` imports `createAgentContext` from the `@lunora/agent` barrel for `ctx.agents`
+(139 modules / 1.1 MiB, mostly `@ai-sdk/*` and zod, reachable only through that edge),
+`functions.ts` registers `agentComponent` from `@lunora/agent/component`, and `@lunora/queue` /
+`@lunora/workflow` helpers stay static (~25 modules). `createAgentContext` itself is light; a
+`@lunora/agent/context` subpath would remove most of it, but it changes eager output, so it is left
+for its own change.
+
+Smoke-load coverage: the generated output decides what is deferred. The smoke entry imports the queue
+registry (`app.ts` holds `import("./queues.js")`), `lunora/workflows.ts` and `lunora/agents.ts` (the
+`import()` targets in `_generated/workflows.ts`, `agents.ts` and the `onEmail` block of `app.ts`), so
+a broken module blocks `build`/`deploy` instead of failing its first production run. A failure is
+reported as `<file> (queue|workflow|agent)`, and a project that defers only these still gets the check.
 
 ## 4. Other concerns checked
 
@@ -303,7 +349,7 @@ opt-in first.
 - Cold-path latency: first call per function per isolate pays module eval. Measure p99.
 - Single-file esbuild gives a smaller win and wraps modules; document that the Vite/rolldown
   chunked output is the recommended path for large apps, and test wrangler `find_additional_modules`.
-- `createWorker`'s HTTP router and `queues.ts`/`workflows.ts`/`agents.ts` remain eager.
+- `createWorker`'s HTTP router, containers and voice-agent sessions remain eager (§3.1).
 
 ## 8. `@lunora/auth` at the generated-app level (cheap lever)
 

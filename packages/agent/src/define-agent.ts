@@ -18,6 +18,17 @@ import type {
     SkillDefinition,
 } from "./types";
 
+/**
+ * `compileAgentWorkflow` hands the name to `defineWorkflow`, which rejects an empty one. The pre-deploy
+ * smoke load imports a deferred (lazy) agent module but never compiles its workflow, so the check runs
+ * at definition time, where that import reaches it.
+ */
+const assertValidName = (name: unknown): void => {
+    if (name !== undefined && (typeof name !== "string" || name.length === 0)) {
+        throw new LunoraError("INTERNAL", "@lunora/agent: defineAgent `name` must be a non-empty string when provided");
+    }
+};
+
 /** Tool names surface as model function names — keep them identifier-shaped. */
 const TOOL_NAME_PATTERN = /^[a-zA-Z][\w-]*$/u;
 
@@ -247,6 +258,8 @@ const defineAgent = (config: AgentConfig): AgentDefinition => {
             "@lunora/agent: defineAgent requires a `model` (a Workers AI id, an AI SDK LanguageModel, or an (env) => model thunk)",
         );
     }
+
+    assertValidName(config.name);
 
     if (config.maxTurns !== undefined && !isPositiveInteger(config.maxTurns)) {
         throw new LunoraError("INTERNAL", "@lunora/agent: `maxTurns` must be a positive integer");

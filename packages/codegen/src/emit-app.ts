@@ -117,6 +117,51 @@ const emitAuthModule = (hasAuth: boolean): string =>
         ? `${GENERATED_HEADER}export { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter, resolveSessionIdentity } from "@lunora/auth/worker";\n`
         : "";
 
+/**
+ * Auto-wire the worker's `email()` handler for `defineAgent({ onEmail })` agents: received mail
+ * starts a durable run via `dispatchAgentEmail` (`@lunora/agent/inbound`). Emitted as the DEFAULT
+ * `composed.email`, ahead of the manual `.onEmail(...)` override, so a hand-registered handler
+ * still wins. Empty when no `onEmail` agent is declared — email-free (and agent-free) output stays
+ * byte-identical. With the lazy registry the agent definitions (and the `@lunora/agent` barrel
+ * they import) load on the first message rather than at isolate startup.
+ */
+const buildEmailAgentsBlock = (options: ResolvedAppOptions): string => {
+    const emailAgents = options.emailAgents ?? [];
+
+    if (emailAgents.length === 0) {
+        return "";
+    }
+
+    const targets = (indent: string): string =>
+        emailAgents.map((agent) => `${indent}{ agent: lunoraAgentDefinitions.${agent.exportName}, className: ${JSON.stringify(agent.className)} },`).join("\n");
+
+    if (options.lazyFunctions !== true) {
+        return `        composed.email = dispatchAgentEmail([
+${targets("            ")}
+        ]);
+
+`;
+    }
+
+    // Concurrent first messages may both load; `??=` keeps one dispatcher, and the module cache
+    // makes the second load free.
+    return `        let agentEmail: ReturnType<typeof dispatchAgentEmail> | undefined;
+
+        composed.email = async (message, rawEnv, context) => {
+            if (agentEmail === undefined) {
+                const [{ dispatchAgentEmail: dispatch }, lunoraAgentDefinitions] = await Promise.all([import("@lunora/agent/inbound"), import("../agents.js")]);
+
+                agentEmail ??= dispatch([
+${targets("                    ")}
+                ]);
+            }
+
+            return agentEmail(message, rawEnv, context);
+        };
+
+`;
+};
+
 /** The `export type { ... }` list — only the declaration types that were emitted. */
 const buildExportedTypes = (options: ResolvedAppOptions): string =>
     [
@@ -278,21 +323,7 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
         : `        const buildWorker = (${buildWorkerParameters}): LunoraWorker => createWorker(this.buildWorkerOptions(env, ${getAuthArgument}));`;
     const assembleParameter = options.hasFramework ? `host?: FrameworkHostHandler` : ``;
 
-    // Auto-wire the worker's `email()` handler for `defineAgent({ onEmail })`
-    // agents: received mail starts a durable run via `dispatchAgentEmail`
-    // (`@lunora/agent/inbound`). Emitted as the DEFAULT `composed.email`, ahead of
-    // the manual `.onEmail(...)` override below, so a hand-registered handler still
-    // wins. Empty when no `onEmail` agent is declared — email-free (and agent-free)
-    // output stays byte-identical.
-    const emailAgents = options.emailAgents ?? [];
-    const emailAgentsBlock =
-        emailAgents.length > 0
-            ? `        composed.email = dispatchAgentEmail([
-${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agent.exportName}, className: ${JSON.stringify(agent.className)} },`).join("\n")}
-        ]);
-
-`
-            : "";
+    const emailAgentsBlock = buildEmailAgentsBlock(options);
 
     // Public terminals: always `build()`; `.buildFrameworkWorker(host)` only when
     // a worker-composition framework adapter is a dependency.

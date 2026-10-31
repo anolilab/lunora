@@ -35,13 +35,18 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
     /** The `lunora/workflows.ts` export name, for log correlation. */
     readonly #lunoraName: string;
 
-    /** The `defineWorkflow` result this entrypoint runs. */
-    readonly #definition: WorkflowDefinition<Params, Output>;
+    /**
+     * The `defineWorkflow` result this entrypoint runs, or a loader for it. A lazy build
+     * (`--lazy-functions`) passes the loader so the definition's module graph is evaluated
+     * on the first `run`, not at isolate startup: nothing on a `WorkflowEntrypoint` reads
+     * the definition before `run`, and `run` is async and replays from the top.
+     */
+    #definition: WorkflowDefinition<Params, Output> | (() => Promise<WorkflowDefinition<Params, Output>>);
 
     public constructor(
         context: ConstructorParameters<typeof WorkflowEntrypoint>[0],
         env: Record<string, unknown>,
-        definition: WorkflowDefinition<Params, Output>,
+        definition: WorkflowDefinition<Params, Output> | (() => Promise<WorkflowDefinition<Params, Output>>),
         exportName?: string,
     ) {
         super(context, env);
@@ -71,6 +76,13 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
         let output: Output;
 
         try {
+            // Resolved inside the `try` so a lazy loader that rejects (import, module evaluation,
+            // `compileAgentWorkflow`) reaches the branch-parent signal below instead of leaving
+            // a `ctx.parallel` parent waiting out its `waitForEvent` timeout.
+            if (typeof this.#definition === "function") {
+                this.#definition = await this.#definition();
+            }
+
             output = await this.#definition.handler(context);
         } catch (error: unknown) {
             // A branch child: tell the parent it failed (best-effort durable send)

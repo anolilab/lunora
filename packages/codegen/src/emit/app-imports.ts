@@ -52,8 +52,16 @@ const buildNotifyImports = (hasNotify: boolean): string[] => (hasNotify ? [`impo
  * opt-in add-on the umbrella never re-exports, so this is unconditionally
  * `@lunora/agent/inbound` regardless of `useUmbrella`.
  */
-const buildInboundImports = (options: ResolvedAppOptions): string[] =>
-    hasEmailAgents(options) ? [`import { dispatchAgentEmail } from "@lunora/agent/inbound";`] : [];
+const buildInboundImports = (options: ResolvedAppOptions): string[] => {
+    if (!hasEmailAgents(options)) {
+        return [];
+    }
+
+    // Lazy: the `email()` entry `import()`s both on the first message (`emit-app.ts`).
+    return options.lazyFunctions === true
+        ? [`import type { dispatchAgentEmail } from "@lunora/agent/inbound";`]
+        : [`import { dispatchAgentEmail } from "@lunora/agent/inbound";`];
+};
 
 /**
  * The agent-definitions namespace import — `import * as lunoraAgentDefinitions
@@ -62,7 +70,7 @@ const buildInboundImports = (options: ResolvedAppOptions): string[] =>
  * `onEmail` agent is declared.
  */
 const buildAgentDefinitionsImport = (options: ResolvedAppOptions): string[] =>
-    hasEmailAgents(options) ? [`import * as lunoraAgentDefinitions from "../agents.js";`] : [];
+    hasEmailAgents(options) && options.lazyFunctions !== true ? [`import * as lunoraAgentDefinitions from "../agents.js";`] : [];
 
 /**
  * The runtime module's own type and value import lines. Which symbols each side
@@ -150,7 +158,8 @@ const buildImportLines = (options: ResolvedAppOptions): string[] => {
         ...(hasQueue
             ? [
                   `import { createQueueCaptureSink, dispatchQueueBatch, shouldCaptureQueue } from "@lunora/queue";`,
-                  `import { LUNORA_QUEUE_REGISTRY } from "./queues.js";`,
+                  // Lazy: the consumer `import()`s the registry on its first batch (`app-worker-options.ts`).
+                  ...(options.lazyFunctions === true ? [] : [`import { LUNORA_QUEUE_REGISTRY } from "./queues.js";`]),
               ]
             : []),
         `import { createShardDO } from "./shard.js";`,

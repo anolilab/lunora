@@ -24,7 +24,10 @@ interface SmokeOutput {
 }
 
 interface Env {
+    WORKFLOW_BRANCH_PARENT: Workflow<Record<string, never>>;
     WORKFLOW_DECLINE: Workflow<DeclineParams>;
+    WORKFLOW_LAZY: Workflow<{ orderId: string }>;
+    WORKFLOW_LAZY_FAIL: Workflow<Record<string, unknown>>;
     WORKFLOW_ROLLBACK_CONFIG: Workflow<Record<string, never>>;
     WORKFLOW_SMOKE: Workflow<SmokeParams>;
     WORKFLOW_TIMED_DECLINE: Workflow<DeclineParams>;
@@ -164,6 +167,49 @@ class SmokeWorkflow extends LunoraWorkflow<SmokeParams, SmokeOutput> {
     }
 }
 
+/** How many times {@link LazyWorkflow} invoked its loader. */
+const lazyLog = { loads: 0 };
+
+/** The `--lazy-functions` entrypoint shape: the definition is a loader the base awaits in `run`. */
+class LazyWorkflow extends LunoraWorkflow<{ orderId: string }, string> {
+    public constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>) {
+        super(
+            context,
+            env,
+            async () => {
+                lazyLog.loads += 1;
+
+                const { default: lazyWorkflow } = await import("./lazy-workflow");
+
+                return lazyWorkflow;
+            },
+            "lazyWorkflow",
+        );
+    }
+}
+
+/** A `ctx.parallel` parent stand-in: waits for the branch event a child signals and returns its payload. */
+const branchParentWorkflow: WorkflowDefinition<Record<string, never>> = defineWorkflow<Record<string, never>>({
+    handler: async (context) => {
+        const received = await context.step.waitForEvent("branch", { timeout: "30 seconds", type: "lunora:branch:fail" });
+
+        return received.payload;
+    },
+});
+
+class BranchParentWorkflow extends LunoraWorkflow<Record<string, never>> {
+    public constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>) {
+        super(context, env, branchParentWorkflow, "branchParentWorkflow");
+    }
+}
+
+/** A lazy entrypoint whose loader rejects, as a module that throws on evaluation does. */
+class LazyFailWorkflow extends LunoraWorkflow {
+    public constructor(context: ConstructorParameters<typeof WorkflowEntrypoint>[0], env: Record<string, unknown>) {
+        super(context, env, () => Promise.reject(new Error("lazy module failed to evaluate")), "lazyFailWorkflow");
+    }
+}
+
 const testWorker = {
     fetch(_request: Request, _env: Env): Response {
         return new Response("workflow-test-worker", { status: 200 });
@@ -200,5 +246,17 @@ class RollbackConfigWorkflow extends LunoraWorkflow<Record<string, never>> {
 }
 
 export default testWorker;
-export { declineLog, DeclineWorkflow, RollbackConfigWorkflow, rollbackLog, SmokeWorkflow, smokeWorkflow, TimedDeclineWorkflow };
+export {
+    BranchParentWorkflow,
+    declineLog,
+    DeclineWorkflow,
+    LazyFailWorkflow,
+    lazyLog,
+    LazyWorkflow,
+    RollbackConfigWorkflow,
+    rollbackLog,
+    SmokeWorkflow,
+    smokeWorkflow,
+    TimedDeclineWorkflow,
+};
 export type { DeclineParams, Env, SmokeOutput, SmokeParams };

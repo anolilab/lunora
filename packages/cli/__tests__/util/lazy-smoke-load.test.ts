@@ -423,4 +423,155 @@ describe(runLazySmokeLoad, () => {
 
         expect(startDevProcess).toHaveBeenCalledWith(expect.objectContaining({ spawn: launcher }));
     });
+
+    describe("deferred workflow, agent and queue modules", () => {
+        const deferredTargets = {
+            agent: { generated: "agents.ts", marker: 'import("../agents.js")', source: "agents.ts" },
+            queue: { generated: "app.ts", marker: 'import("./queues.js")', source: join("_generated", "queues.ts") },
+            workflow: { generated: "workflows.ts", marker: 'import("../workflows.js")', source: "workflows.ts" },
+        } as const;
+
+        /** A project that defers `kind` and has no lazy function manifest, whose deferred module is `source`. */
+        const scaffoldDeferred = (kind: keyof typeof deferredTargets, source: string): void => {
+            const target = deferredTargets[kind];
+
+            rmSync(join(cwd, "lunora", "_generated", "functions.ts"));
+            writeFileSync(join(cwd, "lunora", "_generated", target.generated), `const load = () => ${target.marker};\n`);
+            writeFileSync(join(cwd, "lunora", target.source), source);
+        };
+
+        /** Runs the entry the check wrote, as the smoke Worker would, and answers the probe with what it returned. */
+        const answerFromEntry = (): void => {
+            startDevProcess.mockImplementation(async () => {
+                const entry = resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "");
+                const { default: worker } = (await import(entry)) as { default: { fetch: () => Promise<Response> } };
+                const response = await worker.fetch();
+                const body = (await response.json()) as object;
+
+                vi.stubGlobal(
+                    "fetch",
+                    vi.fn<() => Promise<Response>>(async () => Response.json(body)),
+                );
+
+                return { crashed: new Promise(() => {}), stop };
+            });
+        };
+
+        it.each(["agent", "workflow"] as const)("blocks a deferred %s module that throws on import, with no lazy function manifest", async (kind) => {
+            expect.assertions(3);
+
+            scaffoldDeferred(kind, 'throw new Error("boom at module scope");\n');
+            answerFromEntry();
+
+            const error = await run();
+
+            expect(error).toContain(`1 of 1 lazy module(s) fail to load:\n  lunora/${deferredTargets[kind].source} (${kind}): boom at module scope`);
+            expect(error).toContain("--no-smoke-load");
+            expect(logger.error).toHaveBeenCalledWith(error);
+        });
+
+        it("blocks a deferred queue registry that throws on import", async () => {
+            expect.assertions(1);
+
+            scaffoldDeferred("queue", 'throw new Error("boom at module scope");\n');
+            answerFromEntry();
+
+            await expect(run()).resolves.toContain("lunora/_generated/queues.ts (queue): boom at module scope");
+        });
+
+        it.each(["agent", "queue", "workflow"] as const)("passes a healthy project that defers %s modules", async (kind) => {
+            expect.assertions(2);
+
+            scaffoldDeferred(kind, "export const ok = true;\n");
+            answerFromEntry();
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(logger.success).toHaveBeenCalledWith("0 lazy function(s) and 1 deferred module(s) evaluate cleanly");
+        });
+
+        /** A lazy `onEmail` handler as codegen emits it: it loads the inbound runtime and the agent definitions on the first message. */
+        const scaffoldLazyEmail = (inbound: string): void => {
+            scaffoldDeferred("agent", "export const ok = true;\n");
+            writeFileSync(
+                join(cwd, "lunora", "_generated", "app.ts"),
+                'type Doc = import("./dataModel.js").Doc;\nconst load = () => Promise.all([import("@lunora/agent/inbound"), import("../agents.js")]);\n',
+            );
+            mkdirSync(join(cwd, "node_modules", "@lunora", "agent"), { recursive: true });
+            writeFileSync(
+                join(cwd, "node_modules", "@lunora", "agent", "package.json"),
+                JSON.stringify({ exports: { "./inbound": "./inbound.mjs" }, name: "@lunora/agent", type: "module" }),
+            );
+            writeFileSync(join(cwd, "node_modules", "@lunora", "agent", "inbound.mjs"), inbound);
+        };
+
+        it("blocks a lazy email handler whose inbound module throws while it is evaluated", async () => {
+            expect.assertions(2);
+
+            scaffoldLazyEmail('throw new Error("inbound broke");\n');
+            answerFromEntry();
+
+            const error = await run();
+
+            expect(error).toContain("@lunora/agent/inbound (module): inbound broke");
+            expect(error).not.toContain("dataModel");
+        });
+
+        it("passes a lazy email handler whose inbound module evaluates, counting only the value imports", async () => {
+            expect.assertions(2);
+
+            scaffoldLazyEmail("export const dispatchAgentEmail = () => {};\n");
+            answerFromEntry();
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(logger.success).toHaveBeenCalledWith("0 lazy function(s) and 2 deferred module(s) evaluate cleanly");
+        });
+
+        it("blocks a live-stream module that a lazy build loads through import().then()", async () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(cwd, "lunora", "_generated", "app.ts"),
+                'type Doc = import("./dataModel.js").Doc;\nconst live = () => import("../live.js").then((module) => module.default);\n',
+            );
+            writeFileSync(join(cwd, "lunora", "live.ts"), 'throw new Error("live broke");\n');
+            answerFromEntry();
+
+            await expect(run()).resolves.toContain("lunora/live.ts (module): live broke");
+        });
+
+        it("stays quiet for an eager build whose generated output still loads auth behind import()", async () => {
+            expect.assertions(2);
+
+            rmSync(join(cwd, "lunora", "_generated", "functions.ts"));
+            writeFileSync(join(cwd, "lunora", "_generated", "app.ts"), 'const load = async () => ({ auth: await import("./authModule.js") });\n');
+            writeFileSync(join(cwd, "lunora", "_generated", "authModule.ts"), 'throw new Error("auth broke");\n');
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(startDevProcess).not.toHaveBeenCalled();
+        });
+
+        it("reports function failures and deferred failures together", async () => {
+            expect.assertions(1);
+
+            respondWith({
+                checked: 2,
+                deferredChecked: 1,
+                failures: [
+                    { functionPath: "posts:list", message: "boom" },
+                    { deferred: "workflow", functionPath: "workflow:lunora/workflows.ts", message: "late" },
+                ],
+            });
+
+            await expect(run()).resolves.toContain("2 of 3 lazy module(s) fail to load:\n  posts (list): boom\n  lunora/workflows.ts (workflow): late");
+        });
+
+        it("stays quiet when the generated output defers nothing and has no manifest", async () => {
+            expect.assertions(2);
+
+            rmSync(join(cwd, "lunora", "_generated", "functions.ts"));
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(startDevProcess).not.toHaveBeenCalled();
+        });
+    });
 });

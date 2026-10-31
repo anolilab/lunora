@@ -294,6 +294,7 @@ interface EmitAppOptions {
     identity?: IdentityIR;
     jurisdiction?: JurisdictionIR;
     jurisdictionPinsAuth?: boolean;
+    lazyFunctions?: boolean;
     liveStreamDeclarations?: ReadonlyArray<LiveStreamIR>;
     liveStreams?: boolean;
     liveStreamsWithheld?: boolean;
@@ -1372,7 +1373,9 @@ const discoverWorkflows: (project: Project, lunoraDirectory: string) => Workflow
 ### `emitAgents` (const)
 
 ```ts
-const emitAgents: (agents: ReadonlyArray<AgentIR>) => string;
+const emitAgents: (agents: ReadonlyArray<AgentIR>, options?: {
+    lazy?: boolean;
+}) => string;
 ```
 
 ### `emitApi` (const)
@@ -1486,7 +1489,9 @@ const emitVectors: (vectorIndexes: ReadonlyArray<VectorIndexIR>) => string;
 ### `emitWorkflows` (const)
 
 ```ts
-const emitWorkflows: (workflows: ReadonlyArray<WorkflowIR>) => string;
+const emitWorkflows: (workflows: ReadonlyArray<WorkflowIR>, options?: {
+    lazy?: boolean;
+}) => string;
 ```
 
 ### `emitWranglerCronTriggers` (const)
