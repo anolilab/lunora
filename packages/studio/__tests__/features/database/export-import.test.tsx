@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { exportEndLine } from "../../../../../shared/export-end";
@@ -402,6 +402,56 @@ describe("exportImportPanel", () => {
         fireEvent.click(screen.getByTestId("ei-import"));
 
         expect(screen.getByTestId("ei-import-confirm").textContent).not.toMatch(/delete/iu);
+    });
+
+    it("replace refuses rows that carry no _id, which the shard would write under new ids while the prune deleted the old ones", async () => {
+        expect.assertions(2);
+
+        const mock = createModeClient(["m1"]);
+
+        render(renderPanel(mock));
+        chooseMode("replace");
+        importText('{"table":"messages","doc":{"text":"no id"}}');
+
+        const error = await screen.findByTestId("ei-error");
+
+        expect(error.textContent).toContain("carry an _id");
+        expect(importCalls(mock)).toHaveLength(0);
+    });
+
+    it("does not show a plan that finishes after the mode was changed", async () => {
+        expect.assertions(3);
+
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const mock = createMockClient({
+            query: async (reference): Promise<unknown> => {
+                if (reference === ADMIN_FUNCTIONS.exportShard) {
+                    await gate;
+
+                    return { rows: [{ doc: { _id: "m1", text: "m1" }, table: "messages" }] };
+                }
+
+                return reference === ADMIN_FUNCTIONS.listTables
+                    ? [{ name: "messages", rowCount: 1 }]
+                    : { conflicts: 0, deleted: 0, dryRun: true, errors: [], inserted: {}, replaced: 0 };
+            },
+        });
+
+        render(renderPanel(mock));
+        chooseMode("replace");
+        fireEvent.change(screen.getByTestId("ei-file"), { target: { files: [new File([withEnd(messageRows("m1"))], "shard.ndjson")] } });
+        fireEvent.click(screen.getByTestId("ei-plan"));
+        chooseMode("upsert");
+        release();
+
+        await waitFor(() => {
+            expect(screen.getByTestId("ei-plan").hasAttribute("disabled")).toBe(false);
+        });
+
+        expect(screen.queryByTestId("ei-plan-result")).toBeNull();
     });
 
     it("require-empty refuses a file whose table already holds rows, and sends nothing", async () => {
