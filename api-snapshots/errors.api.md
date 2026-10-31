@@ -747,6 +747,10 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Session expired";
     };
+    readonly GLOBAL_TRANSACTION_UNSUPPORTED: {
+        readonly status: 500;
+        readonly title: "Global transaction unsupported by driver";
+    };
     readonly LIVE_CONNECTION_LIMIT: {
         readonly status: 503;
         readonly title: "Live connection limit reached";
