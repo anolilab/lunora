@@ -129,6 +129,7 @@ const ownerFor = (
         },
         currentCdcEpoch: () => "e1",
         deliverWhisperLocal: () => 0,
+        dropIfLapsed: () => false,
         doName: () => OWNER_KEY,
         env: () => {
             return { ...env, SHARD: { get: (id: string) => stubFor(id), getByName: (name: string) => stubFor(name), idFromName: (id: string) => id } };
@@ -484,6 +485,7 @@ describe("relay hub", () => {
                 shardJurisdiction: () => undefined,
                 // A release also drops this socket's durable cohort memos.
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost);
 
             // eslint-disable-next-line vitest/no-conditional-in-test -- fixture narrowing, not an assertion: `createRelayLink` is typed `RelayLink | undefined` and the rest of the test needs the link
@@ -502,7 +504,7 @@ describe("relay hub", () => {
 
     describe("relay-side delivery gate", () => {
         /** A relay DO's collaborator, with one socket holding one shape subscription. */
-        const relayFor = (seedCursor: number) => {
+        const relayFor = (seedCursor: number, whileOwnerAnswers?: (lapse: { now: boolean }) => void) => {
             const frames: string[] = [];
             const fanout: { delivered: number }[] = [];
             const attachment: SocketAttachment = { connectionId: "c-alice", shapes: { s1: OPEN_SHAPE }, subs: {} };
@@ -522,7 +524,11 @@ describe("relay hub", () => {
             } as unknown as ShardSocketLike;
 
             const ownerStub = {
-                fetch: () => Promise.resolve(Response.json({ cursor: seedCursor, epoch: "e1", frames: ["seed"] })),
+                fetch: () => {
+                    whileOwnerAnswers?.(lapse);
+
+                    return Promise.resolve(Response.json({ cursor: seedCursor, epoch: "e1", frames: ["seed"] }));
+                },
             };
 
             const host = {
@@ -622,6 +628,20 @@ describe("relay hub", () => {
             expect(frames).toStrictEqual(["seed"]);
             expect(dropped).toStrictEqual([socket]);
             expect(lapse.now).toBe(true);
+        });
+
+        it("sends no seed frame to a socket that lapsed while the owner was answering", async () => {
+            expect.assertions(3);
+
+            const { dropped, frames, relay, socket } = relayFor(10, (lapse) => {
+                // The deadline passes during the cross-DO round trip and the drain that follows it.
+                Object.assign(lapse, { now: true });
+            });
+            const outcome = await relay.seedRelayShape(socket, "s1", OPEN_SHAPE, {});
+
+            expect(frames).toStrictEqual([]);
+            expect(dropped).toStrictEqual([socket]);
+            expect(outcome).not.toBe("ok");
         });
 
         it("still refuses a poke the socket is genuinely behind, rather than skipping the gap", async () => {
@@ -759,6 +779,7 @@ describe("relay hub", () => {
                 shardBinding: () => "SHARD",
                 shardJurisdiction: () => undefined,
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost);
 
             // eslint-disable-next-line vitest/no-conditional-in-test -- fixture narrowing, not an assertion: `createRelayLink` is typed `RelayLink | undefined` and the rest of the test needs the link
@@ -814,6 +835,7 @@ describe("relay hub", () => {
                 shardBinding: () => "SHARD",
                 shardJurisdiction: () => undefined,
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost);
 
             // eslint-disable-next-line vitest/no-conditional-in-test -- fixture narrowing, not an assertion: `createRelayLink` is typed `RelayLink | undefined` and the rest of the test needs the link
@@ -935,6 +957,7 @@ describe("relay hub", () => {
                 shardJurisdiction: () => undefined,
                 // A seed memos its cohort baseline durably.
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost;
 
             const member = createRelayLink(host);
@@ -1020,6 +1043,7 @@ describe("relay hub", () => {
                 shardJurisdiction: () => undefined,
                 // A seed memos its cohort baseline durably.
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost;
 
             const member = createRelayLink(host);
@@ -1660,6 +1684,7 @@ describe("relay hub", () => {
                 shardBinding: () => "SHARD",
                 shardJurisdiction: () => undefined,
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost);
 
             await deliver(member, JSON.stringify(unsubscribeFrame));
@@ -1775,6 +1800,7 @@ describe("relay hub", () => {
                 },
                 shardBinding: () => "SHARD",
                 shardJurisdiction: () => undefined,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost);
         };
 
@@ -1821,6 +1847,7 @@ describe("relay hub", () => {
                 shardBinding: () => "SHARD",
                 shardJurisdiction: () => undefined,
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost);
 
             const first = link.announce();
@@ -1883,6 +1910,7 @@ describe("relay hub", () => {
                 shardBinding: () => "SHARD",
                 shardJurisdiction: () => undefined,
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost);
 
             vi.useFakeTimers();
@@ -1930,6 +1958,7 @@ describe("relay hub", () => {
                 shardBinding: () => "SHARD",
                 shardJurisdiction: () => undefined,
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost);
 
             // Two close handlers both find no socket left.
@@ -1981,6 +2010,7 @@ describe("relay hub", () => {
                 shardBinding: () => "SHARD",
                 shardJurisdiction: () => undefined,
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost);
 
             vi.useFakeTimers();
@@ -2033,6 +2063,7 @@ describe("relay hub", () => {
                 shardBinding: () => "SHARD",
                 shardJurisdiction: () => undefined,
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost);
 
             const attached = link.announce();
@@ -2089,6 +2120,7 @@ describe("relay hub", () => {
                 shardBinding: () => "SHARD",
                 shardJurisdiction: () => undefined,
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost);
 
             const drained = link.announceDrain({} as ShardSocketLike);
@@ -2144,6 +2176,7 @@ describe("relay hub", () => {
                 shardBinding: () => "SHARD",
                 shardJurisdiction: () => undefined,
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost);
             const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
 
@@ -2232,6 +2265,7 @@ describe("relay hub", () => {
                 shardBinding: () => "SHARD",
                 shardJurisdiction: () => undefined,
                 sql: () => database.sql,
+                dropIfLapsed: () => false,
             } as unknown as RelayHost);
 
             const response = await deliver(member, JSON.stringify({ frame: "{}", topic: "feed", type: "relay_frame" }));

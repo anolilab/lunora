@@ -311,7 +311,12 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
              * routing pokes through the op-log fails loudly here instead of
              * quietly passing on work the relay tier is supposed to avoid.
              */
-            const relayFor = (sockets: SocketHost, sql: SqlExec, seeds: ReadonlyArray<{ cursor: number; epoch?: string; frames: string[] }>) => {
+            const relayFor = (
+                sockets: SocketHost,
+                sql: SqlExec,
+                seeds: ReadonlyArray<{ cursor: number; epoch?: string; frames: string[] }>,
+                lapsedConnections: ReadonlySet<string> = new Set(),
+            ) => {
                 let pokeId = 0;
                 let seedIndex = 0;
                 const unreachable = (member: string) => () => {
@@ -357,7 +362,8 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     computeOpLogShapeSeed: unreachable("computeOpLogShapeSeed"),
                     currentCdcEpoch: unreachable("currentCdcEpoch"),
                     deliverWhisperLocal: unreachable("deliverWhisperLocal"),
-                    dropIfLapsed: () => false,
+                    // The host's own lapse check: a subscriber past its deadline is reported lapsed (and closed) rather than poked.
+                    dropIfLapsed: (ws: ShardSocketLike) => lapsedConnections.has((ws.deserializeAttachment?.() as SocketAttachment).connectionId ?? ""),
                     doName: () => relayName(OWNER_KEY, 0),
                     env: () => {
                         return { SHARD: namespace };
@@ -483,6 +489,40 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     const aliceAfterResend = await readFrames(alice);
 
                     expect(aliceAfterResend.length).toBe(3);
+                } finally {
+                    close?.();
+                }
+            });
+
+            it("pokes no subscriber the host reports lapsed, and still pokes the others", async () => {
+                const { close, createSocket, host, readFrames, sockets } = factory();
+
+                try {
+                    const lapsed = new Set<string>();
+                    const relay = relayFor(
+                        sockets,
+                        host.sql,
+                        [
+                            { cursor: 10, epoch: "e1", frames: [] },
+                            { cursor: 10, epoch: "e1", frames: [] },
+                        ],
+                        lapsed,
+                    );
+                    const alice = acceptSubscriber(sockets, createSocket, "c-alice", "s1");
+                    const bob = acceptSubscriber(sockets, createSocket, "c-bob", "s2");
+
+                    await seedSocket(relay, alice, "s1");
+                    await seedSocket(relay, bob, "s2");
+
+                    // Bob's credential or window passes before the poke arrives.
+                    lapsed.add("c-bob");
+                    await relay.handleControl(poke());
+
+                    const aliceFrames = await readFrames(alice);
+                    const bobFrames = await readFrames(bob);
+
+                    expect(aliceFrames.length).toBe(3);
+                    expect(bobFrames.length).toBe(0);
                 } finally {
                     close?.();
                 }

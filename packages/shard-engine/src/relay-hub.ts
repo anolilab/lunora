@@ -1966,6 +1966,12 @@ class RelayMember extends RelayLink {
 
         await awaitWsDrain(ws);
 
+        // The owner round trip and the drain both yield; a socket whose credential or window lapsed meanwhile is closed
+        // by the host and is owed none of these rows.
+        if (this.host.dropIfLapsed(ws)) {
+            return { code: "IDENTITY_STALE", message: "the socket lapsed before its shape seed was delivered" };
+        }
+
         for (const frame of seed.frames) {
             trySendFrame(ws, frame);
         }

@@ -6500,6 +6500,8 @@ abstract class ShardDO {
         // wire round-trips; every other outbound path already requires that.
         const deltaJson = JSON.stringify(encodeWire(delta));
 
+        // One clock read for the whole fan-out, shared by every socket's lapse check.
+        const now = Date.now();
         for (const ws of sockets) {
             const attachment = this.readAttachment(ws);
 
@@ -6507,7 +6509,7 @@ abstract class ShardDO {
             // socket whose credential lapsed must not keep receiving its user's
             // rows. This path is subclass-driven (see the README's `broadcast`
             // hook), so nothing upstream of it has already checked.
-            if (this.dropIfLapsed(ws, attachment)) {
+            if (this.dropIfLapsed(ws, attachment, now)) {
                 continue;
             }
 
@@ -17351,14 +17353,22 @@ abstract class ShardDO {
      * `SocketAttachment.revalidateAt`).
      * @returns whether the socket was dropped
      */
-    private dropIfLapsed(ws: ShardSocketLike, attachment: SocketAttachment = this.readAttachment(ws)): boolean {
-        if (isIdentityExpired(attachment.expiresAt)) {
+    private dropIfLapsed(ws: ShardSocketLike, attachment: SocketAttachment = this.readAttachment(ws), now: number = Date.now()): boolean {
+        const { expiresAt, revalidateAt } = attachment;
+
+        // No expiry, no window, no user to give one: nothing here can lapse (an anonymous socket, a user-less admin socket).
+        if (expiresAt === undefined && revalidateAt === undefined && attachment.userId === undefined) {
+            return false;
+        }
+
+        // `now` is read once by a fan-out for all its sockets; the comparison is `isIdentityExpired`'s.
+        if (typeof expiresAt === "number" && now >= expiresAt) {
             this.dropLapsedSocket(ws, 4001, "token_expired");
 
             return true;
         }
 
-        if (isIdentityExpired(attachment.revalidateAt)) {
+        if (typeof revalidateAt === "number" && now >= revalidateAt) {
             this.dropLapsedSocket(ws, IDENTITY_STALE_CLOSE_CODE, "identity_stale");
 
             return true;
@@ -17374,7 +17384,7 @@ abstract class ShardDO {
         ) {
             // Mutated in place too: a caller that writes its own copy back must not erase the deadline, which
             // the next call would then grant afresh.
-            Object.assign(attachment, revalidationStamp(undefined, attachment.userId, Date.now()));
+            Object.assign(attachment, revalidationStamp(undefined, attachment.userId, now));
 
             try {
                 this.writeAttachment(ws, attachment);
@@ -17822,6 +17832,8 @@ abstract class ShardDO {
         // Only a route topic needs the per-socket route re-check; decided once, so an ordinary whisper adds no call per member.
         const routeTopic = topic.startsWith(SOCKET_TOPIC_PREFIX);
 
+        // One clock read for the whole fan-out, shared by every socket's lapse check.
+        const now = Date.now();
         for (const ws of this.runner.sockets()) {
             scanned += 1;
 
@@ -17855,7 +17867,7 @@ abstract class ShardDO {
             // check. Without this a lapsed socket keeps receiving every whisper
             // on its joined topics — including the sender's `from` userId — for
             // the rest of its life.
-            if (this.dropIfLapsed(ws, attachment)) {
+            if (this.dropIfLapsed(ws, attachment, now)) {
                 continue;
             }
 
@@ -19003,6 +19015,8 @@ abstract class ShardDO {
 
         let delivered = 0;
 
+        // One clock read for the whole fan-out, shared by every socket's lapse check.
+        const now = Date.now();
         for (const ws of this.liveGrantSockets) {
             const attachment = this.readAttachment(ws);
             const grants = Object.values(attachment.liveGrants ?? {});
@@ -19021,7 +19035,7 @@ abstract class ShardDO {
                 continue;
             }
 
-            if (this.dropIfLapsed(ws, attachment)) {
+            if (this.dropIfLapsed(ws, attachment, now)) {
                 continue;
             }
 
