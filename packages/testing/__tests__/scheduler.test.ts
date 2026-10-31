@@ -1,4 +1,4 @@
-import { MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
+import { MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, TERMINAL_RETENTION_MS } from "@lunora/scheduler";
 import { defineSchema, defineTable, initLunora, v } from "@lunora/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -356,6 +356,23 @@ describe("fake scheduler", () => {
 
         expect(afterExec).toMatchObject({ id: jobId, state: "succeeded" });
         expect(typeof afterExec?.completedAt).toBe("number");
+    });
+
+    it("get forgets a finished job after the seven-day retention window, as the scheduler does", async () => {
+        expect.assertions(2);
+
+        const t = start();
+        const jobId = await t.mutation(scheduleAppend, { delayMs: 500, message: "aging" });
+
+        // Finishes at the end of this advance.
+        await t.scheduler.advance(1000);
+        await t.scheduler.advance(TERMINAL_RETENTION_MS - 1);
+
+        await expect(t.mutation(getJob, { id: jobId })).resolves.toMatchObject({ state: "succeeded" });
+
+        await t.scheduler.advance(1);
+
+        await expect(t.mutation(getJob, { id: jobId })).resolves.toBeNull();
     });
 
     it("get reports a cancelled job as canceled and an unknown id as null", async () => {

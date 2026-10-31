@@ -834,13 +834,17 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                         return;
                     }
 
-                    expect.assertions(1);
+                    expect.assertions(2);
 
                     const job = await host.scheduler.schedule("tasks/remind", {}, { delayMs: 10_000 });
 
                     await host.simulateDeadLetter(job.id);
 
-                    await expect(host.scheduler.get(job.id)).resolves.toMatchObject({ state: "failed" });
+                    const record = await host.scheduler.get(job.id);
+
+                    expect(record).toMatchObject({ state: "failed" });
+                    // A terminal state carries when it was reached.
+                    expect(record?.completedAt).toStrictEqual(expect.any(Number));
                 });
             });
 

@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import { assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
+import { assertScheduleDelay, MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, TERMINAL_RETENTION_MS } from "@lunora/scheduler";
 import type { ScheduledJob, ScheduledJobView, Scheduler } from "@lunora/server";
 import { decodeWire, encodeWire } from "@lunora/wire";
 
@@ -162,7 +162,7 @@ const createFakeScheduler = (
     /** Jobs whose handler is executing right now, so `get` from inside one reads `running`. */
     const running = new Map<string, FakeScheduledJob>();
 
-    /** How each finished job ended, as `get` reports it. The fake keeps them for the harness's lifetime instead of a retention window. */
+    /** How each finished job ended, as `get` reports it. Read through the same retention window the scheduler applies. */
     const finished = new Map<string, ScheduledJobView>();
 
     /** Every captured TERMINAL job failure (retry budget exhausted), in execution order, across all sweeps. */
@@ -247,6 +247,10 @@ const createFakeScheduler = (
             const job = pending.get(id);
             const active = running.get(id);
             let view: ScheduledJobView | undefined = finished.get(id);
+
+            if (view?.completedAt !== undefined && view.completedAt <= nowMs - TERMINAL_RETENTION_MS) {
+                view = undefined;
+            }
 
             if (job !== undefined) {
                 view = { ...job, state: "pending" };

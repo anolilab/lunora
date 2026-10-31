@@ -814,6 +814,8 @@ const createReferenceHost = (): ReferenceHost => {
     type ReferenceJob = {
         args: Record<string, unknown>;
         attempts: number;
+        /** When the job was parked in the dead-letter set. */
+        completedAt?: number;
         functionPath: string;
         options: ScheduleOptions;
         scheduledFor: number;
@@ -884,7 +886,7 @@ const createReferenceHost = (): ReferenceHost => {
                 // A fresh budget is the point of a requeue: returning it with
                 // its exhausted count parks it again on the next failure without
                 // ever retrying.
-                scheduledJobs.set(id, { ...job, attempts: 0, timer: undefined });
+                scheduledJobs.set(id, { ...job, attempts: 0, completedAt: undefined, timer: undefined });
 
                 return true;
             },
@@ -899,7 +901,7 @@ const createReferenceHost = (): ReferenceHost => {
             const dead = deadJobs.get(id);
 
             if (dead !== undefined) {
-                return { ...toStatus(id, dead), state: "failed" };
+                return { ...toStatus(id, dead), completedAt: dead.completedAt, state: "failed" };
             }
 
             return finishedJobs.get(id) ?? null;
@@ -1024,7 +1026,7 @@ const createReferenceHost = (): ReferenceHost => {
 
             clearTimeout(job.timer);
             scheduledJobs.delete(id);
-            deadJobs.set(id, { ...job, attempts: (job.options.retry?.maxAttempts ?? 5) + 1, timer: undefined });
+            deadJobs.set(id, { ...job, attempts: (job.options.retry?.maxAttempts ?? 5) + 1, completedAt: Date.now(), timer: undefined });
 
             return true;
         },
