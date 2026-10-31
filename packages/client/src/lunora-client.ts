@@ -8896,6 +8896,14 @@ class LunoraClient {
     private retireChangedClaims(): void {
         this.clearQueryCacheForIdentityChange();
         this.evictPreviousIdentitySession();
+
+        // Follower tabs hold the values the leader relayed under the old claims, and a refused re-subscribe relays only
+        // an error. A blank, with no cursor, is committed by them as the value; the leader's reseed then refills it.
+        if (this.tabCoordinator?.isLeader()) {
+            for (const state of this.subscriptions.all()) {
+                this.tabCoordinator.broadcastSubscriptionData(SubscriptionRegistry.keyOf(state), undefined, undefined, undefined, this.identityFingerprint());
+            }
+        }
     }
 
     /**
@@ -8925,7 +8933,15 @@ class LunoraClient {
         conn.reauthPending = true;
 
         // An admin socket presents a freshly minted ticket, as its upgrade did; a failed mint is a refusal.
-        (conn.ticketed === true ? resolveWsCredential(this.wsTicket).catch(() => undefined) : Promise.resolve(undefined))
+        (conn.ticketed === true
+            ? withinRpcDeadline(
+                  this.connectTimeoutMs,
+                  undefined,
+                  async () => resolveWsCredential(this.wsTicket),
+                  () => new Error("LunoraClient: ws ticket provider timed out"),
+              ).catch(() => undefined)
+            : Promise.resolve(undefined)
+        )
             .then(async (ticket) =>
                 sendControl(
                     fetchImpl,

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { TabCoordinator } from "../src/cross-tab";
 import { LunoraClient } from "../src/lunora-client";
 import { createInMemoryQueryCache } from "../src/query-cache";
 import { createSocketHarness, fnRef, jsonResponse, settle } from "./lib/harness";
@@ -904,6 +905,50 @@ describe("admin socket re-authentication", () => {
         client.close();
     });
 
+    it("stops waiting for a ticket that never mints, so the re-auth still goes out", async () => {
+        expect.assertions(2);
+
+        const { sockets, WebSocket } = createSocketHarness();
+        let minted = 0;
+        const fetchMock = vi.fn<typeof fetch>(async (input) =>
+            (input as string).includes("/_lunora/ws/reauth")
+                ? jsonResponse({ error: { code: "UNAUTHENTICATED" } }, { status: 401 })
+                : jsonResponse({ result: { ok: true } }),
+        );
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            url: "http://app.test",
+            WebSocket,
+            wsTicket: async () => {
+                minted += 1;
+
+                // The upgrade's mint answers; the re-auth's never does.
+                return minted === 1
+                    ? "ticket-1"
+                    : new Promise<string>(() => {
+                          /* a mint endpoint that hangs */
+                      });
+            },
+        });
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        sockets[0]?.receive({ connectionId: "conn-1", revalidateMs: 60_000, subject: "user-1", type: "identity" });
+        await settle();
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect(fetchMock.mock.calls.filter(([input]) => (input as string).includes("/_lunora/ws/reauth"))).toHaveLength(0);
+
+        // Past the mint's own budget the request is sent without a ticket and the server's refusal reconnects the socket.
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(sockets[0]?.readyState).toBe(3);
+
+        client.close();
+    });
+
     it("sends no ticket for a socket that did not upgrade with one", async () => {
         expect.assertions(1);
 
@@ -912,6 +957,54 @@ describe("admin socket re-authentication", () => {
         await vi.advanceTimersByTimeAsync(30_000);
 
         expect(reauthCalls()[0]?.[0] as string).not.toContain("token=");
+
+        client.close();
+    });
+});
+
+describe("claims change and follower tabs", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+    });
+
+    it("tells follower tabs to drop the values read under the old claims, so a refused query leaves them nothing", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(TabCoordinator.prototype, "isLeader").mockReturnValue(true);
+
+        const broadcast = vi.spyOn(TabCoordinator.prototype, "broadcastSubscriptionData").mockImplementation(() => undefined);
+        const { sockets, WebSocket } = createSocketHarness();
+        const fetchMock = vi.fn<typeof fetch>(async (input) =>
+            (input as string).includes("/_lunora/ws/reauth")
+                ? jsonResponse({ error: { code: "IDENTITY_CHANGED" } }, { status: 409 })
+                : jsonResponse({ result: { ok: true } }),
+        );
+        const client = new LunoraClient({
+            authTokenOnUpgrade: true,
+            crossTabSync: true,
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            url: "http://app.test",
+            WebSocket,
+        });
+
+        client.setAuthToken("token-1", "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        sockets[0]?.receive({ connectionId: "conn-1", revalidateMs: 60_000, subject: "user-1", type: "identity" });
+        await settle();
+        broadcast.mockClear();
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        // A blank for the subscription, with no cursor: followers commit it as the value, and the leader's reseed refills it.
+        expect(broadcast).toHaveBeenCalledTimes(1);
+        expect(broadcast.mock.calls[0]?.[1]).toBeUndefined();
 
         client.close();
     });
