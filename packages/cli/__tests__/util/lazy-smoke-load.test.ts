@@ -526,10 +526,9 @@ describe(runLazySmokeLoad, () => {
             expect(logger.success).toHaveBeenCalledWith("0 lazy function(s) and 2 deferred module(s) evaluate cleanly");
         });
 
-        it("blocks a live-stream module loaded through import().then(), with no manifest and nothing else deferred", async () => {
+        it("blocks a live-stream module that a lazy build loads through import().then()", async () => {
             expect.assertions(1);
 
-            rmSync(join(cwd, "lunora", "_generated", "functions.ts"));
             writeFileSync(
                 join(cwd, "lunora", "_generated", "app.ts"),
                 'type Doc = import("./dataModel.js").Doc;\nconst live = () => import("../live.js").then((module) => module.default);\n',
@@ -538,6 +537,17 @@ describe(runLazySmokeLoad, () => {
             answerFromEntry();
 
             await expect(run()).resolves.toContain("lunora/live.ts (module): live broke");
+        });
+
+        it("stays quiet for an eager build whose generated output still loads auth behind import()", async () => {
+            expect.assertions(2);
+
+            rmSync(join(cwd, "lunora", "_generated", "functions.ts"));
+            writeFileSync(join(cwd, "lunora", "_generated", "app.ts"), 'const load = async () => ({ auth: await import("./authModule.js") });\n');
+            writeFileSync(join(cwd, "lunora", "_generated", "authModule.ts"), 'throw new Error("auth broke");\n');
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(startDevProcess).not.toHaveBeenCalled();
         });
 
         it("reports function failures and deferred failures together", async () => {

@@ -621,11 +621,14 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     const hasManifest = existsSync(functionsFile) && readFileSync(functionsFile, "utf8").includes("export const loadAllFunctions");
     const schemaDirectory = resolveSchemaDirectory(cwd);
     const events = findDeferredModules(cwd, schemaDirectory);
-    const deferred = [...events, ...findLoaderImports(cwd, schemaDirectory, events)];
 
-    if (!hasManifest && deferred.length === 0) {
+    // Only lazy output starts the check: an eager build also emits loaders (`auth`, the specs, workflow
+    // events) that it is not meant to probe. Once it runs, every loader the generated output reaches is covered.
+    if (!hasManifest && events.length === 0) {
         return undefined;
     }
+
+    const deferred = [...events, ...findLoaderImports(cwd, schemaDirectory, events)];
 
     const target = locateSmokeEntry(options);
 
