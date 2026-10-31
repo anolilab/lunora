@@ -15,10 +15,12 @@ import { resolveShard } from "./resolve-shard";
 const BASE_URL = "https://admin-revocations.internal";
 
 interface AdminRevocations {
+    /** Whether this exact issuance (name and createdAt) is revoked: one direct lookup. Throws when the store cannot answer, so callers fail closed. */
+    isRevoked: (name: string, createdAt: number) => Promise<boolean>;
+    /** The highest createdAt revoked for `name`, or `undefined` when none is. Throws when the store cannot answer. */
+    latestRevoked: (name: string) => Promise<number | undefined>;
     /** Record the revocation. Resolves only once it is durable; throws when it is not. */
     revoke: (name: string, createdAt: number) => Promise<void>;
-    /** Every `createdAt` revoked for `name`. Throws when the store cannot answer: callers fail closed. */
-    revokedAt: (name: string) => Promise<number[]>;
 }
 
 const createAdminRevocations = (namespace: ShardNamespaceLike, rootToken: () => string | undefined): AdminRevocations => {
@@ -51,16 +53,31 @@ const createAdminRevocations = (namespace: ShardNamespaceLike, rootToken: () => 
         revoke: async (name, createdAt) => {
             await send("/revoke", { body: JSON.stringify({ createdAt, name }), method: "POST" });
         },
-        revokedAt: async (name) => {
-            const response = await send(`/list?name=${encodeURIComponent(name)}`, { method: "GET" });
+        isRevoked: async (name, createdAt) => {
+            const response = await send(`/revoked?name=${encodeURIComponent(name)}&createdAt=${String(createdAt)}`, { method: "GET" });
             const body: unknown = await response.json();
             const revoked = (body as null | { revoked?: unknown })?.revoked;
 
-            if (!Array.isArray(revoked) || !revoked.every((value) => typeof value === "number")) {
+            if (typeof revoked !== "boolean") {
                 throw new LunoraError("admin revocation store answered garbage", { code: "SHARD_UNAVAILABLE", status: 503 });
             }
 
             return revoked;
+        },
+        latestRevoked: async (name) => {
+            const response = await send(`/latest?name=${encodeURIComponent(name)}`, { method: "GET" });
+            const body: unknown = await response.json();
+            const latest = (body as null | { latest?: unknown })?.latest;
+
+            if (latest === null) {
+                return undefined;
+            }
+
+            if (typeof latest !== "number") {
+                throw new LunoraError("admin revocation store answered garbage", { code: "SHARD_UNAVAILABLE", status: 503 });
+            }
+
+            return latest;
         },
     };
 };

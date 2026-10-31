@@ -43,7 +43,19 @@ const fakeRevocations = (): ShardNamespaceLike => {
             return new Response("down", { status: 503 });
         }
 
-        return Response.json({ revoked: revocationStore.revoked.get(url.searchParams.get("name") ?? "") ?? [] });
+        const revoked = revocationStore.revoked.get(url.searchParams.get("name") ?? "") ?? [];
+
+        if (url.pathname === "/latest") {
+            let highest: number | undefined;
+
+            for (const value of revoked) {
+                highest = highest === undefined ? value : Math.max(highest, value);
+            }
+
+            return Response.json({ latest: highest ?? null });
+        }
+
+        return Response.json({ revoked: revoked.includes(Number(url.searchParams.get("createdAt"))) });
     };
 
     return {
@@ -325,6 +337,41 @@ describe("a revocation that outlives a restore of the token store", () => {
         await call(fresh, `${ORIGIN}/_lunora/rpc`, token, rpc);
 
         expect(seen.findLast((request) => request.body.includes("listTables"))?.headers[ADMIN_SIGNAL_HEADER]).toBeDefined();
+    });
+
+    it("stays correct for a name whose revocation history runs to thousands of entries", async () => {
+        expect.assertions(4);
+
+        const { namespace, seen, store } = fakeShards();
+        const worker = createWorker({ adminToken: ROOT, functions: REGISTRY, shardDO: namespace });
+        const created = await call(worker, TOKENS, ROOT, { body: JSON.stringify({ name: "ci" }), method: "POST" });
+        const { token } = await created.json<{ token: string }>();
+        const issued = store.get("ci")?.createdAt ?? 0;
+
+        // Thousands of earlier issuances of the same name, with the one that matters landing last.
+        revocationStore.revoked.set("ci", [...Array.from({ length: 5000 }, (_unused, index) => index + 1), issued]);
+
+        const fresh = createWorker({ adminRevocations: fakeRevocations(), adminToken: ROOT, functions: REGISTRY, shardDO: namespace });
+        const rpc = { body: JSON.stringify({ args: {}, functionPath: "__lunora_admin__:listTables" }), method: "POST" };
+
+        // Refused...
+        await call(fresh, `${ORIGIN}/_lunora/rpc`, token, rpc);
+
+        expect(seen.findLast((request) => request.body.includes("listTables"))?.headers[ADMIN_SIGNAL_HEADER]).toBeUndefined();
+
+        // ...still shown as revoked...
+        const listed = await call(fresh, TOKENS, ROOT);
+
+        await expect(listed.json()).resolves.toMatchObject({ tokens: [{ name: "ci", revoked: true }] });
+
+        // ...and a re-create is placed past the newest revoked issuance.
+        await call(fresh, `${TOKENS}?name=ci`, ROOT, { method: "DELETE" });
+
+        const again = await call(fresh, TOKENS, ROOT, { body: JSON.stringify({ name: "ci" }), method: "POST" });
+        const { createdAt } = await again.json<{ createdAt: number }>();
+
+        expect(createdAt).toBeGreaterThan(issued);
+        expect(createdAt).toBeGreaterThan(5000);
     });
 
     it("tells the shard which issuance to delete", async () => {

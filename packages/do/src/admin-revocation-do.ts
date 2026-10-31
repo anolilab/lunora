@@ -16,8 +16,11 @@
  * `fetch`, which answers only the root `LUNORA_ADMIN_TOKEN`, compared in
  * constant time. A DO without that token refuses everything.
  *
- * Routes: `POST /revoke` with `{ name, createdAt }`, and `GET /list?name=` answering
- * `{ revoked }`, the `createdAt`s revoked for that name.
+ * Routes: `POST /revoke` with `{ name, createdAt }`; `GET /revoked?name=&createdAt=` answering
+ * `{ revoked }` for that one issuance; `GET /latest?name=` answering `{ latest }`, the highest
+ * `createdAt` revoked for the name or `null`. Every read is a direct `get` of an exact key and the
+ * latest is kept in a key of its own, so no answer depends on a storage listing being complete, however
+ * many revocations a name has accumulated.
  */
 
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
@@ -25,6 +28,8 @@ import { jsonResponse } from "../../../shared/json-response";
 import { readBodyTextCapped } from "../../../shared/read-body-text-capped";
 
 const ENTRY_PREFIX = "r:";
+
+const LATEST_PREFIX = "m:";
 
 /** Separator between name and `createdAt` in a storage key. NUL cannot appear in a valid token name. */
 const KEY_SEPARATOR = "\u0000";
@@ -37,12 +42,16 @@ const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
 
 interface AdminRevocationDOState {
     storage: {
-        list: <T = unknown>(options: { prefix: string }) => Promise<Map<string, T>>;
-        put: (key: string, value: unknown) => Promise<void>;
+        get: <T = unknown>(key: string) => Promise<T | undefined>;
+        /** Several entries in one call are written atomically. */
+        put: (entries: Record<string, unknown>) => Promise<void>;
     };
 }
 
 const entryKey = (name: string, createdAt: number): string => `${ENTRY_PREFIX}${name}${KEY_SEPARATOR}${String(createdAt)}`;
+
+/** The key holding the highest `createdAt` revoked for a name. */
+const latestKey = (name: string): string => `${LATEST_PREFIX}${name}`;
 
 const refusal = (code: string, message: string, status: number): Response => jsonResponse({ error: { code, message } }, status);
 
@@ -70,21 +79,36 @@ class AdminRevocationDO {
             return this.revoke(request);
         }
 
-        if (request.method === "GET" && url.pathname === "/list") {
-            return this.list(url.searchParams.get("name"));
+        if (request.method === "GET" && url.pathname === "/revoked") {
+            return this.isRevoked(url.searchParams.get("name"), url.searchParams.get("createdAt"));
+        }
+
+        if (request.method === "GET" && url.pathname === "/latest") {
+            return this.latest(url.searchParams.get("name"));
         }
 
         return refusal("NOT_FOUND", `unknown admin-revocation route ${request.method} ${url.pathname}`, 404);
     }
 
-    private async list(name: null | string): Promise<Response> {
+    private async isRevoked(name: null | string, createdAt: null | string): Promise<Response> {
+        const at = createdAt === null ? Number.NaN : Number(createdAt);
+
+        if (name === null || !NAME_RE.test(name) || !Number.isSafeInteger(at)) {
+            return refusal("BAD_REQUEST", "expected ?name=<admin token name>&createdAt=<epoch ms>", 400);
+        }
+
+        return jsonResponse({ revoked: (await this.state.storage.get(entryKey(name, at))) !== undefined }, 200);
+    }
+
+    private async latest(name: null | string): Promise<Response> {
         if (name === null || !NAME_RE.test(name)) {
             return refusal("BAD_REQUEST", "`name` must be a valid admin token name", 400);
         }
 
-        const stored = await this.state.storage.list<number>({ prefix: `${ENTRY_PREFIX}${name}${KEY_SEPARATOR}` });
+        const latest = await this.state.storage.get<number>(latestKey(name));
 
-        return jsonResponse({ revoked: [...stored.values()] }, 200);
+        // eslint-disable-next-line unicorn/no-null -- the JSON wire value for "none"; an absent key would read the same as a malformed answer
+        return jsonResponse({ latest: latest ?? null }, 200);
     }
 
     private async revoke(request: Request): Promise<Response> {
@@ -103,8 +127,11 @@ class AdminRevocationDO {
             return refusal("BAD_REQUEST", "expected { name: <admin token name>, createdAt: <epoch ms> }", 400);
         }
 
-        // Awaited: the caller is told "revoked" only once the write has landed.
-        await this.state.storage.put(entryKey(name, createdAt), createdAt);
+        const latest = await this.state.storage.get<number>(latestKey(name));
+
+        // One atomic write of the revocation and the name's running maximum: the caller is told "revoked"
+        // only once both have landed, and a re-create can always be placed past the newest revoked issuance.
+        await this.state.storage.put({ [entryKey(name, createdAt)]: createdAt, [latestKey(name)]: Math.max(latest ?? createdAt, createdAt) });
 
         return jsonResponse({ revoked: true }, 200);
     }

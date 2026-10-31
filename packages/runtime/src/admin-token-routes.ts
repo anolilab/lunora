@@ -96,13 +96,8 @@ const buildAdminTokenRoutes = (deps: AdminTokenRouteDeps): Record<string, (reque
         const { secret, token } = generateAdminToken(name);
         // The issuance's identity is its createdAt. It must sit past every one already revoked under this
         // name, or a token re-created in the revoked one's millisecond would inherit its revocation.
-        const revoked = await deps.revocations.revokedAt(name);
-        // A loop, not Math.max(...revoked): the history is never trimmed and a spread of it can overflow the stack.
-        let createdAt = now();
-
-        for (const earlier of revoked) {
-            createdAt = Math.max(createdAt, earlier + 1);
-        }
+        const latestRevoked = await deps.revocations.latestRevoked(name);
+        const createdAt = latestRevoked === undefined ? now() : Math.max(now(), latestRevoked + 1);
 
         const stored = (await deps.callStore(CREATE_ADMIN_TOKEN_OP, { createdAt, digest: await digestAdminTokenSecret(secret), expiresAt, name })) as Record<
             string,
@@ -134,9 +129,9 @@ const buildAdminTokenRoutes = (deps: AdminTokenRouteDeps): Record<string, (reque
         const { tokens } = (await deps.callStore(LIST_ADMIN_TOKENS_OP, {})) as { tokens: AdminTokenSummary[] };
         const checked = await Promise.all(
             tokens.map(async (token): Promise<AdminTokenSummary> => {
-                const revoked = await revocations.revokedAt(token.name);
+                const revoked = await revocations.isRevoked(token.name, token.createdAt);
 
-                return revoked.includes(token.createdAt) ? { ...token, revoked: true } : token;
+                return revoked ? { ...token, revoked: true } : token;
             }),
         );
 
