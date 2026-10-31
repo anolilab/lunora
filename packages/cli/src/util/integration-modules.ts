@@ -46,15 +46,15 @@ const resolveRelative = (from: string, specifier: string): string | undefined =>
 /** `lunora.config.ts` and its `.mts` / `.js` / `.mjs` siblings. */
 const PROJECT_CONFIG_FILE = /^lunora\.config\.[cm]?[jt]s$/u;
 
-/** The first string a `package.json` `imports` target resolves to, through its condition objects. */
+/** The first string a `package.json` `imports` target resolves to, through its condition objects; `types` names a declaration file, never the module the Worker loads. */
 const importTarget = (target: unknown): string | undefined => {
     if (typeof target === "string") {
         return target;
     }
 
     if (typeof target === "object" && target !== null) {
-        for (const value of Object.values(target)) {
-            const found = importTarget(value);
+        for (const [condition, value] of Object.entries(target)) {
+            const found = condition === "types" ? undefined : importTarget(value);
 
             if (found !== undefined) {
                 return found;
@@ -75,19 +75,22 @@ const mapSubpathImport = (cwd: string, specifier: string): string | undefined =>
         return undefined;
     }
 
+    // Node takes an exact key before any pattern, wherever either is declared.
+    const exact = importTarget(imports?.[specifier]);
+
+    if (exact !== undefined) {
+        return exact;
+    }
+
     for (const [key, target] of Object.entries(imports ?? {})) {
         const [prefix = "", suffix = ""] = key.split("*");
         const mapped = importTarget(target);
 
-        if (mapped !== undefined) {
-            if (key === specifier) {
-                return mapped;
-            }
+        if (mapped !== undefined && key.includes("*") && specifier.startsWith(prefix) && specifier.endsWith(suffix) && specifier.length >= key.length - 1) {
+            // A replacer function, so a `$&` or `$$` in the subpath is inserted as written; Node substitutes every `*`, not only the first.
+            const captured = specifier.slice(prefix.length, specifier.length - suffix.length);
 
-            if (key.includes("*") && specifier.startsWith(prefix) && specifier.endsWith(suffix) && specifier.length >= key.length - 1) {
-                // Node substitutes every `*` in the target, not only the first.
-                return mapped.replaceAll("*", specifier.slice(prefix.length, specifier.length - suffix.length));
-            }
+            return mapped.replaceAll("*", () => captured);
         }
     }
 
@@ -110,16 +113,41 @@ const virtualEntryRoots = (cwd: string, schemaDirectory: string): string[] => {
     ];
 };
 
+/** Whether the project keeps imports as written (`verbatimModuleSyntax`), so `import { type X } from "m"` still loads `m`. */
+const keepsTypeOnlyImports = (cwd: string): boolean => {
+    const configFile = ts.findConfigFile(cwd, (path) => ts.sys.fileExists(path));
+
+    if (configFile === undefined) {
+        return false;
+    }
+
+    const read: { config?: object } = ts.readConfigFile(configFile, (path) => ts.sys.readFile(path));
+
+    return ts.parseJsonConfigFileContent(read.config ?? {}, ts.sys, dirname(configFile)).options.verbatimModuleSyntax === true;
+};
+
+/** `{ type A, type B }`: named bindings that are all types. Erased with the rest of the import unless the project keeps imports as written. */
+const allNamesTypeOnly = (bindings: ts.NamedImportBindings | ts.NamedExportBindings | undefined): boolean =>
+    bindings !== undefined &&
+    (ts.isNamedImports(bindings) || ts.isNamedExports(bindings)) &&
+    bindings.elements.length > 0 &&
+    bindings.elements.every((element) => element.isTypeOnly);
+
 /** An `import … from` / `export … from` that puts code in the bundle: a type-only one is erased. */
-const valueModuleSpecifier = (node: ts.Node): string | undefined => {
+const valueModuleSpecifier = (node: ts.Node, keepsTypeOnly: boolean): string | undefined => {
     if (ts.isImportDeclaration(node)) {
-        const typeOnly = node.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword;
+        const { importClause } = node;
+        const typeOnly =
+            importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword ||
+            (!keepsTypeOnly && importClause?.name === undefined && allNamesTypeOnly(importClause?.namedBindings));
 
         return !typeOnly && ts.isStringLiteral(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined;
     }
 
     if (ts.isExportDeclaration(node)) {
-        return !node.isTypeOnly && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined;
+        const typeOnly = node.isTypeOnly || (!keepsTypeOnly && allNamesTypeOnly(node.exportClause));
+
+        return !typeOnly && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined;
     }
 
     return undefined;
@@ -137,14 +165,14 @@ const dynamicImportSpecifier = (node: ts.Node): string | undefined => {
 };
 
 /** Relative and `#` subpath imports to follow, and the package specifiers of the file's `import()` calls. */
-const scanFile = (file: string): { dynamicPackages: string[]; relative: string[] } => {
+const scanFile = (file: string, keepsTypeOnly: boolean): { dynamicPackages: string[]; relative: string[] } => {
     const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, false);
     const dynamicPackages: string[] = [];
     const relativeImports: string[] = [];
 
     const visit = (node: ts.Node): void => {
         const dynamic = dynamicImportSpecifier(node);
-        const specifier = dynamic ?? valueModuleSpecifier(node);
+        const specifier = dynamic ?? valueModuleSpecifier(node, keepsTypeOnly);
 
         if (specifier?.startsWith(".") || specifier?.startsWith("#")) {
             relativeImports.push(specifier);
@@ -187,10 +215,12 @@ const isInstalledFrom = (directory: string, name: string): boolean => {
  * deploy. Only specifiers that resolve from `cwd` are returned: the smoke entry imports them from
  * under it, and one that does not resolve there would fail the bundle rather than the module.
  *
- * Not covered: an SDK a package loads for itself (`@lunora/mcp` and `@modelcontextprotocol/sdk`),
+ * Not covered: an SDK a framework route module loads when the entry is virtual (the framework, not this
+ * walk, decides which route modules exist), and an SDK a package loads for itself (`@lunora/mcp` and `@modelcontextprotocol/sdk`),
  * since the app never names it.
  */
 const collectIntegrationModules = (cwd: string, entry: string | undefined, schemaDirectory: string): string[] => {
+    const keepsTypeOnly = keepsTypeOnlyImports(cwd);
     const seen = new Set<string>();
     const packages = new Set<string>();
     // A Vite-composed Worker's entry is `virtual:lunora/worker`, which has no file to read; the files it imports are the roots then.
@@ -200,7 +230,7 @@ const collectIntegrationModules = (cwd: string, entry: string | undefined, schem
         if (!seen.has(file) && !isInstalled(relative(cwd, file))) {
             seen.add(file);
 
-            const { dynamicPackages, relative: imports } = scanFile(file);
+            const { dynamicPackages, relative: imports } = scanFile(file, keepsTypeOnly);
 
             if (!isOutsideApp(relative(cwd, file))) {
                 for (const specifier of dynamicPackages) {

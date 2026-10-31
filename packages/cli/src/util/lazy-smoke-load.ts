@@ -268,8 +268,8 @@ class SmokeLoadError extends Error {
     }
 }
 
-/** A class name that can be written into the smoke entry as an identifier. */
-const IDENTIFIER = /^[A-Z_$][\w$]*$/iu;
+/** A class name that can be written into the smoke entry as an identifier: ECMAScript IdentifierName, Unicode letters included. */
+const IDENTIFIER = /^[$_\p{ID_Start}][$\u200C\u200D\p{ID_Continue}]*$/u;
 
 interface WorkerConfig {
     /** Durable Object classes this Worker must export itself (bindings without a `script_name`). */
@@ -281,8 +281,9 @@ interface WorkerConfig {
 }
 
 /** The parts of the config `deploy` runs against that the check needs, with `--env` applied the way deploy validation applies it. */
-const readWorkerConfig = (cwd: string, environment: string | undefined): WorkerConfig => {
-    const wranglerFile = findWranglerFile(cwd);
+const readWorkerConfig = (cwd: string, environment: string | undefined, configPath: string | undefined): WorkerConfig => {
+    // The config deploy runs against, not the default one: `--config` can bind other classes than the file `wrangler dev` finds on its own.
+    const wranglerFile = configPath ?? findWranglerFile(cwd);
     const parsed = wranglerFile === undefined ? undefined : readWranglerJsonc<WranglerConfig>(wranglerFile).parsed;
 
     if (parsed === undefined) {
@@ -331,7 +332,7 @@ const locateSmokeEntry = ({
         return { skip: "this deploy target does not run on workerd" };
     }
 
-    const { durableObjectClasses, hasContainers, main: configuredMain, workflowClasses } = readWorkerConfig(cwd, environment);
+    const { durableObjectClasses, hasContainers, main: configuredMain, workflowClasses } = readWorkerConfig(cwd, environment, configPath);
     const main = composedEntry ?? configuredMain;
     // Named explicitly even when the caller did not, so `wrangler dev` never follows a Vite build's redirect.
     const configFile = configPath ?? findWranglerFile(cwd);
@@ -482,7 +483,8 @@ const probeLazyModules = async (input: {
         const step = await requestStep({ ...request, pending: "the lazy function modules", query: "step=functions" });
         const { checked: count, failures: found } = step.body ?? {};
 
-        if (typeof count !== "number" || !Array.isArray(found) || !found.every((item) => isModuleFailure(item))) {
+        // Another run's Worker can take the port after the ping; its clean answer must not stand for this run's modules.
+        if (step.body?.run !== runId || typeof count !== "number" || !Array.isArray(found) || !found.every((item) => isModuleFailure(item))) {
             throw unexpectedAnswer(step.response, step.text);
         }
 
@@ -647,7 +649,10 @@ const reportProbe = (cwd: string, result: ProbeResult, logger: Logger): void => 
                 ? []
                 : [
                       `${String(integrations.failures.length)} of ${String(integrations.checked)} integration module(s) fail to load in workerd (each would fail its first use instead):`,
-                      ...integrations.failures.map(({ message, specifier }) => `  import("${specifier}"): ${message}`),
+                      ...integrations.failures.slice(0, MAX_LISTED_MODULES).map(({ message, specifier }) => `  import("${specifier}"): ${message}`),
+                      ...(integrations.failures.length > MAX_LISTED_MODULES
+                          ? [`  …and ${String(integrations.failures.length - MAX_LISTED_MODULES)} more integration module(s)`]
+                          : []),
                   ]),
             "Fix the module, or pass --no-smoke-load to ship anyway.",
         ].join("\n"),
@@ -860,7 +865,7 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
 
     const { base, configFile } = target;
     // Only reached from lazy output (see above); an eager build's loaders are not probed.
-    const integrationModules = collectIntegrationModules(cwd, composedEntry ?? readWorkerConfig(cwd, environment).main, schemaDirectory);
+    const integrationModules = collectIntegrationModules(cwd, composedEntry ?? readWorkerConfig(cwd, environment, options.configPath).main, schemaDirectory);
 
     const output: string[] = [];
     let directory: string | undefined;
