@@ -1026,7 +1026,7 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(Object.keys(deployed?.secrets ?? {})).not.toContain("RESEND_API_KEY");
             // Migrations ran against the preview, with the preview's own token.
             expect(admin.calls.length).toBeGreaterThan(0);
-            expect(admin.calls.every((call) => call.url.startsWith("https://lunora-app-preview-42.acme.workers.dev"))).toBe(true);
+            expect(admin.calls.every((call) => new URL(call.url).origin === "https://lunora-app-preview-42.acme.workers.dev")).toBe(true);
             expect(admin.calls[0]?.authorization).toBe(`Bearer ${deployed?.secrets.LUNORA_ADMIN_TOKEN ?? "missing"}`);
             expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(PRODUCTION_WRANGLER);
             expect(existsSync(join(workdir, ".lunora", "project.json"))).toBe(false);
@@ -1904,7 +1904,7 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             // The listed URL is where the migrations went and where a seed would go: the built one.
             expect(result.data?.preview?.url).toBe("https://lunora-app-preview-42.acme.workers.dev");
             expect(admin.calls.length).toBeGreaterThan(0);
-            expect(admin.calls.every((call) => call.url.startsWith("https://lunora-app-preview-42.acme.workers.dev"))).toBe(true);
+            expect(admin.calls.every((call) => new URL(call.url).origin === "https://lunora-app-preview-42.acme.workers.dev")).toBe(true);
         });
 
         it("asks whether the Worker is the preview's own once per deploy", async () => {
