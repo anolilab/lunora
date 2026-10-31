@@ -142,6 +142,13 @@ const mysqlTransaction = async <T>(pool: MysqlPoolLike, wrap: (held: Mysql2Like)
     return result;
 };
 
+const raiseNoTransaction = (needs: string): never => {
+    throw new LunoraError(
+        "INTERNAL",
+        `@lunora/hyperdrive: a .global() write needs ${needs} to commit its row and companions together; the supplied driver cannot open a transaction.`,
+    );
+};
+
 /**
  * Minimal row-returning client (e.g. `@lunora/hyperdrive`'s `fromPostgresJs`/`fromNodePg`
  * result). Aliases {@link SqlClient} — the exec-facing name is kept so call sites read
@@ -272,13 +279,18 @@ export const buildMysqlExec = (load: () => Mysql2Client | Promise<Mysql2Client>)
         return loaded;
     });
 
-    const pool = connection as Partial<MysqlPoolLike>;
-    const { getConnection } = pool;
+    const exec: SqlExec = {
+        // Always present: whether the driver is a pool is only known once it is loaded. The store treats a present
+        // `transaction` as atomic, so a single connection (which cannot hold one apart from other writers) fails loudly
+        // instead of committing a row and its companions separately.
+        transaction: async <T>(work: (tx: SqlExec) => Promise<T>): Promise<T> => {
+            const driver = await connection();
+            const { getConnection } = driver as Partial<MysqlPoolLike>;
 
-    return {
-        ...(typeof getConnection === "function"
-            ? { transaction: async <T>(work: (tx: SqlExec) => Promise<T>): Promise<T> => await mysqlTransaction(pool as MysqlPoolLike, buildMysqlExec, work) }
-            : {}),
+            return typeof getConnection === "function"
+                ? await mysqlTransaction(driver as unknown as MysqlPoolLike, (held) => buildMysqlExec(() => held), work)
+                : raiseNoTransaction("a mysql2 pool (`createPool`)");
+        },
         all: async (sql, params) => {
             const driver = await connection();
             const [rows] = await driver.query(sql, toMysqlParams(params));
@@ -302,4 +314,6 @@ export const buildMysqlExec = (load: () => Mysql2Client | Promise<Mysql2Client>)
             return { rowsAffected: (result as { affectedRows?: number }).affectedRows ?? 0 };
         },
     };
+
+    return exec;
 };

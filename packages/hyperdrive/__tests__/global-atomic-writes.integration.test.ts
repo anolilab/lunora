@@ -131,7 +131,7 @@ describe("hyperdrive global — row and companion writes commit together", () =>
 
             await assertRowAndCounterMoveTogether(
                 "postgres",
-                buildPgExec(fromPostgresJs(sql)),
+                buildPgExec(fromPostgresJs(() => sql)),
                 async () => await countOf(harness.query(`SELECT COUNT(*) AS n FROM "tallies"`)),
             );
         });
@@ -171,7 +171,7 @@ describe("hyperdrive global — row and companion writes commit together", () =>
 
             await assertRowAndCounterMoveTogether(
                 "mysql",
-                buildMysqlExec(pool as mysql.Pool),
+                buildMysqlExec(() => pool as mysql.Pool),
                 async () => await countOf(query("SELECT COUNT(*) AS n FROM `tallies`")),
             );
         });

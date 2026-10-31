@@ -75,6 +75,31 @@ describe("fromNodePg", () => {
 });
 
 describe("fromPostgresJs", () => {
+    it("runs a transaction through the loaded driver's begin, on the reserved client", async () => {
+        expect.assertions(2);
+
+        const unsafe = vi.fn<PostgresJsLike["unsafe"]>().mockResolvedValue([]);
+        const txUnsafe = vi.fn<PostgresJsLike["unsafe"]>().mockResolvedValue([{ id: "tx" }]);
+        const begin = vi.fn<NonNullable<PostgresJsLike["begin"]>>(async (work) => await work({ unsafe: txUnsafe }));
+
+        const rows = await fromPostgresJs(() => {
+            return { begin, unsafe };
+        }).transaction?.(async (tx) => await tx.query("select 1"));
+
+        expect(rows).toStrictEqual([{ id: "tx" }]);
+        expect(unsafe).not.toHaveBeenCalled();
+    });
+
+    it("rejects a transaction on a driver without begin rather than committing statement by statement", async () => {
+        expect.assertions(1);
+
+        const sql = fromPostgresJs(() => {
+            return { unsafe: vi.fn<PostgresJsLike["unsafe"]>().mockResolvedValue([]) };
+        });
+
+        await expect(sql.transaction?.(async () => 1)).rejects.toThrow(/no `begin`/u);
+    });
+
     it("delegates to the driver's unsafe escape hatch and returns the rows", async () => {
         expect.assertions(2);
 
