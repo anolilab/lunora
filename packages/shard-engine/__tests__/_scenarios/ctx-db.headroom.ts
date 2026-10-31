@@ -399,13 +399,10 @@ const runHeadroomScenarios = (factory: () => SqlHarness): void => {
                 const writer = createShardContextDatabase({
                     clock: () => 1_700_000_000_000,
                     globalDb: {
-                        query: () => {
-                            return {
-                                async* [Symbol.asyncIterator]() {
-                                    yield* rows;
-                                },
-                            };
-                        },
+                        query: () =>
+                            (async function* streamRows() {
+                                yield* rows;
+                            })(),
                     } as unknown as DatabaseWriterLike,
                     headroom: new TransactionHeadroomTracker({ maxReadBytes: 250 }),
                     schema: globalSchema,
