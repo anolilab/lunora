@@ -261,16 +261,24 @@ const backfillSearchIndexPage = async (
             done: recorded.done,
             profile: recorded.profile,
         });
-        recorded = await readSearchBackfillState(exec, dialect, companion);
-        pass = planBackfillPass(recorded, profile);
+        const after = await readSearchBackfillState(exec, dialect, companion);
 
-        if (pass.wipe) {
-            // Someone else changed the progress under another profile: leave this page to the next pass.
-            return false;
-        }
+        if (after.cursor !== recorded.cursor || after.done !== recorded.done || after.profile !== recorded.profile) {
+            // The progress moved while this reset was in flight, so the reset did not take: plan again from what is there.
+            recorded = after;
+            pass = planBackfillPass(recorded, profile);
 
-        if (pass.finished) {
-            return true;
+            if (pass.wipe) {
+                // Under yet another profile: leave this page to the next pass, which resets against that state.
+                return false;
+            }
+
+            if (pass.finished) {
+                return true;
+            }
+        } else {
+            recorded = { cursor: undefined, done: false, profile };
+            pass = planBackfillPass(recorded, profile);
         }
     }
 

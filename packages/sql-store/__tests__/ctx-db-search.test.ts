@@ -402,6 +402,64 @@ describe("global search provisioning", () => {
             expect(companionDocumentCount()).toBe(250);
         });
 
+        it("does not recreate progress a layout change deleted when a late write resumes", async () => {
+            expect.assertions(1);
+
+            createNotesTable();
+            insertPastOnePage();
+            // Complete under the old analysis, so a change of language starts a rebuild from a recorded state.
+            await backfillSqlSearchIndexes(exec, searchSchema, dialect);
+
+            let reachedHeld: () => void = () => undefined;
+            const held = new Promise<void>((resolve) => {
+                reachedHeld = resolve;
+            });
+            let release: () => void = () => undefined;
+            const gate = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            let readHeld = false;
+            let abandoned = false;
+            let landed = false;
+            const stateTable = `"${SEARCH_STATE_TABLE}"`;
+            // The rebuild's reset first looks for the progress row; that look is held until the row is gone, and the
+            // pass is abandoned once the statement that follows it has landed.
+            const slow: SqlCtxExec = {
+                all: async (query, parameters) => {
+                    readHeld = readHeld || query.startsWith(`SELECT "profile" FROM ${stateTable}`);
+
+                    if (readHeld && query.startsWith(`SELECT "profile" FROM ${stateTable}`)) {
+                        reachedHeld();
+                        await gate;
+                        // Nothing after the write this look leads to reaches the engine: the pass was abandoned.
+                        abandoned = true;
+                    }
+
+                    return await exec.all(query, parameters);
+                },
+                run: async (query, parameters) => {
+                    // The one progress write the held look leads to still lands.
+                    landed = abandoned && !landed && /^(?:INSERT INTO|UPDATE) "__lunora_search_state"/u.test(query);
+
+                    if (abandoned && !landed) {
+                        throw new Error("abandoned pass");
+                    }
+
+                    await exec.run(query, parameters);
+                },
+            };
+            const first = backfillSqlSearchIndexes(slow, englishSchema, dialect).catch(() => undefined);
+
+            await held;
+            // A layout migration deletes the progress row while the old pass is still looking for it.
+            raw(`DELETE FROM ${stateTable} WHERE "companion" = ?`, COMPANION);
+            release();
+            await first;
+
+            // The old pass must not write its progress back over the deleted row.
+            expect(raw(`SELECT * FROM ${stateTable} WHERE "companion" = ?`, COMPANION)).toStrictEqual([]);
+        });
+
         it("leaves a staged index populated when its analysis changes", async () => {
             expect.assertions(1);
 

@@ -810,8 +810,8 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
         }
     });
 
-    it("sends a patch's aggregate, rank and CDC companion writes as exactly one batch", async () => {
-        expect.assertions(5);
+    it("sends a patch's aggregate and rank companion writes as exactly one batch, after its CDC append", async () => {
+        expect.assertions(6);
 
         const harness = createSqliteBatchHarness();
 
@@ -823,9 +823,11 @@ describe("createSqlCtxDb — aggregate + rank backfills route through batch when
 
             await writer.patch("notes", id, { archived: true, priority: 2 });
 
-            expect(batch).toHaveBeenCalledTimes(1);
-            // Aggregate: -1 old group, +1 new group, two prunes; rank: DELETE + INSERT; CDC: one append.
-            expect(batch.mock.calls[0]?.[0]).toHaveLength(7);
+            // The CDC append goes ahead of the companions on its own, so a timeout or failure in them cannot lose it.
+            expect(batch).toHaveBeenCalledTimes(2);
+            expect(batch.mock.calls[0]?.[0]).toHaveLength(1);
+            // Aggregate: -1 old group, +1 new group, two prunes; rank: DELETE + INSERT.
+            expect(batch.mock.calls[1]?.[0]).toHaveLength(6);
 
             const groups = await writer.groupBy("notes", { agg: { op: "count" }, by: ["archived"] });
 

@@ -2862,6 +2862,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         write: (on: SqlCtxExec) => Promise<boolean>,
         prepare: (on: SqlCtxExec) => Promise<SQL[]>,
         id: string,
+        cdc: SQL[],
     ): Promise<boolean> => {
         const definition = schema.tables[tableName];
         // A lone row write already commits atomically; BEGIN/COMMIT only pays off when companions ride along.
@@ -2900,7 +2901,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const progress = { batched: false, dispatched: false };
 
             try {
-                const statements = await prepare(on);
+                // Without a transaction the change record goes first, on its own, straight after the row: the later
+                // companion statements (and the reads that prepare them) can time out or fail, and must never leave a
+                // committed row without its record. Inside a transaction it commits with them, last.
+                if (rowCommitsAlone && cdc.length > 0) {
+                    await runInOrder(on, dialect, cdc);
+                }
+
+                const statements = rowCommitsAlone ? await prepare(on) : [...(await prepare(on)), ...cdc];
 
                 if (statements.length > 0) {
                     // Whether the companions are in flight as one atomic batch, which lands whole or not at all.
@@ -3208,12 +3216,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         const written = await writeWithCompanions(
             tableName,
             async (on) => await tryGuardedWrite(tableName, "UPDATE", assignments, snapshot, condition, on),
-            async (on) => [
-                ...(await aggregateStatements(tableName, existing, merged, on)),
-                ...(await rankStatements(tableName, id, existing, merged)),
-                ...cdcStatements(tableName, id, "update", merged),
-            ],
+            async (on) => [...(await aggregateStatements(tableName, existing, merged, on)), ...(await rankStatements(tableName, id, existing, merged))],
             id,
+            cdcStatements(tableName, id, "update", merged),
         );
 
         if (!written) {
@@ -3763,9 +3768,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                     async (on) => [
                         ...(await aggregateStatements(tableName, existing, merged, on)),
                         ...(await rankStatements(tableName, id, existing, undefined)),
-                        ...cdcStatements(tableName, id, "update", merged),
                     ],
                     id,
+                    cdcStatements(tableName, id, "update", merged),
                 );
                 await syncSearch(tableName, id, { document: merged, previous: existing, written: writtenBy(snapshot) });
 
@@ -3788,9 +3793,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 async (on) => [
                     ...(await aggregateStatements(tableName, existing ?? undefined, undefined, on)),
                     ...(await rankStatements(tableName, id, existing ?? undefined, undefined)),
-                    ...cdcStatements(tableName, id, "delete"),
                 ],
                 id,
+                cdcStatements(tableName, id, "delete"),
             );
 
             await syncSearch(tableName, id, undefined);
@@ -4150,9 +4155,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 async (on) => [
                     ...(await aggregateStatements(tableName, undefined, documentWithMeta, on)),
                     ...(await rankStatements(tableName, id, undefined, documentWithMeta)),
-                    ...cdcStatements(tableName, id, "insert", documentWithMeta),
                 ],
                 id,
+                cdcStatements(tableName, id, "insert", documentWithMeta),
             );
 
             // The row and its companions are stored from here on: a failure below is reported as such (see `afterBaseRowCommitted`).
@@ -4316,6 +4321,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         // eslint-disable-next-line unicorn/no-null -- the restored image clears the soft-delete marker, matching what `patch` persisted.
                         async () => await rankStatements(tableName, id, undefined, { ...row, [field]: null }),
                         id,
+                        [],
                     ).catch((error: unknown) => {
                         // The patch already committed, so a rolled-back re-add leaves the rank behind the row: rebuild it.
                         if (exec.transaction !== undefined) {
@@ -4880,12 +4886,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
                     return true;
                 },
-                async (on) => [
-                    ...(await aggregateStatements(tableName, previous, replaced, on)),
-                    ...(await rankStatements(tableName, id, previous, replaced)),
-                    ...cdcStatements(tableName, id, "update", replaced),
-                ],
+                async (on) => [...(await aggregateStatements(tableName, previous, replaced, on)), ...(await rankStatements(tableName, id, previous, replaced))],
                 id,
+                cdcStatements(tableName, id, "update", replaced),
             );
 
             // The row and its companions are stored from here on: a failure below is reported as such (see `afterBaseRowCommitted`).

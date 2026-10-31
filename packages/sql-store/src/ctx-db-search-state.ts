@@ -166,7 +166,8 @@ const readSearchBackfillState = async (exec: SqlCtxExec, dialect: SqlDialect, co
  * only lands while that is still the recorded progress (cursor, profile and completion), so a statement abandoned
  * at its deadline, which the engine may still run after a retry advanced or
  * finished the same backfill, can never move it backwards. Without it the write
- * is unconditional: the deliberate reset when the search profile changes.
+ * is unconditional (recording completion of a missing source table, and the first record of a staged index). When the
+ * row it expected is gone, because a layout change deleted it, nothing is written.
  */
 const writeSearchBackfillState = async (
     exec: SqlCtxExec,
@@ -202,6 +203,13 @@ const writeSearchBackfillState = async (
     if (existing.length > 0) {
         await queryRun(exec, dialect, update);
 
+        return;
+    }
+
+    // The pass was planned from progress that was recorded, and the row is gone: a layout change deleted it. Writing
+    // the old progress back would resurrect state for companion rows that no longer exist, so leave it to the next
+    // pass, which plans from nothing. (An all-empty expectation is an index that never started, which inserts.)
+    if (expected !== undefined && (expected.cursor !== undefined || expected.done || expected.profile !== undefined)) {
         return;
     }
 

@@ -2,7 +2,7 @@ import type { SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SqlCtxExec } from "../src/ctx-db";
-import { createSqlCtxDb } from "../src/ctx-db";
+import { createSqlCtxDb, readSqlCdcChanges } from "../src/ctx-db";
 import { reconcileSearchRow } from "../src/ctx-db-search";
 import type { QueryTimer } from "../src/query-timeout";
 import { SqlQueryTimeoutError } from "../src/query-timeout";
@@ -752,6 +752,75 @@ describe("createSqlCtxDb — statement deadline", () => {
             await writer.aggregate("scores", { field: "points", op: "min", where: { org: "a" } });
 
             expect(rebuilds).toBeGreaterThan(before);
+        } finally {
+            plain.close();
+        }
+    });
+
+    it("keeps the change record of a row whose companion statement timed out", async () => {
+        expect.assertions(2);
+
+        const counted = {
+            tables: {
+                tallies: {
+                    aggregateIndexes: [{ by: ["org"], name: "countByOrg", on: "tallies", op: "count" }],
+                    indexes: [],
+                    shape: { org: col("string") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as unknown as SchemaLike;
+        const plain = createSqliteHarness();
+        const { armed, timer } = manualTimer();
+        let hang = false;
+        let reached: () => void = () => undefined;
+        const hung = new Promise<void>((resolve) => {
+            reached = resolve;
+        });
+        // No `batch` and no `transaction`, as node-pg or a single mysql2 connection: the companion tail is ordered, one statement at a time.
+        const exec: SqlCtxExec = {
+            all: async (query, parameters) => await plain.exec.all(query, parameters),
+            run: async (query, parameters) => {
+                if (hang && query.includes("countByOrg") && query.startsWith("INSERT")) {
+                    hang = false;
+                    reached();
+
+                    return await new Promise<never>(() => {});
+                }
+
+                return await plain.exec.run(query, parameters);
+            },
+        };
+
+        try {
+            const writer = createSqlCtxDb({
+                cdc: true,
+                clock: () => 1,
+                dialect: makeSqliteDialect(),
+                exec,
+                queryTimeoutMs: 5000,
+                queryTimer: timer,
+                schema: counted,
+            });
+
+            await writer.insert("tallies", { _id: "seed", org: "a" }, { allowExplicitId: true });
+
+            hang = true;
+
+            const write = writer.insert("tallies", { _id: "t1", org: "a" }, { allowExplicitId: true });
+
+            await hung;
+
+            for (const fire of armed.values()) {
+                fire();
+            }
+
+            await expect(write).rejects.toBeInstanceOf(SqlQueryTimeoutError);
+
+            const { changes } = await readSqlCdcChanges(plain.exec, {}, makeSqliteDialect());
+
+            // The row committed before the counter statement hung, so its change record must exist.
+            expect(changes.map((change) => change.id)).toStrictEqual(["seed", "t1"]);
         } finally {
             plain.close();
         }
