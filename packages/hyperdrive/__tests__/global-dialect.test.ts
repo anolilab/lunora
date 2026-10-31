@@ -165,6 +165,22 @@ describe("exec adapters", () => {
         expect(result).toEqual({ rowsAffected: 0 });
     });
 
+    it("buildPgExec runs a transaction as a method of its client", async () => {
+        expect.assertions(1);
+
+        const client = {
+            label: "client",
+            query: async () => [],
+            // A method, not a closure: it reads `this`, so extracting it from the client would break it.
+            async transaction<T>(work: (tx: { query: () => Promise<never[]> }) => Promise<T>): Promise<T> {
+                return await work({ query: async () => [] }).then((result) => `${this.label}:${String(result)}` as T);
+            },
+        };
+        const exec = buildPgExec(client);
+
+        await expect((exec.transaction as NonNullable<typeof exec.transaction>)(async () => "done")).resolves.toBe("client:done");
+    });
+
     it("buildMysqlExec forwards verbatim (the core already emits backticks + `?`) and surfaces affectedRows", async () => {
         expect.assertions(2);
 

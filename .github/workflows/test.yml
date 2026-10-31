@@ -606,7 +606,7 @@
             - "name": "Assert the run covers every suite using the MySQL harness"
               "run": |
                   declared="$(grep -rl '_helpers/mysql-mem' packages/hyperdrive/__tests__/*.test.ts | sort | tr '\n' ' ')"
-                  expected='packages/hyperdrive/__tests__/create-hyperdrive.test.ts packages/hyperdrive/__tests__/global-collation-parity.test.ts packages/hyperdrive/__tests__/global-json-paths.test.ts packages/hyperdrive/__tests__/global-mysql.integration.test.ts packages/hyperdrive/__tests__/global-null-placement.test.ts '
+                  expected='packages/hyperdrive/__tests__/create-hyperdrive.test.ts packages/hyperdrive/__tests__/global-atomic-writes.integration.test.ts packages/hyperdrive/__tests__/global-collation-parity.test.ts packages/hyperdrive/__tests__/global-json-paths.test.ts packages/hyperdrive/__tests__/global-mysql.integration.test.ts packages/hyperdrive/__tests__/global-null-placement.test.ts '
                   if [ "$declared" != "$expected" ]; then
                     echo "::error file=.github/workflows/test.yml::Suites using the MySQL harness are [$declared] but this job runs [$expected]. Update the run step below."
                     exit 1
@@ -622,6 +622,7 @@
               "run": |
                   pnpm --filter "@lunora/hyperdrive" run test \
                       __tests__/create-hyperdrive.test.ts \
+                      __tests__/global-atomic-writes.integration.test.ts \
                       __tests__/global-collation-parity.test.ts \
                       __tests__/global-json-paths.test.ts \
                       __tests__/global-mysql.integration.test.ts \

@@ -97,6 +97,50 @@ const assertFoundRows = (connection: Mysql2Client): void => {
     }
 };
 
+/** The `mysql2/promise` pool connection a transaction holds: the exec surface plus the transaction verbs. */
+interface MysqlPoolConnectionLike {
+    beginTransaction: () => Promise<void>;
+    commit: () => Promise<void>;
+    /** Close the connection instead of returning it to the pool. */
+    destroy: () => void;
+    release: () => void;
+    rollback: () => Promise<void>;
+}
+
+/** A `mysql2/promise` pool: what lets one transaction hold one connection while the pool serves everything else. */
+interface MysqlPoolLike {
+    getConnection: () => Promise<Mysql2Like & MysqlPoolConnectionLike>;
+}
+
+/**
+ * Run `work` on one connection taken from `pool`, inside `BEGIN` … `COMMIT`, through the exec `wrap` builds over
+ * it. A connection whose rollback failed may still hold the open transaction, so it is destroyed rather than handed
+ * back to the pool for the next caller to write into.
+ */
+const mysqlTransaction = async <T>(pool: MysqlPoolLike, wrap: (held: Mysql2Like) => SqlExec, work: (tx: SqlExec) => Promise<T>): Promise<T> => {
+    const held = await pool.getConnection();
+    let result: T;
+
+    try {
+        await held.beginTransaction();
+        result = await work(wrap(held));
+        await held.commit();
+    } catch (error) {
+        try {
+            await held.rollback();
+            held.release();
+        } catch {
+            held.destroy();
+        }
+
+        throw error;
+    }
+
+    held.release();
+
+    return result;
+};
+
 /**
  * Minimal row-returning client (e.g. `@lunora/hyperdrive`'s `fromPostgresJs`/`fromNodePg`
  * result). Aliases {@link SqlClient} — the exec-facing name is kept so call sites read
@@ -154,6 +198,10 @@ export type Mysql2Client = Mysql2Like & { config?: unknown; pool?: unknown };
  * sequential fallback minus the ordering — safe only for statements whose
  * effects don't depend on each other, which is what every current caller
  * batches (distinct-keyed companion rows).
+ *
+ * `transaction` is present when `client` has one (`fromPostgresJs`): the
+ * store's row + companion writes then run on one reserved connection and
+ * commit together.
  */
 export const buildPgExec = (client: RowClient): SqlExec => {
     return {
@@ -168,6 +216,13 @@ export const buildPgExec = (client: RowClient): SqlExec => {
             // so the store never consumes `rowsAffected` on the PG path — report 0.
             return { rowsAffected: 0 };
         },
+        ...(client.transaction === undefined
+            ? {}
+            : {
+                  transaction: async <T>(work: (tx: SqlExec) => Promise<T>): Promise<T> =>
+                      // Called on `client`, not extracted: a driver may implement it as a method that reads `this`.
+                      await (client.transaction as NonNullable<RowClient["transaction"]>)(async (tx) => await work(buildPgExec(tx))),
+              }),
     };
 };
 
@@ -186,6 +241,11 @@ export const buildPgExec = (client: RowClient): SqlExec => {
  * same values reports 0 and the OCC guard raises a spurious conflict. Verified
  * once here at construction — see {@link assertFoundRows} — never per statement.
  *
+ * Given a **pool** (anything with `getConnection`), `transaction` takes one
+ * connection for the store's row + companion writes, so they commit together.
+ * A single connection gets no `transaction`: other writers' statements would
+ * land inside an open one, so its companions commit one statement at a time.
+ *
  * `batch` dispatches every statement concurrently (`Promise.all`), same
  * rationale as {@link buildPgExec}'s `batch` — `Mysql2Like` only exposes a
  * single-statement `query`, so this is "spread across a pool's connections"
@@ -196,7 +256,13 @@ export const buildPgExec = (client: RowClient): SqlExec => {
 export const buildMysqlExec = (connection: Mysql2Client): SqlExec => {
     assertFoundRows(connection);
 
+    const pool = connection as Partial<MysqlPoolLike>;
+    const { getConnection } = pool;
+
     return {
+        ...(typeof getConnection === "function"
+            ? { transaction: async <T>(work: (tx: SqlExec) => Promise<T>): Promise<T> => await mysqlTransaction(pool as MysqlPoolLike, buildMysqlExec, work) }
+            : {}),
         all: async (sql, params) => {
             const [rows] = await connection.query(sql, toMysqlParams(params));
 

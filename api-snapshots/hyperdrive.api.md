@@ -59,6 +59,7 @@ interface NodePgLike {
 
 ```ts
 interface PostgresJsLike {
+    begin?(this: void, work: (tx: PostgresJsLike) => Promise<unknown>): Promise<unknown>;
     unsafe(this: void, text: string, params?: ReadonlyArray<unknown>, options?: {
         prepare?: boolean;
     }): Promise<unknown>;
@@ -89,6 +90,7 @@ interface PullSourceOptions extends ProjectOptions {
 interface SqlClient {
     readonly dbSystem?: "mysql" | "postgresql";
     query: <Row = Record<string, unknown>>(text: string, params?: ReadonlyArray<unknown>) => Promise<Row[]>;
+    transaction?: <T>(work: (tx: SqlClient) => Promise<T>) => Promise<T>;
 }
 ```
 

@@ -71,7 +71,7 @@ describe("companion rebuilds and pinned writes on D1", () => {
         await expect(second.rank(table, "by_score", { row: id })).resolves.toStrictEqual({ position: 1, total: 2 });
 
         expect(statements.filter((statement) => isRebuild(statement))).toStrictEqual([]);
-        expect(statements.filter((statement) => statement.startsWith("SELECT 1 FROM"))).toStrictEqual([]);
+        expect(statements.filter((statement) => /^SELECT \d+ AS "t" FROM/u.test(statement))).toStrictEqual([]);
     });
 
     it("single-flights concurrent first callers onto one rebuild", async () => {
@@ -103,7 +103,7 @@ describe("companion rebuilds and pinned writes on D1", () => {
         await writer.patch(table, id, { body: "b" });
         await writer.delete(table, id);
 
-        expect(statements.filter((statement) => statement.startsWith("SELECT 1 FROM"))).toStrictEqual([]);
+        expect(statements.filter((statement) => /^SELECT \d+ AS "t" FROM/u.test(statement))).toStrictEqual([]);
         await expect(writer.get(table, id)).resolves.toBeNull();
     });
 
