@@ -127,7 +127,7 @@ export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
     /** `origin` is the origin the current `/rpc` request reached the worker on — the fallback base for signed object URLs when no `publicBaseUrl` is configured. `undefined` off the synchronous dispatch path. */
     storage?: (env: Record<string, unknown>, origin?: string) => unknown;
-    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;
+    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;
     /** The `ShardRegistryDO` namespace (typically `env.SHARD_REGISTRY`). This shard registers its key for each `.shardBy()` table it writes, so cross-shard export, sync and migrations reach it. */
     shardRegistry?: (env: Record<string, unknown>) => unknown;
 }
@@ -585,7 +585,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return serveRelationFanout(schema as unknown as SchemaLike, db, functionPath, args);
         }
 
-        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<{ ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
+        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<{ identityTracked?: boolean; ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "query" || registered.visibility === "internal") {
@@ -605,7 +605,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // a deferred re-run interleaves with unrelated dispatches.
             const ranges = footprint.ranges();
 
-            return { ...(ranges === undefined ? {} : { ranges }), result, tables: footprint.tables };
+            // `identityTracked`: this ctx reports every read of its caller through
+            // `noteIdentityRead`, so the base may share the run across subscribers
+            // of a path observed never reading it.
+            return { identityTracked: true, ...(ranges === undefined ? {} : { ranges }), result, tables: footprint.tables };
         }
 
         protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
@@ -1094,7 +1097,37 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     ...(userId === undefined ? {} : { userId }),
                 };
             })();
-            const { identity, ip, userId } = caller;
+            // The ONLY way to the caller: there are deliberately no `identity` /
+            // `userId` / `ip` locals. Each reader marks this function path as
+            // reading its caller, which is what keeps a live query that reads it from
+            // sharing one run across subscribers (see `noteIdentityRead`). A consumer
+            // that copies a value at build time marks every ctx of the app; one that
+            // reads it lazily marks only the handlers that reach it.
+            //
+            // Only a registered path is marked: only one can ever be shared, and a
+            // client-chosen name (a shape, a relation fan-out) must not grow the set.
+            const identityPath = Object.hasOwn(LUNORA_FUNCTIONS, options.functionPath ?? "") ? options.functionPath : undefined;
+            const noteCallerRead = (): void => {
+                if (identityPath !== undefined) {
+                    this.noteIdentityRead(identityPath);
+                }
+            };
+            const readIdentity = (): Record<string, unknown> | undefined => {
+                noteCallerRead();
+
+                return caller.identity;
+            };
+            const readUserId = (): string | undefined => {
+                noteCallerRead();
+
+                return caller.userId;
+            };
+            const readIp = (): string | undefined => {
+                noteCallerRead();
+                options.scope?.markIpRead();
+
+                return caller.ip;
+            };
 
             const secrets = createSecrets(env);
 
@@ -1207,9 +1240,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const globalRequest = {
                 ...this.globalCdcOptions(config.cdc ?? false),
                 ...(bookmark === undefined ? {} : { bookmark }),
-                ...(identity === undefined ? {} : { identity }),
+                get identity(): Record<string, unknown> | undefined {
+                    return readIdentity();
+                },
                 onBookmark: (bookmarkValue: string | undefined) => { if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } },
-                ...(userId === undefined ? {} : { userId }),
+                get userId(): string | undefined {
+                    return readUserId();
+                },
             };
             const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;
             // `ctx.db`, wrapped in automatic instrumentation: by default this
@@ -1222,7 +1259,14 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const makeDatabaseContext = (scheduler: SchedulerLike) => {
                 const db: DatabaseWriterLike = this.instrumentDb(createShardCtxDb({
                 ...this.ctxDbTuning(),
-                auth: { identity: identity ?? null, userId: userId ?? null },
+                auth: {
+                    get identity() {
+                        return readIdentity() ?? null;
+                    },
+                    get userId() {
+                        return readUserId() ?? null;
+                    },
+                },
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
@@ -1303,16 +1347,32 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // A reactor run is driven by the writer's inline refresh, not replayed by the writer, so it must not
             // inherit the writer's key: every run would restart the same id and random sequence.
             const stableKey = options.replayKey !== false && options.identity === undefined && this.idempotencyNamespace() !== undefined ? this.getCurrentMutationId() : undefined;
-            // Both factories ignore the scope without a replay key, and most dispatches have none.
-            const stableScope = stableKey === undefined ? "" : JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", userId ?? ""]);
+            // The scope reads the caller, so a factory is only built (and the read only made) on its first draw: a
+            // query that carries a replay key but never draws must not count as reading its caller. Both factories
+            // ignore the scope without a replay key, and most dispatches have none.
+            // The request-scoped parts are captured now: instance state may belong to another request by the first draw.
+            const scopeHead = stableKey === undefined ? [] : [this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? ""];
+            let scopeText: string | undefined;
+            const stableScope = (): string => (scopeText ??= JSON.stringify([...scopeHead, readUserId() ?? ""]));
+            const scoped = <T>(create: (scope: string) => () => T): (() => T) => {
+                if (stableKey === undefined) {
+                    return create("");
+                }
+
+                let made: (() => T) | undefined;
+
+                return () => (made ??= create(stableScope()))();
+            };
             // One sequence for every mutation this run composes: their ids share one counter (the copied `newId`), so their draws must too.
             // Created on the first composed mutation that gets a ctx of its own; most dispatches compose none.
             let composedRandom: (() => number) | undefined;
 
             const ctx: Record<string, unknown> = {
                 auth: {
-                    getIdentity: async () => identity ?? null,
-                    userId: userId ?? null,
+                    getIdentity: async () => readIdentity() ?? null,
+                    get userId() {
+                        return readUserId() ?? null;
+                    },
                 },
                 db,
                 // `ctx.newId()`: a replay of the same top-level mutation gets the same ids. A nested or
@@ -1320,9 +1380,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // A replay key only means something inside the caller's dedup namespace; without one the call is not
                 // deduplicated, so its ids stay random.
                 // `ctx.random()` shares the replay key and scope, so a replay reproduces both sequences.
-                newId: createStableIdFactory(stableKey, stableScope),
-                // Only a mutation is a replay the key reproduces; a query or action carrying the header draws Math.random.
-                random: createStableRandomFactory(contextKind === "mutation" ? stableKey : undefined, stableScope),
+                // A query is never replayed, so its ids skip `scoped` (whose first draw reads the caller) and stay random.
+                newId: contextKind === "query" ? createStableIdFactory(undefined, "") : scoped((scope) => createStableIdFactory(stableKey, scope)),
+                // Only a mutation is a replay the key reproduces; a query or action carrying the header draws Math.random,
+                // and never goes through `scoped`, whose first draw reads the caller.
+                random: contextKind === "mutation" ? scoped((scope) => createStableRandomFactory(stableKey, scope)) : createStableRandomFactory(undefined, ""),
                 shardKey: this.currentShardKey(),
                 // Instrumented `fetch`: a CLIENT span per outbound call plus W3C
                 // `traceparent` propagation, so time spent in a downstream service
@@ -1339,9 +1401,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // Reading it here marks the dispatch's scope; `runCachedQuery`
                 // folds the address into the key for this function from then on.
                 get ip() {
-                    options.scope?.markIpRead();
-
-                    return ip;
+                    return readIp();
                 },
                 log,
                 metrics,
@@ -1383,7 +1443,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                             const mutationDatabase = makeDatabaseContext(mutationScheduler);
                             // The composed mutation's ids come from the action's replay key and counter, so its draws do too; a
                             // fresh factory per call would repeat the same draws across sibling mutations.
-                            const mutationRandom = (composedRandom ??= createStableRandomFactory(stableKey, stableScope));
+                            const mutationRandom = (composedRandom ??= scoped((scope) => createStableRandomFactory(stableKey, scope)));
 
                             // Copied from an action's ctx, which carries the real `fetch`; a mutation
                             // refuses network I/O wherever it runs, so its `fetch` is overridden here.
@@ -1459,7 +1519,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                         fetch: field(refuseFetch),
                         origin: field(undefined),
                         // A composed query is not a mutation replay, so it must not advance the mutation's random sequence.
-                        random: field(createStableRandomFactory(undefined, stableScope)),
+                        random: field(scoped((scope) => createStableRandomFactory(undefined, scope))),
                         scheduler: field(schedulerBase),
                         storage: field(makeStorage()),
                     }) as Record<string, unknown>;

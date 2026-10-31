@@ -168,11 +168,14 @@ describe("emitApp — reactive cache wiring", () => {
  */
 describe("emitShard — ctx.ip marks the reactive-cache read scope", () => {
     it("emits `ip` as a getter that marks the dispatch's read scope", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const emitted = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
-        expect(emitted).toContain("get ip() {\n                    options.scope?.markIpRead();");
+        expect(emitted).toContain("get ip() {\n                    return readIp();");
+        expect(emitted).toContain(
+            "const readIp = (): string | undefined => {\n                noteCallerRead();\n                options.scope?.markIpRead();",
+        );
         // The plain field is what the mark replaced; leaving one behind would
         // hand handlers an unmarked route to the same value.
         expect(emitted).not.toContain("\n                ip,\n");

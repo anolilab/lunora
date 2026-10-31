@@ -328,16 +328,28 @@ const createFlags = (definition: FlagsDefinition, env: Record<string, unknown>, 
     const { provider: providerOverride, targetingKey } = options;
     const provider = (): Provider => providerOverride?.() ?? definition.provider(env);
 
-    // Resolve the default targetingKey once. A user-supplied `identify` thunk
-    // that throws must not propagate — fail open to no targetingKey so a buggy
-    // `identify` degrades the flag read instead of failing the whole request.
+    // Resolve the default targetingKey once, on the first evaluation rather than
+    // here: the thunk may read the caller, and building `ctx.flags` for a handler
+    // that never reads a flag must not count as reading it. A user-supplied
+    // `identify` thunk that throws must not propagate — fail open to no
+    // targetingKey so a buggy `identify` degrades the flag read instead of
+    // failing the whole request.
     let resolvedTargetingKey: string | undefined;
+    let targetingKeyResolved = false;
 
-    try {
-        resolvedTargetingKey = typeof targetingKey === "function" ? targetingKey() : targetingKey;
-    } catch {
-        resolvedTargetingKey = undefined;
-    }
+    const resolveTargetingKey = (): string | undefined => {
+        if (!targetingKeyResolved) {
+            targetingKeyResolved = true;
+
+            try {
+                resolvedTargetingKey = typeof targetingKey === "function" ? targetingKey() : targetingKey;
+            } catch {
+                resolvedTargetingKey = undefined;
+            }
+        }
+
+        return resolvedTargetingKey;
+    };
 
     const memo = new Map<string, Promise<EvaluationDetails<FlagValue>>>();
 
@@ -367,7 +379,8 @@ const createFlags = (definition: FlagsDefinition, env: Record<string, unknown>, 
     };
 
     const evaluate = <T extends FlagValue>(type: FlagType, flagKey: string, defaultValue: T, context?: EvaluationContext): Promise<EvaluationDetails<T>> => {
-        const merged: EvaluationContext = resolvedTargetingKey === undefined ? { ...context } : { targetingKey: resolvedTargetingKey, ...context };
+        const defaultTargetingKey = resolveTargetingKey();
+        const merged: EvaluationContext = defaultTargetingKey === undefined ? { ...context } : { targetingKey: defaultTargetingKey, ...context };
 
         // Fail closed to the default value. The OpenFeature client itself never
         // throws, but binding the provider can (a failed `initialize`).

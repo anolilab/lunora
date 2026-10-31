@@ -1086,8 +1086,9 @@ export const whoAmI = query({ args: {}, handler: async (ctx) => ({ email: ctx.ac
 
             const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
-            expect(result.generated.shard).toContain('import { accessFacade } from "@lunora/cloudflare-access/context"');
-            expect(result.generated.shard).toContain("const access = accessFacade(identity, userId);");
+            expect(result.generated.shard).toContain('import { lazyAccessFacade } from "@lunora/cloudflare-access/context"');
+            // Lazy, so only a handler that reads ctx.access marks its live query as reading the caller.
+            expect(result.generated.shard).toContain("const access = lazyAccessFacade(readIdentity, readUserId);");
             expect(result.generated.shard).toContain("\n                access,");
             // Access rides every ctx, so it must NOT be gated behind the action-only block.
             expect(result.generated.shard).not.toContain("ctx.access = access;");
@@ -5407,7 +5408,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // The request type declares the Sessions-API bookmark pair the DO actually
             // passes, so a direct `createShardDO({ d1 })` can read them under types.
             expect(output).toContain(
-                "d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;",
+                "d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;",
             );
             expect(output).toContain("const globalDbStub: DatabaseWriterLike");
             expect(output).toContain("const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;");

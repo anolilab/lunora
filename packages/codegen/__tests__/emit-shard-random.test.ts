@@ -33,8 +33,12 @@ describe("emitShard — ctx.random", () => {
 
         const shard = emitShard({ schema: discover(PLAIN) });
 
-        expect(shard).toContain("newId: createStableIdFactory(stableKey, stableScope),");
-        expect(shard).toContain('random: createStableRandomFactory(contextKind === "mutation" ? stableKey : undefined, stableScope),');
+        expect(shard).toContain(
+            'newId: contextKind === "query" ? createStableIdFactory(undefined, "") : scoped((scope) => createStableIdFactory(stableKey, scope)),',
+        );
+        expect(shard).toContain(
+            'random: contextKind === "mutation" ? scoped((scope) => createStableRandomFactory(stableKey, scope)) : createStableRandomFactory(undefined, ""),',
+        );
         expect(shard).toContain("createStableRandomFactory, ");
     });
 
@@ -43,7 +47,7 @@ describe("emitShard — ctx.random", () => {
 
         const shard = emitShard({ schema: discover(PLAIN) });
 
-        expect(shard).toContain("random: field(createStableRandomFactory(undefined, stableScope)),");
+        expect(shard).toContain("random: field(scoped((scope) => createStableRandomFactory(undefined, scope))),");
     });
 
     it("draws every mutation an action composes from one shared sequence", () => {
@@ -53,16 +57,16 @@ describe("emitShard — ctx.random", () => {
 
         // Created once, on the first composed mutation, and reused by every later one.
         expect(shard).toContain("let composedRandom: (() => number) | undefined;");
-        expect(shard).toContain("const mutationRandom = (composedRandom ??= createStableRandomFactory(stableKey, stableScope));");
+        expect(shard).toContain("const mutationRandom = (composedRandom ??= scoped((scope) => createStableRandomFactory(stableKey, scope)));");
         expect(shard).toContain("random: { configurable: true, enumerable: true, value: mutationRandom, writable: true },");
     });
 
-    it("serialises the scope only when there is a replay key to scope", () => {
+    it("serialises the scope only when there is a replay key to scope, and reads the caller on the first draw", () => {
         expect.assertions(1);
 
         const shard = emitShard({ schema: discover(PLAIN) });
 
-        expect(shard).toContain('const stableScope = stableKey === undefined ? "" : JSON.stringify([this.currentShardKey(), ');
+        expect(shard).toContain("const scopeHead = stableKey === undefined ? [] : [this.currentShardKey(), ");
     });
 
     it("keeps a reactor run off the writer's replay key", () => {

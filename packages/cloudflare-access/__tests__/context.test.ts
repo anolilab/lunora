@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AccessContextInput, AccessFacade } from "../src/context";
-import { accessContext, accessFacade } from "../src/context";
+import { accessContext, accessFacade, lazyAccessFacade } from "../src/context";
 
 /**
  * Drive `accessContext` once: build a ctx whose `auth.getIdentity()` returns
@@ -122,5 +122,50 @@ describe("accessFacade", () => {
 
         expect(accessFacade(null, null).authenticated).toBe(false);
         expect(accessFacade(undefined, undefined).authenticated).toBe(false);
+    });
+});
+
+describe("lazyAccessFacade", () => {
+    it("reads the caller only when a field is read, then once", () => {
+        expect.assertions(5);
+
+        const readIdentity = vi.fn<() => Record<string, unknown>>(() => identity({ email: "ops@example.com", groups: ["ops"] }));
+        const readUserId = vi.fn<() => string>(() => "user-1");
+        const facade = lazyAccessFacade(readIdentity, readUserId);
+        const holder = { access: facade };
+
+        // Passing the facade around (a middleware spreading ctx) reads nothing.
+        expect(holder.access).toBe(facade);
+        expect(readIdentity).not.toHaveBeenCalled();
+
+        expect(facade.hasGroup("ops")).toBe(true);
+        expect([facade.email, facade.userId, facade.authenticated]).toStrictEqual(["ops@example.com", "user-1", true]);
+        expect([readIdentity.mock.calls.length, readUserId.mock.calls.length]).toStrictEqual([1, 1]);
+    });
+
+    it("reads the caller for every field it exposes", () => {
+        expect.assertions(1);
+
+        const reads = (["authenticated", "claims", "commonName", "email", "groups", "userId"] as const).map((field) => {
+            const readIdentity = vi.fn<() => Record<string, unknown> | undefined>(() => undefined);
+
+            Reflect.get(
+                lazyAccessFacade(readIdentity, () => undefined),
+                field,
+            );
+
+            return readIdentity.mock.calls.length;
+        });
+
+        expect(reads).toStrictEqual([1, 1, 1, 1, 1, 1]);
+    });
+
+    it("reads the caller for hasGroup on its own", () => {
+        expect.assertions(2);
+
+        const readIdentity = vi.fn<() => Record<string, unknown>>(() => identity({ groups: ["ops"] }));
+
+        expect(lazyAccessFacade(readIdentity, () => "user-1").hasGroup("ops")).toBe(true);
+        expect(readIdentity).toHaveBeenCalledTimes(1);
     });
 });

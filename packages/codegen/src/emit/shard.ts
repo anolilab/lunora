@@ -503,14 +503,14 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // field under `noImplicitAny`. The Hyperdrive thunk below stays narrow on
     // purpose — it is handed the same object and simply never reads the extras.
     const d1ConfigField = hasD1Global
-        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;`
+        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | undefined }) => DatabaseWriterLike | undefined;`
         : "";
 
     // Hyperdrive-backed `.global()` tables receive their writer via an optional
     // `hyperdriveGlobal` thunk (mirrors `d1`); the host builds it with the global
     // writer factory from `@lunora/hyperdrive/global` over a Hyperdrive driver.
     const hyperdriveGlobalConfigField = hasHyperdriveGlobal
-        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;`
+        ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; userId?: string | undefined }) => DatabaseWriterLike | undefined;`
         : "";
 
     // External-source ingest (plan 077): the host supplies one resolver that turns a
@@ -559,8 +559,17 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     const globalDatabaseField = hasGlobalTables ? "\n                globalDb," : "";
     // Resolved request auth handed to `.serverDefault(fn)` column factories so
     // server-trusted columns (owner/tenant ids) stamp from the verified caller,
-    // never the client. `userId`/`identity` are resolved above in `buildCtx`.
-    const authField = "\n                auth: { identity: identity ?? null, userId: userId ?? null },";
+    // never the client. Getters, so only a write that actually stamps such a
+    // column counts as reading the caller (see `readIdentity` in `buildCtx`).
+    const authField = `
+                auth: {
+                    get identity() {
+                        return readIdentity() ?? null;
+                    },
+                    get userId() {
+                        return readUserId() ?? null;
+                    },
+                },`;
     // `ctxDbTuning()` FIRST, so every per-request option below still wins. It
     // carries the reactive cache (row + index-range invalidation — without it a
     // write only invalidates table-wide) and the two relation knobs
@@ -640,7 +649,9 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
     // Pass the per-request identity into the \`d1\` factory so a cross-backend
     // reader it builds (reverse relations) can forward \`x-lunora-userid\` /
     // \`x-lunora-identity\` on the fan-out — each shard then applies its own
-    // identity-scoped read. \`userId\`/\`identity\` are in scope from \`buildCtx\`.
+    // identity-scoped read. Both are getters over \`buildCtx\`'s readers, so only a
+    // handler whose global access actually reaches the caller marks its path; the
+    // factory must keep them lazy too, or every live query of the app stays keyed.
     // Resolve `globalDb` from the active backend's thunk. A schema uses exactly
     // one global backend (mixed is rejected above), so this is a single writer —
     // D1 by default, or Hyperdrive when `.global({ backend: "hyperdrive" })`.
@@ -669,9 +680,13 @@ ${declaredStreams.map((stream) => `            [${JSON.stringify(stream.id)}, ()
             const globalRequest = {
                 ...this.globalCdcOptions(config.cdc ?? false),
                 ...(bookmark === undefined ? {} : { bookmark }),
-                ...(identity === undefined ? {} : { identity }),
+                get identity(): Record<string, unknown> | undefined {
+                    return readIdentity();
+                },
                 onBookmark: (bookmarkValue: string | undefined) => { if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } },
-                ...(userId === undefined ? {} : { userId }),
+                get userId(): string | undefined {
+                    return readUserId();
+                },
             };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
         : "";
 

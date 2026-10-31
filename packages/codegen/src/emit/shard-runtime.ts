@@ -776,7 +776,7 @@ const emitPaymentFragments = (
 
                     if (payments === undefined) {
                         payments = config.payment
-                            ? paymentsFromContext({ auth: { userId: userId ?? null }, db: this.db as unknown as LunoraPaymentDbLike }, config.payment(env))
+                            ? paymentsFromContext({ auth: { userId: readUserId() ?? null }, db: this.db as unknown as LunoraPaymentDbLike }, config.payment(env))
                             : paymentStub;
                         paymentsByContext.set(this, payments);
                     }

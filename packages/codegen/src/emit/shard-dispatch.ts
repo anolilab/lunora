@@ -316,7 +316,7 @@ __COMMITTED_CATCH__            } finally {
             return config.scheduler?.((this.env ?? {}) as Record<string, unknown>) as SchedulerLike | undefined;
         }`;
 
-const SUBSCRIPTION_METHODS = `        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<{ ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
+const SUBSCRIPTION_METHODS = `        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<{ identityTracked?: boolean; ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "query" || registered.visibility === "internal") {
@@ -336,7 +336,10 @@ __PREPARE_FUNCTION__            this.ensureServable();
             // a deferred re-run interleaves with unrelated dispatches.
             const ranges = footprint.ranges();
 
-            return { ...(ranges === undefined ? {} : { ranges }), result, tables: footprint.tables };
+            // \`identityTracked\`: this ctx reports every read of its caller through
+            // \`noteIdentityRead\`, so the base may share the run across subscribers
+            // of a path observed never reading it.
+            return { identityTracked: true, ...(ranges === undefined ? {} : { ranges }), result, tables: footprint.tables };
         }
 
         protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {

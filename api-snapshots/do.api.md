@@ -464,6 +464,7 @@ abstract class ShardDO {
     protected getInboundBookmark(): string | undefined;
     protected getCurrentUserId(): string | undefined;
     protected getCurrentIp(): string | undefined;
+    protected noteIdentityRead(functionPath: string): void;
     protected getCurrentOrigin(): string | undefined;
     protected getCurrentBaselineSeq(): number | undefined;
     protected recordStalePatchDropped(event: {
@@ -747,6 +748,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ```ts
 interface SubscriptionOutcome {
+    identityTracked?: boolean;
     ranges?: Map<string, KeyRange[]>;
     result: unknown;
     tables: Set<string>;

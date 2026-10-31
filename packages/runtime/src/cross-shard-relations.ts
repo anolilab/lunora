@@ -65,7 +65,8 @@ interface CrossShardRelationOptions {
      */
     fetch?: typeof globalThis.fetch;
     /** Forwarded identity claims (the `x-lunora-identity` envelope), when present. */
-    identity?: Record<string, unknown>;
+    // eslint-disable-next-line sonarjs/no-redundant-optional -- the generated app passes a getter that may yield undefined, and must compile under exactOptionalPropertyTypes
+    identity?: Record<string, unknown> | undefined;
 
     /**
      * Origin the worker is reachable at. The DO issues a loopback subrequest to
@@ -75,7 +76,8 @@ interface CrossShardRelationOptions {
      */
     origin: string;
     /** Forwarded user id (the `x-lunora-userid` header), when authenticated. */
-    userId?: string;
+    // eslint-disable-next-line sonarjs/no-redundant-optional -- see `identity`
+    userId?: string | undefined;
 }
 
 interface CrossShardRelationCapabilities {
