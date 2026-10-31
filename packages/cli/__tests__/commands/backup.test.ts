@@ -363,7 +363,7 @@ describe("lunora backup", () => {
 
         expect(result.code).toBe(0);
         expect(importCalls).toStrictEqual([]);
-        expect(result.data?.plan).toStrictEqual([{ add: 0, delete: 0, existing: 1, source: 1, table: "users", target: 1 }]);
+        expect(result.data?.plan).toStrictEqual([{ add: 0, delete: 0, existing: 1, matched: 1, source: 1, table: "users", target: 1 }]);
     });
 
     it("restore proceeds with --prod when --yes confirms", async () => {

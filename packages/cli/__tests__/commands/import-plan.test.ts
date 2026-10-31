@@ -44,11 +44,11 @@ describe(planImport, () => {
         // a is stored and repeated; b is new and repeated twice.
         const plan = await planImport(storing(["a"]), indexOf(["a", "a", "b", "b", "b"]), "upsert");
 
-        expect(plan.tables).toStrictEqual([{ add: 1, delete: 0, existing: 4, source: 5, table: "users", target: 1 }]);
+        expect(plan.tables).toStrictEqual([{ add: 1, delete: 0, existing: 4, matched: 1, source: 5, table: "users", target: 1 }]);
 
         const clean = await planImport(storing(["a"]), indexOf(["a", "b"]), "upsert");
 
-        expect(clean.tables).toStrictEqual([{ add: 1, delete: 0, existing: 1, source: 2, table: "users", target: 1 }]);
+        expect(clean.tables).toStrictEqual([{ add: 1, delete: 0, existing: 1, matched: 1, source: 2, table: "users", target: 1 }]);
     });
 
     it("asks to confirm an overwrite only when a stored row would be overwritten, not for a file that repeats its own _id", async () => {
@@ -59,6 +59,16 @@ describe(planImport, () => {
 
         expect(planDestroysRows(empty, "upsert")).toBe(false);
         expect(planDestroysRows(held, "upsert")).toBe(true);
+    });
+
+    it("asks to confirm only when a stored row is matched, not when the target holds other rows and the file repeats an _id", async () => {
+        expect.assertions(2);
+
+        const unrelated = await planImport(storing(["z"]), indexOf(["b", "b"]), "upsert");
+        const matching = await planImport(storing(["b"]), indexOf(["b", "b"]), "upsert");
+
+        expect(planDestroysRows(unrelated, "upsert")).toBe(false);
+        expect(planDestroysRows(matching, "upsert")).toBe(true);
     });
 
     it("refuses a replace for rows that carry no _id, which the import would write under new ids on every run", async () => {

@@ -217,7 +217,7 @@ describe("lunora import --mode", () => {
         expect(worker.ids("posts")).toStrictEqual(["p1"]);
         expect(result.body).toMatchObject({
             deleted: 1,
-            plan: [{ add: 1, delete: 1, existing: 1, source: 2, table: "users", target: 2 }],
+            plan: [{ add: 1, delete: 1, existing: 1, matched: 1, source: 2, table: "users", target: 2 }],
             replaced: 1,
         });
     });

@@ -93,6 +93,8 @@ interface TablePlan {
     delete: number;
     /** File rows whose `_id` the target already holds: conflicts under `append`, overwritten under `upsert`/`replace`. */
     existing: number;
+    /** Stored rows an `_id` of the file matches, which an overwrite changes. Repeats within the file are in `existing`, not here. */
+    matched: number;
     source: number;
     table: string;
     /** Rows the target holds in this table now. */
@@ -123,7 +125,7 @@ const planImport = async (target: ExportTarget, index: SourceIndex, mode: Import
     }
 
     for (const [table, entry] of index) {
-        tables.set(table, { add: entry.rows - entry.duplicates, delete: 0, existing: entry.duplicates, source: entry.rows, table, target: 0 });
+        tables.set(table, { add: entry.rows - entry.duplicates, delete: 0, existing: entry.duplicates, matched: 0, source: entry.rows, table, target: 0 });
     }
 
     const deletions: ExportedRow[] = [];
@@ -142,6 +144,7 @@ const planImport = async (target: ExportTarget, index: SourceIndex, mode: Import
 
         if (typeof id === "string" && index.get(row.table)?.ids.has(id) === true) {
             plan.existing += 1;
+            plan.matched += 1;
             plan.add -= 1;
         } else if (mode === "replace") {
             plan.delete += 1;
@@ -176,7 +179,7 @@ const reportPlan = (logger: Logger, plan: ImportPlan, mode: ImportMode): void =>
 
 /** Whether the plan overwrites or deletes a stored row, which is what a confirmation guards. */
 const planDestroysRows = (plan: ImportPlan, mode: ImportMode): boolean =>
-    overwrites(mode) && plan.tables.some((table) => (table.existing > 0 && table.target > 0) || table.delete > 0);
+    overwrites(mode) && plan.tables.some((table) => table.matched > 0 || table.delete > 0);
 
 export type { ImportMode, ImportPlan, SourceIndex, TablePlan };
 export { IMPORT_MODES, overwrites, parseImportMode, planDestroysRows, planImport, recordSourceRow, reportPlan };
