@@ -7680,6 +7680,19 @@ class LunoraClient {
             return null;
         }
 
+        // Rows with no claims stamp (`frameClaims === ""`): the server announces fingerprints to a tab that holds one,
+        // so the frame is an anomaly; verify once and never show it. A tab with none yet takes it as before.
+        if (frameClaims === "") {
+            if (this.ownClaimsValue !== undefined && !this.claimsVerifiedAgainst.has("")) {
+                this.claimsVerifiedAgainst.add("");
+                this.heldLeaderFrames.set(key, retry);
+                this.fetchOwnClaims();
+            }
+
+            // eslint-disable-next-line unicorn/no-null -- `null` is the follower hook's "no claims of my own"
+            return this.ownClaimsValue ?? null;
+        }
+
         if (this.ownClaimsValue === undefined) {
             this.heldLeaderFrames.set(key, retry);
             this.fetchOwnClaims();
@@ -7695,6 +7708,10 @@ class LunoraClient {
         }
 
         return this.ownClaimsValue;
+    }
+
+    private isFollowerTab(): boolean {
+        return this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader();
     }
 
     /** Forget this tab's own fingerprint: the credential it described may have changed. */
@@ -7719,7 +7736,7 @@ class LunoraClient {
      * were read under the claims it finds, so a plain token refresh does not leave the tab blank.
      */
     private suspendFollowerValues(): void {
-        if (this.tabCoordinator === undefined || this.tabCoordinator.isLeader()) {
+        if (!this.isFollowerTab()) {
             return;
         }
 
@@ -8480,8 +8497,9 @@ class LunoraClient {
             return false;
         }
 
-        // Read under claims this tab has since found are not its own.
-        if (entry.claims !== undefined && this.ownClaimsValue !== undefined && entry.claims !== this.ownClaimsValue) {
+        // Read under claims this tab has since found are not its own. A follower that does not know its own yet shows
+        // none: it is fed by the leader, and the entry could come back after `applyOwnClaims` dropped it.
+        if (entry.claims !== undefined && entry.claims !== this.ownClaimsValue && (this.ownClaimsValue !== undefined || this.isFollowerTab())) {
             return false;
         }
 
@@ -9257,9 +9275,14 @@ class LunoraClient {
 
             // The credential the upgrade presented: a bearer only when it rode the handshake, else the cookie.
             // Presenting the other one could resolve different claims and close a socket nothing changed on.
-            if (conn.connectionId !== undefined && conn.socket !== undefined && conn.retired !== true) {
-                // eslint-disable-next-line unicorn/no-null -- `null` is `reauthenticateShardSocket`'s "cookie alone", mirroring `authToken`'s cleared value
-                this.reauthenticateShardSocket(conn, conn.connectionId, conn.upgradeBearer ?? null);
+            // A socket admitted by a single-use `wsToken` used no cookie, and the ticket cannot be replayed: it
+            // re-auths with the bearer it was minted from, or not at all (the server then closes it at the window's
+            // end and the reconnect mints again), never as a cookie socket.
+            // eslint-disable-next-line unicorn/no-null -- `null` is `reauthenticateShardSocket`'s "cookie alone", mirroring `authToken`'s cleared value
+            const bearer = conn.upgradeBearer ?? (conn.sessionToken === undefined ? null : (this.authToken ?? undefined));
+
+            if (bearer !== undefined && conn.connectionId !== undefined && conn.socket !== undefined && conn.retired !== true) {
+                this.reauthenticateShardSocket(conn, conn.connectionId, bearer);
             }
         }, conn.revalidateMs / 2);
     }

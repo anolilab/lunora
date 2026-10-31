@@ -5,10 +5,13 @@ import type { SubscriptionError, SubscriptionState } from "./subscription";
 import { fanSubscriptionError, setSubscriptionAck } from "./subscription";
 import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition } from "./subscription-frames";
 
-/** Whether a frame stamped `claims` was read under the claims this tab holds; if not yet known, `retry` replays the frame. */
-const claimsAllow = (host: TabLeadershipHost, holdKey: string, claims: string | undefined, retry: () => void): boolean => {
+/**
+ * Whether a frame stamped `claims` was read under the claims this tab holds; if not yet known, `retry` replays the frame.
+ * An unstamped frame carrying `rows` is asked about with `""`: only a tab with no fingerprint of its own accepts it.
+ */
+const claimsAllow = (host: TabLeadershipHost, holdKey: string, claims: string | undefined, retry: () => void, rows = false): boolean => {
     if (claims === undefined) {
-        return true;
+        return !rows || host.ownClaims(holdKey, retry, "") === null;
     }
 
     const own = host.ownClaims(holdKey, retry, claims);
@@ -216,9 +219,15 @@ export const onFollowerSubscriptionData = (
     // Same user is not same claims (another scope or tenant): data read under claims this tab does not hold is not
     // shown, and nothing claims-stamped is shown until this tab knows its own. A frame with no claims is as before.
     if (
-        !claimsAllow(host, key, claims, () => {
-            onFollowerSubscriptionData(host, key, data, cursor, epoch, identity, claims);
-        })
+        !claimsAllow(
+            host,
+            key,
+            claims,
+            () => {
+                onFollowerSubscriptionData(host, key, data, cursor, epoch, identity, claims);
+            },
+            data !== undefined,
+        )
     ) {
         return;
     }

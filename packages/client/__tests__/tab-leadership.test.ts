@@ -458,11 +458,27 @@ describe("onFollowerSubscriptionData", () => {
             expect.assertions(1);
 
             const state = liveSubscription();
-            const { host } = fakeHost({ ownClaims: () => undefined, subscription: () => state });
+            const { host } = fakeHost({ ownClaims: () => null, subscription: () => state });
 
             onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a");
 
             expect(state.serverBase).toStrictEqual([{ id: "a" }]);
+        });
+
+        it("does not show rows with no claims stamp to a tab that holds a fingerprint, but still takes a blank reset", () => {
+            expect.assertions(3);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => "fp-mine", subscription: () => state });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a");
+
+            expect(state.serverBase).toBeUndefined();
+
+            onFollowerSubscriptionData(host, "s1", undefined, undefined, undefined, "subj:a");
+
+            expect(host.dropCacheSeed).toHaveBeenCalledTimes(1);
+            expect(state.valueReceived).toBe(true);
         });
 
         it("applies a claims-stamped frame to a tab that is anonymous, which has no claims to differ", () => {

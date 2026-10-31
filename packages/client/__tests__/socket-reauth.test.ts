@@ -1204,6 +1204,56 @@ describe("a follower tab and a change of its claims", () => {
         client.close();
     });
 
+    it("holds rows with no claims stamp for a tab that holds a fingerprint and asks once, but takes them when it has none", async () => {
+        expect.assertions(4);
+
+        const { claimsCalls, client, internals } = build(async () => jsonResponse({ claims: "fp-mine" }));
+        const retry = vi.fn<() => void>();
+
+        client.setAuthToken("token-1", "user-1");
+
+        // No fingerprint yet: accepted as before.
+        expect(internals.followerClaims("k", retry, "")).toBeNull();
+
+        internals.applyOwnClaims("fp-mine");
+
+        expect(internals.followerClaims("k", retry, "")).toBe("fp-mine");
+
+        await settle();
+        internals.followerClaims("k", retry, "");
+        await settle();
+
+        expect(claimsCalls()).toHaveLength(1);
+        expect(retry).toHaveBeenCalledTimes(1);
+
+        client.close();
+    });
+
+    it("seeds a follower from no claims-stamped cache entry until its own claims are known, and a lone tab as before", () => {
+        expect.assertions(3);
+
+        const entry = { claims: "fp-x", identity: "subj:user-1", ts: 0, value: ["row"] };
+        const matches = (crossTab: boolean, claims?: string): boolean => {
+            const { client, internals } = build(async () => jsonResponse({ claims: "fp-x" }), crossTab);
+
+            client.setAuthToken("token-1", "user-1");
+
+            if (claims !== undefined) {
+                internals.applyOwnClaims(claims);
+            }
+
+            const result = (client as unknown as { cachedQueryMatchesIdentity: (e: typeof entry) => boolean }).cachedQueryMatchesIdentity(entry);
+
+            client.close();
+
+            return result;
+        };
+
+        expect(matches(true)).toBe(false);
+        expect(matches(true, "fp-x")).toBe(true);
+        expect(matches(false)).toBe(true);
+    });
+
     it("takes off the views what a leader committed under claims, until the tab's own are known again", async () => {
         expect.assertions(4);
 
@@ -1267,5 +1317,65 @@ describe("a follower tab and a change of its claims", () => {
         client.close();
 
         expect(vi.getTimerCount()).toBe(0);
+    });
+});
+
+describe("re-auth of a socket admitted by a single-use ws token", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    const ticketClient = async (bearer: string | null) => {
+        const { sockets, WebSocket } = createSocketHarness();
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ ok: true }));
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 0, jitter: false, maxDelayMs: 0 },
+            url: "http://app.test",
+            WebSocket,
+            wsToken: "ticket-1",
+        });
+
+        if (bearer !== null) {
+            client.setAuthToken(bearer, "user-1");
+        }
+
+        client.subscribe(fnRef("todos.list"), {}, () => undefined);
+        await settle();
+        sockets[0]?.open();
+        sockets[0]?.receive({ connectionId: "conn-1", revalidateMs: 60_000, subject: "user-1", type: "identity" });
+        await settle();
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        const calls = fetchMock.mock.calls.filter(([input]) => (input as string).includes("/_lunora/ws/reauth"));
+
+        return { calls, client, sockets };
+    };
+
+    it("presents the bearer the ticket was minted from, and the socket stays open", async () => {
+        expect.assertions(3);
+
+        const { calls, client, sockets } = await ticketClient("bearer-1");
+
+        expect(calls).toHaveLength(1);
+        expect((calls[0]?.[1]?.headers as Record<string, string>).authorization).toBe("Bearer bearer-1");
+        expect(sockets).toHaveLength(1);
+
+        client.close();
+    });
+
+    it("sends no re-auth as a cookie socket when it holds no bearer", async () => {
+        expect.assertions(1);
+
+        const { calls, client } = await ticketClient(null);
+
+        expect(calls).toHaveLength(0);
+
+        client.close();
     });
 });
