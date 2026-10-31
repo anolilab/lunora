@@ -135,11 +135,30 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile --ignore-scripts
-      # Exit 5 is "no record": the pull request never got a preview (refused, or opened before this workflow).
-      - run: pnpm exec lunora preview delete \${{ github.event.pull_request.number }} || [ "$?" -eq 5 ]
+      # The pull request may have changed lunora.appId or the Worker name, so its previews are recorded under an identity
+      # this base checkout does not have. Its package.json and wrangler config are copied out with git and read by the CLI
+      # as data: nothing from the head is installed, built or run. The values never pass through a shell or a \${{ }} in a script.
+      - name: Copy the pull request head's project files
+        env:
+          PR_NUMBER: \${{ github.event.pull_request.number }}
+          HEAD_DIR: \${{ runner.temp }}/lunora-head
+        run: |
+          mkdir -p "$HEAD_DIR"
+          if git fetch --depth=1 origin "refs/pull/$PR_NUMBER/head"; then
+            for file in package.json wrangler.jsonc wrangler.json; do
+              git show "FETCH_HEAD:$file" > "$HEAD_DIR/$file" 2>/dev/null || rm -f "$HEAD_DIR/$file"
+            done
+          else
+            echo "could not fetch the pull request head; the preview is looked up under the base branch's identity only"
+          fi
+      # Exit 5 is "no record": the pull request never got a preview (refused, or opened before this workflow). The CLI
+      # answers it only when the head's identity is the base's, or could not be read; two different identities with no
+      # record under either fail the job.
+      - run: pnpm exec lunora preview delete \${{ github.event.pull_request.number }} --head-dir "$HEAD_DIR" || [ "$?" -eq 5 ]
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          HEAD_DIR: \${{ runner.temp }}/lunora-head
 
   # A fork's or Dependabot's pull request gets no secrets, so it runs the
   # deploy pipeline, bundle included, and publishes nothing.
@@ -418,7 +437,7 @@ describe("ci-workflow", () => {
     });
 
     it("both providers deploy an isolated preview per pull/merge request and delete it when it closes, never a version upload", () => {
-        expect.assertions(14);
+        expect.assertions(18);
 
         writeCiWorkflow(workdir, "github", "pnpm");
         writeCiWorkflow(workdir, "gitlab", "pnpm");
@@ -435,7 +454,13 @@ describe("ci-workflow", () => {
         expect(teardown).toContain("github.event.action == 'closed'");
         expect(teardown).toContain("lunora preview delete ${{ github.event.pull_request.number }}");
         // A pull request that never got a preview (refused, or opened before the workflow) has no record: not a failed cleanup.
-        expect(teardown).toContain('lunora preview delete ${{ github.event.pull_request.number }} || [ "$?" -eq 5 ]');
+        expect(teardown).toContain('lunora preview delete ${{ github.event.pull_request.number }} --head-dir "$HEAD_DIR" || [ "$?" -eq 5 ]');
+        // The head's identity is copied out with git and read as data: no step of this job installs or runs head code, and
+        // no head-controlled value is interpolated into a script.
+        expect(teardown).toContain('git show "FETCH_HEAD:$file"');
+        expect(teardown).toContain("HEAD_DIR: ${{ runner.temp }}/lunora-head");
+        expect(teardown).toContain("--ignore-scripts");
+        expect(teardown.match(/run: [^\n]*\$\{\{ github\.(?!event\.pull_request\.number)/gu) ?? []).toStrictEqual([]);
         expect(github).not.toContain("--preview");
         expect(gitlab).toContain('lunora preview deploy "$CI_MERGE_REQUEST_IID"');
         expect(gitlab).toContain("on_stop: preview_delete");

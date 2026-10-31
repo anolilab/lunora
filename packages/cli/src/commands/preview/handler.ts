@@ -104,6 +104,8 @@ interface PreviewCommandOptions {
     /** Fetch for Cloudflare's REST API. */
     fetch?: typeof globalThis.fetch;
     format?: OutputFormat;
+    /** `--head-dir`: delete also looks for the preview under the id and Worker name of the project files in this directory (a pull request's head, read as data). */
+    headDir?: string;
     healthFetch?: HealthFetch;
     healthSleep?: (ms: number) => Promise<void>;
     logger: Logger;
@@ -1419,6 +1421,67 @@ const listPreviews = async (context: PreviewContext, options: PreviewCommandOpti
     return { code: EXIT_CODE.SUCCESS, data: { previews: records.map((record) => summarize(record)) } };
 };
 
+/** A Worker name as Cloudflare allows one; read from files the pull request controls, so anything else is refused before it names a record. */
+const WORKER_NAME = /^[\dA-Za-z][\w-]{0,62}$/u;
+
+/** The id and production Worker name the project files in `directory` give a preview, read as data (nothing in them is run). */
+const readHeadIdentity = (directory: string): { error: string; identity?: never } | { error?: never; identity: { appId: string; production: string } } => {
+    const appId = readAppId(directory);
+
+    if (appId === undefined) {
+        return { error: 'its package.json has no readable "lunora.appId"' };
+    }
+
+    const wranglerPath = findWranglerFile(directory);
+    const production = wranglerPath === undefined ? undefined : readWranglerJsonc<PreviewConfig>(wranglerPath).parsed?.name;
+
+    if (typeof production !== "string" || !WORKER_NAME.test(production)) {
+        return { error: "its wrangler config has no readable, valid Worker name" };
+    }
+
+    return { identity: { appId, production } };
+};
+
+/**
+ * Delete under this checkout's identity and, when the pull request's head names another, under that too: a pull request
+ * that changed `lunora.appId` or the Worker name made its previews under the new ones, which the base checkout cannot
+ * name. Not-found is answered only when no identity could have a record; with two different identities it is a failure.
+ */
+const deleteForHead = async (context: PreviewContext, options: PreviewCommandOptions, name: string, headDirectory: string): Promise<PreviewCommandResult> => {
+    const head = readHeadIdentity(headDirectory);
+
+    if (head.error !== undefined) {
+        options.logger.warn(`the pull request head's identity could not be read (${head.error}); looking for the preview under this checkout's only`);
+
+        return deletePreview(context, options, name);
+    }
+
+    const { appId, production } = head.identity;
+
+    if (appId === context.appId && production === context.config.name) {
+        return deletePreview(context, options, name);
+    }
+
+    const results = [
+        await deletePreview(context, options, name),
+        await deletePreview({ ...context, appId, config: { ...context.config, name: production } }, options, name),
+    ];
+    const failed = results.find((result) => result.code !== EXIT_CODE.SUCCESS && result.code !== EXIT_CODE.NOT_FOUND);
+
+    if (failed !== undefined) {
+        return failed;
+    }
+
+    return (
+        results.find((result) => result.code === EXIT_CODE.SUCCESS) ??
+        fail(
+            options.logger,
+            `no preview "${name}" is on record under this checkout's project or under the pull request head's, whose id or Worker name differs; nothing was deleted`,
+            EXIT_CODE.FAILURE,
+        )
+    );
+};
+
 const runPreviewCommand = async (options: PreviewCommandOptions): Promise<PreviewCommandResult> => {
     const { logger, subcommand } = options;
 
@@ -1432,6 +1495,10 @@ const runPreviewCommand = async (options: PreviewCommandOptions): Promise<Previe
         return fail(logger, loaded.error);
     }
 
+    if (options.headDir !== undefined && subcommand !== "delete") {
+        return fail(logger, "--head-dir applies to `lunora preview delete` only");
+    }
+
     if (subcommand === "list") {
         return listPreviews(loaded.context, options);
     }
@@ -1440,7 +1507,13 @@ const runPreviewCommand = async (options: PreviewCommandOptions): Promise<Previe
         return fail(logger, `usage: lunora preview ${subcommand ?? ""} <name> — e.g. the pull request number`);
     }
 
-    return subcommand === "deploy" ? deployPreview(loaded.context, options, options.name) : deletePreview(loaded.context, options, options.name);
+    if (subcommand === "deploy") {
+        return deployPreview(loaded.context, options, options.name);
+    }
+
+    return options.headDir === undefined
+        ? deletePreview(loaded.context, options, options.name)
+        : deleteForHead(loaded.context, options, options.name, options.headDir);
 };
 
 /** `lunora preview` handler (lazy-loaded via the command's `loader`). */
@@ -1450,6 +1523,7 @@ const execute: CommandHandler<PreviewOptions> = defineHandler<PreviewOptions, Pr
         dryRun: options.dryRun === true,
         env: options.env,
         format,
+        headDir: options.headDir,
         logger,
         name: argument[1],
         secrets: options.secret ?? [],

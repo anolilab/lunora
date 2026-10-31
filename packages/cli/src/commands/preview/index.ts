@@ -39,6 +39,12 @@ const previewCommand: Command = {
             name: "env",
             type: String,
         },
+        {
+            description:
+                "delete: also look for the preview under the lunora.appId and Worker name of the package.json and wrangler config in this directory, read as data (CI passes a pull request's head files, whose identity the checkout may not share)",
+            name: "head-dir",
+            type: String,
+        },
         OUTPUT_FORMAT_OPTION,
         {
             description: "deploy: give the preview this secret, with the value of the same-named environment variable. Repeatable; nothing else is copied",
@@ -63,6 +69,7 @@ export type PreviewOptions = CreateOptions<{
     "dry-run": boolean | undefined;
     env: string | undefined;
     format: string | undefined;
+    "head-dir": string | undefined;
     secret: string[] | undefined;
     seed: boolean | undefined;
     target: string | undefined;

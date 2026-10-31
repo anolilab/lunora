@@ -207,11 +207,30 @@ ${githubSetupSteps(pm)}
       # A closed, unmerged pull request may have no merge ref left to check out;
       # the base branch names the same production Worker the record is keyed by.
 ${githubSetupSteps(pm, `\${{ github.event.pull_request.base.ref }}`, " --ignore-scripts")}
-      # Exit 5 is "no record": the pull request never got a preview (refused, or opened before this workflow).
-      - run: ${execLine(manager, ["preview", "delete", `\${{ github.event.pull_request.number }}`])} || [ "$?" -eq ${String(EXIT_CODE.NOT_FOUND)} ]
+      # The pull request may have changed lunora.appId or the Worker name, so its previews are recorded under an identity
+      # this base checkout does not have. Its package.json and wrangler config are copied out with git and read by the CLI
+      # as data: nothing from the head is installed, built or run. The values never pass through a shell or a \${{ }} in a script.
+      - name: Copy the pull request head's project files
+        env:
+          PR_NUMBER: \${{ github.event.pull_request.number }}
+          HEAD_DIR: \${{ runner.temp }}/lunora-head
+        run: |
+          mkdir -p "$HEAD_DIR"
+          if git fetch --depth=1 origin "refs/pull/$PR_NUMBER/head"; then
+            for file in package.json wrangler.jsonc wrangler.json; do
+              git show "FETCH_HEAD:$file" > "$HEAD_DIR/$file" 2>/dev/null || rm -f "$HEAD_DIR/$file"
+            done
+          else
+            echo "could not fetch the pull request head; the preview is looked up under the base branch's identity only"
+          fi
+      # Exit 5 is "no record": the pull request never got a preview (refused, or opened before this workflow). The CLI
+      # answers it only when the head's identity is the base's, or could not be read; two different identities with no
+      # record under either fail the job.
+      - run: ${execLine(manager, ["preview", "delete", `\${{ github.event.pull_request.number }}`, "--head-dir", `"$HEAD_DIR"`])} || [ "$?" -eq ${String(EXIT_CODE.NOT_FOUND)} ]
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          HEAD_DIR: \${{ runner.temp }}/lunora-head
 
   # A fork's or Dependabot's pull request gets no secrets, so it runs the
   # deploy pipeline, bundle included, and publishes nothing.

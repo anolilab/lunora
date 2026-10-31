@@ -3067,6 +3067,112 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(changes(account, "DELETE")).toHaveLength(0);
         });
 
+        describe("with --head-dir, the identity a pull request's head carries", () => {
+            const HEAD_APP_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+
+            /** A directory of the files `git show` would extract from the head: data only, never run. */
+            const headFiles = (files: Record<string, string>): string => {
+                const directory = mkdtempSync(join(tmpdir(), "lunora-cli-head-"));
+
+                for (const [file, content] of Object.entries(files)) {
+                    writeFileSync(join(directory, file), content, "utf8");
+                }
+
+                return directory;
+            };
+
+            const renamedFiles = (appId: string): Record<string, string> => {
+                return {
+                    "package.json": APP_MANIFEST.replace(APP_ID, appId),
+                    "wrangler.jsonc": PRODUCTION_WRANGLER.replace('"name": "lunora-app"', '"name": "renamed-app"'),
+                };
+            };
+
+            const deleteWithHead = async (account: ReturnType<typeof fakeAccount>, headDir: string) => {
+                const { logger, warns } = silentLogger();
+                const result = await runPreviewCommand({
+                    cwd: workdir,
+                    environment: CREDENTIALS,
+                    fetch: account.fetch,
+                    headDir,
+                    logger,
+                    name: "42",
+                    subcommand: "delete",
+                });
+
+                return { result, warns };
+            };
+
+            it("deletes a preview recorded under the head's id and Worker name, which the base checkout cannot name", async () => {
+                expect.assertions(3);
+
+                // The pull request renamed the app and gave it a new id; its previews were made under those.
+                const base = { manifest: APP_MANIFEST, wrangler: PRODUCTION_WRANGLER };
+                const head = renamedFiles(HEAD_APP_ID);
+
+                writeFileSync(join(workdir, "package.json"), head["package.json"] ?? "", "utf8");
+                writeFileSync(join(workdir, "wrangler.jsonc"), head["wrangler.jsonc"] ?? "", "utf8");
+
+                const account = await deployed();
+
+                writeFileSync(join(workdir, "package.json"), base.manifest, "utf8");
+                writeFileSync(join(workdir, "wrangler.jsonc"), base.wrangler, "utf8");
+
+                const { result } = await deleteWithHead(account, headFiles(head));
+
+                expect(result.code).toBe(0);
+                expect(account.workers.has("renamed-app-preview-42")).toBe(false);
+                expect(registryValues(account).has(`${HEAD_APP_ID}/42`)).toBe(false);
+            });
+
+            it("fails, never exits not-found, when the identities differ and neither has a record", async () => {
+                expect.assertions(2);
+
+                const { result } = await deleteWithHead(fakeAccount(), headFiles(renamedFiles(HEAD_APP_ID)));
+
+                expect(result.code).toBe(EXIT_CODE.FAILURE);
+                expect(result.error).toMatch(/nothing was deleted/u);
+            });
+
+            it("exits not-found when the head carries the base's identity and there is no record", async () => {
+                expect.assertions(1);
+
+                const { result } = await deleteWithHead(fakeAccount(), headFiles({ "package.json": APP_MANIFEST, "wrangler.jsonc": PRODUCTION_WRANGLER }));
+
+                expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
+            });
+
+            it.each([
+                ["has no files", {}],
+                ["has an app id that is not a UUID", renamedFiles("not-a-uuid")],
+                ["names a Worker that is not a valid name", { ...renamedFiles(HEAD_APP_ID), "wrangler.jsonc": '{ "name": "--evil flag" }' }],
+            ])("reads the base identity only, and says why, when the head %s", async (_label, files) => {
+                expect.assertions(2);
+
+                const { result, warns } = await deleteWithHead(fakeAccount(), headFiles(files));
+
+                expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
+                expect(warns.join("\n")).toMatch(/head/u);
+            });
+
+            it("is a delete option only", async () => {
+                expect.assertions(2);
+
+                const result = await runPreviewCommand({
+                    cwd: workdir,
+                    dryRun: true,
+                    environment: CREDENTIALS,
+                    headDir: workdir,
+                    logger: silentLogger().logger,
+                    name: "42",
+                    subcommand: "deploy",
+                });
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(result.error).toMatch(/--head-dir/u);
+            });
+        });
+
         it("refuses a record whose resource id now names an unrelated resource, and deletes nothing", async () => {
             expect.assertions(3);
 

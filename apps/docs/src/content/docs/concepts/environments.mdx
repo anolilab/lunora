@@ -130,7 +130,12 @@ lunora init my-app --ci github    # or --ci gitlab
 That scaffolds a production deploy on the default branch and a
 `lunora preview deploy <number>` on every pull or merge request. On GitHub, a
 `preview-delete` job runs `lunora preview delete <number>` when the pull request
-closes. A fork's pull or merge request, and a Dependabot pull request, gets no
+closes. It runs on the base branch, so it first copies the pull request's
+`package.json` and wrangler config out with `git` and passes them as
+`--head-dir`: the CLI reads them as data (nothing from the pull request is
+installed or run) to find a preview made under a `lunora.appId` or Worker name
+the pull request changed. If those differ from the base's and no record exists
+under either, the job fails instead of passing. A fork's pull or merge request, and a Dependabot pull request, gets no
 secrets, so it runs `lunora deploy --dry-run` instead. On GitLab, the preview is a review
 environment whose stop job deletes it when the environment stops: the source
 branch is deleted (merging with "delete source branch"), someone stops it under
