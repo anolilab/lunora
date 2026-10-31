@@ -19,8 +19,9 @@ import type {
 } from "./types";
 
 /**
- * `compileAgentWorkflow` hands the name to `defineWorkflow`, which rejects an empty one; a deferred
- * (lazy) agent module is never run by the pre-deploy check, so reject it at definition time.
+ * `compileAgentWorkflow` hands the name to `defineWorkflow`, which rejects an empty one. The pre-deploy
+ * smoke load imports a deferred (lazy) agent module but never compiles its workflow, so the check runs
+ * at definition time, where that import reaches it.
  */
 const assertValidName = (name: unknown): void => {
     if (name !== undefined && (typeof name !== "string" || name.length === 0)) {
