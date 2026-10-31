@@ -1362,7 +1362,8 @@ describe("shardDO admin introspection", () => {
             const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
             const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.dropOutboxEntry, { id: "job-live" }, ADMIN_TOKEN));
 
-            expect(response.ok).toBe(false);
+            // Not the redacted "internal error": the operator is told the entry was parked and what to do.
+            await expect(response.json()).resolves.toMatchObject({ error: { code: "SERVICE_UNAVAILABLE", message: expect.stringContaining("parked") } });
             await expect(readOutbox(shard)).resolves.toMatchObject([{ id: "job-live", parked: true }, { id: "job-parked" }]);
         });
 
