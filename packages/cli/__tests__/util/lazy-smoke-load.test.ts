@@ -526,6 +526,20 @@ describe(runLazySmokeLoad, () => {
             expect(logger.success).toHaveBeenCalledWith("0 lazy function(s) and 2 deferred module(s) evaluate cleanly");
         });
 
+        it("blocks a live-stream module loaded through import().then(), with no manifest and nothing else deferred", async () => {
+            expect.assertions(1);
+
+            rmSync(join(cwd, "lunora", "_generated", "functions.ts"));
+            writeFileSync(
+                join(cwd, "lunora", "_generated", "app.ts"),
+                'type Doc = import("./dataModel.js").Doc;\nconst live = () => import("../live.js").then((module) => module.default);\n',
+            );
+            writeFileSync(join(cwd, "lunora", "live.ts"), 'throw new Error("live broke");\n');
+            answerFromEntry();
+
+            await expect(run()).resolves.toContain("lunora/live.ts (module): live broke");
+        });
+
         it("reports function failures and deferred failures together", async () => {
             expect.assertions(1);
 

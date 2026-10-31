@@ -205,10 +205,10 @@ const JS_EXTENSION = /\.[cm]?js$/u;
 
 /**
  * A value-position `import("<specifier>")`, which is how every lazy loader the generator emits pulls a module in
- * (`await import(…)`, `() => import(…)`, an element of `Promise.all([…])`). A type-position
- * `import("./dataModel.js").Doc` is followed by a member access and never matches.
+ * (`await import(…)`, `() => import(…)`, `import(…).then(…)`, an element of `Promise.all([…])`). A type-position
+ * `import("./dataModel.js").Doc` is followed by a member access other than a promise method and never matches.
  */
-const LOADER_IMPORT = /(?:await|=>|return|[=[,])\s*import\(\s*"([^"]+)"\s*\)(?!\s*\.)/gu;
+const LOADER_IMPORT = /(?:await|=>|return|[=[,])\s*import\(\s*"([^"]+)"\s*\)(?!\s*\.(?!(?:then|catch|finally)\b))/gu;
 
 /**
  * Every other module a generated lazy loader evaluates on first use: the inbound email runtime, MCP, payment,
@@ -621,12 +621,11 @@ const runLazySmokeLoad = async (options: SmokeLoadOptions): Promise<string | und
     const hasManifest = existsSync(functionsFile) && readFileSync(functionsFile, "utf8").includes("export const loadAllFunctions");
     const schemaDirectory = resolveSchemaDirectory(cwd);
     const events = findDeferredModules(cwd, schemaDirectory);
+    const deferred = [...events, ...findLoaderImports(cwd, schemaDirectory, events)];
 
-    if (!hasManifest && events.length === 0) {
+    if (!hasManifest && deferred.length === 0) {
         return undefined;
     }
-
-    const deferred = [...events, ...findLoaderImports(cwd, schemaDirectory, events)];
 
     const target = locateSmokeEntry(options);
 
