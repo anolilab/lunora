@@ -1,3 +1,10 @@
+## @lunora/client [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.274...@lunora/client@1.0.0-alpha.275) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.265
+
 ## @lunora/client [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.273...@lunora/client@1.0.0-alpha.274) (2026-10-31)
 
 ### ⚠ BREAKING CHANGES

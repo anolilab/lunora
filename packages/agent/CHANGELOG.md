@@ -1,3 +1,14 @@
+## @lunora/agent [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.269...@lunora/agent@1.0.0-alpha.270) (2026-10-31)
+
+### Performance Improvements
+
+* **codegen:** defer queues, email agents, workflows and agents in lazy mode ([#1408](https://github.com/anolilab/lunora/issues/1408)) ([e11e8c2](https://github.com/anolilab/lunora/commit/e11e8c26302de22af4995f0905ca5648e8dc6f8e)), closes [#1166](https://github.com/anolilab/lunora/issues/1166)
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.105
+
 ## @lunora/agent [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.268...@lunora/agent@1.0.0-alpha.269) (2026-10-31)
 
 

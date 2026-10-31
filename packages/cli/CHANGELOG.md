@@ -1,3 +1,19 @@
+## @lunora/cli [1.0.0-alpha.462](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.461...@lunora/cli@1.0.0-alpha.462) (2026-10-31)
+
+### Performance Improvements
+
+* **codegen:** defer queues, email agents, workflows and agents in lazy mode ([#1408](https://github.com/anolilab/lunora/issues/1408)) ([e11e8c2](https://github.com/anolilab/lunora/commit/e11e8c26302de22af4995f0905ca5648e8dc6f8e)), closes [#1166](https://github.com/anolilab/lunora/issues/1166)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.382
+* **@lunora/config:** upgraded to 1.0.0-alpha.437
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.281
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.265
+* **@lunora/seed:** upgraded to 1.0.0-alpha.274
+* **@lunora/testing:** upgraded to 1.0.0-alpha.323
+
 ## @lunora/cli [1.0.0-alpha.461](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.460...@lunora/cli@1.0.0-alpha.461) (2026-10-31)
 
 ### ⚠ BREAKING CHANGES
