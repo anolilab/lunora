@@ -37,8 +37,12 @@ const isPrivateIpv4 = (host: string): boolean => {
 
     const [first = -1, second = -1] = octets;
 
+    // 0/8 reaches this machine (`0.0.0.0`), 100.64/10 is carrier-grade NAT (shared address space) and 198.18/15 is the benchmarking range.
     return (
+        first === 0 ||
         first === 127 ||
+        (first === 100 && second >= 64 && second <= 127) ||
+        (first === 198 && (second === 18 || second === 19)) ||
         first === 10 ||
         (first === 192 && second === 168) ||
         (first === 172 && second >= 16 && second <= 31) ||
@@ -173,7 +177,8 @@ const routeScore = (host: string, urlPath: string, route: string): number | unde
     const routeHost = slash === -1 ? route : route.slice(0, slash);
     const routePath = slash === -1 ? "" : route.slice(slash);
     const wildcard = routeHost.startsWith("*");
-    const hostMatches = wildcard ? host.endsWith(routeHost.slice(1)) || `.${host}` === routeHost.slice(1) : host === routeHost;
+    // `*.x.com` matches subdomains only, not the apex; `*x.com` (no dot) matches the apex and any host ending in it.
+    const hostMatches = wildcard ? host.endsWith(routeHost.slice(1)) : host === routeHost;
 
     if (!hostMatches || (routePath !== "" && !`${trimEnd(urlPath, "/")}/`.startsWith(routePath))) {
         return undefined;

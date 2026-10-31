@@ -217,4 +217,39 @@ describe(rowCheckTargetRefusal, () => {
         expect(rowCheckTargetRefusal(cwd, undefined, "https://example.com/prod")).toBeUndefined();
         expect(rowCheckTargetRefusal(cwd, undefined, "https://example.com/staging/api")).toContain("links it to --env staging");
     });
+
+    it.each([
+        "https://100.64.0.1",
+        "https://100.127.255.254",
+        "https://0.0.0.0",
+        "https://0.1.2.3",
+        "https://[::ffff:0:0]",
+        "https://[::ffff:100.64.0.1]",
+        "https://198.18.0.1",
+    ])("treats %s as a private address", (url) => {
+        expect.assertions(1);
+
+        expect(rowCheckTargetRefusal(cwd, undefined, url)).toContain("local or private address");
+    });
+
+    it("does not take 100.128.0.0 (outside the 100.64.0.0/10 shared range) for a private address", () => {
+        expect.assertions(1);
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://100.128.0.1")).toBeUndefined();
+    });
+
+    it("does not let a subdomain wildcard route claim the bare domain, while an exact route claims only its own host", () => {
+        expect.assertions(4);
+
+        wrangler({ env: { staging: { routes: ["staging.x.com/*"] } }, name: "app", routes: ["*.x.com/*"] });
+
+        // `*.x.com` matches subdomains only, so the apex belongs to no route of this project.
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://x.com")).toContain("not x.com");
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://api.x.com")).toBeUndefined();
+
+        wrangler({ name: "app", routes: ["api.x.com/*"] });
+
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://x.com")).toContain("not x.com");
+        expect(rowCheckTargetRefusal(cwd, undefined, "https://api.x.com")).toBeUndefined();
+    });
 });
