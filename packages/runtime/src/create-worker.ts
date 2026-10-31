@@ -3593,7 +3593,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         isAdmin: async (request) => {
             await recordAdminGrant(request);
 
-            return requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken());
+            // The ticket is for the upgrade it was minted for: on any other request a
+            // ticket lifted from a socket URL would lift the pause for that call.
+            const isUpgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
+
+            return requestIsAdmin(request) || (isUpgrade && (await checkAdminWsToken(request, effectiveAdminToken())));
         },
         instanceStub: (name) => (schedulerDO === undefined ? undefined : resolveShard(schedulerDO, name)),
         stub: cronRunStub,

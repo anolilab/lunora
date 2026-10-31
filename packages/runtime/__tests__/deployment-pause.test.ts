@@ -243,6 +243,93 @@ describe("createWorker — deployment pause", () => {
         expect(shard.calls()).toBe(1);
     });
 
+    it("keeps a newer flag read when an abandoned older one resolves late", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers({ toFake: ["clearTimeout", "setTimeout"] });
+
+        const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+
+        try {
+            let reads = 0;
+            let answerFirst: (() => void) | undefined;
+            const namespace: ShardNamespaceLike = {
+                get: () => {
+                    return {
+                        fetch: async (request: Request) => {
+                            if (request.method !== "GET") {
+                                return Response.json({ paused: true });
+                            }
+
+                            reads += 1;
+
+                            if (reads > 1) {
+                                return Response.json({ paused: true });
+                            }
+
+                            // The first read answers "running", but only after it was abandoned.
+                            await new Promise<void>((resolve) => {
+                                answerFirst = resolve;
+                            });
+
+                            return Response.json({ paused: false });
+                        },
+                    };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            };
+            const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: countingShard().namespace });
+            const abandoned = worker.fetch(rpc(), {}, fakeContext);
+
+            await vi.advanceTimersByTimeAsync(PAUSE_READ_DEADLINE_MS);
+            await abandoned;
+
+            // The failed-open window lapses; the next caller reads afresh and sees the pause.
+            now.mockReturnValue(1_000_000 + PAUSE_CACHE_MS);
+
+            const fresh = await worker.fetch(rpc(), {}, fakeContext);
+
+            expect(fresh.status).toBe(503);
+
+            // Now the abandoned read answers with its older snapshot.
+            answerFirst?.();
+            await vi.advanceTimersByTimeAsync(0);
+
+            const after = await worker.fetch(rpc(), {}, fakeContext);
+
+            expect(after.status).toBe(503);
+        } finally {
+            now.mockRestore();
+            vi.useRealTimers();
+        }
+    });
+
+    it("accepts a Studio socket ticket only on a WebSocket upgrade, not on an RPC call", async () => {
+        expect.hasAssertions();
+
+        const shard = countingShard();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: pausableScheduler().namespace, shardDO: shard.namespace });
+
+        await worker.fetch(setPaused(true), {}, fakeContext);
+
+        const minted = await worker.fetch(new Request("https://app.example/_lunora/admin/ws-token", { headers: admin, method: "POST" }), {}, fakeContext);
+        const { token } = await minted.json<{ token: string }>();
+        const refused = await worker.fetch(
+            new Request(`https://app.example/_lunora/rpc?token=${encodeURIComponent(token)}`, {
+                body: JSON.stringify({ args: {}, functionPath: "todos:list" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(refused.status).toBe(503);
+        expect(shard.calls()).toBe(0);
+    });
+
     it("reads the flag at most once per cache window", async () => {
         expect.hasAssertions();
 

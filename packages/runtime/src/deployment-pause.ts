@@ -228,6 +228,10 @@ const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause
                 if (generation === startedAt) {
                     cached = { readAt: now(), state: fallback };
                 }
+
+                // The abandoned read may still answer: with a snapshot older than any
+                // read started from here on, which it must not write over.
+                generation += 1;
             }
 
             return fallback;
