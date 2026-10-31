@@ -97,7 +97,10 @@ describe("fromPostgresJs", () => {
             return { unsafe: vi.fn<PostgresJsLike["unsafe"]>().mockResolvedValue([]) };
         });
 
-        await expect(sql.transaction?.(async () => 1)).rejects.toThrow(/no `begin`/u);
+        await expect(sql.transaction?.(async () => 1)).rejects.toMatchObject({
+            code: "GLOBAL_TRANSACTION_UNSUPPORTED",
+            message: expect.stringContaining("begin()"),
+        });
     });
 
     it("delegates to the driver's unsafe escape hatch and returns the rows", async () => {

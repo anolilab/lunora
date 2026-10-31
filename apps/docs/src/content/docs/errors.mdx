@@ -465,6 +465,12 @@ The message names each failed shard key and its error. Re-run the export once th
 
 `400` — Global table is not editable
 
+### `GLOBAL_TRANSACTION_UNSUPPORTED`
+
+`500` — Global transaction unsupported by driver
+
+A `.global()` write commits its row and companion rows in one transaction. Pass a postgres.js client that has `begin()`, or a mysql2 pool (`createPool`) rather than a single connection.
+
 ### `HTTP_STREAM_BAD_CHUNK`
 
 `502` — Malformed HTTP stream chunk

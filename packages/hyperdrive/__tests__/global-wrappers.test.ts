@@ -165,4 +165,19 @@ describe("mySQL unique indexes cover the whole value", () => {
             ),
         ).rejects.toThrow(/composite unique index/);
     });
+
+    describe("buildMysqlExec transactions", () => {
+        const flags = { config: { clientFlags: 2 } };
+
+        it("rejects a transaction on a single connection, which cannot be held apart from other writers", async () => {
+            expect.assertions(1);
+
+            const exec = buildMysqlExec(() => ({ ...flags, query: async () => [[], []] }) as never);
+
+            await expect(exec.transaction?.(async () => 1)).rejects.toMatchObject({
+                code: "GLOBAL_TRANSACTION_UNSUPPORTED",
+                message: expect.stringContaining("pool"),
+            });
+        });
+    });
 });
