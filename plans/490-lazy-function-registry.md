@@ -1,7 +1,7 @@
 # Plan 490 — Lazy function registry (Worker startup CPU scales with procedure count)
 
 **Baseline:** `947c714aa` (2026-10-13); email-guard prerequisite re-checked against `3e8806fd3` (2026-10-14)
-**Status:** PARTIAL — the lazy registry shipped opt-in (`--lazy-functions`, #1236/#1239). The pre-deploy smoke-load of §7 (error timing) is `lunora build|deploy`'s default for lazy builds. The §9 startup budget shipped as `pnpm run worker-startup:check` (#1165). Cheap levers shipped: the
+**Status:** PARTIAL — the lazy registry shipped opt-in (`--lazy-functions`, #1236/#1239). The pre-deploy smoke-load of §7 (error timing) is `lunora build|deploy`'s default for lazy builds. The §9 startup budget shipped as `pnpm run worker-startup:check` (#1165), and also builds the reference app with `--lazy-functions` against its own baseline, so a loader turned back into a static import fails CI. Cheap levers shipped: the
 `shard.ts` admin payloads parse on first use (#1175, §6 4(a)), and the generated `app.ts` loads
 `@lunora/auth` (through a generated `_generated/authModule.ts` that names the exports it uses) and
 the OpenAPI / OpenRPC / architecture documents with `import()` on the first event (§6 4(b)(c), §8;

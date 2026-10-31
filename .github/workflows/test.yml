@@ -991,7 +991,8 @@
 
     # Guards Cloudflare's 1 s startup-CPU limit (error 10021, not raisable) for a large
     # app: counts the modules a synthetic 300-procedure app evaluates at startup (static
-    # imports only) against the ceiling in `worker-startup.json`. Deterministic, so it
+    # imports only) against the ceiling in `worker-startup.json`, once eager and once with
+    # `--lazy-functions` (the only CI build of the lazy registry). Deterministic, so it
     # can gate; CPU time is printed as advisory only. See scripts/check-worker-startup.js.
     #
     # Its own job, not a `postinstall` gate: a failing postinstall turns every job red

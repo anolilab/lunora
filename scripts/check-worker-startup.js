@@ -16,6 +16,12 @@
  * reverting such a deferral, raises it. CPU time is NOT a gate: on a busy machine
  * the same build ranged from 171 ms to 418 ms between runs.
  *
+ * The same app is built twice: eager (the default) and with `--lazy-functions`, each
+ * against its own baseline (`lazy` in `worker-startup.json`). The lazy registry exists
+ * to keep function modules out of the startup graph, and only a lazy build can show a
+ * loader that became a static import again; the eager build cannot, and nothing else in
+ * CI builds lazy. A lazy graph that is not smaller than the eager one fails outright.
+ *
  * BLIND SPOT: this sees graph growth only. Module-scope CPU work that adds no modules or
  * bytes (an eager `JSON.parse` of an existing payload, an O(N) loop in generated code) passes,
  * so a green result means "the startup graph did not grow", not "startup is safe".
@@ -32,7 +38,7 @@
  *
  * Usage:
  *   pnpm run worker-startup:check     # fail when the eager graph exceeds the ceiling
- *   pnpm run worker-startup:update    # re-baseline after an intentional change
+ *   pnpm run worker-startup:update    # re-baseline both builds after an intentional change
  *   node scripts/check-worker-startup.js --no-cpu    # skip the advisory CPU runs
  *
  * PREREQUISITE: `pnpm run build:packages:prod` (same reason as the size gate).
@@ -188,25 +194,31 @@ ${tableDefinitions.join("\n")}
 };
 
 /** Build the reference app with `lunora build`; returns its output directory. */
-const build = (appDirectory) => {
+const build = (appDirectory, lazy) => {
     const cli = join(rootDir, "packages", "cli", "dist", "bin.mjs");
 
     if (!existsSync(cli)) {
         fail(`check-worker-startup: ${cli} is missing — run \`pnpm run build:packages:prod\` first.`);
     }
 
+    // The env var opts in as well as the flag, so an exported one would turn the eager build lazy.
+    const { LUNORA_LAZY_FUNCTIONS: _ignored, ...environment } = process.env;
+    // --no-smoke-load: the smoke check boots `wrangler dev` (workerd, needs loopback) to evaluate
+    // every lazy module; it does not change the graph, and its failure would read as a build failure here.
+    const mode = lazy ? ["--lazy-functions", "--no-smoke-load"] : [];
+
     try {
         // --no-strict-advisories: the synthetic procedures key rows on an argument
         // on purpose; that lint is about the app's security, not its startup.
-        execFileSync(process.execPath, [cli, "build", "--no-strict-advisories", "--format", "json", "--out-dir", "out"], {
+        execFileSync(process.execPath, [cli, "build", "--no-strict-advisories", ...mode, "--format", "json", "--out-dir", "out"], {
             cwd: appDirectory,
             encoding: "utf8",
-            env: { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" },
+            env: { ...environment, CI: "1", WRANGLER_SEND_METRICS: "false" },
             maxBuffer: 64 * 1024 * 1024,
             stdio: ["ignore", "pipe", "inherit"],
         });
     } catch {
-        fail("check-worker-startup: `lunora build` failed on the reference app (its output is above).");
+        fail(`check-worker-startup: \`lunora build${lazy ? " --lazy-functions" : ""}\` failed on the reference app (its output is above).`);
     }
 
     return join(appDirectory, "out");
@@ -298,49 +310,98 @@ const advisoryCpu = (appDirectory, runs) => {
 
 const baseline = JSON.parse(readFileSync(fixturePath, "utf8"));
 const root = mkdtempSync(join(tmpdir(), "lunora-worker-startup-"));
-const appDirectory = join(root, "app");
 
-let graph;
-let cpu;
+// Separate app directories: codegen writes `_generated/` in place, and `wrangler check startup`
+// bundles from the directory's own sources, so each build must see only its own output.
+const measure = (name, lazy) => {
+    const appDirectory = join(root, name);
+
+    materialize(appDirectory, baseline);
+
+    const graph = eagerGraph(build(appDirectory, lazy));
+
+    return { cpu: skipCpu ? undefined : advisoryCpu(appDirectory, 5), graph };
+};
+
+let eager;
+let lazy;
 
 try {
-    materialize(appDirectory, baseline);
-    const outDirectory = build(appDirectory);
-
-    graph = eagerGraph(outDirectory);
-    cpu = skipCpu ? undefined : advisoryCpu(appDirectory, 5);
+    eager = measure("eager", false);
+    lazy = measure("lazy", true);
 } finally {
     rmSync(root, { force: true, recursive: true });
 }
 
-const moduleCeiling = baseline.eagerModules + baseline.allowanceModules;
-const byteCeiling = baseline.eagerBytes + baseline.allowanceBytes;
+const builds = [
+    { label: "eager", measured: eager, reference: baseline },
+    { label: "lazy (--lazy-functions)", measured: lazy, reference: baseline.lazy ?? { eagerBytes: 0, eagerModules: 0 } },
+];
 
-process.stdout.write(
-    `worker startup (${baseline.procedures} procedures, ${baseline.tables} tables): ${graph.modules} of ${graph.total} modules / ${kib(graph.bytes)} evaluated eagerly — ` +
-        `baseline ${baseline.eagerModules} / ${kib(baseline.eagerBytes)}, ceiling ${moduleCeiling} / ${kib(byteCeiling)}\n`,
-);
-
-if (cpu) {
+for (const { label, measured, reference } of builds) {
     process.stdout.write(
-        `  advisory CPU (local, NOT a gate): median ${cpu.median.toFixed(0)} ms, min ${cpu.min.toFixed(0)}, max ${cpu.max.toFixed(0)} — Cloudflare's limit is 1000 ms of ITS cpu, at least ~1.4x slower than this.\n`,
+        `worker startup, ${label} (${baseline.procedures} procedures, ${baseline.tables} tables): ${measured.graph.modules} of ${measured.graph.total} modules / ${kib(measured.graph.bytes)} evaluated eagerly — ` +
+            `baseline ${reference.eagerModules} / ${kib(reference.eagerBytes)}, ceiling ${reference.eagerModules + baseline.allowanceModules} / ${kib(reference.eagerBytes + baseline.allowanceBytes)}\n`,
     );
+
+    if (measured.cpu) {
+        process.stdout.write(
+            `  advisory CPU (local, NOT a gate): median ${measured.cpu.median.toFixed(0)} ms, min ${measured.cpu.min.toFixed(0)}, max ${measured.cpu.max.toFixed(0)} — Cloudflare's limit is 1000 ms of ITS cpu, at least ~1.4x slower than this.\n`,
+        );
+    }
 }
 
 if (update) {
-    writeFileSync(fixturePath, `${JSON.stringify({ ...baseline, eagerBytes: graph.bytes, eagerModules: graph.modules }, undefined, 4)}\n`, "utf8");
+    writeFileSync(
+        fixturePath,
+        `${JSON.stringify(
+            {
+                ...baseline,
+                eagerBytes: eager.graph.bytes,
+                eagerModules: eager.graph.modules,
+                lazy: { eagerModules: lazy.graph.modules, eagerBytes: lazy.graph.bytes },
+            },
+            undefined,
+            4,
+        )}\n`,
+        "utf8",
+    );
     process.stdout.write("worker-startup.json updated.\n");
     process.exit(0);
 }
 
-if (graph.modules > moduleCeiling || graph.bytes > byteCeiling) {
+if (!baseline.lazy) {
+    fail("check-worker-startup: worker-startup.json has no `lazy` baseline — run `pnpm run worker-startup:update`.");
+}
+
+if (lazy.graph.modules >= eager.graph.modules || lazy.graph.bytes >= eager.graph.bytes) {
+    fail(
+        `The --lazy-functions build evaluates as much at startup as the eager one (${lazy.graph.modules} vs ${eager.graph.modules} modules,\n` +
+            `${kib(lazy.graph.bytes)} vs ${kib(eager.graph.bytes)}): the lazy registry no longer defers function modules. Check that\n` +
+            `\`_generated/functions.ts\` reaches them only through \`import()\` loaders in lazy mode.`,
+    );
+}
+
+const exceeded = builds.filter(
+    ({ measured, reference }) =>
+        measured.graph.modules > reference.eagerModules + baseline.allowanceModules || measured.graph.bytes > reference.eagerBytes + baseline.allowanceBytes,
+);
+
+if (exceeded.length > 0) {
     fail(
         `The reference Worker evaluates more at startup than its ceiling allows.\n` +
-            `  modules: ${graph.modules} (ceiling ${moduleCeiling}, baseline ${baseline.eagerModules})\n` +
-            `  bytes:   ${kib(graph.bytes)} (ceiling ${kib(byteCeiling)}, baseline ${kib(baseline.eagerBytes)})\n` +
+            exceeded
+                .map(
+                    ({ label, measured, reference }) =>
+                        `  ${label}:\n` +
+                        `    modules: ${measured.graph.modules} (ceiling ${reference.eagerModules + baseline.allowanceModules}, baseline ${reference.eagerModules})\n` +
+                        `    bytes:   ${kib(measured.graph.bytes)} (ceiling ${kib(reference.eagerBytes + baseline.allowanceBytes)}, baseline ${kib(reference.eagerBytes)})\n`,
+                )
+                .join("") +
             `Every module reachable through a static import runs when the isolate starts, and Cloudflare rejects a\n` +
             `Worker whose startup exceeds 1 s of CPU (error 10021). Find what became statically reachable (a new\n` +
-            `top-level import of a heavy package from the generated app or a shared lunora/ module), and defer it\n` +
+            `top-level import of a heavy package from the generated app or a shared lunora/ module, or in the lazy\n` +
+            `build a function module the registry imports statically instead of through its loader), and defer it\n` +
             `behind a dynamic import() if it is only needed on a request path. If the growth is intended, accept it\n` +
             `with \`pnpm run worker-startup:update\` so it is visible in review.`,
     );
