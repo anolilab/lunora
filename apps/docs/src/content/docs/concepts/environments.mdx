@@ -134,8 +134,12 @@ closes. It runs on the base branch, so it first copies the pull request's
 `package.json` and wrangler config out with `git` and passes them as
 `--head-dir`: the CLI reads them as data (nothing from the pull request is
 installed or run) to find a preview made under a `lunora.appId` or Worker name
-the pull request changed. If those differ from the base's and no record exists
-under either, the job fails instead of passing. A fork's pull or merge request, and a Dependabot pull request, gets no
+the pull request changed. If those differ from the base's, or cannot be read,
+and no record exists under the base's, the job fails instead of passing. A
+pull request that changed both identifiers more than once leaves the preview of
+an intermediate commit behind, which no later identity can name: delete it with
+`lunora preview delete <number> --head-dir <dir>`, where `<dir>` holds that
+commit's `package.json` and wrangler config. A fork's pull or merge request, and a Dependabot pull request, gets no
 secrets, so it runs `lunora deploy --dry-run` instead. On GitLab, the preview is a review
 environment whose stop job deletes it when the environment stops: the source
 branch is deleted (merging with "delete source branch"), someone stops it under

@@ -3293,13 +3293,57 @@ describe("lunora preview", { timeout: 120_000 }, () => {
                 ["has no files", {}],
                 ["has an app id that is not a UUID", renamedFiles("not-a-uuid")],
                 ["names a Worker that is not a valid name", { ...renamedFiles(HEAD_APP_ID), "wrangler.jsonc": '{ "name": "--evil flag" }' }],
-            ])("reads the base identity only, and says why, when the head %s", async (_label, files) => {
-                expect.assertions(2);
+            ])("fails, saying why, when the head %s and the base identity has no record", async (_label, files) => {
+                expect.assertions(3);
 
                 const { result, warns } = await deleteWithHead(fakeAccount(), headFiles(files));
 
-                expect(result.code).toBe(EXIT_CODE.NOT_FOUND);
+                // Not-found would let the closing job pass while a preview under the head's identity stays deployed.
+                expect(result.code).toBe(EXIT_CODE.FAILURE);
+                expect(result.error).toMatch(/pull request head's identity could not be read/u);
                 expect(warns.join("\n")).toMatch(/head/u);
+            });
+
+            it("fails, never throws, when the head's wrangler config cannot be read", async () => {
+                expect.assertions(2);
+
+                // A directory where the file belongs: it is found, and reading it throws.
+                const directory = headFiles({ "package.json": APP_MANIFEST.replace(APP_ID, HEAD_APP_ID) });
+
+                mkdirSync(join(directory, "wrangler.jsonc"));
+
+                const { result } = await deleteWithHead(fakeAccount(), directory);
+
+                expect(result.code).toBe(EXIT_CODE.FAILURE);
+                expect(result.error).toMatch(/pull request head's identity could not be read/u);
+            });
+
+            it("still deletes under the base identity when the head's cannot be read", async () => {
+                expect.assertions(2);
+
+                const account = await deployed();
+                const { result } = await deleteWithHead(account, headFiles({}));
+
+                expect(result.code).toBe(0);
+                expect(account.workers.has("lunora-app-preview-42")).toBe(false);
+            });
+
+            it("refuses to delete a resource the head's config binds in production, as the base config's would", async () => {
+                expect.assertions(3);
+
+                const account = await deployed();
+                const databaseId = recordOf(account).value.resources.find((resource) => resource.kind === "d1")?.id ?? "";
+                const head = renamedFiles(HEAD_APP_ID);
+
+                head["wrangler.jsonc"] = PRODUCTION_WRANGLER.replace('"database_id": "prod-d1-uuid"', `"database_id": "${databaseId}"`);
+
+                account.calls.length = 0;
+
+                const { result } = await deleteWithHead(account, headFiles(head));
+
+                expect(result.code).not.toBe(0);
+                expect(result.error).toMatch(/production/u);
+                expect(changes(account, "DELETE")).toHaveLength(0);
             });
 
             it("is a delete option only", async () => {

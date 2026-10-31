@@ -224,8 +224,8 @@ ${githubSetupSteps(pm, `\${{ github.event.pull_request.base.ref }}`, " --ignore-
             echo "could not fetch the pull request head; the preview is looked up under the base branch's identity only"
           fi
       # Exit 5 is "no record": the pull request never got a preview (refused, or opened before this workflow). The CLI
-      # answers it only when the head's identity is the base's, or could not be read; two different identities with no
-      # record under either fail the job.
+      # answers it only when the head's identity is the base's; a head whose identity differs, or cannot be read, with no
+      # record under the base's fails the job, since the preview may be recorded under the head's.
       - run: ${execLine(manager, ["preview", "delete", `\${{ github.event.pull_request.number }}`, "--head-dir", `"$HEAD_DIR"`])} || [ "$?" -eq ${String(EXIT_CODE.NOT_FOUND)} ]
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}

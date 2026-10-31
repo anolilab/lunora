@@ -155,6 +155,8 @@ const summarize = (record: PreviewRecord): PreviewSummary => {
 };
 
 interface PreviewContext {
+    /** A second config whose production bindings a delete also refuses to touch: the pull request head's, when it is read. */
+    alsoProduction?: PreviewConfig;
     /** `lunora.appId` from `package.json`; `undefined` until one is minted. */
     appId: string | undefined;
     /** The committed config as a whole: a `--env` preview is planned from one environment but must collide with none of it. */
@@ -1236,7 +1238,11 @@ const deleteRecorded = async (
     }
 
     // The record is account data anyone with the token can edit: it is trusted only for what a preview could own.
-    const collisions = productionCollisions(config, [record.worker, ...record.resources.flatMap((resource) => [resource.id, resource.name])]);
+    const recordedNames = [record.worker, ...record.resources.flatMap((resource) => [resource.id, resource.name])];
+    const collisions = [
+        ...productionCollisions(config, recordedNames),
+        ...(context.alsoProduction === undefined ? [] : productionCollisions(context.alsoProduction, recordedNames)),
+    ];
 
     // The id and `name` form the key the record is later deleted under, so both must be the ones read. The Worker
     // is the one `record.production` named at deploy time, which is not the current name once the app was renamed.
@@ -1435,7 +1441,9 @@ const listPreviews = async (context: PreviewContext, options: PreviewCommandOpti
 const WORKER_NAME = /^[\dA-Za-z][\w-]{0,62}$/u;
 
 /** The id and production Worker name the project files in `directory` give a preview, read as data (nothing in them is run). */
-const readHeadIdentity = (directory: string): { error: string; identity?: never } | { error?: never; identity: { appId: string; production: string } } => {
+const readHeadIdentity = (
+    directory: string,
+): { error: string; identity?: never } | { error?: never; identity: { appId: string; config: PreviewConfig; production: string } } => {
     const appId = readAppId(directory);
 
     if (appId === undefined) {
@@ -1443,13 +1451,22 @@ const readHeadIdentity = (directory: string): { error: string; identity?: never 
     }
 
     const wranglerPath = findWranglerFile(directory);
-    const production = wranglerPath === undefined ? undefined : readWranglerJsonc<PreviewConfig>(wranglerPath).parsed?.name;
+    let config: PreviewConfig | undefined;
 
-    if (typeof production !== "string" || !WORKER_NAME.test(production)) {
+    try {
+        config = wranglerPath === undefined ? undefined : readWranglerJsonc<PreviewConfig>(wranglerPath).parsed;
+    } catch {
+        // Found but not readable (a directory, a permission error): the same as no config, so the caller's fallback runs.
+        config = undefined;
+    }
+
+    const production = config?.name;
+
+    if (config === undefined || typeof production !== "string" || !WORKER_NAME.test(production)) {
         return { error: "its wrangler config has no readable, valid Worker name" };
     }
 
-    return { identity: { appId, production } };
+    return { identity: { appId, config, production } };
 };
 
 /**
@@ -1463,18 +1480,30 @@ const deleteForHead = async (context: PreviewContext, options: PreviewCommandOpt
     if (head.error !== undefined) {
         options.logger.warn(`the pull request head's identity could not be read (${head.error}); looking for the preview under this checkout's only`);
 
-        return deletePreview(context, options, name);
+        const found = await deletePreview(context, options, name);
+
+        // Fail closed: with the head's identity unknown, "not on record" cannot be confirmed, and the closing job would pass
+        // while a preview under that identity stays deployed.
+        return found.code === EXIT_CODE.NOT_FOUND
+            ? fail(
+                  options.logger,
+                  `no preview "${name}" is on record under this checkout's project, and the pull request head's identity could not be read (${head.error}), so it cannot be ruled out under that; nothing was deleted`,
+                  EXIT_CODE.FAILURE,
+              )
+            : found;
     }
 
-    const { appId, production } = head.identity;
+    const { appId, config: headConfig, production } = head.identity;
+    // Neither config may bind what the record lists: the head's production bindings are not in this checkout's.
+    const checked: PreviewContext = { ...context, alsoProduction: headConfig };
 
     if (appId === context.appId && production === context.config.name) {
-        return deletePreview(context, options, name);
+        return deletePreview(checked, options, name);
     }
 
     const results = [
-        await deletePreview(context, options, name),
-        await deletePreview({ ...context, appId, config: { ...context.config, name: production } }, options, name),
+        await deletePreview(checked, options, name),
+        await deletePreview({ ...checked, appId, config: { ...context.config, name: production } }, options, name),
     ];
     const failed = results.find((result) => result.code !== EXIT_CODE.SUCCESS && result.code !== EXIT_CODE.NOT_FOUND);
 
