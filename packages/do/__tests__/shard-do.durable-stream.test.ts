@@ -453,4 +453,41 @@ describe("shardDO durable streams", () => {
         expect(shard.starts).toBe(2);
         expect(parseFrames(bob).filter((frame) => frame.type === "chunk")).toHaveLength(1);
     });
+
+    it("never attaches a socket to a live run begun under other claims of the same user, and shares one under the same claims", async () => {
+        expect.assertions(2);
+
+        const shard = new DurableStreamShard(state, {});
+        let release = (): void => {};
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        shard.registered.set("chat:answer", async function* answer() {
+            yield "row";
+            await gate;
+        });
+
+        const attach = async (identity: Record<string, unknown>): Promise<void> => {
+            const ws = createFakeWebSocket();
+
+            shard.registerSocket(ws, { identity, subs: {}, userId: "alice" });
+            await shard.driveMessage(ws, { id: "stream_1", query: { functionPath: "chat:answer" }, type: "stream" });
+            await new Promise<void>((resolve) => {
+                setTimeout(resolve, 5);
+            });
+        };
+
+        await attach({ orgId: "org-a" });
+        // The same user after a claims change (another tenant): the live run is producing org-a's rows.
+        await attach({ orgId: "org-b" });
+
+        expect(shard.starts).toBe(2);
+
+        // The same claims again: it joins the run already producing under them.
+        await attach({ orgId: "org-b" });
+        release();
+
+        expect(shard.starts).toBe(2);
+    });
 });

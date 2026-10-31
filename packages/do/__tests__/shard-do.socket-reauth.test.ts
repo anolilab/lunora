@@ -1014,3 +1014,96 @@ describe("table-only subscriptions on a socket that carries claims", () => {
         expect(frames(ws).some((frame) => frame.type === "data")).toBe(true);
     });
 });
+
+describe("work queued for a socket that has since lapsed", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    const runRoom = (shard: ReauthShard, ws: FakeWebSocket, kind: "join" | "leave" | "message"): Promise<boolean> =>
+        (shard as unknown as { runRoomHandler: (...args: unknown[]) => Promise<boolean> }).runRoomHandler(
+            ws,
+            "room:a",
+            "rooms:handler",
+            kind,
+            {},
+            undefined,
+            undefined,
+        );
+
+    it.each(["message", "join"] as const)("does not run a room %s handler once the socket's window has passed", async (kind) => {
+        expect.assertions(3);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const shard = new ReauthShard(createState(), {});
+        const ws = createFakeWebSocket();
+        const handler = vi.spyOn(shard, "handleRpc");
+
+        shard.register(ws, {
+            connectionId: "conn-1",
+            expiresAt: NOW + HOUR,
+            identity: { role: "member" },
+            revalidateAt: NOW + 60_000,
+            subs: {},
+            userId: "user-1",
+        });
+
+        // Admitted while valid; the event sat in the room queue past the deadline.
+        vi.setSystemTime(NOW + 60_000);
+
+        await expect(runRoom(shard, ws, kind)).resolves.toBe(false);
+        expect(handler).not.toHaveBeenCalled();
+        expect(ws.closes[0]).toBe(4005);
+    });
+
+    it("still runs a leave, whose cleanup must not be skipped", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers({ now: NOW });
+
+        const shard = new ReauthShard(createState(), {});
+        const ws = createFakeWebSocket();
+        const handler = vi.spyOn(shard, "handleRpc");
+
+        shard.register(ws, {
+            connectionId: "conn-1",
+            expiresAt: NOW + HOUR,
+            identity: { role: "member" },
+            revalidateAt: NOW + 60_000,
+            subs: {},
+            userId: "user-1",
+        });
+        vi.setSystemTime(NOW + 60_000);
+        await runRoom(shard, ws, "leave");
+
+        expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends a table-only subscription persisted before the refusal no delta on a socket that carries claims", () => {
+        expect.assertions(3);
+
+        const shard = new ReauthShard(createState(), {});
+        const claimed = createFakeWebSocket();
+        const anonymous = createFakeWebSocket();
+        const named = createFakeWebSocket();
+        const subs = { "table-only": { table: "messages" } };
+
+        shard.register(claimed, { connectionId: "c1", identity: { orgId: "org-a" }, subs, userId: "user-1" });
+        shard.register(anonymous, { connectionId: "c2", subs });
+        shard.register(named, {
+            connectionId: "c3",
+            identity: { orgId: "org-a" },
+            subs: { named: { functionPath: "messages:list", table: "messages" } },
+            userId: "user-1",
+        });
+        (shard as unknown as { broadcastDelta: (delta: unknown) => void }).broadcastDelta({ key: "k", op: "insert", row: { _id: "k" }, table: "messages" });
+
+        const deltas = (ws: FakeWebSocket) => ws.sent.filter((frame) => frame.includes('"type":"delta"')).length;
+
+        // The authenticated socket gets none for the table-only sub; the anonymous one and a named sub still do.
+        expect([deltas(claimed), deltas(anonymous), deltas(named)]).toStrictEqual([0, 1, 1]);
+        expect(claimed.closes).toStrictEqual([]);
+        expect(Object.keys(claimed.attachment?.subs ?? {})).toStrictEqual(["table-only"]);
+    });
+});

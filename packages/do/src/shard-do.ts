@@ -6521,11 +6521,18 @@ abstract class ShardDO {
             // NOT `for...in`: it walks inherited enumerable keys, where
             // `Object.entries` was own-only. See the "never inherited ones" test.
             const { subs } = attachment;
+            const claimed = socketHasClaims(attachment);
 
             for (const subId of Object.keys(subs)) {
                 const query = subs[subId];
 
                 if (query === undefined || !this.matchesSubscription(query, delta)) {
+                    continue;
+                }
+
+                // A table-only subscription (no function) is refused on an authenticated socket now, but one persisted
+                // before that stays in the attachment: raw table deltas are not claim-scoped, so it is not served.
+                if (claimed && !query.functionPath) {
                     continue;
                 }
 
@@ -13548,7 +13555,9 @@ abstract class ShardDO {
         // anonymous reload starts over, which is the honest answer when nothing
         // durable identifies the caller.
         const caller = attachment.userId ?? anonymousStreamCaller(attachment, id);
-        const runKey = `${caller}\u0000${functionPath}:${stableWireKey(args)}`;
+        // The claims are part of the key: a run produced under one tenant's claims is never attached to the same user's
+        // socket after a claims change, which starts a run of its own, as a cold resume would.
+        const runKey = `${caller}\u0000${claimsFingerprint(attachment.userId, attachment.identity)}\u0000${functionPath}:${stableWireKey(args)}`;
         const cancellers = socketMap(this.streamCancellers, ws);
         const frames = streamFrames(ws, id);
 
@@ -18380,6 +18389,21 @@ abstract class ShardDO {
         if (this.deliveryAuthorization) {
             this.rejectRetainedRooms(ws);
             return false;
+        }
+
+        // The receive-time check ran when the frame arrived; the event may have waited since for its authorization or
+        // the events ahead of it. A lapsed identity runs no handler. A leave still runs: its cleanup must not be skipped.
+        if (kind !== "leave") {
+            const current = this.readAttachment(ws);
+
+            if (isIdentityExpired(current.expiresAt) || isIdentityExpired(current.revalidateAt)) {
+                // A relayed event's stand-in has no socket to close; the relay closes the real one.
+                if (typeof (ws as { close?: unknown }).close === "function") {
+                    this.dropIfLapsed(ws, current);
+                }
+
+                return false;
+            }
         }
 
         // Checked here, not at receive: a queued event runs only once the events ahead of it have settled.
