@@ -60,6 +60,13 @@ export interface TabLeadershipHost {
     isLeader: () => boolean;
     readonly leader: LeaderMirror;
 
+    /**
+     * This tab's own claims fingerprint, to compare with the one a leader stamped on data it relayed: the fingerprint
+     * once known, `null` for a tab with no credential (nothing to differ from), `undefined` while it is being fetched.
+     * In that case `retry` is called once it is known, so a held frame is applied or dropped then.
+     */
+    ownClaims: (key: string, retry: () => void) => null | string | undefined;
+
     /** Shards with a queued offline write, so their sockets open even with no subscription. */
     queuedShardKeys: () => Iterable<string | undefined>;
 
@@ -190,6 +197,18 @@ export const onFollowerSubscriptionData = (
 ): void => {
     if (isForeignStamp(identity, host.identityFingerprint())) {
         return;
+    }
+
+    // Same user is not same claims (another scope or tenant): data read under claims this tab does not hold is not
+    // shown, and nothing claims-stamped is shown until this tab knows its own. A frame with no claims is as before.
+    if (claims !== undefined) {
+        const own = host.ownClaims(key, () => {
+            onFollowerSubscriptionData(host, key, data, cursor, epoch, identity, claims);
+        });
+
+        if (own === undefined || (own !== null && own !== claims)) {
+            return;
+        }
     }
 
     const state = host.subscription(key);

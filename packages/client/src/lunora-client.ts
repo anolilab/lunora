@@ -7,7 +7,7 @@ import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../sha
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { REFRESH_BATCH_CAPABILITY } from "../../../shared/refresh-batch";
 import { onSessionChanged } from "../../../shared/session-change";
-import { IDENTITY_CHANGED_CLOSE_REASON, IDENTITY_STALE_CLOSE_CODE, SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
+import { CLAIMS_FINGERPRINT_PATH, IDENTITY_CHANGED_CLOSE_REASON, IDENTITY_STALE_CLOSE_CODE, SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import { encodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import type { AdminHost } from "./admin/host";
 import { decodeRecordArgs } from "./admin/scheduler";
@@ -705,6 +705,16 @@ class LunoraClient {
     /** Polling-fallback cadence (ms); `0` disables it. See {@link LunoraClientOptions.pollingFallback}. */
     private readonly pollingFallbackIntervalMs: number;
 
+    /** This tab's own claims fingerprint, fetched from the worker; `undefined` until known and again after any credential change. */
+    private ownClaimsValue: string | undefined;
+
+    /** Frames a follower held for want of `ownClaimsValue`, one per subscription, applied once it is known. */
+    private readonly heldLeaderFrames = new Map<string, () => void>();
+
+    private ownClaimsRequest = 0;
+
+    private ownClaimsInFlight = false;
+
     /**
      * The claims fingerprint of the socket whose `data`, `delta`, `resume` or poke frame is being applied, set only
      * for the synchronous span of that handler. A value and its cursor are stamped with it as they are committed.
@@ -1387,6 +1397,7 @@ class LunoraClient {
      * none) reconnects the sockets, cold, so the upgrade presents it.
      */
     public setAuthToken(token: string | null, subject?: string | null): void {
+        this.resetOwnClaims();
         const tokenChanged = this.authToken !== token;
         // Compare the IDENTITY (subject when supplied, else token hash), not the
         // raw token, so a same-subject refresh doesn't trip the identity-change
@@ -4254,6 +4265,7 @@ class LunoraClient {
             identityFingerprint: () => this.identityFingerprint(),
             isLeader: () => this.tabCoordinator?.isLeader() === true,
             leader: this.leader,
+            ownClaims: (key, retry) => this.followerClaims(key, retry),
             queueResubscribe: (state) => {
                 this.queueResubscribe(state);
             },
@@ -7636,6 +7648,85 @@ class LunoraClient {
         this.settleAwaitedAnswer(state, true);
     }
 
+    private followerClaims(key: string, retry: () => void): null | string | undefined {
+        // No credential, nothing to differ from: an anonymous tab and its leader read under the same (no) claims.
+        if (this.identityFingerprint() === null && !this.identityUnresolved()) {
+            // eslint-disable-next-line unicorn/no-null -- `null` is the follower hook's "no claims of my own"
+            return null;
+        }
+
+        if (this.ownClaimsValue === undefined) {
+            this.heldLeaderFrames.set(key, retry);
+            this.fetchOwnClaims();
+        }
+
+        return this.ownClaimsValue;
+    }
+
+    /** Forget this tab's own fingerprint: the credential it described may have changed. */
+    private resetOwnClaims(): void {
+        this.ownClaimsValue = undefined;
+        this.ownClaimsRequest += 1;
+    }
+
+    private fetchOwnClaims(): void {
+        const { authToken, fetchImpl } = this;
+        const request = this.ownClaimsRequest;
+
+        if (fetchImpl === undefined || this.ownClaimsInFlight) {
+            return;
+        }
+
+        this.ownClaimsInFlight = true;
+        sendControl(
+            fetchImpl,
+            joinUrl(this.url, CLAIMS_FINGERPRINT_PATH),
+            "{}",
+            authToken === null ? { "content-type": "application/json" } : { authorization: `Bearer ${authToken}`, "content-type": "application/json" },
+        )
+            .then(({ text }) => {
+                this.ownClaimsInFlight = false;
+
+                const { claims } = JSON.parse(text) as { claims?: unknown };
+
+                if (typeof claims !== "string" || request !== this.ownClaimsRequest) {
+                    return undefined;
+                }
+
+                this.ownClaimsValue = claims;
+
+                // What was committed from a leader under other claims goes, from memory and from the restored cache.
+                for (const state of this.subscriptions.all()) {
+                    if (state.serverClaims !== undefined && state.serverClaims !== claims) {
+                        state.serverBase = undefined;
+                        state.serverCursor = undefined;
+                        state.serverClaims = undefined;
+                        refoldSubscription(state, undefined);
+                    }
+                }
+
+                for (const [key, entry] of this.hydratedQueryCache) {
+                    if (entry.claims !== undefined && entry.claims !== claims) {
+                        this.hydratedQueryCache.delete(key);
+                    }
+                }
+
+                const held = [...this.heldLeaderFrames.values()];
+
+                this.heldLeaderFrames.clear();
+
+                for (const apply of held) {
+                    apply();
+                }
+
+                return undefined;
+            })
+            // Unanswered, the tab stays without claims and shows nothing claims-stamped; the next frame asks again.
+            .catch(() => {
+                this.ownClaimsInFlight = false;
+            });
+    }
+
     /** Run `apply` with the claims fingerprint of the socket that delivered the frame, for the values and cursors it commits. */
     private withFrameClaims(shardKey: string | undefined, apply: () => void): void {
         this.frameClaims = this.getConnection(shardKey)?.claims;
@@ -8753,6 +8844,7 @@ class LunoraClient {
      * the socket lets the next frame put them straight back.
      */
     private evictPreviousIdentitySession(): void {
+        this.resetOwnClaims();
         this.resetRoomSends();
 
         // Cache-seeded values go back to `hydratedQueryCache`, where the identity

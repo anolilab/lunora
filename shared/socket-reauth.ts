@@ -30,3 +30,10 @@ export const IDENTITY_STALE_CLOSE_CODE = 4005;
  * it answers the re-auth request, so the answer can reach a client that has already dropped the socket.
  */
 export const IDENTITY_CHANGED_CLOSE_REASON = "identity_changed";
+
+/**
+ * Worker route a client posts to, with its normal credential, to learn the fingerprint of its own claims: the same
+ * value the shard puts on a socket's `identity` frame for that credential. A cross-tab follower, which has no socket,
+ * uses it to tell whether a leader's data was read under claims it shares.
+ */
+export const CLAIMS_FINGERPRINT_PATH = "/_lunora/claims";

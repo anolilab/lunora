@@ -33,6 +33,7 @@ const fakeHost = (overrides: Partial<TabLeadershipHost> = {}, mirror: Partial<Le
         identityFingerprint: vi.fn<() => string | null>(() => "subj:a"),
         isLeader: vi.fn<() => boolean>(() => false),
         leader,
+        ownClaims: vi.fn<(key: string, retry: () => void) => null | string | undefined>(() => null),
         queueResubscribe: vi.fn<(state: SubscriptionState) => void>(),
         queuedShardKeys: vi.fn<() => Iterable<string | undefined>>(() => []),
         settleAwaitedAnswer: vi.fn<(state: SubscriptionState, readable: boolean) => void>(),
@@ -303,6 +304,79 @@ describe("onFollowerSubscriptionData", () => {
         onFollowerSubscriptionData(host, "s1", [{ id: "b" }], 6, "e1", "subj:a");
 
         expect(state.serverClaims).toBeUndefined();
+    });
+
+    describe("a follower's own claims", () => {
+        it("drops a leader's data read under other claims", () => {
+            expect.assertions(2);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => "fp-mine", subscription: () => state });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a", "fp-theirs");
+
+            expect(state.serverBase).toBeUndefined();
+            expect(host.dropCacheSeed).not.toHaveBeenCalled();
+        });
+
+        it("keeps sharing when the claims match", () => {
+            expect.assertions(1);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => "fp-same", subscription: () => state });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a", "fp-same");
+
+            expect(state.serverBase).toStrictEqual([{ id: "a" }]);
+        });
+
+        it("shows nothing claims-stamped until its own fingerprint is known, then applies the held frame", () => {
+            expect.assertions(3);
+
+            const state = liveSubscription();
+            let own: string | undefined;
+            const retries: (() => void)[] = [];
+            const { host } = fakeHost({
+                ownClaims: (_key, retry) => {
+                    retries.push(retry);
+
+                    return own;
+                },
+                subscription: () => state,
+            });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a", "fp-leader");
+
+            expect(state.serverBase).toBeUndefined();
+
+            own = "fp-leader";
+            retries[0]?.();
+
+            expect(retries).toHaveLength(2);
+            expect(state.serverBase).toStrictEqual([{ id: "a" }]);
+        });
+
+        it("keeps today's behaviour for a frame that carries no claims", () => {
+            expect.assertions(1);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => undefined, subscription: () => state });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a");
+
+            expect(state.serverBase).toStrictEqual([{ id: "a" }]);
+        });
+
+        it("applies a claims-stamped frame to a tab that is anonymous, which has no claims to differ", () => {
+            expect.assertions(1);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ ownClaims: () => null, subscription: () => state });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a", "fp-leader");
+
+            expect(state.serverBase).toStrictEqual([{ id: "a" }]);
+        });
     });
 
     it("counts the leader's first value as the answer even over a hydrated cache, and only the first", () => {

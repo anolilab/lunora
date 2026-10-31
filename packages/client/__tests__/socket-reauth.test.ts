@@ -1009,3 +1009,43 @@ describe("claims change and follower tabs", () => {
         client.close();
     });
 });
+
+describe("a follower tab's own claims fingerprint", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("is fetched with the tab's own credential, held frames wait for it, and a credential change asks again", async () => {
+        expect.assertions(5);
+
+        const { WebSocket } = createSocketHarness();
+        const fetchMock = vi.fn<typeof fetch>(async (input) =>
+            (input as string).includes("/_lunora/claims") ? jsonResponse({ claims: "fp-mine" }) : jsonResponse({ result: { ok: true } }),
+        );
+        const client = new LunoraClient({ authTokenOnUpgrade: true, fetch: fetchMock, heartbeatIntervalMs: 0, url: "http://app.test", WebSocket });
+        const follower = client as unknown as { followerClaims: (key: string, retry: () => void) => null | string | undefined };
+        const retry = vi.fn<() => void>();
+        const claimsCalls = () => fetchMock.mock.calls.filter(([input]) => (input as string).includes("/_lunora/claims"));
+
+        client.setAuthToken("token-1", "user-1");
+
+        expect(follower.followerClaims("k", retry)).toBeUndefined();
+
+        await settle();
+
+        expect((claimsCalls()[0]?.[1]?.headers as Record<string, string> | undefined)?.authorization).toBe("Bearer token-1");
+        expect(retry).toHaveBeenCalledTimes(1);
+        expect(follower.followerClaims("k", retry)).toBe("fp-mine");
+
+        // A new credential may carry other claims, so the tab asks again.
+        client.setAuthToken("token-2", "user-1");
+
+        expect(follower.followerClaims("k", retry)).toBeUndefined();
+
+        client.close();
+    });
+});
