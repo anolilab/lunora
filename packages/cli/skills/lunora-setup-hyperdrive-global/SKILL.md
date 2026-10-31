@@ -141,10 +141,11 @@ import { buildMysqlExec } from "@lunora/hyperdrive/global";
 ```
 
 Each write commits its row and its aggregate, rank and CDC companion rows in one
-transaction when the driver can hold one connection for it: postgres.js
-(`fromPostgresJs`, through `sql.begin`) and a mysql2 **pool** (`getConnection`).
-`fromNodePg` and a single mysql2 connection have no such handle, so there the
-companions commit one statement at a time after the row. Every query and write
+transaction. postgres.js (`fromPostgresJs`, through `sql.begin`) and a mysql2 **pool**
+(`getConnection`) can hold that transaction. A postgres.js client without `begin` and a
+single mysql2 connection cannot, so a write to a table with companions fails there with
+`GLOBAL_TRANSACTION_UNSUPPORTED` before it writes anything. `fromNodePg` has no such
+handle, so its companions commit one statement at a time after the row. Every query and write
 statement, and each write's transaction as a whole, is abandoned after 30 seconds
 with a retryable `SERVICE_UNAVAILABLE` (`createHyperdriveGlobalCtxDb` takes a
 `queryTimeoutMs` to change it; `0` disables it). Table, aggregate, rank and CDC

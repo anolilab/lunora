@@ -103,8 +103,9 @@ export interface SqlClient {
      * transaction: committed when `work` resolves, rolled back when it throws.
      * {@link import("./create-hyperdrive").fromPostgresJs | fromPostgresJs} provides it over postgres.js's `begin`;
      * `@lunora/hyperdrive/global`'s `buildPgExec` uses it so a `.global()` row
-     * write and its aggregate/rank/CDC companions commit together. Absent, they
-     * commit one statement at a time.
+     * write and its aggregate/rank/CDC companions commit together. `fromPostgresJs`
+     * always exposes it and rejects with `GLOBAL_TRANSACTION_UNSUPPORTED` when the loaded client has no `begin`.
+     * Absent (`fromNodePg`), the companions commit one statement at a time.
      */
     transaction?: <T>(work: (tx: SqlClient) => Promise<T>) => Promise<T>;
 }
