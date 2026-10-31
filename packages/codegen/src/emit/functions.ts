@@ -233,9 +233,13 @@ const renderFunctionRegistry = (
     const mutatorPaths = mutators.map((mutator) => `${sanitizeNamespace(mutator.filePath)}:${mutator.exportName}`);
 
     // The queries codegen found (failing closed) reading `ctx.ip`, which the shard never resumes warm.
-    const ipReaderPaths = functions
-        .filter((definition) => definition.readsIp === true)
-        .map((definition) => `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`);
+    // A shape's bare export name rides in the same set (no query path lacks its `:`), since a shape resumes by that name.
+    const ipReaderPaths = [
+        ...functions
+            .filter((definition) => definition.readsIp === true)
+            .map((definition) => `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`),
+        ...shapes.filter((shape) => shape.readsIp === true).map((shape) => shape.exportName),
+    ];
 
     // Splice mutator entries onto the function dispatch body (both already sorted
     // by `${filePath}:${exportName}`); `filter` keeps the joiner clean when either side is empty.
@@ -683,7 +687,7 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
 
     const ipReadersRegistry =
         ipReaderPaths.length > 0
-            ? `\n/**\n * Queries that may read \`ctx.ip\`, decided statically (failing closed). The generated ShardDO marks them\n * address-keyed from its first run, so it never resumes one warm: its rows can depend on the address the cursor\n * was read at, which a claims fingerprint leaves out.\n */\nexport const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set([${ipReaderPaths.map((path) => JSON.stringify(path)).join(", ")}]);\n`
+            ? `\n/**\n * Queries and shapes that may read \`ctx.ip\`, decided statically (failing closed). The generated ShardDO marks them\n * address-keyed from its first run, so it never resumes one warm: its rows can depend on the address the cursor\n * was read at, which a claims fingerprint leaves out.\n */\nexport const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set([${ipReaderPaths.map((path) => JSON.stringify(path)).join(", ")}]);\n`
             : "";
 
     const roomsRegistry = renderRoomRegistry(hasRooms, lazyFunctions, functions);

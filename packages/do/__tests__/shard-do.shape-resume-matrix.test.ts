@@ -145,12 +145,15 @@ class MatrixShapeShard extends ShardDO {
 type HarnessLike = ReturnType<typeof createSqliteExec>;
 
 interface MatrixRow {
+    /** The shape is a registered address reader (`LUNORA_IP_READER_PATHS`), so it is never resumed warm. */
+    addressReader?: true;
     /** Whether `runShardMigrations` is called with `{ cdc: true }` for this case. */
     cdcMigrate: boolean;
     /** Expected number of row-ops in `pokePart` frames (diff length or full-seed length). */
     expectedOpsLen: number;
     /** Whether the subscribe should trigger the resume (diff) path. */
     expectResume: boolean;
+
     /** Human-readable label used as the test description. */
     label: string;
 
@@ -160,7 +163,6 @@ interface MatrixRow {
      * CDC-disabled case where no `__cdc_log` table exists).
      */
     setup: (harness: HarnessLike) => Promise<void>;
-
     /** `sinceClaims` placed in the envelope beside a checkpoint; defaults to the socket's own claims (the resume is under the claims it was read under). `null` omits it. */
     sinceClaims?: null | string;
 
@@ -215,6 +217,21 @@ const matrix: MatrixRow[] = [
         sinceEpochFn: (sql) => readCdcEpoch(sql),
         expectResume: false,
         expectedOpsLen: 2, // the full membership, not the diff
+    },
+    {
+        label: "1d — a shape registered as an address reader is never resumed, whatever fingerprint is presented → full reseed",
+        addressReader: true,
+        cdcMigrate: true,
+        setup: async (harness) => {
+            const writer = makeWriter(harness.sql);
+
+            await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "alpha" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m2", authorId: "u1", channelId: "c1", text: "beta" }, { allowExplicitId: true });
+        },
+        sinceSeq: 1,
+        sinceEpochFn: (sql) => readCdcEpoch(sql),
+        expectResume: false,
+        expectedOpsLen: 2,
     },
     {
         label: "1c — no claims fingerprint (an older client) → full reseed",
@@ -326,7 +343,7 @@ const matrix: MatrixRow[] = [
 // ---------------------------------------------------------------------------
 
 describe("seedOpLogShape resume-vs-reseed decision matrix", () => {
-    it.each(matrix)("$label", async ({ cdcMigrate, expectedOpsLen, expectResume, setup, sinceClaims, sinceEpochFn, sinceSeq }) => {
+    it.each(matrix)("$label", async ({ addressReader, cdcMigrate, expectedOpsLen, expectResume, setup, sinceClaims, sinceEpochFn, sinceSeq }) => {
         expect.assertions(4);
 
         // Each case gets its own in-memory SQLite database so there is no state bleed.
@@ -350,6 +367,11 @@ describe("seedOpLogShape resume-vs-reseed decision matrix", () => {
                 storage: { sql: testHarness.sql as unknown as ShardDOState["storage"]["sql"] },
             };
             const shard = new MatrixShapeShard(state, {});
+
+            if (addressReader) {
+                (shard as unknown as { ipKeyedFunctionPaths: Set<string> }).ipKeyedFunctionPaths.add("messagesByChannel");
+            }
+
             const ws = createFakeSocket();
             sockets.push(ws);
 

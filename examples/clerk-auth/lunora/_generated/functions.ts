@@ -78,7 +78,7 @@ return { "text": source["text"] };
 });
 
 /**
- * Queries that may read `ctx.ip`, decided statically (failing closed). The generated ShardDO marks them
+ * Queries and shapes that may read `ctx.ip`, decided statically (failing closed). The generated ShardDO marks them
  * address-keyed from its first run, so it never resumes one warm: its rows can depend on the address the cursor
  * was read at, which a claims fingerprint leaves out.
  */

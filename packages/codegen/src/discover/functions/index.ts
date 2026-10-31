@@ -11,6 +11,7 @@ import { collectErasures, reportErasures } from "../erased-returns";
 import mayReadIp from "../ip-reads";
 import type { LifecycleMoment, ProcedureClassification } from "./classify-procedure-call";
 import { classifyProcedureCall } from "./classify-procedure-call";
+import { procedureHandler } from "./handler";
 import { argsFromBuilderChain, outputFromBuilderChain, returnTypeFromBuilderCall, returnTypeFromCall } from "./internal/builder-chain";
 import { argsFromCall, exposeFromBuilderChain, x402FromBuilderChain } from "./internal/expose";
 import lazyMetadataFromBuilderChain from "./internal/lazy-metadata";
@@ -258,8 +259,8 @@ const functionIrFromCall = (
         ...(discovered.output ? { output: discovered.output } : {}),
         visibility: discovered.visibility,
         ...(discovered.adminOnly ? { adminOnly: true as const } : {}),
-        // Only a query is ever resumed, so only a query needs the mark.
-        ...(discovered.kind === "query" && mayReadIp(call) ? { readsIp: true as const } : {}),
+        // Only a query is ever resumed, so only a query needs the mark. A handler passed by reference is a body the scan never sees.
+        ...(discovered.kind === "query" && (procedureHandler(call) === undefined || mayReadIp(call)) ? { readsIp: true as const } : {}),
         ...(discovered.expose ? { expose: discovered.expose } : {}),
         ...(discovered.x402 ? { x402: discovered.x402 } : {}),
         ...(discovered.lifecycle ? { lifecycle: discovered.lifecycle } : {}),

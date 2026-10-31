@@ -126,6 +126,12 @@ export interface ShapeIR {
     filePath: string;
 
     /**
+     * The shape's `where` may read `ctx.ip`, decided statically and failing closed (same rule as {@link FunctionIR.readsIp}),
+     * so the shard never resumes it warm.
+     */
+    readsIp?: true;
+
+    /**
      * The `table` string literal from the `defineShape({ table })` call, lifted
      * only for static advisor lints (the runtime object stays authoritative).
      * `undefined` when `table` is not a plain string literal — lints skip those.

@@ -966,6 +966,7 @@ interface ShapeIR {
     args: Record<string, ValidatorIR>;
     exportName: string;
     filePath: string;
+    readsIp?: true;
     table?: string;
 }
 ```

@@ -83,6 +83,17 @@ describe("discoverFunctions — queries that may read ctx.ip", () => {
         expect(readsIpFor("return ctx.db.query('messages').collect();")).toBeUndefined();
     });
 
+    it("emits the marked shapes in the same registry", () => {
+        expect.assertions(1);
+
+        const emitted = emitFunctions({
+            functions: [],
+            shapes: [{ args: {}, exportName: "geoRoom", filePath: "shapes", readsIp: true }],
+        });
+
+        expect(emitted).toMatch(/LUNORA_IP_READER_PATHS[^\n]*new Set\(\["geoRoom"\]\)/u);
+    });
+
     it("emits the marked queries as a registry the shard seeds its address-keyed set from", () => {
         expect.assertions(2);
 
