@@ -2,6 +2,7 @@ import type { CallExpression, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { isContextIdentifier } from "./context-root";
+import { procedureHandler } from "./functions/handler";
 
 /**
  * Names of the framework middleware that can key on the caller's address (a limiter), so they are not assumed
@@ -48,6 +49,12 @@ const isAddressFreeMiddleware = (argument: TsNode | undefined): boolean => {
 /** Whether `node` is a builder `.use(middleware)` call. */
 const isUseCall = (node: TsNode): node is CallExpression => {
     const callee = Node.isCallExpression(node) ? node.getExpression() : undefined;
+
+    if (Node.isElementAccessExpression(callee)) {
+        const key = callee.getArgumentExpression();
+
+        return (Node.isStringLiteral(key) || Node.isNoSubstitutionTemplateLiteral(key)) && key.getLiteralText() === "use";
+    }
 
     return Node.isPropertyAccessExpression(callee) && callee.getName() === "use";
 };
@@ -99,6 +106,11 @@ const namesIp = (node: TsNode): boolean => {
  * @returns whether the registration may read the caller's address
  */
 const mayReadIp = (registration: CallExpression): boolean => {
+    // A handler passed by reference is a body this file does not show.
+    if (procedureHandler(registration) === undefined) {
+        return true;
+    }
+
     for (const node of registration.getDescendants()) {
         if (namesIp(node)) {
             return true;

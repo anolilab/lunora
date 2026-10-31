@@ -2,10 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Project } from "ts-morph";
+import { Project, SyntaxKind } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import discoverFunctions from "../../src/discover/functions";
+import mayReadIp from "../../src/discover/ip-reads";
 import { emitFunctions } from "../../src/emit";
 
 /**
@@ -49,6 +50,31 @@ describe("discoverFunctions — queries that may read ctx.ip", () => {
         expect.assertions(1);
 
         expect(readsIpFor(body, "declare const helper: (ctx: unknown) => unknown;\ndeclare const other: any;")).toBe(true);
+    });
+
+    it("marks a handler passed by reference, whose body this file does not show", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "feed.ts"),
+            `import { query } from "@lunora/server";\nconst handler = async (ctx: any) => ctx.ip;\nexport const list = query({ args: {}, handler });\n`,
+        );
+
+        const [entry] = discoverFunctions(new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false }), workdir);
+
+        expect(entry?.readsIp).toBe(true);
+    });
+
+    it("marks a middleware added through bracket access", () => {
+        expect.assertions(1);
+
+        const source = new Project({ useInMemoryFileSystem: true }).createSourceFile(
+            "feed.ts",
+            `declare const query: any;\ndeclare const byAddress: any;\nexport const list = query["use"](byAddress).query(async (ctx: any) => ctx.db);\n`,
+        );
+        const call = source.getVariableDeclarationOrThrow("list").getInitializerIfKindOrThrow(SyntaxKind.CallExpression);
+
+        expect(mayReadIp(call)).toBe(true);
     });
 
     it("leaves a query that only reads its database unmarked", () => {
