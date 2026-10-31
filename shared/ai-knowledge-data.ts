@@ -45,7 +45,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Retention & scale",
         ],
         id: "cloud/monitoring",
-        summary: "The Lunora cloud is a managed OpenTelemetry backend + control plane — deploy to it and your traces, logs, metrics, and AI generations flow i",
+        summary: "The Lunora cloud is a managed OpenTelemetry backend + control plane — deploy to it and your traces, logs, metrics, and AI generations flow…",
         title: "Monitoring",
     },
     {
@@ -92,7 +92,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Avatar and logo uploads",
         ],
         id: "concepts/auth-ui",
-        summary: "Copy-in sign-in, settings, and organization screens for React, Vue, Svelte, Solid, and Angular — the code lands in your project and you own ",
+        summary: "Copy-in sign-in, settings, and organization screens for React, Vue, Svelte, Solid, and Angular — the code lands in your project and you…",
         title: "Auth UI",
     },
     {
@@ -150,7 +150,7 @@ export const DOC_TOPICS: ReadonlyArray<{
     {
         headings: ["Declaring it", "What _commitSeq guarantees", "Refreshed on every write", "Three things it is not", "When to reach for it"],
         id: "concepts/commit-ordering",
-        summary: "Declare .commitOrdered() so every row carries _commitSeq — a per-shard sequence that orders commits, and the cursor a changefeed can page on",
+        summary: "Declare .commitOrdered() so every row carries _commitSeq — a per-shard sequence that orders commits, and the cursor a changefeed can page…",
         title: "Commit ordering",
     },
     {
@@ -243,7 +243,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Who changed what",
         ],
         id: "concepts/environments",
-        summary: "Running staging next to production, deploying an isolated environment, checking pull requests with a dry run, an isolated preview per pull r",
+        summary: "Running staging next to production, deploying an isolated environment, checking pull requests with a dry run, an isolated preview per pull…",
         title: "Environments & releases",
     },
     {
@@ -269,7 +269,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Privacy",
         ],
         id: "concepts/error-tracking",
-        summary: "Send Lunora's failed calls and error logs to Sentry, PostHog, Datadog, or any error tracker, with the thrown error's real stack and nothing ",
+        summary: "Send Lunora's failed calls and error logs to Sentry, PostHog, Datadog, or any error tracker, with the thrown error's real stack and…",
         title: "Error tracking",
     },
     {
@@ -284,7 +284,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Walkthrough: Clerk",
         ],
         id: "concepts/external-auth",
-        summary: "Use Clerk, WorkOS AuthKit, Auth0, Supabase or any OIDC JWT issuer as your identity provider — verify its token at the Worker and feed ctx.au",
+        summary: "Use Clerk, WorkOS AuthKit, Auth0, Supabase or any OIDC JWT issuer as your identity provider — verify its token at the Worker and feed…",
         title: "External auth",
     },
     {
@@ -406,7 +406,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Choosing between .memory() and .ttl()",
         ],
         id: "concepts/memory-tables",
-        summary: "Declare .memory() for state the shard rebuilds rather than remembers — presence, cursors, live counters — and onShardInit to bring it back a",
+        summary: "Declare .memory() for state the shard rebuilds rather than remembers — presence, cursors, live counters — and onShardInit to bring it back…",
         title: "Memory tables",
     },
     {
@@ -442,13 +442,13 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Calling the backend from a sibling Worker",
         ],
         id: "concepts/monorepos-and-iac",
-        summary: "Running the Lunora worker as one node in a larger dev graph, deploying it from Terraform/Pulumi/Alchemy, and consuming its generated API fro",
+        summary: "Running the Lunora worker as one node in a larger dev graph, deploying it from Terraform/Pulumi/Alchemy, and consuming its generated API…",
         title: "Monorepos and external IaC",
     },
     {
         headings: ["The output is pinned to your CLI version", "Wiring it into your project", "What you get, and what you don't", "Conformance"],
         id: "concepts/non-js-sdks",
-        summary: "Generate a typed, self-contained Lunora client for Python, Go, Ruby, Rust, Swift, Java, Kotlin or Dart/Flutter — vendored into your project ",
+        summary: "Generate a typed, self-contained Lunora client for Python, Go, Ruby, Rust, Swift, Java, Kotlin or Dart/Flutter — vendored into your…",
         title: "Non-JS SDKs",
     },
     {
@@ -460,7 +460,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Queue-backed fan-out",
         ],
         id: "concepts/notifications",
-        summary: "Configure defineNotify in lunora/notify.ts for Web Push + FCM, register browser subscriptions, and send via ctx.notify / ctx.push from an ac",
+        summary: "Configure defineNotify in lunora/notify.ts for Web Push + FCM, register browser subscriptions, and send via ctx.notify / ctx.push from an…",
         title: "Push notifications",
     },
     {
@@ -475,7 +475,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Container telemetry",
         ],
         id: "concepts/observability",
-        summary: "Ship Lunora's logs, traces, and metrics to any OTLP collector — the otlpSink worker option, ctx.log/ctx.trace/ctx.metrics, the zero-config c",
+        summary: "Ship Lunora's logs, traces, and metrics to any OTLP collector — the otlpSink worker option, ctx.log/ctx.trace/ctx.metrics, the zero-config…",
         title: "Observability",
     },
     {
@@ -488,7 +488,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             ".global() tables",
         ],
         id: "concepts/occ",
-        summary: "Why mutations in one shard are serialized rather than retried, where optimistic-concurrency conflicts still arise, and what atomicity means ",
+        summary: "Why mutations in one shard are serialized rather than retried, where optimistic-concurrency conflicts still arise, and what atomicity…",
         title: "OCC & atomicity",
     },
     {
@@ -535,7 +535,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Watching them work",
         ],
         id: "concepts/reactors",
-        summary: "Declare onQueryChange to run server logic when a query's result changes — the actor pattern, with no client on the other end and nothing pol",
+        summary: "Declare onQueryChange to run server logic when a query's result changes — the actor pattern, with no client on the other end and nothing…",
         title: "Reactors (server-side reactivity)",
     },
     {
@@ -576,7 +576,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "From an AI agent",
         ],
         id: "concepts/relation-graph",
-        summary: "Traverse the foreign-key graph your schema already declares with ctx.db.related — depth-bounded, cycle-safe, scored by proximity, and fusabl",
+        summary: "Traverse the foreign-key graph your schema already declares with ctx.db.related — depth-bounded, cycle-safe, scored by proximity, and…",
         title: "Relation graph",
     },
     {
@@ -589,13 +589,13 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Relations vs the relation graph",
         ],
         id: "concepts/relations",
-        summary: "Modeling many-to-one, one-to-many and many-to-many relationships with the one / many relation descriptors, foreign-key columns, join tables ",
+        summary: "Modeling many-to-one, one-to-many and many-to-many relationships with the one / many relation descriptors, foreign-key columns, join…",
         title: "Relations",
     },
     {
         headings: ["Default-closed", "URLs and methods", "Arguments", "Choosing a shard", "Authentication", "Rate limiting", "Caching", "OpenAPI"],
         id: "concepts/rest-api",
-        summary: "Publish a query, mutation, or action as a plain REST endpoint with .expose({ rest: true }) — default-closed, routed through the procedure so",
+        summary: "Publish a query, mutation, or action as a plain REST endpoint with .expose({ rest: true }) — default-closed, routed through the procedure…",
         title: "Public REST API",
     },
     {
@@ -688,13 +688,13 @@ export const DOC_TOPICS: ReadonlyArray<{
     {
         headings: ["The one caveat that matters", "The read surface", "_scheduled_functions", "_storage"],
         id: "concepts/system-tables",
-        summary: "Read pending scheduled jobs and stored file metadata through ctx.db.system — a read-only, eventually consistent view outside the mutation sn",
+        summary: "Read pending scheduled jobs and stored file metadata through ctx.db.system — a read-only, eventually consistent view outside the mutation…",
         title: "System tables",
     },
     {
         headings: ["Install", "Configure", "Write a test", "Run in CI"],
         id: "concepts/testing-ai-features",
-        summary: "Drive a Lunora app's AI flows in a real browser with the e2e runner, and judge non-deterministic model output with natural-language assertio",
+        summary: "Drive a Lunora app's AI flows in a real browser with the e2e runner, and judge non-deterministic model output with natural-language…",
         title: "Testing AI features end to end",
     },
     {
@@ -1025,7 +1025,7 @@ export const DOC_TOPICS: ReadonlyArray<{
     {
         headings: ["1. See where you stand", "2. Create the usage alerts", "3. Add the budget alert by hand", "4. Check delivery", "In CI"],
         id: "runaway-bill",
-        summary: "Set Cloudflare usage alerts well above normal with `lunora cloudflare alerts`, add the budget alert the API cannot, and check what actually ",
+        summary: "Set Cloudflare usage alerts well above normal with `lunora cloudflare alerts`, add the budget alert the API cannot, and check what…",
         title: "Protect yourself from a runaway bill",
     },
     {
@@ -1036,7 +1036,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "Keep heavy packages off the startup path",
         ],
         id: "startup-cpu-limit",
-        summary: 'Why a large app fails to deploy with "Script startup exceeded CPU time limit", how to measure it, and how lazy function loading and lighter ',
+        summary: 'Why a large app fails to deploy with "Script startup exceeded CPU time limit", how to measure it, and how lazy function loading and…',
         title: "Worker startup CPU limit (error 10021)",
     },
     {
@@ -1066,7 +1066,7 @@ export const DOC_TOPICS: ReadonlyArray<{
             "What you learned",
         ],
         id: "tutorial/scaling",
-        summary: "Take the chat app from one Durable Object to many — shard by channel, put identities in a global table, and keep cross-shard reads off the h",
+        summary: "Take the chat app from one Durable Object to many — shard by channel, put identities in a global table, and keep cross-shard reads off the…",
         title: "Tutorial: scaling the chat app",
     },
     {

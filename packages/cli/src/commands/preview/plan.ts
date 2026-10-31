@@ -87,7 +87,7 @@ const SETTINGS_KEYS = new Set([
 const COPIED_KEYS = ["ai", "browser", "define", "images", "media", "secrets", "vars", "version_metadata", "worker_loaders"] as const;
 
 /** Settings the preview block sets for itself, so a source environment's values for them are not copied. */
-const SETTINGS_KEPT_BY_BLOCK = new Set(["name", "routes", "triggers", "workers_dev"]);
+const SETTINGS_KEPT_BY_BLOCK = new Set(["env", "name", "routes", "triggers", "workers_dev"]);
 
 /** Non-inheritable keys left out: a preview's logs do not go to production's tail Workers. */
 const DROPPED_KEYS = new Set(["tail_consumers"]);

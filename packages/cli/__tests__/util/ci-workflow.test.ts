@@ -121,6 +121,7 @@ jobs:
     permissions:
       contents: read
     steps:
+      # Deleting needs none of the project's dependency scripts, and one that fails must not keep a closed preview alive.
       # A closed, unmerged pull request may have no merge ref left to check out;
       # the base branch names the same production Worker the record is keyed by.
       - uses: actions/checkout@v4
@@ -133,7 +134,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       # Exit 5 is "no record": the pull request never got a preview (refused, or opened before this workflow).
       - run: pnpm exec lunora preview delete \${{ github.event.pull_request.number }} || [ "$?" -eq 5 ]
         env:
@@ -512,6 +513,19 @@ describe("ci-workflow", () => {
         expect(job("preview")).not.toContain("pnpm install");
         expect(job("preview")).toContain("environment:\n    name: preview/$CI_MERGE_REQUEST_IID");
         expect(job("preview_delete")).toContain("pnpm install --frozen-lockfile --ignore-scripts");
+    });
+
+    it("github deletes a closed preview with the install's dependency scripts off, so a failing one cannot keep it alive", () => {
+        expect.assertions(2);
+
+        writeCiWorkflow(workdir, "github", "pnpm");
+
+        const yaml = readFileSync(join(workdir, WORKFLOWS.github.file), "utf8");
+        const teardown = yaml.slice(yaml.indexOf("  preview-delete:"), yaml.indexOf("  check:"));
+
+        expect(teardown).toContain("pnpm install --frozen-lockfile --ignore-scripts");
+        // The deploy jobs keep the ordinary install.
+        expect(yaml.slice(yaml.indexOf("  deploy:"), yaml.indexOf("  preview:"))).not.toContain("--ignore-scripts");
     });
 
     it("skips an existing pipeline unless overwrite is set", () => {

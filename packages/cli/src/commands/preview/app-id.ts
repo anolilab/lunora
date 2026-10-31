@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { readManifest, recordManifestKey } from "@lunora/config/cloudflare";
 
-const APP_ID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/u;
+const APP_ID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/iu;
 
 /**
  * The project's id, kept in `package.json` under `lunora.appId` beside the other records the CLI keeps there.
@@ -12,7 +12,8 @@ const APP_ID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/u;
 const readAppId = (cwd: string): string | undefined => {
     const id = readManifest(cwd)?.lunora?.["appId"];
 
-    return typeof id === "string" && APP_ID.test(id) ? id : undefined;
+    // A UUID is the same id in either case, and records are keyed by one spelling: lowercase.
+    return typeof id === "string" && APP_ID.test(id) ? id.toLowerCase() : undefined;
 };
 
 /** Write a new id into `package.json`, or return `undefined` when it cannot be written (no manifest, or a `lunora` that is not an object, or an id already there). */

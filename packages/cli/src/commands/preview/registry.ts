@@ -523,6 +523,13 @@ const keepLease = (
     };
 };
 
+/** Whether this run still holds the preview right now, extending the hold when it does. Asked of D1 itself, not remembered. */
+const renewLease = async (request: Request, database: string, appId: string, slug: string, token: string): Promise<boolean> => {
+    const result = await lockQuery(request, database, RENEW_LOCK, [LOCK_SECONDS, appId, slug, token]);
+
+    return result?.changes === 1;
+};
+
 /** Let go of the preview if this run still holds it; a hold that cannot be released lapses by itself. */
 const releaseLease = async (request: Request, database: string, appId: string, slug: string, token: string): Promise<void> => {
     try {
@@ -709,6 +716,7 @@ export {
     recordKey,
     registryNamespace,
     releaseLease,
+    renewLease,
     takeLease,
     workerMarker,
     workersSubdomain,

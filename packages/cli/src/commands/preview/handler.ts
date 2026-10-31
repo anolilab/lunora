@@ -62,6 +62,7 @@ import {
     recordKey,
     registryNamespace,
     releaseLease,
+    renewLease,
     takeLease,
     workerMarker,
     workersSubdomain,
@@ -546,6 +547,8 @@ const holdLost = (logger: Logger, slug: string, result: PreviewCommandResult): P
 /** Whether this run still holds its preview; the renewal timer clears it when it cannot say so any more. */
 interface Hold {
     lost: boolean;
+    /** Asks D1 whether the hold is still this run's; throws if not. Called right before a registry write that must not land late. */
+    verify: () => Promise<void>;
 }
 
 /** Stop before the next step, not after the last one, once the hold cannot be vouched for. */
@@ -674,6 +677,8 @@ const shipHeld = async (
         // seed carries the preview's admin token, which must only go where the migrations went.
         record.url = url;
         record.updatedAt = new Date().toISOString();
+        // The deploy may have outlasted the hold: another run may own the record by now, and this write must not undo it.
+        await hold.verify();
         await writeRecord(request, namespace, record);
 
         if (deployed.code !== 0) {
@@ -758,7 +763,15 @@ const shipPreview = async (
         return fail(logger, `preview "${plan.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
     }
 
-    const hold: Hold = { lost: false };
+    const hold: Hold = {
+        lost: false,
+        verify: async () => {
+            if (!(await renewLease(request, database, appId, plan.slug, token))) {
+                hold.lost = true;
+                throw new Error(`the hold on preview "${plan.slug}" is no longer this run's, so its record was left as the other run has it`);
+            }
+        },
+    };
     const stop = keepLease(request, database, appId, plan.slug, token, () => {
         hold.lost = true;
     });
@@ -843,8 +856,9 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
         return fail(logger, identified.error);
     }
 
-    // The preview's env block, and whatever reconcile adds to the top level, exist only for this run.
-    const restore = snapshotPreviewConfig(cwd);
+    // The preview's env block, and whatever reconcile adds to the top level, exist only for this run. The snapshot is
+    // taken inside the guarded block below: if reading a config file fails, the lock must still be let go of.
+    let restore: () => void = () => undefined;
     // Codegen writes a first schema baseline when there is none; the branch's schema must not become production's.
     const baselinePath = join(cwd, "lunora", SCHEMA_SNAPSHOT_FILENAME);
     const hadBaseline = existsSync(baselinePath);
@@ -860,6 +874,8 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
     const disarm = guardCleanup(putBack);
 
     try {
+        restore = snapshotPreviewConfig(cwd);
+
         // Bindings do not inherit into an environment: reconcile the top level first, so the env block copies
         // every binding the code needs, not the ones the last deploy happened to write.
         await provisionBindings(cwd, logger, undefined, "cloudflare", undefined);
@@ -971,6 +987,7 @@ const removePreview = async (
     planned: PreviewPlan | undefined,
     logger: Logger,
     check: () => void,
+    verify: () => Promise<void>,
 ): Promise<PreviewCommandResult> => {
     try {
         check();
@@ -1012,6 +1029,8 @@ const removePreview = async (
         unrecorded = await unrecordedResources(request, planned?.resources ?? [], record);
 
         if (unrecorded.length === 0) {
+            // The deletes may have outlasted the hold: another run may own the record by now.
+            await verify();
             await (remaining.length === 0 ? deleteRecord(request, namespace, record) : writeRecord(request, namespace, left));
         }
     } catch (error) {
@@ -1033,14 +1052,42 @@ const removePreview = async (
     return { code: EXIT_CODE.SUCCESS, data: { deleted: summarize(record) } };
 };
 
-/** Why a preview with no readable record may still exist: its Worker or a resource under the preview's names is in the account. */
-const leftBehind = async (request: Request, config: PreviewConfig, names: PreviewNames, slug: string): Promise<string[]> => {
-    const worker = await workerMarker(request, names.worker, PREVIEW_MARKER_VAR);
-    const found = worker.exists && worker.marker === previewMarker(names) ? [`Worker "${names.worker}" exists`] : [];
-    const planned = planPreview(config, slug).plan?.resources ?? [];
-    const resources = await unrecordedResources(request, planned, undefined);
+/**
+ * Why a preview with no readable record may still exist: its Worker or a resource under its names is in the account. With
+ * no record there is no way to know whether it was made with `--env`, so the top level and every environment are looked at.
+ */
+const leftBehind = async (request: Request, config: PreviewConfig, slug: string): Promise<string[]> => {
+    const origins: { config: PreviewConfig; env?: string }[] = [{ config }];
 
-    return [...found, ...resources.map((resource) => `${resource} exists`)];
+    for (const envName of Object.keys(config.env ?? {})) {
+        // A block a preview run wrote is not an environment of the app, and `environmentConfig` says so by refusing it.
+        const origin = environmentConfig(config, envName);
+
+        if (origin.config !== undefined) {
+            origins.push({ config: origin.config, env: envName });
+        }
+    }
+
+    const found = await Promise.all(
+        origins.map(async (origin) => {
+            const { names } = previewNames(origin.config, slug);
+            const planned = planPreview(origin.config, slug, origin.env).plan?.resources ?? [];
+
+            if (names === undefined) {
+                return [];
+            }
+
+            const worker = await workerMarker(request, names.worker, PREVIEW_MARKER_VAR);
+            const resources = await unrecordedResources(request, planned, undefined);
+
+            return [
+                ...(worker.exists && worker.marker === previewMarker(names) ? [`Worker "${names.worker}" exists`] : []),
+                ...resources.map((resource) => `${resource} exists`),
+            ];
+        }),
+    );
+
+    return [...new Set(found.flat())];
 };
 
 /** The plan the record was made from, to find what a deploy left unrecorded: from the environment it recorded, if any. */
@@ -1066,7 +1113,7 @@ const deleteRecorded = async (
                 : await recordFor(request, namespace, context.appId, names.production, names.slug, logger, options.dryRun !== true);
 
         if (namespace === undefined || record === undefined) {
-            const remains = await leftBehind(request, config, names, names.slug);
+            const remains = await leftBehind(request, config, names.slug);
 
             // KV is eventually consistent, and a checkout can carry a different app id than the one that deployed: an absent
             // record is "nothing to delete" only when nothing under the preview's names is left in the account.
@@ -1131,9 +1178,17 @@ const deleteRecorded = async (
         return { code: EXIT_CODE.SUCCESS, data: { plan: summarize(record) } };
     }
 
-    return removePreview(request, namespace, record, plannedAs(config, record), logger, () => {
-        checkHeld(hold, record.name);
-    });
+    return removePreview(
+        request,
+        namespace,
+        record,
+        plannedAs(config, record),
+        logger,
+        () => {
+            checkHeld(hold, record.name);
+        },
+        hold.verify,
+    );
 };
 
 const deletePreview = async (context: PreviewContext, options: PreviewCommandOptions, name: string): Promise<PreviewCommandResult> => {
@@ -1164,7 +1219,7 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
 
     // A delete and a deploy of one preview never overlap: either could otherwise write back a record for what the other removed.
     if (context.appId === undefined || namespace === undefined || options.dryRun === true) {
-        return deleteRecorded(context, options, { hold: { lost: false }, names, namespace, request });
+        return deleteRecorded(context, options, { hold: { lost: false, verify: () => Promise.resolve() }, names, namespace, request });
     }
 
     const { appId } = context;
@@ -1185,7 +1240,15 @@ const deletePreview = async (context: PreviewContext, options: PreviewCommandOpt
         return fail(logger, `preview "${names.slug}": ${reason(error)}`, EXIT_CODE.FAILURE);
     }
 
-    const hold: Hold = { lost: false };
+    const hold: Hold = {
+        lost: false,
+        verify: async () => {
+            if (!(await renewLease(request, database, appId, names.slug, token))) {
+                hold.lost = true;
+                throw new Error(`the hold on preview "${names.slug}" is no longer this run's, so its record was left as the other run has it`);
+            }
+        },
+    };
     const stop = keepLease(request, database, appId, names.slug, token, () => {
         hold.lost = true;
     });

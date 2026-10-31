@@ -101,12 +101,12 @@ const execLine = (manager: PackageManager, args: ReadonlyArray<string>): string 
  * The GitHub Actions steps shared by every job: checkout,
  * provision the manager, provision Node, install with a frozen lockfile.
  */
-const githubSetupSteps = (pm: PmCiProfile, checkoutReference?: string): string =>
+const githubSetupSteps = (pm: PmCiProfile, checkoutReference?: string, installSuffix = ""): string =>
     `      - uses: actions/checkout@v4
 ${checkoutReference === undefined ? "" : `        with:\n          ref: ${checkoutReference}\n`}${pm.githubSetupStep}      - uses: actions/setup-node@v4
         with:
           node-version: 22
-${pm.githubCacheKey === undefined ? "" : `          cache: ${pm.githubCacheKey}\n`}      - run: ${pm.installCmd}`;
+${pm.githubCacheKey === undefined ? "" : `          cache: ${pm.githubCacheKey}\n`}      - run: ${pm.installCmd}${installSuffix}`;
 
 const buildGithubContent = (manager: PackageManager): string => {
     const pm = PM_CI_PROFILES[manager];
@@ -203,9 +203,10 @@ ${githubSetupSteps(pm)}
     permissions:
       contents: read
     steps:
+      # Deleting needs none of the project's dependency scripts, and one that fails must not keep a closed preview alive.
       # A closed, unmerged pull request may have no merge ref left to check out;
       # the base branch names the same production Worker the record is keyed by.
-${githubSetupSteps(pm, `\${{ github.event.pull_request.base.ref }}`)}
+${githubSetupSteps(pm, `\${{ github.event.pull_request.base.ref }}`, " --ignore-scripts")}
       # Exit 5 is "no record": the pull request never got a preview (refused, or opened before this workflow).
       - run: ${execLine(manager, ["preview", "delete", `\${{ github.event.pull_request.number }}`])} || [ "$?" -eq ${String(EXIT_CODE.NOT_FOUND)} ]
         env:

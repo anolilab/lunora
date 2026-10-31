@@ -1614,6 +1614,70 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(account.statements.some((statement) => statement.sql.startsWith("CREATE TABLE IF NOT EXISTS lunora_preview_locks"))).toBe(true);
         });
 
+        it("lets go of the checkout lock when reading the config for the snapshot fails", async () => {
+            expect.assertions(2);
+
+            const account = fakeAccount();
+            const { spawner } = wranglerAt(workdir, account.workers);
+
+            // A config path that cannot be read as a file: the snapshot throws after the lock was taken.
+            mkdirSync(join(workdir, "wrangler.dev.jsonc"));
+
+            await expect(deployWith(account, spawner)).rejects.toThrow(/EISDIR|illegal operation on a directory/iu);
+            expect(existsSync(join(workdir, ".lunora", "preview.lock"))).toBe(false);
+        });
+
+        it("accepts an uppercase app id, keyed in lowercase, where CI cannot mint another", async () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, lunora: { appId: APP_ID.toUpperCase() }, name: "x" }),
+                "utf8",
+            );
+
+            const account = fakeAccount();
+            const { spawner } = wranglerAt(workdir, account.workers);
+            const result = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: { ...CREDENTIALS, CI: "true" },
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            expect(result.error).toBeUndefined();
+            expect(result.code).toBe(0);
+            expect(registryValues(account).has(`${APP_ID}/42`)).toBe(true);
+        });
+
+        it("does not rewrite the record once the deploy has outlasted its hold", async () => {
+            expect.assertions(3);
+
+            const account = fakeAccount();
+            const { spawner: inner } = wranglerAt(workdir, account.workers);
+            const stolen: Spawner = async (descriptor) => {
+                if (descriptor.args.includes("deploy") && descriptor.args.includes("--env")) {
+                    // Another run took the preview while the deploy ran.
+                    account.locks.set(`${APP_ID}/42`, { expires: Math.floor(Date.now() / 1000) + 600, owner: "someone-else" });
+                }
+
+                return inner(descriptor);
+            };
+
+            const result = await deployWith(account, stolen);
+            const record = JSON.parse(registryValues(account).get(`${APP_ID}/42`) ?? "{}") as { url?: string };
+
+            expect(result.error).toMatch(/was lost while this run worked/u);
+            expect(record.url).toBeUndefined();
+            // The other run's hold is not this run's to release.
+            expect(account.locks.get(`${APP_ID}/42`)?.owner).toBe("someone-else");
+        });
+
         it("marks the lock database it makes, and uses it again on the next run", async () => {
             expect.assertions(3);
 
@@ -2249,15 +2313,15 @@ describe("lunora preview", { timeout: 120_000 }, () => {
         };
 
         it("with --env, gives an environment-only D1 binding a preview database of its own, records the environment, and delete removes it", async () => {
-            expect.assertions(7);
+            expect.hasAssertions();
 
             withEnvironment();
 
             const account = fakeAccount();
-            const { spawner } = wranglerAt(workdir, account.workers);
+            const { deploys, spawner } = wranglerAt(workdir, account.workers);
             const { errors, logger } = silentLogger();
 
-            expect.assertions(8);
+            expect.assertions(11);
 
             const deploy = await runPreviewCommand({
                 adminFetch: adminRecorder().fetch,
@@ -2273,6 +2337,13 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             });
 
             expect([deploy.error, ...errors]).toStrictEqual([undefined]);
+
+            // The block holds what the preview needs, not a copy of every environment (production's ids and names).
+            const written = deploys[0]?.wrangler.env?.["preview-42"] as Record<string, unknown> | undefined;
+
+            expect(written).toBeDefined();
+            expect(written?.env).toBeUndefined();
+            expect(JSON.stringify(written)).not.toContain("prod-main-uuid");
             expect(deploy.code).toBe(0);
             expect(account.d1.has("lunora-app-prod-preview-42-envdb")).toBe(true);
             expect(account.workers.has("lunora-app-prod-preview-42")).toBe(true);
@@ -2284,6 +2355,37 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(result.code).toBe(0);
             expect(account.d1.has("lunora-app-prod-preview-42-envdb")).toBe(false);
             expect(account.workers.has("lunora-app-prod-preview-42")).toBe(false);
+        });
+
+        it("does not call an env-based preview gone when its record cannot be read but its Worker is still there", async () => {
+            expect.assertions(3);
+
+            withEnvironment();
+
+            const account = fakeAccount();
+            const { spawner } = wranglerAt(workdir, account.workers);
+
+            await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                env: "production",
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner,
+                subcommand: "deploy",
+            });
+
+            // The record is not seen from here: nothing says which environment it was made from.
+            registryValues(account).delete(`${APP_ID}/42`);
+
+            const { result } = await run(account, "delete");
+
+            expect(result.code).toBe(EXIT_CODE.FAILURE);
+            expect(result.error).toMatch(/Worker "lunora-app-prod-preview-42" exists/u);
+            expect(account.workers.has("lunora-app-prod-preview-42")).toBe(true);
         });
 
         it("refuses an unknown --env before creating anything, naming the valid environments", async () => {
@@ -2335,6 +2437,34 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(result.error).toMatch(/would bind production's .*nothing was created/u);
             expect(account.r2.size).toBe(buckets);
             expect(leaseKeys(account)).toStrictEqual([]);
+        });
+
+        it("leaves the record alone when the hold was lost during the deletes", async () => {
+            expect.assertions(3);
+
+            const account = await deployed();
+            const stealing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                const outcome = await account.fetch(input, init);
+
+                // Another run takes the preview as the last resource goes.
+                if (init?.method === "DELETE" && (input as string).includes("/r2/buckets/")) {
+                    account.locks.set(`${APP_ID}/42`, { expires: Math.floor(Date.now() / 1000) + 600, owner: "someone-else" });
+                }
+
+                return outcome;
+            }) as typeof globalThis.fetch;
+            const result = await runPreviewCommand({
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: stealing,
+                logger: silentLogger().logger,
+                name: "42",
+                subcommand: "delete",
+            });
+
+            expect(result.error).toMatch(/was lost while this run worked/u);
+            expect(registryValues(account).has(`${APP_ID}/42`)).toBe(true);
+            expect(account.locks.get(`${APP_ID}/42`)?.owner).toBe("someone-else");
         });
 
         it("refuses to delete while another run holds the preview, deleting nothing", async () => {
