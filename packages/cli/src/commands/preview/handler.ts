@@ -881,15 +881,18 @@ const deployPreview = async (context: PreviewContext, options: PreviewCommandOpt
     // The preview's env block, and whatever reconcile adds to the top level, exist only for this run. The snapshot is
     // taken inside the guarded block below: if reading a config file fails, the lock must still be let go of.
     let restore: () => void = () => undefined;
-    // Codegen writes a first schema baseline when there is none; the branch's schema must not become production's.
+    // The deploy pipeline does not re-bless the baseline for a preview, but codegen writes a first one when there is none,
+    // and the file is production's: it is put back to the exact bytes it had, or removed if it did not exist.
     const baselinePath = join(cwd, "lunora", SCHEMA_SNAPSHOT_FILENAME);
-    const hadBaseline = existsSync(baselinePath);
+    const baselineBefore = existsSync(baselinePath) ? readFileSync(baselinePath) : undefined;
     const putBack = (): void => {
         restore();
         lock.release();
 
-        if (!hadBaseline) {
+        if (baselineBefore === undefined) {
             rmSync(baselinePath, { force: true });
+        } else if (!baselineBefore.equals(existsSync(baselinePath) ? readFileSync(baselinePath) : Buffer.alloc(0))) {
+            writeFileSync(baselinePath, baselineBefore);
         }
     };
     // A killed process runs no `finally`: an interrupt must also leave the config as it found it and let go of the lock.

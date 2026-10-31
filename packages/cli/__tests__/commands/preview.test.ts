@@ -1262,6 +1262,49 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(existsSync(baselinePath)).toBe(false);
         });
 
+        it.each([
+            ["succeeds", 0],
+            ["fails", 1],
+        ])("restores an existing schema baseline byte for byte when the deploy %s, whatever wrote it meanwhile", async (_label, code) => {
+            expect.assertions(2);
+
+            const baselinePath = join(workdir, "lunora", ".lunora-schema.json");
+            runCodegen({ projectRoot: workdir, ...wranglerCodegenInputs(workdir) });
+
+            // One table behind the branch, in a layout the serializer would not write: only a byte-exact restore matches.
+            const current = JSON.parse(readFileSync(baselinePath, "utf8")) as { tables: Record<string, unknown> };
+            const committed = `${JSON.stringify({ ...current, tables: Object.fromEntries(Object.entries(current.tables).slice(1)) }, undefined, 4)}\n\n`;
+
+            writeFileSync(baselinePath, committed, "utf8");
+
+            const account = fakeAccount();
+            const { spawner } = wranglerAt(workdir, account.workers);
+
+            const result = await runPreviewCommand({
+                adminFetch: adminRecorder().fetch,
+                cwd: workdir,
+                environment: CREDENTIALS,
+                fetch: account.fetch,
+                healthFetch: healthy,
+                logger: silentLogger().logger,
+                name: "42",
+                spawner: async (descriptor) => {
+                    const outcome = await spawner(descriptor);
+
+                    // A stand-in for any step that re-blesses the baseline with the preview's schema.
+                    if (descriptor.args.includes("deploy")) {
+                        writeFileSync(baselinePath, '{"preview":true}', "utf8");
+                    }
+
+                    return { ...outcome, code: descriptor.args.includes("deploy") ? code : outcome.code };
+                },
+                subcommand: "deploy",
+            });
+
+            expect(result.code).toBe(code === 0 ? 0 : 1);
+            expect(readFileSync(baselinePath, "utf8")).toBe(committed);
+        });
+
         it("deploys the --var overrides with the preview", async () => {
             expect.assertions(2);
 
