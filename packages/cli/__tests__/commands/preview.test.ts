@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cloudflareRestRequest } from "../../../../shared/cloudflare-rest";
 import { runCli } from "../../src/cli";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer/shared";
+import { readAppId } from "../../src/commands/preview/app-id";
 import { runPreviewCommand } from "../../src/commands/preview/handler";
 import type { PreviewConfig, PreviewPlan } from "../../src/commands/preview/plan";
 import { environmentConfig, planPreview, previewEnvironmentBlock, previewNames, productionCollisions, resourceKey } from "../../src/commands/preview/plan";
@@ -2073,6 +2074,22 @@ describe("lunora preview", { timeout: 120_000 }, () => {
             expect(code).toBe(0);
             expect(output).toContain('Worker "lunora-app-preview-42"');
             expect(output).toContain("from the environment: ALPHA_KEY, BETA_KEY");
+        });
+    });
+
+    describe("app id", () => {
+        it("reads an uppercase UUID as the lowercase id records are keyed by, and refuses a non-UUID", () => {
+            expect.assertions(2);
+
+            const manifest = (appId: string): string => JSON.stringify({ lunora: { appId }, name: "app" });
+
+            writeFileSync(join(workdir, "package.json"), manifest(APP_ID.toUpperCase()), "utf8");
+
+            expect(readAppId(workdir)).toBe(APP_ID);
+
+            writeFileSync(join(workdir, "package.json"), manifest("not-a-uuid"), "utf8");
+
+            expect(readAppId(workdir)).toBeUndefined();
         });
     });
 
