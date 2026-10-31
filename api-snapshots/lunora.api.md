@@ -545,6 +545,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MigrationCovers` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MigrationCtx` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6042,6 +6046,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `MiddlewareNext` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `MigrationCovers` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
