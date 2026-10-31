@@ -2150,6 +2150,7 @@ type RestCacheConfig = RestCachePolicy;
 interface RetryPolicy {
     backoff?: "exponential" | "linear";
     baseMs?: number;
+    forever?: boolean;
     maxAttempts?: number;
     maxMs?: number;
 }
@@ -2225,6 +2226,14 @@ interface RunQueryOptions {
 }
 ```
 
+### `ScheduleRunOptions` (interface)
+
+```ts
+interface ScheduleRunOptions {
+    retry?: RetryPolicy;
+}
+```
+
 ### `ScheduledFunctionDoc` (interface)
 
 ```ts
@@ -2287,8 +2296,8 @@ interface Scheduler {
     }>;
     get: (id: string) => Promise<ScheduledJobView | null>;
     list: () => Promise<ScheduledJob[]>;
-    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>, options?: ScheduleRunOptions) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>, options?: ScheduleRunOptions) => Promise<string>;
 }
 ```
 
@@ -5941,6 +5950,10 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `ScheduleRunOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `ScheduledFunctionDoc` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
@@ -7341,12 +7354,13 @@ interface SchedulableWorkflowReference {
 interface ScheduleOutbox {
     admit: (target: string) => number | undefined;
     forget: (id: string) => void;
+    handOff?: (id: string, run: () => Promise<unknown>, token?: string) => Promise<void>;
     record: (id: string, envelope: {
         args: unknown;
         options: Record<string, unknown> | undefined;
         target: unknown;
         when: number;
-    }) => void;
+    }) => string | undefined;
     wake: () => void;
 }
 ```

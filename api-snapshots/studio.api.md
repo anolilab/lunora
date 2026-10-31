@@ -29,6 +29,7 @@ const ADMIN_FUNCTIONS: {
     readonly deleteRows: "__lunora_admin__:deleteRows";
     readonly describeTable: "__lunora_admin__:describeTable";
     readonly describeTables: "__lunora_admin__:describeTables";
+    readonly dropOutboxEntry: "__lunora_admin__:dropOutboxEntry";
     readonly explainIssue: "__lunora_admin__:explainIssue";
     readonly exportShard: "__lunora_admin__:exportShard";
     readonly facetColumn: "__lunora_admin__:facetColumn";
@@ -41,6 +42,7 @@ const ADMIN_FUNCTIONS: {
     readonly getFanoutMetrics: "__lunora_admin__:getFanoutMetrics";
     readonly getFunctionStats: "__lunora_admin__:getFunctionStats";
     readonly getIssues: "__lunora_admin__:getIssues";
+    readonly getScheduleOutbox: "__lunora_admin__:getScheduleOutbox";
     readonly lintSql: "__lunora_admin__:lintSql";
     readonly listFlags: "__lunora_admin__:listFlags";
     readonly listReactors: "__lunora_admin__:listReactors";
@@ -71,6 +73,7 @@ const ADMIN_FUNCTIONS: {
     readonly pitrRestore: "__lunora_admin__:pitrRestore";
     readonly readTablePage: "__lunora_admin__:readTablePage";
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";
+    readonly retryOutboxEntry: "__lunora_admin__:retryOutboxEntry";
     readonly resolveIssue: "__lunora_admin__:resolveIssue";
     readonly rlsPolicies: "__lunora_admin__:rlsPolicies";
     readonly schemaHistory: "__lunora_admin__:schemaHistory";
@@ -1934,6 +1937,18 @@ const MESSAGE_IDS: readonly [
     "canceled",
     "pending",
     "running",
+    "Outbox",
+    "Retry now",
+    "next attempt",
+    "parked",
+    "retrying",
+    "forever",
+    "unreadable",
+    "Nothing is waiting for the scheduler.",
+    "Jobs whose mutation committed but that the scheduler has not accepted yet wait here.",
+    "First page",
+    "Next page",
+    "That job is no longer in the outbox.",
     "No workpools.",
     "pool",
     "Pools",

@@ -32,6 +32,7 @@ const ADMIN_FUNCTIONS: {
     readonly deleteRows: "__lunora_admin__:deleteRows";
     readonly describeTable: "__lunora_admin__:describeTable";
     readonly describeTables: "__lunora_admin__:describeTables";
+    readonly dropOutboxEntry: "__lunora_admin__:dropOutboxEntry";
     readonly explainIssue: "__lunora_admin__:explainIssue";
     readonly exportShard: "__lunora_admin__:exportShard";
     readonly facetColumn: "__lunora_admin__:facetColumn";
@@ -46,6 +47,7 @@ const ADMIN_FUNCTIONS: {
     readonly getIssues: "__lunora_admin__:getIssues";
     readonly getMetricHistory: "__lunora_admin__:getMetricHistory";
     readonly getMetricSeries: "__lunora_admin__:getMetricSeries";
+    readonly getScheduleOutbox: "__lunora_admin__:getScheduleOutbox";
     readonly listSubscriptions: "__lunora_admin__:listSubscriptions";
     readonly listTableIndexes: "__lunora_admin__:listTableIndexes";
     readonly listTablesIndexes: "__lunora_admin__:listTablesIndexes";
@@ -81,6 +83,7 @@ const ADMIN_FUNCTIONS: {
     readonly recordQueueMessage: "__lunora_admin__:recordQueueMessage";
     readonly releaseShardRegistration: "__lunora_admin__:releaseShardRegistration";
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";
+    readonly retryOutboxEntry: "__lunora_admin__:retryOutboxEntry";
     readonly resolveIssue: "__lunora_admin__:resolveIssue";
     readonly rlsPolicies: "__lunora_admin__:rlsPolicies";
     readonly schemaHistory: "__lunora_admin__:schemaHistory";
@@ -2667,8 +2670,24 @@ interface SchedulableWorkflowReferenceLike {
 interface ScheduleOutbox {
     admit: (target: string) => number | undefined;
     forget: (id: string) => void;
-    record: (id: string, envelope: ScheduleOutboxEnvelope) => void;
+    handOff?: (id: string, run: () => Promise<unknown>, token?: string) => Promise<void>;
+    record: (id: string, envelope: ScheduleOutboxEnvelope) => string | undefined;
     wake: () => void;
+}
+```
+
+### `ScheduleOutboxEntry` (interface)
+
+```ts
+interface ScheduleOutboxEntry {
+    attempts: number;
+    createdAt: number;
+    forever: boolean;
+    id: string;
+    nextAttemptAt: number;
+    parked: boolean;
+    target: string | undefined;
+    when: number | undefined;
 }
 ```
 
@@ -4221,6 +4240,12 @@ const diffGlobalMembership: (rows: ReadonlyArray<ShapeRow>, previous: ReadonlyMa
 const distinctValues: (rows: Record<string, unknown>[], field: string) => unknown[];
 ```
 
+### `dropScheduleOutbox` (const)
+
+```ts
+const dropScheduleOutbox: (sql: SqlExec, id: string) => boolean;
+```
+
 ### `encodeAggregateKey` (const)
 
 ```ts
@@ -4402,6 +4427,12 @@ const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, re
 
 ```ts
 const handleReplicaControl: (host: ReplicaOwnerHost, request: Request) => Promise<Response>;
+```
+
+### `hasScheduleOutboxEntry` (const)
+
+```ts
+const hasScheduleOutboxEntry: (sql: SqlExec, id: string) => boolean;
 ```
 
 ### `hasTrigger` (const)
@@ -4755,7 +4786,7 @@ const param: (value: unknown) => SQL;
 ### `parkScheduleOutbox` (const)
 
 ```ts
-const parkScheduleOutbox: (sql: SqlExec, id: string, attempts: number) => void;
+const parkScheduleOutbox: (sql: SqlExec, id: string, attempts: number, now: number) => void;
 ```
 
 ### `parseExportShardArgs` (const)
@@ -4972,6 +5003,12 @@ const readDeployInfo: (rawEnv: unknown) => DeployInfo;
 const readDueScheduleOutbox: (sql: SqlExec, nowMs: number, limit: number) => ScheduleOutboxRow[];
 ```
 
+### `readDueScheduleOutboxEntry` (const)
+
+```ts
+const readDueScheduleOutboxEntry: (sql: SqlExec, id: string, nowMs: number) => ScheduleOutboxRow | undefined;
+```
+
 ### `readExternalSourceBaseline` (const)
 
 ```ts
@@ -5020,6 +5057,25 @@ const readQueueMessages: (sql: SqlExec, options?: ReadQueueMessagesOptions) => {
 
 ```ts
 const readReactorState: (sql: SqlExec, path: string) => ReactorState | undefined;
+```
+
+### `readScheduleOutbox` (const)
+
+```ts
+const readScheduleOutbox: (sql: SqlExec, limit: number, cursor?: string) => {
+    entries: ScheduleOutboxEntry[];
+    nextCursor: string | undefined;
+};
+```
+
+### `readScheduleOutboxState` (const)
+
+```ts
+const readScheduleOutboxState: (sql: SqlExec, id: string) => {
+    createdAt: number;
+    parked: boolean;
+    version: string;
+} | undefined;
 ```
 
 ### `readSchemaHistory` (const)
@@ -5150,6 +5206,12 @@ const reprojectionMigrationId: (table: string) => string;
 
 ```ts
 const reprojectionTables: (schema: SchemaLike) => string[];
+```
+
+### `requeueScheduleOutbox` (const)
+
+```ts
+const requeueScheduleOutbox: (sql: SqlExec, id: string, now: number) => boolean;
 ```
 
 ### `resolvePatch` (const)

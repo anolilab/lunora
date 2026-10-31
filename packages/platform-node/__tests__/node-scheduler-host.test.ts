@@ -211,6 +211,21 @@ describe("createNodeSchedulerHost", () => {
         }
     });
 
+    it("refuses retry.forever as INVALID_INPUT before persisting or arming the job", async () => {
+        expect.assertions(2);
+
+        const database = new Database(":memory:");
+        const host = createNodeSchedulerHost(database, { onDispatch: vi.fn<(functionPath: string) => void>() });
+
+        try {
+            await expect(host.scheduler.schedule("jobs:run", {}, { retry: { forever: true } })).rejects.toMatchObject({ code: "INVALID_INPUT" });
+            await expect(host.scheduler.list?.()).resolves.toHaveLength(0);
+        } finally {
+            host.dispose();
+            database.close();
+        }
+    });
+
     it("does not let another host's stale timer deliver a retry before its backoff", async () => {
         expect.assertions(2);
 

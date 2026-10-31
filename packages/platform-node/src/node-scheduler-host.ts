@@ -44,6 +44,7 @@
 import { randomUUID } from "node:crypto";
 import { deserialize, serialize } from "node:v8";
 
+import { LunoraError } from "@lunora/errors";
 import type { ScheduledJob, ScheduledJobRecord, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
 import { parse } from "@visulima/cron-parser";
 import type Database from "better-sqlite3";
@@ -743,6 +744,13 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         schedule: async (functionPath, args, scheduleOptions) => {
             if (closed) {
                 throw new Error("platform closed: cannot schedule a job");
+            }
+
+            // Refused before the row is written or a timer armed, and as INVALID_INPUT: a
+            // shard outbox treats that code as a deterministic refusal and parks the call,
+            // where an uncatalogued throw would be re-offered every half hour for good.
+            if (scheduleOptions?.retry?.forever === true) {
+                throw new LunoraError("INVALID_INPUT", "retry.forever is not supported by the Node scheduler host; set a finite retry.maxAttempts");
             }
 
             // A UUID rather than a per-process counter: the counter restarted
