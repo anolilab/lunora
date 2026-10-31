@@ -42,7 +42,7 @@
  * `objectColumnPaths`, `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`, `queryExplain`,
  * `serverReactors`,
  * `shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
- * `websocketHibernation`, `alarmRearmBreaker`, `scheduleRateBreaker` — is
+ * `websocketHibernation`, `alarmRearmBreaker`, `scheduleRateBreaker`, `deploymentPause` — is
  * **advisory**: rating one `unsupported` omits no surface and warns nobody. It
  * still records parity honestly, which is its job; it is not a gate.
  *
@@ -338,6 +338,17 @@ export interface PlatformCapabilities {
          * does that host emits the surface silently.
          */
         deliveryAuthorization?: Capability;
+
+        /**
+         * The operator's incident switch (`lunora pause` / `resume`, Studio, `POST
+         * /_lunora/admin/pause`): function calls answer `503 DEPLOYMENT_PAUSED`,
+         * scheduled jobs are held in place, cron ticks are skipped and recorded,
+         * queue messages are held. The flag is durable in the `SchedulerDO`, and
+         * so is the registry of named scheduler instances a pause fans out to, so a
+         * host rates it by whether it runs one (no separate host contract carries it). Advisory by
+         * nature: an app never declares it, so there is nothing for codegen to gate.
+         */
+        deploymentPause?: Capability;
 
         /**
          * Durable streams: a `.stream()` run whose chunks are persisted and

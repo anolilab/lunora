@@ -133,6 +133,14 @@ the action first:
 const { cancelled } = await ctx.scheduler.cancel(reminderId);
 ```
 
+`get(id)` reports where a job is in its life as `state`: `pending`, `running`,
+then how it ended — `succeeded` (the dispatch returned 2xx; for a workflow or
+agent target, that its instance started), `failed` (its retry budget ran out and
+it was dead-lettered, with the reason in `error`) or `canceled`. Finished jobs
+keep answering, with `completedAt`, for seven days; after that `get` returns
+`null`, as it does for an id that was never scheduled. Studio's Schedule tab
+lists them under **History**.
+
 You can also read pending jobs from a query via the `_scheduled_functions`
 [system table](/docs/concepts/function-context) (`ctx.db.system`), which is
 read-only and eventually consistent.
@@ -170,6 +178,23 @@ firing.
     `ctx.scheduler` jobs, which the DO owns. A cron trigger is dispatched once from the worker's `scheduled()` handler; a failure is logged as `CRON_JOB_FAILED`
     and the tick is gone until the next one. Make cron handlers idempotent, and re-derive missed work from your own data rather than assuming a redelivery.
 </Callout>
+
+A code-defined cron job (`cronJobs()`) never overlaps itself. Before a run
+starts, the worker takes a per-job lease held in the `SchedulerDO`. A tick that
+lands while the previous run of the same job is still going is **skipped**
+instead of run alongside it, whichever isolate it lands in, and the skip is
+recorded. **Run now** in Studio answers `409 CRON_JOB_IN_FLIGHT` in the same
+situation. A run that never reports back (its invocation was torn down) gives
+up its lease after fifteen minutes, the platform's cron wall-clock limit, and is
+recorded as failed. If the `SchedulerDO` can't be reached, the run goes ahead
+without the guard rather than stopping the cron, and a warning is logged. A cron
+that targets a workflow holds the lease only while it starts the instance, so a
+long-running workflow can still overlap the next tick's instance.
+
+Every fire is recorded: start, duration, outcome, the error of a failed run, and
+how many ticks it caused to be skipped. The last 50 per job are kept, and
+Studio's **Cron triggers** view shows each job's last run plus the recent
+history.
 
 ## How dispatch works
 

@@ -1,3 +1,22 @@
+## @lunora/flags [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.98...@lunora/flags@1.0.0-alpha.99) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+
+## @lunora/flags [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.97...@lunora/flags@1.0.0-alpha.98) (2026-10-31)
+
+### Performance Improvements
+
+* **do,codegen:** share live queries that never read the caller ([#1401](https://github.com/anolilab/lunora/issues/1401)) ([d57a64c](https://github.com/anolilab/lunora/commit/d57a64cc0d292fab0d01a4f0b394842cf2d0bff8))
+
+## @lunora/flags [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.96...@lunora/flags@1.0.0-alpha.97) (2026-10-30)
+
+### Performance Improvements
+
+* **react,codegen:** cache page keys and evaluate flags concurrently ([#1391](https://github.com/anolilab/lunora/issues/1391)) ([aa302ec](https://github.com/anolilab/lunora/commit/aa302ec401c41ba573a6e772591cc8399f2f56ee))
+
 ## @lunora/flags [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/flags@1.0.0-alpha.95...@lunora/flags@1.0.0-alpha.96) (2026-10-30)
 
 

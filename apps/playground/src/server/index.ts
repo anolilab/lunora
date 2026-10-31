@@ -371,13 +371,10 @@ const handleTestSchedule = async (request: Request, env: Env): Promise<Response>
 };
 
 /**
- * Where a scheduled job got to: `unknown`, `scheduled`, `failed`, `executed`.
- *
- * `executed` is inferred from an absence — the SchedulerDO deletes a job's rows
- * the moment it succeeds — so it is only sound once the other two readings of
- * that absence are ruled out: an id this app never issued (see
- * {@link wasJobIssued}) and a job parked in the dead-letter after exhausting its
- * retries, whose `id:` header is deleted too.
+ * Where a scheduled job got to: `unknown`, `scheduled`, `executed`, `failed`,
+ * `canceled` — read off the scheduler's own lifecycle state. The issued-id
+ * check (see {@link wasJobIssued}) keeps a typo'd id from reading as anything
+ * but `unknown`.
  */
 const handleTestJobStatus = async (url: URL, env: Env): Promise<Response> => {
     const id = url.searchParams.get("id");
@@ -388,13 +385,18 @@ const handleTestJobStatus = async (url: URL, env: Env): Promise<Response> => {
 
     const scheduler = createScheduler({ namespace: env.SCHEDULER });
 
-    if (await scheduler.get(id)) {
-        return Response.json({ status: "scheduled" });
+    const job = await scheduler.get(id);
+
+    // An issued id with no record has aged out of the outcome retention window.
+    if (!job) {
+        return Response.json({ status: "unknown" });
     }
 
-    const parked = await scheduler.dead();
+    if (job.state === "succeeded") {
+        return Response.json({ status: "executed" });
+    }
 
-    return Response.json({ status: parked.some((record) => record.id === id) ? "failed" : "executed" });
+    return Response.json({ status: job.state === "failed" || job.state === "canceled" ? job.state : "scheduled" });
 };
 
 /**

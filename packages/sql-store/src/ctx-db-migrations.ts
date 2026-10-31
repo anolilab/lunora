@@ -28,6 +28,7 @@ import type { SqlCtxExec } from "./sql-exec";
 import {
     columnRefSql,
     createIndexIfNotExists,
+    MAX_BOUND_PARAMETERS,
     OCC_VERSION_COLUMN,
     qualifiedColumnRefSql,
     queryAll,
@@ -1467,6 +1468,17 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
         }
 
         for (const index of indexes) {
+            // A rebuild inserts `__id__`, `__partition__` and every sort key in one statement, with the fence's two
+            // parameters: a wider tuple could never be rebuilt, so it is refused here rather than when it first is.
+            const maxSortKeys = MAX_BOUND_PARAMETERS - 4;
+
+            if (index.sortBy.length > maxSortKeys) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `rank index "${index.name}" on ${tableName} has ${String(index.sortBy.length)} sort keys; at most ${String(maxSortKeys)} fit the ${String(MAX_BOUND_PARAMETERS)} parameters one statement binds`,
+                );
+            }
+
             const rankTable = rankTableName(tableName, index.name);
             const sortColumnDefs = rankSortColumnDefs(dialect, index, definition);
 

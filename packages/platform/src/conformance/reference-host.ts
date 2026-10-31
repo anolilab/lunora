@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type {
     PlatformCapabilities,
+    ScheduledJobRecord,
     ScheduledJobStatus,
     ScheduleOptions,
     SchedulerHost,
@@ -813,6 +814,8 @@ const createReferenceHost = (): ReferenceHost => {
     type ReferenceJob = {
         args: Record<string, unknown>;
         attempts: number;
+        /** When the job was parked in the dead-letter set. */
+        completedAt?: number;
         functionPath: string;
         options: ScheduleOptions;
         scheduledFor: number;
@@ -837,6 +840,9 @@ const createReferenceHost = (): ReferenceHost => {
      * clearing bookkeeping like the pre-267 Node host did.
      */
     const dispatchedJobs = new Set<string>();
+
+    /** How each job that left the pending set ended. In-memory: this host lives for one test, so it needs no retention sweep. */
+    const finishedJobs = new Map<string, ScheduledJobRecord>();
 
     const toStatus = (id: string, job: ReferenceJob): ScheduledJobStatus => {
         return {
@@ -863,6 +869,7 @@ const createReferenceHost = (): ReferenceHost => {
 
             clearTimeout(job.timer);
             scheduledJobs.delete(id);
+            finishedJobs.set(id, { ...toStatus(id, job), completedAt: Date.now(), state: "canceled" });
 
             return true;
         },
@@ -879,10 +886,25 @@ const createReferenceHost = (): ReferenceHost => {
                 // A fresh budget is the point of a requeue: returning it with
                 // its exhausted count parks it again on the next failure without
                 // ever retrying.
-                scheduledJobs.set(id, { ...job, attempts: 0, timer: undefined });
+                scheduledJobs.set(id, { ...job, attempts: 0, completedAt: undefined, timer: undefined });
 
                 return true;
             },
+        },
+        get: async (id) => {
+            const pending = scheduledJobs.get(id);
+
+            if (pending !== undefined) {
+                return { ...toStatus(id, pending), state: "pending" };
+            }
+
+            const dead = deadJobs.get(id);
+
+            if (dead !== undefined) {
+                return { ...toStatus(id, dead), completedAt: dead.completedAt, state: "failed" };
+            }
+
+            return finishedJobs.get(id) ?? null;
         },
         list: async () => [...scheduledJobs].map(([id, job]) => toStatus(id, job)),
         schedule: async (functionPath, args, options) => {
@@ -906,6 +928,7 @@ const createReferenceHost = (): ReferenceHost => {
 
                 if (job !== undefined) {
                     job.attempts += 1;
+                    finishedJobs.set(id, { ...toStatus(id, job), completedAt: Date.now(), state: "succeeded" });
                 }
 
                 dispatchedJobs.add(id);
@@ -1003,7 +1026,7 @@ const createReferenceHost = (): ReferenceHost => {
 
             clearTimeout(job.timer);
             scheduledJobs.delete(id);
-            deadJobs.set(id, { ...job, attempts: (job.options.retry?.maxAttempts ?? 5) + 1, timer: undefined });
+            deadJobs.set(id, { ...job, attempts: (job.options.retry?.maxAttempts ?? 5) + 1, completedAt: Date.now(), timer: undefined });
 
             return true;
         },

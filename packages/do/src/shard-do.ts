@@ -932,6 +932,13 @@ interface HibernatableWebSocket {
  */
 interface SubscriptionOutcome {
     /**
+     * Set only by an executor whose ctx routes every caller read through
+     * {@link ShardDO.noteIdentityRead}. Absent, the run is assumed to depend on
+     * the caller, so its path never shares a run across identities.
+     */
+    identityTracked?: boolean;
+
+    /**
      * Index slices the run was provably confined to, per table — see
      * {@link SubscriptionMemo.ranges}. Absent when the run reported no
      * narrowable read.
@@ -940,6 +947,15 @@ interface SubscriptionOutcome {
     result: unknown;
     tables: Set<string>;
 }
+
+/** One in-flight reactive run other sockets may join; `leader` is the starting socket's full identity key when the run was keyed without it. */
+interface SharedReactiveRun {
+    leader?: string;
+    pending: Promise<SubscriptionOutcome | null>;
+}
+
+/** The run key's identity slot for a path proven not to read its caller; a bare string never collides with an encoded identity object. */
+const IDENTITY_FREE_RUN = "identity-free";
 
 /**
  * What one reactor dispatch reports back to {@link ShardDO.dispatchReactors}.
@@ -2808,7 +2824,23 @@ abstract class ShardDO {
     private writeGeneration = 0;
 
     /** In-flight subscription seeds by stamp and run key; see {@link ShardDO.resolveSeedOutcome}. */
-    private readonly seedRuns = new Map<string, Promise<SubscriptionOutcome | null>>();
+    private readonly seedRuns = new Map<string, SharedReactiveRun>();
+
+    /**
+     * Function paths a ctx has been seen reading its caller through (`ctx.auth`,
+     * `ctx.ip`, or any facade built from them). Sticky for the instance's
+     * lifetime: once a path reads identity, its live runs are never shared across
+     * callers again.
+     */
+    private readonly identityReadPaths: Set<string> = new Set<string>();
+
+    /**
+     * Function paths a vouched live run completed without reading its caller, and
+     * not in {@link ShardDO.identityReadPaths}: their runs are shared across
+     * subscribers whatever their identity. A path starts outside this set, so its
+     * first run is always keyed by caller.
+     */
+    private readonly identityFreePaths: Set<string> = new Set<string>();
 
     /**
      * Per-socket poke baseline for shape subscriptions: maps each shape's
@@ -4539,6 +4571,18 @@ abstract class ShardDO {
      */
     protected getCurrentIp(): string | undefined {
         return this.currentRequestIp;
+    }
+
+    /**
+     * Record that a ctx built for `functionPath` handed its caller (identity,
+     * userId or ip) to code. The generated `buildCtx` calls it from every
+     * accessor that exposes the caller, synchronously at the read, so the mark
+     * lands before the run that made it settles and a socket joining that run
+     * sees it. See {@link ShardDO.joinReactiveRun}.
+     */
+    protected noteIdentityRead(functionPath: string): void {
+        this.identityReadPaths.add(functionPath);
+        this.identityFreePaths.delete(functionPath);
     }
 
     /**
@@ -12970,7 +13014,38 @@ abstract class ShardDO {
         // field on `this`: a deferred subscription re-run interleaves with
         // unrelated RPC dispatches, so a shared field would stamp one request's
         // slices onto another subscriber's memo and suppress its invalidations.
-        return this.executeSubscription(functionPath, args, identity);
+        const outcome = await this.executeSubscription(functionPath, args, identity);
+
+        if (outcome?.identityTracked === true) {
+            this.settleIdentityUse(functionPath, outcome);
+        }
+
+        return outcome;
+    }
+
+    /**
+     * Promote `functionPath` to identity-free once a tracked run of it finished
+     * without reading its caller. The result is encoded first, because encoding
+     * runs any getter the handler left on it, and such a getter may read the
+     * caller too; it is the same encoding (cached per outcome) every delivery
+     * reuses. A result that fails to encode proves nothing and promotes nothing.
+     * A path already marked can never be promoted (marks are never cleared), so
+     * it skips the encode, which no delivery may need.
+     */
+    private settleIdentityUse(functionPath: string, outcome: SubscriptionOutcome): void {
+        if (this.identityReadPaths.has(functionPath)) {
+            return;
+        }
+
+        try {
+            this.encodeOutcome(outcome);
+        } catch {
+            return;
+        }
+
+        if (!this.identityReadPaths.has(functionPath)) {
+            this.identityFreePaths.add(functionPath);
+        }
     }
 
     /**
@@ -12981,10 +13056,12 @@ abstract class ShardDO {
      * {@link SubscriptionIdentity} entirely. Those share one result across ALL
      * sockets (the null-identity bucket of {@link resolveReactiveOutcomeDeduped}).
      *
-     * Everything else is identity-DEPENDENT: a user query may be `rls()` /
-     * `ctx.auth`-scoped and a flag read ({@link FLAGS_FUNCTION_PREFIX}) evaluates
-     * with the subscriber's identity. Those only share between sockets whose FULL
-     * identity (claims, ip, userId) is equal — see {@link subscriptionIdentityKey}.
+     * Everything else is identity-DEPENDENT until proven otherwise: a user query
+     * may be `rls()` / `ctx.auth`-scoped and a flag read ({@link FLAGS_FUNCTION_PREFIX})
+     * evaluates with the subscriber's identity. Those share between sockets whose
+     * FULL identity (claims, ip, userId) is equal — see {@link subscriptionIdentityKey} —
+     * unless the path has been observed never reading its caller; see
+     * {@link ShardDO.reactiveRunKey}.
      */
     // eslint-disable-next-line class-methods-use-this, @typescript-eslint/member-ordering -- pure predicate over the function path; a protected method so the security boundary lives in one named place (and tests can probe it), co-located with the reactive dedup it gates rather than hoisted away from its only caller
     protected isIdentityIndependent(functionPath: string): boolean {
@@ -12994,14 +13071,12 @@ abstract class ShardDO {
     /**
      * Memoizing wrapper over {@link resolveReactiveOutcome}: flush-local sharing across sockets.
      * Within a single {@link refreshSubscriptions} pass, sockets subscribed to the
-     * SAME `(functionPath, args)` under the SAME identity run the query once: the
-     * first run is cached (by its in-flight Promise, since the bounded worker pool
-     * runs sockets in parallel) and shared with the rest. Identity-independent
-     * reads (admin/reserved — see {@link isIdentityIndependent}) share across every
-     * socket; all others key on the socket's full identity, so sockets that differ
-     * in ANY identity field never share a result (RLS / `ctx.auth` / per-user flags).
-     * The `cache` is created fresh per flush by the caller, so a result is never
-     * reused across passes (it would go stale after the next write).
+     * SAME `(functionPath, args)` under the same {@link ShardDO.reactiveRunKey} run
+     * the query once: the first run is cached (by its in-flight Promise, since the
+     * bounded worker pool runs sockets in parallel) and shared with the rest, through
+     * {@link ShardDO.joinReactiveRun}. The `cache` is created fresh per flush by the
+     * caller, so a result is never reused across passes (it would go stale after the
+     * next write).
      *
      * `args` and `attachment` are the socket's own stored values and are only READ
      * here, to build the key. What the handler receives is a copy — `handedArgs()`
@@ -13014,32 +13089,80 @@ abstract class ShardDO {
         handedArgs: () => Record<string, unknown>,
         isAdmin: boolean,
         attachment: SocketAttachment,
-        cache: Map<string, Promise<SubscriptionOutcome | null>>,
+        cache: Map<string, SharedReactiveRun>,
     ): Promise<SubscriptionOutcome | null> {
         if (this.deliveryAuthorization) {
             return this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
         }
-        const key = this.reactiveRunKey(functionPath, args, attachment);
+        const { key, leader } = this.reactiveRunKey(functionPath, args, attachment);
         const cached = cache.get(key);
 
         if (cached !== undefined) {
-            return cached;
+            return this.joinReactiveRun(cached, functionPath, handedArgs, isAdmin, attachment);
         }
 
         const pending = this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
 
-        cache.set(key, pending);
+        cache.set(key, { leader, pending });
 
         return pending;
     }
 
-    /** The key two reactive runs share under: see {@link isIdentityIndependent} for which identity fields it carries. */
-    private reactiveRunKey(functionPath: string, args: Record<string, unknown>, attachment: SocketAttachment): string {
-        return this.isIdentityIndependent(functionPath)
-            ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
-              reactiveCacheKey(functionPath, args, null)
-            : // The key reads the identity, never keeps it, so the stored one serves without a copy.
-              reactiveCacheKey(functionPath, args, subscriptionIdentityKey(attachment));
+    /**
+     * The key two reactive runs share under, and — when it leaves the caller out —
+     * the full identity key of the socket that starts the run.
+     *
+     * Admin/reserved reads (see {@link isIdentityIndependent}) never carry the
+     * caller. A user query carries it unless its path is in
+     * {@link ShardDO.identityFreePaths}: a tracked run of it already finished
+     * without reading identity, and none has read it since. A path's first run is
+     * therefore always keyed, and the moment any run reads identity the path is
+     * keyed again for good.
+     */
+    private reactiveRunKey(functionPath: string, args: Record<string, unknown>, attachment: SocketAttachment): { key: string; leader?: string } {
+        if (this.isIdentityIndependent(functionPath)) {
+            // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
+            return { key: reactiveCacheKey(functionPath, args, null) };
+        }
+
+        // The key reads the identity, never keeps it, so the stored one serves without a copy.
+        const caller = subscriptionIdentityKey(attachment);
+
+        return this.identityFreePaths.has(functionPath)
+            ? { key: reactiveCacheKey(functionPath, args, IDENTITY_FREE_RUN), leader: caller }
+            : { key: reactiveCacheKey(functionPath, args, caller) };
+    }
+
+    /**
+     * Join a run another socket started. A run keyed by caller is joined as is.
+     * One keyed without it was started on the strength of earlier runs, and the
+     * handler may still read the caller on a branch none of them took — so a
+     * socket with a different identity only takes the result if the path is still
+     * unmarked once the run has settled (every accessor marks synchronously, and
+     * the result is encoded before the run settles, see
+     * {@link ShardDO.settleIdentityUse}), and that encoding succeeded. Otherwise,
+     * and on a rejection whose message may carry the leader's data, it runs the
+     * query under its own identity.
+     */
+    private joinReactiveRun(
+        run: SharedReactiveRun,
+        functionPath: string,
+        handedArgs: () => Record<string, unknown>,
+        isAdmin: boolean,
+        attachment: SocketAttachment,
+    ): Promise<SubscriptionOutcome | null> {
+        if (run.leader === undefined || run.leader === subscriptionIdentityKey(attachment)) {
+            return run.pending;
+        }
+
+        const ownRun = (): Promise<SubscriptionOutcome | null> => this.resolveReactiveOutcome(functionPath, handedArgs(), isAdmin, socketIdentity(attachment));
+
+        // An unmarked path's outcome is encoded in settle, so a missing encoding means it failed.
+        return run.pending.then(
+            (outcome) =>
+                outcome?.identityTracked === true && !this.identityReadPaths.has(functionPath) && this.encodedOutcomes.has(outcome) ? outcome : ownRun(),
+            ownRun,
+        );
     }
 
     /**
@@ -13072,11 +13195,12 @@ abstract class ShardDO {
 
         // Keyed by stamp too rather than one map per stamp: admin seeds stamp no
         // epoch, so interleaved admin and user seeds would keep evicting each other.
-        const key = `${stamp}\u0000${this.reactiveRunKey(functionPath, args, attachment)}`;
+        const { key: runKey, leader } = this.reactiveRunKey(functionPath, args, attachment);
+        const key = `${stamp}\u0000${runKey}`;
         const inFlight = this.seedRuns.get(key);
 
         if (inFlight !== undefined) {
-            return inFlight;
+            return this.joinReactiveRun(inFlight, functionPath, handedArgs, isAdmin, attachment);
         }
 
         // Every caller, leader included, awaits the `finally` chain, so a rejection reaches each of them and none dangles.
@@ -13086,12 +13210,12 @@ abstract class ShardDO {
             isAdmin,
             socketIdentity(attachment),
         ).finally(() => {
-            if (this.seedRuns.get(key) === shared) {
+            if (this.seedRuns.get(key)?.pending === shared) {
                 this.seedRuns.delete(key);
             }
         });
 
-        this.seedRuns.set(key, shared);
+        this.seedRuns.set(key, { leader, pending: shared });
 
         return shared;
     }
@@ -13800,52 +13924,29 @@ abstract class ShardDO {
      * subscription set is small (cap of {@link ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET}).
      *
      * ----------------------------------------------------------------------
-     * Audit finding #5 — N identical subscriptions ⇒ N query runs per change.
+     * Sockets on the same `(functionPath, args)` share ONE run per flush.
      * ----------------------------------------------------------------------
-     * This loop executes `executeSubscription` once PER (socket, sub). When N
-     * sockets subscribe to the SAME `(functionPath, args)`, a single write that
-     * touches a read table re-runs the identical query N times. The N-runs
-     * fan-out is characterized by the `profile:` case in
-     * `subscription-refresh.integration.test.ts`.
+     * Only the run and its outcome (value AND `tables`/`ranges` footprint) are
+     * shared, through {@link ShardDO.resolveReactiveOutcomeDeduped}; the frame is
+     * still built per socket (`pushSubscriptionData`), since each socket's memo
+     * decides between a delta, a snapshot and nothing. Sharing is bounded by
+     * {@link ShardDO.reactiveRunKey}: equal identity, or a path observed never
+     * reading its caller.
      *
-     * Cross-socket execution dedup (group identical `(functionPath, args)`, run
-     * + serialize once, fan the same frame to every sharing socket) was
-     * INVESTIGATED and DELIBERATELY NOT implemented here, because it would change
-     * observable behavior rather than being a pure optimization:
-     *
-     * (a) Per-socket memo divergence. The frame a socket receives depends on its
-     * OWN subscription memo (`pushSubscriptionData`): one socket may need a
-     * `{type:"delta"}`, a freshly-subscribed socket a full `{type:"data"}`
-     * snapshot, and an up-to-date socket nothing at all. So only the QUERY RUN +
-     * its result can be shared — `pushSubscriptionData` must still run per socket.
-     * Dedup saves the N-1 redundant runs, not the fan-out.
-     *
-     * (b) Side-effect cardinality. The real `executeSubscription` lives in the
-     * codegen subclass and dispatches the user handler, which records function
-     * metrics, scan attribution, and `ctx.log` lines PER RUN. N subscribers today
-     * produce N metric samples / N log lines; collapsing to one run silently
-     * under-counts those in the studio. The base class can't see inside the
-     * override, so it can't make that trade safely.
-     *
-     * (c) Error attribution. A throwing run is contained per (socket, sub) here
-     * (see the catch below, and the integration test's isolation cases). A shared
-     * run would have to fan one failure to every sharing socket while preserving
-     * the "leave memo untouched ⇒ re-run next flush" contract.
+     * Two consequences are deliberate. A shared run records its function metrics,
+     * scan attribution and `ctx.log` lines once, not once per subscriber. And a
+     * shared run that throws fails every socket sharing it under the same key; a
+     * socket of another identity that joined an identity-free run re-runs on its
+     * own instead (see {@link ShardDO.joinReactiveRun}). Either way the memo is
+     * left untouched, so the subscription re-runs next flush.
      *
      * The opt-in {@link ReactiveCache} (`ShardDOOptions.reactiveCache`) does NOT
      * cover this, despite the shared key shape: it wraps `/rpc` query dispatch
      * (see {@link ShardDO.runCachedQuery}), while a refresh runs through
-     * `executeSubscription`, which never consults it. It cannot, either — a
-     * subscription's re-run is only half about the value. The other half is the
-     * `tables`/`ranges` footprint it reports, which is what decides whether the
-     * NEXT write re-runs it; a cache hit produces a value with no footprint, so
-     * routing refreshes through the cache would quietly empty every memo's
-     * dependency set and stop the subscription updating at all.
-     *
-     * So this fan-out stands as characterized. Collapsing it needs a dedup that
-     * shares the footprint alongside the value — {@link ShardDO.resolveReactiveOutcomeDeduped}
-     * is that, per flush, for the identity-independent subset — not a second
-     * memo bolted into this loop.
+     * `executeSubscription`, which never consults it. It cannot, either — a cache
+     * hit produces a value with no footprint, so routing refreshes through it
+     * would quietly empty every memo's dependency set and stop the subscription
+     * updating at all.
      */
 
     /**
@@ -13943,11 +14044,10 @@ abstract class ShardDO {
         const generation = this.writeGeneration;
 
         // Flush-local dedup of reactive runs: sockets on the same
-        // `(functionPath, args)` share ONE query run this pass when their FULL
-        // identity is equal (see `subscriptionIdentityKey`); admin/reserved reads
-        // share across all sockets. Created fresh per flush so a result is never
+        // `(functionPath, args)` share ONE query run this pass under the key
+        // `reactiveRunKey` gives them. Created fresh per flush so a result is never
         // reused across writes (see resolveReactiveOutcomeDeduped).
-        const reactiveRunCache = new Map<string, Promise<SubscriptionOutcome | null>>();
+        const reactiveRunCache = new Map<string, SharedReactiveRun>();
 
         const refreshOne = async (ws: ShardSocketLike): Promise<void> => {
             // Claimed before the first await; see `SocketTableIndex.beginVisit`.

@@ -68,6 +68,8 @@ export const createHyperdrive = (binding: HyperdriveLike): { config: HyperdriveC
  * config must have caching disabled (see `@lunora/hyperdrive/global`).
  */
 export const fromPostgresJs = (client: PostgresJsLike): SqlClient => {
+    const { begin } = client;
+
     return {
         dbSystem: "postgresql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
@@ -75,6 +77,12 @@ export const fromPostgresJs = (client: PostgresJsLike): SqlClient => {
 
             return rows as Row[];
         },
+        ...(begin === undefined
+            ? {}
+            : {
+                  // `begin` hands back what `work` resolved to.
+                  transaction: async <T>(work: (tx: SqlClient) => Promise<T>): Promise<T> => (await begin(async (tx) => await work(fromPostgresJs(tx)))) as T,
+              }),
     };
 };
 

@@ -1,3 +1,16 @@
+## @lunora/sql-store [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.225...@lunora/sql-store@1.0.0-alpha.226) (2026-10-31)
+
+### Features
+
+* **sql-store:** atomic .global() writes, statement deadlines, fewer round trips ([#1395](https://github.com/anolilab/lunora/issues/1395)) ([1d7524c](https://github.com/anolilab/lunora/commit/1d7524c8bc1a2b3b5bec345cfab861c4bd310f68))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.178
+* **@lunora/do:** upgraded to 1.0.0-alpha.271
+
 ## @lunora/sql-store [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.224...@lunora/sql-store@1.0.0-alpha.225) (2026-10-30)
 
 ### Bug Fixes

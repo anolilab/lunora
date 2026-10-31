@@ -1,4 +1,4 @@
-import type { CronJobInfo } from "@lunora/client";
+import type { CronJobInfo, CronRunsResult } from "@lunora/client";
 import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
@@ -49,6 +49,117 @@ describe("cronTriggersPanel", () => {
         await screen.findByTestId("cron-table");
 
         expect(mock.getCronJobs).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows each trigger's last run and the recent-run history from the client", async () => {
+        expect.assertions(4);
+
+        const mock = createMockClient({
+            getCronJobs: () => JOBS,
+            listCronRuns: () => {
+                return {
+                    inFlight: [{ name: "clear presence", runId: "live", skipped: 2, startedAt: 5000 }],
+                    runs: [
+                        {
+                            durationMs: 0,
+                            endedAt: 4000,
+                            name: "daily digest",
+                            reason: "in-flight",
+                            runId: "skip-1",
+                            skipped: 0,
+                            startedAt: 4000,
+                            status: "skipped",
+                        },
+                        {
+                            durationMs: 1500,
+                            endedAt: 2500,
+                            error: "shard status 500",
+                            name: "daily digest",
+                            runId: "fail-1",
+                            skipped: 1,
+                            startedAt: 1000,
+                            status: "failed",
+                        },
+                    ],
+                };
+            },
+        });
+
+        render(withProvider(mock, <CronTriggersPanel />));
+
+        await screen.findByTestId("cron-run-history");
+
+        expect(screen.getByTestId("cron-last-run-clear presence").textContent).toContain("2 ticks skipped");
+        expect(screen.getByTestId("cron-last-run-daily digest").textContent).toContain("skipped");
+        expect(screen.getByTestId("cron-run-row-fail-1").textContent).toContain("shard status 500");
+        expect(screen.getByTestId("cron-run-row-fail-1").textContent).toContain("1.5 s");
+    });
+
+    it("surfaces a failed history read instead of showing no runs", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            getCronJobs: () => JOBS,
+            listCronRuns: () => {
+                throw new Error("cron-runs unavailable");
+            },
+        });
+
+        render(withProvider(mock, <CronTriggersPanel />));
+
+        await expect(screen.findByTestId("cron-runs-error")).resolves.toHaveProperty("textContent", "cron-runs unavailable");
+    });
+
+    it("shows no history, and no error, for a worker without a scheduler", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            getCronJobs: () => JOBS,
+            listCronRuns: () => {
+                throw Object.assign(new Error("a `schedulerDO` namespace is required"), { code: "SCHEDULER_NOT_CONFIGURED" });
+            },
+        });
+
+        render(withProvider(mock, <CronTriggersPanel />));
+
+        await screen.findByTestId("cron-table");
+
+        expect(screen.queryByTestId("cron-runs-error")).toBeNull();
+        expect(screen.getByTestId("cron-last-run-daily digest").textContent).toContain("never");
+    });
+
+    it("keeps the last runs shown when a later history read fails", async () => {
+        expect.assertions(2);
+
+        const loadCronRuns = vi
+            .fn<() => Promise<CronRunsResult>>()
+            .mockResolvedValueOnce({
+                inFlight: [],
+                runs: [{ durationMs: 10, endedAt: 20, name: "daily digest", runId: "ok-1", skipped: 0, startedAt: 10, status: "succeeded" }],
+            })
+            .mockRejectedValue(new Error("network down"));
+
+        render(
+            withProvider(
+                createMockClient(),
+                <CronTriggersPanel
+                    loadCronJobs={async () => JOBS}
+                    loadCronRuns={loadCronRuns}
+                    runCronJob={async (name: string) => {
+                        return { name, ran: true };
+                    }}
+                />,
+            ),
+        );
+
+        await screen.findByTestId("cron-run-row-ok-1");
+        fireEvent.click(screen.getByTestId("cron-run-daily digest"));
+        fireEvent.click(screen.getByTestId("cron-run-daily digest-confirm"));
+
+        await screen.findByTestId("cron-runs-error");
+
+        expect(screen.getByTestId("cron-run-row-ok-1")).toBeDefined();
+        expect(screen.getByTestId("cron-last-run-daily digest").textContent).toContain("succeeded");
     });
 
     it("shows the empty state when there are no triggers", async () => {

@@ -154,6 +154,8 @@ export interface ScheduleRecord {
      */
     attempts?: number;
     enqueuedAt: number;
+    /** Why the job was dead-lettered. Set only on a parked (`/dead`) record. */
+    error?: string;
 
     /**
      * The `ns:fn` path of the function to dispatch on fire. Absent when the job
@@ -193,6 +195,70 @@ export interface ScheduleRecord {
     workflow?: string;
 }
 
+/**
+ * Where a job is in its life, as {@link Scheduler.get} reports it.
+ *
+ * - `pending` — waiting for its fire time, a pool slot, or a retry backoff.
+ * - `running` — its dispatch is in flight right now.
+ * - `succeeded` — the dispatch answered 2xx. For a function target the receiver
+ * answers only after the function returned, so this is the function's success;
+ * for a workflow/agent target it means the instance was STARTED, not finished —
+ * follow the instance (same id) for its outcome.
+ * - `failed` — the retry budget ran out and the job was dead-lettered
+ * ({@link Scheduler.dead}); `deadRetry` returns it to `pending`.
+ * - `canceled` — removed by {@link Scheduler.cancel}.
+ */
+export type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+
+/**
+ * A job as {@link Scheduler.get} sees it: the record plus its lifecycle state.
+ * Terminal states (`succeeded`, `canceled`, and a purged `failed`) are kept for
+ * a bounded retention window after `completedAt`, then answer `null`.
+ */
+export interface ScheduledJobView extends ScheduleRecord {
+    /** When the job reached its terminal state (epoch ms). Absent while `pending`/`running`. */
+    completedAt?: number;
+    state: ScheduledJobState;
+}
+
+/**
+ * How one cron fire ended. `skipped` is a tick that did not run: the previous
+ * run of the same cron was still in flight (`reason: "in-flight"`), or the
+ * deployment was paused (`reason: "paused"`).
+ */
+export type CronRunStatus = "failed" | "skipped" | "succeeded";
+
+/** One recorded fire of a code-defined cron job (`cronJobs()`), as the SchedulerDO's `/cron/runs` reports it. */
+export interface CronRunRecord {
+    /** Run time in ms; `0` for a skipped tick. */
+    durationMs: number;
+    /** When the run finished, or when the tick was skipped (epoch ms). */
+    endedAt: number;
+    /** The thrown message of a `failed` run. */
+    error?: string;
+    /** The `cronJobs()` name. */
+    name: string;
+    /** Why a tick was `skipped`: the previous run still held the lease, or the deployment was paused. */
+    reason?: "in-flight" | "paused";
+    runId: string;
+    /** Ticks of the same cron skipped while this run held the lease; on a `skipped` row, the consecutive ticks it stands for. */
+    skipped: number;
+    /** When the run began, or the first tick of a `skipped` row's streak (epoch ms). */
+    startedAt: number;
+    status: CronRunStatus;
+}
+
+/** A cron run that holds its lease right now. */
+export interface CronRunInFlight {
+    name: string;
+    /** When the run last said it was still alive; the lease lapses fifteen minutes after this, or after `startedAt` when it never did. */
+    renewedAt?: number;
+    runId: string;
+    /** Ticks skipped so far because this run was still going. */
+    skipped: number;
+    startedAt: number;
+}
+
 export interface Scheduler {
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
 
@@ -210,8 +276,13 @@ export interface Scheduler {
      * recover is a no-op rather than an error.
      */
     deadRetry: (id: string) => Promise<boolean>;
-    /** Resolve a single pending job by id, or `null` when absent (derived from {@link Scheduler.list}). */
-    get: (id: string) => Promise<ScheduleRecord | null>;
+
+    /**
+     * Resolve a job by id with its lifecycle {@link ScheduledJobView.state} —
+     * pending, running, or (for a bounded retention window) its terminal outcome.
+     * `null` when the id was never scheduled or its terminal record has expired.
+     */
+    get: (id: string) => Promise<ScheduledJobView | null>;
     /** All pending scheduled jobs (the DO's `/list` view). */
     list: () => Promise<ScheduleRecord[]>;
 
@@ -289,6 +360,14 @@ export interface LunoraSchedulerOptions {
      * caller-supplied dispatch target would be an SSRF vector.
      */
     namespace: DurableObjectNamespaceLike;
+
+    /**
+     * The instance that holds the deployment's pause flag and the registry of
+     * named instances: the worker's `schedulerInstanceName`. Default `default`.
+     * A named instance registers there the first time it is addressed, so a
+     * pause reaches it and an instance created during a pause starts paused.
+     */
+    primaryInstanceName?: string;
 }
 
 /** Per-enqueue options for a {@link Workpool}. Extends {@link RunOptions} minus the implicit `pool` (the pool sets that). */

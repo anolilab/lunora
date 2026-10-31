@@ -97,6 +97,16 @@ export interface SqlClient {
      * return no rows).
      */
     query: <Row = Record<string, unknown>>(text: string, params?: ReadonlyArray<unknown>) => Promise<Row[]>;
+
+    /**
+     * Run `work` against a client pinned to one connection inside one
+     * transaction: committed when `work` resolves, rolled back when it throws.
+     * {@link import("./create-hyperdrive").fromPostgresJs | fromPostgresJs} provides it over postgres.js's `begin`;
+     * `@lunora/hyperdrive/global`'s `buildPgExec` uses it so a `.global()` row
+     * write and its aggregate/rank/CDC companions commit together. Absent, they
+     * commit one statement at a time.
+     */
+    transaction?: <T>(work: (tx: SqlClient) => Promise<T>) => Promise<T>;
 }
 
 /**
@@ -130,6 +140,8 @@ export interface NodePgLike {
  * direction, which is all bivariance asks for.
  */
 export interface PostgresJsLike {
+    /** postgres.js's `sql.begin(fn)`: reserves one connection and runs `fn` inside `BEGIN` … `COMMIT`. */
+    begin?(this: void, work: (tx: PostgresJsLike) => Promise<unknown>): Promise<unknown>;
     unsafe(this: void, text: string, params?: ReadonlyArray<unknown>, options?: { prepare?: boolean }): Promise<unknown>;
 }
 

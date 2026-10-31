@@ -1331,6 +1331,7 @@ interface AnalyticsPanelProps {
 ```ts
 interface CronTriggersPanelProps {
     readonly loadCronJobs?: () => Promise<CronJobInfo[]>;
+    readonly loadCronRuns?: () => Promise<CronRunsResult>;
     readonly runCronJob?: (name: string) => Promise<{
         name: string;
         ran: boolean;
@@ -1899,6 +1900,20 @@ const MESSAGE_IDS: readonly [
     "workflow",
     "Run now",
     "Run now?",
+    "Recent runs",
+    "Pause",
+    "Resume",
+    "Pause deployment?",
+    "Resume deployment?",
+    "Deployment paused",
+    "Function calls get 503, scheduled jobs are held on every scheduler instance, cron ticks are skipped and queue messages are held until you resume.",
+    "Reason (optional)",
+    "Deployment running",
+    "started",
+    "duration",
+    "skipped",
+    "never",
+    "{count} ticks skipped",
     "Running…",
     "ran",
     "attempts",
@@ -1911,6 +1926,14 @@ const MESSAGE_IDS: readonly [
     "last tried",
     "max concurrency",
     "No dead-letter jobs.",
+    "No finished jobs.",
+    "Jobs that succeed, fail or are cancelled stay here for seven days.",
+    "state",
+    "finished",
+    "succeeded",
+    "canceled",
+    "pending",
+    "running",
     "No workpools.",
     "pool",
     "Pools",

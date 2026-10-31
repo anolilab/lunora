@@ -1244,6 +1244,95 @@ describe("dispatchQueueBatch — a DISPATCH_IN_PROGRESS decline", () => {
             }
         });
 
+        describe("while the deployment is paused (holdSeconds)", () => {
+            it("re-enqueues each message as a fresh copy, acks the original and runs no handler", async () => {
+                expect.assertions(5);
+
+                const handler = vi.fn<() => void>();
+                const queue = producer();
+                const first = captureMessage({ n: 1 }, { attempts: 4, id: "m1" });
+                const second = captureMessage({ n: 2 }, { attempts: 2, id: "m2" });
+
+                await dispatchQueueBatch(
+                    batch("q", [first, second]),
+                    { q: { binding: "QUEUE_Q", definition: defineQueue({ handler }), exportName: "q" } },
+                    { env: { ...DISPATCH_ENV, QUEUE_Q: queue }, holdSeconds: 300 },
+                );
+
+                expect(queue.send.mock.calls).toStrictEqual([
+                    [await sealRequeue("tok", "m1", { n: 1 }), { contentType: "json", delaySeconds: 300 }],
+                    [await sealRequeue("tok", "m2", { n: 2 }), { contentType: "json", delaySeconds: 300 }],
+                ]);
+                // Acked, not retried: a retry would spend a delivery attempt per hold.
+                expect([first.acked, second.acked]).toStrictEqual([true, true]);
+                expect(retryOptions(first)).toStrictEqual([]);
+                expect(retryOptions(second)).toStrictEqual([]);
+                expect(handler).not.toHaveBeenCalled();
+            });
+
+            it("holds a copy again under the original id, so a long pause never spends its budget", async () => {
+                expect.assertions(2);
+
+                const queue = producer();
+                const copy = captureMessage(await sealRequeue("tok", "m1", { n: 1 }), { attempts: 4, id: "copy-1" });
+
+                await dispatchQueueBatch(batch("q", [copy]), registry, { env: { ...DISPATCH_ENV, QUEUE_Q: queue }, holdSeconds: 300 });
+
+                expect(queue.send.mock.calls).toStrictEqual([[await sealRequeue("tok", "m1", { n: 1 }), { contentType: "json", delaySeconds: 300 }]]);
+                expect(copy.acked).toBe(true);
+            });
+
+            it.each([
+                ["has no producer binding", { env: DISPATCH_ENV }],
+                [
+                    "cannot send the copy",
+                    {
+                        env: {
+                            ...DISPATCH_ENV,
+                            QUEUE_Q: producer(
+                                vi.fn<Send>(async () => {
+                                    throw new Error("queue down");
+                                }),
+                            ),
+                        },
+                    },
+                ],
+            ])("falls back to a delayed retry, never an ack, when the queue %s", async (_label, { env }) => {
+                expect.assertions(2);
+
+                const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+                try {
+                    const held = captureMessage({ n: 1 }, { id: "m1" });
+
+                    await dispatchQueueBatch(batch("q", [held]), registry, { env, holdSeconds: 300 });
+
+                    expect(held.acked).toBe(false);
+                    expect(retryOptions(held)).toStrictEqual([{ delaySeconds: 300 }]);
+                } finally {
+                    error.mockRestore();
+                }
+            });
+
+            it("still fails a job that genuinely throws once the pause lifts, on the copy's own budget", async () => {
+                expect.assertions(2);
+
+                const failing = defineQueue({
+                    handler: () => {
+                        throw new Error("boom");
+                    },
+                    maxRetries: 3,
+                });
+                const copy = captureMessage(await sealRequeue("tok", "m1", { n: 1 }), { attempts: 4, id: "copy-1" });
+
+                await expect(
+                    dispatchQueueBatch(batch("q", [copy]), { q: { binding: "QUEUE_Q", definition: failing, exportName: "q" } }, { env: DISPATCH_ENV }),
+                ).rejects.toThrow("boom");
+                // Not acked: the broker retries it, and dead-letters it past max_retries.
+                expect(copy.acked).toBe(false);
+            });
+        });
+
         it("carries a bigint, a Date and bytes through the copy intact", async () => {
             expect.assertions(1);
 

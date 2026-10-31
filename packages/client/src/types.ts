@@ -1171,6 +1171,8 @@ export interface ScheduleRecord {
      */
     attempts?: number;
     enqueuedAt: number;
+    /** Why the job was dead-lettered. Set on a parked record. */
+    error?: string;
 
     /**
      * The `ns:fn` path dispatched on fire. Absent when the job targets a durable
@@ -1195,6 +1197,77 @@ export interface ScheduleRecord {
      * of {@link ScheduleRecord.functionPath}.
      */
     workflow?: string;
+}
+
+/**
+ * Where a scheduled job is in its life. `succeeded` means its dispatch answered
+ * 2xx (for a workflow/agent target: its instance started); `failed`, that it
+ * exhausted its retry budget; `canceled`, that it was cancelled. Mirrors
+ * `@lunora/scheduler`'s `ScheduledJobState`.
+ */
+export type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+
+/** A scheduled job with its lifecycle state, as `getScheduledJob` / `listScheduledHistory` return it. */
+export interface ScheduledJobView extends ScheduleRecord {
+    /** When the job reached its terminal state (epoch ms). Absent while `pending`/`running`. */
+    completedAt?: number;
+    state: ScheduledJobState;
+}
+
+/** One page of finished jobs, newest first, plus the cursor to the next older page, if any. */
+export interface ScheduledHistoryPage {
+    cursor?: string;
+    records: ScheduledJobView[];
+}
+
+/** How one cron fire ended; `skipped` is a tick that did not run because the previous run was still going or the deployment was paused. Mirrors `@lunora/scheduler`'s `CronRunStatus`. */
+export type CronRunStatus = "failed" | "skipped" | "succeeded";
+
+/** One recorded fire of a code-defined cron job. Mirrors `@lunora/scheduler`'s `CronRunRecord`. */
+export interface CronRunRecord {
+    /** Run time in ms; `0` for a skipped tick. */
+    durationMs: number;
+    /** When the run finished, or when the tick was skipped (epoch ms). */
+    endedAt: number;
+    /** The thrown message of a `failed` run. */
+    error?: string;
+    /** The `cronJobs()` name. */
+    name: string;
+    /** Why a tick was `skipped`: the previous run still held the lease, or the deployment was paused. */
+    reason?: "in-flight" | "paused";
+    runId: string;
+    /** Ticks of the same cron skipped while this run held the lease. */
+    skipped: number;
+    startedAt: number;
+    status: CronRunStatus;
+}
+
+/** A cron run that holds its lease right now. Mirrors `@lunora/scheduler`'s `CronRunInFlight`. */
+export interface CronRunInFlight {
+    name: string;
+    /** When the run last said it was still alive; the lease lapses fifteen minutes after this, or after `startedAt` when it never did. */
+    renewedAt?: number;
+    runId: string;
+    /** Ticks skipped so far because this run was still going. */
+    skipped: number;
+    startedAt: number;
+}
+
+/** What `listCronRuns` returns: the runs in flight, and every recorded run newest first per job. */
+export interface CronRunsResult {
+    inFlight: CronRunInFlight[];
+    runs: CronRunRecord[];
+}
+
+/** Whether the deployment is paused, as `getDeploymentPause` / `setDeploymentPause` return it. */
+export interface DeploymentPauseStatus {
+    paused: boolean;
+    /** When the pause began (epoch ms). */
+    pausedAt?: number;
+    /** The operator's note. */
+    reason?: string;
+    /** `false` on a worker without a `schedulerDO`, which cannot be paused. */
+    supported: boolean;
 }
 
 /**

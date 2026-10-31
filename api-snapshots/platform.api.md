@@ -300,6 +300,7 @@ interface PlatformCapabilities {
         cronTriggers?: Capability;
         crossShardFanout?: Capability;
         deliveryAuthorization?: Capability;
+        deploymentPause?: Capability;
         durableStreams?: Capability;
         edgeRequestMetadata?: Capability;
         globalTables?: Capability;
@@ -597,6 +598,21 @@ interface ScheduledJob {
 }
 ```
 
+### `ScheduledJobRecord` (interface)
+
+```ts
+interface ScheduledJobRecord extends ScheduledJobStatus {
+    completedAt?: number;
+    state: ScheduledJobState;
+}
+```
+
+### `ScheduledJobState` (type)
+
+```ts
+type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+```
+
 ### `ScheduledJobStatus` (interface)
 
 ```ts
@@ -616,6 +632,7 @@ interface SchedulerHost {
         list: () => Promise<ScheduledJobStatus[]>;
         requeue: (id: string) => Promise<boolean>;
     };
+    get?: (id: string) => Promise<ScheduledJobRecord | null>;
     list?: () => Promise<ScheduledJobStatus[]>;
     schedule: (functionPath: string, args: Record<string, unknown>, options?: ScheduleOptions) => Promise<ScheduledJob>;
 }

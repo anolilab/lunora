@@ -314,8 +314,8 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 // The OAuth discovery documents (an \`mcp()\` resource's metadata, the
                 // issuer's) are derived here from the declared options, so the worker
                 // forwards only those exact paths and no other probe reaches the object.
-                // Memoised on the declaration: a framework-hosted worker rebuilds these
-                // options per request, and \`options(env)\` rebuilds every plugin.
+                // Memoised on the declaration: each worker built for a new \`env\` runs
+                // these options again, and \`options(env)\` rebuilds every plugin.
                 discoveryPaths,
                 internalSecret,${doAuthJurisdictionLine(options)}
                 namespace,
@@ -517,6 +517,9 @@ const buildQueueConsumerLines = (options: ResolvedAppOptions): string[] =>
               })`,
               `                        : undefined,`,
               `                    env: queueEnv as Record<string, unknown>,`,
+              // Set only while the deployment is paused: the consumer re-enqueues each
+              // message instead of running it.
+              `                    holdSeconds: trigger.holdSeconds,`,
               // The consumer's `ctx.run` joins the queue invocation's trace instead
               // of minting a fresh one per dispatched function.
               `                    traceparent: trigger.traceparent,`,

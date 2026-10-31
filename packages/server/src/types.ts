@@ -903,8 +903,12 @@ interface ScheduledFunctionDoc {
     args: Record<string, unknown>;
     /** Number of dispatch attempts already made (absent until the first retry). */
     attempts?: number;
+    /** When the job reached a terminal state (epoch ms). Set only on a `get()` of a finished job. */
+    completedAt?: number;
     /** When the job was enqueued (epoch ms). */
     enqueuedAt: number;
+    /** Why a `failed` job was dead-lettered. */
+    error?: string;
 
     /**
      * Fully-qualified `ns:fn` path of the function to invoke. Absent when the job
@@ -920,6 +924,14 @@ interface ScheduledFunctionDoc {
     scheduledFor: number;
     /** Routing hint forwarded so dispatch lands on the right shard. */
     shardKey?: string;
+
+    /**
+     * Lifecycle state (`pending`, `running`, `succeeded`, `failed`, `canceled`).
+     * `get()` reports it, including a finished job's outcome for a bounded
+     * retention window; `query().collect()` lists pending jobs only, which carry
+     * no state field.
+     */
+    state?: "canceled" | "failed" | "pending" | "running" | "succeeded";
 
     /**
      * The workflow/agent export key (its generated class name) a fresh durable instance is started from
@@ -1566,6 +1578,8 @@ interface ScheduledJob {
     attempts?: number;
     /** When the job was enqueued (epoch ms). */
     enqueuedAt: number;
+    /** Why the job was dead-lettered. Set only on a `failed` job. */
+    error?: string;
 
     /**
      * The `ns:fn` path of the function to dispatch on fire. Absent when the job
@@ -1591,6 +1605,25 @@ interface ScheduledJob {
      * instead of {@link ScheduledJob.functionPath}.
      */
     workflow?: string;
+}
+
+/**
+ * Where a job is in its life, as {@link Scheduler.get} reports it. `succeeded`
+ * means the dispatch answered 2xx — for a function, that it returned; for a
+ * workflow/agent target, that its instance was started. `failed` is a job that
+ * exhausted its retry budget; `canceled` one removed by {@link Scheduler.cancel}.
+ */
+type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+
+/**
+ * A job with its lifecycle state. Terminal states are kept for a bounded
+ * retention window after `completedAt`, after which {@link Scheduler.get}
+ * answers `null`.
+ */
+interface ScheduledJobView extends ScheduledJob {
+    /** When the job reached its terminal state (epoch ms). Absent while `pending`/`running`. */
+    completedAt?: number;
+    state: ScheduledJobState;
 }
 
 /**
@@ -1626,8 +1659,8 @@ type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown>
 interface Scheduler {
     /** Cancel a pending job by id. `cancelled` is `false` when no such job exists. */
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
-    /** Resolve a single pending job by id, or `null` when absent. */
-    get: (id: string) => Promise<ScheduledJob | null>;
+    /** Resolve a job by id with its lifecycle state, or `null` when never scheduled or past retention. */
+    get: (id: string) => Promise<ScheduledJobView | null>;
     /** List all pending scheduled jobs. */
     list: () => Promise<ScheduledJob[]>;
 
@@ -2819,6 +2852,8 @@ export type {
     RunQueryOptions,
     ScheduledFunctionDoc,
     ScheduledJob,
+    ScheduledJobState,
+    ScheduledJobView,
     Scheduler,
     Schema,
     SearchFilterBuilder,

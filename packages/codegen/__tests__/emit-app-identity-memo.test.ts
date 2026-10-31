@@ -335,7 +335,7 @@ describe("emitApp — identity memoisation", () => {
             const { build } = await prepare();
             const env = {};
 
-            // A framework-hosted worker rebuilds its options (and so the inner resolver) per request.
+            // Each options build wraps a fresh inner resolver; the memo store spans the builds.
             await build(resolver, env)(withCookie("s=a"));
             await build(resolver, env)(withCookie("s=a"));
 

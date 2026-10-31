@@ -1,3 +1,17 @@
+## @lunora/cloudflare-access [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.249...@lunora/cloudflare-access@1.0.0-alpha.250) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/server:** upgraded to 1.0.0-alpha.259
+
+## @lunora/cloudflare-access [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.248...@lunora/cloudflare-access@1.0.0-alpha.249) (2026-10-31)
+
+### Performance Improvements
+
+* **do,codegen:** share live queries that never read the caller ([#1401](https://github.com/anolilab/lunora/issues/1401)) ([d57a64c](https://github.com/anolilab/lunora/commit/d57a64cc0d292fab0d01a4f0b394842cf2d0bff8))
+
 ## @lunora/cloudflare-access [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/cloudflare-access@1.0.0-alpha.247...@lunora/cloudflare-access@1.0.0-alpha.248) (2026-10-30)
 
 

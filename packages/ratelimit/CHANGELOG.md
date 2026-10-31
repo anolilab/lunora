@@ -1,3 +1,31 @@
+## @lunora/ratelimit [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.188...@lunora/ratelimit@1.0.0-alpha.189) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/d1:** upgraded to 1.0.0-alpha.225
+* **@lunora/server:** upgraded to 1.0.0-alpha.259
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.178
+* **@lunora/values:** upgraded to 1.0.0-alpha.89
+
+## @lunora/ratelimit [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.187...@lunora/ratelimit@1.0.0-alpha.188) (2026-10-31)
+
+### Bug Fixes
+
+* **ratelimit:** admit retries on token buckets with very long periods ([#1434](https://github.com/anolilab/lunora/issues/1434)) ([84f874e](https://github.com/anolilab/lunora/commit/84f874ee13b3d406a07d79491df550bad5f10473))
+
+## @lunora/ratelimit [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.186...@lunora/ratelimit@1.0.0-alpha.187) (2026-10-30)
+
+### Bug Fixes
+
+* **ratelimit:** give a token-bucket retry-after that actually admits ([#1433](https://github.com/anolilab/lunora/issues/1433)) ([fbb3215](https://github.com/anolilab/lunora/commit/fbb32154a5d43c64d695b0bb24d3a7048cb1e6ce))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.224
+
 ## @lunora/ratelimit [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.185...@lunora/ratelimit@1.0.0-alpha.186) (2026-10-30)
 
 

@@ -43,7 +43,9 @@ import { buildAuthJurisdictionMoveRpc } from "./auth-jurisdiction-move-rpc";
 import { buildBackupAdminRoutes } from "./backup-admin-routes";
 import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit, withBodyLimit } from "./body-readers";
+import { beginCronRun, endCronRun } from "./cron-runs";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
+import { createDeploymentPause, PAUSE_PATH, PAUSED_QUEUE_RETRY_SECONDS } from "./deployment-pause";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
 import { prepareExportRows } from "./export-stream";
@@ -630,6 +632,9 @@ type QueueForwardHandler = (
  * is a child of the trigger span instead of an unrelated root trace.
  */
 interface TriggerTrace {
+    /** Set while the deployment is paused: the consumer holds each message back this many seconds instead of running it. */
+    holdSeconds?: number;
+
     /** W3C `traceparent` naming the trigger's SERVER span. */
     traceparent: string;
 }
@@ -1860,6 +1865,9 @@ interface RpcContext {
 const RPC_PATH = "/_lunora/rpc";
 const RPC_BATCH_PATH = "/_lunora/rpc-batch";
 const WS_PATH = "/_lunora/ws";
+
+/** The reserved paths that run app functions, and so answer `503 DEPLOYMENT_PAUSED` while the deployment is paused. */
+const FUNCTION_CALL_PATHS: ReadonlySet<string> = new Set([RPC_BATCH_PATH, RPC_PATH, WS_PATH]);
 
 /** HTTP metadata extracted safely from an inbound request for observability. */
 interface RequestTelemetryMeta {
@@ -3573,10 +3581,40 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return value;
     };
 
+    /** The scheduler instance holding cron leases, run history and the pause flag, or `undefined` when the worker has none. */
+    const cronRunStub = (): ResolvedShard | undefined =>
+        schedulerDO === undefined ? undefined : resolveShard(schedulerDO, options.schedulerInstanceName ?? "default");
+
+    const deploymentPause = createDeploymentPause({
+        assertAdmin: assertAdminAuthorized,
+        // The WS ticket too: Studio's live views upgrade `/_lunora/ws` with `?token=`, since a browser socket cannot carry the bearer header.
+        // The `adminGate` grant is recorded here because `applyAdminGate` only covers `/_lunora/admin/*`: an Access-only operator's
+        // RPCs carry no bearer and would otherwise be refused.
+        isAdmin: async (request) => {
+            await recordAdminGrant(request);
+
+            // The ticket is for the upgrade it was minted for: on any other request a
+            // ticket lifted from a socket URL would lift the pause for that call.
+            const isUpgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
+
+            return requestIsAdmin(request) || (isUpgrade && (await checkAdminWsToken(request, effectiveAdminToken())));
+        },
+        instanceStub: (name) => (schedulerDO === undefined ? undefined : resolveShard(schedulerDO, name)),
+        stub: cronRunStub,
+    });
+
+    const isPaused = async (): Promise<boolean> => {
+        const state = await deploymentPause.read();
+
+        return state.paused;
+    };
+
     /**
      * Dispatch every code-defined cron job declared under the firing expression,
      * collecting per-job failures into `errors` so one failing job neither aborts
-     * the others nor is swallowed.
+     * the others nor is swallowed. Each job runs under its own overlap lease: a
+     * tick that lands while the previous run of the same job is still going is
+     * skipped (and recorded as such) rather than run concurrently with it.
      * @returns how many jobs were declared under `cron` — 0 means the expression
      * matched nothing, which the caller reports rather than treating as success.
      */
@@ -3594,12 +3632,25 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return 0;
         }
 
+        const stub = cronRunStub();
+
         for (const job of cronJobs) {
+            // eslint-disable-next-line no-await-in-loop -- intentional: jobs on one expression run sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard
+            const gate = await beginCronRun(stub, job.name);
+
+            if (gate.skip) {
+                continue;
+            }
+
             try {
-                // eslint-disable-next-line no-await-in-loop -- intentional: jobs on one expression run sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard
+                // eslint-disable-next-line no-await-in-loop -- see above
                 await runOneCronJob(job, env, context, traceparent);
+                // eslint-disable-next-line no-await-in-loop -- see above
+                await endCronRun(stub, job.name, gate);
             } catch (error: unknown) {
                 errors.push(toError(error));
+                // eslint-disable-next-line no-await-in-loop -- see above
+                await endCronRun(stub, job.name, gate, error);
             }
         }
 
@@ -3637,7 +3688,26 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError(`no cron job named "${name}" is registered`, { code: "CRON_JOB_NOT_FOUND", status: 404 });
         }
 
-        await runOneCronJob(job, env, context);
+        const stub = cronRunStub();
+        const gate = await beginCronRun(stub, job.name);
+
+        if (gate.skip && gate.reason === "paused") {
+            throw new LunoraError(`cron job "${name}" was not run: the deployment is paused`, { code: "DEPLOYMENT_PAUSED", status: 503 });
+        }
+
+        if (gate.skip) {
+            throw new LunoraError(`cron job "${name}" is already running`, { code: "CRON_JOB_IN_FLIGHT", status: 409 });
+        }
+
+        try {
+            await runOneCronJob(job, env, context);
+        } catch (error: unknown) {
+            await endCronRun(stub, job.name, gate, error);
+
+            throw error;
+        }
+
+        await endCronRun(stub, job.name, gate);
 
         return Response.json({ name, ran: true }, { status: 200 });
     };
@@ -5745,6 +5815,35 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    /**
+     * Run the app's raw `crons` handler for one tick. Paused, it is skipped: it is
+     * user code with no lease of its own (`cronJobs()` skip through `beginCronRun`,
+     * which records the paused tick). The built-in backup is not routed here and
+     * keeps running — it executes no app code, and an operator mid-incident wants
+     * the snapshot more than ever.
+     */
+    const runUserCron = async (
+        handler: CronHandler,
+        controller: ScheduledControllerLike,
+        env: unknown,
+        context: ExecutionContextLike,
+        errors: Error[],
+        toError: (error: unknown) => Error,
+    ): Promise<void> => {
+        if (await isPaused()) {
+            // eslint-disable-next-line no-console -- the scheduled() entry point has no request-scoped logger; the host captures console
+            console.warn(`[lunora] scheduled("${controller.cron}") skipped its crons handler: the deployment is paused.`);
+
+            return;
+        }
+
+        try {
+            await handler(controller, env, context);
+        } catch (error: unknown) {
+            errors.push(toError(error));
+        }
+    };
+
     const handleScheduled = async (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike, traceparent?: string): Promise<void> => {
         // A cron can fire on an isolate that never served a `fetch`, so resolve
         // `env.LUNORA_ADMIN_TOKEN` here too — the built-in backup authenticates its
@@ -5757,11 +5856,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const userHandler = options.crons?.[controller.cron];
 
         if (userHandler) {
-            try {
-                await userHandler(controller, env, context);
-            } catch (error: unknown) {
-                errors.push(toError(error));
-            }
+            await runUserCron(userHandler, controller, env, context, errors, toError);
         }
 
         // Code-defined crons: run every job declared under the firing expression.
@@ -5811,6 +5906,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const tenantFanoutRoutes = buildTenantFanoutRoutes({
         assertAdmin: assertAdminAuthorized,
         dispatchScheduled: handleScheduled,
+        isPaused,
         queueHandler: options.queueHandler,
     });
 
@@ -5991,6 +6087,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
         [SCHEDULER_DISPATCH_PATH]: (request, env, _url, context) => handleSchedulerDispatch(request, env, context),
         [CRON_JOBS_RUN_PATH]: (request, env, _url, context) => handleRunCronJob(request, env, context),
+        [PAUSE_PATH]: async (request) => deploymentPause.handleRoute(request),
         // Mint a short-lived HMAC-signed WS admin sub-token. Gated by the master
         // admin bearer (header) / `adminGate`; the studio then sends the minted
         // token — not the master credential — in the WS `?token=`
@@ -6156,7 +6253,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // through to the router rather than failing with a 426. The handshake is
         // always a GET (RFC 6455 §4.1), so a POST carrying the header is not one.
         if (socketRoutePaths.has(url.pathname) && request.method === "GET" && isWebSocketUpgrade(request)) {
-            return handleWebSocketUpgrade(request, env, url);
+            return (await deploymentPause.refusal(request)) ?? handleWebSocketUpgrade(request, env, url);
         }
 
         // Auth providers register routes as `"METHOD path"` (e.g. `"GET /auth/signin"`).
@@ -6187,7 +6284,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         if (internalRoute) {
             await applyAdminGate(request, url.pathname);
 
-            return internalRoute(request, env, url, context);
+            const isFunctionCall = FUNCTION_CALL_PATHS.has(url.pathname) || Object.hasOwn(restRoutes, url.pathname);
+
+            return (isFunctionCall ? await deploymentPause.refusal(request) : undefined) ?? internalRoute(request, env, url, context);
         }
 
         // Voice sessions live under a DYNAMIC prefix (`/_lunora/voice/<agent>`), so
@@ -6195,7 +6294,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // the app wired `voiceAgents` (a voice-enabled agent) — otherwise it falls
         // through to the 404 below.
         if (options.voiceAgents !== undefined && url.pathname.startsWith(VOICE_PATH_PREFIX)) {
-            return handleVoiceUpgrade(request, env, url);
+            return (await deploymentPause.refusal(request)) ?? handleVoiceUpgrade(request, env, url);
         }
 
         // The reserved prefix is reserved even where nothing matched. The internal
@@ -6276,6 +6375,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             }
         },
         async queue(batch, env, context) {
+            // Paused: the consumer holds each message back instead of running it
+            // (`holdSeconds`), re-enqueued with a fresh budget so no pause length can
+            // dead-letter work that never ran.
+            const pause = await deploymentPause.read();
+
             // Forward to the codegen-built push-consumer handler (which routes by
             // `batch.queue` via `@lunora/queue`). A no-op when the app declares no
             // push queues, so re-exporting `queue` unconditionally is harmless.
@@ -6292,7 +6396,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                               publish: (topic, payload, publishOptions) => publishLiveToShard(QUEUE_LIVE_ORIGIN, topic, payload, publishOptions, "trusted"),
                           };
 
-                await options.queue?.(batch, env, context, { traceparent }, live, options.queueFetchImpl);
+                await options.queue?.(
+                    batch,
+                    env,
+                    context,
+                    pause.paused ? { holdSeconds: PAUSED_QUEUE_RETRY_SECONDS, traceparent } : { traceparent },
+                    live,
+                    options.queueFetchImpl,
+                );
             });
         },
         async scheduled(controller, env, context) {
@@ -6417,6 +6528,32 @@ const hostTriggers = (host: FrameworkHostHandler): Partial<FrameworkTriggers> =>
 };
 
 /**
+ * Build a worker once per `env` object and reuse it. Composing one costs more
+ * than dispatching a request through it, and a fresh worker starts with every
+ * per-isolate cache and memo empty. Workers hands the same `env` to every
+ * invocation in an isolate, so the build runs once there; a non-object `env`
+ * cannot key the cache and is built per call.
+ */
+const workerPerEnv = (make: (env: unknown) => LunoraWorker): ((env: unknown) => LunoraWorker) => {
+    const built = new WeakMap<object, LunoraWorker>();
+
+    return (env) => {
+        if (env === null || typeof env !== "object") {
+            return make(env);
+        }
+
+        let worker = built.get(env);
+
+        if (worker === undefined) {
+            worker = make(env);
+            built.set(env, worker);
+        }
+
+        return worker;
+    };
+};
+
+/**
  * Compose a meta-framework's Cloudflare Worker handler with Lunora's realtime
  * plane into one `{ fetch, scheduled }` Worker — the **single, shared** class-B
  * (own-CF-adapter, hook-injection) composer behind `@lunora/astro`'s
@@ -6429,8 +6566,8 @@ const hostTriggers = (host: FrameworkHostHandler): Partial<FrameworkTriggers> =>
  *
  * Owns the three behaviors the adapters otherwise each re-implemented (and
  * diverged on): (1) the host may be a bare `fetch` fn or a `{ fetch }` object;
- * (2) options may be a fixed object or an `(env) => options` factory, rebuilt per
- * request so per-request bindings wire in; (3) **trigger preservation** — a
+ * (2) options may be a fixed object or an `(env) => options` factory, called once
+ * per `env` object so its bindings wire in; (3) **trigger preservation** — a
  * dispatch Lunora does not own goes to the framework host rather than being
  * silently dropped. `scheduled` is Lunora's only when it configures a cron
  * surface; `queue` only when the app declares a push consumer; `email` never.
@@ -6479,14 +6616,13 @@ const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: Framework
         return build(optionsInput);
     }
 
-    // Factory form: options depend on per-request `env`, so (re)build per call.
-    const optionsFactory = optionsInput;
+    const workerFor = workerPerEnv((env) => build(optionsInput(env)));
 
     return {
-        fetch: (request, env, context) => build(optionsFactory(env)).fetch(request, env, context),
-        queue: (batch, env, context) => build(optionsFactory(env)).queue?.(batch, env, context) ?? Promise.resolve(),
-        scheduled: (controller, env, context) => build(optionsFactory(env)).scheduled(controller, env, context),
-        serverQuery: (request, env, reference, args, options) => build(optionsFactory(env)).serverQuery(request, env, reference, args, options),
+        fetch: (request, env, context) => workerFor(env).fetch(request, env, context),
+        queue: (batch, env, context) => workerFor(env).queue?.(batch, env, context) ?? Promise.resolve(),
+        scheduled: (controller, env, context) => workerFor(env).scheduled(controller, env, context),
+        serverQuery: (request, env, reference, args, options) => workerFor(env).serverQuery(request, env, reference, args, options),
         // `email` is the only trigger declared conditionally, and the asymmetry
         // with `queue` above is deliberate: Lunora always exports a `queue`
         // (`createWorker`'s consumer, a no-op when the app declares no push
@@ -6497,8 +6633,7 @@ const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: Framework
         ...(hostEmail === undefined
             ? {}
             : {
-                  email: (message: unknown, env: unknown, context: ExecutionContextLike) =>
-                      build(optionsFactory(env)).email?.(message, env, context) ?? Promise.resolve(),
+                  email: (message: unknown, env: unknown, context: ExecutionContextLike) => workerFor(env).email?.(message, env, context) ?? Promise.resolve(),
               }),
     };
 };
@@ -6563,14 +6698,16 @@ const resolveLunoraOptions = (options: LunoraHandlerOptions, env: unknown): Fram
  *
  * `shardDO` defaults to `env.SHARD`; pass `options` (or an `(env) => options`
  * factory) to add `auth`, `crons`, a `security` posture, or a custom namespace.
- * A new worker is composed per request because the options (and the `SHARD`
- * binding they default from) are only known once `env` arrives.
+ * The worker is composed on the first request for each `env` object, because the
+ * options (and the `SHARD` binding they default from) are only known once `env`
+ * arrives, and reused for every later request carrying that `env`.
  * @param options Partial worker options (default `shardDO: env.SHARD`), or an `(env) => options` factory.
  */
-const createLunoraHandler =
-    (options: LunoraHandlerOptions = {}): ((request: Request, env: unknown, context?: ExecutionContextLike) => Promise<Response>) =>
-    (request, env, context) =>
-        createWorker(resolveLunoraOptions(options, env)).fetch(request, env, context ?? NOOP_EXECUTION_CONTEXT);
+const createLunoraHandler = (options: LunoraHandlerOptions = {}): ((request: Request, env: unknown, context?: ExecutionContextLike) => Promise<Response>) => {
+    const workerFor = workerPerEnv((env) => createWorker(resolveLunoraOptions(options, env)));
+
+    return (request, env, context) => workerFor(env).fetch(request, env, context ?? NOOP_EXECUTION_CONTEXT);
+};
 
 /** Re-exported helper so callers can roundtrip envelopes in tests. */
 const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;

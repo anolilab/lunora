@@ -2231,12 +2231,15 @@ interface RunQueryOptions {
 interface ScheduledFunctionDoc {
     args: Record<string, unknown>;
     attempts?: number;
+    completedAt?: number;
     enqueuedAt: number;
+    error?: string;
     functionPath?: string;
     id: string;
     pool?: string;
     scheduledFor: number;
     shardKey?: string;
+    state?: "canceled" | "failed" | "pending" | "running" | "succeeded";
     workflow?: string;
 }
 ```
@@ -2248,6 +2251,7 @@ interface ScheduledJob {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
+    error?: string;
     functionPath?: string;
     id: string;
     instanceName?: string;
@@ -2259,6 +2263,21 @@ interface ScheduledJob {
 }
 ```
 
+### `ScheduledJobState` (type)
+
+```ts
+type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+```
+
+### `ScheduledJobView` (interface)
+
+```ts
+interface ScheduledJobView extends ScheduledJob {
+    completedAt?: number;
+    state: ScheduledJobState;
+}
+```
+
 ### `Scheduler` (interface)
 
 ```ts
@@ -2266,7 +2285,7 @@ interface Scheduler {
     cancel: (id: string) => Promise<{
         cancelled: boolean;
     }>;
-    get: (id: string) => Promise<ScheduledJob | null>;
+    get: (id: string) => Promise<ScheduledJobView | null>;
     list: () => Promise<ScheduledJob[]>;
     runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
     runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
@@ -5927,6 +5946,14 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `ScheduledJob` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 

@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 199 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 203 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -285,6 +285,10 @@ Re-read the row and retry the mutation with the fresh value. Lunora serializes a
 
 `400` — Cron jobs not configured
 
+### `CRON_JOB_IN_FLIGHT`
+
+`409` — Cron job is already running
+
 ### `CRON_JOB_NOT_FOUND`
 
 `404` — Cron job not found
@@ -328,6 +332,10 @@ The operation may have committed. Retry with the same transport key; a committed
 `409` — Committed receipt authorization changed
 
 The operation committed, but its stored result belongs to an older authority epoch. Do not automatically retry with a new transport ID. Recover through the application's durable operation key under current authorization.
+
+### `DEPLOYMENT_PAUSED`
+
+`503` — Deployment is paused
 
 ### `DISPATCH_IN_PROGRESS`
 
@@ -649,6 +657,14 @@ A mutation sent with `onlineOnly: true` found its connection down or reconnectin
 ### `OUT_OF_ORDER`
 
 `409` — Out-of-order mutation
+
+### `PAUSE_INSTANCES_FAILED`
+
+`502` — Pause did not reach every scheduler instance
+
+### `PAUSE_NOT_CONFIGURED`
+
+`400` — Deployment pause not configured
 
 ### `PAYLOAD_TOO_LARGE`
 

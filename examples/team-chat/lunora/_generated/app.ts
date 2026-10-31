@@ -269,7 +269,7 @@ class AppBuilder<Env extends object> {
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.globalDeclaration
                 ? {
-                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null }) => {
+                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null | undefined }) => {
                           const env = rawEnv as Env;
                           const database = this.globalDeclaration?.d1(env);
 
@@ -280,16 +280,30 @@ class AppBuilder<Env extends object> {
                           const origin = this.globalDeclaration?.origin?.(env);
                           const crossShard = origin
                               ? createCrossShardRelationCapabilities({
-                                    ...(request?.identity === undefined ? {} : { identity: request.identity }),
+                                    get identity() {
+                                        return request?.identity;
+                                    },
                                     origin,
-                                    ...(request?.userId == null ? {} : { userId: request.userId }),
+                                    get userId() {
+                                        return request?.userId ?? undefined;
+                                    },
                                 })
                               : undefined;
 
                           return createD1CtxDb({
                               ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
                               ...(request?.cdcRetentionMs === undefined ? {} : { cdcRetentionMs: request.cdcRetentionMs }),
-                              auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
+                              // Getters, like the cross-shard identity above: reading the
+                              // request's caller marks the live query as caller-dependent, so
+                              // it may happen only when a `.serverDefault` column is stamped.
+                              auth: {
+                                  get identity() {
+                                      return request?.identity ?? null;
+                                  },
+                                  get userId() {
+                                      return request?.userId ?? null;
+                                  },
+                              },
                               // Forwarded from the shard's own `cdc` config, so ONE
                               // switch governs both changelogs. Built without it, the
                               // global `__cdc_log` is never written and the shape
@@ -315,8 +329,8 @@ class AppBuilder<Env extends object> {
         let worker: LunoraWorker | null = null;
         let auth: LunoraAuth | null = null;
         let authInit: Promise<void> | null = null;
-        // One memo per env for THIS assembled worker: a framework-hosted worker rebuilds its options per
-        // request and must reuse it, but a second `assemble()` has its own auth closure and must not share.
+        // One memo per env for THIS assembled worker: every worker it builds reuses it, but a second
+        // `assemble()` has its own auth closure and must not share.
         const identityMemos: IdentityMemoStore = new WeakMap();
 
         const initAuth = async (env: Env): Promise<void> => {
@@ -372,6 +386,19 @@ class AppBuilder<Env extends object> {
                 throw error;
             }));
 
+        // For host-owned events (cron, queue, mail), which must not go down with auth. The failure is
+        // logged each time: auth retries on the next event, and an isolate that only ever sees these
+        // would otherwise repeat it with nothing saying why the admin and auth surfaces are missing.
+        const authReady = (env: Env): Promise<boolean> =>
+            ensureAuth(env).then(
+                () => true,
+                (error: unknown) => {
+                    console.error("[lunora] auth failed to initialise; this event runs without auth:", error);
+
+                    return false;
+                },
+            );
+
         const buildWorker = (env: Env, deferred: DeferredModules): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth, identityMemos, deferred));
 
         const composed: ComposedApp = {
@@ -386,12 +413,13 @@ class AppBuilder<Env extends object> {
             },
             scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
                 const deferred = await loadDeferredModules();
-                worker ??= buildWorker(rawEnv as Env, deferred);
+                const target = (await authReady(rawEnv as Env)) ? (worker ??= buildWorker(rawEnv as Env, deferred)) : buildWorker(rawEnv as Env, deferred);
 
-                return worker.scheduled(controller, rawEnv, context);
+                return target.scheduled(controller, rawEnv, context);
             },
             serverQuery: async (request, rawEnv, reference, args, options) => {
                 const deferred = await loadDeferredModules();
+                await ensureAuth(rawEnv as Env);
                 worker ??= buildWorker(rawEnv as Env, deferred);
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
@@ -611,8 +639,8 @@ class AppBuilder<Env extends object> {
                 // The OAuth discovery documents (an `mcp()` resource's metadata, the
                 // issuer's) are derived here from the declared options, so the worker
                 // forwards only those exact paths and no other probe reaches the object.
-                // Memoised on the declaration: a framework-hosted worker rebuilds these
-                // options per request, and `options(env)` rebuilds every plugin.
+                // Memoised on the declaration: each worker built for a new `env` runs
+                // these options again, and `options(env)` rebuilds every plugin.
                 discoveryPaths,
                 internalSecret,
                 namespace,

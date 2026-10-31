@@ -249,7 +249,8 @@ describe("createSqlCtxDb — companion rebuilds", () => {
                     return await harness.exec.all(query, parameters);
                 },
             };
-            const abandoned = createSqlCtxDb({ clock: () => 1, dialect, exec: stuck, provisionScope, schema: companionSchema });
+            // No statement deadline: a cancelled request's timers never fire either, so its run stays pending.
+            const abandoned = createSqlCtxDb({ clock: () => 1, dialect, exec: stuck, provisionScope, queryTimeoutMs: 0, schema: companionSchema });
 
             abandoned.count("notes", { org: "a" }).catch(() => undefined);
 
@@ -290,7 +291,8 @@ describe("createSqlCtxDb — companion rebuilds", () => {
                     return await recorded.all(query, parameters);
                 },
             };
-            const stalled = createSqlCtxDb({ clock: () => 1, dialect, exec: slow, provisionScope, schema: companionSchema });
+            // No statement deadline, so the source page stays parked past the rebuild wait.
+            const stalled = createSqlCtxDb({ clock: () => 1, dialect, exec: slow, provisionScope, queryTimeoutMs: 0, schema: companionSchema });
             const first = stalled.count("notes", { org: "a" });
 
             const next = createSqlCtxDb({ clock: () => 2, dialect, exec: harness.exec, provisionScope, schema: companionSchema });
@@ -452,10 +454,21 @@ describe("createSqlCtxDb — companion rebuilds", () => {
 
             const stalled = gate();
             const replacement = gate();
-            const first = createSqlCtxDb({ clock: () => 1, dialect, exec: stalled.exec, provisionScope, schema: companionSchema }).count("notes", {
-                org: "a",
-            });
-            const counted = createSqlCtxDb({ clock: () => 2, dialect, exec: replacement.exec, provisionScope, schema: companionSchema }).count("notes", {
+            // No statement deadlines, so both gated source pages stay parked past the rebuild wait.
+            const first = createSqlCtxDb({ clock: () => 1, dialect, exec: stalled.exec, provisionScope, queryTimeoutMs: 0, schema: companionSchema }).count(
+                "notes",
+                {
+                    org: "a",
+                },
+            );
+            const counted = createSqlCtxDb({
+                clock: () => 2,
+                dialect,
+                exec: replacement.exec,
+                provisionScope,
+                queryTimeoutMs: 0,
+                schema: companionSchema,
+            }).count("notes", {
                 org: "a",
             });
 
@@ -911,5 +924,52 @@ describe("createSqlCtxDb — the changed-tables poll", () => {
             // eslint-disable-next-line no-await-in-loop -- one poll per cursor, compared in turn
             await expect(writer.cdcChangedTables?.(since)).resolves.toMatchObject({ cursor, tables: expected.map((row) => row["table"]) });
         }
+    });
+});
+
+describe("createSqlCtxDb — statements stay under workerd's compound-SELECT limit", () => {
+    let harness: ReturnType<typeof createSqliteBatchHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteBatchHarness();
+
+        // workerd and D1 allow five terms per compound SELECT; `node:sqlite` exposes the limit from Node 24.
+        const { limits } = harness.database as unknown as { limits?: { compoundSelect: number } };
+
+        if (limits !== undefined) {
+            limits.compoundSelect = 5;
+        }
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("rebuilds aggregate and rank companions holding more than five rows", async () => {
+        expect.assertions(2);
+
+        const schema = {
+            tables: {
+                notes: {
+                    aggregateIndexes: [{ by: ["org"], name: "byOrg", on: "notes", op: "count" }],
+                    indexes: [],
+                    rankIndexes: [{ name: "byPriority", on: "notes", sortBy: [{ direction: "desc", field: "priority" }] }],
+                    shape: { org: col("string"), priority: col("number") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as unknown as SchemaLike;
+        const seeder = createSqlCtxDb({ clock: () => 1, dialect, exec: harness.exec, schema });
+
+        for (const priority of [1, 2, 3, 4, 5, 6, 7]) {
+            // eslint-disable-next-line no-await-in-loop -- deterministic seeding
+            await seeder.insert("notes", { org: `org-${String(priority)}`, priority });
+        }
+
+        // A fresh writer rebuilds both companions from the table: seven groups and seven rank entries.
+        const rebuilt = createSqlCtxDb({ clock: () => 1, dialect, exec: harness.exec, schema });
+
+        await expect(rebuilt.count("notes", { org: "org-7" })).resolves.toBe(1);
+        await expect(rebuilt.rankPage("notes", "byPriority", { take: 10 }).then((page) => page.page.length)).resolves.toBe(7);
     });
 });

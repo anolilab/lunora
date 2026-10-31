@@ -61,8 +61,9 @@ await scheduler.cancel(id);
 ```
 
 `runAfter`/`runAt` resolve the **job id** — the same string `cancel`, `get` and
-`ctx.scheduler` deal in. Read the instant it will fire at back off
-`scheduler.get(id)`.
+`ctx.scheduler` deal in. `scheduler.get(id)` answers the job with its `state`
+(`pending`, `running`, `succeeded`, `failed`, `canceled`) and, once finished,
+`completedAt` — kept for seven days, then `null`.
 
 Pass `instanceName` to isolate a tenant's jobs into a separate DO instance.
 

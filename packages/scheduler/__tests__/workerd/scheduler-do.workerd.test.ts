@@ -278,7 +278,7 @@ describe("schedulerDO (workerd)", () => {
         });
     });
 
-    it("leaves nothing behind when a job is cancelled mid-dispatch and the attempt fails", async () => {
+    it("keeps only the cancel outcome when a job is cancelled mid-dispatch and the attempt fails", async () => {
         expect.hasAssertions();
 
         const stub = newStub("cancel-mid-dispatch");
@@ -294,8 +294,10 @@ describe("schedulerDO (workerd)", () => {
             // The failed attempt used to re-arm the job through the retry path,
             // resurrecting it after `/cancel` answered `{ cancelled: true }`.
             const rows = await state.storage.list({ prefix: "" });
+            const live = [...rows.keys()].filter((key) => key.endsWith(":cancelled-0") && !key.startsWith("done:") && !key.startsWith("dt:"));
 
-            expect([...rows.keys()].filter((key) => key.endsWith(":cancelled-0"))).toStrictEqual([]);
+            expect(live).toStrictEqual([]);
+            await expect(state.storage.get("done:cancelled-0")).resolves.toMatchObject({ state: "canceled" });
             expect(instance.dispatched).toHaveLength(1);
         });
     });

@@ -128,6 +128,18 @@ import mysql from "mysql2/promise";
 })
 ```
 
+Each write commits its row and its aggregate, rank and CDC companion rows in one
+transaction when the driver can hold one connection for it: postgres.js
+(`fromPostgresJs`, through `sql.begin`) and a mysql2 **pool** (`getConnection`).
+`fromNodePg` and a single mysql2 connection have no such handle, so there the
+companions commit one statement at a time after the row. Every query and write
+statement, and each write's transaction as a whole, is abandoned after 30 seconds
+with a retryable `SERVICE_UNAVAILABLE` (`createHyperdriveGlobalCtxDb` takes a
+`queryTimeoutMs` to change it; `0` disables it). Table, aggregate, rank and CDC
+schema migrations are exempt, since an index on a large table can take longer; a
+search index's companion build and backfill pages are not, and can fail the same way. A write whose transaction the engine aborts on a
+deadlock surfaces as a retryable `CONFLICT`.
+
 Outside the app builder, for example in tests or a custom host,
 `createHyperdriveGlobalCtxDb({ engine, exec, ... })` builds the same reactive writer
 directly.

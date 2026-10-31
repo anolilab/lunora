@@ -13,10 +13,10 @@
  * be a real type-level one: if either side moves, `true` stops being assignable
  * and `lint:types` fails here.
  */
-import type { ScheduleRecord } from "@lunora/scheduler";
+import type { ScheduledJobView as SchedulerJobView, ScheduleRecord } from "@lunora/scheduler";
 import { describe, expect, it } from "vitest";
 
-import type { ScheduledFunctionDoc, ScheduledJob } from "../src/types";
+import type { ScheduledFunctionDoc, ScheduledJob, ScheduledJobView } from "../src/types";
 
 /** `true` only when `A` and `B` are mutually assignable — i.e. the mirror has not drifted. */
 type Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
@@ -28,11 +28,18 @@ describe("@lunora/scheduler record mirrors", () => {
         const inLockstep: [
             // The ctx view is the whole record, field for field.
             Mutual<ScheduledJob, ScheduleRecord>,
-            // The system-table view is a subset — `Pick` itself fails to compile if
-            // it names a field the record no longer has.
-            Mutual<ScheduledFunctionDoc, Pick<ScheduleRecord, keyof ScheduledFunctionDoc>>,
-        ] = [true, true];
+            // The `get()` view adds the lifecycle state on both sides.
+            Mutual<ScheduledJobView, SchedulerJobView>,
+            // The system-table view is a subset of the `get()` view (it carries the
+            // state a `get` reports) — `Pick` itself fails to compile if it names a
+            // field the record no longer has. Optional there, since `collect()`
+            // rows are pending jobs with no state field.
+            Mutual<
+                ScheduledFunctionDoc,
+                Partial<Pick<SchedulerJobView, "completedAt" | "state">> & Pick<ScheduleRecord, Exclude<keyof ScheduledFunctionDoc, "completedAt" | "state">>
+            >,
+        ] = [true, true, true];
 
-        expect(inLockstep).toHaveLength(2);
+        expect(inLockstep).toHaveLength(3);
     });
 });

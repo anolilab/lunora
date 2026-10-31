@@ -1,3 +1,20 @@
+## @lunora/d1 [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.224...@lunora/d1@1.0.0-alpha.225) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/platform:** upgraded to 1.0.0-alpha.77
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.178
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.226
+* **@lunora/do:** upgraded to 1.0.0-alpha.271
+
+## @lunora/d1 [1.0.0-alpha.224](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.223...@lunora/d1@1.0.0-alpha.224) (2026-10-30)
+
+### Bug Fixes
+
+* **sql-store:** require the table for global by-id calls ([#1428](https://github.com/anolilab/lunora/issues/1428)) ([5680500](https://github.com/anolilab/lunora/commit/56805003af8612bd8f437cefb9a5cce882e4e008))
+
 ## @lunora/d1 [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.222...@lunora/d1@1.0.0-alpha.223) (2026-10-30)
 
 

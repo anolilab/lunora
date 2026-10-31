@@ -123,9 +123,12 @@ describe("createScheduler", () => {
 
         await scheduler.runAfter(0, fnRef, { userId: "u-1" }, { maxConcurrency: 4, pool: "billing" });
 
-        expect(calls[0]?.body["instanceName"]).toBe("tenant-a");
-        expect(calls[0]?.body["pool"]).toBe("billing");
-        expect(calls[0]?.body["maxConcurrency"]).toBe(4);
+        // The first call registers the instance with the default one.
+        const schedule = calls.find((call) => call.url.endsWith("/schedule"));
+
+        expect(schedule?.body["instanceName"]).toBe("tenant-a");
+        expect(schedule?.body["pool"]).toBe("billing");
+        expect(schedule?.body["maxConcurrency"]).toBe(4);
     });
 
     it("runAt() omits maxConcurrency for an unpooled job", async () => {
@@ -243,7 +246,7 @@ describe("createScheduler", () => {
     it("get() resolves a single record via the direct GET /get?id= route", async () => {
         expect.assertions(4);
 
-        const records = [{ args: {}, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10 }];
+        const records = [{ args: {}, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10, state: "pending" }];
         const { calls, namespace } = fakeNamespace({ "/list": { records } });
         const scheduler = createScheduler({ namespace });
 
@@ -289,7 +292,9 @@ describe("createScheduler", () => {
         expect.assertions(2);
 
         const args = { amount: 5n, when: new Date(0) };
-        const records = [{ args: encodeWire(args) as Record<string, unknown>, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10 }];
+        const records = [
+            { args: encodeWire(args) as Record<string, unknown>, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10, state: "pending" },
+        ];
         const { namespace } = fakeNamespace({ "/list": { records } });
         const scheduler = createScheduler({ namespace });
 

@@ -1,3 +1,586 @@
+## @lunora/queue [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.136...@lunora/queue@1.0.0-alpha.137) (2026-10-31)
+
+### ⚠ BREAKING CHANGES
+
+* **scheduler,runtime:** Scheduler.get (and @lunora/server's ctx.scheduler.get)
+returns a ScheduledJobView with a required state and answers for finished
+jobs instead of null. The Node scheduler host keeps succeeded and canceled
+rows instead of deleting them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(scheduler): record cron runs and skip overlapping ticks
+
+Cron fires recorded nothing, and a run that outlasted its interval ran
+concurrently with the next tick.
+
+Each cronJobs() job now runs under a per-job lease held in the SchedulerDO
+(POST /cron/begin, /cron/end): Cloudflare delivers cron triggers to any
+isolate, so module state cannot see a run elsewhere, and the DO's input
+gate makes the check-and-set atomic. A tick that finds the lease held is
+skipped and recorded; the holding run counts it. A lease older than the
+fifteen-minute scheduled() wall clock is treated as lost and recorded as a
+failed run. Every fire is kept (start, end, duration, status, error,
+skipped count), the newest 50 per job. Studio's "Run now" answers
+409 CRON_JOB_IN_FLIGHT while a run is going.
+
+The worker fails open: with no schedulerDO, or one that cannot be reached,
+the run goes ahead unguarded and a warning is logged, rather than a
+scheduler outage stopping every cron.
+
+Surfaces: GET /cron/runs on the DO, /_lunora/admin/scheduled/cron-runs,
+the admin client's listCronRuns, and Studio's Cron triggers view (last run
+per job, recent-run history). Cloudflare and celld capability notes state
+the lease; Node rates cronTriggers unsupported, so there is no runtime
+path to guard there.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(runtime): pause and resume a deployment
+
+There was no way to stop functions, scheduled jobs, crons and queue
+consumers during an incident short of a redeploy.
+
+The pause flag is durable in the SchedulerDO (meta:paused, GET/POST
+/pause). While it is set the alarm holds every job in place (header,
+index and attempts untouched) and deletes its clock rather than spin on
+past-due rows; resume re-derives the clock and the held jobs run.
+/cron/begin skips and records the tick (reason "paused").
+
+The worker reads the flag per isolate with a 5 s cache (fail open) and:
+answers app function calls (rpc, batch, ws, REST, socket and voice routes)
+with 503 DEPLOYMENT_PAUSED and Retry-After; lets admin-bearer calls,
+the admin plane, health, auth and the scheduler's dispatch callback
+through so the operator can inspect and resume; hands queue batches back
+with a 300 s retry (each spends a delivery attempt, stated in the docs);
+answers Studio's Run now with 503.
+
+Entry points: GET/POST /_lunora/admin/pause (PAUSE_NOT_CONFIGURED without
+a schedulerDO, and GET reports supported: false), the admin client's
+getDeploymentPause / setDeploymentPause, `lunora pause [status]
+[--reason]` and `lunora resume`, and Studio's banner on every page while
+paused (with Resume) plus a toggle on the Schedule tab. New error codes
+DEPLOYMENT_PAUSED, PAUSE_NOT_CONFIGURED, CRON_JOB_IN_FLIGHT.
+
+Platform: new advisory deploymentPause capability, emulated on Cloudflare
+and celld (SchedulerDO-held), unsupported on Node (no SchedulerDO).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* chore(api): record job lifecycle, cron runs and deployment pause
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* test(scheduler): expect the cancel outcome row after a mid-dispatch cancel
+
+The job now keeps a done: record when cancelled; the test still fails if the
+failed attempt re-arms the job.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(runtime): tidy pause and cron-run edits
+
+Scope the cron loop's no-await-in-loop disables to their lines, move the queue
+pause check above the comment it had split from its code, drop a redundant
+completedAt guard in the Studio job history (formatTimestamp already falls
+back), and undo stray blank-line churn in PlatformCapabilities.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(playground): read job-status from the scheduler's lifecycle state
+
+get() now keeps succeeded, failed and canceled jobs for the retention window, so a non-null
+record no longer means the job is still pending. Branch on state instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(runtime): let adminGate operators through a deployment pause
+
+The pause refused a function call before any adminGate grant was recorded, so an Access-only
+operator (no bearer) was locked out of RPC while paused. Read the flag first and evaluate the
+gate only when paused, so ordinary traffic still never pays for it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(runtime): hold raw crons and tenant queue batches while paused
+
+The pause only gated cronJobs() and the native queue() entry. A raw crons handler still ran on
+every tick, and a Workers-for-Platforms tenant's forwarded batches (POST /_lunora/queue) were
+consumed. Skip the raw handler and answer a forwarded batch with every id in retry. The built-in
+backup keeps running: it executes no app code.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): stop a running drain from dispatching after a pause
+
+alarm() read the pause flag once, so records queued behind in-flight dispatches still started
+after a pause landed. Re-check the flag before each claim and leave the due-time index in place,
+and keep rescheduleAlarm() from arming a past alarm while paused.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): keep a job that ran from reading as canceled
+
+A cancel landing mid-dispatch wrote canceled even when the kick then went through, and a cancel
+on a header left behind by a failed post-dispatch cleanup overwrote the succeeded row. Rewrite
+the outcome to succeeded when the raced kick succeeds (only while the row is still this record's
+and the id is not reused), and treat a header beside an outcome row as residue to clean up.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): clear a stale failed outcome when a dead job is retried
+
+A dead-letter purge writes its failed outcome before dropping the dead row. If that drop failed
+and the job was then retried, /get read the leftover failed row ahead of the new pending header.
+/dead/retry now deletes the outcome row first.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): keep real cron runs in history through skipped ticks
+
+Cron history was keyed by start time, so a run that held its lease through 50 skipped ticks
+was trimmed the moment it was recorded, and a long pause evicted every earlier run. Key rows by
+end time and fold consecutive same-reason skips into one row whose skipped count is the streak.
+/cron/runs also reconciles a lapsed lease into a failed run instead of showing it in flight
+until another tick arrives.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): let the outcome sweep keep up with load and cancels
+
+One 64-row batch per alarm that found due jobs could fall behind a 100-job drain, and a
+cancel-only workload never swept at all. Sweep up to four batches, on every alarm and after
+each cancel and dead-letter purge.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(client): page scheduled-job history by cursor
+
+listScheduledHistory dropped the scheduler's continuation cursor, so outcomes past the first 100
+within the retention window were unreachable. It now takes { cursor } and returns
+{ records, cursor? }, and Studio's History view loads older pages on demand.
+* **scheduler,runtime:** LunoraAdminClient.listScheduledHistory returns a ScheduledHistoryPage instead
+of an array.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(studio): keep the pause banner through a failed status poll
+
+Every rejected pause read fell back to not-paused, so one network blip or 5xx during a pause
+hid the banner until the next good poll. Only an older worker's 404 means unsupported now;
+other errors rethrow and the query keeps its last state.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* chore(api): record the paged scheduled-history client surface
+
+listScheduledHistory now takes a cursor and returns ScheduledHistoryPage.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(cli): note what else a pause holds and lets through
+
+Raw crons handlers and forwarded tenant queue batches are now held; the scheduled backup and
+adminGate-authorized operators are not.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* test(scheduler): await the dispatch-entered milestone, not a timer turn
+
+The cron-overlap and lifecycle tests waited a zero-delay timer before asserting on an in-flight
+dispatch. They now await a promise the blocking double resolves when that dispatch begins. Also
+separate a run's end from the last skipped tick in the cron-history test, whose shared end
+time made the row order depend on the random run id.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): keep the pause flag until resume has re-armed the clock
+
+Resume deleted the flag before re-arming the alarm, so a failed arm returned an error with
+the deployment unpaused and held jobs left without a clock. Arm first, then clear the flag.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* perf(runtime): share one in-flight pause read per isolate
+
+Calls that found the pause cache stale each started their own SchedulerDO read. Concurrent
+callers now await the read already in flight.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(studio): drop the finally from the history pager
+
+React Compiler cannot memoize a component holding a try/finally, so the Load more handler
+catches inline instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(platform-node): record a job cancelled mid-dispatch as succeeded when it ran
+
+Match SchedulerDO: a cancel landing while the handler runs keeps the claim, so a successful
+attempt still settles the row as succeeded. Retry re-arm and dead-letter parking now require a
+pending row, so a failed attempt leaves the job canceled rather than parking or re-arming it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(platform): say a parked job reads failed until requeued or purged
+
+Both hosts keep a dead-lettered job until an operator requeues or purges it, so the get()
+contract no longer implies it ages out. Scheduler get() fixtures now carry a lifecycle state.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): refuse stray arguments to pause and resume
+
+lunora resume ignored its positional arguments and lunora pause checked only the first, so a
+typo could still flip a deployment. Both now exit with a usage error.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): never lose a cron run or a skip decision to a write error
+
+/cron/end released the lease before recording the run, so a failed write lost the run with
+nothing left to reconcile. Record first, then release. A failed skip-history write in
+/cron/begin no longer errors the request, which the worker read as an outage and ran the job
+unguarded.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(runtime): keep the operator's pause reason out of the public 503
+
+The DEPLOYMENT_PAUSED body echoed the free-text --reason to every caller, which leaks internal
+incident notes. Callers now get a fixed message; the reason stays on the admin pause route.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): list dead-lettered jobs in history when they are parked
+
+A parked job had no completion time and no dt: entry, so it was missing from /history and
+Studio until purged, and get() gave no failure time. Parking now records completedAt and
+indexes it; a purge keeps that time, and a requeue drops it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(studio): clear the history pager's loading flag on both paths
+
+The reset sat after the await, which reads as success-only. The try and the catch now each
+clear it, still without a finally.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): record a lapsed cron lease before releasing it
+
+/cron/runs deleted an expired lease before writing its failed-run row, so a failed write lost
+the run. Record first, as /cron/end does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* style(studio): mark the deliberate react-doctor findings in the scheduler views
+
+The table scaffolding repeats by design and the pager's loading flag is cleared on both paths;
+line-scoped disables with reasons stop the PR scan from re-posting them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): reject cron names the overlap lease cannot hold
+
+cronJobs() accepted names of any length while /cron/begin refuses names over 256 characters,
+which the worker reads as an outage and runs the job unguarded. Reject them at definition.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): report a cancel as done once the job is removed
+
+A failed outcome write after the rows were removed errored the request, so a retry answered
+cancelled: false for a job that was gone. The outcome row is now best-effort.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(runtime): note what a pause leaves serving and what a skip means
+
+Custom routes handlers are not gated by a pause, like httpRouter. CronRunStatus skipped also
+covers a paused deployment.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): keep cron history whole across partial write failures
+
+A lease left by a failed release after /cron/end was later recorded again as a lost run, and
+folding a skip deleted the old row before writing its replacement. Skip a lost run already on
+record, and write the folded row before dropping the old one. Also fix a misplaced doc comment.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* perf(platform-node): index scheduler rows by state and completion
+
+Finished rows now stay for seven days, and the sweep after each delivery plus the pending scans
+read the whole table. A (state, completed_at) index keeps them bounded.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(studio): keep the job history contiguous after Load more
+
+Polling refreshed only the first page, so new outcomes pushed rows into the gap before the
+loaded older pages, where they were never shown. Polling stops once older pages are loaded.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(errors): regenerate error reference after rebase
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(runtime): keep a fresh pause toggle over an older read
+
+A read of the pause flag that started before an admin POST could resolve
+after it and overwrite the cache the POST had just filled, so the isolate
+that set the flag kept serving (or refusing) calls for another cache window.
+Writes now bump a generation; a read only fills the cache when no write
+began or finished since it started.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): drop the history entry of a requeued dead job
+
+Requeueing a dead-lettered job removed its dead row but left the dt: index
+entry parkDead wrote, which took a /history page slot until the retention
+sweep reclaimed it. The entry is now deleted with the dead row.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(testing): report the dead-letter reason on a failed fake job
+
+The fake scheduler exposed the handler's thrown message as a failed job's
+error, while SchedulerDO records why the job was dead-lettered. Tests reading
+get(id).error now see the same value production callers do.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(testing): match the stored dead-letter error text
+
+SchedulerDO stores the reason as "dead-lettered after N attempts"; the fake
+reported only "after N attempts".
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* style(studio): sort the cron panel imports after the rebase
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(queue): hold paused messages with a fresh retry budget
+
+A paused deployment handed each queue batch back with a delayed retry, which
+spends one delivery attempt per hold. A pause longer than max_retries times
+the delay dead-lettered work that never ran.
+
+The runtime now tells the consumer to hold instead (holdSeconds on the
+trigger, forwarded by the generated queue entry). The consumer re-enqueues
+each message as a fresh, authenticated copy that keeps the original id and
+body, and acks the original only once the copy was sent. A message that cannot
+be copied falls back to the delayed retry and logs why. A job that genuinely
+throws after the pause lifts still fails on its normal budget.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): restore the outcome of a job whose history write failed
+
+When a dispatched job's terminal row could not be written, its pending rows
+were still cleared, so neither get() nor /history had any record that it ran.
+
+The failed write now leaves a repair marker holding the row and marks the
+instance dirty, so its successor runs the orphan walk. The walk writes the row
+back with its original completion time and drops the marker and any header
+the job left behind, so the job is neither lost from history nor run again.
+Scheduling a caller-chosen id again clears a stale marker.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): renew a running cron job's lease
+
+A cron lease was declared lost fifteen minutes after it began, on the premise
+that every holder is a scheduled() invocation torn down at that age. A manual
+run from a fetch handler, or a host that does not enforce the bound, can run
+longer: the next tick then started a second copy beside it, and the first
+run's real outcome was dropped.
+
+The worker now renews the lease every five minutes while the run is alive
+(POST /cron/renew), and the lease lapses fifteen minutes after its last sign
+of life instead of after its start. A renewal only extends a lease the caller
+still owns and that has not lapsed, so a stale worker cannot revive a lease
+another run took over. A renewal that fails is logged and the run goes on.
+* **scheduler,runtime:** CronRunInFlight gains an optional renewedAt field, in
+@lunora/scheduler and in its mirror in @lunora/client; the scheduler gains the
+internal /cron/renew route.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(api): snapshot the queue hold field on TriggerTrace
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(studio): show a failed cron history read and the pause banner in a bare studio
+
+A failed cron history request was mapped to an empty result, so an auth, server
+or network error read as no runs and replaced the last runs shown. Only a
+worker without a scheduler now maps to empty; any other failure is shown and
+the last runs are kept.
+
+The pause banner was gated on the app chrome's token, so a studio composed
+around an injected client never showed it. It now shows when there is no chrome
+or the chrome holds a token.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(runtime): stop waiting on a pause read that never settles
+
+The flag read is shared by every caller in an isolate but belongs to the
+request that started it. If that request is cancelled the read may never
+settle and every caller hangs. Callers now stop waiting after three seconds,
+fail open on the last state the isolate trusted, and the next caller reads
+afresh.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(platform-node): reclaim expired cancelled jobs on cancel
+
+Finished rows were swept only on a completion or a restart, so a host that
+only cancels kept expired cancelled rows indefinitely.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): commit paired history writes together and skip stale entries
+
+Four pairs of writes were awaited one after the other, so a failure between
+them left a half state: a reused id lost its old outcome without the new job
+persisting, a requeued job kept a dead row that /get answered failed for, a
+corrected outcome lost its history entry, and a folded skip streak counted
+twice toward the history limit and evicted a real run. Each pair is now issued
+in one synchronous run, which Durable Object storage commits as one.
+
+/history also counted stale index entries toward its page, so a page of them
+answered no records with a cursor. It now reads on until a record shows or the
+index ends, within a bound.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(cli): correct how a pause holds queue messages
+
+Held messages are re-sent as delayed copies with their attempt budgets intact;
+only a message that cannot be copied falls back to a delayed retry.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(api): snapshot the queue hold option on DispatchOptions
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(scheduler): pause and resume reach every named scheduler instance
+
+A pause held jobs only on the scheduler instance the admin route addresses, so
+jobs on a tenant scheduler or a workpool with its own instanceName kept running
+while Studio and the CLI reported the deployment as paused.
+
+A named instance now registers durably with the main one (its SchedulerDO
+storage) the first time it is addressed, and is brought to the current pause
+state by the registration itself, so one created during a pause starts paused.
+The admin route applies each pause or resume to the main instance first and
+then to every registered instance. An instance that cannot be reached is
+reported (PAUSE_INSTANCES_FAILED, naming it) and repeating the command
+converges. The registry lives in the same storage as the flag, so it needs no
+new host contract; the capability notes say so for both hosts.
+
+A custom schedulerInstanceName must also be passed to createScheduler and
+createWorkpool as the new optional primaryInstanceName.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(api): regenerate the studio snapshot for the pause banner text
+
+Generated by api:update from the built package; the banner string changed with
+the fan-out wording.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(runtime): keep a ticket to its upgrade and a newer pause read
+
+A Studio socket ticket lifted the pause on any request that carried it in the
+query. It is now accepted only on a WebSocket upgrade.
+
+A flag read abandoned at its deadline could still answer later and overwrite the
+newer read that replaced it. Abandoning a read now invalidates it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): batch cron history deletes, move a streak atomically, guard repair
+
+A cron history far past its limit passed more than 128 keys to one delete, which
+the host rejects and which failed /cron/begin. Stale rows are now deleted in
+batches of 128.
+
+A folded skip streak is written and its old key deleted in one synchronous run,
+which storage commits together, so a failed delete cannot leave two copies.
+
+Restoring a lost outcome now leaves a header that belongs to a later job of the
+same id alone and drops only the stale marker.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(platform,testing): report when a parked job failed and age out fake outcomes
+
+The reference host's get() omitted completedAt for a dead-lettered job, which the
+contract requires for every terminal state; the suite now asserts it.
+
+The fake scheduler kept finished outcomes for the harness lifetime; get() now
+forgets them after the seven-day retention window the scheduler applies.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **scheduler,runtime:** job outcomes, cron run history, deployment pause ([#1397](https://github.com/anolilab/lunora/issues/1397)) ([4d648d3](https://github.com/anolilab/lunora/commit/4d648d35b7aa5861415d59930c4223e2645223c8))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/platform:** upgraded to 1.0.0-alpha.77
+
 ## @lunora/queue [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.135...@lunora/queue@1.0.0-alpha.136) (2026-10-30)
 
 

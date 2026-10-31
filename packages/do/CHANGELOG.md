@@ -1,3 +1,22 @@
+## @lunora/do [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.270...@lunora/do@1.0.0-alpha.271) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/observability:** upgraded to 1.0.0-alpha.192
+* **@lunora/platform:** upgraded to 1.0.0-alpha.77
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.117
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.178
+* **@lunora/values:** upgraded to 1.0.0-alpha.89
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.145
+
+## @lunora/do [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.269...@lunora/do@1.0.0-alpha.270) (2026-10-31)
+
+### Performance Improvements
+
+* **do,codegen:** share live queries that never read the caller ([#1401](https://github.com/anolilab/lunora/issues/1401)) ([d57a64c](https://github.com/anolilab/lunora/commit/d57a64cc0d292fab0d01a4f0b394842cf2d0bff8))
+
 ## @lunora/do [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.268...@lunora/do@1.0.0-alpha.269) (2026-10-30)
 
 

@@ -1,11 +1,13 @@
 import type { ReactElement } from "react";
 import { useState } from "react";
 
+import { DeploymentPauseToggle } from "../../components/deployment-pause";
 import { Button } from "../../components/ui/button";
 import { useT } from "../../i18n/i18n-context";
 import type { CronTriggersPanelProps } from "./cron-triggers-panel";
 import { CronTriggersPanel } from "./cron-triggers-panel";
 import { DeadLetterJobs } from "./dead-letter-jobs";
+import { JobHistory } from "./job-history";
 import type { ScheduledJobsProps } from "./scheduled-jobs";
 import { ScheduledJobs } from "./scheduled-jobs";
 import { SchedulerPoolsPanel } from "./scheduler-pools-panel";
@@ -22,14 +24,15 @@ interface SchedulePanelProps {
 }
 
 /** The complementary schedule surfaces the tab toggles between. */
-type ScheduleView = "cron" | "dead" | "jobs" | "pools";
+type ScheduleView = "cron" | "dead" | "history" | "jobs" | "pools";
 
-const VIEW_KEYS: ReadonlyArray<ScheduleView> = ["jobs", "dead", "pools", "cron"];
+const VIEW_KEYS: ReadonlyArray<ScheduleView> = ["jobs", "history", "dead", "pools", "cron"];
 
 /**
  * The studio's Schedule tab. Hosts complementary surfaces behind a segmented
  * toggle. **Scheduled jobs** is the dynamic, in-flight queue — functions enqueued
- * via `runAfter` / `runAt`, live-updating and cancellable. **Dead letter** is the
+ * via `runAfter` / `runAt`, live-updating and cancellable. **History** is how
+ * recent jobs ended (succeeded, failed, cancelled). **Dead letter** is the
  * recovery surface for jobs that exhausted their retries (retry or drop them).
  * **Pools** shows the workpool backlog / concurrency (`createWorkpool`). **Cron
  * triggers** is the static `cronJobs()` map compiled into the worker: fixed for
@@ -41,7 +44,7 @@ export const SchedulePanel = ({ loadCronJobs, scheduledCancel, scheduledLoad }: 
     const t = useT();
     const [view, setView] = useState<ScheduleView>("jobs");
 
-    const viewLabel = { cron: t("Cron triggers"), dead: t("Dead letter"), jobs: t("Scheduled jobs"), pools: t("Pools") };
+    const viewLabel = { cron: t("Cron triggers"), dead: t("Dead letter"), history: t("History"), jobs: t("Scheduled jobs"), pools: t("Pools") };
 
     const selectView = (event: React.MouseEvent<HTMLButtonElement>): void => {
         setView(event.currentTarget.dataset.view as ScheduleView);
@@ -49,6 +52,8 @@ export const SchedulePanel = ({ loadCronJobs, scheduledCancel, scheduledLoad }: 
 
     return (
         <div className="flex flex-col gap-4" data-testid="lunora-schedule">
+            <DeploymentPauseToggle />
+
             <div aria-label={t("Schedule view")} className="flex gap-1.5" data-testid="schedule-view-toggle" role="tablist">
                 {VIEW_KEYS.map((key) => (
                     <Button
@@ -68,6 +73,7 @@ export const SchedulePanel = ({ loadCronJobs, scheduledCancel, scheduledLoad }: 
             </div>
 
             {view === "jobs" && <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />}
+            {view === "history" && <JobHistory />}
             {view === "dead" && <DeadLetterJobs />}
             {view === "pools" && <SchedulerPoolsPanel />}
             {view === "cron" && <CronTriggersPanel loadCronJobs={loadCronJobs} />}

@@ -92,7 +92,7 @@ export { CELLD_CAPABILITIES, CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES } from "
 export type { ShardKvListOptions, ShardKvStore } from "./kv-store";
 
 // Scheduler host
-export type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "./scheduler-host";
+export type { ScheduledJob, ScheduledJobRecord, ScheduledJobState, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "./scheduler-host";
 export type { SecretValueKeyOptions } from "./secret-value-encryption";
 export { encryptingSecretValueHost, SecretValueKeyError } from "./secret-value-encryption";
 // Secret value host

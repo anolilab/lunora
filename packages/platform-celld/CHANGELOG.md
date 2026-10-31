@@ -1,3 +1,23 @@
+## @lunora/platform-celld [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.36...@lunora/platform-celld@1.0.0-alpha.37) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.77
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.117
+* **@lunora/agent:** upgraded to 1.0.0-alpha.269
+* **@lunora/ai:** upgraded to 1.0.0-alpha.159
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.145
+* **@lunora/container:** upgraded to 1.0.0-alpha.103
+* **@lunora/d1:** upgraded to 1.0.0-alpha.225
+* **@lunora/do:** upgraded to 1.0.0-alpha.271
+* **@lunora/queue:** upgraded to 1.0.0-alpha.137
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.264
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.162
+* **@lunora/server:** upgraded to 1.0.0-alpha.259
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.178
+* **@lunora/storage:** upgraded to 1.0.0-alpha.165
+
 ## @lunora/platform-celld [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.35...@lunora/platform-celld@1.0.0-alpha.36) (2026-10-29)
 
 
