@@ -1005,10 +1005,8 @@ public API and is gated as one. Listed once per package, sorted by name.
 ```ts
 interface AdminRevocationDOState {
     storage: {
-        list: <T = unknown>(options: {
-            prefix: string;
-        }) => Promise<Map<string, T>>;
-        put: (key: string, value: unknown) => Promise<void>;
+        get: <T = unknown>(key: string) => Promise<T | undefined>;
+        put: (entries: Record<string, unknown>) => Promise<void>;
     };
 }
 ```

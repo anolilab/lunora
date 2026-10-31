@@ -3231,9 +3231,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     throw new LunoraError("the admin revocation store is not available", { code: "ADMIN_TOKEN_NOT_CONFIGURED", status: 400 });
                 }
 
-                const revoked = await adminRevocations.revokedAt(name);
-
-                if (revoked.includes(answer.createdAt)) {
+                if (await adminRevocations.isRevoked(name, answer.createdAt)) {
                     return { live: false, nameKnown: true };
                 }
 
