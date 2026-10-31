@@ -40,7 +40,7 @@ import { createNodeWorkflowStore } from "./node-workflow-store";
  * scheduler lag. A non-2xx marks the delivery failed, which re-arms it with backoff.
  */
 const createJobDelivery =
-    (invoke: ReturnType<typeof createShardInvoke>): NonNullable<NodeSchedulerHostOptions["onDispatch"]> =>
+    (invoke: ReturnType<typeof createShardInvoke>, shardKey: string): NonNullable<NodeSchedulerHostOptions["onDispatch"]> =>
     async (functionPath, args, job) => {
         const response = await invoke({
             args,
@@ -48,7 +48,7 @@ const createJobDelivery =
             id: job.id,
             identity: undefined,
             scheduledFor: job.scheduledFor,
-            shardKey: "__root__",
+            shardKey,
             traceparent: undefined,
         });
 
@@ -283,7 +283,7 @@ export const createNodePlatform = <
         // time so the shard can record scheduler lag. An embedder's own `onDispatch` replaces this
         // outright, so a job is never delivered twice. Without `onFetch` there is no shard handler
         // to run it, and the host keeps its old behaviour of completing the delivery.
-        const deliverJob = options.onFetch === undefined ? undefined : createJobDelivery(invoke);
+        const deliverJob = options.onFetch === undefined ? undefined : createJobDelivery(invoke, options.shardKey ?? "__root__");
         const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, { ...options, onDispatch: options.onDispatch ?? deliverJob });
         const { socket: sockets } = createNodeSocketHost(database);
 

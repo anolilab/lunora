@@ -258,6 +258,29 @@ describe("createNodePlatform", () => {
             expect(new URL(request.url).pathname).toBe("/rpc");
         });
 
+        it("runs a due job on the shard the platform serves, not always the root", async () => {
+            expect.assertions(1);
+
+            let arrived!: (key: string) => void;
+            const shardKey = new Promise<string>((resolve) => {
+                arrived = resolve;
+            });
+
+            using platform = createNodePlatform({
+                dispatch: { adminToken: "token" },
+                onFetch: (_request, shard) => {
+                    arrived(shard.shardKey);
+
+                    return new Response("{}");
+                },
+                shardKey: "tenant-1",
+            });
+
+            await platform.scheduler.schedule("jobs:run", {}, { delayMs: 0 });
+
+            await expect(shardKey).resolves.toBe("tenant-1");
+        });
+
         it("gives every cron tick its own idempotency key so the shard runs each one", async () => {
             expect.assertions(2);
 
