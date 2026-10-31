@@ -711,9 +711,7 @@ class LunoraClient {
     /** Frames a follower held for want of `ownClaimsValue`, one per subscription, applied once it is known. */
     private readonly heldLeaderFrames = new Map<string, () => void>();
 
-    private ownClaimsRequest = 0;
-
-    private ownClaimsInFlight = false;
+    private ownClaimsFetch: Promise<unknown> | undefined;
 
     /**
      * The claims fingerprint of the socket whose `data`, `delta`, `resume` or poke frame is being applied, set only
@@ -7666,65 +7664,69 @@ class LunoraClient {
     /** Forget this tab's own fingerprint: the credential it described may have changed. */
     private resetOwnClaims(): void {
         this.ownClaimsValue = undefined;
-        this.ownClaimsRequest += 1;
+        this.ownClaimsFetch = undefined;
+    }
+
+    /** Take `claims` as this tab's own: drop what a leader committed under others, from memory and the restored cache, and run the held frames. */
+    private applyOwnClaims(claims: string): void {
+        this.ownClaimsValue = claims;
+
+        for (const state of this.subscriptions.all()) {
+            if (state.serverClaims !== undefined && state.serverClaims !== claims) {
+                state.serverBase = undefined;
+                state.serverCursor = undefined;
+                state.serverClaims = undefined;
+                refoldSubscription(state, undefined);
+            }
+        }
+
+        for (const [key, entry] of this.hydratedQueryCache) {
+            if (entry.claims !== undefined && entry.claims !== claims) {
+                this.hydratedQueryCache.delete(key);
+            }
+        }
+
+        const held = [...this.heldLeaderFrames.values()];
+
+        this.heldLeaderFrames.clear();
+
+        for (const apply of held) {
+            apply();
+        }
     }
 
     private fetchOwnClaims(): void {
         const { authToken, fetchImpl } = this;
-        const request = this.ownClaimsRequest;
 
-        if (fetchImpl === undefined || this.ownClaimsInFlight) {
+        if (fetchImpl === undefined || this.ownClaimsFetch !== undefined) {
             return;
         }
 
-        this.ownClaimsInFlight = true;
-        sendControl(
+        const fetching: Promise<unknown> = sendControl(
             fetchImpl,
             joinUrl(this.url, CLAIMS_FINGERPRINT_PATH),
             "{}",
             authToken === null ? { "content-type": "application/json" } : { authorization: `Bearer ${authToken}`, "content-type": "application/json" },
         )
             .then(({ text }) => {
-                this.ownClaimsInFlight = false;
+                const { claims } = JSON.parse(text) as { claims?: string };
 
-                const { claims } = JSON.parse(text) as { claims?: unknown };
-
-                if (typeof claims !== "string" || request !== this.ownClaimsRequest) {
-                    return undefined;
-                }
-
-                this.ownClaimsValue = claims;
-
-                // What was committed from a leader under other claims goes, from memory and from the restored cache.
-                for (const state of this.subscriptions.all()) {
-                    if (state.serverClaims !== undefined && state.serverClaims !== claims) {
-                        state.serverBase = undefined;
-                        state.serverCursor = undefined;
-                        state.serverClaims = undefined;
-                        refoldSubscription(state, undefined);
-                    }
-                }
-
-                for (const [key, entry] of this.hydratedQueryCache) {
-                    if (entry.claims !== undefined && entry.claims !== claims) {
-                        this.hydratedQueryCache.delete(key);
-                    }
-                }
-
-                const held = [...this.heldLeaderFrames.values()];
-
-                this.heldLeaderFrames.clear();
-
-                for (const apply of held) {
-                    apply();
+                // A credential change since the request began makes the answer about another credential.
+                if (typeof claims === "string" && this.ownClaimsFetch === fetching) {
+                    this.applyOwnClaims(claims);
                 }
 
                 return undefined;
             })
             // Unanswered, the tab stays without claims and shows nothing claims-stamped; the next frame asks again.
-            .catch(() => {
-                this.ownClaimsInFlight = false;
+            .catch(() => undefined)
+            .finally(() => {
+                if (this.ownClaimsFetch === fetching) {
+                    this.ownClaimsFetch = undefined;
+                }
             });
+
+        this.ownClaimsFetch = fetching;
     }
 
     /** Run `apply` with the claims fingerprint of the socket that delivered the frame, for the values and cursors it commits. */

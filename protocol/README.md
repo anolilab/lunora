@@ -940,6 +940,18 @@ A client that does not present the credential on re-auth loses an admin socket t
 user at its first window; a socket with no user is never held to a window. This is a
 protocol change for admin clients that re-auth (the reference client and Studio do).
 
+**Claims fingerprint route.** A cross-tab follower tab has no socket and so no `identity` frame of
+its own. `POST /_lunora/claims` (no body needed) answers a caller, resolved with the same
+credential check as `POST /_lunora/ws/reauth` (a missing or lapsed credential is `401`), with
+`{ "claims": "<fingerprint>" }` and nothing else: the fingerprint of the caller's own verified
+claims, from the same function and the same forwarded identity the shard uses for a socket's
+`identity` frame, so the two agree. A follower reads it on a credential change and drops leader
+data (and cached values) stamped with other `claims`; until it knows its own it shows nothing
+a leader stamped with `claims`. A frame without `claims`, and a tab with no credential, behave
+as before. The route is an HTTP route of the worker, not a `ctx.*` surface or a binding, so it
+has no entry in `PlatformCapabilities`, like the re-auth route. The non-JS SDKs have no
+leader/follower model and do not call it.
+
 **Resuming under the claims a cursor was read under.** A socket can close with `4005`
 because its window lapsed while the client was away, and the claims it holds can change in
 that gap, so a cursor read before it may describe rows the new claims cannot see. The
