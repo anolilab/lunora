@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { ts } from "ts-morph";
@@ -43,6 +43,72 @@ const resolveRelative = (from: string, specifier: string): string | undefined =>
     return candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile());
 };
 
+/** `lunora.config.ts` and its `.mts` / `.js` / `.mjs` siblings. */
+const PROJECT_CONFIG_FILE = /^lunora\.config\.[cm]?[jt]s$/u;
+
+/** The first string a `package.json` `imports` target resolves to, through its condition objects. */
+const importTarget = (target: unknown): string | undefined => {
+    if (typeof target === "string") {
+        return target;
+    }
+
+    if (typeof target === "object" && target !== null) {
+        for (const value of Object.values(target)) {
+            const found = importTarget(value);
+
+            if (found !== undefined) {
+                return found;
+            }
+        }
+    }
+
+    return undefined;
+};
+
+/** `#lunora/payment` → `./lunora/payment` through the project's `package.json` `imports`, exact keys and one-`*` patterns. */
+const mapSubpathImport = (cwd: string, specifier: string): string | undefined => {
+    let imports: Record<string, unknown> | undefined;
+
+    try {
+        imports = (JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as { imports?: Record<string, unknown> }).imports;
+    } catch {
+        return undefined;
+    }
+
+    for (const [key, target] of Object.entries(imports ?? {})) {
+        const [prefix = "", suffix = ""] = key.split("*");
+        const mapped = importTarget(target);
+
+        if (mapped !== undefined) {
+            if (key === specifier) {
+                return mapped;
+            }
+
+            if (key.includes("*") && specifier.startsWith(prefix) && specifier.endsWith(suffix) && specifier.length >= key.length - 1) {
+                return mapped.replace("*", specifier.slice(prefix.length, specifier.length - suffix.length));
+            }
+        }
+    }
+
+    return undefined;
+};
+
+/** The `.ts` files the composed (virtual) entry reaches: the generated modules, and the project config whose `app` hook it imports. */
+const virtualEntryRoots = (cwd: string, schemaDirectory: string): string[] => {
+    const generated = join(cwd, schemaDirectory, "_generated");
+    // The same file the composed entry imports for the app's `app` hook.
+    const config = readdirSync(cwd).find((name) => PROJECT_CONFIG_FILE.test(name));
+
+    return [
+        ...(existsSync(generated)
+            ? readdirSync(generated)
+                  .filter((name) => name.endsWith(".ts"))
+                  .map((name) => join(generated, name))
+            : []),
+        ...(config === undefined ? [] : [join(cwd, config)]),
+    ];
+};
+
 /** An `import … from` / `export … from` that puts code in the bundle: a type-only one is erased. */
 const valueModuleSpecifier = (node: ts.Node): string | undefined => {
     if (ts.isImportDeclaration(node)) {
@@ -69,7 +135,7 @@ const dynamicImportSpecifier = (node: ts.Node): string | undefined => {
     return argument !== undefined && ts.isStringLiteralLike(argument) ? argument.text : undefined;
 };
 
-/** Relative imports to follow, and the package specifiers of the file's `import()` calls. */
+/** Relative and `#` subpath imports to follow, and the package specifiers of the file's `import()` calls. */
 const scanFile = (file: string): { dynamicPackages: string[]; relative: string[] } => {
     const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, false);
     const dynamicPackages: string[] = [];
@@ -79,7 +145,7 @@ const scanFile = (file: string): { dynamicPackages: string[]; relative: string[]
         const dynamic = dynamicImportSpecifier(node);
         const specifier = dynamic ?? valueModuleSpecifier(node);
 
-        if (specifier?.startsWith(".")) {
+        if (specifier?.startsWith(".") || specifier?.startsWith("#")) {
             relativeImports.push(specifier);
         } else if (dynamic !== undefined && isPackageSpecifier(dynamic)) {
             dynamicPackages.push(dynamic);
@@ -113,7 +179,7 @@ const isInstalledFrom = (directory: string, name: string): boolean => {
  * evaluation runs on first use, so an SDK that throws while evaluating in workerd would surface in
  * front of a user; the smoke check evaluates each one before the Worker ships.
  *
- * Walks only the files the Worker loads: from the entry along relative imports, static and dynamic,
+ * Walks only the files the Worker loads: from the entry along relative and `#` subpath imports, static and dynamic,
  * through `_generated` (which is how the entry reaches the function modules) without collecting from
  * it, since codegen's own `import()`s are not integration loaders. A file the Worker never loads
  * (a colocated test, a seed script) is never read, so a Node-only `import()` in it cannot block a
@@ -123,10 +189,11 @@ const isInstalledFrom = (directory: string, name: string): boolean => {
  * Not covered: an SDK a package loads for itself (`@lunora/mcp` and `@modelcontextprotocol/sdk`),
  * since the app never names it.
  */
-const collectIntegrationModules = (cwd: string, entry: string | undefined): string[] => {
+const collectIntegrationModules = (cwd: string, entry: string | undefined, schemaDirectory: string): string[] => {
     const seen = new Set<string>();
     const packages = new Set<string>();
-    const queue = entry !== undefined && existsSync(resolve(cwd, entry)) ? [resolve(cwd, entry)] : [];
+    // A Vite-composed Worker's entry is `virtual:lunora/worker`, which has no file to read; the files it imports are the roots then.
+    const queue = entry !== undefined && existsSync(resolve(cwd, entry)) ? [resolve(cwd, entry)] : virtualEntryRoots(cwd, schemaDirectory);
 
     for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
         if (!seen.has(file) && !isInstalled(relative(cwd, file))) {
@@ -140,7 +207,17 @@ const collectIntegrationModules = (cwd: string, entry: string | undefined): stri
                 }
             }
 
-            queue.push(...imports.flatMap((specifier) => resolveRelative(file, specifier) ?? []));
+            queue.push(
+                ...imports.flatMap((specifier) => {
+                    if (!specifier.startsWith("#")) {
+                        return resolveRelative(file, specifier) ?? [];
+                    }
+
+                    const mapped = mapSubpathImport(cwd, specifier);
+
+                    return mapped === undefined ? [] : (resolveRelative(join(cwd, "package.json"), mapped) ?? []);
+                }),
+            );
         }
     }
 

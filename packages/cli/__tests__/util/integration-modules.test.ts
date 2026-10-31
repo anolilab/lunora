@@ -45,7 +45,34 @@ describe(collectIntegrationModules, () => {
         write("src/server/db/index.ts", 'export const mysql = async () => (await import("mysql2/promise")).createPool({});\n');
         write("lunora/integrations.ts", 'export const load = () => import("postgres");\n');
 
-        expect(collectIntegrationModules(cwd, "src/server/index.ts")).toStrictEqual(["@cloudflare/playwright", "mysql2/promise", "postgres", "stripe"]);
+        expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual([
+            "@cloudflare/playwright",
+            "mysql2/promise",
+            "postgres",
+            "stripe",
+        ]);
+    });
+
+    it("scans the generated registry and the project config when the entry is a virtual module", () => {
+        expect.assertions(1);
+
+        install("postgres", "stripe");
+        write("lunora/_generated/functions.ts", 'export const functions = { integrations: () => import("../integrations.js") };\n');
+        write("lunora/integrations.ts", 'export const load = () => import("postgres");\n');
+        write("lunora.config.ts", 'export default { app: () => import("stripe") };\n');
+
+        expect(collectIntegrationModules(cwd, "virtual:lunora/worker", "lunora")).toStrictEqual(["postgres", "stripe"]);
+    });
+
+    it("follows package.json subpath imports such as #lunora/*", () => {
+        expect.assertions(1);
+
+        install("stripe");
+        write("package.json", JSON.stringify({ imports: { "#lunora/*": "./lunora/*" } }));
+        write("src/server/index.ts", 'import { payment } from "#lunora/payment";\nexport default payment;\n');
+        write("lunora/payment/index.ts", 'export const payment = { client: () => import("stripe") };\n');
+
+        expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual(["stripe"]);
     });
 
     it("leaves out files the Worker never loads, runtime modules, generated output and uninstalled packages", () => {
@@ -61,7 +88,7 @@ describe(collectIntegrationModules, () => {
         // A colocated test sits in the schema directory, but nothing the Worker loads imports it.
         write("lunora/posts.test.ts", 'export const mocked = () => import("vitest");\n');
 
-        expect(collectIntegrationModules(cwd, "src/server/index.ts")).toStrictEqual([]);
+        expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual([]);
     });
 
     it("follows a relative import() into the module that loads the SDK", () => {
@@ -71,6 +98,6 @@ describe(collectIntegrationModules, () => {
         write("src/index.ts", 'export const later = () => import("./billing.js");\n');
         write("src/billing.ts", 'export const client = () => import("stripe");\n');
 
-        expect(collectIntegrationModules(cwd, "src/index.ts")).toStrictEqual(["stripe"]);
+        expect(collectIntegrationModules(cwd, "src/index.ts", "lunora")).toStrictEqual(["stripe"]);
     });
 });

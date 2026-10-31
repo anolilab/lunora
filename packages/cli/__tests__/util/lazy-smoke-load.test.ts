@@ -258,19 +258,18 @@ describe(runLazySmokeLoad, () => {
     });
 
     describe("integration modules loaded with import()", () => {
-        /** An eager project whose entry hands `stripe` to an integration through a loader, with `stripe` installed. */
-        const eagerWithLoader = (): void => {
-            writeFileSync(join(cwd, "lunora", "_generated", "functions.ts"), "export const LUNORA_FUNCTIONS = {};\n");
+        /** A lazy project whose entry hands `stripe` to an integration through a loader, with `stripe` installed. */
+        const lazyWithLoader = (): void => {
             writeFileSync(join(cwd, "src", "index.ts"), 'import { payments } from "./payments.js";\n\nexport default { payments };\n');
             writeFileSync(join(cwd, "src", "payments.ts"), 'export const payments = { client: async () => (await import("stripe")).default };\n');
             mkdirSync(join(cwd, "node_modules", "stripe"), { recursive: true });
             writeFileSync(join(cwd, "node_modules", "stripe", "package.json"), '{ "name": "stripe" }');
         };
 
-        it("checks an eager build that loads an integration SDK with import(), without the lazy registry", async () => {
-            expect.assertions(3);
+        it("checks the integration SDKs a lazy build loads with import(), next to its lazy functions", async () => {
+            expect.assertions(2);
 
-            eagerWithLoader();
+            lazyWithLoader();
 
             let entry = "";
 
@@ -283,13 +282,22 @@ describe(runLazySmokeLoad, () => {
 
             await expect(run()).resolves.toBeUndefined();
             expect(entry).toContain('["stripe", () => import("stripe")]');
-            expect(entry).not.toContain("loadAllFunctions");
+        });
+
+        it("leaves an eager build alone even when it loads an SDK with import()", async () => {
+            expect.assertions(2);
+
+            lazyWithLoader();
+            writeFileSync(join(cwd, "lunora", "_generated", "functions.ts"), "export const LUNORA_FUNCTIONS = {};\n");
+
+            await expect(run()).resolves.toBeUndefined();
+            expect(startDevProcess).not.toHaveBeenCalled();
         });
 
         it("blocks naming the module when an integration SDK fails to evaluate", async () => {
             expect.assertions(2);
 
-            eagerWithLoader();
+            lazyWithLoader();
             respondWith({ checked: 0, failures: [], integrations: { checked: 1, failures: [{ message: "process is not defined", specifier: "stripe" }] } });
 
             const error = await run();
@@ -298,14 +306,23 @@ describe(runLazySmokeLoad, () => {
             expect(stop).toHaveBeenCalledWith();
         });
 
-        it("stays quiet when the import()ed package is not installed where the smoke entry would resolve it", async () => {
+        it("leaves out an import()ed package that is not installed where the smoke entry would resolve it", async () => {
             expect.assertions(2);
 
-            eagerWithLoader();
+            lazyWithLoader();
             rmSync(join(cwd, "node_modules"), { force: true, recursive: true });
 
+            let entry = "";
+
+            startDevProcess.mockImplementation(async (options) => {
+                entry = readFileSync(resolve(options.cwd, options.args.find((argument) => argument.endsWith("entry.ts")) ?? ""), "utf8");
+
+                return { crashed: new Promise(() => {}), stop };
+            });
+            respondWith({ checked: 1, failures: [] });
+
             await expect(run()).resolves.toBeUndefined();
-            expect(startDevProcess).not.toHaveBeenCalled();
+            expect(entry).not.toContain('import("stripe")');
         });
     });
 
@@ -451,7 +468,6 @@ describe(runLazySmokeLoad, () => {
         it("names the integration module whose evaluation never settles", async () => {
             expect.assertions(2);
 
-            writeFileSync(join(cwd, "lunora", "_generated", "functions.ts"), "export const LUNORA_FUNCTIONS = {};\n");
             writeFileSync(join(cwd, "src", "index.ts"), 'export default { a: () => import("fine"), b: () => import("stuck") };\n');
 
             for (const name of ["fine", "stuck"]) {
@@ -464,7 +480,7 @@ describe(runLazySmokeLoad, () => {
                     throw timeout();
                 }
 
-                return answerStep(url, {}, runIdOf(resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "")));
+                return answerStep(url, { checked: 0, failures: [] }, runIdOf(resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "")));
             });
 
             const error = await run();
@@ -632,13 +648,12 @@ describe(runLazySmokeLoad, () => {
         const answerFromEntry = (): void => {
             startDevProcess.mockImplementation(async () => {
                 const entry = resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? "");
-                const { default: worker } = (await import(entry)) as { default: { fetch: () => Promise<Response> } };
-                const response = await worker.fetch();
-                const body = (await response.json()) as object;
+                const { default: worker } = (await import(entry)) as { default: { fetch: (request: Request) => Promise<Response> } };
 
+                // Each probe step is answered by the real entry, the way the Worker would.
                 vi.stubGlobal(
                     "fetch",
-                    vi.fn<() => Promise<Response>>(async () => Response.json(body)),
+                    vi.fn<(url: string) => Promise<Response>>(async (url) => worker.fetch(new Request(url))),
                 );
 
                 return { crashed: new Promise(() => {}), stop };
@@ -741,14 +756,12 @@ describe(runLazySmokeLoad, () => {
         it("reports function failures and deferred failures together", async () => {
             expect.assertions(1);
 
-            respondWith({
-                checked: 2,
-                deferredChecked: 1,
-                failures: [
-                    { functionPath: "posts:list", message: "boom" },
-                    { deferred: "workflow", functionPath: "workflow:lunora/workflows.ts", message: "late" },
-                ],
-            });
+            scaffoldDeferred("workflow", 'throw new Error("late");\n');
+            writeFileSync(
+                join(cwd, "lunora", "_generated", "functions.ts"),
+                'export const loadAllFunctions = async () => ({ checked: 2, failures: [{ functionPath: "posts:list", message: "boom" }] });\n',
+            );
+            answerFromEntry();
 
             await expect(run()).resolves.toContain("2 of 3 lazy module(s) fail to load:\n  posts (list): boom\n  lunora/workflows.ts (workflow): late");
         });
