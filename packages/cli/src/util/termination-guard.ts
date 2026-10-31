@@ -12,7 +12,9 @@ const exitNow = (code: number): void => process.exit(code);
 let exitWith: (code: number) => void = exitNow;
 let handlers: (readonly [NodeJS.Signals, () => void])[] = [];
 
-const runAll = async (code: number): Promise<void> => {
+let shutdown: Promise<void> | undefined;
+
+const cleanUpThenExit = async (code: number): Promise<void> => {
     // Each cleanup starts now, synchronously, so the work that needs no waiting is done before anything else can run.
     const started = [...cleanups].map(async (cleanup) => {
         try {
@@ -30,6 +32,13 @@ const runAll = async (code: number): Promise<void> => {
 
     await Promise.race([Promise.all(started), grace]);
     exitWith(code);
+};
+
+// A repeated signal waits for the shutdown already running instead of exiting before its cleanup has finished.
+const runAll = (code: number): Promise<void> => {
+    shutdown ??= cleanUpThenExit(code);
+
+    return shutdown;
 };
 
 /**
@@ -67,6 +76,7 @@ const guardCleanup = (cleanup: () => Promise<void> | void, exit?: (code: number)
 
             handlers = [];
             exitWith = exitNow;
+            shutdown = undefined;
         }
     };
 };
