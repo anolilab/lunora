@@ -146,6 +146,24 @@ describe(runLazySmokeLoad, () => {
         expect(ports.size).toBe(2);
     });
 
+    it("blocks when the functions answer carries another run's id", async () => {
+        expect.assertions(2);
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn<(url: string) => Promise<Response>>(async (url) => {
+                const own = runIdOf(resolve(cwd, dev.mock.lastCall?.[0].extraArgs?.[0] ?? ""));
+
+                return answerStep(url, { checked: 1, failures: [] }, new URL(url).searchParams.get("step") === "functions" ? "another-run" : own);
+            }),
+        );
+
+        const error = await run();
+
+        expect(error).toContain("answered with something other than the probe's result");
+        expect(stop).toHaveBeenCalledWith();
+    });
+
     it("retries on the next port when its wrangler exits because another run holds the port", async () => {
         expect.assertions(3);
 
@@ -285,6 +303,32 @@ describe(runLazySmokeLoad, () => {
             expect(entry).toContain('["stripe", () => import("stripe")]');
         });
 
+        it("lists at most ten failing integration modules and counts the rest", async () => {
+            expect.assertions(3);
+
+            const failures = Array.from({ length: 12 }, (_, index) => {
+                return { message: "boom", specifier: `sdk-${String(index)}` };
+            });
+
+            writeFileSync(
+                join(cwd, "src", "index.ts"),
+                `export default { ${failures.map(({ specifier }, index) => `l${String(index)}: () => import("${specifier}")`).join(", ")} };\n`,
+            );
+
+            for (const { specifier } of failures) {
+                mkdirSync(join(cwd, "node_modules", specifier), { recursive: true });
+                writeFileSync(join(cwd, "node_modules", specifier, "package.json"), JSON.stringify({ name: specifier }));
+            }
+
+            respondWith({ checked: 0, failures: [], integrations: { checked: 12, failures } });
+
+            const error = await run();
+
+            expect(error).toContain("12 of 12 integration module(s)");
+            expect(error?.match(/import\("sdk-\d+"\)/gu)).toHaveLength(10);
+            expect(error).toContain("…and 2 more integration module(s)");
+        });
+
         it("leaves an eager build alone even when it loads an SDK with import()", async () => {
             expect.assertions(2);
 
@@ -388,6 +432,30 @@ describe(runLazySmokeLoad, () => {
             expect(entry.read().content).toContain("export class Flow extends WorkflowEntrypoint");
             expect(entry.read().content).not.toContain("Remote");
             expect(dev.mock.calls[0]?.[0]).toStrictEqual(expect.objectContaining({ configPath: "wrangler.jsonc" }));
+        });
+
+        it("stubs the classes of the selected config, and Unicode class names, once a Vite build has redirected wrangler", async () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(cwd, "wrangler.jsonc"),
+                JSON.stringify({ durable_objects: { bindings: [{ class_name: "DefaultDO", name: "SHARD" }] }, main: "src/index.ts", name: "app" }),
+            );
+            writeFileSync(
+                join(cwd, "wrangler.alt.jsonc"),
+                JSON.stringify({ durable_objects: { bindings: [{ class_name: "Größe", name: "SHARD" }] }, main: "src/index.ts", name: "app" }),
+            );
+            mkdirSync(join(cwd, ".wrangler", "deploy"), { recursive: true });
+            writeFileSync(join(cwd, ".wrangler", "deploy", "config.json"), JSON.stringify({ configPath: "../../dist/server/wrangler.json" }));
+            respondWith({ checked: 1, failures: [] });
+
+            const entry = captureEntry();
+
+            await run({ configPath: join(cwd, "wrangler.alt.jsonc") });
+
+            expect(entry.read().content).toContain("export class Größe extends DurableObject {}");
+            expect(entry.read().content).not.toContain("DefaultDO");
+            expect(dev.mock.calls[0]?.[0]).toStrictEqual(expect.objectContaining({ configPath: "wrangler.alt.jsonc" }));
         });
 
         it("forces plain http and uses a directory of its own that is gone afterwards", async () => {
