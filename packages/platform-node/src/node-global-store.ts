@@ -149,8 +149,13 @@ export const createNodeSqlExec = (database: Database.Database): SqlCtxExec => {
                 settle = resolve;
             });
 
+            // Set only once this wrapper's own BEGIN took: a refused one (the caller already holds a transaction on
+            // the exposed connection) leaves that transaction theirs to finish.
+            let owned = false;
+
             try {
                 database.exec("BEGIN IMMEDIATE");
+                owned = true;
 
                 const result = await work(direct);
 
@@ -158,7 +163,7 @@ export const createNodeSqlExec = (database: Database.Database): SqlCtxExec => {
 
                 return result;
             } catch (error) {
-                if (database.inTransaction) {
+                if (owned && database.inTransaction) {
                     database.exec("ROLLBACK");
                 }
 

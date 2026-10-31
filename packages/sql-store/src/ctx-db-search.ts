@@ -231,8 +231,8 @@ const backfillSearchIndexPage = async (
 ): Promise<boolean> => {
     const companion = companionFor(tableName, index);
     const profile = companionProfile(index, dialect);
-    const recorded = await readSearchBackfillState(exec, dialect, companion);
-    const pass = planBackfillPass(recorded, profile);
+    let recorded = await readSearchBackfillState(exec, dialect, companion);
+    let pass = planBackfillPass(recorded, profile);
 
     if (pass.finished) {
         return true;
@@ -252,7 +252,26 @@ const backfillSearchIndexPage = async (
         // document's rows in place, so the re-walk converges on the new profile
         // while each row keeps serving the old one until its turn: stale
         // analysis on a shrinking suffix, rather than no row at all.
-        await writeSearchBackfillState(exec, dialect, companion, undefined, false, profile);
+        //
+        // Conditional on the progress it was planned from: a reset abandoned at its deadline can land after a retry
+        // reset, walked or finished the same rebuild, and must not send that back to the top. The state is then read
+        // again and the pass re-planned, so a reset that did not take is never proceeded on as if it had.
+        await writeSearchBackfillState(exec, dialect, companion, undefined, false, profile, {
+            cursor: recorded.cursor,
+            done: recorded.done,
+            profile: recorded.profile,
+        });
+        recorded = await readSearchBackfillState(exec, dialect, companion);
+        pass = planBackfillPass(recorded, profile);
+
+        if (pass.wipe) {
+            // Someone else changed the progress under another profile: leave this page to the next pass.
+            return false;
+        }
+
+        if (pass.finished) {
+            return true;
+        }
     }
 
     // The source table may not exist yet — the companion DDL runs for every
@@ -289,7 +308,8 @@ const backfillSearchIndexPage = async (
     // write from a pass the deadline abandoned finds it moved on and changes nothing.
     await writeSearchBackfillState(exec, dialect, companion, lastId ?? pass.cursor, done, profile, {
         cursor: pass.cursor,
-        profile: pass.wipe ? profile : recorded.profile,
+        done: false,
+        profile: recorded.profile,
     });
 
     return done;

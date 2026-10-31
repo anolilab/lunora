@@ -336,4 +336,33 @@ describe("createNodeSqlExec — one connection, several wrappers", () => {
             database.close();
         }
     });
+
+    it("leaves a transaction the caller opened on the connection alone when its own begin is refused", async () => {
+        expect.assertions(3);
+
+        const database = new Database(":memory:");
+
+        try {
+            database.exec("CREATE TABLE notes (body TEXT)");
+            database.exec("BEGIN");
+            database.prepare("INSERT INTO notes (body) VALUES (?)").run("caller's");
+
+            const exec = createNodeSqlExec(database);
+
+            // SQLite refuses a nested BEGIN; that refusal is not a transaction this wrapper owns.
+            await expect(
+                (exec.transaction as NonNullable<SqlCtxExec["transaction"]>)(async () => {
+                    await Promise.resolve();
+                }),
+            ).rejects.toThrow(/within a transaction/u);
+
+            expect(database.inTransaction).toBe(true);
+
+            database.exec("COMMIT");
+
+            expect(database.prepare("SELECT body FROM notes").all()).toStrictEqual([{ body: "caller's" }]);
+        } finally {
+            database.close();
+        }
+    });
 });

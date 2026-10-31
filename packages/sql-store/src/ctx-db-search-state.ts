@@ -163,7 +163,7 @@ const readSearchBackfillState = async (exec: SqlCtxExec, dialect: SqlDialect, co
  * tracking pays once.
  *
  * `expected` is the progress the page was planned from. A write that carries it
- * only lands while that is still the recorded progress, so a statement abandoned
+ * only lands while that is still the recorded progress (cursor, profile and completion), so a statement abandoned
  * at its deadline, which the engine may still run after a retry advanced or
  * finished the same backfill, can never move it backwards. Without it the write
  * is unconditional: the deliberate reset when the search profile changes.
@@ -175,7 +175,7 @@ const writeSearchBackfillState = async (
     cursor: string | undefined,
     done: boolean,
     profile: string,
-    expected?: { cursor: string | undefined; profile: string | undefined },
+    expected?: { cursor: string | undefined; done: boolean; profile: string | undefined },
 ): Promise<void> => {
     // eslint-disable-next-line unicorn/no-null -- SQL bind value: "no page has run yet" is a NULL column, not undefined
     const cursorValue = cursor ?? null;
@@ -191,11 +191,12 @@ const writeSearchBackfillState = async (
     const verified = searchCoverageSurvives(existing[0]?.["profile"], profile);
     const doneValue = done ? 1 : 0;
     const coveredSet = done || !verified ? sql`${sql.identifier("covered")} = ${doneValue}` : sql`${sql.identifier("covered")} = ${sql.identifier("covered")}`;
+    const expectedDone = expected?.done === true ? 1 : 0;
     const unchanged =
         expected === undefined
             ? sql``
             : // eslint-disable-next-line unicorn/no-null -- SQL bind values: an unrecorded cursor or profile is a NULL column, compared null-safely
-              sql` AND ${nullSafeEqualsSql(dialect.name, columnRefSql("cursor"), expected.cursor ?? null)} AND ${nullSafeEqualsSql(dialect.name, columnRefSql("profile"), expected.profile ?? null)} AND ${sql.identifier("done")} = 0`;
+              sql` AND ${nullSafeEqualsSql(dialect.name, columnRefSql("cursor"), expected.cursor ?? null)} AND ${nullSafeEqualsSql(dialect.name, columnRefSql("profile"), expected.profile ?? null)} AND ${sql.identifier("done")} = ${expectedDone}`;
     const update = sql`UPDATE ${sql.identifier(SEARCH_STATE_TABLE)} SET ${sql.identifier("cursor")} = ${cursorValue}, ${sql.identifier("done")} = ${doneValue}, ${sql.identifier("profile")} = ${profile}, ${coveredSet} WHERE ${sql.identifier("companion")} = ${companion}${unchanged}`;
 
     if (existing.length > 0) {
