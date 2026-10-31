@@ -90,8 +90,7 @@ interface SchemaDriftGateResult {
  * Run the schema-drift gate against the snapshot codegen produced. `options`
  * carries `codegen` (this run's `CodegenResult`, with the current snapshot +
  * baseline path), `allowDrift` (the `--allow-schema-drift` override — report but
- * never block), `updateBaseline` (re-bless the baseline even on a blocked
- * outcome, deliberately accepting the new shape), and `readOnly` (evaluate +
+ * never block, check nothing, leave the baseline alone), and `readOnly` (evaluate +
  * report but never write — used by `lunora verify`).
  *
  * The returned `rebless` thunk (when present) is the ONLY baseline write — the
@@ -104,26 +103,17 @@ interface GateContext {
     readOnly: boolean;
     rebless: () => void;
     snapshotPath: string;
-    updateBaseline: boolean;
 }
 
 /**
- * Outcome for a present-but-corrupt baseline: block (so drift isn't silently
- * skipped and the bad file isn't auto-overwritten) unless the developer opts
- * into regenerating it from the current schema.
+ * Outcome for a present-but-corrupt baseline: block, so drift isn't silently skipped and the
+ * bad file isn't auto-overwritten. Deleting the file is the way out: an absent baseline is a
+ * first capture, which the next run writes from the current schema.
  */
 const corruptBaselineResult = (context: GateContext): SchemaDriftGateResult => {
     const reason =
         `schema-drift gate: the committed baseline ${context.snapshotPath} is unreadable or malformed, so schema drift cannot be checked. ` +
-        `Fix it (e.g. resolve a merge conflict in lunora/.lunora-schema.json), or pass --update-schema-baseline to regenerate it from the current schema.`;
-
-    if (context.updateBaseline && !context.readOnly) {
-        context.logger.warn(
-            `schema baseline was unreadable; regenerating from the current schema on success (--update-schema-baseline): ${context.snapshotPath}`,
-        );
-
-        return { blocked: false, changes: [], reason, rebless: context.rebless };
-    }
+        `Fix it (e.g. resolve a merge conflict in lunora/.lunora-schema.json), or delete it: the next run captures a fresh baseline from the current schema, checking nothing against the old one.`;
 
     // Read-only callers (verify) own the reporting — staying silent here avoids
     // the message being logged twice.
@@ -134,50 +124,11 @@ const corruptBaselineResult = (context: GateContext): SchemaDriftGateResult => {
     return { blocked: true, changes: [], reason };
 };
 
-/** `logger` with errors demoted to warnings, for a check whose failure does not stop the run. */
-const quietLogger = (logger: Logger): Logger => {
-    return {
-        ...logger,
-        error: (message) => {
-            logger.warn(message);
-        },
-    };
-};
-
-/**
- * Both `--allow-schema-drift` and `--update-schema-baseline`: the run goes ahead
- * either way, but the shape is accepted only past the stored-row check a plain
- * `--update-schema-baseline` runs, or the pair would bless unchecked what the
- * second flag alone refuses.
- */
-const acceptCheckedShape = async (overridden: SchemaDriftDecision, strict: SchemaDriftDecision, context: GateContext): Promise<SchemaDriftGateResult> => {
-    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the strict decision is judged exactly as a blocked run would be
-    const checked = await blockedDecisionResult(strict, { ...context, logger: quietLogger(context.logger) });
-
-    if (checked.blocked) {
-        context.logger.warn(
-            `schema baseline left at its committed shape — the stored rows do not confirm the new shape, so only --allow-schema-drift applies to this run: ${context.snapshotPath}`,
-        );
-
-        return { blocked: false, changes: overridden.changes, reason: `${overridden.reason}\n\n${checked.reason}` };
+/** A run `--allow-schema-drift` let through: nothing is checked and the baseline stays at its committed shape. */
+const overriddenResult = (overridden: SchemaDriftDecision, context: GateContext): SchemaDriftGateResult => {
+    if (!context.readOnly) {
+        context.logger.warn(`schema baseline left at its committed shape — --allow-schema-drift overrides this run only: ${context.snapshotPath}`);
     }
-
-    return { blocked: false, changes: overridden.changes, reason: overridden.reason, rebless: context.rebless };
-};
-
-/** A run `--allow-schema-drift` let through: the baseline stays put unless `--update-schema-baseline` asks and the rows confirm it. */
-const overriddenResult = async (overridden: SchemaDriftDecision, strict: SchemaDriftDecision, context: GateContext): Promise<SchemaDriftGateResult> => {
-    if (context.readOnly) {
-        return { blocked: false, changes: overridden.changes, reason: overridden.reason };
-    }
-
-    if (context.updateBaseline) {
-        return acceptCheckedShape(overridden, strict, context);
-    }
-
-    context.logger.warn(
-        `schema baseline left at its committed shape — --allow-schema-drift overrides this run only. Pass --update-schema-baseline to accept the new shape: ${context.snapshotPath}`,
-    );
 
     return { blocked: false, changes: overridden.changes, reason: overridden.reason };
 };
@@ -192,67 +143,49 @@ const verdictNote = (verdict: StoredRowVerdict | undefined): string => {
 };
 
 /**
- * Read the stored rows when they can decide the outcome: every blocking change is
- * one rows decide, or `--update-schema-baseline` asks to accept the shape and some
- * of it is. A command with no deployment to read (`prepare`, `build`) answers
- * "inconclusive" for an acceptance, so it can never bless a shape unchecked.
+ * Read the stored rows when they can decide the outcome: every blocking change is one the rows
+ * decide (a field's validator, a removed field, a new unique constraint). A decision holding any
+ * other change is never settled by rows, so it is never read. A command with no deployment to
+ * read (`prepare`, `build`) answers "inconclusive", so it can never clear a shape unchecked.
  */
 const storedRowVerdict = async (decision: SchemaDriftDecision, context: GateContext): Promise<StoredRowVerdict | undefined> => {
     const checkable = decision.uncovered.filter((change) => isRowCheckable(change));
-    const decisive = checkable.length > 0 && (checkable.length === decision.uncovered.length || context.updateBaseline);
+    const decisive = checkable.length > 0 && checkable.length === decision.uncovered.length;
 
     if (!decisive || context.readOnly) {
         return undefined;
     }
 
     if (context.checkStoredRows === undefined) {
-        return context.updateBaseline
-            ? {
-                  kind: "inconclusive",
-                  reason: `\`lunora ${context.command ?? "prepare"}\` does not read a deployment; run \`lunora deploy --update-schema-baseline\`, which checks the stored rows first`,
-              }
-            : undefined;
+        return {
+            kind: "inconclusive",
+            reason: `\`lunora ${context.command ?? "prepare"}\` does not read a deployment; run \`lunora deploy\`, which checks the stored rows first`,
+        };
     }
 
     return context.checkStoredRows(checkable);
 };
 
 /**
- * Outcome for a blocking decision. Stored rows that all fit the new schema clear
- * it — the shape is then simply true of the data, so the baseline advances on
- * success. `--update-schema-baseline` accepts the shape, but never over rows
- * that contradict it or could not be checked; changes rows cannot decide (an
- * index, a call site, a constraint) it accepts on the operator's word, as before.
+ * Outcome for a blocking decision. Stored rows that all fit the new schema clear it — the shape
+ * is then simply true of the data, so the baseline advances on success. Rows that contradict it,
+ * or could not be read, keep the block.
  */
 const blockedDecisionResult = async (decision: SchemaDriftDecision, context: GateContext): Promise<SchemaDriftGateResult> => {
     const verdict = await storedRowVerdict(decision, context);
-    const accepted = { blocked: false, changes: decision.changes, reason: decision.reason, rebless: context.rebless };
 
     if (verdict?.kind === "conforms") {
         context.logger.success(
             `schema-drift gate: all ${String(verdict.rows)} stored row(s) of ${verdict.tables.join(", ")} fit the new schema — the change needs no backfill`,
         );
 
-        if (context.updateBaseline && decision.uncovered.some((change) => !isRowCheckable(change))) {
-            context.logger.warn(
-                `schema baseline will be re-blessed with changes the stored rows cannot confirm (--update-schema-baseline): ${context.snapshotPath}`,
-            );
-        }
-
-        return accepted;
+        return { blocked: false, changes: decision.changes, reason: decision.reason, rebless: context.rebless };
     }
 
-    const refusesAcceptance = verdict !== undefined && context.updateBaseline;
-    const reason = `${decision.reason}${verdictNote(verdict)}${refusesAcceptance ? "\n\n--update-schema-baseline does not accept a shape the stored rows contradict or that could not be checked." : ""}`;
+    const reason = `${decision.reason}${verdictNote(verdict)}`;
 
     if (!context.readOnly) {
         context.logger.error(reason);
-    }
-
-    if (context.updateBaseline && !context.readOnly && !refusesAcceptance) {
-        context.logger.warn(`schema baseline will be re-blessed despite breaking drift on success (--update-schema-baseline): ${context.snapshotPath}`);
-
-        return { ...accepted, reason };
     }
 
     return { blocked: true, changes: decision.changes, reason };
@@ -277,9 +210,8 @@ const runSchemaDriftGate = async (options: {
     command?: string;
     logger: Logger;
     readOnly?: boolean;
-    updateBaseline?: boolean;
 }): Promise<SchemaDriftGateResult> => {
-    const { allowDrift, checkStoredRows, codegen, command, logger, readOnly = false, updateBaseline = false } = options;
+    const { allowDrift, checkStoredRows, codegen, command, logger, readOnly = false } = options;
     const snapshotPath = codegen.schemaSnapshotPath;
     const baseline = readBaseline(snapshotPath);
     const context: GateContext = {
@@ -291,7 +223,6 @@ const runSchemaDriftGate = async (options: {
             writeBaseline(snapshotPath, codegen.schemaSnapshot);
         },
         snapshotPath,
-        updateBaseline,
     };
 
     if (baseline.status === "corrupt") {
@@ -316,11 +247,8 @@ const runSchemaDriftGate = async (options: {
     // `--allow-schema-drift` is a PER-RUN override, not an acceptance of the new
     // shape: re-blessing on its say-so advances the committed baseline past the
     // breaking change, so the very next run — with no flag at all — sees no drift
-    // and the gate is disarmed for good. `prepare` makes that starkest (it
-    // produces no bundle, so nothing shipped), but the same write from `deploy`
-    // means the flag and `--update-schema-baseline` do the same thing. Only the
-    // latter accepts the shape. Re-evaluating without the override is how we tell
-    // "waved through" from "no breaking drift to wave through"; the diff is pure
+    // and the gate is disarmed for good. Re-evaluating without the override is how we
+    // tell "waved through" from "no breaking drift to wave through"; the diff is pure
     // and in-memory.
     const overriddenOnly = allowDrift && decision.changes.length > 0 && evaluate(false).blocked;
 
@@ -332,7 +260,7 @@ const runSchemaDriftGate = async (options: {
         }
 
         if (overriddenOnly) {
-            return overriddenResult(decision, evaluate(false), context);
+            return overriddenResult(decision, context);
         }
 
         return { blocked: false, changes: decision.changes, reason: decision.reason, rebless: readOnly ? undefined : context.rebless };

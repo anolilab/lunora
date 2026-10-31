@@ -90,7 +90,7 @@ If your `lunora/crons.ts` schedules `internal.presence.sweep`, delete that entry
 
 Rows written before rooms were tenant-scoped have no `tenantId` — which is why the column is optional. Every heartbeat, `listPresent` and join-time cleanup looks rows up by tenant, so those rows are invisible to them: members re-appear with their next heartbeat as new rows, and the old ones sit in storage. The table's `.ttl()` alarm deletes them once they are past the TTL, in every shard.
 
-The deploy's schema-drift gate reports two breaking changes for this upgrade. The `byRoomSession` index is replaced by `byTenantRoomSession`, and the gate cannot know that the only query using it was this item's own code, which the upgrade also replaced. The new `.ttl()` deletes every row already past the cutoff on its first alarm, which for presence only enforces the expiry `listPresent` already applies at read time — so there is nothing to back-fill. Accept the new shape once: `lunora prepare --update-schema-baseline`, or `--allow-schema-drift` on that one `lunora deploy`.
+The deploy's schema-drift gate reports two breaking changes for this upgrade. The `byRoomSession` index is replaced by `byTenantRoomSession`, and the gate cannot know that the only query using it was this item's own code, which the upgrade also replaced. The new `.ttl()` deletes every row already past the cutoff on its first alarm, which for presence only enforces the expiry `listPresent` already applies at read time — so there is nothing to back-fill. The dropped index no longer blocks; pass `--allow-schema-drift` on that one `lunora deploy` for the `.ttl()` change.
 
 ## What you own
 

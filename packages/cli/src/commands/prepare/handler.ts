@@ -52,8 +52,6 @@ interface PrepareCommandOptions {
      * have to be found here separately.
      */
     target?: string;
-    /** Re-bless the committed schema baseline with the current shape. */
-    updateSchemaBaseline?: boolean;
 }
 
 interface PrepareCommandResult {
@@ -94,7 +92,6 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
             spawner: options.spawner,
             strictAdvisories: options.strictAdvisories,
             target: options.target,
-            updateSchemaBaseline: options.updateSchemaBaseline,
         },
         "prepare",
     );
@@ -146,7 +143,6 @@ const execute: CommandHandler<PrepareOptions> = defineHandler<PrepareOptions>(({
         smokeLoad: options.smokeLoad,
         strictAdvisories: options.strictAdvisories,
         target: options.target,
-        updateSchemaBaseline: options.updateSchemaBaseline === true,
     }),
 );
 

@@ -314,55 +314,15 @@ interface SchemaDriftDecision {
     uncovered: ReadonlyArray<DriftChange>;
 }
 
-/** The commands that can print the blocked-drift remediation, and which override flags each accepts. */
-const DRIFT_FLAG_SUPPORT: Record<string, { allowDrift: boolean; updateBaseline: boolean }> = {
-    // `build` reaches the gate through `runDeployCommand({ dryRun: true })`, so it
-    // prints this message even though it is not `deploy`. It accepts
-    // `--allow-schema-drift` and deliberately NOT `--update-schema-baseline`:
-    // build publishes nothing, and re-blessing a baseline for an artifact that
-    // never shipped is exactly what lets a breaking change through on the retry.
-    build: { allowDrift: true, updateBaseline: false },
-    deploy: { allowDrift: true, updateBaseline: true },
-    prepare: { allowDrift: true, updateBaseline: true },
-    verify: { allowDrift: true, updateBaseline: false },
-};
-
 /**
- * Render only the override flags the command that is printing this actually
- * accepts, and name the alternative when it accepts none.
- *
- * The message used to list both flags unconditionally, so following it verbatim
- * failed: `build` accepts neither (`Found unknown option "--allow-schema-drift"`)
- * and `verify` accepts only the first. This is the message a first-time deployer
- * hits, and half its own advice did not work on the command that printed it.
- *
- * The table lists every command that actually reaches the gate. `build` is one
- * of them — it delegates to `runDeployCommand({ dryRun: true })`, so it arrives
- * here as `command: "deploy"`'s neighbour rather than never arriving at all,
- * which is what the earlier version of this comment claimed. `codegen` genuinely
- * does not reach it. An unrecognised caller falls back to listing both flags —
- * better an over-broad hint than none.
+ * The override line every command that runs the gate prints. `--allow-schema-drift` checks nothing and
+ * leaves the baseline where it was, so it is for a change that is backward-compatible in a way the schema
+ * cannot show (every command that reaches the gate accepts it, `build` and `verify` included).
  */
-const ALLOW_DRIFT_LINE = "  • For backward-compatible changes (e.g. adding an optional field): pass `--allow-schema-drift` to skip the block.";
-const UPDATE_BASELINE_LINE =
-    "  • To accept the new shape without a migration: pass `--update-schema-baseline`. `lunora deploy` first reads the stored rows a changed field affects and refuses if any does not fit.";
+const ALLOW_DRIFT_LINE =
+    "  • For a change you know is safe: pass `--allow-schema-drift` to skip the block for this run. It checks nothing and leaves the baseline unchanged, so the next run drifts again.";
 
-const remediationFlagLines = (command: string | undefined): string => {
-    const support = command === undefined ? undefined : DRIFT_FLAG_SUPPORT[command];
-
-    if (command === undefined || support === undefined) {
-        return `${ALLOW_DRIFT_LINE}\n${UPDATE_BASELINE_LINE}\n`;
-    }
-
-    // Every command that runs the gate accepts `--allow-schema-drift`, so that
-    // line is unconditional; only the baseline re-bless varies. (`verify` runs
-    // the gate read-only, so re-blessing from it would be wrong, not missing.)
-    const baselineLine = support.updateBaseline
-        ? UPDATE_BASELINE_LINE
-        : `  • To accept the new shape without a migration, run \`lunora prepare --update-schema-baseline\` — \`lunora ${command}\` does not take that flag.`;
-
-    return `${ALLOW_DRIFT_LINE}\n${baselineLine}\n`;
-};
+const remediationFlagLines = (): string => `${ALLOW_DRIFT_LINE}\n`;
 
 /** Render one `  - <summary>` line per change, the shape every branch of the message uses. */
 const summarize = (changes: ReadonlyArray<DriftChange>): string => changes.map((change) => `  - ${change.summary}`).join("\n");
@@ -392,7 +352,7 @@ const scaffoldLine = (table: string): string => `      lunora migrate create bac
 
 /**
  * Render the blocked-deploy message: what is still uncovered, what to do about
- * it, and the override flags the printing command accepts.
+ * it, and the one-run override.
  *
  * Every "to fix" line is conditional on there being something that line can fix.
  * The bullet naming `defineMigration` used to be unconditional, so a
@@ -451,7 +411,7 @@ const blockedReason = (
         );
     }
 
-    fixLines.push(remediationFlagLines(command));
+    fixLines.push(remediationFlagLines());
 
     return [
         // NOT "…not covered by a new migration": only a `"backfill"` change ever
@@ -460,8 +420,7 @@ const blockedReason = (
         // Name the command the operator actually ran. Hardcoding "deploy" meant
         // `lunora prepare` and `lunora build` both reported a deploy being
         // blocked when no deploy had been attempted — sending the reader to look
-        // for a deployment that does not exist. This is the same reason
-        // `remediationFlagLines` is command-aware.
+        // for a deployment that does not exist.
         `${command ?? "deploy"} blocked: ${String(uncovered.length)} unresolved breaking schema change(s) since the last blessed schema baseline:`,
         summarize(uncovered),
         "",
@@ -488,7 +447,7 @@ const blockedReason = (
  * to another Durable Object or region and a `"code"` change breaks a call site;
  * rewriting rows fixes neither, so a migration must not excuse them however well
  * its table matches. Those are cleared by fixing the code or accepting the new
- * shape (`--allow-schema-drift` / `--update-schema-baseline`).
+ * shape (`--allow-schema-drift` for one run).
  */
 const evaluateSchemaDrift = (options: {
     allowDrift?: boolean;

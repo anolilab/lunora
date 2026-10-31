@@ -54,8 +54,8 @@ diffs the schema against the committed `lunora/.lunora-schema.json`.
   fail to open).
 - **Breaking, not fixable by a migration:** changing a table's shard mode
   (root ↔ `.shardBy()` ↔ `.global()`, or the `.global()` backend) moves rows to
-  other storage; use export → import. A dropped index or relation needs call
-  sites changed, then `--update-schema-baseline`.
+  other storage; use export → import. A dropped relation needs call sites
+  changed. A dropped index never blocks.
 
 A migration covers a change only if it is new since the baseline, its `table`
 is a string literal naming the affected table, and its `up` does more than return
@@ -213,8 +213,7 @@ reshaping still follows widen → migrate → narrow.
    old shape. Write the new shape from the widen step on.
 4. **A non-literal `table`.** `table: TABLE_NAME` covers nothing in the gate.
 5. **Bypassing the gate.** `--allow-schema-drift` ships the shape for one run
-   without checking anything. `lunora deploy` (with or without
-   `--update-schema-baseline`) reads the stored rows of the affected tables and
+   without checking anything. `lunora deploy` reads the stored rows of the affected tables and
    lets a change through only when every row already fits.
 
 ## Checklist

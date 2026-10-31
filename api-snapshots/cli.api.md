@@ -153,7 +153,6 @@ interface DeployCommandOptions {
     strictAdvisories?: boolean;
     target?: string;
     temporary?: boolean;
-    updateSchemaBaseline?: boolean;
 }
 ```
 

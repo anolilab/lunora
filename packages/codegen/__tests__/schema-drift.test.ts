@@ -207,7 +207,7 @@ describe("schema-drift", () => {
             expect(unique.changes.some((c) => c.type === "addedIndex" && c.severity === "breaking" && c.remediation === "backfill")).toBe(true);
         });
 
-        it("flags a dropped table, removed index, removed relation, and changed shard mode as breaking", () => {
+        it("flags a dropped table, removed relation, and changed shard mode as breaking, and a removed index as safe", () => {
             expect.assertions(4);
 
             const withExtras = buildSchemaSnapshot(
@@ -232,7 +232,7 @@ describe("schema-drift", () => {
             );
 
             expect(dropped.changes.some((c) => c.type === "removedTable" && c.severity === "breaking")).toBe(true);
-            expect(dropped.changes.some((c) => c.type === "removedIndex" && c.severity === "breaking")).toBe(true);
+            expect(dropped.changes.some((c) => c.type === "removedIndex" && c.severity === "safe")).toBe(true);
             expect(dropped.changes.some((c) => c.type === "removedRelation" && c.severity === "breaking")).toBe(true);
             expect(reshard.changes.some((c) => c.type === "changedShardMode" && c.severity === "breaking")).toBe(true);
         });
@@ -262,24 +262,18 @@ describe("schema-drift", () => {
             expect(decision.reason).toContain("changed type");
         });
 
-        it("names the command that ran, not `deploy`, and offers only the flags that command accepts", () => {
-            expect.assertions(4);
+        it("names the command that ran, not `deploy`", () => {
+            expect.assertions(3);
 
             // `lunora build` reaches this gate through `runDeployCommand({ dryRun: true })`.
             // It used to report "deploy blocked:" — sending the operator to look for a
-            // deployment that was never attempted — and to offer
-            // `--update-schema-baseline`, which `build` rejects with a raw
-            // `Found unknown option` stack trace. Both halves of its own advice failed.
+            // deployment that was never attempted.
             const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
             const decision = evaluateSchemaDrift({ baseline, command: "build", current, migrations: [] });
 
             expect(decision.blocked).toBe(true);
             expect(decision.reason).toContain("build blocked");
             expect(decision.reason).not.toContain("deploy blocked");
-
-            // `build` publishes nothing, so re-blessing a baseline from it would
-            // advance past a breaking change that never shipped.
-            expect(decision.reason).toContain("`lunora build` does not take that flag");
         });
 
         it("passes breaking drift when a NEW migration covers the affected table", () => {
@@ -349,32 +343,55 @@ describe("schema-drift", () => {
             expect(decision.reason).not.toContain("defineMigration");
         });
 
-        it("a dropped index stays blocked even with a migration on that very table", () => {
-            // Rewriting rows cannot repair a query that named the index. Letting a
-            // same-table migration excuse it would ship a deploy whose callers
-            // still fail at runtime — the flags are the honest escape.
-            expect.assertions(2);
+        it("a dropped index, unique or not, is safe: it cannot invalidate a stored row", () => {
+            expect.assertions(4);
 
             const indexed = buildSchemaSnapshot(schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]), []);
-            const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), ["touch-users"]);
-            const decision = evaluateSchemaDrift({ baseline: indexed, current, migrations: [{ id: "touch-users", table: "users" }] });
+            const unique = buildSchemaSnapshot(
+                schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName", unique: true }] })]),
+                [],
+            );
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
 
-            expect(decision.blocked).toBe(true);
-            expect(decision.reason).toContain("removed index byName");
+            for (const from of [indexed, unique]) {
+                const decision = evaluateSchemaDrift({ baseline: from, current, migrations: [] });
+
+                expect(decision.blocked).toBe(false);
+                expect(decision.reason).toContain("removed index byName");
+            }
         });
 
-        it("offers no migration for a dropped index — that is a code change, not a backfill", () => {
-            // A row transform cannot restore DDL. Offering `migrate create` here
-            // sends the operator to the one tool guaranteed not to work.
-            expect.assertions(3);
+        it("a new unique index, and an index that becomes unique, are row-checkable constraints that name their fields", () => {
+            expect.assertions(4);
 
+            const plain = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
             const indexed = buildSchemaSnapshot(schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]), []);
-            const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
-            const { blocked, reason } = evaluateSchemaDrift({ baseline: indexed, current, migrations: [] });
+            const unique = buildSchemaSnapshot(
+                schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName", unique: true }] })]),
+                [],
+            );
+            const added = evaluateSchemaDrift({ baseline: plain, current: unique, migrations: [] });
+            const tightened = evaluateSchemaDrift({ baseline: indexed, current: unique, migrations: [] });
 
-            expect(blocked).toBe(true);
-            expect(reason).toContain("removed index byName");
-            expect(reason).not.toContain("lunora migrate create");
+            expect(added.blocked).toBe(true);
+            expect(added.uncovered[0]?.uniqueOn).toStrictEqual(["name"]);
+            expect(tightened.blocked).toBe(true);
+            expect(tightened.uncovered[0]?.uniqueOn).toStrictEqual(["name"]);
+        });
+
+        it("an index that is reshaped but not unique stays safe", () => {
+            expect.assertions(1);
+
+            const before = buildSchemaSnapshot(
+                schema([table("users", { age: numberField, name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]),
+                [],
+            );
+            const after = buildSchemaSnapshot(
+                schema([table("users", { age: numberField, name: stringField }, { indexes: [{ fields: ["name", "age"], name: "byName" }] })]),
+                [],
+            );
+
+            expect(evaluateSchemaDrift({ baseline: before, current: after, migrations: [] }).blocked).toBe(false);
         });
 
         it("offers no migration for a dropped table — its rows are unreachable, not transformable", () => {
@@ -455,40 +472,17 @@ describe("schema-drift", () => {
             expect(decision.reason).toContain("overridden by --allow-schema-drift");
         });
 
-        describe("remediation names only the flags the printing command accepts", () => {
-            // The message used to list both flags unconditionally, so following it
-            // verbatim failed: `build` accepts neither and `verify` accepts only
-            // `--allow-schema-drift`. This is the message a first-time deployer
-            // hits, and half its own advice did not work.
-            const breaking = (): ReturnType<typeof buildSchemaSnapshot> => buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
+        it("offers the one-run override on every command and no longer offers a baseline flag", () => {
+            expect.assertions(10);
 
-            it("offers both flags on deploy", () => {
-                expect.assertions(2);
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
 
-                const { reason } = evaluateSchemaDrift({ baseline, command: "deploy", current: breaking(), migrations: [] });
+            for (const command of ["deploy", "prepare", "build", "verify", undefined]) {
+                const { reason } = evaluateSchemaDrift({ baseline, command, current, migrations: [] });
 
-                expect(reason).toContain("--allow-schema-drift");
-                expect(reason).toContain("--update-schema-baseline");
-            });
-
-            it("offers only --allow-schema-drift on verify, and points at prepare for the other", () => {
-                expect.assertions(3);
-
-                const { reason } = evaluateSchemaDrift({ baseline, command: "verify", current: breaking(), migrations: [] });
-
-                expect(reason).toContain("pass `--allow-schema-drift`");
-                expect(reason).toContain("lunora prepare --update-schema-baseline");
-                expect(reason).toContain("`lunora verify` does not take that flag");
-            });
-
-            it("falls back to listing both when the caller is unknown", () => {
-                expect.assertions(2);
-
-                const { reason } = evaluateSchemaDrift({ baseline, current: breaking(), migrations: [] });
-
-                expect(reason).toContain("--allow-schema-drift");
-                expect(reason).toContain("--update-schema-baseline");
-            });
+                expect(reason).toContain("`--allow-schema-drift`");
+                expect(reason).not.toContain("update-schema-baseline");
+            }
         });
 
         it("never blocks a first-ever capture (no baseline)", () => {

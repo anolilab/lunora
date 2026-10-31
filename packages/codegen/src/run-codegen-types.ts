@@ -75,15 +75,6 @@ export interface CodegenOptions {
     target?: string;
 
     /**
-     * Re-bless the committed schema-drift baseline (`lunora/.lunora-schema.json`)
-     * with the current structural snapshot. The baseline is ALWAYS written on
-     * first capture (when the file is absent); set this to overwrite an existing
-     * one — e.g. after the developer has added the data migration that justifies
-     * a breaking change. Ignored when `dryRun` is true.
-     */
-    updateSchemaBaseline?: boolean;
-
-    /**
      * Every `queues.producers[]` entry of `wrangler.jsonc`, top level and each
      * `env.<name>` block. A producer naming a push queue's binding with another
      * queue name becomes an extra route in `_generated/queues.ts`, so a batch from

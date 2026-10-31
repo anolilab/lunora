@@ -673,10 +673,10 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // Structural schema snapshot for the pre-deploy drift gate. Built from the
     // discovered schema + the declared migration ids; the CLI gate diffs the
     // CURRENT snapshot against the committed baseline. Always computed (cheap,
-    // pure) and returned in `CodegenResult`; the baseline file is (re-)blessed
-    // only when it is absent (first capture) or `updateSchemaBaseline` is set —
-    // so a routine codegen run never silently moves the goalposts the gate
-    // measures against.
+    // pure) and returned in `CodegenResult`; codegen writes the baseline file only
+    // when it is absent (first capture). Advancing it is the deploy gate's job, on
+    // success — so a routine codegen run never silently moves the goalposts the
+    // gate measures against.
     const schemaSnapshot = buildSchemaSnapshot(
         schema,
         migrations.map((migration) => migration.id),
@@ -957,10 +957,9 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               },
           ]);
 
-    // Bless the schema baseline on first capture (so a project gets a committed snapshot the
-    // moment it runs codegen) or when explicitly asked to refresh it. The CLI gate reads the
-    // existing baseline BEFORE calling codegen, so re-blessing here never hides drift from that run.
-    if (!options.dryRun && (!schemaSnapshotExists || options.updateSchemaBaseline === true)) {
+    // Bless the schema baseline on first capture, so a project gets a committed snapshot the
+    // moment it runs codegen. The CLI gate reads the existing baseline BEFORE calling codegen.
+    if (!options.dryRun && !schemaSnapshotExists) {
         writeIfChanged(schemaSnapshotPath, serializeSchemaSnapshot(schemaSnapshot));
     }
 

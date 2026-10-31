@@ -87,6 +87,30 @@ const dropIndex = (): void => {
     writeFileSync(schemaPath, readFileSync(schemaPath, "utf8").replace(`.index("by_channel", ["channelId"])\n`, ""), "utf8");
 };
 
+/** Drop the `attachments` relation from `users` — a breaking change no stored row can confirm. */
+const dropRelations = (): void => {
+    const schemaPath = join(workdir, "lunora", "schema.ts");
+    const source = readFileSync(schemaPath, "utf8");
+    const start = source.indexOf("        .relations((r) => ({");
+    const end = source.indexOf("})),", start) + "})),".length;
+
+    writeFileSync(schemaPath, `${source.slice(0, start).trimEnd()},${source.slice(end)}`, "utf8");
+};
+
+/** Add a unique index on `users.name`, a constraint the stored rows may already violate. */
+const addUniqueIndex = (): void => {
+    const schemaPath = join(workdir, "lunora", "schema.ts");
+
+    writeFileSync(
+        schemaPath,
+        readFileSync(schemaPath, "utf8").replace(
+            '.index("by_email", ["email"], { unique: true })',
+            '.index("by_email", ["email"], { unique: true })\n        .index("by_name", ["name"], { unique: true })',
+        ),
+        "utf8",
+    );
+};
+
 /** A deployed worker whose admin export holds `rows`, recording which tables were read. */
 const deployedWorker = (rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>): { fetchImpl: StreamingFetchLike; reads: string[][] } => {
     const reads: string[][] = [];
@@ -259,30 +283,6 @@ describe("schema-drift gate", () => {
             expect(calls.length).toBeGreaterThan(0);
         });
 
-        it("re-blesses the baseline with --update-schema-baseline so the next deploy is clean", async () => {
-            expect.assertions(2);
-
-            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
-            introduceBreakingDrift();
-
-            // Accept the new shape into the baseline: every stored `users.name` is already a number.
-            const blessed = await runDeployCommand({
-                ...TARGET,
-                cwd: workdir,
-                fetchImpl: deployedWorker([{ doc: { _id: "u1", name: 7 }, table: "users" }]).fetchImpl,
-                logger: silentLogger().logger,
-                spawner: createRecordingSpawner().spawner,
-                updateSchemaBaseline: true,
-            });
-
-            expect(blessed.code).toBe(0);
-
-            // A subsequent deploy with no further change sees no drift.
-            const followUp = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
-
-            expect(followUp.code).toBe(0);
-        });
-
         it("passes a blocked change, and re-blesses, when every stored row already fits the new schema", async () => {
             expect.assertions(4);
 
@@ -306,6 +306,92 @@ describe("schema-drift gate", () => {
             expect(followUp.code).toBe(0);
         });
 
+        it("refuses a new unique index over duplicate stored rows, naming the rows and keeping the baseline", async () => {
+            expect.assertions(5);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            const baselineBefore = readFileSync(join(workdir, SNAPSHOT_FILE), "utf8");
+
+            addUniqueIndex();
+
+            const worker = deployedWorker([
+                { doc: { _id: "u1", name: "Ada" }, table: "users" },
+                { doc: { _id: "u2", name: "Grace" }, table: "users" },
+                { doc: { _id: "u3", name: "Ada" }, table: "users" },
+            ]);
+            const { errors, logger } = silentLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runDeployCommand({ ...TARGET, cwd: workdir, fetchImpl: worker.fetchImpl, logger, spawner });
+            const message = errors.join("\n");
+
+            expect(result.schemaDrift?.blocked).toBe(true);
+            expect(calls).toHaveLength(0);
+            expect(message).toContain("users u3: name duplicates u1");
+            expect(message).not.toContain("Ada");
+            expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).toBe(baselineBefore);
+        });
+
+        it("passes a new unique index when no stored row repeats a value, and the baseline advances", async () => {
+            expect.assertions(5);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            const baselineBefore = readFileSync(join(workdir, SNAPSHOT_FILE), "utf8");
+
+            addUniqueIndex();
+
+            const worker = deployedWorker([
+                { doc: { _id: "u1", name: "Ada" }, table: "users" },
+                { doc: { _id: "u2", name: "Grace" }, table: "users" },
+                { doc: { _id: "u3" }, table: "users" },
+                { doc: { _id: "u4" }, table: "users" },
+            ]);
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runDeployCommand({ ...TARGET, cwd: workdir, fetchImpl: worker.fetchImpl, logger: silentLogger().logger, spawner });
+
+            expect(result.code).toBe(0);
+            expect(calls.length).toBeGreaterThan(0);
+            expect(worker.reads).toStrictEqual([["users"]]);
+            expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).not.toBe(baselineBefore);
+
+            // Nothing left to check: a deploy that could not read rows would be refused if the constraint were still drift.
+            const followUp = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            expect(followUp.code).toBe(0);
+        });
+
+        it("keeps the block on a new unique index when the stored rows cannot be read", async () => {
+            expect.assertions(3);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            addUniqueIndex();
+
+            const { errors, logger } = silentLogger();
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.schemaDrift?.blocked).toBe(true);
+            expect(calls).toHaveLength(0);
+            expect(errors.join("\n")).toContain("The stored rows were not checked");
+        });
+
+        it("a dropped index does not block a deploy and the baseline advances with it", async () => {
+            expect.assertions(3);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            const baselineBefore = readFileSync(join(workdir, SNAPSHOT_FILE), "utf8");
+
+            dropIndex();
+
+            const { calls, spawner } = createRecordingSpawner();
+            const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner });
+
+            expect(result.code).toBe(0);
+            expect(calls.length).toBeGreaterThan(0);
+            expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).not.toBe(baselineBefore);
+        });
+
         it("names each stored row that does not fit — table, id, field, reason, never the value — and stays blocked", async () => {
             expect.assertions(4);
 
@@ -318,7 +404,7 @@ describe("schema-drift gate", () => {
             ]);
             const { errors, logger } = silentLogger();
             const { calls, spawner } = createRecordingSpawner();
-            const result = await runDeployCommand({ ...TARGET, cwd: workdir, fetchImpl: worker.fetchImpl, logger, spawner, updateSchemaBaseline: true });
+            const result = await runDeployCommand({ ...TARGET, cwd: workdir, fetchImpl: worker.fetchImpl, logger, spawner });
             const message = errors.join("\n");
 
             expect(result.schemaDrift?.blocked).toBe(true);
@@ -327,7 +413,7 @@ describe("schema-drift gate", () => {
             expect(message).not.toContain("Ada Lovelace");
         });
 
-        it("keeps the block when there is no deployed worker to read, even under --update-schema-baseline", async () => {
+        it("keeps the block when there is no deployed worker to read", async () => {
             expect.assertions(3);
 
             await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
@@ -335,44 +421,34 @@ describe("schema-drift gate", () => {
 
             const { errors, logger } = silentLogger();
             const { calls, spawner } = createRecordingSpawner();
-            const result = await runDeployCommand({ cwd: workdir, logger, spawner, updateSchemaBaseline: true });
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
 
             expect(result.schemaDrift?.blocked).toBe(true);
             expect(calls).toHaveLength(0);
             expect(errors.join("\n")).toContain("The stored rows were not checked: no deployed worker to read the stored rows from");
         });
 
-        it("--allow-schema-drift with --update-schema-baseline ships the run but blesses only a shape the stored rows confirm", async () => {
-            expect.assertions(4);
+        it("--allow-schema-drift ships the run, checks nothing and leaves the baseline alone, even when the stored rows would confirm the shape", async () => {
+            expect.assertions(3);
 
             await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
             const baselineBefore = readFileSync(join(workdir, SNAPSHOT_FILE), "utf8");
 
             introduceBreakingDrift();
 
-            const unchecked = await runDeployCommand({
-                allowSchemaDrift: true,
-                cwd: workdir,
-                logger: silentLogger().logger,
-                spawner: createRecordingSpawner().spawner,
-                updateSchemaBaseline: true,
-            });
-
-            expect(unchecked.code).toBe(0);
-            expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).toBe(baselineBefore);
-
-            const confirmed = await runDeployCommand({
+            const worker = deployedWorker([{ doc: { _id: "u1", name: 7 }, table: "users" }]);
+            const overridden = await runDeployCommand({
                 ...TARGET,
                 allowSchemaDrift: true,
                 cwd: workdir,
-                fetchImpl: deployedWorker([{ doc: { _id: "u1", name: 7 }, table: "users" }]).fetchImpl,
+                fetchImpl: worker.fetchImpl,
                 logger: silentLogger().logger,
                 spawner: createRecordingSpawner().spawner,
-                updateSchemaBaseline: true,
             });
 
-            expect(confirmed.code).toBe(0);
-            expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).not.toBe(baselineBefore);
+            expect(overridden.code).toBe(0);
+            expect(worker.reads).toStrictEqual([]);
+            expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).toBe(baselineBefore);
         });
 
         it.each([
@@ -529,22 +605,23 @@ describe("schema-drift gate", () => {
             expect(errors.some((line) => line.includes("unreadable or malformed"))).toBe(true);
         });
 
-        it("regenerates a corrupt baseline with --update-schema-baseline and deploys", async () => {
-            expect.assertions(2);
+        it("names how to recover: deleting the file makes the next deploy a first capture", async () => {
+            expect.assertions(3);
 
             await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
             writeFileSync(join(workdir, SNAPSHOT_FILE), "{ not valid json", "utf8");
 
-            const result = await runDeployCommand({
-                cwd: workdir,
-                logger: silentLogger().logger,
-                spawner: createRecordingSpawner().spawner,
-                updateSchemaBaseline: true,
-            });
+            const { errors, logger } = silentLogger();
+            const refused = await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
 
+            expect(errors.join("\n")).toContain("delete it");
+
+            rmSync(join(workdir, SNAPSHOT_FILE), { force: true });
+
+            const result = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            expect(refused.code).toBe(EXIT_CODE.USAGE);
             expect(result.code).toBe(0);
-            // The baseline is valid JSON again after a successful deploy re-blessed it.
-            expect(() => JSON.parse(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8"))).not.toThrow();
         });
     });
 
@@ -609,7 +686,7 @@ describe("schema-drift gate", () => {
             expect(blocked.code).toBe(EXIT_CODE.USAGE);
             expect(blockedText).toContain("build blocked");
             expect(blockedText).not.toContain("deploy blocked");
-            expect(blockedText).not.toContain("pass `--update-schema-baseline`");
+            expect(blockedText).not.toContain("--update-schema-baseline");
 
             const overridden = await runBuildCommand({
                 allowSchemaDrift: true,
@@ -623,7 +700,7 @@ describe("schema-drift gate", () => {
             expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).toBe(baselineBefore);
         });
 
-        it("prepare --update-schema-baseline refuses a change only stored rows can confirm, and points at deploy", async () => {
+        it("prepare refuses a change only stored rows can confirm and points at deploy", async () => {
             expect.assertions(3);
 
             await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
@@ -632,29 +709,29 @@ describe("schema-drift gate", () => {
             introduceBreakingDrift();
 
             const { errors, logger } = silentLogger();
-            const refused = await runPrepareCommand({ cwd: workdir, logger, updateSchemaBaseline: true });
+            const refused = await runPrepareCommand({ cwd: workdir, logger });
 
             expect(refused.code).toBe(EXIT_CODE.USAGE);
-            expect(errors.join("\n")).toContain("run `lunora deploy --update-schema-baseline`, which checks the stored rows first");
+            expect(errors.join("\n")).toContain("`lunora prepare` does not read a deployment; run `lunora deploy`, which checks the stored rows first");
             expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).toBe(baselineBefore);
         });
 
-        it("prepare --update-schema-baseline still accepts a change no stored row can contradict", async () => {
+        it("a dropped index does not block: prepare passes it and the baseline advances", async () => {
             expect.assertions(2);
 
             await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
+
+            const baselineBefore = readFileSync(join(workdir, SNAPSHOT_FILE), "utf8");
+
             dropIndex();
 
-            const blessed = await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger, updateSchemaBaseline: true });
+            const passed = await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
 
-            expect(blessed.code).toBe(0);
-
-            const followUp = await runPrepareCommand({ cwd: workdir, logger: silentLogger().logger });
-
-            expect(followUp.code).toBe(0);
+            expect(passed.code).toBe(0);
+            expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).not.toBe(baselineBefore);
         });
 
-        it("never lets conforming rows clear a decision that also holds a change rows cannot decide, unless --update-schema-baseline is passed", async () => {
+        it("never lets conforming rows clear a decision that also holds a change rows cannot decide", async () => {
             expect.assertions(3);
 
             await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
@@ -662,7 +739,7 @@ describe("schema-drift gate", () => {
             const baselineBefore = readFileSync(join(workdir, SNAPSHOT_FILE), "utf8");
 
             introduceBreakingDrift();
-            dropIndex();
+            dropRelations();
 
             const { errors, logger } = silentLogger();
             const result = await runDeployCommand({
@@ -674,7 +751,7 @@ describe("schema-drift gate", () => {
             });
 
             expect(result.schemaDrift?.blocked).toBe(true);
-            expect(errors.join("\n")).toContain("by_channel");
+            expect(errors.join("\n")).toContain("attachments");
             expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).toBe(baselineBefore);
         });
 

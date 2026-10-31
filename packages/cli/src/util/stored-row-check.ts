@@ -14,11 +14,11 @@ import type { ExportTarget } from "../commands/data-transfer/export-rows";
 import { forEachExportedRow } from "../commands/data-transfer/export-rows";
 
 /**
- * The breaking changes whose verdict a row-by-row read decides. Each concerns one
- * field and makes a stored row invalid by that field alone. A unique column or index (a
- * duplicate is a property of two rows), a TTL, and the `addedFieldConstraint`
- * family (which mixes `.unique()` and refinements in with `.nullable()`) are not
- * decidable that way and keep the gate's answer.
+ * The breaking changes whose verdict a row-by-row read decides. Most concern one
+ * field and make a stored row invalid by that field alone. A new uniqueness constraint
+ * (`uniqueOn`) is decided by the whole read instead: a duplicate is a property of two rows.
+ * A TTL and the rest of the `addedFieldConstraint` family (refinements, `.nullable()`) are
+ * not decidable that way and keep the gate's answer.
  */
 const ROW_CHECKABLE_CHANGES = new Set<DriftChange["type"]>([
     "addedRequiredField",
@@ -28,8 +28,8 @@ const ROW_CHECKABLE_CHANGES = new Set<DriftChange["type"]>([
     "removedField",
 ]);
 
-const isRowCheckable = (change: DriftChange): change is DriftChange & { field: string; table: string } =>
-    change.table !== undefined && change.field !== undefined && ROW_CHECKABLE_CHANGES.has(change.type);
+const isRowCheckable = (change: DriftChange): change is DriftChange & { table: string } =>
+    change.table !== undefined && (change.uniqueOn !== undefined || (change.field !== undefined && ROW_CHECKABLE_CHANGES.has(change.type)));
 
 /** Rows named in a failing verdict. Enough to act on, few enough to read in a CI log. */
 const FAILURE_SAMPLE = 10;
@@ -277,6 +277,8 @@ const unverifiable = (validator: ValidatorIR, path: string): string | undefined 
 interface TablePlan {
     removed: string[];
     table: TableIR;
+    /** Each new uniqueness constraint: the fields whose combined value must not repeat. */
+    unique: ReadonlyArray<string>[];
     validated: [string, ValidatorIR][];
 }
 
@@ -312,6 +314,93 @@ const rowMismatch = (plan: TablePlan, document: Record<string, unknown>): Mismat
     return undefined;
 };
 
+/** One value of a stored field as it takes part in a uniqueness key: tagged by type so `1` and `"1"` differ. */
+const keyPart = (value: unknown): string => {
+    if (typeof value === "string") {
+        return `string:${value}`;
+    }
+
+    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+        return `${typeof value}:${value.toString()}`;
+    }
+
+    return `other:${JSON.stringify(value)}`;
+};
+
+/**
+ * The `_id` of the earlier row that `document` repeats under one of the plan's new unique constraints, or `undefined`.
+ * A tuple holding a NULL or an absent field never repeats, as in SQL. A `.shardBy()` table's rows only collide inside their own
+ * shard, because each shard has its own index; `seen` is the read's state across rows.
+ */
+const repeatedRow = (plan: TablePlan, document: Record<string, unknown>, seen: Map<string, string>): [fields: string, firstId: string] | undefined => {
+    const shard = typeof plan.table.shardMode === "object" ? keyPart(decodeWire(document[plan.table.shardMode.field])) : "";
+    const id = typeof document["_id"] === "string" ? document["_id"] : "(no _id)";
+
+    for (const fields of plan.unique) {
+        const values = fields.map((field) => decodeWire(document[field]));
+
+        if (values.some((value) => value === null || value === undefined)) {
+            continue;
+        }
+
+        const key = [plan.table.name, fields.join("\u0001"), shard, ...values.map((value) => keyPart(value))].join("\u0000");
+        const first = seen.get(key);
+
+        if (first === undefined) {
+            seen.set(key, id);
+        } else {
+            return [fields.join(" + "), first];
+        }
+    }
+
+    return undefined;
+};
+
+/** Add a new uniqueness constraint to `plan`, or say why rows cannot confirm it. */
+const planUnique = (plan: TablePlan, fields: ReadonlyArray<string>): string | undefined => {
+    // A constraint over a field the schema no longer has says nothing rows can confirm.
+    if (fields.length === 0 || fields.some((column) => plan.table.shape[column] === undefined)) {
+        return `the unique constraint on ${plan.table.name} names a field the current schema does not declare`;
+    }
+
+    plan.unique.push(fields);
+
+    return undefined;
+};
+
+/** Add one row-checkable change to `plan`, or say why rows cannot confirm it. */
+const planChange = (plan: TablePlan, change: DriftChange & { table: string }): string | undefined => {
+    if (change.uniqueOn !== undefined) {
+        return planUnique(plan, change.uniqueOn);
+    }
+
+    const { field } = change;
+
+    if (field === undefined) {
+        return `"${change.summary}" is not something stored rows can confirm`;
+    }
+
+    const validator = plan.table.shape[field];
+
+    if (change.type === "removedField" || validator === undefined) {
+        plan.removed.push(field);
+
+        return undefined;
+    }
+
+    // A stored string cannot show which table a `v.id()` points at or which bucket a `v.storage()` key lives in.
+    const reason =
+        (change.type === "changedFieldKind" || change.type === "changedFieldShape") && referencesRow(validator)
+            ? `${change.table}.${field} now references a different table or bucket, which a stored id cannot show`
+            : unverifiable(validator, `${change.table}.${field}`);
+
+    if (reason === undefined) {
+        plan.validated.push([field, validator]);
+    }
+
+    return reason;
+};
+
 /** What to check per table, or why these changes cannot be decided by reading rows. */
 const planCheck = (changes: ReadonlyArray<DriftChange>, tables: ReadonlyMap<string, TableIR>): { plans: Map<string, TablePlan> } | { reason: string } => {
     const plans = new Map<string, TablePlan>();
@@ -321,35 +410,21 @@ const planCheck = (changes: ReadonlyArray<DriftChange>, tables: ReadonlyMap<stri
             return { reason: `"${change.summary}" is not something stored rows can confirm` };
         }
 
-        const { field, table: name } = change;
-        const table = tables.get(name);
+        const table = tables.get(change.table);
 
         if (table === undefined) {
-            return { reason: `table ${name} is not in the current schema` };
+            return { reason: `table ${change.table} is not in the current schema` };
         }
 
-        const plan = plans.get(name) ?? { removed: [], table, validated: [] };
+        const plan = plans.get(change.table) ?? { removed: [], table, unique: [], validated: [] };
 
-        plans.set(name, plan);
+        plans.set(change.table, plan);
 
-        const validator = table.shape[field];
-
-        if (change.type === "removedField" || validator === undefined) {
-            plan.removed.push(field);
-            continue;
-        }
-
-        // A stored string cannot show which table a `v.id()` points at or which bucket a `v.storage()` key lives in.
-        const reason =
-            (change.type === "changedFieldKind" || change.type === "changedFieldShape") && referencesRow(validator)
-                ? `${name}.${field} now references a different table or bucket, which a stored id cannot show`
-                : unverifiable(validator, `${name}.${field}`);
+        const reason = planChange(plan, change);
 
         if (reason !== undefined) {
             return { reason };
         }
-
-        plan.validated.push([field, validator]);
     }
 
     return { plans };
@@ -383,6 +458,7 @@ const checkStoredRows = async (options: {
 
     const names = [...plans.keys()].toSorted((a, b) => a.localeCompare(b));
     const failures: StoredRowFailure[] = [];
+    const seen = new Map<string, string>();
     let rows = 0;
     let truncated = false;
 
@@ -396,7 +472,8 @@ const checkStoredRows = async (options: {
 
             rows += 1;
 
-            const found = rowMismatch(plan, row.doc);
+            const repeated = repeatedRow(plan, row.doc, seen);
+            const found: Mismatch = repeated === undefined ? rowMismatch(plan, row.doc) : [repeated[0], `duplicates ${repeated[1]}`];
 
             if (found === undefined) {
                 return undefined;

@@ -223,9 +223,7 @@ rounding it.
 
 **Migration:** a deploy that changes these columns from `bigint` to `number` is
 blocked by the schema-drift check until a `payment_sessions` migration covers
-the change. `--update-schema-baseline` reads the stored rows first and refuses
-while any still holds a `bigint`, which every row written before the upgrade
-does. The store reads them, but code that reads the columns
+the change. Rows written before the upgrade still hold a `bigint`. The store reads them, but code that reads the columns
 directly gets a `number` for new rows and a `bigint` for old ones, so arithmetic
 that mixes the two throws. `where` filters on these columns do not match the old
 rows either. Convert or backfill those rows before you rely on the columns outside
@@ -352,6 +350,26 @@ drift with `--allow-schema-drift`.
 
 Hand-written NDJSON needs the same line. Imports from Convex, Supabase and
 Firestore, and `--table` imports of bare documents, are unaffected.
+
+### `@lunora/cli`: `--update-schema-baseline` is removed
+
+`lunora deploy` and `lunora prepare` no longer take `--update-schema-baseline`;
+passing it is an unknown-option error. The gate settles the two cases it existed
+for on its own:
+
+- A dropped index (unique or not), or an index reshaped without becoming unique,
+  does not block. It cannot invalidate a stored row, and the baseline advances
+  with the deploy.
+- A new unique index, an index that becomes unique, or a field that becomes
+  `.unique()` is checked against the table's stored rows. The deploy is refused,
+  naming the repeating rows by `_id`, while any value repeats or the rows cannot be
+  read.
+
+**Migration:** drop the flag from scripts and CI. When every change is verified, or
+a new migration covers it, the baseline advances after a successful deploy.
+`--allow-schema-drift` is still the one-run override: it checks nothing and leaves
+the baseline unchanged. An unreadable baseline file is fixed or deleted; deleting
+it makes the next run a first capture.
 
 ## Recommended (non-breaking) follow-ups
 

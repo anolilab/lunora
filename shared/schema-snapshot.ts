@@ -219,6 +219,11 @@ interface DriftChange {
     field?: string;
     /** The table this change belongs to. Always set when `scope` is `"table"`. */
     table?: string;
+    /**
+     * Set when the change adds a uniqueness constraint: the fields whose combined value must not repeat among a table's stored rows.
+     * Rows can settle it, so a caller that can read them checks for duplicates instead of asking for a migration.
+     */
+    uniqueOn?: ReadonlyArray<string>;
     /** A machine-readable change discriminator. */
     type:
         | "addedFieldConstraint"
@@ -723,11 +728,15 @@ const diffFieldConstraints = (tableName: string, name: string, old: FieldSnapsho
     if (old.unique !== field.unique) {
         changes.push(
             field.unique === true
-                ? breakingFieldChange(
-                      tableName,
-                      "addedFieldConstraint",
-                      `field ${tableName}.${name} became unique — existing duplicates would violate it; add a data migration to de-duplicate first`,
-                  )
+                ? {
+                      ...breakingFieldChange(
+                          tableName,
+                          "addedFieldConstraint",
+                          `field ${tableName}.${name} became unique — existing duplicates would violate it; add a data migration to de-duplicate first`,
+                      ),
+                      field: name,
+                      uniqueOn: [name],
+                  }
                 : safeFieldChange(tableName, "relaxedFieldConstraint", `field ${tableName}.${name} is no longer unique`),
         );
     }
@@ -876,6 +885,7 @@ const diffIndexes = (tableName: string, baseline: TableSnapshot, current: TableS
                           summary: `added unique index ${name} on ${tableName} — existing duplicates would violate it; add a data migration to de-duplicate first`,
                           table: tableName,
                           type: "addedIndex",
+                          uniqueOn: index.fields,
                       }
                     : {
                           remediation: "none",
@@ -891,23 +901,38 @@ const diffIndexes = (tableName: string, baseline: TableSnapshot, current: TableS
         }
 
         if (!indexesEqual(old, index)) {
-            changes.push({
-                remediation: "code",
-                severity: "breaking",
-                summary: `index ${name} on ${tableName} changed shape — a query may have relied on the old index`,
-                table: tableName,
-                scope: "table",
-                type: "changedIndex",
-            });
+            // Only a UNIQUE index can invalidate stored rows (a duplicate under its new fields). Any other reshaping leaves every
+            // row valid and breaks at most a `.withIndex()` call site, which the generated types turn into a compile error.
+            changes.push(
+                index.unique
+                    ? {
+                          remediation: "backfill",
+                          scope: "table",
+                          severity: "breaking",
+                          summary: `index ${name} on ${tableName} changed shape and is unique — existing duplicates would violate it; add a data migration to de-duplicate first`,
+                          table: tableName,
+                          type: "changedIndex",
+                          uniqueOn: index.fields,
+                      }
+                    : {
+                          remediation: "none",
+                          scope: "table",
+                          severity: "safe",
+                          summary: `index ${name} on ${tableName} changed shape — a query that relied on the old index may need updating`,
+                          table: tableName,
+                          type: "changedIndex",
+                      },
+            );
         }
     }
 
     for (const name of Object.keys(baseline.indexes)) {
         if (current.indexes[name] === undefined) {
+            // Dropping an index (unique or not) cannot invalidate a stored row; at most a query that named it stops compiling.
             changes.push({
-                remediation: "code",
-                severity: "breaking",
-                summary: `removed index ${name} on ${tableName} — a query that used \`.withIndex("${name}")\` would break`,
+                remediation: "none",
+                severity: "safe",
+                summary: `removed index ${name} on ${tableName} — a query that used \`.withIndex("${name}")\` no longer compiles`,
                 table: tableName,
                 scope: "table",
                 type: "removedIndex",

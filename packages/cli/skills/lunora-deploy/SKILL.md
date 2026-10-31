@@ -60,15 +60,14 @@ take `--env`.
 
 Flags worth knowing:
 
-| Flag                       | Effect                                                                          |
-| -------------------------- | ------------------------------------------------------------------------------- |
-| `--env <name>`             | Deploy a wrangler environment; checks read that env's (non-inherited) bindings. |
-| `--dry-run`                | Run every gate and bundle without publishing; `wrangler.jsonc` edits roll back. |
-| `--health-check`           | Probe `/_lunora/health/ready` on the new version; fail if it never answers.     |
-| `--prebuilt`               | Skip codegen and the drift gate when `lunora prepare` already ran in this job.  |
-| `--migrate`                | Run every declared data migration (`up` is idempotent) against the live worker. |
-| `--allow-schema-drift`     | Deploy despite blocked drift; the baseline is not advanced.                     |
-| `--update-schema-baseline` | Accept the current schema as the baseline; deploy checks stored rows first.     |
+| Flag                   | Effect                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------- |
+| `--env <name>`         | Deploy a wrangler environment; checks read that env's (non-inherited) bindings. |
+| `--dry-run`            | Run every gate and bundle without publishing; `wrangler.jsonc` edits roll back. |
+| `--health-check`       | Probe `/_lunora/health/ready` on the new version; fail if it never answers.     |
+| `--prebuilt`           | Skip codegen and the drift gate when `lunora prepare` already ran in this job.  |
+| `--migrate`            | Run every declared data migration (`up` is idempotent) against the live worker. |
+| `--allow-schema-drift` | Deploy despite blocked drift; checks nothing, the baseline is not advanced.     |
 
 `--migrate` is checked before wrangler runs, so a missing requirement aborts the
 whole deploy:
@@ -164,7 +163,7 @@ ship.
 When the stored rows already fit a tightening, `lunora deploy` notices on its own:
 it reads the affected tables from the deployed worker (`--migrate-url` or the
 project link, plus `LUNORA_ADMIN_TOKEN`) and lets the change through, naming any
-row that does not fit otherwise. `--update-schema-baseline` runs the same check.
+row that does not fit otherwise. A new unique index is checked the same way, for repeated values.
 `--allow-schema-drift` skips the gate for one run without checking. Otherwise
 stage the change with `lunora-migration-helper`.
 

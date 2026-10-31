@@ -54,7 +54,6 @@ To fix:
 
   • If the stored rows already fit the new schema, `lunora deploy` goes ahead on its own: it reads the rows of each affected table from the deployed worker (`--migrate-url` or the project link, plus `LUNORA_ADMIN_TOKEN`) and names any row that does not fit.
   • For backward-compatible changes (e.g. adding an optional field): pass `--allow-schema-drift` to skip the block.
-  • To accept the new shape without a migration: pass `--update-schema-baseline`. `lunora deploy` first reads the stored rows a changed field affects and refuses if any does not fit.
 Docs: https://lunora.dev/docs/migrations
 ```
 
@@ -120,19 +119,27 @@ instead:
 
 | Change                                                                 | What clears it                                                                    |
 | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Dropped index, changed index, dropped relation                         | Change the queries that used them, then accept the new shape                      |
+| Dropped relation                                                       | Change the queries that used it                                                   |
 | Dropped table                                                          | Its rows stay in each shard's SQLite, unreachable — export the shard to keep them |
 | [Shard-mode flip](/docs/concepts/sharding#migrating-a-populated-table) | An export/import round trip; a per-shard transform cannot move rows between DOs   |
 | [Jurisdiction change](/docs/concepts/data-residency)                   | Export then import into the new region, or revert                                 |
 
-`--allow-schema-drift` skips the block for one run without checking anything.
-`--update-schema-baseline` accepts the new shape permanently. On `lunora deploy`
-it first runs the stored-row check above for every change rows can settle, and
-refuses while a row does not fit or the rows could not be read. Changes rows
-cannot settle (a dropped index, a new unique index) it accepts on your word.
-`lunora prepare` reads no deployment, so it refuses
-`--update-schema-baseline` for a change only stored rows can confirm and points
-you at `lunora deploy`.
+A dropped index (unique or not) never blocks: it cannot invalidate a stored row,
+and a query that still names it stops compiling. A new unique index, an index
+that becomes unique, or a field that becomes `.unique()` is verified like any
+other change: `lunora deploy` reads the table's stored rows and refuses while two
+rows repeat a value, naming them by `_id` (never printing the value), or while
+the rows cannot be read. A `NULL` never counts as a repeat, and on a
+`.shardBy()` table only rows of the same shard are compared, because each shard
+has its own index.
+
+When every change is verified, or a new migration covers it, the baseline
+advances with the deploy. `--allow-schema-drift` skips the block for one run
+without checking anything and leaves the baseline where it was, so the next run
+sees the same drift. `lunora prepare` reads no deployment, so for a change only
+stored rows can confirm it refuses and points you at `lunora deploy`. A baseline
+file that is unreadable blocks until it is fixed or deleted; deleting it makes
+the next run a first capture.
 
 ## Schema migrations (global tables)
 

@@ -848,7 +848,6 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
             codegen,
             command,
             logger: options.logger,
-            updateBaseline: options.updateSchemaBaseline === true,
         });
 
         if (gate.blocked) {
@@ -1517,7 +1516,6 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
         strictAdvisories: options.strictAdvisories,
         target: options.target,
         temporary: options.temporary === true,
-        updateSchemaBaseline: options.updateSchemaBaseline === true,
     });
 
     return {

@@ -245,6 +245,97 @@ describe(checkStoredRows, () => {
         await expect(checkStoredRows({ changes: [change("users", "status")], tables: [users], target: bad })).resolves.toMatchObject({ kind: "fails" });
     });
 
+    describe("a new unique constraint", () => {
+        const unique = (tableName: string, fields: string[], type: DriftChange["type"] = "addedIndex"): DriftChange => {
+            return {
+                remediation: "backfill",
+                scope: "table",
+                severity: "breaking",
+                summary: `unique ${fields.join("+")} on ${tableName}`,
+                table: tableName,
+                type,
+                uniqueOn: fields,
+            };
+        };
+        const accounts = table("accounts", { email: { kind: "string" }, region: { kind: "string" } });
+
+        it("names the later row and the first it repeats, never the value", async () => {
+            expect.assertions(2);
+
+            const verdict = await checkStoredRows({
+                changes: [unique("accounts", ["email"])],
+                tables: [accounts],
+                target: target([
+                    { doc: { _id: "a1", email: "secret@x.io" }, table: "accounts" },
+                    { doc: { _id: "a2", email: "other@x.io" }, table: "accounts" },
+                    { doc: { _id: "a3", email: "secret@x.io" }, table: "accounts" },
+                ]),
+            });
+
+            expect(verdict).toMatchObject({ failures: [{ field: "email", id: "a3", reason: "duplicates a1", table: "accounts" }], kind: "fails" });
+            expect(JSON.stringify(verdict)).not.toContain("secret@x.io");
+        });
+
+        it("compares the whole tuple of a composite index, and lets NULLs repeat as SQL does", async () => {
+            expect.assertions(2);
+
+            const rows = target([
+                { doc: { _id: "a1", email: "a", region: "eu" }, table: "accounts" },
+                { doc: { _id: "a2", email: "a", region: "us" }, table: "accounts" },
+                { doc: { _id: "a3", email: null, region: "eu" }, table: "accounts" },
+                { doc: { _id: "a4", region: "eu" }, table: "accounts" },
+            ]);
+
+            await expect(checkStoredRows({ changes: [unique("accounts", ["email", "region"])], tables: [accounts], target: rows })).resolves.toMatchObject({
+                kind: "conforms",
+            });
+
+            const repeated = target([
+                { doc: { _id: "a1", email: "a", region: "eu" }, table: "accounts" },
+                { doc: { _id: "a2", email: "a", region: "eu" }, table: "accounts" },
+            ]);
+
+            await expect(checkStoredRows({ changes: [unique("accounts", ["email", "region"])], tables: [accounts], target: repeated })).resolves.toMatchObject({
+                kind: "fails",
+            });
+        });
+
+        it("scopes a shardBy table's constraint to one shard, because each shard has its own index", async () => {
+            expect.assertions(2);
+
+            const sharded = table("accounts", { email: { kind: "string" }, orgId: { kind: "string" } }, { field: "orgId", kind: "shardBy" });
+            const rows = (secondOrg: string) =>
+                target([
+                    { doc: { _id: "a1", email: "a", orgId: "acme" }, table: "accounts" },
+                    { doc: { _id: "a2", email: "a", orgId: secondOrg }, table: "accounts" },
+                ]);
+
+            await expect(checkStoredRows({ changes: [unique("accounts", ["email"])], tables: [sharded], target: rows("beta") })).resolves.toMatchObject({
+                kind: "conforms",
+            });
+            await expect(checkStoredRows({ changes: [unique("accounts", ["email"])], tables: [sharded], target: rows("acme") })).resolves.toMatchObject({
+                kind: "fails",
+            });
+        });
+
+        it("checks a field that became unique the same way", async () => {
+            expect.assertions(1);
+
+            const became: DriftChange = { ...unique("accounts", ["email"], "addedFieldConstraint"), field: "email" };
+
+            await expect(
+                checkStoredRows({
+                    changes: [became],
+                    tables: [accounts],
+                    target: target([
+                        { doc: { _id: "a1", email: "a" }, table: "accounts" },
+                        { doc: { _id: "a2", email: "a" }, table: "accounts" },
+                    ]),
+                }),
+            ).resolves.toMatchObject({ kind: "fails" });
+        });
+    });
+
     it("checks a record's keys against its new key validator, without naming the key", async () => {
         expect.assertions(2);
 

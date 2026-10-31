@@ -205,8 +205,6 @@ interface DeployCommandOptions {
      * global API key), so we pass the flag straight through without guarding.
      */
     temporary?: boolean;
-    /** Re-bless the committed schema baseline with the current shape (accepts breaking drift). */
-    updateSchemaBaseline?: boolean;
 }
 
 /**

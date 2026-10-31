@@ -104,7 +104,6 @@ interface CodegenOptions {
     project?: Project;
     projectRoot: string;
     target?: string;
-    updateSchemaBaseline?: boolean;
     wranglerQueueProducers: ReadonlyArray<WranglerQueueProducerIR>;
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
 }
@@ -245,6 +244,7 @@ interface DriftChange {
     summary: string;
     field?: string;
     table?: string;
+    uniqueOn?: ReadonlyArray<string>;
     type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedCommitOrdering" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedMemoryMode" | "changedShardMode" | "changedTtlPolicy" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
 }
 ```
